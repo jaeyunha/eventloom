@@ -1,0 +1,23 @@
+{
+  "name": "@eventloom/cli",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Elastic-2.0",
+  "type": "module",
+  "bin": {
+    "eventloom": "./dist/eventloom"
+  },
+  "scripts": {
+    "build": "rm -rf dist && mkdir -p dist/assets/eventloom && cp -R ../../skills/eventloom/. dist/assets/eventloom/ && bun build ./src/main.ts --compile --target bun --outfile ./dist/eventloom",
+    "typecheck": "tsc --noEmit",
+    "test": "cd ../.. && vitest run packages/cli/src"
+  },
+  "dependencies": {
+    "@eventloom/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

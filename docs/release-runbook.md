@@ -150,6 +150,31 @@ the deployment environment. `D1_DATABASE_ID` is the single D1 database ID
 variable; do not introduce a separate Drizzle-only alias. Drizzle inspection
 does not replace the Wrangler-owned numbered migration path.
 
+### Legacy Airtable business-data cutover
+
+Deploying a D1-authoritative Worker does not migrate historical Airtable
+records by itself. Before switching an environment that previously used
+Airtable as business storage:
+
+1. Record a D1 Time Travel bookmark with `wrangler d1 time-travel info`.
+2. Export Airtable in strict mode. If legacy peripheral rows lack stable
+   `Application ID` values, rerun with `--quarantine-report`; this exports only
+   the valid remainder and writes a redacted report.
+3. Generate a domain-transformed import plan. Do not copy raw Airtable field
+   names directly to D1: JSON-backed submissions, speakers, agendas,
+   evaluations, and CRM aggregates require normalized child rows.
+4. Rehearse the exact plan against a fresh local D1 with migrations `0001`
+   through `0013`, then run `PRAGMA foreign_key_check`.
+5. Apply the same validated plan remotely with explicit `--apply`. The
+   importer is dry-run by default and rejects plans containing quarantined
+   rows.
+6. Run the missing-Agenda backfill, compare canonical counts and hashes, and
+   exercise the deployed organizer/public workflows before declaring cutover.
+
+Do not use `wrangler d1 export` as an incidental live-release backup:
+Cloudflare warns that it can make the database temporarily unavailable. Time
+Travel is the no-downtime recovery mechanism for this cutover.
+
 ## 4. Staging deployment and acceptance
 
 After preflight and migration approval, deploy the API Worker with the guarded script:

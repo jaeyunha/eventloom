@@ -203,7 +203,7 @@ function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
 }
 
 function productionBindings(
-  transport: AirtableTransport,
+  _transport: AirtableTransport,
   database: NonNullable<RuntimeBindings["DB"]>,
 ): RuntimeBindings {
   const coordinator = {
@@ -254,7 +254,6 @@ function productionBindings(
     CALENDAR_UID_DOMAIN: "calendar.production.example.test",
     CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
     CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
-    AIRTABLE_TRANSPORT: transport,
   };
 }
 
@@ -999,6 +998,18 @@ describe("production authenticated tenant scope", () => {
     expect(inspectProductionRuntime(bindings).success).toBe(true);
     expect(() => createRuntimeApp(bindings)).not.toThrow();
   });
+
+  it("boots production D1 authority without legacy Airtable business credentials", () => {
+    const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
+    const {
+      AIRTABLE_ACCESS_TOKEN: _airtableAccessToken,
+      AIRTABLE_BASE_ID: _airtableBaseId,
+      ...d1Only
+    } = bindings;
+
+    expect(inspectProductionRuntime(d1Only).success).toBe(true);
+    expect(() => createRuntimeApp(d1Only)).not.toThrow();
+  });
 });
 
 describe("integrated local runtime composition", () => {
@@ -1073,11 +1084,15 @@ describe("fixture local runtime composition", () => {
       },
     });
 
-    const contexts = await app.request(
-      "/api/speaker/portal/contexts",
-      { headers: speakerHeaders() },
-      localBindings,
-    );
+    const [contexts, accessContexts, speakerTasks] = await Promise.all([
+      app.request("/api/speaker/portal/contexts", { headers: speakerHeaders() }, localBindings),
+      app.request("/api/account/access-contexts", { headers: speakerHeaders() }, localBindings),
+      app.request(
+        `/api/account/speaker-tasks?organizationId=${LOCAL_ORGANIZATION_ID}&eventId=demo-event`,
+        { headers: speakerHeaders() },
+        localBindings,
+      ),
+    ]);
     expect(contexts.status).toBe(200);
     await expect(contexts.json()).resolves.toMatchObject({
       data: [
@@ -1088,6 +1103,27 @@ describe("fixture local runtime composition", () => {
           primaryParticipantId: "local-participant",
         },
       ],
+    });
+    expect(accessContexts.status).toBe(200);
+    await expect(accessContexts.json()).resolves.toMatchObject({
+      data: [
+        { scope: "organization", organization: { id: LOCAL_ORGANIZATION_ID } },
+        {
+          scope: "event",
+          organization: { id: LOCAL_ORGANIZATION_ID },
+          event: { id: "demo-event" },
+          roles: ["speaker"],
+          capabilities: ["speaker.portal.read", "speaker.tasks.read"],
+        },
+      ],
+    });
+    expect(speakerTasks.status).toBe(200);
+    await expect(speakerTasks.json()).resolves.toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        tasks: [{ taskId: "local-biography-task" }, { taskId: "local-slides-task" }],
+      },
     });
   });
   it("projects submitted CFP proposals into the submitting account portal", async () => {

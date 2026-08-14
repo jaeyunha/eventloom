@@ -163,10 +163,9 @@ async function run() {
     configurations.production,
   );
   const wranglerInventory = parseWranglerInventory(renderedWrangler);
-  const validation = validateReleaseConfiguration({
+  validateReleaseConfiguration({
     configurations,
     targetEnvironment: options.environment,
-    requiredProviders: [],
     wranglerInventory,
   });
   const migrationReadiness = inspectOrganizationIdMigrationReadiness({
@@ -192,7 +191,6 @@ async function run() {
       configurationValid: true,
       environment: options.environment,
       online: false,
-      providerStates: validation.providerStates[options.environment],
       migrationReadiness,
       checks,
     };
@@ -212,7 +210,6 @@ async function run() {
     configurationValid: true,
     environment: options.environment,
     online: true,
-    providerStates: validation.providerStates[options.environment],
     migrationReadiness,
     checks,
   };

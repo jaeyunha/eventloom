@@ -34,6 +34,16 @@ export async function runExportCli({
     };
     const configuration = readExportConfiguration(environment, mergedConfiguration);
     const outputPath = resolve(argumentsResult.output);
+    const quarantineReportPath =
+      argumentsResult.quarantineReport === undefined
+        ? undefined
+        : resolve(argumentsResult.quarantineReport);
+    if (quarantineReportPath === outputPath) {
+      throw new AirtableExportError(
+        "ARGUMENT_ERROR",
+        "The quarantine report path must differ from the manifest path.",
+      );
+    }
     if (argumentsResult.dryRun) {
       stdout.write(
         `${JSON.stringify(
@@ -45,6 +55,8 @@ export async function runExportCli({
               "all",
             outputPath,
             resume: argumentsResult.resume,
+            quarantineReportPath: quarantineReportPath ?? null,
+            invalidApplicationIds: quarantineReportPath === undefined ? "reject" : "quarantine",
             airtableAccess: "read-only",
           },
           null,
@@ -58,11 +70,17 @@ export async function runExportCli({
       outputPath,
       apiOrigin: argumentsResult.apiOrigin,
       resume: argumentsResult.resume,
+      quarantineReportPath,
       fetchImplementation,
     });
     stdout.write(
       `Exported ${result.manifest.recordCount} records from ${result.manifest.tableCount} tables to ${result.outputPath}.\n`,
     );
+    if (result.quarantineReportPath !== undefined) {
+      stdout.write(
+        `Quarantined ${result.manifest.quarantineCount} records and wrote the redacted report to ${result.quarantineReportPath}.\n`,
+      );
+    }
     return 0;
   } catch (error) {
     const code = error instanceof AirtableExportError ? error.code : "UNEXPECTED_ERROR";

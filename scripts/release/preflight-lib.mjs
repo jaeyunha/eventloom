@@ -26,8 +26,6 @@ const REQUIRED_CONFIGURATION = [
   "OPENAI_REMIX_MODEL",
 ];
 
-const OPTIONAL_PROVIDERS = {};
-
 const ISOLATED_CONFIGURATION = [
   "BETTER_AUTH_SECRET",
   "CLOUDFLARE_API_TOKEN",
@@ -230,13 +228,6 @@ async function requestJson(
   return payload;
 }
 
-function providerState(configuration, keys) {
-  const present = keys.filter((key) => Boolean(configValue(configuration, key)));
-  if (present.length === 0) return "disabled";
-  if (present.length !== keys.length) return "partial";
-  return "configured";
-}
-
 export function parseDotEnv(source) {
   const configuration = {};
   const lines = source.replace(/^\uFEFF/, "").split(/\r?\n/);
@@ -333,20 +324,12 @@ export function parseWranglerInventory(source) {
 export function validateReleaseConfiguration({
   configurations,
   targetEnvironment,
-  requiredProviders = [],
   wranglerInventory,
 }) {
   if (!ENVIRONMENTS.includes(targetEnvironment)) {
     fail("INVALID_ARGUMENT", "Target environment must be local, staging, or production");
   }
 
-  for (const provider of requiredProviders) {
-    if (!Object.hasOwn(OPTIONAL_PROVIDERS, provider)) {
-      fail("INVALID_ARGUMENT", "Unknown required provider");
-    }
-  }
-
-  const providerStates = {};
   for (const environment of ENVIRONMENTS) {
     const configuration = configurations[environment];
     if (!configuration)
@@ -394,21 +377,6 @@ export function validateReleaseConfiguration({
       !calendarUidDomain.split(".").every((label) => domainLabel.test(label))
     ) {
       fail("INVALID_CONFIGURATION", `${environment} has an invalid CALENDAR_UID_DOMAIN`);
-    }
-
-    providerStates[environment] = {};
-    for (const [provider, keys] of Object.entries(OPTIONAL_PROVIDERS)) {
-      const state = providerState(configuration, keys);
-      providerStates[environment][provider] = state;
-      if (state === "partial") {
-        fail(
-          "PARTIAL_PROVIDER_CONFIGURATION",
-          `${environment} has partial ${provider} configuration`,
-        );
-      }
-      if (requiredProviders.includes(provider) && state !== "configured") {
-        fail("MISSING_PROVIDER_CONFIGURATION", `${environment} requires ${provider} configuration`);
-      }
     }
 
     const wrangler = wranglerInventory?.[environment];
@@ -494,7 +462,7 @@ export function validateReleaseConfiguration({
     fail("UNPROVISIONED_RESOURCE", `${targetEnvironment} D1 database is still a placeholder`);
   }
 
-  return { providerStates };
+  return {};
 }
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;

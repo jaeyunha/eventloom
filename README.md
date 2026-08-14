@@ -117,6 +117,105 @@ The web app runs at `http://127.0.0.1:3015`, the API at `http://127.0.0.1:8787`,
 
 For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` creates a sanitized local `.env` by default and never copies provider credentials. Use `--env-mode copy` only for guarded integration/release work. Local, staging, and production resources and credentials must remain separate. See [`docs/setup.md`](docs/setup.md).
 
+## Eventloom CLI and agent skill
+
+The repository includes a read-only, multi-profile CLI for agents and operators.
+It discovers access from the authenticated Eventloom API, fails closed when a
+saved context is stale or ambiguous, and never grants authority from local
+configuration alone.
+
+### Build and run the CLI
+
+The CLI is currently distributed from source rather than as a published package:
+
+```bash
+bun install
+bun run --filter @eventloom/cli build
+export PATH="$PWD/packages/cli/dist:$PATH"
+eventloom --help
+```
+
+Each named profile stores one authenticated account and its immutable API
+origin. Sign-in credentials are read interactively or from standard input; do
+not put passwords in command arguments:
+
+```bash
+eventloom auth login --profile work --api-url https://api.example.com
+eventloom auth list
+eventloom access list --profile work
+```
+
+Profiles and active context are stored below `~/.eventloom`. This is a
+permission-hardened plaintext store, not an operating-system keychain:
+directories use mode `0700`, files use mode `0600`, and symlinks or non-regular
+files are rejected. Protect the directory and any backups because authenticated
+session material is sensitive.
+
+Select a freshly authorized context before a narrow role read:
+
+```bash
+eventloom context use \
+  --profile work \
+  --organization org_123 \
+  --event event_456
+
+eventloom context show
+eventloom organizer status --profile work
+eventloom reviewer inbox --profile work
+eventloom speaker tasks --profile work
+```
+
+Use `--all-contexts` only when a role command should read every compatible
+context for one profile. Use `--all-accounts` for deliberate multi-profile
+access discovery or briefing:
+
+```bash
+eventloom access list --all-accounts
+eventloom briefing --all-accounts
+```
+
+Add `--json` to receive the stable machine-readable envelope. Exit codes are
+`0` for success, `2` for invalid usage or input, `3` for authentication
+failure, `4` for authorization or incompatible context, `5` when an aggregate
+operation has no successful profile, and `1` for unexpected local, transport,
+or server failures.
+
+The current organizer, reviewer, speaker, and briefing commands are read-only.
+Eventloom resolves roles, capabilities, organization membership, and event
+access freshly on the server for every request. The CLI does not expose a
+generic raw API command or mutation surface.
+
+### Install the Eventloom agent skill
+
+The built executable bundles the canonical skill from
+[`skills/eventloom`](skills/eventloom). Install it globally for Codex, Claude
+Code, or both:
+
+```bash
+eventloom skill install --agent codex --global
+eventloom skill install --agent claude-code --global
+eventloom skill install --agent all --global
+```
+
+Global installs are written to `~/.agents/skills/eventloom` for Codex and
+`~/.claude/skills/eventloom` for Claude Code. To keep the skill inside the
+current repository instead, use project scope:
+
+```bash
+eventloom skill install --agent all --project
+```
+
+Project installs use `.agents/skills/eventloom` and
+`.claude/skills/eventloom`. The installer records a deterministic manifest,
+refuses to overwrite a modified installation, and performs staged replacement
+with rollback. Use `--force` only when intentionally replacing a locally
+modified skill directory.
+
+The skill instructs agents to use only the installed CLI's read-only,
+server-authorized command surface. Broad reads must be explicit, consequential
+actions remain human-controlled, and credentials or raw session material must
+never be printed, logged, or passed through agent prompts.
+
 ## Self-host on Cloudflare
 
 Competition hosts and public users can run their own isolated deployment. You

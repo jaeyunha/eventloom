@@ -202,7 +202,7 @@ test("parses env files without expanding or exposing assignments", () => {
   );
 });
 
-test("validates D1-only configuration without Airtable or Accelevents", () => {
+test("validates D1-only configuration without legacy business-authority providers", () => {
   const { configurations, wranglerInventory } = fixtures();
   for (const configuration of Object.values(configurations)) {
     delete configuration.AIRTABLE_ACCESS_TOKEN;
@@ -210,12 +210,14 @@ test("validates D1-only configuration without Airtable or Accelevents", () => {
     delete configuration.ACCELEVENTS_API_BASE_URL;
     delete configuration.ACCELEVENTS_API_KEY;
   }
-  const result = validateReleaseConfiguration({
-    configurations,
-    targetEnvironment: "staging",
-    wranglerInventory,
-  });
-  assert.deepEqual(result.providerStates.staging, {});
+  assert.deepEqual(
+    validateReleaseConfiguration({
+      configurations,
+      targetEnvironment: "staging",
+      wranglerInventory,
+    }),
+    {},
+  );
 });
 
 test("allows disabled AI without an OpenAI secret", () => {

@@ -34,7 +34,6 @@ import type {
   MemberUser,
   SetupLinkClaim,
 } from "../features/members/types";
-import type { AirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareBindings,
   type CloudflareOutboxInvitationTransient,
@@ -72,7 +71,6 @@ export type RuntimeBindings = ApiBindings &
     readonly AIRTABLE_ACCESS_TOKEN?: string;
     readonly AIRTABLE_BASE_ID?: string;
     readonly AIRTABLE_BASE_DEV_ID?: string;
-    readonly AIRTABLE_TRANSPORT?: AirtableTransport;
     readonly AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?: string;
     readonly AIRTABLE_PAT_CONNECTION_ENABLED?: string;
     readonly BETTER_AUTH_SECRET?: string;
@@ -2117,12 +2115,6 @@ const fixedOrigins = {
 const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
 const LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
   "eventloom-integrated-local-airtable-credential-key-v2";
-const D1_AUTHORITATIVE_AIRTABLE_BASE_ID = "d1-authoritative";
-const d1AuthoritativeAirtableTransport: AirtableTransport = {
-  async request() {
-    throw new Error("Airtable is not the authoritative application store.");
-  },
-};
 const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
 const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
 
@@ -2468,8 +2460,6 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
   const dependencies = createD1ApplicationDependencies({
     authenticator,
-    baseId: D1_AUTHORITATIVE_AIRTABLE_BASE_ID,
-    transport: d1AuthoritativeAirtableTransport,
     database: bindings.DB,
     agendaCoordinator: bindings.AGENDA_COORDINATOR,
     privateFiles: bindings.PRIVATE_FILES,
@@ -2535,6 +2525,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     : undefined;
   return {
     ...dependencies,
+    ...(dependencies.access === undefined ? {} : { access: dependencies.access }),
     auth: betterAuthRuntime,
     members: { service: memberService },
     integrations,

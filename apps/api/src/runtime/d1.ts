@@ -75,13 +75,6 @@ export function createD1BusinessRepositories(input: {
   };
 }
 
-export function hasOptionalAirtableConfiguration(input: {
-  AIRTABLE_ACCESS_TOKEN?: string;
-  AIRTABLE_BASE_ID?: string;
-}): boolean {
-  return Boolean(input.AIRTABLE_ACCESS_TOKEN && input.AIRTABLE_BASE_ID);
-}
-
 export interface D1RuntimeDependencies {
   events: D1EventRepository;
   cfp: D1CfpRepository;

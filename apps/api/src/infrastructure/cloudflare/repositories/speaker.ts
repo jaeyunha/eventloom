@@ -12,16 +12,21 @@ import {
   speakerTasks,
   submissions,
 } from "../../../db/schema";
+import { allSpeakerPortalCapabilities } from "../../../features/speaker/capabilities";
 import type {
   FinalizeSpeakerAssetCommand,
+  OrganizationQualifiedSpeakerSubmission,
+  OrganizationQualifiedSpeakerTask,
   RepositoryResult,
   SpeakerAccessScope,
+  SpeakerAccountWorkloadRepository,
   SpeakerAsset,
   SpeakerAssetAuditEntry,
   SpeakerAssetReviewCommand,
+  SpeakerPortalCapability,
   SpeakerPortalContext,
+  SpeakerPortalContextScopeProjection,
   SpeakerProfile,
-  SpeakerRepository,
   SpeakerSubmission,
   SpeakerTask,
   SpeakerTaskRepositoryCommand,
@@ -55,7 +60,90 @@ const auditLabel = "__speaker_asset_audit__";
 
 type EventScope = { organizationId: string; eventId: string };
 
-export class D1SpeakerRepository implements SpeakerRepository {
+function commaSeparatedIds(value: unknown): string[] {
+  return String(value ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
+function portalCapabilities(value: unknown): SpeakerPortalCapability[] {
+  try {
+    const parsed: unknown = JSON.parse(String(value ?? "[]"));
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (capability): capability is SpeakerPortalCapability =>
+            typeof capability === "string" &&
+            allSpeakerPortalCapabilities.includes(capability as SpeakerPortalCapability),
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function participantCapabilities(row: Record<string, unknown>): {
+  participantIds: string[];
+  capabilities: SpeakerPortalCapability[];
+  capabilitiesByParticipant: Record<string, readonly SpeakerPortalCapability[]>;
+} {
+  const participantIds = commaSeparatedIds(row.participant_ids);
+  const capabilities = portalCapabilities(row.capabilities_json);
+  const grantedParticipantIds = new Set(commaSeparatedIds(row.granted_participant_ids));
+  const primaryParticipantId =
+    typeof row.primary_participant_id === "string" ? row.primary_participant_id : undefined;
+  return {
+    participantIds,
+    capabilities,
+    capabilitiesByParticipant: Object.fromEntries(
+      participantIds.map((participantId) => [
+        participantId,
+        capabilities.filter(
+          (capability) =>
+            capability === "submission-edit" ||
+            (grantedParticipantIds.has(participantId) &&
+              (capability !== "roster-manage" || participantId === primaryParticipantId)),
+        ),
+      ]),
+    ),
+  };
+}
+
+const grantedSpeakerProfileIdsSql = `(
+  SELECT group_concat(DISTINCT sg.speaker_profile_id)
+    FROM speaker_grants sg
+    JOIN speaker_profiles sp
+      ON sp.organization_id = sg.organization_id
+     AND sp.id = sg.speaker_profile_id
+    JOIN portal_context_participants granted_pcp
+      ON granted_pcp.organization_id = pc.organization_id
+     AND granted_pcp.event_id = pc.event_id
+     AND granted_pcp.context_id = pc.id
+     AND granted_pcp.participant_id = sp.participant_id
+   WHERE sg.organization_id = pc.organization_id
+     AND sg.user_id = pc.account_id
+     AND sg.revoked_at IS NULL
+     AND sp.event_id = pc.event_id
+) AS granted_speaker_profile_ids`;
+
+const grantedParticipantIdsSql = `(
+  SELECT group_concat(DISTINCT sp.participant_id)
+    FROM speaker_grants sg
+    JOIN speaker_profiles sp
+      ON sp.organization_id = sg.organization_id
+     AND sp.id = sg.speaker_profile_id
+    JOIN portal_context_participants granted_pcp
+      ON granted_pcp.organization_id = pc.organization_id
+     AND granted_pcp.event_id = pc.event_id
+     AND granted_pcp.context_id = pc.id
+     AND granted_pcp.participant_id = sp.participant_id
+   WHERE sg.organization_id = pc.organization_id
+     AND sg.user_id = pc.account_id
+     AND sg.revoked_at IS NULL
+     AND sp.event_id = pc.event_id
+) AS granted_participant_ids`;
+
+export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
   readonly #db: D1Database;
   readonly #orm: OpenSessionboardDatabase;
 
@@ -64,7 +152,7 @@ export class D1SpeakerRepository implements SpeakerRepository {
     this.#orm = createDatabase(db);
   }
 
-  async listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+  async #listOwnedPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
     const result = await this.#db
       .withSession("first-primary")
       .prepare(
@@ -127,27 +215,12 @@ export class D1SpeakerRepository implements SpeakerRepository {
     return [...contexts.values()];
   }
 
-  async listPortalContextScopes(accountId: string): Promise<
-    readonly {
-      context: SpeakerPortalContext;
-      scope: SpeakerAccessScope;
-    }[]
-  > {
-    return (await this.listPortalContexts(accountId)).map((context) => ({
-      context,
-      scope: {
-        submissionIds: context.submissionIds,
-        participantIds: context.participantIds,
-        capabilities: context.capabilities,
-      },
-    }));
-  }
-
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
     const session = this.#db.withSession("first-primary");
-    const projected = await session
+    const context = await session
       .prepare(
         `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
+              ${grantedParticipantIdsSql},
               group_concat(DISTINCT pcp.participant_id) AS participant_ids,
               group_concat(DISTINCT pcs.submission_id) AS submission_ids
          FROM portal_contexts pc
@@ -159,17 +232,15 @@ export class D1SpeakerRepository implements SpeakerRepository {
       )
       .bind(eventId, accountId)
       .first<Record<string, unknown>>();
-    if (projected !== null) {
+    if (context !== null) {
+      const projected = participantCapabilities(context);
       return {
-        tenantId: String(projected.organization_id),
-        submissionIds: String(projected.submission_ids ?? "")
-          .split(",")
-          .filter(Boolean),
-        participantIds: String(projected.participant_ids ?? "")
-          .split(",")
-          .filter(Boolean),
-        capabilities: JSON.parse(String(projected.capabilities_json ?? "[]")),
-        primaryParticipantId: String(projected.primary_participant_id),
+        tenantId: String(context.organization_id),
+        submissionIds: commaSeparatedIds(context.submission_ids),
+        participantIds: projected.participantIds,
+        capabilities: projected.capabilities,
+        capabilitiesByParticipant: projected.capabilitiesByParticipant,
+        primaryParticipantId: String(context.primary_participant_id),
         role: "speaker",
       };
     }
@@ -193,18 +264,166 @@ export class D1SpeakerRepository implements SpeakerRepository {
       .bind(eventId, accountId)
       .first<Record<string, unknown>>();
     if (owned === null) return { submissionIds: [], participantIds: [] };
+    const participantIds = commaSeparatedIds(owned.participant_ids);
+    const capabilities = ["submission-edit"] as const;
     return {
       tenantId: String(owned.organization_id),
-      submissionIds: String(owned.submission_ids ?? "")
-        .split(",")
-        .filter(Boolean),
-      participantIds: String(owned.participant_ids ?? "")
-        .split(",")
-        .filter(Boolean),
-      capabilities: ["submission-edit"],
+      submissionIds: commaSeparatedIds(owned.submission_ids),
+      participantIds,
+      capabilities,
+      capabilitiesByParticipant: Object.fromEntries(
+        participantIds.map((participantId) => [participantId, capabilities]),
+      ),
       primaryParticipantId: String(owned.primary_participant_id ?? ""),
       role: "speaker",
     };
+  }
+
+  async getAccessScopeForOrganization(
+    organizationId: string,
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerAccessScope> {
+    const context = await this.#db
+      .prepare(
+        `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
+                ${grantedParticipantIdsSql},
+                group_concat(DISTINCT pcp.participant_id) AS participant_ids,
+                group_concat(DISTINCT pcs.submission_id) AS submission_ids
+           FROM portal_contexts pc
+           LEFT JOIN portal_context_participants pcp
+             ON pcp.organization_id = pc.organization_id
+            AND pcp.event_id = pc.event_id
+            AND pcp.context_id = pc.id
+           LEFT JOIN portal_context_submissions pcs
+             ON pcs.organization_id = pc.organization_id
+            AND pcs.event_id = pc.event_id
+            AND pcs.context_id = pc.id
+          WHERE pc.organization_id = ?
+            AND pc.event_id = ?
+            AND pc.account_id = ?
+            AND pc.status <> 'archived'
+          GROUP BY pc.organization_id, pc.id
+          LIMIT 1`,
+      )
+      .bind(organizationId, eventId, accountId)
+      .first<Record<string, unknown>>();
+    if (context === null) return { submissionIds: [], participantIds: [] };
+    const projected = participantCapabilities(context);
+    return {
+      tenantId: String(context.organization_id),
+      submissionIds: commaSeparatedIds(context.submission_ids),
+      participantIds: projected.participantIds,
+      capabilities: projected.capabilities,
+      capabilitiesByParticipant: projected.capabilitiesByParticipant,
+      primaryParticipantId: String(context.primary_participant_id),
+      role: "speaker",
+    };
+  }
+
+  async listPortalContextScopes(
+    accountId: string,
+  ): Promise<readonly SpeakerPortalContextScopeProjection[]> {
+    const rows = await this.#db
+      .prepare(
+        `SELECT pc.organization_id, pc.event_id, pc.id, pc.name, pc.slug, pc.status,
+                pc.primary_participant_id, pc.capabilities_json,
+                ${grantedSpeakerProfileIdsSql},
+                ${grantedParticipantIdsSql},
+                group_concat(DISTINCT pcp.participant_id) AS participant_ids,
+                group_concat(DISTINCT pcs.submission_id) AS submission_ids
+           FROM portal_contexts pc
+           LEFT JOIN portal_context_participants pcp
+             ON pcp.organization_id = pc.organization_id
+            AND pcp.event_id = pc.event_id
+            AND pcp.context_id = pc.id
+           LEFT JOIN portal_context_submissions pcs
+             ON pcs.organization_id = pc.organization_id
+            AND pcs.event_id = pc.event_id
+            AND pcs.context_id = pc.id
+          WHERE pc.account_id = ? AND pc.status <> 'archived'
+          GROUP BY pc.organization_id, pc.event_id, pc.id
+          ORDER BY pc.organization_id, pc.event_id, pc.id`,
+      )
+      .bind(accountId)
+      .all<Record<string, unknown>>();
+    const projections = (rows.results ?? []).flatMap((row) => {
+      const organizationId =
+        typeof row.organization_id === "string" ? row.organization_id.trim() : "";
+      const eventId = typeof row.event_id === "string" ? row.event_id.trim() : "";
+      const name = typeof row.name === "string" ? row.name.trim() : "";
+      const id = typeof row.id === "string" ? row.id.trim() : "";
+      if (
+        organizationId.length === 0 ||
+        eventId.length === 0 ||
+        name.length === 0 ||
+        id.length === 0
+      ) {
+        return [];
+      }
+      const projected = participantCapabilities(row);
+      const participantIds = projected.participantIds;
+      const speakerProfileIds = commaSeparatedIds(row.granted_speaker_profile_ids);
+      const submissionIds = commaSeparatedIds(row.submission_ids);
+      const capabilities: SpeakerPortalContext["capabilities"] = projected.capabilities;
+      const slug = typeof row.slug === "string" ? row.slug : undefined;
+      const status = typeof row.status === "string" ? row.status : undefined;
+      const primaryParticipantId =
+        typeof row.primary_participant_id === "string" ? row.primary_participant_id : undefined;
+      return [
+        {
+          speakerProfileIds,
+          context: {
+            id,
+            eventId,
+            name,
+            ...(slug === undefined ? {} : { slug }),
+            ...(status === undefined ? {} : { status }),
+            capabilities,
+            submissionIds,
+            participantIds,
+            ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+          },
+          scope: {
+            tenantId: organizationId,
+            submissionIds,
+            participantIds,
+            capabilities,
+            capabilitiesByParticipant: projected.capabilitiesByParticipant,
+            ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+            role: "speaker" as const,
+          },
+        },
+      ];
+    });
+    if (projections.length > 0) return projections;
+    return (await this.#listOwnedPortalContexts(accountId)).flatMap((context) => {
+      const tenantId = context.organizationId;
+      if (tenantId === undefined) return [];
+      return [
+        {
+          speakerProfileIds: [],
+          context,
+          scope: {
+            tenantId,
+            submissionIds: context.submissionIds,
+            participantIds: context.participantIds,
+            capabilities: context.capabilities,
+            capabilitiesByParticipant: Object.fromEntries(
+              context.participantIds.map((participantId) => [participantId, context.capabilities]),
+            ),
+            ...(context.primaryParticipantId === undefined
+              ? {}
+              : { primaryParticipantId: context.primaryParticipantId }),
+            role: "speaker" as const,
+          },
+        },
+      ];
+    });
+  }
+
+  async listPortalContexts(accountId: string) {
+    return (await this.listPortalContextScopes(accountId)).map(({ context }) => context);
   }
 
   async listSubmissions(
@@ -279,6 +498,57 @@ export class D1SpeakerRepository implements SpeakerRepository {
     return result;
   }
 
+  async listSubmissionsForOrganization(
+    organizationId: string,
+    eventId: string,
+    submissionIds: readonly string[],
+  ): Promise<OrganizationQualifiedSpeakerSubmission[]> {
+    if (submissionIds.length === 0) return [];
+    const rows = await this.#orm
+      .select()
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.organizationId, organizationId),
+          eq(submissions.eventId, eventId),
+          inArray(submissions.id, [...new Set(submissionIds)]),
+        ),
+      );
+    const result: OrganizationQualifiedSpeakerSubmission[] = [];
+    for (const row of rows) {
+      const links = await this.#db
+        .prepare(
+          "SELECT participant_id, role FROM submission_participants WHERE organization_id = ? AND event_id = ? AND submission_id = ? ORDER BY ordinal",
+        )
+        .bind(organizationId, eventId, row.id)
+        .all<{ participant_id: string; role: string }>();
+      const answers = await this.#db
+        .prepare(
+          "SELECT field_key, value_json FROM submission_answers WHERE organization_id = ? AND submission_id = ?",
+        )
+        .bind(organizationId, row.id)
+        .all<{ field_key: string; value_json: string }>();
+      const answerRecord = Object.fromEntries(
+        (answers.results ?? []).map((answer) => [answer.field_key, JSON.parse(answer.value_json)]),
+      );
+      result.push({
+        tenantId: row.organizationId,
+        id: row.id,
+        eventId: row.eventId,
+        title: typeof answerRecord.title === "string" ? answerRecord.title : row.id,
+        status: row.status,
+        participantIds: (links.results ?? []).map((link) => link.participant_id),
+        primaryParticipantId: (links.results ?? []).find((link) => link.role === "primary")
+          ?.participant_id,
+        formId: row.formId,
+        version: row.version,
+        updatedAt: row.updatedAt,
+        answers: answerRecord,
+      } as OrganizationQualifiedSpeakerSubmission);
+    }
+    return result;
+  }
+
   async getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null> {
     return (await this.listSubmissions(eventId, [submissionId]))[0] ?? null;
   }
@@ -302,6 +572,19 @@ export class D1SpeakerRepository implements SpeakerRepository {
 
   async getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null> {
     return (await this.listProfiles(eventId, [participantId]))[0] ?? null;
+  }
+
+  async listProfilesForEvent(organizationId: string, eventId: string): Promise<SpeakerProfile[]> {
+    const rows = await this.#orm
+      .select()
+      .from(speakerProfiles)
+      .where(
+        and(
+          eq(speakerProfiles.organizationId, organizationId),
+          eq(speakerProfiles.eventId, eventId),
+        ),
+      );
+    return rows.map((row) => this.#profile(row));
   }
 
   async createProfile(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>> {
@@ -415,6 +698,27 @@ export class D1SpeakerRepository implements SpeakerRepository {
         ),
       );
     return Promise.all(rows.map((row) => this.#task(row)));
+  }
+
+  async listTasksForOrganization(
+    organizationId: string,
+    eventId: string,
+    participantIds: readonly string[],
+  ): Promise<OrganizationQualifiedSpeakerTask[]> {
+    if (participantIds.length === 0) return [];
+    const rows = await this.#orm
+      .select()
+      .from(speakerTasks)
+      .where(
+        and(
+          eq(speakerTasks.organizationId, organizationId),
+          eq(speakerTasks.eventId, eventId),
+          inArray(speakerTasks.participantId, [...new Set(participantIds)]),
+        ),
+      );
+    return Promise.all(
+      rows.map(async (row) => ({ ...(await this.#task(row)), tenantId: row.organizationId })),
+    );
   }
 
   async getTask(eventId: string, taskId: string): Promise<SpeakerTask | null> {
