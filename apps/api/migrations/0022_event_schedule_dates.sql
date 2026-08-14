@@ -1,3 +1,5 @@
+PRAGMA foreign_keys = ON;
+
 ALTER TABLE events
 ADD COLUMN schedule_dates_json TEXT NOT NULL DEFAULT '[]'
 CHECK (

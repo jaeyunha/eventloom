@@ -150,6 +150,7 @@ function localWranglerVariables(environment, origins) {
 export function buildWebDryRunArguments(environment, outputDirectory, configPath, variables) {
   return [
     "x",
+    "--no-install",
     "wrangler",
     "deploy",
     "--dry-run",

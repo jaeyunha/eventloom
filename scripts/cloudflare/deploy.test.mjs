@@ -24,8 +24,9 @@ test("API validation, migration, and deployment all use the generated config", (
 
 test("web dry runs use the generated Wrangler config", () => {
   const args = buildWebDryRunArguments("production", "/tmp/output", webConfig, []);
-  assert.deepEqual(args.slice(0, 9), [
+  assert.deepEqual(args.slice(0, 10), [
     "x",
+    "--no-install",
     "wrangler",
     "deploy",
     "--dry-run",
@@ -35,7 +36,7 @@ test("web dry runs use the generated Wrangler config", () => {
     "production",
     "--config",
   ]);
-  assert.equal(args[9], webConfig);
+  assert.equal(args[10], webConfig);
 });
 
 test("OpenNext production deployment uses the generated Wrangler config", () => {

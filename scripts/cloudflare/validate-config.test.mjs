@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { validateMigrationSql } from "./validate-config.mjs";
 
+const migrationsDirectory = new URL("../../apps/api/migrations/", import.meta.url);
 const migration0020 = readFileSync(
   new URL(
     "../../apps/api/migrations/0020_self_hostable_communication_senders.sql",
@@ -41,6 +42,18 @@ test("accepts the reviewed 0020 full dependency-graph rebuild", () => {
   assert.doesNotThrow(() =>
     validateMigrationSql("0020_self_hostable_communication_senders.sql", migration0020),
   );
+});
+
+test("accepts every checked-in ordered D1 migration", () => {
+  const migrations = readdirSync(migrationsDirectory)
+    .filter((entry) => /^\d{4}_[a-z0-9_]+\.sql$/u.test(entry))
+    .sort();
+
+  assert.notEqual(migrations.length, 0);
+  for (const migration of migrations) {
+    const sql = readFileSync(new URL(migration, migrationsDirectory), "utf8");
+    assert.doesNotThrow(() => validateMigrationSql(migration, sql), migration);
+  }
 });
 
 test("accepts a migration-scoped snapshot rebuild in dependency-safe phase order", () => {
