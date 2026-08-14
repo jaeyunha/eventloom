@@ -397,7 +397,15 @@ function submissionTitle(submission: Submission): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function validateFileRequestShapes(form: CfpForm, submission: Submission): ReviewIssue[] {
+function validateFileRequestShapes(
+  form: CfpForm,
+  submission: Submission,
+  options: {
+    enforceRequired: boolean;
+  } = {
+    enforceRequired: true,
+  },
+): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
 
   const inspect = (field: FormField, value: unknown, path: string): void => {
@@ -406,7 +414,7 @@ function validateFileRequestShapes(form: CfpForm, submission: Submission): Revie
     }
     const required = field.required || field.fileRequest.required;
     if (isEmptyAnswer(value)) {
-      if (required) {
+      if (options.enforceRequired && required) {
         issues.push({
           path,
           code: "required",
@@ -1298,7 +1306,9 @@ export class CfpService {
         }
         const fileIssues = usesCurrentSchema
           ? [
-              ...validateFileRequestShapes(form, next),
+              ...validateFileRequestShapes(form, next, {
+                enforceRequired: false,
+              }),
               ...(await this.#validateFileRequestAssets(form, next)),
             ]
           : [];

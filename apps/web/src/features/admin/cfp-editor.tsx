@@ -127,6 +127,53 @@ export interface CfpConfiguration {
   formVersion?: number;
 }
 
+const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
+  {
+    id: "title",
+    key: "title",
+    label: "Session title",
+    type: "text",
+    required: true,
+    visible: true,
+    placeholder: "A clear, specific title",
+    options: [],
+  },
+  {
+    id: "abstract",
+    key: "abstract",
+    label: "Abstract",
+    type: "textarea",
+    required: false,
+    visible: true,
+    placeholder: "A concise summary for reviewers and attendees",
+    options: [],
+  },
+  {
+    id: "description",
+    key: "description",
+    label: "Description",
+    type: "textarea",
+    required: false,
+    visible: true,
+    placeholder: "Objectives, outline, and expected audience takeaways",
+    options: [],
+  },
+];
+
+function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
+  const coreKeys = new Set(CORE_PROPOSAL_FIELDS.map((field) => field.key));
+  const fieldsByKey = new Map(fields.map((field) => [field.key ?? field.id, field]));
+  return [
+    ...CORE_PROPOSAL_FIELDS.map((field) => {
+      const existing = fieldsByKey.get(field.key ?? field.id);
+      return existing === undefined
+        ? { ...field, options: [...(field.options ?? [])] }
+        : existing;
+    }),
+    ...fields.filter((field) => !coreKeys.has(field.key ?? field.id)),
+  ];
+}
+
 function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
   return {
     eventName: "",
@@ -149,7 +196,7 @@ function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
     formats: [],
     levels: [],
     helpfulLinks: [],
-    fields: [],
+    fields: withCoreProposalFields([]),
     rule: {
       type: "condition",
       field: "title",
@@ -772,7 +819,7 @@ export function configurationFromServer(
       .join("\n"),
     successMessage: readString("successContent", current.successMessage),
     redirectUrl: readString("redirectUrl", current.redirectUrl),
-    fields: form.submissionFields.map(toEditorField),
+    fields: withCoreProposalFields(form.submissionFields.map(toEditorField)),
     participantFields: form.participantFields.map(toEditorField),
     sections: form.sections.map((section) => ({ ...section })),
     rules: [...form.rules],

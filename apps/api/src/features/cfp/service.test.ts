@@ -656,6 +656,59 @@ describe("CFP rules and configuration", () => {
     });
   });
 
+  it("allows incremental draft progress before a required file is uploaded", async () => {
+    const { service } = createFixture();
+    const form = buildForm({
+      version: 2,
+      status: "published",
+      submissionFields: [
+        ...buildForm().submissionFields,
+        {
+          id: "proposal-deck",
+          sectionId: "session",
+          key: "proposal_deck",
+          label: "Session proposal deck",
+          kind: "file_request",
+          required: true,
+          options: [],
+          fileRequest: {
+            allowedMimeTypes: ["application/pdf"],
+            maxBytes: 25 * 1024 * 1024,
+            required: true,
+            owner: "submission",
+          },
+        },
+      ],
+    });
+    await service.saveForm(form, 1);
+    const draft = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "create-incremental-file-draft",
+    });
+
+    const saved = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: draft.id,
+      ownerAccountId: "account_1",
+      expectedVersion: draft.version,
+      formVersion: 2,
+      completedStep: "account",
+      answers: {
+        accountEmail: "speaker@example.test",
+        accountFirstName: "Rina",
+        accountLastName: "Speaker",
+        accountAcceptedTerms: true,
+      },
+      participants: [],
+      idempotencyKey: "save-account-before-file-upload",
+    });
+
+    expect(saved.completedSteps).toContain("account");
+  });
+
   it("accepts only authorized finalized file assets and preserves schema versions", async () => {
     const fileAssets: CfpFileAssetAuthorizer = {
       getAsset: async (input) => ({

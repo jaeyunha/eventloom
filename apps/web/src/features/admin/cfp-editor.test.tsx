@@ -163,6 +163,57 @@ describe("CFP editor", () => {
     ).rejects.toThrow("form persistence failed");
   });
 
+  it("repairs missing core proposal fields when loading an existing form", () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    const form = toFormConfiguration(configuration, "organization-1", "devflow-conf-2027");
+    const repaired = configurationFromServer(
+      configuration,
+      {
+        id: "devflow-conf-2027",
+        tenantId: "organization-1",
+        version: 4,
+        slug: "devflow-conf-2027",
+        name: "DevFlow Conference 2027",
+        timezone: "America/Los_Angeles",
+        opensAt: "2027-01-05T08:00:00.000Z",
+        closesAt: "2027-02-15T08:00:00.000Z",
+      },
+      {
+        ...form,
+        submissionFields: form.submissionFields.filter(
+          (field) => !["title", "abstract", "description"].includes(field.key),
+        ),
+      },
+    );
+
+    expect(repaired.fields.slice(0, 3)).toMatchObject([
+      {
+        id: "title",
+        key: "title",
+        label: "Session title",
+        type: "text",
+        required: true,
+        visible: true,
+      },
+      {
+        id: "abstract",
+        key: "abstract",
+        label: "Abstract",
+        type: "textarea",
+        required: false,
+        visible: true,
+      },
+      {
+        id: "description",
+        key: "description",
+        label: "Description",
+        type: "textarea",
+        required: false,
+        visible: true,
+      },
+    ]);
+  });
+
   it("summarizes nested AND/OR condition logic", () => {
     expect(
       summarizeRule({
