@@ -560,6 +560,60 @@ export const speakerAssets = sqliteTable(
     ),
   ],
 );
+
+export const cfpFileAssets = sqliteTable(
+  "cfp_file_assets",
+  {
+    id: text().primaryKey().notNull(),
+    organizationId: text("organization_id").notNull(),
+    eventId: text("event_id").notNull(),
+    submissionId: text("submission_id").notNull(),
+    owner: text().notNull(),
+    participantId: text("participant_id"),
+    fieldKey: text("field_key").notNull(),
+    objectKey: text("object_key").notNull(),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    state: text().notNull(),
+    rejectionReason: text("rejection_reason"),
+    createdAt: text("created_at").notNull(),
+    finalizedAt: text("finalized_at"),
+  },
+  (t) => [
+    eventFk(t.organizationId, t.eventId),
+    foreignKey({
+      columns: [t.organizationId, t.eventId, t.submissionId],
+      foreignColumns: [submissions.organizationId, submissions.eventId, submissions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.organizationId, t.eventId, t.participantId],
+      foreignColumns: [participants.organizationId, participants.eventId, participants.id],
+    }).onDelete("cascade"),
+    unique().on(t.objectKey),
+    unique().on(t.organizationId, t.eventId, t.id),
+    index("cfp_file_assets_submission_idx").on(
+      t.organizationId,
+      t.eventId,
+      t.submissionId,
+      t.createdAt,
+    ),
+    index("cfp_file_assets_participant_idx").on(
+      t.organizationId,
+      t.eventId,
+      t.participantId,
+      t.createdAt,
+    ),
+    check("cfp_file_assets_owner_check", sql`${t.owner} in('submission','participant')`),
+    check(
+      "cfp_file_assets_owner_participant_check",
+      sql`(${t.owner}='submission' and ${t.participantId} is null) or (${t.owner}='participant' and ${t.participantId} is not null)`,
+    ),
+    check("cfp_file_assets_state_check", sql`${t.state} in('pending_upload','ready','rejected')`),
+    check("cfp_file_assets_size_check", sql`${t.sizeBytes}>0`),
+  ],
+);
+
 export const submissionAnswers = sqliteTable(
   "submission_answers",
   {

@@ -36,11 +36,6 @@ import { airtableSyncStatement } from "./shared";
 
 const json = (value: unknown): string => JSON.stringify(value);
 const nowIso = (): string => new Date().toISOString();
-const assetId = (value: unknown): string | null => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const candidate = (value as { assetId?: unknown }).assetId;
-  return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
-};
 
 function conflict(message: string): CfpError {
   return new CfpError("CONFLICT", message);
@@ -471,7 +466,7 @@ export class D1CfpRepository implements CfpRepository {
           .prepare(
             "INSERT INTO submission_answers (organization_id, submission_id, field_key, value_json, asset_id) VALUES (?, ?, ?, ?, ?)",
           )
-          .bind(next.tenantId, next.id, fieldKey, json(value), assetId(value)),
+          .bind(next.tenantId, next.id, fieldKey, json(value), null),
       );
     }
     for (const [index, participant] of next.participants.entries()) {

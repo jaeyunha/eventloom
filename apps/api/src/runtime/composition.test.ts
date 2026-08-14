@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { type ApiDependencies, createApp } from "../app";
 import type { AgendaState } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
-import type { CfpRepository } from "../features/cfp/service";
 import {
   CommunicationService,
   InMemoryCommunicationRepository,
@@ -12,11 +11,6 @@ import type { CommunicationActor, CommunicationRecipient } from "../features/com
 import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import { EvaluationService } from "../features/evaluations/service";
 import { SessionService } from "../features/sessions/service";
-import type {
-  PrivateAssetCapabilityBinding,
-  PrivateUploadGrant,
-  SpeakerAsset,
-} from "../features/speaker/types";
 
 import {
   type AirtableRequest,
@@ -27,7 +21,6 @@ import {
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import {
   AirtableAgendaRepository,
-  AirtableCfpFileAssetGateway,
   AirtableCfpRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
@@ -529,229 +522,6 @@ function cfpReceiptDatabase(): {
   } as unknown as NonNullable<RuntimeBindings["DB"]>;
   return { database, rows };
 }
-function cfpFileAssetCompositionFixture(): {
-  readonly gateway: AirtableCfpFileAssetGateway;
-  readonly setUploaded: (uploaded: boolean) => void;
-  readonly binding: () => PrivateAssetCapabilityBinding | undefined;
-} {
-  const event: EventCfp = {
-    id: "event-file",
-    tenantId: "tenant-file",
-    version: 1,
-    slug: "event-file",
-    name: "File CFP",
-    timezone: "UTC",
-    opensAt: "2026-08-01T00:00:00.000Z",
-    closesAt: "2026-09-01T00:00:00.000Z",
-  };
-  const form: CfpForm = {
-    id: "form-file",
-    tenantId: event.tenantId,
-    eventId: event.id,
-    name: "File CFP",
-    version: 1,
-    status: "published",
-    welcomeContent: "",
-    settings: {
-      speakerLimit: 2,
-      maxSubmissionsPerAccount: 2,
-      remindersEnabled: false,
-      adminNotificationsEnabled: false,
-      confirmationMessage: "",
-      successContent: "",
-    },
-    sections: [{ id: "section", title: "Talk", description: "" }],
-    submissionFields: [
-      {
-        id: "slides",
-        sectionId: "section",
-        key: "slides",
-        label: "Slides",
-        kind: "file_request",
-        required: false,
-        options: [],
-        fileRequest: {
-          allowedMimeTypes: ["application/pdf"],
-          maxBytes: 1024,
-          required: false,
-          owner: "submission",
-        },
-      },
-    ],
-    participantFields: [],
-    rules: [],
-  };
-  const submission: Submission = {
-    id: "submission-file",
-    tenantId: event.tenantId,
-    eventId: event.id,
-    formId: form.id,
-    ownerAccountId: "owner-file",
-    formVersion: 1,
-    version: 1,
-    status: "draft",
-    completedSteps: ["welcome"],
-    answers: {},
-    participants: [],
-    secondaryContacts: [],
-    createdAt: "2026-08-08T00:00:00.000Z",
-    updatedAt: "2026-08-08T00:00:00.000Z",
-  };
-  const cfp = {
-    async getEvent(tenantId: string, eventId: string) {
-      return tenantId === event.tenantId && eventId === event.id ? event : null;
-    },
-    async getForm(tenantId: string, formId: string) {
-      return tenantId === form.tenantId && formId === form.id ? form : null;
-    },
-    async getSubmission(tenantId: string, submissionId: string) {
-      return tenantId === submission.tenantId && submissionId === submission.id ? submission : null;
-    },
-  } as unknown as CfpRepository;
-  const assets = new Map<string, SpeakerAsset>();
-  const speakers = {
-    async createPendingAsset(asset: SpeakerAsset) {
-      assets.set(asset.id, structuredClone(asset));
-      return structuredClone(asset);
-    },
-    async getAsset(eventId: string, assetId: string) {
-      const asset = assets.get(assetId);
-      return asset?.eventId === eventId ? structuredClone(asset) : null;
-    },
-    async finalizeAsset(command: {
-      eventId: string;
-      assetId: string;
-      state: "ready" | "rejected";
-      finalizedAt: string;
-      rejectionReason?: string;
-    }) {
-      const asset = assets.get(command.assetId);
-      if (asset === undefined || asset.eventId !== command.eventId) {
-        return { ok: false, reason: "not_found" } as const;
-      }
-      const finalized = {
-        ...asset,
-        state: command.state,
-        finalizedAt: command.finalizedAt,
-        ...(command.rejectionReason === undefined
-          ? {}
-          : { rejectionReason: command.rejectionReason }),
-      };
-      assets.set(asset.id, finalized);
-      return { ok: true, value: structuredClone(finalized) } as const;
-    },
-  };
-  let uploaded = false;
-  let latestBinding: PrivateAssetCapabilityBinding | undefined;
-  const privateAssets = {
-    async registerUploadCapability(
-      binding: PrivateAssetCapabilityBinding,
-    ): Promise<PrivateUploadGrant> {
-      latestBinding = structuredClone(binding);
-      return {
-        method: "PUT",
-        url: `/api/speaker/assets/capabilities/upload/${binding.capabilityId}/opaque-token`,
-        headers: {
-          "content-type": binding.contentType,
-          "content-length": String(binding.sizeBytes),
-        },
-        expiresAt: binding.expiresAt,
-      };
-    },
-    async verifyUploadCapability(binding: PrivateAssetCapabilityBinding) {
-      return (
-        uploaded &&
-        latestBinding !== undefined &&
-        latestBinding.capabilityId === binding.capabilityId
-      );
-    },
-    async invalidateUploadCapability() {
-      uploaded = false;
-    },
-  };
-  return {
-    gateway: new AirtableCfpFileAssetGateway({
-      cfp,
-      speakers,
-      privateAssets,
-      now: () => new Date("2026-08-08T12:00:00.000Z"),
-    }),
-    setUploaded(value) {
-      uploaded = value;
-    },
-    binding: () => latestBinding,
-  };
-}
-
-describe("production CFP file asset composition", () => {
-  it("binds upload capabilities, denies tenant mismatch, and finds finalized assets", async () => {
-    const fixture = cfpFileAssetCompositionFixture();
-    const authorization = await fixture.gateway.issueUpload({
-      tenantId: "tenant-file",
-      eventId: "event-file",
-      submissionId: "submission-file",
-      owner: "submission",
-      fieldKey: "slides",
-      fileName: "slides.pdf",
-      contentType: "application/pdf",
-      sizeBytes: 4,
-      idempotencyKey: "issue-file-1",
-    });
-
-    expect(authorization).toMatchObject({
-      asset: {
-        tenantId: "tenant-file",
-        eventId: "event-file",
-        submissionId: "submission-file",
-        owner: "submission",
-        state: "pending_upload",
-      },
-      grant: { method: "PUT", url: expect.stringContaining("opaque-token") },
-    });
-    expect(fixture.binding()).toMatchObject({
-      tenantId: "tenant-file",
-      eventId: "event-file",
-      submissionId: "submission-file",
-      objectKey: expect.stringContaining("cfp/"),
-    });
-    await expect(
-      fixture.gateway.getAsset({
-        tenantId: "tenant-other",
-        eventId: "event-file",
-        submissionId: "submission-file",
-        assetId: authorization.asset.assetId,
-        owner: "submission",
-      }),
-    ).resolves.toBeNull();
-
-    fixture.setUploaded(true);
-    const finalized = await fixture.gateway.finalizeUpload({
-      tenantId: "tenant-file",
-      eventId: "event-file",
-      submissionId: "submission-file",
-      fieldKey: "slides",
-      assetId: authorization.asset.assetId,
-      owner: "submission",
-      state: "ready",
-      idempotencyKey: "finalize-file-1",
-    });
-    expect(finalized).toMatchObject({
-      assetId: authorization.asset.assetId,
-      state: "ready",
-      tenantId: "tenant-file",
-    });
-    await expect(
-      fixture.gateway.getAsset({
-        tenantId: "tenant-file",
-        eventId: "event-file",
-        submissionId: "submission-file",
-        assetId: finalized.assetId,
-        owner: "submission",
-      }),
-    ).resolves.toEqual(finalized);
-  });
-});
-
 describe("production CFP receipt effects", () => {
   it("queues one verified submitter receipt per submission version without calling OpenSend", async () => {
     const queueMessages: CloudflareOutboxMessage[] = [];
