@@ -8,8 +8,6 @@ import {
 } from "./outbox-consumer";
 import { CloudflareReminderOutbox } from "./reminder-repository";
 
-const NOW = "2026-08-14T12:00:00.000Z";
-
 class ReminderOutboxD1 {
   row:
     | {
@@ -148,7 +146,7 @@ describe("Cloudflare reminder outbox", () => {
           CALENDAR_FROM_EMAIL: "schedule@current.example",
         } as never,
         undefined,
-        { repository, logger: {}, now: () => new Date(NOW), leaseOwner: "test" },
+        { repository, logger: {}, now: () => job.availableAt, leaseOwner: "test" },
       );
     } finally {
       vi.unstubAllGlobals();

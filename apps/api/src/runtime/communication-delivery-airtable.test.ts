@@ -203,7 +203,7 @@ describe("Airtable communication D1 delivery", () => {
           CALENDAR_FROM_EMAIL: "schedule@current.example",
         } as never,
         undefined,
-        { repository: outbox, logger: {}, now: () => new Date(NOW), leaseOwner: "test" },
+        { repository: outbox, logger: {}, now: () => outboxJob.availableAt, leaseOwner: "test" },
       );
     } finally {
       vi.unstubAllGlobals();

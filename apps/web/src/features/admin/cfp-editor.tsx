@@ -166,9 +166,7 @@ function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
   return [
     ...CORE_PROPOSAL_FIELDS.map((field) => {
       const existing = fieldsByKey.get(field.key ?? field.id);
-      return existing === undefined
-        ? { ...field, options: [...(field.options ?? [])] }
-        : existing;
+      return existing === undefined ? { ...field, options: [...(field.options ?? [])] } : existing;
     }),
     ...fields.filter((field) => !coreKeys.has(field.key ?? field.id)),
   ];
@@ -510,9 +508,9 @@ export function toFormConfiguration(
     const fileRequest =
       kind === "file_request"
         ? {
-            allowedMimeTypes:
-              field.fileRequest?.allowedMimeTypes ??
-              [...DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES],
+            allowedMimeTypes: field.fileRequest?.allowedMimeTypes ?? [
+              ...DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES,
+            ],
             maxBytes: field.fileRequest?.maxBytes ?? DEFAULT_FILE_REQUEST_MAX_BYTES,
             required: field.required,
             owner: fileOwner,
