@@ -14,6 +14,7 @@ import {
   WorkspaceSurface,
   workspaceClassNames,
 } from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createSessionsApi,
   type SessionContentStatus,
@@ -531,7 +532,12 @@ function ScopedSessionsWorkspace({
 }
 
 export function SessionsWorkspace(props: Readonly<SessionsWorkspaceProps>) {
+  const eventId = useOrganizerEventId(props.eventId);
   return (
-    <ScopedSessionsWorkspace key={`${props.organizationId}\u0000${props.eventId}`} {...props} />
+    <ScopedSessionsWorkspace
+      key={`${props.organizationId}\u0000${eventId}`}
+      {...props}
+      eventId={eventId}
+    />
   );
 }

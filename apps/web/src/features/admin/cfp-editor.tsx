@@ -22,6 +22,7 @@ import {
 } from "../cfp/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
+import { useOrganizerEventId } from "./organizer-event-workspace";
 
 const ORGANIZER_STICKY_HEADER_HEIGHT = 52;
 const ORGANIZER_SCROLL_CONTAINER_ID = "admin-content";
@@ -1066,7 +1067,13 @@ interface CfpEditorProps {
   api?: CfpApi;
 }
 
-export function CfpEditor({ eventId, organizationId, formId, api: providedApi }: CfpEditorProps) {
+export function CfpEditor({
+  eventId: fallbackEventId,
+  organizationId,
+  formId,
+  api: providedApi,
+}: CfpEditorProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const [configuration, setConfiguration] = useState<CfpConfiguration>(() =>
     createEmptyCfpConfiguration(eventId),
   );

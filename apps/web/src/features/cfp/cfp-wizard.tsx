@@ -386,7 +386,7 @@ function PublicCfpShell({
       <header className={styles.publicHeader}>
         <div className={styles.publicBrand}>
           <span aria-hidden="true" className={styles.brandMark}>
-            OS
+            E
           </span>
           <span>{resolvedOrganizationName}</span>
         </div>
@@ -660,7 +660,7 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
   );
 }
 
-function submissionPayload(
+export function cfpSubmissionPayload(
   draft: CfpDraft,
   dynamicAnswers: DynamicAnswers,
   participantAnswers: ParticipantAnswers,
@@ -674,8 +674,10 @@ function submissionPayload(
     answers: {
       ...answers,
       title: draft.submission.title,
-      abstract: draft.submission.description,
-      description: draft.submission.description,
+      abstract: dynamicAnswers.abstract ?? draft.submission.description,
+      description:
+        dynamicAnswers.description ??
+        (dynamicAnswers.abstract === undefined ? draft.submission.description : ""),
       format: draft.submission.format,
       tags: draft.submission.tags,
       track: draft.submission.track,
@@ -733,19 +735,68 @@ export function cfpReviewAudienceLevel(
   }
   return { label: "Level", value: reviewValueString(legacyLevel) };
 }
+
+export function cfpReviewSubmissionDetails(
+  form: CfpPublishedForm | undefined,
+  draft: CfpDraft,
+  answers: DynamicAnswers,
+): readonly { key: string; label: string; value: string }[] {
+  if (form && form.submissionFields.length > 0) {
+    const resolvedAnswers = Object.fromEntries(
+      form.submissionFields.map((field) => [
+        field.key,
+        cfpSubmissionFieldValue(draft, answers, field.key),
+      ]),
+    );
+    const evaluated = evaluatePublishedFields(form, {
+      ...answers,
+      ...resolvedAnswers,
+      accountEmail: draft.account.email,
+      accountFirstName: draft.account.firstName,
+      accountLastName: draft.account.lastName,
+    });
+    return form.submissionFields.flatMap((field) => {
+      if (isFileField(field) || evaluated.fields.get(field.key)?.visible === false) return [];
+      const value = reviewValueString(cfpSubmissionFieldValue(draft, answers, field.key));
+      return value === "Not specified" ? [] : [{ key: field.key, label: field.label, value }];
+    });
+  }
+
+  return [
+    { key: "title", label: "Title", value: reviewValueString(draft.submission.title) },
+    {
+      key: "description",
+      label: "Description",
+      value: reviewValueString(draft.submission.description),
+    },
+    { key: "format", label: "Format", value: reviewValueString(draft.submission.format) },
+    { key: "tags", label: "Tags", value: reviewValueString(draft.submission.tags) },
+    { key: "track", label: "Track", value: reviewValueString(draft.submission.track) },
+    { key: "level", label: "Level", value: reviewValueString(draft.submission.level) },
+    { key: "language", label: "Language", value: reviewValueString(draft.submission.language) },
+  ].filter((item) => item.value !== "Not specified");
+}
+
 export function cfpConfirmationEmailMessage(recipient: string): string {
   const delivery =
     recipient.trim().length > 0 ? ` is queued for ${recipient.trim()}` : " is queued";
   return `A confirmation email${delivery} and will include the event name and talk title.`;
 }
 
-function submissionValue(draft: CfpDraft, answers: DynamicAnswers, key: string): unknown {
+export function cfpSubmissionFieldValue(
+  draft: CfpDraft,
+  answers: DynamicAnswers,
+  key: string,
+): unknown {
   switch (key) {
     case "title":
       return draft.submission.title;
     case "abstract":
+      return answers.abstract ?? draft.submission.description;
     case "description":
-      return draft.submission.description;
+      return (
+        answers.description ?? (answers.abstract === undefined ? draft.submission.description : "")
+      );
     case "format":
       return draft.submission.format;
     case "tags":
@@ -789,9 +840,10 @@ function participantValue(
       return answers[key];
   }
 }
-function formSubmissionErrorKey(key: string): string {
+export function cfpSubmissionErrorKey(key: string): string {
   if (key === "title") return "submission.title";
-  if (key === "abstract" || key === "description") return "submission.description";
+  if (key === "abstract") return "submission.abstract";
+  if (key === "description") return "submission.description";
   return `submission.${key}`;
 }
 
@@ -830,8 +882,11 @@ function dynamicFormErrors(
         required: fieldRequired(field),
       };
       if (!state.visible) continue;
-      const value = fieldValueForValidation(field, submissionValue(draft, answers, field.key));
-      const key = formSubmissionErrorKey(field.key);
+      const value = fieldValueForValidation(
+        field,
+        cfpSubmissionFieldValue(draft, answers, field.key),
+      );
+      const key = cfpSubmissionErrorKey(field.key);
       const fileState = fileStates[fileStateKey(field.key)];
       if (isFileField(field) && fileState?.status === "error") {
         errors[key] = fileState.message ?? `${field.label} could not be uploaded.`;
@@ -915,7 +970,8 @@ function removeFixedErrorsForDynamicForm(
   const keys = new Set(form.submissionFields.map((field) => field.key));
   const aliases: Record<string, string[]> = {
     "submission.title": ["title"],
-    "submission.description": ["abstract", "description"],
+    "submission.abstract": ["abstract"],
+    "submission.description": ["description"],
     "submission.format": ["format"],
     "submission.tags": ["tags"],
     "submission.track": ["track"],
@@ -1267,10 +1323,15 @@ export function CfpWizard({
           return { ...current, submission: { ...current.submission, title: String(value ?? "") } };
         }
         if (key === "abstract" || key === "description") {
-          return {
-            ...current,
-            submission: { ...current.submission, description: String(value ?? "") },
-          };
+          const hasPublishedAbstract =
+            published?.form.submissionFields.some((field) => field.key === "abstract") ?? false;
+          if (key === "abstract" || !hasPublishedAbstract) {
+            return {
+              ...current,
+              submission: { ...current.submission, description: String(value ?? "") },
+            };
+          }
+          return current;
         }
         if (key === "tags") {
           return {
@@ -1411,7 +1472,7 @@ export function CfpWizard({
       }
     }
     if (formVersion === null) throw new Error("The CFP form version is unavailable.");
-    const payload = submissionPayload(nextDraft, dynamicAnswers, participantAnswers);
+    const payload = cfpSubmissionPayload(nextDraft, dynamicAnswers, participantAnswers);
     const saved = await api.saveDraft({
       organizationId: identity.organizationId,
       eventId: identity.eventId,
@@ -2558,7 +2619,7 @@ function PublishedFieldControl({
               maxLength={typeof maxLength === "number" ? maxLength : 10000}
               onValueChange={onChange}
               placeholder={placeholder}
-              rows={7}
+              rows={field.key === "abstract" ? 6 : 4}
               value={valueString}
             />
           );
@@ -2682,8 +2743,12 @@ function DynamicSubmissionFields({
         const fields = form.submissionFields.filter((field) => field.sectionId === section.id);
         if (fields.length === 0) return null;
         return (
-          <section className={styles.sectionPanel} key={section.id}>
-            <h2>{section.title}</h2>
+          <section
+            aria-labelledby={`cfp-section-${section.id}`}
+            className={styles.sectionPanel}
+            key={section.id}
+          >
+            <h2 id={`cfp-section-${section.id}`}>{section.title}</h2>
             {section.description ? <p>{section.description}</p> : null}
             {fields.map((field) => {
               const fieldState = evaluated.fields.get(field.key) ?? {
@@ -2695,7 +2760,7 @@ function DynamicSubmissionFields({
                 fieldState.required === field.required
                   ? field
                   : { ...field, required: fieldState.required };
-              const errorKey = formSubmissionErrorKey(field.key);
+              const errorKey = cfpSubmissionErrorKey(field.key);
               return (
                 <PublishedFieldControl
                   key={field.id}
@@ -2708,7 +2773,7 @@ function DynamicSubmissionFields({
                   onFileStateChange={(state) =>
                     onFileUploadStateChange(fileStateKey(field.key), state)
                   }
-                  value={submissionValue(draft, answers, field.key)}
+                  value={cfpSubmissionFieldValue(draft, answers, field.key)}
                 />
               );
             })}
@@ -2882,22 +2947,6 @@ function ParticipantsStep({
               />
             )}
           </Field>
-          <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
-            {(controlProps) => (
-              <Input
-                {...controlProps}
-                autoComplete="tel"
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeParticipant(current, index, { mobilePhone: event.target.value }),
-                  )
-                }
-                placeholder="+1"
-                type="tel"
-                value={participant.mobilePhone}
-              />
-            )}
-          </Field>
           <Field
             error={errors[`participants.${index}.biography`]}
             label="Biography"
@@ -3040,9 +3089,15 @@ function DynamicParticipantsFields({
           mobilePhone: participant.mobilePhone,
         });
         return (
-          <section className={styles.participantCard} key={participant.id}>
+          <section
+            aria-labelledby={`participant-${participant.id}-heading`}
+            className={styles.participantCard}
+            key={participant.id}
+          >
             <div className={styles.participantCardHeading}>
-              <h2>{index === 0 ? "Primary speaker" : `Additional speaker ${index}`}</h2>
+              <h2 id={`participant-${participant.id}-heading`}>
+                {index === 0 ? "Primary speaker" : `Additional speaker ${index}`}
+              </h2>
               {index > 0 ? (
                 <Button
                   className={styles.removeButton}
@@ -3108,20 +3163,6 @@ function DynamicParticipantsFields({
                     onValueChange={(value) => updateParticipantField(index, "biography", value)}
                     rows={6}
                     value={participant.biography}
-                  />
-                )}
-              </Field>
-            ) : null}
-            {!configuredIdentityKeys.has("mobilePhone") ? (
-              <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
-                {(controlProps) => (
-                  <Input
-                    {...controlProps}
-                    onChange={(event) =>
-                      updateParticipantField(index, "mobilePhone", event.target.value)
-                    }
-                    type="tel"
-                    value={participant.mobilePhone}
                   />
                 )}
               </Field>
@@ -3259,7 +3300,7 @@ function ReviewStep({
   answers: DynamicAnswers;
 }) {
   const router = useRouter();
-  const audienceLevel = cfpReviewAudienceLevel(form, answers, draft.submission.level);
+  const submissionDetails = cfpReviewSubmissionDetails(form, draft, answers);
   const uploadedFiles =
     form?.submissionFields.flatMap((field) => {
       if (field.kind !== "file_request") return [];
@@ -3305,13 +3346,9 @@ function ReviewStep({
             ✎ Edit session
           </Button>
         </div>
-        <ReviewValue label="Title" value={draft.submission.title} />
-        <ReviewValue label="Description" value={draft.submission.description} />
-        <ReviewValue label="Format" value={draft.submission.format} />
-        <ReviewValue label="Tags" value={draft.submission.tags.join(", ")} />
-        <ReviewValue label="Track" value={draft.submission.track} />
-        <ReviewValue label={audienceLevel.label} value={audienceLevel.value} />
-        <ReviewValue label="Language" value={draft.submission.language || "Not specified"} />
+        {submissionDetails.map((detail) => (
+          <ReviewValue key={detail.key} label={detail.label} value={detail.value} />
+        ))}
         {uploadedFiles.length > 0 ? (
           <div className={styles.reviewFiles}>
             <p className={styles.reviewFilesLabel}>Uploaded files</p>
@@ -3350,7 +3387,6 @@ function ReviewStep({
               {participant.firstName} {participant.lastName} <span>{participant.role}</span>
             </h3>
             <ReviewValue label="Email" value={participant.email} />
-            <ReviewValue label="Mobile Phone" value={participant.mobilePhone || "Not provided"} />
             <ReviewValue label="Biography" value={participant.biography || "Not provided"} />
           </div>
         ))}

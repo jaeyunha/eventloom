@@ -2,7 +2,7 @@
 
 import { CalendarDays, ChevronDown, LayoutDashboard, LogOut } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   type CSSProperties,
   createContext,
@@ -43,6 +43,13 @@ import { AdminCommandPalette } from "./admin-command-palette";
 import type { AdminCommandPage } from "./admin-command-palette-model";
 import { AdminNavigationIcon } from "./admin-navigation-icon";
 import styles from "./admin-shell.module.css";
+import {
+  canonicalOrganizerEventPath,
+  type OrganizerEventRouteIdentity,
+  parseOrganizerEventCollection,
+  resolveOrganizerEventReference,
+} from "./organizer-event-route";
+import { OrganizerEventWorkspaceProvider } from "./organizer-event-workspace";
 
 export interface OrganizerNavigationItem {
   href: string;
@@ -292,8 +299,53 @@ export async function fetchOrganizerEventName(
   return eventWorkspaceNameFromResponse(await response.json().catch(() => null), eventId);
 }
 
+export function eventWorkspaceFromCollectionResponse(
+  payload: unknown,
+  eventReference: string,
+): OrganizerEventRouteIdentity | null {
+  try {
+    return (
+      resolveOrganizerEventReference(parseOrganizerEventCollection(payload), eventReference) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchOrganizerEventWorkspace(
+  apiBaseUrl: string,
+  organizationId: string,
+  eventReference: string,
+  fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = fetch,
+): Promise<OrganizerEventRouteIdentity | null> {
+  const response = await fetcher(
+    `${apiBaseUrl}/api/admin/organizations/${encodeURIComponent(organizationId)}/events`,
+    {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) return null;
+  return eventWorkspaceFromCollectionResponse(
+    await response.json().catch(() => null),
+    eventReference,
+  );
+}
+
+type EventWorkspaceResolution =
+  | { readonly eventReference: string; readonly status: "loading" }
+  | {
+      readonly event: OrganizerEventRouteIdentity;
+      readonly eventReference: string;
+      readonly status: "resolved";
+    }
+  | { readonly eventReference: string; readonly status: "unavailable" };
+
 export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const publicMemberSetup = isPublicMemberSetupPath(pathname);
   const eventContext = qualifiedEventContext(pathname);
   const requiredOrganizationId = organizationIdFromPathname(pathname);
@@ -309,12 +361,14 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const navigationGroups = organizerNavigationGroupsFor(eventContext, currentOrganizationId);
   const eventWorkspaceDestinations = eventWorkspaceDestinationsFor(eventContext);
   const eventOrganizationId = eventContext?.organizationId ?? null;
-  const eventId = eventContext?.eventId ?? null;
-  const [eventWorkspaceName, setEventWorkspaceName] = useState<{
-    eventId: string;
-    name: string;
-  } | null>(null);
-  const currentEventName = eventWorkspaceName?.eventId === eventId ? eventWorkspaceName.name : null;
+  const eventReference = eventContext?.eventId ?? null;
+  const [eventWorkspaceResolution, setEventWorkspaceResolution] =
+    useState<EventWorkspaceResolution | null>(null);
+  const currentEventResolution =
+    eventWorkspaceResolution?.eventReference === eventReference ? eventWorkspaceResolution : null;
+  const currentEvent =
+    currentEventResolution?.status === "resolved" ? currentEventResolution.event : null;
+  const currentEventName = currentEvent?.name ?? null;
   const [authentication, setAuthentication] = useState<"checking" | "authenticated" | "denied">(
     "checking",
   );
@@ -327,28 +381,44 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const [commandOpen, setCommandOpen] = useState(false);
 
   useEffect(() => {
-    if (eventOrganizationId === null || eventId === null) return;
+    if (eventOrganizationId === null || eventReference === null) {
+      setEventWorkspaceResolution(null);
+      return;
+    }
     const controller = new AbortController();
-    fetch(
-      `/api/admin/organizations/${encodeURIComponent(eventOrganizationId)}/events/${encodeURIComponent(eventId)}`,
-      {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
-      },
+    setEventWorkspaceResolution({ eventReference, status: "loading" });
+    void fetchOrganizerEventWorkspace("", eventOrganizationId, eventReference, (input, init) =>
+      fetch(input, { ...init, signal: controller.signal }),
     )
-      .then(async (response) => (response.ok ? response.json() : null))
-      .then((payload: unknown) => {
+      .then((event) => {
         if (controller.signal.aborted) return;
-        const name = eventWorkspaceNameFromResponse(payload, eventId);
-        setEventWorkspaceName(name === null ? null : { eventId, name });
+        setEventWorkspaceResolution(
+          event === null
+            ? { eventReference, status: "unavailable" }
+            : { event, eventReference, status: "resolved" },
+        );
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        if (!controller.signal.aborted) setEventWorkspaceName(null);
+        if (!controller.signal.aborted) {
+          setEventWorkspaceResolution({ eventReference, status: "unavailable" });
+        }
       });
     return () => controller.abort();
-  }, [eventId, eventOrganizationId]);
+  }, [eventOrganizationId, eventReference]);
+
+  useEffect(() => {
+    if (eventContext === null || currentEvent === null) return;
+    const canonicalPath = canonicalOrganizerEventPath(
+      pathname,
+      eventContext.organizationId,
+      eventContext.eventId,
+      currentEvent,
+    );
+    if (!canonicalPath) return;
+    const query = searchParams.toString();
+    router.replace(query ? `${canonicalPath}?${query}` : canonicalPath, { scroll: false });
+  }, [currentEvent, eventContext, pathname, router, searchParams]);
 
   useEffect(() => {
     if (publicMemberSetup) {
@@ -484,7 +554,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
               </SidebarMenuItem>
             </SidebarMenu>
             <AdminCommandPalette
-              currentEventId={eventId}
+              currentEventId={currentEvent?.id ?? null}
               onOpenChange={setCommandOpen}
               open={commandOpen}
               organizationId={currentOrganizationId}
@@ -702,7 +772,22 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                 </section>
               ) : effectiveAuthentication === "authenticated" && currentOrganizationId !== null ? (
                 <OrganizerOrganizationContext.Provider value={currentOrganizationId}>
-                  {children}
+                  <OrganizerEventWorkspaceProvider
+                    event={currentEvent}
+                    organizationId={currentOrganizationId}
+                  >
+                    {eventContext === null || currentEvent !== null ? (
+                      children
+                    ) : (
+                      <p
+                        role={currentEventResolution?.status === "unavailable" ? "alert" : "status"}
+                      >
+                        {currentEventResolution?.status === "unavailable"
+                          ? "This event workspace could not be found."
+                          : "Loading event workspace…"}
+                      </p>
+                    )}
+                  </OrganizerEventWorkspaceProvider>
                 </OrganizerOrganizationContext.Provider>
               ) : null}
             </div>

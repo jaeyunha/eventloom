@@ -53,6 +53,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createDeliverablesApi,
   type DeliverableAsset,
@@ -2839,12 +2840,13 @@ function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableA
 }
 
 export function DeliverablesWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
   mode = "deliverables",
   api: providedApi,
   initialData,
 }: DeliverablesWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(
     () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
     [eventId, organizationId, providedApi],

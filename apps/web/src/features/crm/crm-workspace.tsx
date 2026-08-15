@@ -3212,7 +3212,7 @@ export function CrmWorkspaceView({
                   {selectedEvent?.name ?? lastAddedEventId}
                   {lastEventResult.idempotent ? " (idempotent)." : "."}{" "}
                   <Link
-                    href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(lastAddedEventId)}`}
+                    href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(selectedEvent?.slug ?? lastAddedEventId)}`}
                   >
                     Open event workspace
                   </Link>

@@ -29,6 +29,7 @@ import {
   StatusBadge as WorkspaceStatusBadge,
 } from "@/components/workspace/workspace-ui";
 import { createMemberApi, type OrganizationMember } from "../members/api";
+import { useOrganizerEventId } from "./organizer-event-workspace";
 import styles from "./submission-workspace.module.css";
 
 export type SubmissionStatus =
@@ -1005,7 +1006,7 @@ export function submissionListState(input: {
 }
 
 export function SubmissionListWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
   selectedSubmissionId,
 }: Readonly<{
@@ -1013,6 +1014,7 @@ export function SubmissionListWorkspace({
   organizationId: string;
   selectedSubmissionId?: string;
 }>) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
   const [track, setTrack] = useState("all");

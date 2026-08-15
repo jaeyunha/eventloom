@@ -20,6 +20,7 @@ import {
   WorkspaceHeader,
   WorkspaceMetaItem,
 } from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
@@ -1947,8 +1948,9 @@ interface ScopedAgendaWorkspaceProps extends AgendaWorkspaceProps {
 }
 
 export function AgendaWorkspace(props: Readonly<AgendaWorkspaceProps>) {
-  const scopeKey = agendaWorkspaceScopeKey(props.organizationId, props.eventId);
-  return <ScopedAgendaWorkspace key={scopeKey} {...props} scopeKey={scopeKey} />;
+  const eventId = useOrganizerEventId(props.eventId);
+  const scopeKey = agendaWorkspaceScopeKey(props.organizationId, eventId);
+  return <ScopedAgendaWorkspace key={scopeKey} {...props} eventId={eventId} scopeKey={scopeKey} />;
 }
 
 function ScopedAgendaWorkspace({
