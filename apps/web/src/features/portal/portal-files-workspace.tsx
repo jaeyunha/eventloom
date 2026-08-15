@@ -1,5 +1,12 @@
 "use client";
 
+import {
+  formatUploadMimeTypes,
+  standardImageUploadMimeTypes,
+  standardPresentationUploadMimeTypes,
+  standardSupportingFileUploadMimeTypes,
+  standardUploadMaximumBytes,
+} from "@eventloom/contracts";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input } from "@/components/ui";
 import {
@@ -51,6 +58,23 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+const uploadPolicies: Readonly<
+  Record<PortalAsset["kind"], { mimeTypes: readonly string[]; maxBytes: number }>
+> = {
+  headshot: {
+    mimeTypes: standardImageUploadMimeTypes,
+    maxBytes: standardUploadMaximumBytes.headshot,
+  },
+  slides: {
+    mimeTypes: standardPresentationUploadMimeTypes,
+    maxBytes: standardUploadMaximumBytes.slides,
+  },
+  supporting_file: {
+    mimeTypes: standardSupportingFileUploadMimeTypes,
+    maxBytes: standardUploadMaximumBytes.supporting_file,
+  },
+};
+
 export function FilesWorkspaceView({
   eventName,
   sessions,
@@ -81,6 +105,8 @@ export function FilesWorkspaceView({
   const families = useMemo(() => groupPortalAssetVersions(scopedAssets), [scopedAssets]);
   const selectedFamily = families.find((family) => family.id === selectedFamilyId) ?? families[0];
   const uploadFamily = families.find((family) => family.id === uploadFamilyId);
+  const uploadKind = uploadFamily?.kind ?? kind;
+  const uploadPolicy = uploadPolicies[uploadKind];
   const uploadResolution = uploadFamily
     ? resolvePortalAssetFamily(uploadFamily.versions, uploadFamily.current)
     : null;
@@ -157,6 +183,7 @@ export function FilesWorkspaceView({
                   value={uploadFamilyId}
                   onChange={(event) => {
                     setUploadFamilyId(event.currentTarget.value);
+                    setFile(null);
                     const family = families.find(
                       (candidate) => candidate.id === event.currentTarget.value,
                     );
@@ -175,8 +202,11 @@ export function FilesWorkspaceView({
                 <span>File type</span>
                 <select
                   disabled={Boolean(uploadFamily)}
-                  value={uploadFamily?.kind ?? kind}
-                  onChange={(event) => setKind(event.currentTarget.value as PortalAsset["kind"])}
+                  value={uploadKind}
+                  onChange={(event) => {
+                    setKind(event.currentTarget.value as PortalAsset["kind"]);
+                    setFile(null);
+                  }}
                 >
                   <option value="headshot">Headshot</option>
                   <option value="slides">Slides</option>
@@ -187,11 +217,17 @@ export function FilesWorkspaceView({
             <label className={styles.field} htmlFor={uploadInputId}>
               <span>Choose file</span>
               <Input
+                key={`${uploadFamilyId}:${uploadKind}`}
                 id={uploadInputId}
                 required
                 type="file"
+                accept={uploadPolicy.mimeTypes.join(",")}
                 onChange={(event) => setFile(event.currentTarget.files?.[0] ?? null)}
               />
+              <small>
+                Accepted: {formatUploadMimeTypes(uploadPolicy.mimeTypes)}. Maximum{" "}
+                {formatBytes(uploadPolicy.maxBytes)}.
+              </small>
             </label>
             {uploadFamily && !uploadResolution?.current ? (
               <p className={styles.notice}>
@@ -314,6 +350,7 @@ function FileFamilyDetail({
       <MetadataList>
         <MetadataRow label="Session ID" value={display.submissionId ?? "Unavailable"} />
         <MetadataRow label="Size" value={formatBytes(display.sizeBytes)} />
+        <MetadataRow label="Format" value={display.contentType} />
         <MetadataRow label="Review state" value={portalReviewStatus(current)} />
       </MetadataList>
       {current?.reviewNote ? (
@@ -326,7 +363,7 @@ function FileFamilyDetail({
       <Button
         type="button"
         variant="outline"
-        disabled={!current || current.state !== "ready" || busyAssetIds.has(current.id)}
+        disabled={current?.state !== "ready" || busyAssetIds.has(current.id)}
         onClick={() => current && onDownload(current)}
       >
         Download current version

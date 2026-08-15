@@ -1,5 +1,6 @@
 "use client";
 
+import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -2566,16 +2567,7 @@ function FileRequestControl({
       ? undefined
       : { status: "ready" as const, assetId: persistedAssetId });
   const uploadSequenceRef = useRef(0);
-  const acceptedTypeLabels = acceptedTypes.map((type) => {
-    const labels: Record<string, string> = {
-      "application/pdf": "PDF",
-      "application/msword": "Word",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word",
-      "application/vnd.ms-powerpoint": "PowerPoint",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PowerPoint",
-    };
-    return labels[type.trim().toLowerCase()] ?? type;
-  });
+  const acceptedTypeLabels = uploadMimeTypeLabels(acceptedTypes);
   const maxSizeLabel =
     maxSize === undefined
       ? undefined

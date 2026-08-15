@@ -12,6 +12,13 @@ import {
 import styles from "./portal-workspace.module.css";
 import type { PortalAsset } from "./types";
 
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "Unknown size";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 function formatDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
@@ -80,6 +87,8 @@ export function AssetDetails({
                 </div>
               </div>
               <MetadataList>
+                <MetadataRow label="Format" value={version.contentType} />
+                <MetadataRow label="Size" value={formatBytes(version.sizeBytes)} />
                 <MetadataRow label="Uploaded" value={formatDate(version.createdAt)} />
                 <MetadataRow label="Review" value={portalReviewStatus(version)} />
               </MetadataList>

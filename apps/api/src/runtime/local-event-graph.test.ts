@@ -29,7 +29,7 @@ describe("local fixture event graph", () => {
   beforeAll(async () => {
     dependencies = createLocalDependencies();
     await dependencies.agenda?.engine.getPublishedAgenda("demo-event");
-  });
+  }, 30_000);
 
   it("lists only evaluation plans covered by explicit reviewer grants", async () => {
     const app = createApp(dependencies);

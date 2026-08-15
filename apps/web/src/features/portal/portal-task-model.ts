@@ -1,3 +1,4 @@
+import { formatUploadMimeTypes } from "@eventloom/contracts";
 import { portalSubmissionIdsMatch } from "./model";
 import { formatPortalFileSize } from "./portal-ui";
 import type { PortalProfile, PortalSubmission, PortalTask } from "./types";
@@ -180,7 +181,7 @@ export function validateTaskUpload(
   if (!mimeTypeAllowed(file.type, policy.allowedMimeTypes)) {
     return {
       valid: false,
-      error: `This file type is not allowed. Accepted types: ${policy.allowedMimeTypes.join(", ")}.`,
+      error: `This file type is not allowed. Accepted types: ${formatUploadMimeTypes(policy.allowedMimeTypes)}.`,
     };
   }
   if (!Number.isFinite(file.size) || file.size < 0 || file.size > policy.maxBytes) {

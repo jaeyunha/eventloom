@@ -153,6 +153,11 @@ describe("focused participant workspaces", () => {
     expect(markup).toContain("Needs changes");
     expect(markup).toContain("Replace the draft agenda slide.");
     expect(markup).toContain("Download current version");
+    expect(markup).toContain("application/pdf");
+    expect(markup).toContain("1.5 KiB");
+    expect(markup).toContain(
+      'accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,image/jpeg,image/png,image/webp"',
+    );
     expect(markup).not.toMatch(/comments|activity history|uploaded by/iu);
   });
 

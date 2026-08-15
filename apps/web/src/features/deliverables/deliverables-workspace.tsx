@@ -1,5 +1,6 @@
 "use client";
 
+import { standardFileRequestMimeTypes } from "@eventloom/contracts";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -728,7 +729,7 @@ function TaskComposer({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueAt, setDueAt] = useState("");
-  const [mimeTypes, setMimeTypes] = useState("application/pdf");
+  const [mimeTypes, setMimeTypes] = useState(standardFileRequestMimeTypes.join(", "));
   const [maxSizeMb, setMaxSizeMb] = useState("100");
   const [acceptedAssetKinds, setAcceptedAssetKinds] = useState<readonly DeliverableAssetKind[]>([
     "slides",
@@ -820,7 +821,7 @@ function TaskComposer({
     setTitle("");
     setDescription("");
     setDueAt("");
-    setMimeTypes("application/pdf");
+    setMimeTypes(standardFileRequestMimeTypes.join(", "));
     setMaxSizeMb("100");
     setAcceptedAssetKinds(["slides"]);
     setSubjectType("session");
@@ -882,7 +883,7 @@ function TaskComposer({
                   rows={3}
                   value={description}
                   onChange={(event) => setDescription(event.currentTarget.value)}
-                  placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
+                  placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
                   required
                 />
               </div>
@@ -921,14 +922,15 @@ function TaskComposer({
               <div className={gridClass}>
                 <div className={fieldClass}>
                   <Label htmlFor="task-mime-types">Allowed MIME types</Label>
-                  <Input
+                  <Textarea
                     id="task-mime-types"
+                    rows={3}
                     value={mimeTypes}
                     onChange={(event) => setMimeTypes(event.currentTarget.value)}
                     aria-describedby="mime-help"
                   />
                   <small id="mime-help" className={mutedClass}>
-                    Comma-separated values, for example application/pdf.
+                    Defaults to PDF, Word, PowerPoint, JPG, PNG, WebP, and plain text.
                   </small>
                 </div>
                 <div className={fieldClass}>
