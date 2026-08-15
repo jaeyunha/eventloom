@@ -26,7 +26,7 @@ export function WorkspaceStatus({
       <header className={styles.workspaceHeader}>
         <div>
           <p className={styles.eyebrow}>
-            {eventId === undefined ? "Reviewer workspace" : `${eventId} · ${mode}`}
+            {mode === "organizer" ? "Organizer review" : "Reviewer workspace"}
           </p>
           <h1>{reviewer ? "Reviewer queue" : "Evaluation plan"}</h1>
         </div>

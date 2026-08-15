@@ -7,6 +7,7 @@ export interface WorkspaceShellProps extends HTMLAttributes<HTMLDivElement> {
   readonly navigation?: ReactNode;
   readonly mobileNavigation?: ReactNode;
   readonly contextBar?: ReactNode;
+  readonly contentBodyClassName?: string;
   readonly mainClassName?: string;
   readonly mainId?: string;
 }
@@ -19,6 +20,7 @@ export function WorkspaceShell({
   navigation,
   mobileNavigation,
   contextBar,
+  contentBodyClassName,
   mainClassName,
   mainId = "workspace-main",
   className,
@@ -33,10 +35,10 @@ export function WorkspaceShell({
       {navigation === undefined ? null : (
         <aside className={styles.desktopNavigation}>{navigation}</aside>
       )}
-      <main className={cn(styles.main, mainClassName)} id={mainId} tabIndex={-1}>
+      <main className={cn(styles.main, styles.insetPanel, mainClassName)} id={mainId} tabIndex={-1}>
         <div className={styles.content}>
           {contextBar === undefined ? null : <div className={styles.context}>{contextBar}</div>}
-          {children}
+          <div className={cn(styles.contentBody, contentBodyClassName)}>{children}</div>
         </div>
       </main>
       {mobileNavigation === undefined ? null : (

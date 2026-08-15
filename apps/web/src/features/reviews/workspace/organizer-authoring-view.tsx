@@ -37,7 +37,7 @@ export function OrganizerAuthoringView({
         {assignmentOnly
           ? "Choose a submission that needs attention, fill missing reviewer slots, preview coverage, and apply coverage without editing the plan or rubric. Existing assignments remain unchanged."
           : isDraft
-            ? "Shape the review schedule, reviewer eligibility, and rubric before opening this version for reviewers."
+            ? "Shape the review schedule, track targeting, and rubric before opening this version for reviewers. Round review teams are managed from the Review team tab."
             : "Inspect the live grading configuration. Its rounds and rubric are locked to protect existing assignments and reviews; create a revision before changing them."}
       </p>
       {assignmentOnly ? <OrganizerAssignmentCoverage controller={controller} /> : null}

@@ -6,7 +6,7 @@
 .header {
   display: grid;
   gap: 1rem;
-  padding: 1.25rem 1.5rem 1.15rem;
+  padding: 1.25rem var(--workspace-heading-padding-inline, 1.5rem) 1.15rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--background) 96%, transparent), transparent),

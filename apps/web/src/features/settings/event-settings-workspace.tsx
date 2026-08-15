@@ -337,6 +337,7 @@ function SettingsSectionNavigation({
             className={`${styles.navigationLink} ${section === item.id ? styles.navigationLinkActive : ""}`}
             href={eventSettingsSectionHref(organizationId, eventSlug, item.id)}
             aria-current={section === item.id ? "page" : undefined}
+            title={item.description}
             onClick={() => setMobileOpen(false)}
           >
             <item.icon className={styles.navigationIcon} aria-hidden />
@@ -1508,50 +1509,58 @@ export function EventSettingsWorkspaceView({
       ? (state.detailsMessage ?? "The event library and audit history could not be loaded.")
       : null;
   const sectionDefinition = eventSettingsSectionDefinition(section);
+  const header = (
+    <WorkspaceHeader
+      className={data ? (styles.destinationHeader ?? "") : (styles.stateHeader ?? "")}
+      breadcrumb={
+        <WorkspaceBreadcrumb>
+          <Link href="/admin/events">Events</Link>
+          <span aria-hidden="true">/</span>
+          <span>{eventIdentity?.name ?? "Event settings"}</span>
+          <span aria-hidden="true">/</span>
+          <span>Settings</span>
+        </WorkspaceBreadcrumb>
+      }
+      title={sectionDefinition.label}
+      description={sectionDefinition.description}
+      metadata={
+        <WorkspaceMetaItem>{contextLabel(organizationId, eventIdentity)}</WorkspaceMetaItem>
+      }
+    />
+  );
 
   return (
     <main id="event-settings-content" className={styles.workspace} tabIndex={-1}>
-      <WorkspaceHeader
-        breadcrumb={
-          <WorkspaceBreadcrumb>
-            <Link href="/admin/events">Events</Link>
-            <span aria-hidden="true">/</span>
-            <span>{eventIdentity?.name ?? "Event settings"}</span>
-            <span aria-hidden="true">/</span>
-            <span>Settings</span>
-          </WorkspaceBreadcrumb>
-        }
-        title={sectionDefinition.label}
-        description={sectionDefinition.description}
-        metadata={
-          <WorkspaceMetaItem>{contextLabel(organizationId, eventIdentity)}</WorkspaceMetaItem>
-        }
-      />
-
       {state.status === "error" || state.status === "config-error" ? (
-        <Card className={styles.fullWidthState} role="alert">
-          <CardHeader>
-            <CardTitle>Event settings unavailable</CardTitle>
-            <CardDescription>{state.message}</CardDescription>
-          </CardHeader>
-          <CardContent className={styles.stateActions}>
-            <p className={styles.mutedText}>
-              Core event settings were not loaded, so section navigation is unavailable.
-            </p>
-            {onRetry ? (
-              <Button type="button" variant="outline" onClick={onRetry}>
-                Try again
-              </Button>
-            ) : null}
-          </CardContent>
-        </Card>
+        <>
+          {header}
+          <Card className={styles.fullWidthState} role="alert">
+            <CardHeader>
+              <CardTitle>Event settings unavailable</CardTitle>
+              <CardDescription>{state.message}</CardDescription>
+            </CardHeader>
+            <CardContent className={styles.stateActions}>
+              <p className={styles.mutedText}>
+                Core event settings were not loaded, so section navigation is unavailable.
+              </p>
+              {onRetry ? (
+                <Button type="button" variant="outline" onClick={onRetry}>
+                  Try again
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
+        </>
       ) : state.status === "loading" && !data ? (
-        <Card className={styles.fullWidthState} aria-live="polite" aria-busy="true">
-          <CardHeader>
-            <CardTitle>Loading event settings</CardTitle>
-            <CardDescription>Retrieving event-scoped statuses and rooms.</CardDescription>
-          </CardHeader>
-        </Card>
+        <>
+          {header}
+          <Card className={styles.fullWidthState} aria-live="polite" aria-busy="true">
+            <CardHeader>
+              <CardTitle>Loading event settings</CardTitle>
+              <CardDescription>Retrieving event-scoped statuses and rooms.</CardDescription>
+            </CardHeader>
+          </Card>
+        </>
       ) : data ? (
         <SettingsShell
           navigation={
@@ -1563,6 +1572,7 @@ export function EventSettingsWorkspaceView({
           }
           wide={section === "history"}
         >
+          {header}
           <div className="sr-only" role="status" aria-live="polite">
             {notice}
           </div>

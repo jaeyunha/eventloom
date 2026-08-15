@@ -51,5 +51,6 @@ describe("RoleWorkspaceShell", () => {
     );
 
     expect(css).toMatch(/\.sidebar\s*\{[\s\S]*border-right:\s*0;/u);
+    expect(css).toMatch(/\.inset\s*\{[\s\S]*border:\s*1px solid[\s\S]*border-radius:\s*0\.75rem;/u);
   });
 });

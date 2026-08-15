@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { Button } from "../../../components/ui/button";
 import {
   Card,
@@ -24,13 +25,27 @@ export function OrganizerAssignmentsPanel({
     onAuthoritativePlan,
     onAssignmentsPersisted,
     assignmentTarget,
-    setView,
   } = controller;
+  const invitationHref = controller.organizationId
+    ? `/admin/organizations/${encodeURIComponent(controller.organizationId)}/members?tab=invite`
+    : "/admin/events";
   return (
     <>
+      <div className={styles.viewIntro}>
+        <p className={styles.sectionEyebrow}>Review team</p>
+        <h2>Choose the round team, then distribute work</h2>
+        <p>
+          Add organization reviewers to this event round, set their capacity, create submission
+          assignments, and monitor completion from one place.
+        </p>
+        <Button asChild variant="outline">
+          <Link href={invitationHref}>Invite reviewers</Link>
+        </Button>
+      </div>
       <OrganizerAuthoring
         seed={seed}
         baseUrl={baseUrl}
+        organizationId={controller.organizationId}
         reviewerMembers={reviewerMembers}
         reviewerMembersLoading={reviewerMembersLoading}
         reviewerMembersError={reviewerMembersError}
@@ -39,25 +54,18 @@ export function OrganizerAssignmentsPanel({
         assignmentOnly
         assignmentTarget={assignmentTarget ?? undefined}
       />
-      <div className={styles.viewIntro}>
-        <p className={styles.sectionEyebrow}>Reviewers</p>
-        <h2>Keep reviewer coverage moving</h2>
-        <p>Monitor completion, send reminders, and remove assignments that need to be replaced.</p>
-        <Button type="button" variant="outline" onClick={() => setView("assignments")}>
-          Add or update assignments
-        </Button>
-      </div>
       {seed.assignments.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>No reviewers assigned</CardTitle>
+            <CardTitle>No assignments yet</CardTitle>
             <CardDescription>
-              Choose a submission and verified reviewers to begin this review round.
+              Save the round review team above, then choose a submission and reviewers to create the
+              first assignments.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button type="button" onClick={() => setView("assignments")}>
-              Assign reviewers
+            <Button asChild>
+              <a href="#assignment-task-heading">Fill reviewer slots</a>
             </Button>
           </CardContent>
         </Card>

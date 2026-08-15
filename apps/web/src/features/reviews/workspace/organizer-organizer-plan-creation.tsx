@@ -70,7 +70,7 @@ export function OrganizerPlanCreation({
       </a>
       <header className={styles.workspaceHeader}>
         <div>
-          <p className={styles.eyebrow}>{eventId} · organizer</p>
+          <p className={styles.eyebrow}>Organizer review setup</p>
           <h1>Create evaluation plan</h1>
         </div>
         <ReviewNavigation eventId={eventId} mode="organizer" organizationId={organizationId} />
@@ -83,8 +83,8 @@ export function OrganizerPlanCreation({
           </div>
         </div>
         <p className={styles.sectionIntro}>
-          Start with one or more rounds and a first rubric. You can add rounds, reviewer pools, and
-          criteria after the plan is created.
+          Start with one or more rounds and a first rubric. Round review teams are managed after
+          creation from Review team.
         </p>
         <form onSubmit={(event) => void submit(event)} aria-describedby="create-plan-help">
           <div className={styles.summaryGrid}>
@@ -97,10 +97,6 @@ export function OrganizerPlanCreation({
                 autoComplete="off"
                 required
               />
-            </div>
-            <div className={styles.formField}>
-              <label htmlFor="create-plan-event-id">Event ID</label>
-              <input id="create-plan-event-id" value={eventId} readOnly />
             </div>
             <div className={styles.formField}>
               <label htmlFor="create-plan-rounds">Rounds</label>

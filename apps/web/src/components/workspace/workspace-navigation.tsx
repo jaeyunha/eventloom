@@ -24,6 +24,7 @@ export interface WorkspaceNavigationItem {
 export interface WorkspaceNavigationProps extends Omit<HTMLAttributes<HTMLElement>, "children"> {
   readonly items: readonly WorkspaceNavigationItem[];
   readonly ariaLabel?: string;
+  readonly variant?: "standalone" | "embedded";
 }
 
 function NavigationLinks({
@@ -60,16 +61,22 @@ export function DesktopNavigation({
   items,
   ariaLabel = "Workspace navigation",
   className,
+  variant = "standalone",
   ...props
 }: WorkspaceNavigationProps) {
   return (
-    <nav aria-label={ariaLabel} className={cn(styles.desktopNavigation, className)} {...props}>
+    <nav
+      aria-label={ariaLabel}
+      className={cn(styles.desktopNavigation, variant === "embedded" && styles.embedded, className)}
+      {...props}
+    >
       <NavigationLinks items={items} />
     </nav>
   );
 }
 
-export interface MobileBottomNavigationProps extends Omit<WorkspaceNavigationProps, "ariaLabel"> {
+export interface MobileBottomNavigationProps
+  extends Omit<WorkspaceNavigationProps, "ariaLabel" | "variant"> {
   readonly ariaLabel?: string;
   readonly moreItems?: readonly WorkspaceNavigationItem[];
   readonly moreLabel?: string;
