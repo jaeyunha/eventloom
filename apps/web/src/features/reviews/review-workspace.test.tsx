@@ -40,6 +40,10 @@ import {
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
 
+vi.mock("@/features/admin/organizer-event-workspace", () => ({
+  useOrganizerEventId: (fallbackEventId?: string) => fallbackEventId,
+}));
+
 it("derives an active plan closing date from its final round", () => {
   expect(
     effectiveReviewClosesAt({
