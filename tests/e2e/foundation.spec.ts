@@ -3,12 +3,8 @@ import { expect, test } from "@playwright/test";
 test("web and API foundations run as independent healthy services", async ({ page, request }) => {
   await page.goto("/");
 
-  await expect(
-    page.getByRole("heading", {
-      level: 1,
-      name: "Run your speaker program from first submission to published agenda.",
-    }),
-  ).toBeVisible();
+  await expect(page.locator("#hero-title")).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Eventloom workflow preview" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open the CFP" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Sign in", exact: true }).first()).toBeVisible();
 
