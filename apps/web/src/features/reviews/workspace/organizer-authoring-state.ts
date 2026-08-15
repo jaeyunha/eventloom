@@ -10,6 +10,7 @@ import type { ReviewPlanSeed } from "./organizer-review-plan-seed";
 export interface OrganizerAuthoringProps {
   seed: ReviewPlanSeed;
   baseUrl: string;
+  organizationId?: string | undefined;
   reviewerMembers: readonly OrganizationMember[];
   reviewerMembersLoading: boolean;
   reviewerMembersError: string | null;
@@ -26,6 +27,7 @@ export function useOrganizerAuthoringState({
   const {
     seed,
     baseUrl,
+    organizationId,
     reviewerMembers,
     reviewerMembersLoading,
     reviewerMembersError,
@@ -135,6 +137,7 @@ export function useOrganizerAuthoringState({
   return {
     seed,
     baseUrl,
+    organizationId,
     reviewerMembers,
     reviewerMembersLoading,
     reviewerMembersError,

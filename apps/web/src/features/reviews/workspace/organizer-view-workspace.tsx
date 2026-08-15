@@ -16,7 +16,7 @@ export function OrganizerWorkspaceSurface({
   const { seed, organizationId, view, setView } = controller;
   const tabs = [
     ["overview", "Overview"],
-    ["assignments", "Reviewers"],
+    ["assignments", "Review team"],
     ["setup", "Plan & rubric"],
     ["decisions", "Results"],
   ] as const;
@@ -27,7 +27,7 @@ export function OrganizerWorkspaceSurface({
       </a>
       <header className={styles.workspaceHeader}>
         <div>
-          <p className={styles.eyebrow}>{seed.eventName} · organizer review</p>
+          <p className={styles.eyebrow}>Organizer review</p>
           <h1>{seed.planName}</h1>
           <p className={styles.headerDescription}>
             Configure the plan, repair review coverage, follow up with reviewers, and record final

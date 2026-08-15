@@ -1,8 +1,14 @@
-import { createElement } from "react";
+import { createElement, isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import MembersPage from "../../app/admin/organizations/[organizationId]/members/page";
 import { isPublicMemberSetupPath, sessionHasOrganizerMembership } from "../admin/admin-shell";
-import { createMemberApi, type OrganizationMember, type ReviewerPool } from "./api";
+import {
+  activeVerifiedReviewers,
+  createMemberApi,
+  type OrganizationMember,
+  type ReviewerPool,
+} from "./api";
 import {
   completeMemberSetup,
   MemberSetup,
@@ -49,6 +55,10 @@ const pool: ReviewerPool = {
 };
 
 describe("organization member API adapter", () => {
+  it("limits assignment candidates to active verified reviewer-role members", () => {
+    expect(activeVerifiedReviewers([owner, reviewer])).toEqual([reviewer]);
+  });
+
   it("uses organization-qualified member and event-round pool endpoints", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const scopedOwner = { ...owner, organizationId: "org/1" };
@@ -325,8 +335,6 @@ describe("member workspace", () => {
     const markup = renderToStaticMarkup(
       createElement(MemberWorkspace, {
         organizationId: "org-1",
-        eventId: "event-1",
-        roundId: "round-1",
         baseUrl: "https://api.example.test",
       }),
     );
@@ -334,7 +342,9 @@ describe("member workspace", () => {
     expect(markup).toContain("People");
     expect(markup).toContain("People directory");
     expect(markup).toContain("Invite member");
-    expect(markup).toContain("Reviewer pools");
+    expect(markup).not.toContain("Reviewer pools");
+    expect(markup).not.toContain("Load pool");
+    expect(markup).not.toContain("Save reviewer pool");
     expect(markup).not.toContain("Organization settings");
     expect(markup).toContain("Search people");
     expect(markup).not.toContain("CEP-10");
@@ -344,6 +354,17 @@ describe("member workspace", () => {
     expect(markup).not.toContain("Organization configuration (JSON)");
     expect(markup).not.toContain("Event ID");
     expect(markup).not.toContain("Round ID");
+  });
+
+  it("opens the invitation tab directly from an event review link", async () => {
+    const page = await MembersPage({
+      params: Promise.resolve({ organizationId: "org-1" }),
+      searchParams: Promise.resolve({ tab: "invite" }),
+    });
+
+    expect(isValidElement<{ initialTab?: string }>(page)).toBe(true);
+    if (!isValidElement<{ initialTab?: string }>(page)) throw new Error("Members page is invalid.");
+    expect(page.props.initialTab).toBe("invite");
   });
 
   it("renders organization settings only through the dedicated settings workspace", () => {

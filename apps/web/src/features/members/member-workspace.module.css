@@ -77,6 +77,8 @@
 }
 
 .cardHeader {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 0.85rem;
 }
 
@@ -345,6 +347,16 @@
 
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  .cardHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .cardHeader [data-slot="card-action"] {
+    grid-row: auto;
+    grid-column: 1;
+    justify-self: start;
   }
 
   .reviewerRow {
