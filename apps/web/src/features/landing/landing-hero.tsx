@@ -1,7 +1,67 @@
+import { z } from "zod";
 import { LandingIcon } from "./landing-icon";
 import { LandingProductDemo } from "./landing-product-demo";
 
-export function LandingHero() {
+const repositoryApiUrl = "https://api.github.com/repos/jaeyunha/open-sessionboard";
+const repositoryResponseSchema = z.object({
+  stargazers_count: z.number().int().nonnegative(),
+});
+
+type RepositoryBadge = {
+  readonly accessibleLabel: string;
+  readonly label: string;
+};
+
+async function resolveRepositoryBadge(): Promise<RepositoryBadge> {
+  try {
+    const response = await fetch(repositoryApiUrl, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(2_500),
+    });
+
+    if (response.status === 404) {
+      return {
+        accessibleLabel: "Private GitHub repository",
+        label: "Private",
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        accessibleLabel: "GitHub star count unavailable",
+        label: "—",
+      };
+    }
+
+    const repository = repositoryResponseSchema.safeParse(await response.json());
+    if (!repository.success) {
+      return {
+        accessibleLabel: "GitHub star count unavailable",
+        label: "—",
+      };
+    }
+
+    const label = new Intl.NumberFormat("en-US").format(repository.data.stargazers_count);
+    return {
+      accessibleLabel: `${label} GitHub stars`,
+      label,
+    };
+  } catch {
+    // no-excuse-ok: catch -- GitHub availability must never block the landing page.
+    return {
+      accessibleLabel: "GitHub star count unavailable",
+      label: "—",
+    };
+  }
+}
+
+export async function LandingHero() {
+  const repositoryBadge = await resolveRepositoryBadge();
+
   return (
     <section className="hero" id="top" aria-labelledby="hero-title">
       <div className="wrap">
@@ -23,12 +83,13 @@ export function LandingHero() {
             <a
               className="button button-secondary github-button"
               href="https://github.com/jaeyunha/open-sessionboard"
+              aria-label={`GitHub · ${repositoryBadge.accessibleLabel}`}
             >
               <LandingIcon name="github" />
               GitHub
               <span className="github-stars">
                 <LandingIcon name="star" />
-                <span>Private</span>
+                <span>{repositoryBadge.label}</span>
               </span>
             </a>
           </div>
