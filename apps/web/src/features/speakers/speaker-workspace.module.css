@@ -1,5 +1,7 @@
 .workspace {
   display: grid;
+  width: 100%;
+  max-width: 100%;
   gap: 1rem;
   min-width: 0;
   color: var(--foreground);
@@ -62,6 +64,18 @@
   min-width: 0;
 }
 
+:global(.dialog-grid) > .view {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tabs > [data-slot="tabs-list"] {
+  max-width: 100%;
+  overflow-x: auto;
+  justify-content: flex-start;
+}
+
 .panel {
   min-width: 0;
 }
@@ -113,17 +127,17 @@
 }
 
 .mutationStatus[data-mutation-status="pending"] {
-  border-color: #e4cf98;
-  background: #f8f1df;
+  border-color: color-mix(in srgb, var(--warning) 24%, var(--border));
+  background: var(--warning-surface);
 }
 
 .mutationStatus[data-mutation-status="saved"] {
-  border-color: #bfd8c8;
-  background: #edf5ef;
+  border-color: color-mix(in srgb, var(--success) 22%, var(--border));
+  background: var(--success-surface);
 }
 
 .mutationStatus[data-mutation-status="conflict"] {
-  border-color: #e4cf98;
+  border-color: color-mix(in srgb, var(--warning) 24%, var(--border));
 }
 
 .mutationStatus[data-mutation-status="failure"] {
@@ -169,7 +183,7 @@
 }
 
 .attentionFilter[aria-pressed="true"] {
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
 }
 
 .attentionFilter strong {
@@ -397,13 +411,17 @@
 
 .detailGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
   gap: 0.9rem;
 }
 
 .uploadPanel,
 .preview {
   min-width: 0;
+}
+
+.preview {
+  overflow-wrap: anywhere;
 }
 
 .tableWrap {
@@ -446,41 +464,6 @@
   cursor: pointer;
   color: var(--foreground);
   font-size: 0.78rem;
-}
-
-.taskStatus {
-  display: inline-flex;
-  min-height: 1.5rem;
-  align-items: center;
-  padding: 0.15rem 0.45rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 0.74rem;
-  font-weight: 650;
-  line-height: 1.1;
-}
-
-.taskStatusNeutral {
-  color: var(--muted-foreground);
-  background: var(--muted);
-}
-
-.taskStatusInfo {
-  color: #315e7a;
-  background: #edf4f8;
-  border-color: #bdd3df;
-}
-
-.taskStatusWarning {
-  color: #8a641e;
-  background: #f8f1df;
-  border-color: #e4cf98;
-}
-
-.taskStatusSuccess {
-  color: #2d6a4f;
-  background: #edf5ef;
-  border-color: #bfd8c8;
 }
 
 .emailFlowGrid {
@@ -558,7 +541,36 @@
 
 .actionsStack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
+  min-width: 0;
+}
+
+.actionsStack > *,
+.actionGrid > *,
+.details > * {
+  min-width: 0;
+}
+
+.workspace [data-slot="card-header"],
+.workspace [data-slot="card-title"],
+.workspace [data-slot="card-description"] {
+  min-width: 0;
+}
+
+.workspace [data-slot="card-header"] > :not([data-slot="card-action"]) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.workspace [data-slot="card-title"],
+.workspace [data-slot="card-description"] {
+  overflow-wrap: anywhere;
+}
+
+.workspace [data-slot="button"] {
+  max-width: 100%;
 }
 
 .reminderItem {
@@ -614,7 +626,10 @@
 }
 
 .headshotFallback {
+  min-width: 0;
+  max-width: 100%;
   justify-items: center;
+  overflow-wrap: anywhere;
   text-align: center;
 }
 
@@ -630,6 +645,12 @@
 
 .sheetBody {
   padding: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speakerRow {
+    transition: none;
+  }
 }
 
 @media (max-width: 68rem) {
@@ -693,7 +714,31 @@
   }
 }
 
+@media (max-width: 20rem) {
+  .attentionStrip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .attentionFilter:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+}
+
 @media (max-width: 42rem) {
+  .tabs > [data-slot="tabs-list"] {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    overflow-x: visible;
+    flex-wrap: wrap;
+  }
+
+  .tabs > [data-slot="tabs-list"] > [data-slot="tabs-trigger"] {
+    flex: 1 1 8rem;
+    min-width: 0;
+    white-space: normal;
+  }
+
   .header {
     display: grid;
     align-items: start;
@@ -729,6 +774,12 @@
 
   .detailHeader .actions,
   .actions > * {
+    min-width: 0;
     flex: 1 1 auto;
+  }
+
+  .actions [data-slot="button"],
+  .preview [data-slot="button"] {
+    white-space: normal;
   }
 }
