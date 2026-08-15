@@ -207,14 +207,24 @@ export interface SpeakerImportIssue {
 }
 
 export interface SpeakerImportPreview {
+  readonly previewId: string;
+  readonly sourceDigest: string;
   readonly validRows: readonly SpeakerImportRow[];
   readonly invalidRows: readonly SpeakerImportIssue[];
 }
 
 export interface SpeakerImportCommitInput {
-  readonly rows: readonly SpeakerImportRow[];
+  readonly previewId: string;
+  readonly sourceDigest: string;
   readonly idempotencyKey: string;
 }
+
+type SpeakerImportCommitRequest =
+  | SpeakerImportCommitInput
+  | {
+      readonly rows: SpeakerImportPreview["validRows"];
+      readonly idempotencyKey: string;
+    };
 
 export interface SpeakerInvitationPreview {
   readonly participantId: string;
@@ -509,20 +519,61 @@ function parseSpeakerInvitationResult(value: unknown): SpeakerInvitationResult {
   };
 }
 
+const SPEAKER_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+function safeSpeakerErrorCode(value: unknown): string {
+  return typeof value === "string" && SPEAKER_ERROR_CODE_PATTERN.test(value)
+    ? value
+    : "SPEAKER_REQUEST_FAILED";
+}
+
+function safeSpeakerTraceId(value: unknown): string | undefined {
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
+}
+
+function parseSpeakerImportPreview(value: unknown): SpeakerImportPreview {
+  if (!isRecord(value)) {
+    throw new SpeakerAuthoritativeDataError("The speaker import preview is invalid.");
+  }
+  if (
+    typeof value.previewId !== "string" ||
+    value.previewId.trim().length === 0 ||
+    typeof value.sourceDigest !== "string" ||
+    value.sourceDigest.trim().length === 0 ||
+    !Array.isArray(value.validRows) ||
+    !Array.isArray(value.invalidRows)
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker import preview is missing its durable preview artifact.",
+    );
+  }
+  return {
+    previewId: value.previewId,
+    sourceDigest: value.sourceDigest,
+    validRows: value.validRows as readonly SpeakerImportRow[],
+    invalidRows: value.invalidRows as readonly SpeakerImportIssue[],
+  };
+}
+
 async function errorFrom(response: Response): Promise<SpeakerApiError> {
-  const body = (await response.json().catch(() => undefined)) as SpeakerErrorResponse | undefined;
+  const body = (await response.json().catch(() => undefined)) as unknown;
+  const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
   return new SpeakerApiError(
-    body?.error?.code ?? "SPEAKER_REQUEST_FAILED",
-    body?.error?.message ?? "The speaker request could not be completed.",
-    response.status,
-    body?.error?.traceId,
+    safeSpeakerErrorCode(error?.code),
+    typeof error?.message === "string" && error.message.trim().length > 0
+      ? error.message
+      : "The speaker request could not be completed.",
+    Number.isSafeInteger(response.status) && response.status >= 400 && response.status <= 599
+      ? response.status
+      : 500,
+    safeSpeakerTraceId(error?.traceId),
   );
 }
 
 export interface SpeakerApi {
   list(signal?: AbortSignal): Promise<SpeakerRosterEnvelope>;
   get(participantId: string, signal?: AbortSignal): Promise<SpeakerRecord>;
-  create(input: SpeakerCreateInput): Promise<SpeakerRosterEnvelope>;
+  create(input: SpeakerCreateInput, signal?: AbortSignal): Promise<SpeakerRosterEnvelope>;
   update(participantId: string, input: SpeakerUpdateInput): Promise<SpeakerRosterEnvelope>;
   getSessions(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerSession[]>;
   getAssets(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerAsset[]>;
@@ -530,7 +581,7 @@ export interface SpeakerApi {
   replaceHeadshot(input: SpeakerHeadshotReplacementInput): Promise<SpeakerHeadshotReplacement>;
   previewImport(file: File, signal?: AbortSignal): Promise<SpeakerImportPreview>;
   commitImport(
-    input: SpeakerImportCommitInput,
+    input: SpeakerImportCommitRequest,
     signal?: AbortSignal,
   ): Promise<SpeakerRosterEnvelope>;
   listTasks(signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
@@ -592,6 +643,7 @@ export function createSpeakerApi(
   const normalizedBaseUrl = baseWithoutTrailingSlash(baseUrl.trim());
   const normalizedOrganizationId = organizationId.trim();
   const normalizedEventId = eventId.trim();
+  let latestImportPreview: SpeakerImportPreview | null = null;
   if (normalizedOrganizationId.length === 0) {
     throw new TypeError("An organization ID is required for speaker requests.");
   }
@@ -696,8 +748,8 @@ export function createSpeakerApi(
         signal === undefined ? undefined : { signal },
       ).then((value) => assertSpeakerParticipant(value, participantId, normalizedEventId));
     },
-    create(input) {
-      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input).then((value) =>
+    create(input, signal) {
+      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input, signal).then((value) =>
         assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
@@ -754,15 +806,32 @@ export function createSpeakerApi(
     previewImport(file, signal) {
       const body = new FormData();
       body.append("file", file);
-      return request<SpeakerImportPreview>("/imports/preview", {
+      return request<unknown>("/imports/preview", {
         method: "POST",
         body,
         ...(signal === undefined ? {} : { signal }),
+      }).then((value) => {
+        const preview = parseSpeakerImportPreview(value);
+        latestImportPreview = preview;
+        return preview;
       });
     },
     commitImport(input, signal) {
-      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal).then((value) =>
-        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      const canonicalInput =
+        "previewId" in input
+          ? input
+          : latestImportPreview === null
+            ? null
+            : {
+                previewId: latestImportPreview.previewId,
+                sourceDigest: latestImportPreview.sourceDigest,
+                idempotencyKey: input.idempotencyKey,
+              };
+      if (canonicalInput === null) {
+        throw new TypeError("A durable speaker import preview is required before commit.");
+      }
+      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", canonicalInput, signal).then(
+        (value) => assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
     listTasks(signal) {
@@ -784,7 +853,15 @@ export function createSpeakerApi(
       });
     },
     assignTasks(input) {
-      return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", input);
+      return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", {
+        title: input.title,
+        description: input.description,
+        dueAt: input.dueAt,
+        assignments: input.participantIds.map((participantId) => ({
+          participantId,
+          submissionId: null,
+        })),
+      });
     },
     previewInvitations(input) {
       return jsonRequest<readonly SpeakerInvitationPreview[]>(

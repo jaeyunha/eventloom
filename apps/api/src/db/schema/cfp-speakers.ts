@@ -663,6 +663,8 @@ export const speakerProfiles = sqliteTable(
     version: integer().notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    admittedByAccountId: text("admitted_by_account_id"),
+    admittedAt: text("admitted_at"),
   },
   (t) => [
     foreignKey({
@@ -687,6 +689,67 @@ export const speakerProfiles = sqliteTable(
   ],
 );
 
+export const speakerImportPreviews = sqliteTable(
+  "speaker_import_previews",
+  {
+    id: text().primaryKey().notNull(),
+    organizationId: text("organization_id").notNull(),
+    eventId: text("event_id").notNull(),
+    accountId: text("account_id").notNull(),
+    sourceDigest: text("source_digest").notNull(),
+    rowsJson: j("rows_json"),
+    rosterRevision: integer("roster_revision").notNull(),
+    createdAt: text("created_at").notNull(),
+    committedAt: text("committed_at"),
+  },
+  (t) => [
+    eventFk(t.organizationId, t.eventId, "cascade"),
+    unique().on(t.organizationId, t.eventId, t.id),
+    index("speaker_import_previews_scope_idx").on(t.organizationId, t.eventId, t.createdAt),
+    check("speaker_import_previews_revision_check", sql`${t.rosterRevision}>=0`),
+    json("speaker_import_previews_rows_check", t.rowsJson, "array"),
+  ],
+);
+
+export const speakerAggregateOperations = sqliteTable(
+  "speaker_aggregate_operations",
+  {
+    id: text().primaryKey().notNull(),
+    organizationId: text("organization_id").notNull(),
+    eventId: text("event_id").notNull(),
+    operationType: text("operation_type").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    expectedVersion: integer("expected_version"),
+    sourceDigest: text("source_digest").notNull(),
+    previewId: text("preview_id"),
+    participantIdsJson: j("participant_ids_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    eventFk(t.organizationId, t.eventId, "cascade"),
+    foreignKey({
+      columns: [t.organizationId, t.eventId, t.previewId],
+      foreignColumns: [
+        speakerImportPreviews.organizationId,
+        speakerImportPreviews.eventId,
+        speakerImportPreviews.id,
+      ],
+    }).onDelete("restrict"),
+    unique().on(t.organizationId, t.eventId, t.operationType, t.idempotencyKey),
+    index("speaker_aggregate_operations_scope_idx").on(t.organizationId, t.eventId, t.createdAt),
+    check(
+      "speaker_aggregate_operations_type_check",
+      sql`${t.operationType} in('create','import','update','revoke')`,
+    ),
+    check(
+      "speaker_aggregate_operations_expected_version_check",
+      sql`${t.expectedVersion} is null or ${t.expectedVersion}>0`,
+    ),
+    json("speaker_aggregate_operations_participants_check", t.participantIdsJson, "array"),
+  ],
+);
+
+/** @deprecated Retained only for expand/backfill compatibility; not canonical authority. */
 export const speakerRoster = sqliteTable(
   "speaker_roster",
   {

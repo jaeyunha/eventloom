@@ -3392,24 +3392,12 @@
 }
 
 #review-panel-assignments > .viewIntro {
-  order: 0;
   margin: 0;
 }
 
-#review-panel-assignments > .section:nth-of-type(2) {
-  order: 1;
-}
-
-#review-panel-assignments > .section:nth-of-type(3) {
-  order: 2;
-}
-
 #review-panel-assignments > .section:first-of-type {
-  order: 3;
-  width: min(100%, 48rem);
   margin-top: var(--space-2);
   padding: var(--space-4);
-  justify-self: start;
   border-color: var(--color-border-strong);
   background: color-mix(in srgb, var(--color-surface) 92%, var(--color-canvas));
   box-shadow: none;
@@ -3467,6 +3455,90 @@
   border: 1px solid var(--color-border);
   border-radius: var(--organizer-panel-radius);
   background: var(--color-surface);
+}
+
+.reviewTeamCard {
+  border-color: var(--color-border-strong);
+  box-shadow: none;
+}
+
+.reviewTeamCard [data-slot="card-header"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.reviewTeamContent {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.reviewTeamList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--organizer-control-radius);
+  list-style: none;
+}
+
+.reviewTeamRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, 10rem) minmax(8rem, auto);
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+}
+
+.reviewTeamRow + .reviewTeamRow {
+  border-top: 1px solid var(--color-border);
+}
+
+.reviewTeamIdentity {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.reviewTeamIdentity [data-slot="field-content"] {
+  min-width: 0;
+}
+
+.reviewTeamIdentity [data-slot="field-label"],
+.reviewTeamIdentity [data-slot="field-description"] {
+  overflow-wrap: anywhere;
+}
+
+.reviewTeamCap {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.reviewTeamCap label,
+.reviewTeamLoad,
+.reviewTeamFooter,
+.reviewTeamMessage {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+
+.reviewTeamLoad {
+  text-align: end;
+}
+
+.reviewTeamFooter {
+  justify-content: space-between;
+}
+
+.reviewTeamMessage {
+  margin: 0;
+}
+
+.reviewTeamEmpty {
+  min-height: 12rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--organizer-control-radius);
 }
 
 .assignmentTaskHeader,
@@ -3809,6 +3881,33 @@
 
   .assignmentCoverageTask {
     padding: var(--space-3);
+  }
+
+  .reviewTeamRow {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewTeamCard [data-slot="card-header"] {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewTeamCard [data-slot="card-action"] {
+    grid-row: auto;
+    grid-column: 1;
+    justify-self: start;
+  }
+
+  .reviewTeamLoad {
+    text-align: start;
+  }
+
+  .reviewTeamFooter {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .reviewTeamFooter [data-slot="button"] {
+    width: 100%;
   }
 
   .assignmentCandidateToolbar [data-slot="button"] {

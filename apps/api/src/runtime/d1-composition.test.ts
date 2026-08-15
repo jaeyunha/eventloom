@@ -10,12 +10,13 @@ import { D1CrmRepository } from "../infrastructure/cloudflare/repositories/crm";
 import { D1EvaluationRepository } from "../infrastructure/cloudflare/repositories/evaluations";
 import { D1EventRepository } from "../infrastructure/cloudflare/repositories/events";
 import { D1ProgramPublicationRepository } from "../infrastructure/cloudflare/repositories/publication";
+import { D1PublishedSpeakerProjectionStore } from "../infrastructure/cloudflare/repositories/published-speakers";
 import { D1RemixRepository } from "../infrastructure/cloudflare/repositories/remix";
 import { D1ReportRepository } from "../infrastructure/cloudflare/repositories/reports";
 import { D1ReviewerPoolRepository } from "../infrastructure/cloudflare/repositories/reviewer-pool";
 import { D1SessionRepository } from "../infrastructure/cloudflare/repositories/sessions";
 import { D1SpeakerRepository } from "../infrastructure/cloudflare/repositories/speaker";
-import { D1PublishedSpeakerProjectionStore, D1RemixContentGateway } from "./airtable";
+import { D1RemixContentGateway } from "./airtable";
 import {
   createD1RuntimeComposition,
   createD1RuntimeDependencies,

@@ -1927,7 +1927,10 @@
   }
 
   .workspaceHeader {
-    height: 3rem;
+    height: auto;
+    min-height: 3rem;
+    flex-wrap: wrap;
+    padding-block: 0.35rem;
     padding-inline: 0.7rem;
   }
   .eventTwoColumn {

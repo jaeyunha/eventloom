@@ -12,13 +12,14 @@ import {
   speakerTasks,
   submissions,
 } from "../../../db/schema";
-import type { Submission, SubmissionParticipant } from "../../../features/cfp/model";
-import { allSpeakerPortalCapabilities } from "../../../features/speaker/capabilities";
 import type {
+  CommitOrganizerSpeakerImportCommand,
   FinalizeSpeakerAssetCommand,
   OrganizationQualifiedSpeakerSubmission,
   OrganizationQualifiedSpeakerTask,
+  OrganizerSpeakerAggregateResult,
   RepositoryResult,
+  SaveOrganizerSpeakerImportPreviewCommand,
   SpeakerAccessScope,
   SpeakerAccountWorkloadRepository,
   SpeakerAsset,
@@ -26,7 +27,12 @@ import type {
   SpeakerAssetComment,
   SpeakerAssetReviewCommand,
   SpeakerEventResource,
+  SpeakerImportPreview,
+  SpeakerImportRow,
   SpeakerOrganizerAccessScope,
+  SpeakerOrganizerLifecycleRepository,
+  SpeakerOrganizerReadModel,
+  SpeakerOrganizerReadResources,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerPortalContextScopeProjection,
@@ -40,6 +46,7 @@ import type {
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
+  UpsertOrganizerSpeakerAggregateCommand,
 } from "../../../features/speaker/types";
 
 export function portalSubmissionStatus(
@@ -76,108 +83,150 @@ function commaSeparatedIds(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function portalCapabilities(value: unknown): SpeakerPortalCapability[] {
-  try {
-    const parsed: unknown = JSON.parse(String(value ?? "[]"));
-    return Array.isArray(parsed)
-      ? parsed.filter(
-          (capability): capability is SpeakerPortalCapability =>
-            typeof capability === "string" &&
-            allSpeakerPortalCapabilities.includes(capability as SpeakerPortalCapability),
-        )
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function participantCapabilities(row: Record<string, unknown>): {
-  participantIds: string[];
-  capabilities: SpeakerPortalCapability[];
-  capabilitiesByParticipant: Record<string, readonly SpeakerPortalCapability[]>;
-} {
-  const participantIds = commaSeparatedIds(row.participant_ids);
-  const storedCapabilities = portalCapabilities(row.capabilities_json);
-  const grantedParticipantIds = new Set(commaSeparatedIds(row.granted_participant_ids));
-  // Legacy projections did not expose ownership. Treat only an explicit zero as non-owner so old
-  // stored contexts keep their submission-edit behavior while D1 grant revocation fails closed.
-  const ownsSubmission = row.owns_submission === undefined || Number(row.owns_submission) > 0;
-  const primaryParticipantId =
-    typeof row.primary_participant_id === "string" ? row.primary_participant_id : undefined;
-  const capabilitiesByParticipant = Object.fromEntries(
-    participantIds.map((participantId) => [
-      participantId,
-      storedCapabilities.filter(
-        (capability) =>
-          (capability === "submission-edit"
-            ? ownsSubmission || grantedParticipantIds.has(participantId)
-            : grantedParticipantIds.has(participantId)) &&
-          (capability !== "roster-manage" || participantId === primaryParticipantId),
-      ),
-    ]),
-  );
-  const capabilities = storedCapabilities.filter((capability) =>
-    participantIds.some((participantId) =>
-      capabilitiesByParticipant[participantId]?.includes(capability),
-    ),
-  );
-  return { participantIds, capabilities, capabilitiesByParticipant };
-}
-
-const grantedSpeakerProfileIdsSql = `(
-  SELECT group_concat(DISTINCT sg.speaker_profile_id)
-    FROM speaker_grants sg
-    JOIN speaker_profiles sp
-      ON sp.organization_id = sg.organization_id
-     AND sp.id = sg.speaker_profile_id
-    JOIN portal_context_participants granted_pcp
-      ON granted_pcp.organization_id = pc.organization_id
-     AND granted_pcp.event_id = pc.event_id
-     AND granted_pcp.context_id = pc.id
-     AND granted_pcp.participant_id = sp.participant_id
-   WHERE sg.organization_id = pc.organization_id
-     AND sg.user_id = pc.account_id
-     AND sg.revoked_at IS NULL
-     AND sp.event_id = pc.event_id
-) AS granted_speaker_profile_ids`;
-
-const ownsSubmissionSql = `EXISTS (
-  SELECT 1
-    FROM portal_context_submissions owned_pcs
-    JOIN submissions owned_s
-      ON owned_s.organization_id = owned_pcs.organization_id
-     AND owned_s.event_id = owned_pcs.event_id
-     AND owned_s.id = owned_pcs.submission_id
-   WHERE owned_pcs.organization_id = pc.organization_id
-     AND owned_pcs.event_id = pc.event_id
-     AND owned_pcs.context_id = pc.id
-     AND owned_s.owner_account_id = pc.account_id
-) AS owns_submission`;
-
-const grantedParticipantIdsSql = `(
-  SELECT group_concat(DISTINCT sp.participant_id)
-    FROM speaker_grants sg
-    JOIN speaker_profiles sp
-      ON sp.organization_id = sg.organization_id
-     AND sp.id = sg.speaker_profile_id
-    JOIN portal_context_participants granted_pcp
-      ON granted_pcp.organization_id = pc.organization_id
-     AND granted_pcp.event_id = pc.event_id
-     AND granted_pcp.context_id = pc.id
-     AND granted_pcp.participant_id = sp.participant_id
-   WHERE sg.organization_id = pc.organization_id
-     AND sg.user_id = pc.account_id
-     AND sg.revoked_at IS NULL
-     AND sp.event_id = pc.event_id
-) AS granted_participant_ids`;
-
-export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
+export class D1SpeakerRepository
+  implements SpeakerAccountWorkloadRepository, SpeakerOrganizerLifecycleRepository
+{
   readonly #db: D1Database;
   readonly #orm: OpenSessionboardDatabase;
 
   constructor(db: D1Database) {
     this.#db = db;
     this.#orm = createDatabase(db);
+  }
+
+  async #grantedAccessScope(
+    eventId: string,
+    accountId: string,
+    organizationId?: string,
+  ): Promise<SpeakerAccessScope | null> {
+    const rows = await this.#db
+      .withSession("first-primary")
+      .prepare(
+        `SELECT pg.organization_id, pg.participant_id, pg.permissions_json,
+                group_concat(DISTINCT sp.submission_id) AS submission_ids
+           FROM participant_grants pg
+      LEFT JOIN submission_participants sp
+             ON sp.organization_id = pg.organization_id
+            AND sp.event_id = pg.event_id
+            AND sp.participant_id = pg.participant_id
+          WHERE pg.event_id = ?
+            AND pg.user_id = ?
+            AND pg.revoked_at IS NULL
+            AND (? IS NULL OR pg.organization_id = ?)
+       GROUP BY pg.organization_id, pg.participant_id, pg.permissions_json
+       ORDER BY pg.organization_id, pg.participant_id`,
+      )
+      .bind(eventId, accountId, organizationId ?? null, organizationId ?? null)
+      .all<Record<string, unknown>>();
+    const matches = rows.results ?? [];
+    const organizations = new Set(matches.map((row) => String(row.organization_id)));
+    if (organizations.size !== 1) return null;
+    const tenantId = organizations.values().next().value as string | undefined;
+    if (tenantId === undefined) return null;
+    const participantIds = matches.map((row) => String(row.participant_id));
+    const capabilitiesByParticipant = Object.fromEntries(
+      matches.map((row) => {
+        const permissions = new Set<string>();
+        try {
+          const parsed: unknown = JSON.parse(String(row.permissions_json ?? "[]"));
+          if (Array.isArray(parsed)) {
+            for (const permission of parsed) {
+              if (typeof permission === "string") permissions.add(permission);
+            }
+          }
+        } catch {
+          // Malformed permissions fail closed; the migration enforces valid JSON.
+        }
+        const capabilities: SpeakerPortalCapability[] = [];
+        if (permissions.has("edit_own_profile")) capabilities.push("profile-self");
+        if (permissions.has("view_own_tasks") || permissions.has("update_own_tasks")) {
+          capabilities.push("task-response");
+        }
+        if (permissions.has("manage_own_assets")) {
+          capabilities.push("asset-read", "asset-write", "asset-comment");
+        }
+        capabilities.push("resource-read");
+        return [String(row.participant_id), capabilities] as const;
+      }),
+    );
+    const capabilities = [
+      ...new Set(Object.values(capabilitiesByParticipant).flat()),
+    ] as SpeakerPortalCapability[];
+    return {
+      tenantId,
+      submissionIds: [...new Set(matches.flatMap((row) => commaSeparatedIds(row.submission_ids)))],
+      participantIds,
+      capabilities,
+      capabilitiesByParticipant,
+      ...(participantIds[0] === undefined ? {} : { primaryParticipantId: participantIds[0] }),
+      role: "speaker",
+    };
+  }
+
+  async #listGrantedPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+    const rows = await this.#db
+      .withSession("first-primary")
+      .prepare(
+        `SELECT e.organization_id, e.id AS event_id, e.name, e.slug, e.status,
+                group_concat(DISTINCT pg.participant_id) AS participant_ids,
+                group_concat(DISTINCT sp.submission_id) AS submission_ids
+           FROM participant_grants pg
+           JOIN events e ON e.organization_id = pg.organization_id AND e.id = pg.event_id
+      LEFT JOIN submission_participants sp
+             ON sp.organization_id = pg.organization_id
+            AND sp.event_id = pg.event_id
+            AND sp.participant_id = pg.participant_id
+          WHERE pg.user_id = ? AND pg.revoked_at IS NULL
+       GROUP BY e.organization_id, e.id
+       ORDER BY e.updated_at DESC`,
+      )
+      .bind(accountId)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => {
+      const participantIds = commaSeparatedIds(row.participant_ids);
+      return {
+        id: `speaker:${String(row.organization_id)}:${String(row.event_id)}:${accountId}`,
+        organizationId: String(row.organization_id),
+        eventId: String(row.event_id),
+        name: String(row.name),
+        slug: String(row.slug),
+        status: String(row.status),
+        capabilities: [
+          "profile-self",
+          "task-response",
+          "asset-read",
+          "asset-write",
+          "asset-comment",
+          "resource-read",
+        ],
+        submissionIds: commaSeparatedIds(row.submission_ids),
+        participantIds,
+        ...(participantIds[0] === undefined ? {} : { primaryParticipantId: participantIds[0] }),
+      };
+    });
+  }
+
+  async #profilesForGrant(
+    organizationId: string,
+    eventId: string,
+    accountId: string,
+  ): Promise<string[]> {
+    if (organizationId.length === 0) return [];
+    const rows = await this.#db
+      .prepare(
+        `SELECT sp.id
+           FROM participant_grants pg
+           JOIN speaker_profiles sp
+             ON sp.organization_id = pg.organization_id
+            AND sp.event_id = pg.event_id
+            AND sp.participant_id = pg.participant_id
+          WHERE pg.organization_id = ? AND pg.event_id = ?
+            AND pg.user_id = ? AND pg.revoked_at IS NULL
+       ORDER BY sp.id`,
+      )
+      .bind(organizationId, eventId, accountId)
+      .all<{ id: string }>();
+    return (rows.results ?? []).map((row) => row.id);
   }
 
   async #listOwnedPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
@@ -244,35 +293,8 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
   }
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
+    const granted = await this.#grantedAccessScope(eventId, accountId);
     const session = this.#db.withSession("first-primary");
-    const context = await session
-      .prepare(
-        `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
-              ${ownsSubmissionSql},
-              ${grantedParticipantIdsSql},
-              group_concat(DISTINCT pcp.participant_id) AS participant_ids,
-              group_concat(DISTINCT pcs.submission_id) AS submission_ids
-         FROM portal_contexts pc
-         LEFT JOIN portal_context_participants pcp ON pcp.organization_id = pc.organization_id AND pcp.event_id = pc.event_id AND pcp.context_id = pc.id
-         LEFT JOIN portal_context_submissions pcs ON pcs.organization_id = pc.organization_id AND pcs.event_id = pc.event_id AND pcs.context_id = pc.id
-        WHERE pc.event_id = ? AND pc.account_id = ? AND pc.status <> 'archived'
-        GROUP BY pc.organization_id, pc.id
-        LIMIT 1`,
-      )
-      .bind(eventId, accountId)
-      .first<Record<string, unknown>>();
-    if (context !== null) {
-      const projected = participantCapabilities(context);
-      return {
-        tenantId: String(context.organization_id),
-        submissionIds: commaSeparatedIds(context.submission_ids),
-        participantIds: projected.participantIds,
-        capabilities: projected.capabilities,
-        capabilitiesByParticipant: projected.capabilitiesByParticipant,
-        primaryParticipantId: String(context.primary_participant_id),
-        role: "speaker",
-      };
-    }
     const owned = await session
       .prepare(
         `SELECT s.organization_id,
@@ -292,18 +314,38 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
       )
       .bind(eventId, accountId)
       .first<Record<string, unknown>>();
-    if (owned === null) return { submissionIds: [], participantIds: [] };
-    const participantIds = commaSeparatedIds(owned.participant_ids);
-    const capabilities = ["submission-edit"] as const;
+    if (owned === null) return granted ?? { submissionIds: [], participantIds: [] };
+    if (granted !== null && granted.tenantId !== String(owned.organization_id)) {
+      return { submissionIds: [], participantIds: [] };
+    }
+    const ownedParticipantIds = commaSeparatedIds(owned.participant_ids);
+    const participantIds = [
+      ...new Set([...(granted?.participantIds ?? []), ...ownedParticipantIds]),
+    ];
+    const capabilities = [
+      ...new Set([...(granted?.capabilities ?? []), "submission-edit" as const]),
+    ];
+    const capabilitiesByParticipant: Record<string, readonly SpeakerPortalCapability[]> = {
+      ...(granted?.capabilitiesByParticipant ?? {}),
+    };
+    for (const participantId of ownedParticipantIds) {
+      capabilitiesByParticipant[participantId] = [
+        ...new Set([
+          ...(capabilitiesByParticipant[participantId] ?? []),
+          "submission-edit" as const,
+        ]),
+      ];
+    }
     return {
       tenantId: String(owned.organization_id),
-      submissionIds: commaSeparatedIds(owned.submission_ids),
+      submissionIds: [
+        ...new Set([...(granted?.submissionIds ?? []), ...commaSeparatedIds(owned.submission_ids)]),
+      ],
       participantIds,
       capabilities,
-      capabilitiesByParticipant: Object.fromEntries(
-        participantIds.map((participantId) => [participantId, capabilities]),
-      ),
-      primaryParticipantId: String(owned.primary_participant_id ?? ""),
+      capabilitiesByParticipant,
+      primaryParticipantId:
+        granted?.primaryParticipantId ?? String(owned.primary_participant_id ?? ""),
       role: "speaker",
     };
   }
@@ -313,144 +355,53 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     eventId: string,
     accountId: string,
   ): Promise<SpeakerAccessScope> {
-    const context = await this.#db
-      .prepare(
-        `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
-                ${ownsSubmissionSql},
-                ${grantedParticipantIdsSql},
-                group_concat(DISTINCT pcp.participant_id) AS participant_ids,
-                group_concat(DISTINCT pcs.submission_id) AS submission_ids
-           FROM portal_contexts pc
-           LEFT JOIN portal_context_participants pcp
-             ON pcp.organization_id = pc.organization_id
-            AND pcp.event_id = pc.event_id
-            AND pcp.context_id = pc.id
-           LEFT JOIN portal_context_submissions pcs
-             ON pcs.organization_id = pc.organization_id
-            AND pcs.event_id = pc.event_id
-            AND pcs.context_id = pc.id
-          WHERE pc.organization_id = ?
-            AND pc.event_id = ?
-            AND pc.account_id = ?
-            AND pc.status <> 'archived'
-          GROUP BY pc.organization_id, pc.id
-          LIMIT 1`,
-      )
-      .bind(organizationId, eventId, accountId)
-      .first<Record<string, unknown>>();
-    if (context === null) return { submissionIds: [], participantIds: [] };
-    const projected = participantCapabilities(context);
-    return {
-      tenantId: String(context.organization_id),
-      submissionIds: commaSeparatedIds(context.submission_ids),
-      participantIds: projected.participantIds,
-      capabilities: projected.capabilities,
-      capabilitiesByParticipant: projected.capabilitiesByParticipant,
-      primaryParticipantId: String(context.primary_participant_id),
-      role: "speaker",
-    };
+    return (
+      (await this.#grantedAccessScope(eventId, accountId, organizationId)) ?? {
+        submissionIds: [],
+        participantIds: [],
+      }
+    );
   }
 
   async listPortalContextScopes(
     accountId: string,
   ): Promise<readonly SpeakerPortalContextScopeProjection[]> {
-    const rows = await this.#db
-      .prepare(
-        `SELECT pc.organization_id, pc.event_id, pc.id, pc.name, pc.slug, pc.status,
-                pc.primary_participant_id, pc.capabilities_json,
-                ${ownsSubmissionSql},
-                ${grantedSpeakerProfileIdsSql},
-                ${grantedParticipantIdsSql},
-                group_concat(DISTINCT pcp.participant_id) AS participant_ids,
-                group_concat(DISTINCT pcs.submission_id) AS submission_ids
-           FROM portal_contexts pc
-           LEFT JOIN portal_context_participants pcp
-             ON pcp.organization_id = pc.organization_id
-            AND pcp.event_id = pc.event_id
-            AND pcp.context_id = pc.id
-           LEFT JOIN portal_context_submissions pcs
-             ON pcs.organization_id = pc.organization_id
-            AND pcs.event_id = pc.event_id
-            AND pcs.context_id = pc.id
-          WHERE pc.account_id = ? AND pc.status <> 'archived'
-          GROUP BY pc.organization_id, pc.event_id, pc.id
-          ORDER BY pc.organization_id, pc.event_id, pc.id`,
-      )
-      .bind(accountId)
-      .all<Record<string, unknown>>();
-    const projections = (rows.results ?? []).flatMap((row) => {
-      const organizationId =
-        typeof row.organization_id === "string" ? row.organization_id.trim() : "";
-      const eventId = typeof row.event_id === "string" ? row.event_id.trim() : "";
-      const name = typeof row.name === "string" ? row.name.trim() : "";
-      const id = typeof row.id === "string" ? row.id.trim() : "";
-      if (
-        organizationId.length === 0 ||
-        eventId.length === 0 ||
-        name.length === 0 ||
-        id.length === 0
-      ) {
-        return [];
-      }
-      const projected = participantCapabilities(row);
-      const participantIds = projected.participantIds;
-      const speakerProfileIds = commaSeparatedIds(row.granted_speaker_profile_ids);
-      const submissionIds = commaSeparatedIds(row.submission_ids);
-      const capabilities: SpeakerPortalContext["capabilities"] = projected.capabilities;
-      const slug = typeof row.slug === "string" ? row.slug : undefined;
-      const status = typeof row.status === "string" ? row.status : undefined;
-      const primaryParticipantId =
-        typeof row.primary_participant_id === "string" ? row.primary_participant_id : undefined;
-      return [
-        {
-          speakerProfileIds,
-          context: {
-            id,
-            eventId,
-            name,
-            ...(slug === undefined ? {} : { slug }),
-            ...(status === undefined ? {} : { status }),
-            capabilities,
-            submissionIds,
-            participantIds,
-            ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
-          },
-          scope: {
-            tenantId: organizationId,
-            submissionIds,
-            participantIds,
-            capabilities,
-            capabilitiesByParticipant: projected.capabilitiesByParticipant,
-            ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
-            role: "speaker" as const,
-          },
-        },
-      ];
-    });
-    if (projections.length > 0) return projections;
-    return (await this.#listOwnedPortalContexts(accountId)).flatMap((context) => {
-      const tenantId = context.organizationId;
-      if (tenantId === undefined) return [];
-      return [
-        {
-          speakerProfileIds: [],
-          context,
-          scope: {
-            tenantId,
-            submissionIds: context.submissionIds,
-            participantIds: context.participantIds,
-            capabilities: context.capabilities,
-            capabilitiesByParticipant: Object.fromEntries(
-              context.participantIds.map((participantId) => [participantId, context.capabilities]),
-            ),
-            ...(context.primaryParticipantId === undefined
-              ? {}
-              : { primaryParticipantId: context.primaryParticipantId }),
-            role: "speaker" as const,
-          },
-        },
-      ];
-    });
+    const [grantedContexts, ownedContexts] = await Promise.all([
+      this.#listGrantedPortalContexts(accountId),
+      this.#listOwnedPortalContexts(accountId),
+    ]);
+    const contextsByEvent = new Map<string, SpeakerPortalContext>();
+    for (const context of [...grantedContexts, ...ownedContexts]) {
+      const current = contextsByEvent.get(context.eventId);
+      contextsByEvent.set(
+        context.eventId,
+        current === undefined
+          ? context
+          : {
+              ...current,
+              capabilities: [...new Set([...current.capabilities, ...context.capabilities])],
+              submissionIds: [...new Set([...current.submissionIds, ...context.submissionIds])],
+              participantIds: [...new Set([...current.participantIds, ...context.participantIds])],
+              ...((current.primaryParticipantId ?? context.primaryParticipantId) === undefined
+                ? {}
+                : {
+                    primaryParticipantId:
+                      current.primaryParticipantId ?? context.primaryParticipantId,
+                  }),
+            },
+      );
+    }
+    return Promise.all(
+      [...contextsByEvent.values()].map(async (context) => {
+        const scope = await this.getAccessScope(context.eventId, accountId);
+        const speakerProfileIds = await this.#profilesForGrant(
+          scope.tenantId ?? "",
+          context.eventId,
+          accountId,
+        );
+        return { context, scope, speakerProfileIds };
+      }),
+    );
   }
 
   async listPortalContexts(accountId: string) {
@@ -461,296 +412,743 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     eventId: string,
     accountId: string,
   ): Promise<SpeakerOrganizerAccessScope | null> {
-    if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
-    const membership = await this.#db
+    const row = await this.#db
+      .withSession("first-primary")
       .prepare(
-        `SELECT e.organization_id, m.role
+        `SELECT e.organization_id, om.role,
+                (SELECT group_concat(DISTINCT s.id)
+                   FROM submissions s
+                   JOIN evaluation_decisions d
+                     ON d.organization_id = s.organization_id
+                    AND d.event_id = s.event_id
+                    AND d.submission_id = s.id
+                  WHERE s.organization_id = e.organization_id
+                    AND s.event_id = e.id AND d.status = 'accepted') AS submission_ids,
+                (SELECT group_concat(DISTINCT participant_id) FROM (
+                   SELECT sp.participant_id
+                     FROM speaker_profiles sp
+                    WHERE sp.organization_id = e.organization_id AND sp.event_id = e.id
+                   UNION
+                   SELECT spl.participant_id
+                     FROM submission_participants spl
+                     JOIN evaluation_decisions d
+                       ON d.organization_id = spl.organization_id
+                      AND d.event_id = spl.event_id
+                      AND d.submission_id = spl.submission_id
+                    WHERE spl.organization_id = e.organization_id
+                      AND spl.event_id = e.id AND d.status = 'accepted'
+                )) AS participant_ids
            FROM events e
-           JOIN organization_memberships m
-             ON m.organization_id = e.organization_id
-            AND m.user_id = ?
-          WHERE e.id = ? AND m.role IN ('owner', 'admin')
+           JOIN organization_memberships om
+             ON om.organization_id = e.organization_id AND om.user_id = ?
+          WHERE e.id = ? AND om.role IN ('owner','admin')
           LIMIT 2`,
       )
       .bind(accountId, eventId)
-      .all<{ organization_id: string; role: "owner" | "admin" }>();
-    const memberships = membership.results ?? [];
-    const authority = memberships.length === 1 ? memberships[0] : undefined;
-    if (authority === undefined) return null;
-    const accepted = await this.#db
-      .prepare(
-        `SELECT s.id AS submission_id, sp.participant_id
-           FROM submissions s
-           JOIN evaluation_decisions d
-             ON d.organization_id = s.organization_id
-            AND d.event_id = s.event_id
-            AND d.submission_id = s.id
-            AND d.status = 'accepted'
-            AND d.id = (
-              SELECT latest.id
-                FROM evaluation_decisions latest
-               WHERE latest.organization_id = s.organization_id
-                 AND latest.event_id = s.event_id
-                 AND latest.submission_id = s.id
-               ORDER BY latest.updated_at DESC, latest.version DESC, latest.id DESC
-               LIMIT 1
-            )
-      LEFT JOIN submission_participants sp
-             ON sp.organization_id = s.organization_id
-            AND sp.event_id = s.event_id
-            AND sp.submission_id = s.id
-          WHERE s.organization_id = ? AND s.event_id = ?
-          ORDER BY s.id, sp.ordinal`,
-      )
-      .bind(authority.organization_id, eventId)
-      .all<{ submission_id: string; participant_id: string | null }>();
+      .all<Record<string, unknown>>();
+    const matches = row.results ?? [];
+    if (matches.length !== 1) return null;
+    const scope = matches[0];
+    if (scope === undefined) return null;
     return {
-      tenantId: authority.organization_id,
+      tenantId: String(scope.organization_id),
       eventId,
-      role: authority.role,
-      submissionIds: [...new Set((accepted.results ?? []).map((row) => row.submission_id))],
-      participantIds: [
-        ...new Set(
-          (accepted.results ?? []).flatMap((row) =>
-            row.participant_id === null ? [] : [row.participant_id],
-          ),
-        ),
-      ],
+      role: scope.role === "owner" ? "owner" : "admin",
+      submissionIds: commaSeparatedIds(scope.submission_ids),
+      participantIds: commaSeparatedIds(scope.participant_ids),
     };
   }
 
-  async ensureAcceptedSubmission(input: {
-    readonly submission: Submission;
-    readonly updatedAt: string;
-  }): Promise<SpeakerSubmission> {
-    const { submission } = input;
+  async getOrganizerReadModel(
+    eventId: string,
+    accountId: string,
+    resources: SpeakerOrganizerReadResources,
+  ): Promise<SpeakerOrganizerReadModel | null> {
+    const scope = await this.getOrganizerAccessScope(eventId, accountId);
+    if (scope === null) return null;
+    const [submissionsForScope, roster, profiles, tasks, assets] = await Promise.all([
+      this.listSubmissions(eventId, scope.submissionIds),
+      this.listRosterForEvent(eventId),
+      resources.profiles === true ? this.listProfilesForEvent(scope.tenantId, eventId) : [],
+      resources.tasks === true ? this.listTasks(eventId, scope.participantIds) : [],
+      resources.assets === true ? this.listAssets(eventId, scope.participantIds) : [],
+    ]);
+    return { scope, submissions: submissionsForScope, roster, profiles, tasks, assets };
+  }
+
+  async resolveEventParticipant(input: {
+    organizationId: string;
+    eventId: string;
+    sourceType: "cfp" | "manual" | "csv" | "crm";
+    sourceId: string;
+    explicitParticipantId?: string;
+    normalizedEmail?: string;
+    createParticipantId: string;
+  }) {
     const event = await this.#db
+      .prepare("SELECT 1 AS found FROM events WHERE organization_id = ? AND id = ?")
+      .bind(input.organizationId, input.eventId)
+      .first<{ found: number }>();
+    if (event === null) return { state: "ambiguous" as const, candidateParticipantIds: [] };
+    const rows = await this.#db
       .prepare(
-        `SELECT organization_id, id, name, slug, status
-           FROM events
-          WHERE organization_id = ? AND id = ?
-          LIMIT 1`,
-      )
-      .bind(submission.tenantId, submission.eventId)
-      .first<{
-        organization_id: string;
-        id: string;
-        name: string;
-        slug: string;
-        status: string;
-      }>();
-    if (event === null) throw new Error("The accepted speaker event was not found.");
-    const primary =
-      submission.participants.find((participant) => participant.role === "primary") ??
-      submission.participants[0];
-    if (primary === undefined) throw new Error("An accepted submission must contain a speaker.");
-
-    const ownedSubmissions = await this.#db
-      .prepare(
-        `SELECT s.id AS submission_id, sp.participant_id
-           FROM submissions s
+        `SELECT p.id,
+                group_concat(DISTINCT sp.submission_id) AS submission_ids
+           FROM participants p
       LEFT JOIN submission_participants sp
-             ON sp.organization_id = s.organization_id
-            AND sp.event_id = s.event_id
-            AND sp.submission_id = s.id
-          WHERE s.organization_id = ? AND s.event_id = ? AND s.owner_account_id = ?
-          ORDER BY s.id, sp.ordinal`,
+             ON sp.organization_id = p.organization_id
+            AND sp.event_id = p.event_id AND sp.participant_id = p.id
+          WHERE p.organization_id = ? AND p.event_id = ?
+            AND ((? IS NOT NULL AND p.id = ?)
+              OR (p.source_type = ? AND p.source_id = ?)
+              OR (? IS NOT NULL AND p.normalized_email = ? COLLATE NOCASE))
+       GROUP BY p.id ORDER BY p.id`,
       )
-      .bind(submission.tenantId, submission.eventId, submission.ownerAccountId)
-      .all<{ submission_id: string; participant_id: string | null }>();
-    const ownerSubmissionIds = [
-      ...new Set((ownedSubmissions.results ?? []).map((row) => row.submission_id)),
-    ];
-    const ownerParticipantIds = [
-      ...new Set(
-        (ownedSubmissions.results ?? []).flatMap((row) =>
-          row.participant_id === null ? [] : [row.participant_id],
-        ),
-      ),
-    ];
-    await this.#ensurePortalContext({
-      organizationId: submission.tenantId,
-      event,
-      accountId: submission.ownerAccountId,
-      primaryParticipantId: primary.id,
-      submissionIds: ownerSubmissionIds.length === 0 ? [submission.id] : ownerSubmissionIds,
-      participantIds:
-        ownerParticipantIds.length === 0
-          ? submission.participants.map((participant) => participant.id)
-          : ownerParticipantIds,
-      updatedAt: input.updatedAt,
-    });
-
-    const identities = await this.#db
-      .prepare(
-        `SELECT sp.participant_id, p.claimed_user_id, u.id AS verified_user_id
-           FROM submission_participants sp
-           JOIN participants p
-             ON p.organization_id = sp.organization_id
-            AND p.event_id = sp.event_id
-            AND p.id = sp.participant_id
-      LEFT JOIN auth_users u
-             ON lower(u.email) = lower(p.email)
-            AND u.email_verified = 1
-          WHERE sp.organization_id = ? AND sp.event_id = ? AND sp.submission_id = ?
-          ORDER BY sp.ordinal, u.id`,
+      .bind(
+        input.organizationId,
+        input.eventId,
+        input.explicitParticipantId ?? null,
+        input.explicitParticipantId ?? null,
+        input.sourceType,
+        input.sourceId,
+        input.normalizedEmail ?? null,
+        input.normalizedEmail ?? null,
       )
-      .bind(submission.tenantId, submission.eventId, submission.id)
-      .all<{
-        participant_id: string;
-        claimed_user_id: string | null;
-        verified_user_id: string | null;
-      }>();
-    const accountsByParticipant = new Map<string, Set<string>>();
-    for (const row of identities.results ?? []) {
-      const accounts = accountsByParticipant.get(row.participant_id) ?? new Set<string>();
-      if (row.claimed_user_id !== null) accounts.add(row.claimed_user_id);
-      if (row.verified_user_id !== null) accounts.add(row.verified_user_id);
-      accountsByParticipant.set(row.participant_id, accounts);
+      .all<{ id: string; submission_ids: string | null }>();
+    const matches = rows.results ?? [];
+    if (matches.length > 1) {
+      return { state: "ambiguous" as const, candidateParticipantIds: matches.map((row) => row.id) };
     }
-    for (const [participantId, accounts] of accountsByParticipant) {
-      if (accounts.size !== 1) continue;
-      const accountId = [...accounts][0];
-      if (accountId === undefined || accountId === submission.ownerAccountId) continue;
-      await this.#ensurePortalContext({
-        organizationId: submission.tenantId,
-        event,
-        accountId,
-        primaryParticipantId: participantId,
-        submissionIds: [submission.id],
-        participantIds: [participantId],
-        updatedAt: input.updatedAt,
-      });
+    const match = matches[0];
+    if (match === undefined && input.explicitParticipantId !== undefined) {
+      return { state: "ambiguous" as const, candidateParticipantIds: [] };
     }
-
-    const title =
-      typeof submission.answers.title === "string" && submission.answers.title.trim().length > 0
-        ? submission.answers.title.trim()
-        : submission.id;
-    return {
-      tenantId: submission.tenantId,
-      id: submission.id,
-      eventId: submission.eventId,
-      formId: submission.formId,
-      title,
-      status: "accepted",
-      participantIds: submission.participants.map((participant) => participant.id),
-      primaryParticipantId: primary.id,
-      version: submission.version,
-      updatedAt: input.updatedAt,
-    };
-  }
-
-  async ensureProfile(input: {
-    readonly eventId: string;
-    readonly participant: SubmissionParticipant;
-    readonly updatedAt: string;
-    readonly organizationId?: string;
-  }): Promise<SpeakerProfile> {
-    const scope = await this.#eventScope(input.eventId);
-    if (
-      scope === null ||
-      (input.organizationId !== undefined && input.organizationId !== scope.organizationId)
-    ) {
-      throw new Error("The accepted speaker profile event was not found.");
-    }
-    const existing = await this.#db
-      .prepare(
-        `SELECT id, display_name, email, job_title, company, status, biography, social_links_json,
-                travel_required, arrival_at, departure_at, accommodation, dietary_requirements,
-                accessibility_needs, travel_notes, headshot_asset_id, source_type, source_id,
-                version, updated_at
-           FROM speaker_profiles
-          WHERE organization_id = ? AND event_id = ? AND participant_id = ?
-          LIMIT 1`,
-      )
-      .bind(scope.organizationId, input.eventId, input.participant.id)
-      .first<Record<string, unknown>>();
-    const displayName =
-      `${input.participant.firstName.trim()} ${input.participant.lastName.trim()}`.trim() ||
-      input.participant.id;
-    const email = input.participant.email.trim().toLowerCase();
-    if (existing !== null) {
-      const changed =
-        String(existing.display_name) !== displayName || String(existing.email ?? "") !== email;
-      if (changed) {
-        const result = await this.#db
-          .prepare(
-            `UPDATE speaker_profiles
-                SET display_name = ?, email = ?, version = version + 1, updated_at = ?
-              WHERE organization_id = ? AND event_id = ? AND participant_id = ? AND version = ?`,
-          )
-          .bind(
-            displayName,
-            email.length === 0 ? null : email,
-            input.updatedAt,
-            scope.organizationId,
-            input.eventId,
-            input.participant.id,
-            Number(existing.version),
-          )
-          .run();
-        if ((result.meta?.changes ?? 0) !== 1) {
-          throw new Error("The accepted speaker profile changed during projection.");
+    return match === undefined
+      ? {
+          state: "resolved" as const,
+          participantId: input.createParticipantId,
+          submissionIds: [],
+          created: true,
         }
-      }
-      const persisted = await this.getProfile(input.eventId, input.participant.id);
-      if (persisted === null) throw new Error("The accepted speaker profile was not persisted.");
-      return persisted;
-    }
-    const profile: SpeakerProfile = {
-      id: `speaker-profile:${input.eventId}:${input.participant.id}`,
-      eventId: input.eventId,
-      participantId: input.participant.id,
-      displayName,
-      ...(email.length === 0 ? {} : { email }),
-      biography: input.participant.biography,
-      status: "accepted",
-      sourceType: "cfp",
-      sourceId: input.participant.id,
-      version: 1,
-      updatedAt: input.updatedAt,
-    };
-    const created = await this.createProfile(profile);
-    if (!created.ok) throw new Error("The accepted speaker profile was not persisted.");
-    return created.value;
+      : {
+          state: "resolved" as const,
+          participantId: match.id,
+          submissionIds: commaSeparatedIds(match.submission_ids),
+          created: false,
+        };
   }
 
-  async ensureVerifiedSpeakerGrant(input: {
+  async listRoster(
+    eventId: string,
+    submissionId: string,
+  ): Promise<import("../../../features/speaker/types").SpeakerRosterEntry[]> {
+    return (await this.listRosterForEvent(eventId)).filter(
+      (entry) =>
+        entry.submissionId === submissionId ||
+        entry.submissionId === `speaker-submission:${submissionId}` ||
+        `speaker-submission:${entry.submissionId}` === submissionId,
+    );
+  }
+
+  async listRosterForEvent(
+    eventId: string,
+  ): Promise<import("../../../features/speaker/types").SpeakerRosterEntry[]> {
+    const rows = await this.#db
+      .prepare(
+        `SELECT sp.*, (
+           SELECT spl.submission_id
+             FROM submission_participants spl
+             LEFT JOIN evaluation_decisions d
+               ON d.organization_id = spl.organization_id
+              AND d.event_id = spl.event_id AND d.submission_id = spl.submission_id
+            WHERE spl.organization_id = sp.organization_id
+              AND spl.event_id = sp.event_id AND spl.participant_id = sp.participant_id
+            ORDER BY CASE WHEN d.status = 'accepted' THEN 0 ELSE 1 END, spl.ordinal
+            LIMIT 1
+         ) AS submission_id
+           FROM speaker_profiles sp
+          WHERE sp.event_id = ?
+       ORDER BY sp.display_name, sp.participant_id`,
+      )
+      .bind(eventId)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => {
+      const submissionId = typeof row.submission_id === "string" ? row.submission_id : "";
+      return {
+        id: String(row.id),
+        eventId,
+        ...(submissionId.length === 0 ? {} : { submissionId }),
+        participantId: String(row.participant_id),
+        displayName: String(row.display_name),
+        ...(row.email === null ? {} : { email: String(row.email) }),
+        jobTitle: String(row.job_title),
+        company: String(row.company),
+        biography: String(row.biography),
+        socialLinks: JSON.parse(String(row.social_links_json)) as Record<string, string>,
+        travelLogistics: {
+          travelRequired: Number(row.travel_required) === 1,
+          arrivalAt: row.arrival_at === null ? null : String(row.arrival_at),
+          departureAt: row.departure_at === null ? null : String(row.departure_at),
+          accommodation: String(row.accommodation),
+          dietaryRequirements: String(row.dietary_requirements),
+          accessibilityNeeds: String(row.accessibility_needs),
+          travelNotes: String(row.travel_notes),
+        },
+        ...(row.headshot_asset_id === null
+          ? {}
+          : { headshotAssetId: String(row.headshot_asset_id) }),
+        ...(row.source_type === null
+          ? {}
+          : { sourceType: row.source_type as "cfp" | "manual" | "csv" | "crm" }),
+        ...(row.source_id === null ? {} : { sourceId: String(row.source_id) }),
+        role: "primary" as const,
+        status:
+          String(row.status) === "revoked"
+            ? ("revoked" as const)
+            : String(row.status) === "active"
+              ? ("active" as const)
+              : ("pending" as const),
+        workflowStatus: String(row.status),
+        organizerStatus: String(row.status),
+        version: Number(row.version),
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+        ...(row.admitted_by_account_id === null
+          ? {}
+          : { authorAccountId: String(row.admitted_by_account_id) }),
+      };
+    });
+  }
+
+  async ensureVerifiedParticipantGrant(input: {
     readonly organizationId: string;
     readonly eventId: string;
     readonly participantId: string;
     readonly email: string;
     readonly createdAt: string;
   }): Promise<boolean> {
-    const profile = await this.getProfile(input.eventId, input.participantId);
-    const email = input.email.trim().toLowerCase();
-    if (profile === null || email.length === 0 || profile.email?.trim().toLowerCase() !== email) {
-      return false;
-    }
+    const profile = await this.#db
+      .prepare(
+        `SELECT id
+           FROM speaker_profiles
+          WHERE organization_id = ? AND event_id = ? AND participant_id = ?
+            AND email = ? COLLATE NOCASE AND status <> 'revoked'
+          LIMIT 2`,
+      )
+      .bind(input.organizationId, input.eventId, input.participantId, input.email.trim())
+      .all<{ id: string }>();
+    if ((profile.results ?? []).length !== 1) return false;
     const users = await this.#db
       .prepare(
         `SELECT id
            FROM auth_users
-          WHERE lower(email) = lower(?) AND email_verified = 1
+          WHERE email = ? COLLATE NOCASE AND email_verified = 1
           ORDER BY id
           LIMIT 2`,
       )
-      .bind(email)
+      .bind(input.email.trim())
       .all<{ id: string }>();
-    const matches = users.results ?? [];
-    const user = matches.length === 1 ? matches[0] : undefined;
+    if ((users.results ?? []).length !== 1) return false;
+    const user = users.results[0];
     if (user === undefined) return false;
     await this.#db
       .prepare(
-        `INSERT INTO speaker_grants
-           (organization_id, speaker_profile_id, user_id, created_at, revoked_at)
-         VALUES (?, ?, ?, ?, NULL)
-         ON CONFLICT (organization_id, speaker_profile_id, user_id) DO NOTHING`,
+        `INSERT INTO participant_grants
+           (organization_id,event_id,participant_id,user_id,permissions_json,
+            created_at,updated_at,revoked_at)
+         VALUES (?,?,?,?,'["edit_own_profile","manage_own_assets","view_own_tasks","update_own_tasks"]',?,?,NULL)
+         ON CONFLICT(organization_id,event_id,participant_id,user_id) DO UPDATE SET
+           permissions_json = excluded.permissions_json,
+           updated_at = excluded.updated_at,
+           revoked_at = NULL`,
       )
-      .bind(input.organizationId, profile.id, user.id, input.createdAt)
+      .bind(
+        input.organizationId,
+        input.eventId,
+        input.participantId,
+        user.id,
+        input.createdAt,
+        input.createdAt,
+      )
       .run();
     return true;
+  }
+
+  async saveOrganizerSpeakerImportPreview(
+    command: SaveOrganizerSpeakerImportPreviewCommand,
+  ): Promise<SpeakerImportPreview> {
+    const scope = await this.getOrganizerAccessScope(command.eventId, command.accountId);
+    if (scope === null || scope.tenantId !== command.organizationId)
+      throw new Error("Organizer scope denied.");
+    const revision = await this.#profileRevision(command.organizationId, command.eventId);
+    await this.#db
+      .prepare(
+        `INSERT INTO speaker_import_previews
+          (id,organization_id,event_id,account_id,source_digest,rows_json,roster_revision,created_at,committed_at)
+         VALUES (?,?,?,?,?,?,?,?,NULL)`,
+      )
+      .bind(
+        command.previewId,
+        command.organizationId,
+        command.eventId,
+        command.accountId,
+        command.sourceDigest,
+        json(command.rows),
+        revision,
+        command.createdAt,
+      )
+      .run();
+    return {
+      previewId: command.previewId,
+      sourceDigest: command.sourceDigest,
+      rosterRevision: revision,
+      validRows: command.rows,
+      invalidRows: [],
+    };
+  }
+
+  async commitOrganizerSpeakerImport(
+    command: CommitOrganizerSpeakerImportCommand,
+  ): Promise<OrganizerSpeakerAggregateResult> {
+    const scope = await this.getOrganizerAccessScope(command.eventId, command.accountId);
+    if (scope === null || scope.tenantId !== command.organizationId)
+      throw new Error("Organizer scope denied.");
+    const existing = await this.#db
+      .prepare(
+        `SELECT source_digest, participant_ids_json FROM speaker_aggregate_operations WHERE organization_id = ? AND event_id = ? AND operation_type = 'import' AND idempotency_key = ?`,
+      )
+      .bind(command.organizationId, command.eventId, command.idempotencyKey)
+      .first<{ source_digest: string; participant_ids_json: string }>();
+    if (existing !== null) {
+      if (command.sourceDigest !== undefined && existing.source_digest !== command.sourceDigest)
+        throw new Error("Idempotency digest conflict.");
+      return {
+        participantIds: JSON.parse(existing.participant_ids_json) as string[],
+        replayed: true,
+      };
+    }
+    const preview = await this.#db
+      .prepare(
+        `SELECT rows_json, source_digest, roster_revision FROM speaker_import_previews WHERE organization_id = ? AND event_id = ? AND id = ? AND account_id = ?`,
+      )
+      .bind(command.organizationId, command.eventId, command.previewId, command.accountId)
+      .first<{ rows_json: string; source_digest: string; roster_revision: number }>();
+    if (
+      preview === null ||
+      (command.sourceDigest !== undefined && preview.source_digest !== command.sourceDigest)
+    )
+      throw new Error("Import preview digest conflict.");
+    if (
+      (await this.#profileRevision(command.organizationId, command.eventId)) !==
+      preview.roster_revision
+    )
+      throw new Error("Import preview is stale.");
+    const rows = JSON.parse(preview.rows_json) as SpeakerImportRow[];
+    const participantIds =
+      command.participantIds === undefined || command.participantIds.length === 0
+        ? await Promise.all(
+            rows.map(async (row) => {
+              const existingParticipant = await this.#db
+                .prepare(
+                  `SELECT id FROM participants WHERE organization_id = ? AND event_id = ? AND normalized_email = ? COLLATE NOCASE LIMIT 2`,
+                )
+                .bind(command.organizationId, command.eventId, row.email.toLowerCase())
+                .all<{ id: string }>();
+              const matches = existingParticipant.results ?? [];
+              if (matches.length > 1) throw new Error("Import participant identity is ambiguous.");
+              return matches[0]?.id ?? `participant:${command.previewId}:${row.rowNumber}`;
+            }),
+          )
+        : [...command.participantIds];
+    if (
+      rows.length !== participantIds.length ||
+      new Set(participantIds).size !== participantIds.length
+    )
+      throw new Error("Import participant identities are invalid.");
+    const statements: D1PreparedStatement[] = [];
+    rows.forEach((row, index) => {
+      const participantId = participantIds[index];
+      if (participantId === undefined) throw new Error("Import participant identity is missing.");
+      const names = this.#participantNames(row.displayName);
+      const sourceId = `${command.previewId}:row:${row.rowNumber}`;
+      statements.push(
+        this.#db
+          .prepare(
+            `INSERT OR IGNORE INTO participants (id,organization_id,event_id,first_name,last_name,display_name,email,normalized_email,identity_state,source_type,source_id,claimed_user_id,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?, 'resolved','csv',?,NULL,1,?,?)`,
+          )
+          .bind(
+            participantId,
+            command.organizationId,
+            command.eventId,
+            names.firstName,
+            names.lastName,
+            row.displayName,
+            row.email,
+            row.email.toLowerCase(),
+            sourceId,
+            command.committedAt,
+            command.committedAt,
+          ),
+        this.#db
+          .prepare(
+            `INSERT INTO speaker_profiles (id,organization_id,event_id,participant_id,display_name,email,job_title,company,status,biography,social_links_json,travel_required,arrival_at,departure_at,accommodation,dietary_requirements,accessibility_needs,travel_notes,headshot_asset_id,source_type,source_id,version,created_at,updated_at,admitted_by_account_id,admitted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,'','','','',NULL,'csv',?,1,?,?,?,?)`,
+          )
+          .bind(
+            `profile:${command.eventId}:${participantId}`,
+            command.organizationId,
+            command.eventId,
+            participantId,
+            row.displayName,
+            row.email,
+            row.jobTitle,
+            row.company,
+            row.status ?? "pending",
+            row.biography,
+            json(row.socialLinks),
+            sourceId,
+            command.committedAt,
+            command.committedAt,
+            command.accountId,
+            command.committedAt,
+          ),
+        ...this.#communicationRecipientStatements({
+          organizationId: command.organizationId,
+          eventId: command.eventId,
+          participantId,
+          displayName: row.displayName,
+          email: row.email,
+          updatedAt: command.committedAt,
+        }),
+        this.#db
+          .prepare(
+            `INSERT INTO audit_events (id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,details_json,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+          )
+          .bind(
+            `speaker-import:${command.eventId}:${command.idempotencyKey}:${row.rowNumber}`,
+            command.organizationId,
+            "user",
+            command.accountId,
+            "speaker.imported",
+            "speaker_profile",
+            `profile:${command.eventId}:${participantId}`,
+            json({
+              eventId: command.eventId,
+              previewId: command.previewId,
+              rowNumber: row.rowNumber,
+            }),
+            command.committedAt,
+          ),
+      );
+    });
+    statements.push(
+      this.#db
+        .prepare(
+          `INSERT INTO speaker_aggregate_operations (id,organization_id,event_id,operation_type,idempotency_key,source_digest,preview_id,participant_ids_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+        )
+        .bind(
+          `speaker-import:${command.eventId}:${command.idempotencyKey}`,
+          command.organizationId,
+          command.eventId,
+          "import",
+          command.idempotencyKey,
+          preview.source_digest,
+          command.previewId,
+          json(participantIds),
+          command.committedAt,
+        ),
+      this.#db
+        .prepare(
+          `UPDATE speaker_import_previews SET committed_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND committed_at IS NULL`,
+        )
+        .bind(command.committedAt, command.organizationId, command.eventId, command.previewId),
+    );
+    await this.#db.batch(statements);
+    return { participantIds, replayed: false };
+  }
+
+  async upsertOrganizerSpeakerAggregate(
+    command: UpsertOrganizerSpeakerAggregateCommand,
+  ): Promise<RepositoryResult<SpeakerProfile>> {
+    const scope = await this.getOrganizerAccessScope(command.eventId, command.accountId);
+    if (scope === null || scope.tenantId !== command.organizationId)
+      return { ok: false, reason: "not_found" };
+    const digest = command.sourceDigest ?? json({ ...command, updatedAt: undefined });
+    const operationKey = command.idempotencyKey;
+    if (operationKey !== undefined) {
+      const existing = await this.#db
+        .prepare(
+          `SELECT source_digest, participant_ids_json FROM speaker_aggregate_operations WHERE organization_id = ? AND event_id = ? AND operation_type = 'create' AND idempotency_key = ?`,
+        )
+        .bind(command.organizationId, command.eventId, operationKey)
+        .first<{ source_digest: string; participant_ids_json: string }>();
+      if (existing !== null) {
+        if (existing.source_digest !== digest) return { ok: false, reason: "version_conflict" };
+        const profile = await this.getProfile(command.eventId, command.participantId);
+        return profile === null ? { ok: false, reason: "not_found" } : { ok: true, value: profile };
+      }
+    }
+    if (command.expectedVersion !== null) {
+      const mutationType = command.status === "revoked" ? "revoke" : "update";
+      const durableKey = `${command.participantId}:${command.expectedVersion}`;
+      const replay = await this.#db
+        .prepare(
+          `SELECT source_digest FROM speaker_aggregate_operations WHERE organization_id = ? AND event_id = ? AND operation_type = ? AND idempotency_key = ?`,
+        )
+        .bind(command.organizationId, command.eventId, mutationType, durableKey)
+        .first<{ source_digest: string }>();
+      if (replay !== null) {
+        if (replay.source_digest !== digest) return { ok: false, reason: "version_conflict" };
+        const profile = await this.getProfile(command.eventId, command.participantId);
+        return profile === null ? { ok: false, reason: "not_found" } : { ok: true, value: profile };
+      }
+    }
+    const current = await this.getProfile(command.eventId, command.participantId);
+    if (command.expectedVersion === null) {
+      if (current !== null) return { ok: false, reason: "version_conflict" };
+      const names = this.#participantNames(command.displayName);
+      const statements = [
+        this.#db
+          .prepare(
+            `INSERT OR IGNORE INTO participants (id,organization_id,event_id,first_name,last_name,display_name,email,normalized_email,identity_state,source_type,source_id,claimed_user_id,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?, 'resolved',?,?,NULL,1,?,?)`,
+          )
+          .bind(
+            command.participantId,
+            command.organizationId,
+            command.eventId,
+            names.firstName,
+            names.lastName,
+            command.displayName,
+            command.email,
+            command.email.toLowerCase(),
+            command.sourceType,
+            command.sourceId,
+            command.updatedAt,
+            command.updatedAt,
+          ),
+        this.#db
+          .prepare(
+            `INSERT INTO speaker_profiles (id,organization_id,event_id,participant_id,display_name,email,job_title,company,status,biography,social_links_json,travel_required,arrival_at,departure_at,accommodation,dietary_requirements,accessibility_needs,travel_notes,headshot_asset_id,source_type,source_id,version,created_at,updated_at,admitted_by_account_id,admitted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,1,?,?,?,?)`,
+          )
+          .bind(
+            command.profileId,
+            command.organizationId,
+            command.eventId,
+            command.participantId,
+            command.displayName,
+            command.email,
+            command.jobTitle,
+            command.company,
+            command.status,
+            command.biography,
+            json(command.socialLinks),
+            command.travelLogistics.travelRequired ? 1 : 0,
+            command.travelLogistics.arrivalAt,
+            command.travelLogistics.departureAt,
+            command.travelLogistics.accommodation,
+            command.travelLogistics.dietaryRequirements,
+            command.travelLogistics.accessibilityNeeds,
+            command.travelLogistics.travelNotes,
+            command.sourceType,
+            command.sourceId,
+            command.updatedAt,
+            command.updatedAt,
+            command.accountId,
+            command.updatedAt,
+          ),
+        ...this.#communicationRecipientStatements({
+          organizationId: command.organizationId,
+          eventId: command.eventId,
+          participantId: command.participantId,
+          displayName: command.displayName,
+          email: command.email,
+          updatedAt: command.updatedAt,
+        }),
+        this.#db
+          .prepare(
+            `INSERT INTO audit_events (id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,details_json,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+          )
+          .bind(
+            `speaker-create:${command.eventId}:${operationKey ?? command.participantId}`,
+            command.organizationId,
+            "user",
+            command.accountId,
+            "speaker.created",
+            "speaker_profile",
+            command.profileId,
+            json({ eventId: command.eventId, participantId: command.participantId }),
+            command.updatedAt,
+          ),
+      ];
+      if (operationKey !== undefined)
+        statements.push(
+          this.#db
+            .prepare(
+              `INSERT INTO speaker_aggregate_operations (id,organization_id,event_id,operation_type,idempotency_key,source_digest,preview_id,participant_ids_json,created_at) VALUES (?,?,?,?,?,?,NULL,?,?)`,
+            )
+            .bind(
+              `speaker-create:${command.eventId}:${operationKey}`,
+              command.organizationId,
+              command.eventId,
+              "create",
+              operationKey,
+              digest,
+              json([command.participantId]),
+              command.updatedAt,
+            ),
+        );
+      try {
+        await this.#db.batch(statements);
+      } catch {
+        return { ok: false, reason: "version_conflict" };
+      }
+    } else {
+      if (current === null) return { ok: false, reason: "not_found" };
+      if (current.version !== command.expectedVersion)
+        return { ok: false, reason: "version_conflict" };
+      const mutationType = command.status === "revoked" ? "revoke" : "update";
+      const durableKey = `${command.participantId}:${command.expectedVersion}`;
+      const updateId = `speaker-${mutationType}:${command.eventId}:${durableKey}`;
+      try {
+        await this.#db.batch([
+          this.#db
+            .prepare(
+              `INSERT INTO speaker_aggregate_operations (id,organization_id,event_id,operation_type,idempotency_key,expected_version,source_digest,preview_id,participant_ids_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+            )
+            .bind(
+              updateId,
+              command.organizationId,
+              command.eventId,
+              mutationType,
+              durableKey,
+              command.expectedVersion,
+              digest,
+              null,
+              json([command.participantId]),
+              command.updatedAt,
+            ),
+          this.#db
+            .prepare(
+              `UPDATE speaker_profiles SET display_name=?,email=?,job_title=?,company=?,status=?,biography=?,social_links_json=?,travel_required=?,arrival_at=?,departure_at=?,accommodation=?,dietary_requirements=?,accessibility_needs=?,travel_notes=?,version=version+1,updated_at=?,admitted_by_account_id=? WHERE organization_id=? AND event_id=? AND participant_id=? AND version=?`,
+            )
+            .bind(
+              command.displayName,
+              command.email,
+              command.jobTitle,
+              command.company,
+              command.status,
+              command.biography,
+              json(command.socialLinks),
+              command.travelLogistics.travelRequired ? 1 : 0,
+              command.travelLogistics.arrivalAt,
+              command.travelLogistics.departureAt,
+              command.travelLogistics.accommodation,
+              command.travelLogistics.dietaryRequirements,
+              command.travelLogistics.accessibilityNeeds,
+              command.travelLogistics.travelNotes,
+              command.updatedAt,
+              command.accountId,
+              command.organizationId,
+              command.eventId,
+              command.participantId,
+              command.expectedVersion,
+            ),
+          ...this.#communicationRecipientStatements({
+            organizationId: command.organizationId,
+            eventId: command.eventId,
+            participantId: command.participantId,
+            displayName: command.displayName,
+            email: command.email,
+            updatedAt: command.updatedAt,
+          }),
+          this.#db
+            .prepare(
+              `INSERT INTO audit_events (id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,details_json,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+            )
+            .bind(
+              updateId,
+              command.organizationId,
+              "user",
+              command.accountId,
+              command.status === "revoked" ? "speaker.revoked" : "speaker.updated",
+              "speaker_profile",
+              current.id,
+              json({
+                eventId: command.eventId,
+                participantId: command.participantId,
+                expectedVersion: command.expectedVersion,
+              }),
+              command.updatedAt,
+            ),
+        ]);
+      } catch {
+        return { ok: false, reason: "version_conflict" };
+      }
+    }
+    const value = await this.getProfile(command.eventId, command.participantId);
+    return value === null ? { ok: false, reason: "not_found" } : { ok: true, value };
+  }
+
+  async #profileRevision(organizationId: string, eventId: string): Promise<number> {
+    const row = await this.#db
+      .prepare(
+        `SELECT COALESCE(sum(version),0) AS revision FROM speaker_profiles WHERE organization_id = ? AND event_id = ?`,
+      )
+      .bind(organizationId, eventId)
+      .first<{ revision: number }>();
+    return Number(row?.revision ?? 0);
+  }
+
+  #participantNames(displayName: string): { firstName: string; lastName: string } {
+    const normalized = displayName.trim();
+    const split = normalized.indexOf(" ");
+    return split < 0
+      ? { firstName: normalized, lastName: "" }
+      : { firstName: normalized.slice(0, split), lastName: normalized.slice(split + 1).trim() };
+  }
+
+  #communicationRecipientStatements(input: {
+    organizationId: string;
+    eventId: string;
+    participantId: string;
+    displayName: string;
+    email: string;
+    updatedAt: string;
+  }): D1PreparedStatement[] {
+    const firstName = this.#participantNames(input.displayName).firstName;
+    return [
+      this.#db
+        .prepare(
+          `INSERT INTO communication_recipients
+             (id,organization_id,event_id,participant_id,email,display_name,data_json,updated_at)
+           VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             organization_id=excluded.organization_id,
+             event_id=excluded.event_id,
+             participant_id=excluded.participant_id,
+             email=excluded.email,
+             display_name=excluded.display_name,
+             data_json=excluded.data_json,
+             updated_at=excluded.updated_at`,
+        )
+        .bind(
+          input.participantId,
+          input.organizationId,
+          input.eventId,
+          input.participantId,
+          input.email,
+          input.displayName,
+          json({ first_name: firstName, display_name: input.displayName, email: input.email }),
+          input.updatedAt,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO communication_recipient_audiences
+             (organization_id,event_id,recipient_id,audience)
+           VALUES (?,?,?,'all_participants')
+           ON CONFLICT(organization_id,event_id,recipient_id,audience) DO NOTHING`,
+        )
+        .bind(input.organizationId, input.eventId, input.participantId),
+    ];
   }
 
   async listSubmissions(
@@ -917,42 +1315,54 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     const scope = await this.#eventScope(profile.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
     try {
-      await this.#db
-        .prepare(
-          `INSERT INTO speaker_profiles
-             (id, organization_id, event_id, participant_id, display_name, email, job_title,
-              company, status, biography, social_links_json, travel_required, arrival_at,
-              departure_at, accommodation, dietary_requirements, accessibility_needs,
-              travel_notes, headshot_asset_id, source_type, source_id, version, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          profile.id,
-          scope.organizationId,
-          profile.eventId,
-          profile.participantId,
-          profile.displayName,
-          profile.email ?? null,
-          profile.jobTitle ?? "",
-          profile.company ?? "",
-          profile.status ?? "",
-          profile.biography,
-          json(profile.socialLinks ?? {}),
-          profile.travelLogistics?.travelRequired ? 1 : 0,
-          profile.travelLogistics?.arrivalAt ?? null,
-          profile.travelLogistics?.departureAt ?? null,
-          profile.travelLogistics?.accommodation ?? "",
-          profile.travelLogistics?.dietaryRequirements ?? "",
-          profile.travelLogistics?.accessibilityNeeds ?? "",
-          profile.travelLogistics?.travelNotes ?? "",
-          profile.headshotAssetId ?? null,
-          profile.sourceType ?? null,
-          profile.sourceId ?? null,
-          profile.version,
-          profile.updatedAt,
-          profile.updatedAt,
-        )
-        .run();
+      const email = profile.email?.trim() ?? "";
+      await this.#db.batch([
+        this.#db
+          .prepare(
+            `INSERT INTO speaker_profiles
+               (id, organization_id, event_id, participant_id, display_name, email, job_title,
+                company, status, biography, social_links_json, travel_required, arrival_at,
+                departure_at, accommodation, dietary_requirements, accessibility_needs,
+                travel_notes, headshot_asset_id, source_type, source_id, version, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            profile.id,
+            scope.organizationId,
+            profile.eventId,
+            profile.participantId,
+            profile.displayName,
+            email.length === 0 ? null : email,
+            profile.jobTitle ?? "",
+            profile.company ?? "",
+            profile.status ?? "",
+            profile.biography,
+            json(profile.socialLinks ?? {}),
+            profile.travelLogistics?.travelRequired ? 1 : 0,
+            profile.travelLogistics?.arrivalAt ?? null,
+            profile.travelLogistics?.departureAt ?? null,
+            profile.travelLogistics?.accommodation ?? "",
+            profile.travelLogistics?.dietaryRequirements ?? "",
+            profile.travelLogistics?.accessibilityNeeds ?? "",
+            profile.travelLogistics?.travelNotes ?? "",
+            profile.headshotAssetId ?? null,
+            profile.sourceType ?? null,
+            profile.sourceId ?? null,
+            profile.version,
+            profile.updatedAt,
+            profile.updatedAt,
+          ),
+        ...(email.length === 0
+          ? []
+          : this.#communicationRecipientStatements({
+              organizationId: scope.organizationId,
+              eventId: profile.eventId,
+              participantId: profile.participantId,
+              displayName: profile.displayName,
+              email,
+              updatedAt: profile.updatedAt,
+            })),
+      ]);
     } catch {
       return { ok: false, reason: "version_conflict" };
     }
@@ -978,38 +1388,60 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     if (current.version !== command.expectedVersion)
       return { ok: false, reason: "version_conflict" };
     const travel = command.travelLogistics ?? current.travelLogistics;
-    const result = await this.#db
-      .prepare(
-        `UPDATE speaker_profiles SET display_name = ?, email = ?, job_title = ?, company = ?, status = ?, biography = ?, social_links_json = ?, headshot_asset_id = ?, travel_required = ?, arrival_at = ?, departure_at = ?, accommodation = ?, dietary_requirements = ?, accessibility_needs = ?, travel_notes = ?, version = version + 1, updated_at = ?
-       WHERE event_id = ? AND participant_id = ? AND version = ?`,
-      )
-      .bind(
-        command.displayName ?? current.displayName,
-        command.email ?? current.email ?? null,
-        command.jobTitle ?? current.jobTitle ?? "",
-        command.company ?? current.company ?? "",
-        command.status ?? current.status ?? "",
-        command.biography ?? current.biography,
-        json(command.socialLinks ?? current.socialLinks ?? {}),
-        command.headshotAssetId === null
-          ? null
-          : (command.headshotAssetId ?? current.headshotAssetId ?? null),
-        travel?.travelRequired ? 1 : 0,
-        travel?.arrivalAt ?? null,
-        travel?.departureAt ?? null,
-        travel?.accommodation ?? "",
-        travel?.dietaryRequirements ?? "",
-        travel?.accessibilityNeeds ?? "",
-        travel?.travelNotes ?? "",
-        command.updatedAt,
-        command.eventId,
-        command.participantId,
-        command.expectedVersion,
-      )
-      .run();
-    if ((result.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
+    const scope = await this.#eventScope(command.eventId);
+    if (scope === null) return { ok: false, reason: "not_found" };
+    const displayName = command.displayName ?? current.displayName;
+    const email = command.email ?? current.email ?? "";
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE speaker_profiles SET display_name = ?, email = ?, job_title = ?, company = ?, status = ?, biography = ?, social_links_json = ?, headshot_asset_id = ?, travel_required = ?, arrival_at = ?, departure_at = ?, accommodation = ?, dietary_requirements = ?, accessibility_needs = ?, travel_notes = ?, version = version + 1, updated_at = ?
+         WHERE event_id = ? AND participant_id = ? AND version = ?`,
+        )
+        .bind(
+          displayName,
+          email.length === 0 ? null : email,
+          command.jobTitle ?? current.jobTitle ?? "",
+          command.company ?? current.company ?? "",
+          command.status ?? current.status ?? "",
+          command.biography ?? current.biography,
+          json(command.socialLinks ?? current.socialLinks ?? {}),
+          command.headshotAssetId === null
+            ? null
+            : (command.headshotAssetId ?? current.headshotAssetId ?? null),
+          travel?.travelRequired ? 1 : 0,
+          travel?.arrivalAt ?? null,
+          travel?.departureAt ?? null,
+          travel?.accommodation ?? "",
+          travel?.dietaryRequirements ?? "",
+          travel?.accessibilityNeeds ?? "",
+          travel?.travelNotes ?? "",
+          command.updatedAt,
+          command.eventId,
+          command.participantId,
+          command.expectedVersion,
+        ),
+      ...(email.length === 0
+        ? []
+        : this.#communicationRecipientStatements({
+            organizationId: scope.organizationId,
+            eventId: command.eventId,
+            participantId: command.participantId,
+            displayName,
+            email,
+            updatedAt: command.updatedAt,
+          })),
+    ]);
     const persisted = await this.getProfile(command.eventId, command.participantId);
-    return persisted === null ? { ok: false, reason: "not_found" } : { ok: true, value: persisted };
+    if (persisted === null) return { ok: false, reason: "not_found" };
+    if (
+      (results[0]?.meta?.changes ?? 0) !== 1 &&
+      (persisted.version !== command.expectedVersion + 1 ||
+        persisted.updatedAt !== command.updatedAt)
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    return { ok: true, value: persisted };
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
@@ -1522,119 +1954,6 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     return rows
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .map((row) => JSON.parse(row.body) as SpeakerAssetAuditEntry);
-  }
-
-  async #ensurePortalContext(input: {
-    organizationId: string;
-    event: { id: string; name: string; slug: string; status: string };
-    accountId: string;
-    primaryParticipantId: string;
-    submissionIds: readonly string[];
-    participantIds: readonly string[];
-    updatedAt: string;
-  }): Promise<void> {
-    const contextId = `portal-context:${input.organizationId}:${input.event.id}:${input.accountId}`;
-    const capabilities: readonly SpeakerPortalCapability[] = [
-      "profile-self",
-      "submission-edit",
-      "task-response",
-      "asset-read",
-      "asset-write",
-      "asset-comment",
-    ];
-    const current = await this.#db
-      .prepare(
-        `SELECT version, capabilities_json, name, slug, status, primary_participant_id
-           FROM portal_contexts
-          WHERE organization_id = ? AND event_id = ? AND id = ? AND account_id = ?
-          LIMIT 1`,
-      )
-      .bind(input.organizationId, input.event.id, contextId, input.accountId)
-      .first<Record<string, unknown>>();
-    if (current === null) {
-      await this.#db
-        .prepare(
-          `INSERT INTO portal_contexts
-             (id, organization_id, event_id, account_id, name, slug, status,
-              primary_participant_id, capabilities_json, version, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-           ON CONFLICT (id) DO NOTHING`,
-        )
-        .bind(
-          contextId,
-          input.organizationId,
-          input.event.id,
-          input.accountId,
-          input.event.name,
-          `${input.event.slug}--${input.accountId}`,
-          input.event.status,
-          input.primaryParticipantId,
-          json(capabilities),
-          input.updatedAt,
-          input.updatedAt,
-        )
-        .run();
-    } else {
-      const stored = portalCapabilities(current.capabilities_json);
-      const nextCapabilities = [...new Set([...stored, ...capabilities])];
-      const changed =
-        String(current.name) !== input.event.name ||
-        String(current.status) !== input.event.status ||
-        String(current.primary_participant_id) !== input.primaryParticipantId ||
-        JSON.stringify(stored) !== JSON.stringify(nextCapabilities);
-      if (changed) {
-        const result = await this.#db
-          .prepare(
-            `UPDATE portal_contexts
-                SET name = ?, status = ?, primary_participant_id = ?, capabilities_json = ?,
-                    version = version + 1, updated_at = ?
-              WHERE organization_id = ? AND event_id = ? AND id = ? AND account_id = ?
-                AND version = ?`,
-          )
-          .bind(
-            input.event.name,
-            input.event.status,
-            input.primaryParticipantId,
-            json(nextCapabilities),
-            input.updatedAt,
-            input.organizationId,
-            input.event.id,
-            contextId,
-            input.accountId,
-            Number(current.version),
-          )
-          .run();
-        if ((result.meta?.changes ?? 0) !== 1) {
-          throw new Error("The speaker portal context changed during acceptance projection.");
-        }
-      }
-    }
-    const statements: D1PreparedStatement[] = [];
-    for (const submissionId of [...new Set(input.submissionIds)]) {
-      statements.push(
-        this.#db
-          .prepare(
-            `INSERT INTO portal_context_submissions
-               (organization_id, event_id, context_id, submission_id)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT (organization_id, event_id, context_id, submission_id) DO NOTHING`,
-          )
-          .bind(input.organizationId, input.event.id, contextId, submissionId),
-      );
-    }
-    for (const participantId of [...new Set(input.participantIds)]) {
-      statements.push(
-        this.#db
-          .prepare(
-            `INSERT INTO portal_context_participants
-               (organization_id, event_id, context_id, participant_id)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT (organization_id, event_id, context_id, participant_id) DO NOTHING`,
-          )
-          .bind(input.organizationId, input.event.id, contextId, participantId),
-      );
-    }
-    if (statements.length > 0) await this.#db.batch(statements);
   }
 
   async #saveTask(

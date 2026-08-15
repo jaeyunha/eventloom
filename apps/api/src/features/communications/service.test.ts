@@ -463,6 +463,143 @@ describe("communications domain", () => {
     expect(persisted.recipients[0]?.email).toBe("one@example.test");
   });
 
+  it("previews an exact recipient set in request order and protects server identity data", async () => {
+    const { service } = await fixture();
+    const template = await service.createTemplate(organizer, {
+      id: "identity-template",
+      eventId,
+      name: "Identity-safe update",
+      purpose: "organizer_group_email",
+      subject: "{{first_name}}|{{display_name}}|{{email}}",
+      html: "<p>{{first_name}}|{{display_name}}|{{email}}</p>",
+      text: "{{first_name}}|{{display_name}}|{{email}}",
+      variables: ["first_name", "display_name", "email"],
+    });
+    await service.approveTemplate(organizer, eventId, template.id, template.version);
+
+    const preview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: template.id,
+      audience: "all_participants",
+      recipientIds: ["participant-2", "participant-1"],
+      data: {
+        first_name: "Attacker",
+        display_name: "Spoofed recipient",
+        email: "spoofed@example.test",
+      },
+    });
+
+    expect(preview.recipientIds).toEqual(["participant-2", "participant-1"]);
+    expect(preview.recipientPreviews.map((recipient) => recipient.subject)).toEqual([
+      "Two|Two|two@example.test",
+      "One|One|one@example.test",
+    ]);
+    await expectCode(
+      service.previewGroupSend(organizer, {
+        eventId,
+        purpose: "organizer_group_email",
+        templateId: template.id,
+        audience: "all_participants",
+        recipientIds: ["participant-1", "participant-1"],
+      }),
+      "COMMUNICATION_INVALID_INPUT",
+    );
+    await expectCode(
+      service.previewGroupSend(organizer, {
+        eventId,
+        purpose: "organizer_group_email",
+        templateId: template.id,
+        audience: "accepted_participants",
+        recipientIds: ["participant-2"],
+      }),
+      "COMMUNICATION_NOT_FOUND",
+    );
+  });
+
+  it("lists event sends newest first and excludes other tenant data", async () => {
+    const { service } = await fixture();
+    const preview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      data: { message: "Listing" },
+    });
+    const first = await service.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "list-first",
+    });
+    const second = await service.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "list-second",
+    });
+
+    const listed = await service.listSends(organizer, eventId);
+    expect(listed.map((send) => send.id)).toEqual(
+      [first, second]
+        .sort(
+          (left, right) =>
+            right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+        )
+        .map((send) => send.id),
+    );
+    expect(await service.listSends(otherTenantOrganizer, eventId)).toEqual([]);
+  });
+
+  it("redacts credentials from provider errors before persisting delivery reasons", async () => {
+    const repository = new InMemoryCommunicationRepository({
+      recipients: recipients.slice(0, 1),
+      authorizedAudiences: { [`${tenantId}:${eventId}`]: ["all_participants"] },
+    });
+    const service = new CommunicationService(
+      repository,
+      {
+        async send() {
+          throw new Error(
+            "provider failed: Bearer super-secret api_key=another-secret https://user:password@mail.example.test",
+          );
+        },
+      },
+      {
+        clock: () => new Date(now),
+        senderIdentities: {
+          auth: "login@conference.example",
+          speakers: "program@conference.example",
+          calendar: "schedule@conference.example",
+        },
+      },
+    );
+    const template = await service.createTemplate(organizer, {
+      id: "redaction-template",
+      eventId,
+      name: "Redaction",
+      purpose: "organizer_group_email",
+      subject: "Update",
+      html: "<p>Update</p>",
+      text: "Update",
+    });
+    await service.approveTemplate(organizer, eventId, template.id, template.version);
+    const preview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: template.id,
+      audience: "all_participants",
+    });
+    const send = await service.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "redacted-provider-error",
+    });
+    const serialized = JSON.stringify(send);
+    expect(serialized).not.toContain("super-secret");
+    expect(serialized).not.toContain("another-secret");
+    expect(serialized).not.toContain("user:password");
+    expect(send.deliveries[0]?.failureReason).toContain("[REDACTED]");
+  });
+
   it("is idempotent and records per-recipient provider states and delivery history", async () => {
     const { service, adapter } = await fixture();
     const preview = await service.previewGroupSend(organizer, {
@@ -483,6 +620,65 @@ describe("communications domain", () => {
       idempotencyKey: "same-key",
     });
     expect(replay.id).toBe(first.id);
+
+    const changedRecipients = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      recipientIds: ["participant-1"],
+      data: { message: "Operational update" },
+    });
+    await expectCode(
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: changedRecipients.id,
+        idempotencyKey: "same-key",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+
+    const changedRenderData = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      data: { message: "Changed operational update" },
+    });
+    await expectCode(
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: changedRenderData.id,
+        idempotencyKey: "same-key",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+
+    const changedTemplate = await service.createTemplateVersion(organizer, {
+      eventId,
+      templateId: "group-template",
+      subject: "Changed {{displayName}}",
+      html: "<p>{{message}}</p>",
+      text: "{{message}}",
+    });
+    await service.approveTemplate(organizer, eventId, changedTemplate.id, changedTemplate.version);
+    const changedTemplatePreview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: changedTemplate.id,
+      templateVersion: changedTemplate.version,
+      audience: "all_participants",
+      data: { message: "Operational update" },
+    });
+    await expectCode(
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: changedTemplatePreview.id,
+        idempotencyKey: "same-key",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+
     expect(adapter.requests).toHaveLength(2);
     expect(first.deliveries.map((delivery) => delivery.status)).toEqual(["queued", "failed"]);
     expect(first).toMatchObject({

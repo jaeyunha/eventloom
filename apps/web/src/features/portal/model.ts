@@ -302,7 +302,7 @@ export function scopePortalContextToPrimaryParticipant(
 
 function emptyScopedPortalView(
   view: PortalView | null | undefined,
-  context: PortalContext | null | undefined,
+  _context: PortalContext | null | undefined,
   scopedContext: PortalContext | undefined,
 ): PortalView {
   const capabilities = view?.capabilities === undefined ? undefined : [...view.capabilities];
@@ -584,23 +584,31 @@ export function portalSubmissionEditTarget(
   };
 }
 
+export type PortalReadinessState = "no-tasks" | "in-progress" | "ready";
+
 export interface PortalSummary {
   submissionCount: number;
   acceptedCount: number;
+  taskCount: number;
   outstandingTaskCount: number;
   completedTaskCount: number;
-  completionPercent: number;
+  completionPercent: number | null;
+  readinessState: PortalReadinessState;
 }
 
 export function summarizePortal(view: PortalView): PortalSummary {
+  const taskCount = view.tasks.length;
   const completedTaskCount = view.tasks.filter(isTaskFinished).length;
+  const outstandingTaskCount = taskCount - completedTaskCount;
   return {
     submissionCount: view.submissions.length,
     acceptedCount: view.submissions.filter((submission) => submission.status === "accepted").length,
-    outstandingTaskCount: view.tasks.length - completedTaskCount,
+    taskCount,
+    outstandingTaskCount,
     completedTaskCount,
-    completionPercent:
-      view.tasks.length === 0 ? 100 : Math.round((completedTaskCount / view.tasks.length) * 100),
+    completionPercent: taskCount === 0 ? null : Math.round((completedTaskCount / taskCount) * 100),
+    readinessState:
+      taskCount === 0 ? "no-tasks" : outstandingTaskCount === 0 ? "ready" : "in-progress",
   };
 }
 

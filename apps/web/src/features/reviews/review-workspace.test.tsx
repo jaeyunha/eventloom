@@ -839,21 +839,16 @@ describe("review workspace", () => {
       expect(markup).toContain("Test Summit Local");
       expect(markup).toContain("test-summit-local");
       expect(markup).not.toContain("87aad17-5e75-4732-9085-65df6b8e9a9b");
+      expect(markup).toContain("Organizer review setup");
       expect(markup).toContain('id="create-plan-name"');
       expect(markup).toContain('for="create-plan-name"');
-      expect(markup).toContain('aria-describedby="create-plan-name-description"');
-      expect(markup).not.toContain('id="create-plan-event-id"');
-      expect(markup).not.toContain("Event ID");
-      expect(markup).toContain('<legend class="sr-only">Event</legend>');
-      expect(markup).not.toContain('id="create-plan-rounds"');
-      expect(markup).not.toContain('id="create-plan-first-rubric"');
-      expect(markup).not.toContain('id="create-plan-first-criterion"');
-      expect(markup).not.toContain('id="create-plan-blind-review"');
+      expect(markup).toContain('id="create-plan-rounds"');
+      expect(markup).toContain('id="create-plan-first-rubric"');
+      expect(markup).toContain('id="create-plan-first-criterion"');
+      expect(markup).toContain('id="create-plan-blind-review"');
       expect(markup).toContain("Create draft plan");
-      expect(markup).toContain("One editable round is created now.");
-      expect(markup).not.toContain('aria-current="page"');
-      expect(markup).not.toContain("Invite reviewers");
-      expect(markup).not.toContain('aria-label="Review workspace"');
+      expect(markup).toContain("Round review teams are managed after creation from Review team.");
+      expect(markup).not.toContain('id="create-plan-event-id"');
     } finally {
       organizerEventWorkspace.current = null;
     }
@@ -994,6 +989,7 @@ describe("review workspace", () => {
     );
 
     expect(markup).toContain("Plan overview");
+    expect(markup).toContain("Organizer review");
     expect(markup).toContain("Open for review");
     expect(markup).toContain("Initial committee review");
     expect(markup).toContain("Aug 10, 2026");
@@ -1020,7 +1016,7 @@ describe("review workspace", () => {
         }),
       );
 
-      expect(markup).not.toContain(
+      expect(markup).toContain(
         'href="/admin/organizations/org-selected/events/summit-2026/reviews"',
       );
       expect(markup).not.toContain(
@@ -1028,8 +1024,9 @@ describe("review workspace", () => {
       );
       expect(markup).not.toContain('href="/review"');
       expect(markup).not.toContain("Reviewer AI workspace");
-      expect(markup).toContain('href="/admin/organizations/org-selected/members"');
+      expect(markup).toContain('href="/admin/organizations/org-selected/members?tab=invite"');
       expect(markup).toContain("Invite reviewers");
+      expect(markup).toContain("Review team");
 
       expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
     } finally {
@@ -1080,6 +1077,18 @@ describe("review workspace", () => {
     expect(markup).toContain("Add round");
     expect(markup).toContain("Reviews per submission");
     expect(markup).not.toContain("Plan overview");
+  });
+
+  it("keeps round reviewer-pool editing out of plan authoring", () => {
+    const targetingSource = readFileSync(
+      fileURLToPath(
+        new URL("./workspace/organizer-authoring-round-targeting.tsx", import.meta.url),
+      ),
+      "utf8",
+    );
+
+    expect(targetingSource).not.toContain("Round reviewer pool");
+    expect(targetingSource).not.toContain("Verified organization reviewers for this round");
   });
 
   it("keeps assignment and decision detail out of the default overview", () => {
@@ -1915,6 +1924,7 @@ describe("review workspace", () => {
         const actualReact = await vi.importActual<typeof import("react")>("react");
         return {
           ...actualReact,
+          useCallback: <T,>(callback: T) => callback,
           useEffect: useEffectMock,
           useMemo: <T,>(factory: () => T) => factory(),
           useRef: useRefMock,
@@ -1925,6 +1935,32 @@ describe("review workspace", () => {
         useOrganizerEventId: (fallbackEventId?: string) => fallbackEventId,
         useOrganizerEventSlug: (fallbackEventReference: string) => fallbackEventReference,
         useOrganizerEventWorkspace: () => null,
+      }));
+      vi.doMock("./workspace/organizer-reviewer-pool-controller", () => ({
+        useOrganizerReviewerPool: () => ({
+          pool: {
+            organizationId: "org-1",
+            eventId: "event-empty",
+            roundId: "round-initial",
+            reviewerIds: ["reviewer-a", "reviewer-b"],
+            grants: [
+              { reviewerId: "reviewer-a", maxAssignments: 8, assignedCount: 0 },
+              { reviewerId: "reviewer-b", maxAssignments: 8, assignedCount: 0 },
+            ],
+            version: 1,
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          },
+          draft: { "reviewer-a": 8, "reviewer-b": 8 },
+          loading: false,
+          saving: false,
+          error: null,
+          message: null,
+          changeReviewer: () => undefined,
+          changeMaxAssignments: () => undefined,
+          save: async () => undefined,
+          reload: () => undefined,
+        }),
       }));
       const reviewModule = await import("./review-workspace");
       const draftOrganizerState = testPlan("event-empty");
@@ -2150,40 +2186,6 @@ describe("review workspace", () => {
         ).value,
       ).toBe("single");
 
-      const reviewerPool = findHost(tree, (props) => props.id === "round-initial-reviewer-pool");
-      const reviewerPoolProps = reviewerPool.props as Record<string, unknown>;
-      expect(reviewerPoolProps.style).toMatchObject({
-        display: "block",
-        width: "100%",
-        maxWidth: "100%",
-        minWidth: 0,
-      });
-      const reviewerPoolLabels = hostElements(tree).filter(
-        (element) =>
-          (element.props as Record<string, unknown>).htmlFor === "round-initial-reviewer-pool",
-      );
-      expect(reviewerPoolLabels.length).toBeGreaterThan(0);
-      const reviewerPoolLabelChildren = (
-        reviewerPoolLabels.at(0)?.props as Record<string, unknown> | undefined
-      )?.children;
-      expect(
-        isValidElement(reviewerPoolLabelChildren) && reviewerPoolLabelChildren.type === "select",
-        "reviewer pool label must not wrap its select",
-      ).toBe(false);
-      fireChange(reviewerPool, {
-        value: "",
-        selectedOptions: [{ value: "reviewer-a" }, { value: "reviewer-b" }],
-      });
-      tree = renderTree();
-      expect(
-        (
-          findHost(tree, (props) => props.id === "round-initial-reviewer-pool").props as Record<
-            string,
-            unknown
-          >
-        ).value,
-      ).toEqual(["reviewer-a", "reviewer-b"]);
-
       const minimum = findHost(tree, (props) => props["aria-label"] === "Audience impact minimum");
       fireChange(minimum, { value: "2.5" });
       tree = renderTree();
@@ -2341,6 +2343,7 @@ describe("review workspace", () => {
     } finally {
       fetchMock.mockRestore();
       vi.doUnmock("react");
+      vi.doUnmock("./workspace/organizer-reviewer-pool-controller");
       vi.resetModules();
     }
   });

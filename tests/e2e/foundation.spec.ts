@@ -69,14 +69,17 @@ test("legal pages remain keyboard navigable at the minimum mobile width", async 
 test("unauthenticated organizer routes fail closed before rendering workspace chrome", async ({
   page,
 }) => {
+  const redirect = page.waitForURL(/\/login$/, { timeout: 15_000 });
   await page.goto("/admin/events");
+  await redirect;
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByText("Signed-in organizer", { exact: true })).toHaveCount(0);
 });
 test("unauthenticated speaker routes redirect to sign-in without rendering portal chrome", async ({
   page,
 }) => {
+  const redirect = page.waitForURL(/\/login\?next=%2Fportal$/, { timeout: 15_000 });
   await page.goto("/portal");
-  await expect(page).toHaveURL(/\/login\?next=%2Fportal$/);
+  await redirect;
   await expect(page.getByText("Speaker portal", { exact: true })).toHaveCount(0);
 });

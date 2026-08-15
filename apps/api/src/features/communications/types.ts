@@ -250,6 +250,7 @@ export interface CommunicationRepository {
     eventId: string,
     idempotencyKey: string,
   ): Promise<CommunicationSend | undefined>;
+  listSends?(tenantId: string, eventId: string): Promise<readonly CommunicationSend[]>;
   getSend(
     tenantId: string,
     eventId: string,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectNextOutstandingPortalTask } from "./portal-home";
+import { portalHomeReadinessPresentation, selectNextOutstandingPortalTask } from "./portal-home";
 import type { PortalTask } from "./types";
 
 function task(overrides: Partial<PortalTask> = {}): PortalTask {
@@ -19,6 +19,23 @@ function task(overrides: Partial<PortalTask> = {}): PortalTask {
     ...overrides,
   };
 }
+
+describe("portal home readiness", () => {
+  it("keeps zero tasks neutral and reserves Ready for completed non-empty work", () => {
+    expect(portalHomeReadinessPresentation("no-tasks")).toEqual({
+      label: "No tasks",
+      tone: "neutral",
+      nextHeading: "No speaker tasks assigned",
+      nextDescription: "The event team has not assigned any speaker tasks yet.",
+    });
+    expect(portalHomeReadinessPresentation("in-progress").label).toBe("In progress");
+    expect(portalHomeReadinessPresentation("ready")).toMatchObject({
+      label: "Ready",
+      tone: "success",
+      nextHeading: "You are ready for the event",
+    });
+  });
+});
 
 describe("selectNextOutstandingPortalTask", () => {
   it("prefers an actionable task over an earlier dependency-blocked task", () => {

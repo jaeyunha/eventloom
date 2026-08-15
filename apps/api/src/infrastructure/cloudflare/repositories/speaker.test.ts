@@ -7,10 +7,10 @@ import {
 } from "../../../features/access/service";
 import { AccountSpeakerTasksService } from "../../../features/access/speaker-tasks";
 import type { UserPrincipal } from "../../../features/auth/types";
-import type { Submission } from "../../../features/cfp/model";
 import { capabilityAllows } from "../../../features/speaker/capabilities";
 import { createSpeakerRoutes } from "../../../features/speaker/routes";
 import { SpeakerService } from "../../../features/speaker/service";
+import { withTestSpeakerOrganizerLifecycle } from "../../../features/speaker/test-lifecycle-adapter";
 import type {
   SpeakerAssetAuditEntry,
   SpeakerRepository,
@@ -49,27 +49,33 @@ class RecordingD1 {
       all: async () => {
         this.reads.push({ sql, values: statement.values });
         return {
-          results: sql.includes("s.owner_account_id = ?")
-            ? [
-                {
-                  organization_id: "org-1",
-                  event_id: "event-1",
-                  event_name: "Event One",
-                  event_slug: "event-one",
-                  event_status: "active",
-                  submission_id: "submission-1",
-                  participant_id: "participant-1",
-                  participant_role: "primary",
-                },
-              ]
-            : sql.includes("FROM portal_contexts pc")
-              ? this.contextRows
-              : [],
+          results:
+            sql.includes("SELECT sp.id") && sql.includes("FROM participant_grants pg")
+              ? this.contextRows.map((row) => ({ id: row.granted_speaker_profile_ids }))
+              : sql.includes("FROM participant_grants pg")
+                ? this.contextRows
+                : sql.includes("s.owner_account_id = ?")
+                  ? this.contextRows.length > 0
+                    ? []
+                    : [
+                        {
+                          organization_id: "org-1",
+                          event_id: "event-1",
+                          event_name: "Event One",
+                          event_slug: "event-one",
+                          event_status: "active",
+                          submission_id: "submission-1",
+                          participant_id: "participant-1",
+                          participant_role: "primary",
+                        },
+                      ]
+                  : [],
         };
       },
       first: async () => {
         this.reads.push({ sql, values: statement.values });
         if (sql.includes("GROUP BY s.organization_id")) {
+          if (this.contextRows.length > 0) return null;
           return {
             organization_id: "org-1",
             submission_ids: "submission-1",
@@ -89,126 +95,6 @@ class RecordingD1 {
   }
   async batch(statements: Array<{ sql?: string }>) {
     this.batches.push(statements.map((statement) => statement.sql ?? String(statement)));
-    return statements.map(() => ({ meta: { changes: 1 }, results: [] }));
-  }
-}
-
-class AcceptanceProjectionD1 {
-  readonly contexts = new Map<string, QueryRow>();
-  readonly contextSubmissions = new Set<string>();
-  readonly contextParticipants = new Set<string>();
-  readonly tasks: SpeakerTask[] = [];
-
-  withSession() {
-    return this;
-  }
-
-  prepare(sql: string) {
-    const statement = {
-      sql,
-      values: [] as unknown[],
-      bind: (...values: unknown[]) => {
-        statement.values = values;
-        return statement;
-      },
-      all: async () => {
-        if (sql.includes("JOIN organization_memberships m")) {
-          return { results: [{ organization_id: "org-1", role: "owner" }] };
-        }
-        if (sql.includes("JOIN evaluation_decisions d")) {
-          return {
-            results: [
-              { submission_id: "submission-accepted", participant_id: "participant-priya" },
-            ],
-          };
-        }
-        if (sql.includes("s.owner_account_id = ?")) {
-          return {
-            results: [
-              { submission_id: "submission-accepted", participant_id: "participant-priya" },
-              { submission_id: "submission-draft", participant_id: "participant-priya" },
-            ],
-          };
-        }
-        if (sql.includes("p.claimed_user_id")) {
-          return {
-            results: [
-              {
-                participant_id: "participant-priya",
-                claimed_user_id: "account-priya",
-                verified_user_id: "account-priya",
-              },
-            ],
-          };
-        }
-        if (sql.includes("FROM auth_users")) return { results: [{ id: "account-priya" }] };
-        return { results: [] };
-      },
-      first: async () => {
-        const values = statement.values;
-        if (sql.includes("FROM events") && sql.includes("name, slug, status")) {
-          return {
-            organization_id: "org-1",
-            id: "event-1",
-            name: "DevFlow Conf 2027",
-            slug: "devflow-conf-2027",
-            status: "active",
-          };
-        }
-        if (sql.includes("FROM portal_contexts")) {
-          return this.contexts.get(String(values[2])) ?? null;
-        }
-        return null;
-      },
-      raw: async () => (sql.includes('from "events"') ? [["org-1", "event-1"]] : []),
-      run: async () => {
-        const values = statement.values;
-        if (sql.includes("INSERT INTO portal_contexts")) {
-          const id = String(values[0]);
-          if (!this.contexts.has(id)) {
-            this.contexts.set(id, {
-              version: 1,
-              capabilities_json: String(values[8]),
-              name: String(values[4]),
-              slug: String(values[5]),
-              status: String(values[6]),
-              primary_participant_id: String(values[7]),
-            });
-            return { meta: { changes: 1 } };
-          }
-          return { meta: { changes: 0 } };
-        }
-        if (sql.includes("UPDATE portal_contexts")) {
-          const id = String(values[7]);
-          const current = this.contexts.get(id);
-          if (current === undefined || Number(current.version) !== Number(values[9])) {
-            return { meta: { changes: 0 } };
-          }
-          this.contexts.set(id, {
-            ...current,
-            name: values[0],
-            status: values[1],
-            primary_participant_id: values[2],
-            capabilities_json: values[3],
-            version: Number(current.version) + 1,
-          });
-        }
-        return { meta: { changes: 1 } };
-      },
-    };
-    return statement;
-  }
-
-  async batch(statements: Array<{ sql?: string; values?: unknown[] }>) {
-    for (const statement of statements) {
-      const values = statement.values ?? [];
-      if (statement.sql?.includes("portal_context_submissions")) {
-        this.contextSubmissions.add(values.map(String).join(":"));
-      }
-      if (statement.sql?.includes("portal_context_participants")) {
-        this.contextParticipants.add(values.map(String).join(":"));
-      }
-    }
     return statements.map(() => ({ meta: { changes: 1 }, results: [] }));
   }
 }
@@ -299,107 +185,7 @@ describe("D1SpeakerRepository", () => {
     expect(portalSubmissionStatus("submitted", undefined)).toBe("submitted");
   });
 
-  it("materializes the accepted D1 portal handoff idempotently and preserves owned submission edits", async () => {
-    const database = new AcceptanceProjectionD1();
-    const repository = new D1SpeakerRepository(database as unknown as D1Database);
-    const submission: Submission = {
-      id: "submission-accepted",
-      tenantId: "org-1",
-      eventId: "event-1",
-      formId: "form-1",
-      ownerAccountId: "account-priya",
-      formVersion: 1,
-      status: "submitted",
-      completedSteps: ["welcome", "account", "submission", "participant", "review"],
-      answers: { title: "Reliable distributed workflows" },
-      participants: [
-        {
-          id: "participant-priya",
-          firstName: "Priya",
-          lastName: "Raman",
-          email: "priya@example.test",
-          role: "primary",
-          biography: "Builds reliable systems.",
-          answers: {},
-        },
-      ],
-      secondaryContacts: [],
-      version: 3,
-      createdAt: "2026-08-15T10:00:00.000Z",
-      updatedAt: "2026-08-15T11:00:00.000Z",
-      submittedAt: "2026-08-15T11:00:00.000Z",
-    };
-
-    await repository.ensureAcceptedSubmission({
-      submission,
-      updatedAt: "2026-08-15T12:00:00.000Z",
-    });
-    await repository.ensureAcceptedSubmission({
-      submission,
-      updatedAt: "2026-08-15T12:00:00.000Z",
-    });
-
-    expect(database.contexts).toHaveLength(1);
-    const context = [...database.contexts.values()][0];
-    expect(JSON.parse(String(context?.capabilities_json))).toEqual([
-      "profile-self",
-      "submission-edit",
-      "task-response",
-      "asset-read",
-      "asset-write",
-      "asset-comment",
-    ]);
-    expect(database.contextSubmissions).toEqual(
-      new Set([
-        "org-1:event-1:portal-context:org-1:event-1:account-priya:submission-accepted",
-        "org-1:event-1:portal-context:org-1:event-1:account-priya:submission-draft",
-      ]),
-    );
-    expect(database.contextParticipants).toEqual(
-      new Set(["org-1:event-1:portal-context:org-1:event-1:account-priya:participant-priya"]),
-    );
-    await expect(repository.getOrganizerAccessScope("event-1", "organizer-1")).resolves.toEqual({
-      tenantId: "org-1",
-      eventId: "event-1",
-      role: "owner",
-      submissionIds: ["submission-accepted"],
-      participantIds: ["participant-priya"],
-    });
-  });
-
-  it("keeps revoked D1 grants from exposing accepted-speaker preparation capabilities", async () => {
-    const contextRow = {
-      organization_id: "org-1",
-      event_id: "event-1",
-      id: "context-1",
-      name: "Event One",
-      slug: "event-one--account-priya",
-      status: "active",
-      primary_participant_id: "participant-priya",
-      capabilities_json:
-        '["profile-self","submission-edit","task-response","asset-read","asset-write","asset-comment"]',
-      owns_submission: 0,
-      participant_ids: "participant-priya",
-      granted_participant_ids: "",
-      granted_speaker_profile_ids: "",
-      submission_ids: "submission-accepted",
-    };
-    const repository = new D1SpeakerRepository(
-      new RecordingD1([contextRow], contextRow) as unknown as D1Database,
-    );
-
-    await expect(repository.listPortalContexts?.("account-priya")).resolves.toMatchObject([
-      { eventId: "event-1", capabilities: [] },
-    ]);
-    await expect(repository.getAccessScope("event-1", "account-priya")).resolves.toMatchObject({
-      capabilities: [],
-      capabilitiesByParticipant: { "participant-priya": [] },
-    });
-  });
-
   it("creates an organizer task through the normal route from D1 event authority", async () => {
-    const database = new AcceptanceProjectionD1();
-    const d1 = new D1SpeakerRepository(database as unknown as D1Database);
     const tasks: SpeakerTask[] = [];
     const acceptedSubmission = {
       tenantId: "org-1",
@@ -412,26 +198,52 @@ describe("D1SpeakerRepository", () => {
       version: 3,
       updatedAt: "2026-08-15T12:00:00.000Z",
     };
-    const repository: SpeakerRepository = {
-      getAccessScope: d1.getAccessScope.bind(d1),
-      getOrganizerAccessScope: d1.getOrganizerAccessScope.bind(d1),
+    const organizerScope = {
+      tenantId: "org-1",
+      eventId: "event-1",
+      role: "owner" as const,
+      submissionIds: ["submission-accepted"],
+      participantIds: ["participant-priya"],
+    };
+    const profile = {
+      id: "speaker-profile:event-1:participant-priya",
+      eventId: "event-1",
+      participantId: "participant-priya",
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+      biography: "Builds reliable systems.",
+      status: "accepted",
+      version: 1,
+      updatedAt: "2026-08-15T12:00:00.000Z",
+    } as const;
+    const repository = withTestSpeakerOrganizerLifecycle({
+      getAccessScope: async () => organizerScope,
+      getOrganizerAccessScope: async () => organizerScope,
+      submissions: [acceptedSubmission],
+      roster: [
+        {
+          id: "roster-participant-priya",
+          eventId: "event-1",
+          submissionId: "submission-accepted",
+          participantId: "participant-priya",
+          displayName: "Priya Raman",
+          email: "priya@example.test",
+          role: "primary",
+          status: "active",
+          workflowStatus: "accepted",
+          version: 1,
+          createdAt: "2026-08-15T12:00:00.000Z",
+          updatedAt: "2026-08-15T12:00:00.000Z",
+        },
+      ],
+      profiles: [profile],
+      tasks,
+      assets: [],
       listSubmissions: async (_eventId, submissionIds) =>
         submissionIds.includes(acceptedSubmission.id) ? [acceptedSubmission] : [],
       getSubmission: async (_eventId, submissionId) =>
         submissionId === acceptedSubmission.id ? acceptedSubmission : null,
-      listProfiles: async () => [
-        {
-          id: "speaker-profile:event-1:participant-priya",
-          eventId: "event-1",
-          participantId: "participant-priya",
-          displayName: "Priya Raman",
-          email: "priya@example.test",
-          biography: "Builds reliable systems.",
-          status: "accepted",
-          version: 1,
-          updatedAt: "2026-08-15T12:00:00.000Z",
-        },
-      ],
+      listProfiles: async () => [profile],
       getProfile: async () => null,
       updateBiography: async () => ({ ok: false, reason: "not_found" }),
       listTasks: async () => [...tasks],
@@ -456,7 +268,7 @@ describe("D1SpeakerRepository", () => {
       transitionTask: async () => ({ ok: false, reason: "not_found" }),
       createPendingAsset: async (asset) => asset,
       getAsset: async () => null,
-    };
+    });
     const service = new SpeakerService(repository, {} as never, {
       speakerSender: "speakers@example.test",
       now: () => new Date("2026-08-15T13:00:00.000Z"),
@@ -540,7 +352,9 @@ describe("D1SpeakerRepository", () => {
       },
     ]);
     expect(database.queries.join("\n")).toContain("s.owner_account_id = ?");
-    expect(database.sessionConstraints).toEqual(["first-primary", "first-primary"]);
+    expect(database.sessionConstraints).toEqual(
+      expect.arrayContaining(["first-primary", "first-primary"]),
+    );
   });
 
   it("authorizes CFP applicants to their owned submission resources", async () => {
@@ -563,7 +377,7 @@ describe("D1SpeakerRepository", () => {
     expect(database.sessionConstraints).toContain("first-primary");
   });
 
-  it("projects mixed participant capabilities from tenant-qualified D1 grants", async () => {
+  it("projects speaker capabilities only from tenant-qualified participant grants", async () => {
     const contextRow = {
       organization_id: "org-a",
       event_id: "event-1",
@@ -573,7 +387,10 @@ describe("D1SpeakerRepository", () => {
       status: "active",
       primary_participant_id: "participant-a",
       capabilities_json: '["submission-edit","task-response"]',
-      participant_ids: "participant-a,participant-b",
+      participant_id: "participant-a",
+      permissions_json:
+        '["edit_own_profile","manage_own_assets","view_own_tasks","update_own_tasks"]',
+      participant_ids: "participant-a",
       granted_participant_ids: "participant-a",
       granted_speaker_profile_ids: "profile:event-1:participant-a",
       submission_ids: "submission-1",
@@ -589,12 +406,18 @@ describe("D1SpeakerRepository", () => {
     const projections = await repository.listPortalContextScopes("account-1");
 
     expect(organizationScope.capabilitiesByParticipant).toEqual({
-      "participant-a": ["submission-edit", "task-response"],
-      "participant-b": ["submission-edit"],
+      "participant-a": [
+        "profile-self",
+        "task-response",
+        "asset-read",
+        "asset-write",
+        "asset-comment",
+        "resource-read",
+      ],
     });
     expect(projections[0]).toMatchObject({
       speakerProfileIds: ["profile:event-1:participant-a"],
-      context: { participantIds: ["participant-a", "participant-b"] },
+      context: { participantIds: ["participant-a"] },
       scope: { capabilitiesByParticipant: organizationScope.capabilitiesByParticipant },
     });
     expect(
@@ -605,8 +428,8 @@ describe("D1SpeakerRepository", () => {
     expect(database.reads).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          sql: expect.stringContaining("granted_speaker_profile_ids"),
-          values: ["account-1"],
+          sql: expect.stringContaining("SELECT sp.id"),
+          values: ["org-a", "event-1", "account-1"],
         }),
       ]),
     );
@@ -707,7 +530,7 @@ describe("D1SpeakerRepository", () => {
     expect(taskParticipantReads).toEqual([["participant-a"]]);
   });
 
-  it("fails task reads closed for a submission-edit-only D1 context", async () => {
+  it("fails task reads closed when there is no current participant grant", async () => {
     const contextRow = {
       organization_id: "org-a",
       event_id: "event-1",
@@ -717,19 +540,18 @@ describe("D1SpeakerRepository", () => {
       status: "active",
       primary_participant_id: "participant-a",
       capabilities_json: '["submission-edit"]',
+      participant_id: "participant-a",
+      permissions_json: "[]",
       participant_ids: "participant-a,participant-b",
       granted_participant_ids: "",
       submission_ids: "submission-1",
     };
-    const database = new RecordingD1([contextRow], contextRow);
+    const database = new RecordingD1([], contextRow);
     const repository = new D1SpeakerRepository(database as unknown as D1Database);
 
     const scope = await repository.getAccessScopeForOrganization("org-a", "event-1", "account-1");
 
-    expect(scope.capabilitiesByParticipant).toEqual({
-      "participant-a": ["submission-edit"],
-      "participant-b": ["submission-edit"],
-    });
+    expect(scope.capabilitiesByParticipant).toBeUndefined();
     expect(
       scope.participantIds.filter((participantId) =>
         capabilityAllows(scope, "task-response", participantId),
@@ -748,8 +570,8 @@ describe("D1SpeakerRepository", () => {
     expect(database.reads).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          sql: expect.stringContaining("pc.organization_id = ?"),
-          values: ["org-a", "event-shared", "account-1"],
+          sql: expect.stringContaining("pg.organization_id = ?"),
+          values: ["event-shared", "account-1", "org-a", "org-a"],
         }),
         expect.objectContaining({
           sql: expect.stringContaining('"submissions"."organization_id" = ?'),

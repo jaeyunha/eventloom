@@ -160,6 +160,19 @@ describe("D1 event repository commands", () => {
 });
 
 describe("D1 session repository commands", () => {
+  it("lists event-qualified active speaker profile IDs", async () => {
+    const db = database();
+
+    await new D1SessionRepository(db).listSpeakerIds("tenant-a", "event-a");
+
+    expect(db.statements).toHaveLength(1);
+    expect(db.statements[0]?.bound.query).toContain("FROM speaker_profiles");
+    expect(db.statements[0]?.bound.query).toContain("organization_id = ?");
+    expect(db.statements[0]?.bound.query).toContain("event_id = ?");
+    expect(db.statements[0]?.bound.query).toContain("status <> 'revoked'");
+    expect(db.statements[0]?.bound.values).toEqual(["tenant-a", "event-a"]);
+  });
+
   it("batches tenant/event-scoped CAS, normalized joins, audit, and sync-job persistence", async () => {
     const db = database();
     await new D1SessionRepository(db).commit?.({

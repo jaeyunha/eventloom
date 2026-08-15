@@ -5,8 +5,33 @@ import type {
   SpeakerRosterEnvelope,
   SpeakerTask,
 } from "./api";
-import { assertSpeakerRosterScope } from "./api";
+import { assertSpeakerRosterScope, SpeakerApiError } from "./api";
 import { taskSummaryFor } from "./speaker-roster-logic";
+
+const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]*$/;
+const SAFE_TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function speakerMutationOutcomeUnknown(reason: unknown): boolean {
+  if (!(reason instanceof SpeakerApiError)) return true;
+  return reason.status === 408 || reason.status >= 500;
+}
+
+export function speakerErrorDiagnostic(reason: unknown): string | null {
+  if (
+    !(reason instanceof SpeakerApiError) ||
+    !SAFE_ERROR_CODE.test(reason.code) ||
+    !Number.isInteger(reason.status) ||
+    reason.status < 400 ||
+    reason.status > 599
+  ) {
+    return null;
+  }
+  const trace =
+    typeof reason.traceId === "string" && SAFE_TRACE_ID.test(reason.traceId)
+      ? ` · trace ${reason.traceId}`
+      : "";
+  return `${reason.code} · HTTP ${reason.status}${trace}`;
+}
 
 export function normalizeRoster(
   roster: SpeakerRosterEnvelope,

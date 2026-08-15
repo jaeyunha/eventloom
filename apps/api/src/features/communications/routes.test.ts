@@ -81,7 +81,121 @@ function url(path: string, scopedOrganizationId = organizationId): string {
   return `/organizations/${scopedOrganizationId}/events/${eventId}/communications${path}`;
 }
 
+function communicationApp() {
+  const repository = new InMemoryCommunicationRepository({
+    templates: [
+      {
+        id: "group-template",
+        tenantId: organizationId,
+        eventId,
+        name: "Group update",
+        purpose: "organizer_group_email",
+        version: 1,
+        status: "approved",
+        sender: "program@conference.example",
+        subject: "Hello {{display_name}}",
+        html: "<p>Hello {{display_name}}</p>",
+        text: "Hello {{display_name}}",
+        variables: ["display_name"],
+        createdBy: actor.userId,
+        createdAt: "2026-08-12T12:00:00.000Z",
+        updatedAt: "2026-08-12T12:00:00.000Z",
+        approvedBy: actor.userId,
+        approvedAt: "2026-08-12T12:00:00.000Z",
+      },
+    ],
+    recipients: [
+      {
+        id: "recipient-1",
+        tenantId: organizationId,
+        eventId,
+        email: "one@example.test",
+        displayName: "One",
+        audiences: ["all_participants"],
+      },
+      {
+        id: "recipient-2",
+        tenantId: organizationId,
+        eventId,
+        email: "two@example.test",
+        displayName: "Two",
+        audiences: ["all_participants"],
+      },
+    ],
+    authorizedAudiences: {
+      [`${organizationId}:${eventId}`]: ["all_participants"],
+    },
+  });
+  const service = new CommunicationService(
+    repository,
+    {
+      async send(request) {
+        return { status: "queued" as const, providerMessageId: `provider-${request.recipientId}` };
+      },
+    },
+    {
+      clock: () => new Date("2026-08-12T12:30:00.000Z"),
+      senderIdentities: {
+        auth: "login@conference.example",
+        speakers: "program@conference.example",
+        calendar: "schedule@conference.example",
+      },
+    },
+  );
+  const app = new Hono<CommunicationRouteEnvironment>();
+  app.use("/organizations/*", async (context, next) => {
+    context.set("communicationActor", actor);
+    await next();
+  });
+  app.route(
+    "/organizations/:organizationId/events/:eventId/communications",
+    createCommunicationRoutes(service),
+  );
+  return app;
+}
+
 describe("communication routes", () => {
+  it("validates exact preview recipients and lists sends newest first", async () => {
+    const app = communicationApp();
+    const invalid = await app.request(url("/previews"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "organizer_group_email",
+        templateId: "group-template",
+        audience: "all_participants",
+        recipientIds: ["recipient-1", "recipient-1"],
+      }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const previewResponse = await app.request(url("/previews"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "organizer_group_email",
+        templateId: "group-template",
+        audience: "all_participants",
+        recipientIds: ["recipient-2", "recipient-1"],
+      }),
+    });
+    expect(previewResponse.status).toBe(200);
+    const preview = (await previewResponse.json()) as { id: string; recipientIds: string[] };
+    expect(preview.recipientIds).toEqual(["recipient-2", "recipient-1"]);
+
+    const sendResponse = await app.request(url("/sends"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ previewId: preview.id, idempotencyKey: "route-list-send" }),
+    });
+    expect(sendResponse.status).toBe(201);
+    const send = (await sendResponse.json()) as { id: string };
+
+    const listed = await app.request(url("/sends"));
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toMatchObject({ sends: [{ id: send.id }] });
+  });
+
   it("assigns a generic configured sender email and rejects malformed sender input", async () => {
     const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
       senderIdentities: {

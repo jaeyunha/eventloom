@@ -41,6 +41,22 @@ The exported runtime composes D1 repositories for supported product domains. Air
 
 Cloudflare D1 is the authoritative store for tenant, program, identity, and operational state: organizations and memberships; events, CFP, submissions, speakers, evaluations, sessions, and agenda; communications, reports, CRM, remix, and publication; authentication, API credentials, audit, idempotency, customer webhooks, integration state, and delivery coordination. Supported runtime repositories resolve these records from D1, and ordinary product traffic does not read Airtable or wait for it.
 
+Speaker operations use one participant-centric D1 model. `participants` owns
+event-scoped identity and source reconciliation; `speaker_profiles` owns event
+speaker admission, profile data, lifecycle, travel details, and optimistic
+versioning; `participant_grants` owns exact organization/event/participant/user
+portal capabilities; `submission_participants` owns real CFP authorship and
+speaker roles; and `session_speakers` owns program assignment and ordering.
+Portal contexts are derived from active participant grants and narrowly scoped
+CFP submission ownership rather than persisted as independent authorization.
+
+The historical `speaker_roster`, `speaker_grants`, and persisted portal-context
+tables are migration-only compatibility state. New runtime code does not read or
+write them as speaker authority, create synthetic CFP submissions for manually
+added speakers, or fall back to process-local caches when D1 capabilities are
+absent. Airtable remains an optional asynchronous projection target and cannot
+grant speaker access.
+
 Production UI modules never embed event, submission, speaker, agenda, review, task, activity, date, or metric records as runtime fallbacks. Loading, unavailable, empty, and error states remain explicit until an authoritative API response arrives. Deterministic examples are permitted only in test-only modules and isolated fixture inputs with no production import path. Local fixture scenarios must drive the same domain services and transitions as the deployed runtime; they may not create contradictory repository snapshots, silently default missing event scope, or substitute browser-side demo data after an API failure.
 
 Event creation and empty Agenda initialization commit in the same D1 batch. Every event

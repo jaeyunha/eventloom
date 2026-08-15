@@ -27,7 +27,7 @@ export function OrganizerWorkspaceSurface({
       </a>
       <header className={styles.workspaceHeader}>
         <div>
-          <p className={styles.eyebrow}>{seed.eventName} · organizer review</p>
+          <p className={styles.eyebrow}>Organizer review</p>
           <h1>{seed.planName}</h1>
           <p className={styles.headerDescription}>
             Set up the plan, assign reviewers, track progress, and record final decisions.

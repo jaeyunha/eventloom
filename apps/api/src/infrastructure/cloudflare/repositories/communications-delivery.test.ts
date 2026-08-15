@@ -161,6 +161,111 @@ function queueMessage(body: CloudflareOutboxMessage): OutboxQueueMessage & { ack
 }
 
 describe("D1 communication delivery", () => {
+  it("reconstructs immutable snapshots and histories while listing event sends newest first", async () => {
+    const database = new SqliteD1();
+    database.execute(`
+      INSERT INTO communication_templates
+        (id, organization_id, event_id, version, name, purpose, status, sender,
+         subject, html, text, variables_json, created_by, created_at, updated_at,
+         approved_by, approved_at)
+      VALUES
+        ('template-1', 'org-1', 'event-1', 1, 'Program update',
+         'organizer_group_email', 'approved', 'program@conference.example',
+         'Hello {{display_name}}', '<p>Hello {{display_name}}</p>',
+         'Hello {{display_name}}', '["display_name"]', 'organizer-1',
+         '${SNAPSHOT_TIME}', '${SNAPSHOT_TIME}', 'organizer-1', '${SNAPSHOT_TIME}');
+      INSERT INTO communication_recipients
+        (id, organization_id, event_id, participant_id, email, display_name, data_json, updated_at)
+      VALUES
+        ('recipient-1', 'org-1', 'event-1', 'participant-1', 'one@example.com', 'One', '{}', '${SNAPSHOT_TIME}'),
+        ('recipient-2', 'org-1', 'event-1', 'participant-2', 'two@example.com', 'Two', '{}', '${SNAPSHOT_TIME}');
+      INSERT INTO communication_recipient_audiences
+        (organization_id, event_id, recipient_id, audience)
+      VALUES
+        ('org-1', 'event-1', 'recipient-1', 'all_participants'),
+        ('org-1', 'event-1', 'recipient-2', 'all_participants');
+    `);
+    let currentTime = SNAPSHOT_TIME;
+    const repository = new D1CommunicationRepository(database as unknown as D1Database);
+    const service = new CommunicationService(
+      repository,
+      {
+        async send(request) {
+          return {
+            status: "queued" as const,
+            providerMessageId: `provider-${request.sendId}-${request.recipientId}`,
+          };
+        },
+      },
+      {
+        clock: () => new Date(currentTime),
+        senderIdentities: {
+          auth: "login@conference.example",
+          speakers: "program@conference.example",
+          calendar: "schedule@conference.example",
+        },
+      },
+    );
+    const actor: CommunicationActor = {
+      tenantId: "org-1",
+      userId: "organizer-1",
+      kind: "human",
+      grants: [{ eventId: "event-1", role: "organizer" }],
+    };
+    const preview = await service.previewGroupSend(actor, {
+      eventId: "event-1",
+      purpose: "organizer_group_email",
+      templateId: "template-1",
+      audience: "all_participants",
+      recipientIds: ["recipient-2", "recipient-1"],
+    });
+    expect(preview.recipientIds).toEqual(["recipient-2", "recipient-1"]);
+    database.execute(`
+      UPDATE communication_templates SET subject='Changed', html='<p>Changed</p>', text='Changed'
+       WHERE id='template-1' AND version=1;
+      UPDATE communication_recipients SET email='changed@example.com', display_name='Changed'
+       WHERE id='recipient-2';
+    `);
+    const first = await service.sendGroup(actor, {
+      eventId: "event-1",
+      previewId: preview.id,
+      idempotencyKey: "first-send",
+    });
+    currentTime = "2026-08-14T12:01:00.000Z";
+    const second = await service.sendGroup(actor, {
+      eventId: "event-1",
+      previewId: preview.id,
+      idempotencyKey: "second-send",
+    });
+    currentTime = "2026-08-14T12:02:00.000Z";
+    await service.recordDeliveryStatus(actor, {
+      eventId: "event-1",
+      sendId: first.id,
+      recipientId: "recipient-2",
+      status: "delivered",
+      providerMessageId: `provider-${first.id}-recipient-2`,
+    });
+    const reconstructed = new D1CommunicationRepository(database as unknown as D1Database);
+    const restoredPreview = await reconstructed.getPreview("org-1", "event-1", preview.id);
+    expect(restoredPreview?.template.subject).toBe("Hello {{display_name}}");
+    expect(restoredPreview?.recipients[0]?.email).toBe("two@example.com");
+    const listed = await reconstructed.listSends("org-1", "event-1");
+    expect(listed.map((send) => send.id)).toEqual([second.id, first.id]);
+    const restored = listed[1];
+    expect(restored?.template.subject).toBe("Hello {{display_name}}");
+    expect(restored?.recipients.map((recipient) => [recipient.id, recipient.email])).toEqual([
+      ["recipient-2", "two@example.com"],
+      ["recipient-1", "one@example.com"],
+    ]);
+    expect(restored?.deliveries[0]?.history.map((entry) => entry.status)).toEqual([
+      "queued",
+      "queued",
+      "delivered",
+    ]);
+    expect(restored?.history.some((entry) => entry.action === "delivery_delivered")).toBe(true);
+    expect(await reconstructed.listSends("org-1", "other-event")).toEqual([]);
+  });
+
   it("creates one complete recipient job and rotates only its provider envelope", async () => {
     const database = new SqliteD1();
     const oldSender = "program@legacy.example";

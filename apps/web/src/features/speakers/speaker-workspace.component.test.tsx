@@ -2,7 +2,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SpeakerApi, SpeakerAsset } from "./api";
-import { SPEAKER_ROSTER_COLUMNS, SpeakerHeadshot, SpeakerWorkspace } from "./speaker-workspace";
+import {
+  SPEAKER_ROSTER_COLUMNS,
+  SpeakerHeadshot,
+  SpeakerMutationFailure,
+  SpeakerWorkspace,
+} from "./speaker-workspace";
 
 describe("speaker workspace presentation", () => {
   it("defines the compact roster table columns", () => {
@@ -59,6 +64,17 @@ describe("speaker workspace presentation", () => {
     expect(markup).not.toContain("no_reminder_offset");
     expect(markup).not.toContain("outside_window");
     expect(markup).not.toContain("no_due_date");
+  });
+
+  it("renders mutation failures as focusable alerts", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SpeakerMutationFailure, { message: "The import failed." }),
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain('aria-live="assertive"');
+    expect(markup).toContain('tabindex="-1"');
+    expect(markup).toContain("The import failed.");
   });
 
   it("keeps missing or unavailable headshots as an accessible fallback", () => {

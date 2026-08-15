@@ -72,8 +72,9 @@ export function OrganizerPlanCreation({
             <p className={styles.sectionEyebrow}>Organizer setup</p>
             <h2 id="create-plan-heading">Create the first evaluation plan</h2>
             <p className={styles.sectionIntro}>
-              The draft starts with one editable review round and a starter scorecard. Add more
-              rounds, scorecard criteria, reviewer eligibility, and blind-review settings in Setup.
+              The draft starts with one editable round and a starter scorecard. Configure rounds,
+              dates, blind review, and scorecard criteria in Setup. Review teams and assignments
+              follow after the plan opens.
             </p>
           </div>
 
@@ -127,8 +128,7 @@ export function OrganizerPlanCreation({
                   className={`${styles.fieldHint} ${styles.planCreationHint}`}
                   id="create-plan-help"
                 >
-                  One editable round is created now. Configure more rounds, scorecard criteria,
-                  reviewer eligibility, and blind-review settings in Setup.
+                  One editable round is created now. Complete its setup before opening the plan.
                 </p>
                 {message ? (
                   <p className={styles.formError} role="alert">

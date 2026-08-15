@@ -163,6 +163,31 @@ test.beforeEach(async ({ context }) => {
       sameSite: "Lax",
     },
   ]);
+  await context.route("**/api/auth/get-session", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        session: { id: SESSION_TOKEN, userId: "user-organizer-e2e" },
+        user: {
+          id: "user-organizer-e2e",
+          email: "jaeyunha0317@gmail.com",
+          name: "Olivia Organizer",
+        },
+        memberships: [{ organizationId: ORGANIZATION_ID, role: "owner" }],
+        speakerGrants: [],
+      }),
+    });
+  });
+  await context.route(`**/api/admin/organizations/${ORGANIZATION_ID}/events`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ id: EVENT_ID, name: "Eventloom Demo", slug: EVENT_ID }],
+      }),
+    });
+  });
 });
 
 test("keeps capability-derived account workspaces usable on desktop and mobile", async ({

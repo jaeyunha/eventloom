@@ -241,6 +241,128 @@ describe("local fixture event graph", () => {
     );
   });
 
+  it("replays manual speaker creation and validates session speakers against active canonical state", async () => {
+    const app = createApp(createLocalDependencies());
+    const headers = {
+      "content-type": "application/json",
+      cookie: "better-auth.session_token=local-session",
+    };
+    const speakerEndpoint = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/speakers`;
+    const sessionEndpoint = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/sessions`;
+    const speakerInput = {
+      idempotencyKey: "local-manual-speaker-replay",
+      sourceType: "manual",
+      displayName: "Replay Speaker",
+      email: "replay-speaker@local.eventloom.test",
+      jobTitle: "Staff Engineer",
+      company: "Local QA",
+      biography: "Tests local canonical speaker lifecycle invariants.",
+      socialLinks: {},
+      status: "active",
+    };
+
+    const createdResponse = await app.request(
+      speakerEndpoint,
+      { method: "POST", headers, body: JSON.stringify(speakerInput) },
+      environment,
+    );
+    const replayResponse = await app.request(
+      speakerEndpoint,
+      { method: "POST", headers, body: JSON.stringify(speakerInput) },
+      environment,
+    );
+
+    expect(createdResponse.status).toBe(201);
+    expect(replayResponse.status).toBe(201);
+    const created = (await createdResponse.json()) as {
+      data: { speakers: readonly { participantId: string; email: string; version: number }[] };
+    };
+    const replayed = (await replayResponse.json()) as typeof created;
+    const createdSpeaker = created.data.speakers.find(({ email }) => email === speakerInput.email);
+    const replayedSpeakers = replayed.data.speakers.filter(
+      ({ email }) => email === speakerInput.email,
+    );
+    expect(createdSpeaker).toBeDefined();
+    expect(replayedSpeakers).toEqual([
+      expect.objectContaining({ participantId: createdSpeaker?.participantId }),
+    ]);
+    if (createdSpeaker === undefined) throw new Error("Expected the manual speaker to be created.");
+
+    const activeSessionResponse = await app.request(
+      sessionEndpoint,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id: "local-active-speaker-session",
+          title: "Active speaker assignment",
+          durationMinutes: 30,
+          speakerIds: [createdSpeaker.participantId],
+        }),
+      },
+      environment,
+    );
+    expect(activeSessionResponse.status).toBe(201);
+
+    const revokeResponse = await app.request(
+      `${speakerEndpoint}/${encodeURIComponent(createdSpeaker.participantId)}`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          expectedVersion: createdSpeaker.version,
+          displayName: speakerInput.displayName,
+          email: speakerInput.email,
+          jobTitle: speakerInput.jobTitle,
+          company: speakerInput.company,
+          biography: speakerInput.biography,
+          socialLinks: speakerInput.socialLinks,
+          status: "revoked",
+        }),
+      },
+      environment,
+    );
+    expect(revokeResponse.status).toBe(200);
+
+    const revokedSessionResponse = await app.request(
+      sessionEndpoint,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id: "local-revoked-speaker-session",
+          title: "Revoked speaker assignment",
+          durationMinutes: 30,
+          speakerIds: [createdSpeaker.participantId],
+        }),
+      },
+      environment,
+    );
+    expect(revokedSessionResponse.status).toBe(404);
+    await expect(revokedSessionResponse.json()).resolves.toMatchObject({
+      error: { code: "NOT_FOUND" },
+    });
+
+    const unknownSessionResponse = await app.request(
+      sessionEndpoint,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id: "local-unknown-speaker-session",
+          title: "Unknown speaker assignment",
+          durationMinutes: 30,
+          speakerIds: ["unknown-local-participant"],
+        }),
+      },
+      environment,
+    );
+    expect(unknownSessionResponse.status).toBe(404);
+    await expect(unknownSessionResponse.json()).resolves.toMatchObject({
+      error: { code: "NOT_FOUND" },
+    });
+  });
+
   it("builds local report rows from canonical accepted sessions", async () => {
     const reportService = dependencies.reports?.service;
     expect(reportService).toBeDefined();

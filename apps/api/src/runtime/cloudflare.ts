@@ -329,11 +329,15 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
                 2 AS scope_order,
                 grants.organization_id,
                 NULL AS role,
-                grants.speaker_profile_id
+                profiles.id AS speaker_profile_id
            FROM session_base AS base
-           JOIN speaker_grants AS grants
+           JOIN participant_grants AS grants
              ON grants.user_id = base.user_id
             AND grants.revoked_at IS NULL
+           JOIN speaker_profiles AS profiles
+             ON profiles.organization_id = grants.organization_id
+            AND profiles.event_id = grants.event_id
+            AND profiles.participant_id = grants.participant_id
           ORDER BY scope_order, organization_id, speaker_profile_id`,
       )
       .bind(tokenDigest)

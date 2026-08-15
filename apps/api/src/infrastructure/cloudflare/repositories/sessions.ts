@@ -99,6 +99,21 @@ export class D1SessionRepository implements SessionRepository {
     this.#database = createDatabase(binding);
   }
 
+  async listSpeakerIds(tenantId: string, eventId: string): Promise<readonly string[]> {
+    const result = await this.binding
+      .prepare(
+        `SELECT participant_id AS id
+         FROM speaker_profiles
+         WHERE organization_id = ?
+           AND event_id = ?
+           AND status <> 'revoked'
+         ORDER BY participant_id ASC`,
+      )
+      .bind(tenantId, eventId)
+      .all<{ id: string }>();
+    return result.results.map(({ id }) => id);
+  }
+
   async getSession(tenantId: string, eventId: string, sessionId: string): Promise<Session | null> {
     const [row] = await this.#database
       .select()

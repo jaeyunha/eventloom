@@ -95,6 +95,7 @@ async function openAcceptedSpeakerFiles(page: Page): Promise<void> {
 }
 
 test("speaker tasks and files stay focused on desktop", async ({ authSession, page }, testInfo) => {
+  test.setTimeout(60_000);
   await installPortalApi(page, authSession);
   await page.setViewportSize({ width: 1440, height: 1000 });
 

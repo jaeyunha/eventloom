@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import type { D1Database } from "@cloudflare/workers-types";
 import { describe, expect, it } from "vitest";
 import type { MemberInvitation } from "../features/members/types";
@@ -32,12 +32,9 @@ function invitation(): MemberInvitation {
   };
 }
 
-describe("D1 member activation credential protection", () => {
-  it("stores an expensive verifier, rejects a different retry, and clears it on finalization", async () => {
-    const database = new SqliteD1(
-      "eventloom-member-activation-",
-      identityMigration,
-    );
+  describe("D1 member activation credential protection", () => {
+    it("stores an expensive verifier, rejects a different retry, and clears it on finalization", async () => {
+    const database = new SqliteD1("eventloom-member-activation-", identityMigration);
     try {
       const d1 = database as unknown as D1Database;
       const identity = new D1MemberIdentityRepository(d1);
@@ -100,10 +97,7 @@ describe("D1 member activation credential protection", () => {
   });
 
   it("upgrades a matching legacy activation digest before resuming activation", async () => {
-    const database = new SqliteD1(
-      "eventloom-member-activation-legacy-",
-      identityMigration,
-    );
+    const database = new SqliteD1("eventloom-member-activation-legacy-", identityMigration);
     try {
       const d1 = database as unknown as D1Database;
       const identity = new D1MemberIdentityRepository(d1);

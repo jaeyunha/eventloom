@@ -6,6 +6,7 @@ import {
   ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
   ORGANIZER_HEADSHOT_MAX_BYTES,
   type SpeakerApi,
+  SpeakerApiError,
   type SpeakerAsset,
   type SpeakerRecord,
   type SpeakerRosterEnvelope,
@@ -27,7 +28,9 @@ import {
   SpeakerHeadshot,
   SpeakerInvitationControls,
   SpeakerWorkspace,
+  speakerErrorDiagnostic,
   speakerInvitationReady,
+  speakerMutationOutcomeUnknown,
   speakerOnboardingTaskDefinitions,
   speakerProgressFor,
   speakerProgressMatches,
@@ -126,9 +129,17 @@ describe("speaker API adapter", () => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
       const path = String(input);
       if (path.endsWith("/imports/preview")) {
-        return new Response(JSON.stringify({ data: { validRows: [], invalidRows: [] } }), {
-          status: 200,
-        });
+        return new Response(
+          JSON.stringify({
+            data: {
+              previewId: "preview-1",
+              sourceDigest: "sha256:source-1",
+              validRows: [],
+              invalidRows: [],
+            },
+          }),
+          { status: 200 },
+        );
       }
       return new Response(
         JSON.stringify({
@@ -145,7 +156,11 @@ describe("speaker API adapter", () => {
         type: "text/csv",
       }),
     );
-    await api.commitImport({ rows: [], idempotencyKey: "import-once" });
+    await api.commitImport({
+      previewId: "preview-1",
+      sourceDigest: "sha256:source-1",
+      idempotencyKey: "import-once",
+    });
 
     expect(String(calls[0]?.input)).toBe(
       "https://api.example.test/api/admin/organizations/org%2F1/events/event%2F1/speakers",
@@ -154,11 +169,43 @@ describe("speaker API adapter", () => {
     expect(calls[1]?.init?.body).toBeInstanceOf(FormData);
     expect(String(calls[2]?.input)).toContain("/speakers/imports");
     expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({
-      rows: [],
+      previewId: "preview-1",
+      sourceDigest: "sha256:source-1",
       idempotencyKey: "import-once",
     });
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
   });
+  it("rejects legacy client-owned import previews without a durable artifact", async () => {
+    const api = createSpeakerApi("", "org-1", "event-1", async () =>
+      Response.json({ data: { validRows: [], invalidRows: [] } }),
+    );
+
+    await expect(
+      api.previewImport(new File(["displayName,email"], "speakers.csv", { type: "text/csv" })),
+    ).rejects.toThrow("durable preview artifact");
+  });
+
+  it("keeps only validated error diagnostics from speaker responses", async () => {
+    const api = createSpeakerApi("", "org-1", "event-1", async () =>
+      Response.json(
+        {
+          error: {
+            code: "<script>",
+            message: "Import failed.",
+            traceId: "not-a-trace-id",
+          },
+        },
+        { status: 503 },
+      ),
+    );
+
+    await expect(api.list()).rejects.toMatchObject({
+      code: "SPEAKER_REQUEST_FAILED",
+      status: 503,
+      traceId: undefined,
+    });
+  });
+
   it("keeps default speaker requests on the same-origin API gateway", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const api = createSpeakerApi("", "org-1", "event-1", async (input, init) => {
@@ -510,7 +557,10 @@ describe("speaker API adapter", () => {
       title: task.title,
       description: task.description,
       dueAt: task.dueAt,
-      participantIds: ["participant-1", "participant-2"],
+      assignments: [
+        { participantId: "participant-1", submissionId: null },
+        { participantId: "participant-2", submissionId: null },
+      ],
     });
     expect(String(calls[2]?.input)).toBe(
       "https://api.example.test/api/admin/organizations/org-1/events/event-1/speaker-tasks",
@@ -654,6 +704,21 @@ describe("speaker API adapter", () => {
 });
 
 describe("speaker workspace contracts", () => {
+  it("classifies ambiguous failures and exposes only safe diagnostics", () => {
+    const traceId = "123e4567-e89b-42d3-a456-426614174000";
+    const unavailable = new SpeakerApiError("SERVICE_UNAVAILABLE", "Unavailable", 503, traceId);
+    const validation = new SpeakerApiError("VALIDATION_ERROR", "Invalid", 400);
+    const unsafe = new SpeakerApiError("<script>", "Invalid", 999, "trace-1");
+
+    expect(speakerMutationOutcomeUnknown(unavailable)).toBe(true);
+    expect(speakerMutationOutcomeUnknown(new TypeError("Failed to fetch"))).toBe(true);
+    expect(speakerMutationOutcomeUnknown(validation)).toBe(false);
+    expect(speakerErrorDiagnostic(unavailable)).toBe(
+      `SERVICE_UNAVAILABLE · HTTP 503 · trace ${traceId}`,
+    );
+    expect(speakerErrorDiagnostic(unsafe)).toBeNull();
+  });
+
   it("uses restrained semantic tones for each task status", () => {
     expect(taskStatusTone("not_started")).toBe("neutral");
     expect(taskStatusTone("in_progress")).toBe("info");

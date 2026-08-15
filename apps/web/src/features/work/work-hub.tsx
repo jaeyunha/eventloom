@@ -37,7 +37,12 @@ function organizationsFrom(value: unknown): readonly WorkOrganizationSummary[] {
     if (typeof item !== "object" || item === null) return [];
     const candidate = item as Record<string, unknown>;
     return typeof candidate.organizationId === "string" && typeof candidate.name === "string"
-      ? [{ organizationId: candidate.organizationId, name: candidate.name }]
+      ? [
+          {
+            organizationId: candidate.organizationId,
+            name: candidate.name,
+          },
+        ]
       : [];
   });
 }

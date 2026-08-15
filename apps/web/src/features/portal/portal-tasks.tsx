@@ -6,7 +6,7 @@ import {
   WorkspaceProgressSummary,
   WorkspaceState,
 } from "../../components/workspace";
-import { filterTasks } from "./model";
+import { filterTasks, summarizePortal } from "./model";
 import { usePortal } from "./portal-provider";
 import { PortalTaskDetail } from "./portal-task-detail";
 import { PortalTaskInbox, type TaskFilter } from "./portal-task-list";
@@ -34,9 +34,7 @@ function PortalTasksContent() {
 
   const visible = sortTasksByUrgency(filterTasks(view.tasks, filter));
   const selected = visible.find((task) => task.id === selectedId) ?? visible[0] ?? null;
-  const completed = view.tasks.filter(
-    (task) => task.status === "completed" || task.status === "waived",
-  ).length;
+  const summary = summarizePortal(view);
 
   return (
     <div className={styles.page}>
@@ -49,9 +47,13 @@ function PortalTasksContent() {
       <WorkspaceProgressSummary
         className={styles.progress}
         label="Event preparation"
-        value={completed}
-        max={Math.max(view.tasks.length, 1)}
-        detail={`${completed} of ${view.tasks.length} finished · ${view.outstandingTaskCount} still open`}
+        value={summary.completedTaskCount}
+        max={Math.max(summary.taskCount, 1)}
+        detail={
+          summary.readinessState === "no-tasks"
+            ? "No speaker tasks assigned"
+            : `${summary.completedTaskCount} of ${summary.taskCount} finished · ${summary.outstandingTaskCount} still open`
+        }
       />
 
       {view.tasks.length === 0 ? (

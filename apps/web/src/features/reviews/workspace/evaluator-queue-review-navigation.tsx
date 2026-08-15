@@ -35,7 +35,9 @@ export function ReviewNavigation({
       ) : null}
       {resolvedOrganizationId === null ? null : (
         <Button asChild size="sm" variant="ghost">
-          <Link href={`/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/members`}>
+          <Link
+            href={`/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/members?tab=invite`}
+          >
             Invite reviewers
           </Link>
         </Button>
