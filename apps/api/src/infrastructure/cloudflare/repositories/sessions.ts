@@ -768,13 +768,7 @@ export class D1SessionRepository implements SessionRepository {
         .prepare(
           `UPDATE session_statuses SET active = 0, sort_order = 1000000 + rowid, version = ?, updated_at = ? WHERE organization_id = ? AND event_id = ? AND ${guard}`,
         )
-        .bind(
-          value.version,
-          value.updatedAt,
-          value.tenantId,
-          value.eventId,
-          ...guardValues,
-        ),
+        .bind(value.version, value.updatedAt, value.tenantId, value.eventId, ...guardValues),
       ...value.statuses.map((status, ordinal) =>
         this.binding
           .prepare(

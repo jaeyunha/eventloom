@@ -2,11 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Event, EventAuditEntry } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
-import type {
-  Session,
-  SessionAuditEntry,
-  SessionSettings,
-} from "../../../features/sessions/types";
+import type { Session, SessionAuditEntry, SessionSettings } from "../../../features/sessions/types";
 import { SessionRepositoryConflictError } from "../../../features/sessions/types";
 import { D1EventRepository } from "./events";
 import { D1SessionRepository } from "./sessions";
