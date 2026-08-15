@@ -1747,7 +1747,8 @@ export class SpeakerService {
         ? Promise.resolve([])
         : this.repository.listProfiles(eventId, [primaryParticipantId]);
     const rawTasksPromise =
-      primaryParticipantId === undefined
+      primaryParticipantId === undefined ||
+      !contextCapabilityAllows(scope, "task-response", [primaryParticipantId])
         ? Promise.resolve([])
         : this.repository.listTasks(eventId, [primaryParticipantId]);
     const contextsPromise: Promise<readonly SpeakerPortalContext[]> =

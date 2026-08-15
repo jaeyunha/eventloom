@@ -2779,6 +2779,43 @@ describe("SpeakerService portal access", () => {
       },
     });
   });
+
+  it("does not read or expose tasks without task-response capability", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["asset-read", "asset-write"],
+    });
+    repository.portalContexts.push({
+      id: "portal:org-1:event-1:participant-1",
+      organizationId: "org-1",
+      eventId: "event-1",
+      name: "Asset-only event",
+      capabilities: ["asset-read", "asset-write"],
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+    });
+    repository.submissions.push(submission("submission-1", "participant-1"));
+    repository.tasks.push(task({ id: "private-task", participantId: "participant-1" }));
+
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new FakePrivateAssetGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
+    const portal = await service.getPortal("event-1", "account-1");
+
+    expect(portal.tasks).toEqual([]);
+    expect(repository.taskReads).toBe(0);
+  });
+
   it("hydrates the portal with one scope and one parallel read per projection", async () => {
     const repository = new CountingPortalRepository();
     repository.scopes.set("event-1:account-1", {
