@@ -1,7 +1,29 @@
 .workspace {
+  --admin-settings-navigation-width: 12.5rem;
+  --admin-settings-content-width: 48rem;
+  --admin-settings-wide-width: 62rem;
   display: grid;
   min-width: 0;
   gap: var(--admin-space-4);
+}
+
+.destinationHeader,
+.stateHeader {
+  min-height: auto;
+  padding: 0 0 var(--admin-space-2);
+  border: 0;
+  background: transparent;
+}
+
+.destinationHeader h1,
+.stateHeader h1 {
+  font-size: clamp(1.5rem, 2.2vw, 1.875rem);
+  letter-spacing: -0.035em;
+}
+
+.destinationHeader p,
+.stateHeader p {
+  max-width: 42rem;
 }
 
 .mutedText {
@@ -28,9 +50,7 @@
 }
 
 .navigationHeader {
-  display: grid;
-  gap: var(--admin-space-1);
-  padding: 0 var(--admin-space-2) var(--admin-space-1);
+  display: none;
 }
 
 .navigationEyebrow {
@@ -76,7 +96,7 @@
   display: grid;
   grid-template-columns: 1.15rem minmax(0, 1fr);
   gap: 0.62rem;
-  align-items: start;
+  align-items: center;
   min-height: 3.15rem;
   padding: 0.58rem 0.62rem;
   border: 1px solid transparent;
@@ -89,22 +109,21 @@
 
 .navigationLink:hover,
 .navigationLink:focus-visible {
-  border-color: var(--admin-border);
-  background: var(--admin-canvas);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--admin-canvas) 84%, var(--admin-surface));
   color: var(--admin-ink);
 }
 
 .navigationLinkActive {
-  border-color: transparent;
-  background: var(--admin-brand-soft);
+  border-color: color-mix(in srgb, var(--admin-border) 84%, transparent);
+  background: color-mix(in srgb, var(--admin-brand-soft) 78%, var(--admin-surface));
   color: var(--admin-ink);
-  box-shadow: inset 2px 0 0 var(--admin-brand);
+  box-shadow: 0 1px 1px rgb(24 24 27 / 4%);
 }
 
 .navigationIcon {
   width: 1rem;
   height: 1rem;
-  margin-top: 0.08rem;
   color: var(--admin-subtle);
 }
 
@@ -125,10 +144,7 @@
 }
 
 .navigationLinkCopy span {
-  color: var(--admin-subtle);
-  font-size: 0.69rem;
-  font-weight: 500;
-  line-height: 1.35;
+  display: none;
 }
 
 .mobileNavigation {
@@ -194,8 +210,14 @@
 }
 
 .fullWidthState {
-  width: 100%;
+  width: min(100%, var(--admin-settings-content-width));
+  margin-inline: auto;
   border-color: var(--admin-border-strong);
+}
+
+.stateHeader {
+  width: min(100%, var(--admin-settings-content-width));
+  margin-inline: auto;
 }
 
 .fullWidthState[role="alert"] {
@@ -358,48 +380,62 @@
 
 .resourceList:has(> li:not(.emptyState)) {
   overflow: hidden;
-  border: 1px solid var(--admin-border);
-  border-radius: var(--admin-radius-md);
-  background: var(--admin-surface);
+  border-top: 1px solid var(--admin-border);
+  border-radius: 0;
+  background: transparent;
 }
 
 .taxonomyHeader {
   display: flex;
   flex-wrap: wrap;
   gap: 0.8rem;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
+  min-height: 4.5rem;
+  padding: 0.85rem var(--admin-space-4);
 }
 
 .emptyState {
   display: grid;
-  gap: 0.55rem;
-  justify-items: start;
-  padding: 0.9rem;
-  border: 1px dashed var(--admin-border-strong);
-  border-radius: var(--admin-radius-sm);
-  background: var(--admin-canvas);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem var(--admin-space-4);
+  align-items: center;
+  padding: 0.8rem var(--admin-space-4);
+  border-top: 1px solid var(--admin-border);
+  background: color-mix(in srgb, var(--admin-canvas) 54%, transparent);
   text-align: left;
 }
 
 .emptyState strong {
+  grid-column: 1;
   color: var(--admin-ink);
 }
 
+.emptyState > span {
+  grid-column: 1;
+}
+
+.emptyState > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
 .taxonomyGrid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1rem;
+  display: block;
 }
 
 .taxonomyCard {
   display: grid;
   min-width: 0;
-  gap: 0.8rem;
-  padding: 1rem;
-  border: 1px solid var(--admin-border);
-  border-radius: var(--admin-radius-md);
-  background: var(--admin-surface);
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.taxonomyCard + .taxonomyCard {
+  border-top: 1px solid var(--admin-border);
 }
 
 .taxonomyHeading {
@@ -415,9 +451,9 @@
 
 .guidanceBadge {
   color: var(--admin-subtle);
-  font-size: 0.62rem;
+  font-size: var(--admin-text-caption);
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .guidanceBadgeOptional {
@@ -700,22 +736,27 @@
   overflow: hidden;
 }
 
-.classificationContent {
-  display: grid;
-  gap: var(--admin-space-4);
+.librarySection .classificationContent {
+  display: block;
+  padding: 0;
 }
 
 .sectionNote {
-  max-width: 68ch;
-  padding-left: 0.65rem;
-  margin: 0.55rem 0 0;
-  border-left: 2px solid var(--admin-border-strong);
+  max-width: none;
+  padding: 0.75rem var(--admin-space-4);
+  margin: 0;
+  border-bottom: 1px solid var(--admin-border);
+  background: color-mix(in srgb, var(--admin-canvas) 46%, transparent);
   color: var(--admin-subtle);
-  font-size: 0.74rem;
+  font-size: var(--admin-text-small);
   line-height: 1.5;
 }
 
-@media (max-width: 48rem) {
+.classificationContent > .detailsState {
+  margin: var(--admin-space-4);
+}
+
+@media (max-width: 64rem) {
   .navigationWrapper {
     position: static;
   }
@@ -744,7 +785,7 @@
   }
 }
 
-@media (min-width: 48.01rem) {
+@media (min-width: 64.01rem) {
   .mobileNavigation {
     display: none;
   }
@@ -752,7 +793,7 @@
 
 @media (max-width: 36rem) {
   .taxonomyCard {
-    padding: 0.85rem;
+    padding: 0;
   }
 
   .taxonomyHeader {
@@ -787,6 +828,17 @@
   .revisionSheet {
     width: 100vw;
     max-width: 100vw;
+  }
+
+  .emptyState {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .emptyState > button {
+    grid-column: 1;
+    grid-row: auto;
+    width: fit-content;
+    margin-top: var(--admin-space-1);
   }
 }
 

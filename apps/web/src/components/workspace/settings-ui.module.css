@@ -7,7 +7,14 @@
   gap: var(--admin-space-6);
   min-width: 0;
   align-items: start;
-  justify-content: start;
+  justify-content: center;
+  width: 100%;
+  max-width: calc(
+    var(--admin-settings-navigation-width) +
+    var(--admin-space-6) +
+    var(--admin-settings-content-width)
+  );
+  margin-inline: auto;
 }
 
 .shellWide {
@@ -15,6 +22,11 @@
       0,
       var(--admin-settings-wide-width)
     );
+  max-width: calc(
+    var(--admin-settings-navigation-width) +
+    var(--admin-space-6) +
+    var(--admin-settings-wide-width)
+  );
 }
 
 .navigation,
@@ -28,14 +40,17 @@
 .content {
   display: grid;
   width: 100%;
-  gap: var(--admin-space-4);
+  gap: var(--admin-space-5);
 }
 
 .group {
   overflow: hidden;
   border: 1px solid var(--admin-border);
-  border-radius: var(--admin-radius-md);
-  background: var(--admin-surface);
+  border-radius: calc(var(--admin-radius-md) - var(--admin-space-1));
+  background: color-mix(in srgb, var(--admin-surface) 96%, var(--admin-canvas));
+  box-shadow:
+    0 1px 2px rgb(24 24 27 / 4%),
+    inset 0 1px 0 rgb(255 255 255 / 38%);
 }
 
 .groupHeader {
@@ -44,8 +59,9 @@
   gap: var(--admin-space-3);
   align-items: flex-start;
   justify-content: space-between;
-  padding: var(--admin-space-4);
+  padding: var(--admin-space-4) var(--admin-space-4) 0.95rem;
   border-bottom: 1px solid var(--admin-border);
+  background: color-mix(in srgb, var(--admin-canvas) 42%, transparent);
 }
 
 .groupHeading {
@@ -102,7 +118,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--admin-space-4);
   align-items: center;
-  min-height: 3.5rem;
+  min-height: 3.75rem;
   padding: var(--admin-space-3, 0.75rem);
   border-bottom: 1px solid var(--admin-border);
 }
@@ -139,14 +155,6 @@
 }
 
 @media (max-width: 64rem) {
-  .shell,
-  .shellWide {
-    grid-template-columns: 12.5rem minmax(0, 1fr);
-    gap: var(--admin-space-5);
-  }
-}
-
-@media (max-width: 48rem) {
   .shell,
   .shellWide {
     display: block;
