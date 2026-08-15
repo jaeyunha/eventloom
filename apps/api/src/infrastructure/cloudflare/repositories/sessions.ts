@@ -766,16 +766,39 @@ export class D1SessionRepository implements SessionRepository {
     return [
       this.binding
         .prepare(
-          `DELETE FROM session_statuses WHERE organization_id = ? AND event_id = ? AND ${guard}`,
+          `UPDATE session_statuses SET active = 0, sort_order = 1000000 + rowid, version = ?, updated_at = ? WHERE organization_id = ? AND event_id = ? AND ${guard}`,
         )
-        .bind(value.tenantId, value.eventId, ...guardValues),
+        .bind(
+          value.version,
+          value.updatedAt,
+          value.tenantId,
+          value.eventId,
+          ...guardValues,
+        ),
       ...value.statuses.map((status, ordinal) =>
         this.binding
           .prepare(
-            `INSERT INTO session_statuses (id, organization_id, event_id, value, name, description, agenda_eligible, sort_order, active, version, created_at, updated_at) SELECT ?, ?, ?, ?, ?, '', ?, ?, 1, ?, ?, ? WHERE ${guard}`,
+            `UPDATE session_statuses SET name = ?, description = '', agenda_eligible = ?, sort_order = ?, active = 1, version = ?, updated_at = ? WHERE organization_id = ? AND event_id = ? AND value = ? AND ${guard}`,
           )
           .bind(
-            `${value.id}:status:${ordinal}`,
+            status,
+            value.agendaEligibleStatuses.includes(status) ? 1 : 0,
+            ordinal,
+            value.version,
+            value.updatedAt,
+            value.tenantId,
+            value.eventId,
+            status,
+            ...guardValues,
+          ),
+      ),
+      ...value.statuses.map((status, ordinal) =>
+        this.binding
+          .prepare(
+            `INSERT INTO session_statuses (id, organization_id, event_id, value, name, description, agenda_eligible, sort_order, active, version, created_at, updated_at) SELECT ?, ?, ?, ?, ?, '', ?, ?, 1, ?, ?, ? WHERE ${guard} AND NOT EXISTS (SELECT 1 FROM session_statuses WHERE organization_id = ? AND event_id = ? AND value = ?)`,
+          )
+          .bind(
+            `status_${crypto.randomUUID()}`,
             value.tenantId,
             value.eventId,
             status,
@@ -786,6 +809,9 @@ export class D1SessionRepository implements SessionRepository {
             value.createdAt,
             value.updatedAt,
             ...guardValues,
+            value.tenantId,
+            value.eventId,
+            status,
           ),
       ),
     ];

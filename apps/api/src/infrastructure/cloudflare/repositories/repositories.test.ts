@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Event, EventAuditEntry } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
-import type { Session, SessionAuditEntry } from "../../../features/sessions/types";
+import type {
+  Session,
+  SessionAuditEntry,
+  SessionSettings,
+} from "../../../features/sessions/types";
 import { SessionRepositoryConflictError } from "../../../features/sessions/types";
 import { D1EventRepository } from "./events";
 import { D1SessionRepository } from "./sessions";
@@ -192,5 +196,41 @@ describe("D1 session repository commands", () => {
         audit: sessionAudit,
       }),
     ).rejects.toBeInstanceOf(SessionRepositoryConflictError);
+  });
+
+  it("updates status rows without deleting values referenced by sessions", async () => {
+    const db = database();
+    const settings: SessionSettings = {
+      id: "settings-1",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      statuses: ["Draft", "Accepted"],
+      agendaEligibleStatuses: ["Accepted"],
+      version: 2,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      createdBy: "user-1",
+      updatedBy: "user-1",
+      history: [],
+    };
+    await new D1SessionRepository(db).commit?.({
+      operation: "putSettings",
+      value: settings,
+      expectedVersion: 1,
+      audit: {
+        ...sessionAudit,
+        entityType: "settings",
+        entityId: settings.id,
+        version: settings.version,
+        after: settings,
+      },
+    });
+
+    const queries = db.statements.map((item) => item.bound.query).join("\n");
+    expect(queries).not.toContain("DELETE FROM session_statuses");
+    expect(queries).toContain("UPDATE session_statuses SET active = 0");
+    expect(queries).toContain("UPDATE session_statuses SET name = ?");
+    expect(queries).toContain("INSERT INTO session_statuses");
+    expect(queries).toContain("NOT EXISTS");
   });
 });
