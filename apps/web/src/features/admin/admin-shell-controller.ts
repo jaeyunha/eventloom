@@ -38,7 +38,30 @@ export interface AdminShellController {
   readonly publicMemberSetup: boolean;
   readonly setCommandOpen: (open: boolean) => void;
   readonly selectOrganization: (organizationId: string) => void;
-  readonly signOut: () => Promise<void>;
+  readonly signOut: () => Promise<boolean>;
+}
+
+export type AdminSignOutFetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export async function signOutAdminSession({
+  fetcher = globalThis.fetch,
+  navigate = (path) => window.location.assign(path),
+}: Readonly<{
+  fetcher?: AdminSignOutFetcher;
+  navigate?: (path: string) => void;
+}> = {}): Promise<boolean> {
+  const response = await fetcher("/api/auth/sign-out", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  }).catch(() => null);
+  if (response === null || !response.ok) return false;
+  navigate("/");
+  return true;
 }
 
 export function useAdminShellController(): AdminShellController {
@@ -80,14 +103,8 @@ export function useAdminShellController(): AdminShellController {
     }
   }
 
-  async function signOut(): Promise<void> {
-    await fetch("/api/auth/sign-out", {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    }).catch(() => undefined);
-    window.location.assign("/");
+  function signOut(): Promise<boolean> {
+    return signOutAdminSession();
   }
 
   return {

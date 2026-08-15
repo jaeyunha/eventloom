@@ -75,16 +75,28 @@ test("explained drift remains visible but is safe for read cutover", async () =>
 });
 
 test("cutover advances one state at a time and fences the write-d1 transition", async () => {
-  const markers = markerAdapter({ tenantId: "tenant-1", state: "shadow", version: 3 });
-  const report = compareSnapshots({ source: { events: [] }, target: { events: [] } });
+  const markers = markerAdapter({
+    tenantId: "tenant-1",
+    environment: "staging",
+    state: "shadow",
+    version: 3,
+  });
+  const report = compareSnapshots({
+    source: { events: [] },
+    target: { events: [] },
+    tenantId: "tenant-1",
+    environment: "staging",
+  });
   const readMarker = await transitionTenant({
     tenantId: "tenant-1",
+    environment: "staging",
     to: "read-d1",
     reason: "shadow checks passed",
     markerAdapter: markers,
     verificationReport: report,
     now: () => new Date("2026-08-13T10:00:00.000Z"),
   });
+
   assert.equal(readMarker.state, "read-d1");
   assert.equal(readMarker.verificationReportHash, report.reportHash);
 
@@ -106,6 +118,7 @@ test("cutover advances one state at a time and fences the write-d1 transition", 
     now: () => new Date("2026-08-13T11:00:00.000Z"),
   });
   assert.equal(writeMarker.state, "write-d1");
+  assert.equal(writeMarker.verificationReportHash, report.reportHash);
   assert.equal(markers.calls.at(-1).input.fenceToken, "fence-1");
   assert.deepEqual(
     fenceCalls.map(({ operation }) => operation),
@@ -118,8 +131,127 @@ test("cutover advances one state at a time and fences the write-d1 transition", 
   });
 });
 
+test("read cutover rejects bare, tampered, cross-tenant, and cross-environment reports", async () => {
+  const validReport = compareSnapshots({
+    source: { events: [] },
+    target: { events: [] },
+    tenantId: "tenant-1",
+    environment: "staging",
+  });
+
+  for (const [label, verificationReport, environment, expectedCode] of [
+    ["bare", { safeForReadCutover: true }, "staging", "VERIFICATION_INVALID"],
+    [
+      "tampered",
+      { ...validReport, status: "unexplained-drift" },
+      "staging",
+      "VERIFICATION_INVALID",
+    ],
+    [
+      "cross-tenant",
+      compareSnapshots({
+        source: { events: [] },
+        target: { events: [] },
+        tenantId: "tenant-2",
+        environment: "staging",
+      }),
+      "staging",
+      "VERIFICATION_TENANT_MISMATCH",
+    ],
+    ["cross-environment", validReport, "production", "VERIFICATION_ENVIRONMENT_MISMATCH"],
+  ]) {
+    const markers = markerAdapter({
+      tenantId: "tenant-1",
+      environment,
+      state: "shadow",
+      version: 0,
+    });
+    await assert.rejects(
+      transitionTenant({
+        tenantId: "tenant-1",
+        environment,
+        to: "read-d1",
+        reason: label,
+        markerAdapter: markers,
+        verificationReport,
+      }),
+      (error) => error instanceof CutoverError && error.code === expectedCode,
+    );
+    assert.deepEqual(
+      markers.calls.map(({ operation }) => operation),
+      ["read"],
+    );
+  }
+});
+
+test("cutover cannot relabel an existing marker environment", async () => {
+  const markers = markerAdapter({
+    tenantId: "tenant-1",
+    environment: "production",
+    state: "shadow",
+    version: 0,
+  });
+  const stagingReport = compareSnapshots({
+    source: { events: [] },
+    target: { events: [] },
+    tenantId: "tenant-1",
+    environment: "staging",
+  });
+
+  await assert.rejects(
+    transitionTenant({
+      tenantId: "tenant-1",
+      environment: "staging",
+      to: "read-d1",
+      reason: "wrong environment",
+      markerAdapter: markers,
+      verificationReport: stagingReport,
+    }),
+    (error) => error instanceof CutoverError && error.code === "MARKER_ENVIRONMENT_MISMATCH",
+  );
+  assert.deepEqual(
+    markers.calls.map(({ operation }) => operation),
+    ["read"],
+  );
+});
+
+test("write cutover rejects missing or malformed verification provenance", async () => {
+  for (const verificationReportHash of [undefined, { tampered: true }, "not-a-hash"]) {
+    const markers = markerAdapter({
+      tenantId: "tenant-1",
+      environment: "staging",
+      state: "read-d1",
+      version: 1,
+      ...(verificationReportHash === undefined ? {} : { verificationReportHash }),
+    });
+    await assert.rejects(
+      transitionTenant({
+        tenantId: "tenant-1",
+        environment: "staging",
+        to: "write-d1",
+        reason: "invalid provenance",
+        markerAdapter: markers,
+        fenceAdapter: {
+          async acquireWriteFence() {
+            throw new Error("must not acquire");
+          },
+          async releaseWriteFence() {
+            throw new Error("must not release");
+          },
+        },
+      }),
+      (error) => error instanceof CutoverError && error.code === "MARKER_INVALID",
+    );
+    assert.deepEqual(
+      markers.calls.map(({ operation }) => operation),
+      ["read"],
+    );
+  }
+});
+
 test("illegal transitions fail before marker or fence writes", async () => {
   const markers = markerAdapter({ tenantId: "tenant-1", state: "shadow", version: 0 });
+
   let fenceCalls = 0;
   await assert.rejects(
     transitionTenant({
@@ -151,8 +283,9 @@ test("illegal transitions fail before marker or fence writes", async () => {
       markerAdapter: markers,
       verificationReport: { safeForReadCutover: false },
     }),
-    (error) => error instanceof CutoverError && error.code === "VERIFICATION_REQUIRED",
+    (error) => error instanceof CutoverError && error.code === "VERIFICATION_INVALID",
   );
+
   assert.deepEqual(
     markers.calls.map(({ operation }) => operation),
     ["read", "read"],
@@ -160,7 +293,13 @@ test("illegal transitions fail before marker or fence writes", async () => {
 });
 
 test("rollback stops at the write-d1 boundary and releases an aborted fence", async () => {
-  const committed = markerAdapter({ tenantId: "tenant-1", state: "write-d1", version: 8 });
+  const verificationReportHash = "a".repeat(64);
+  const committed = markerAdapter({
+    tenantId: "tenant-1",
+    state: "write-d1",
+    version: 8,
+    verificationReportHash,
+  });
   await assert.rejects(
     rollbackReadCutover({
       tenantId: "tenant-1",
@@ -174,7 +313,12 @@ test("rollback stops at the write-d1 boundary and releases an aborted fence", as
     ["read"],
   );
 
-  const readable = markerAdapter({ tenantId: "tenant-1", state: "read-d1", version: 4 });
+  const readable = markerAdapter({
+    tenantId: "tenant-1",
+    state: "read-d1",
+    version: 4,
+    verificationReportHash,
+  });
   const rolledBack = await rollbackReadCutover({
     tenantId: "tenant-1",
     reason: "read validation regressed",
@@ -186,7 +330,7 @@ test("rollback stops at the write-d1 boundary and releases an aborted fence", as
 
   const failingMarkers = {
     async readMarker() {
-      return { tenantId: "tenant-1", state: "read-d1", version: 2 };
+      return { tenantId: "tenant-1", state: "read-d1", version: 2, verificationReportHash };
     },
     async compareAndSetMarker() {
       throw new Error("version conflict");

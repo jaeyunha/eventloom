@@ -31,7 +31,27 @@ export function OrganizerDecisionsPanel({
     setSelectedDecisionId,
     decisionEditorRef,
     exportResults,
+    setView,
   } = controller;
+  if (seed.status === "draft") {
+    return (
+      <section className={styles.section} aria-labelledby="aggregate-heading">
+        <div className={styles.sectionHeading}>
+          <div>
+            <p className={styles.sectionEyebrow}>Results</p>
+            <h2 id="aggregate-heading">Results are not available yet</h2>
+          </div>
+        </div>
+        <p className={styles.sectionIntro}>
+          Finish the scorecard and reviewer setup, then open the plan. Scores and decisions will
+          appear here after reviewers submit their work.
+        </p>
+        <Button type="button" onClick={() => setView("setup")}>
+          Finish plan setup
+        </Button>
+      </section>
+    );
+  }
   return (
     <section className={styles.section} aria-labelledby="aggregate-heading">
       <div className={styles.sectionHeading}>
@@ -47,9 +67,9 @@ export function OrganizerDecisionsPanel({
             onClick={() =>
               setAggregateSort((current) => (current === "descending" ? "ascending" : "descending"))
             }
-            aria-label={`Sort aggregate score ${aggregateSort === "descending" ? "ascending" : "descending"}`}
+            aria-label={`Sort score ${aggregateSort === "descending" ? "ascending" : "descending"}`}
           >
-            Sort {aggregateSort === "descending" ? "ascending" : "descending"}
+            Sort score {aggregateSort === "descending" ? "ascending" : "descending"}
           </Button>
           <Button size="sm" type="button" variant="outline" onClick={() => void exportResults()}>
             Export CSV
@@ -57,7 +77,7 @@ export function OrganizerDecisionsPanel({
         </div>
       </div>
       <div className={styles.formField}>
-        <label htmlFor="organizer-aggregate-round">Aggregate round</label>
+        <label htmlFor="organizer-aggregate-round">Review round</label>
         <select
           id="organizer-aggregate-round"
           value={selectedRoundId}
@@ -74,9 +94,7 @@ export function OrganizerDecisionsPanel({
           ))}
         </select>
         <span className={styles.fieldHint}>
-          Exact round: {selectedRound?.name ?? selectedRoundId} · round revision{" "}
-          {selectedRound?.roundRevision ?? "unavailable"} · rubric revision{" "}
-          {selectedRound?.rubricRevision ?? "unavailable"}
+          Scores and decisions use the saved scorecard for this round.
         </span>
       </div>
       {aggregateLoading ? (
@@ -90,9 +108,7 @@ export function OrganizerDecisionsPanel({
         </p>
       ) : null}
       <p className={styles.fieldHint}>
-        Scores shown below are only from {selectedRound?.name ?? selectedRoundId}, with round
-        revision {selectedRound?.roundRevision ?? "unavailable"} and rubric revision{" "}
-        {selectedRound?.rubricRevision ?? "unavailable"}.
+        Showing scores and decisions for {selectedRound?.name ?? selectedRoundId}.
       </p>
       <div className={styles.collectionToolbar}>
         <div className={styles.formField}>

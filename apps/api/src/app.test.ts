@@ -67,6 +67,52 @@ describe("API foundation", () => {
     expect(rejected.headers.has("access-control-allow-origin")).toBe(false);
   });
 
+  it("blocks hostile-origin text/plain cookie mutations before protected services run", async () => {
+    let closeCalls = 0;
+    const principal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-1",
+      userId: "user-1",
+      email: "organizer@example.test",
+      memberships: [{ organizationId: "org-a", role: "admin" }],
+      speakerGrants: [],
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      evaluations: {
+        actorFor: async () => ({ kind: "organizer", tenantId: "org-a", userId: "user-1" }) as never,
+        service: {
+          closePlan: async () => {
+            closeCalls += 1;
+            return { id: "plan-1", version: 2, status: "closed" };
+          },
+        } as never,
+      },
+    });
+    const production = { APP_ENV: "production", WEB_ORIGIN: "https://web.example.test" };
+    const request = (origin: string) =>
+      app.request(
+        "/api/admin/evaluations/plans/plan-1/close",
+        {
+          method: "POST",
+          headers: {
+            cookie: "__Secure-better-auth.session_token=opaque",
+            origin,
+            "content-type": "text/plain",
+          },
+          body: JSON.stringify({ expectedVersion: 1 }),
+        },
+        production,
+      );
+
+    const blocked = await request("https://evil.example.test");
+    expect(blocked.status).toBe(403);
+    expect(closeCalls).toBe(0);
+    const allowed = await request(production.WEB_ORIGIN);
+    expect(allowed.status).toBe(200);
+    expect(closeCalls).toBe(1);
+  });
+
   it("uses the same safe error envelope for unknown routes", async () => {
     const response = await createApp().request("/unknown", {}, environment);
     const body = apiErrorSchema.parse(await response.json());

@@ -6479,15 +6479,13 @@ export class AirtableSubmissionReviewSource
     }
     const submission = await this.#cfpService.reopen({
       tenantId,
+      eventId,
       submissionId,
       organizerId: input.organizerId,
       expectedVersion: input.expectedVersion,
       reason: input.reason,
       idempotencyKey: input.idempotencyKey,
     });
-    if (submission.eventId !== eventId) {
-      throw new Error("The submission does not belong to the requested event.");
-    }
     return this.toAdminRecord(submission);
   }
 

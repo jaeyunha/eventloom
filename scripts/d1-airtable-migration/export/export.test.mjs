@@ -309,8 +309,43 @@ test("validates arguments and configuration without exposing credentials", () =>
   );
 });
 
+test("custom API origins require HTTPS except for loopback HTTP", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "airtable-export-origin-"));
+  await assert.rejects(
+    exportAirtableInventory({
+      accessToken: "secret-token",
+      baseId: "appTest",
+      outputPath: join(directory, "rejected.json"),
+      apiOrigin: "http://airtable.example.test",
+      fetchImplementation: async () => {
+        throw new Error("unsafe origin must be rejected before fetch");
+      },
+    }),
+    (error) =>
+      error instanceof AirtableExportError &&
+      error.code === "CONFIGURATION_ERROR" &&
+      !error.message.includes("secret-token"),
+  );
+
+  const schema = await fixture("schema.json");
+  const records = await fixture("records.json");
+  const loopback = fakeAirtable(schema, records);
+  await exportAirtableInventory({
+    accessToken: "secret-token",
+    baseId: "appTest",
+    outputPath: join(directory, "loopback.json"),
+    apiOrigin: "http://127.0.0.1:8787",
+    fetchImplementation: loopback.fetchImplementation,
+  });
+  assert.equal(
+    loopback.requests.every(({ url }) => url.origin === "http://127.0.0.1:8787"),
+    true,
+  );
+});
+
 test("CLI help and dry-run make no network or file writes", async () => {
   const stdout = capture();
+
   const stderr = capture();
   let fetches = 0;
   assert.equal(

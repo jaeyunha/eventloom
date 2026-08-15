@@ -16,12 +16,13 @@ export function OrganizerRoundEditor({
   round: ApiPlan["rounds"][number];
   roundIndex: number;
 }>) {
-  const { busy, status, updateRound, addCriterion } = controller;
+  const { busy, status, rounds, updateRound, addCriterion, removeRound } = controller;
   return (
     <fieldset
       className={`${styles.scoreCard} ${styles.authoringRoundCard}`}
       data-authoring-round=""
       key={round.id}
+      disabled={busy || status !== "draft"}
     >
       <legend>
         <span>Round {roundIndex + 1}</span>
@@ -58,21 +59,6 @@ export function OrganizerRoundEditor({
           }}
         />
       </div>
-      <div className={styles.formField}>
-        <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
-        <input
-          id={`${round.id}-closes-at`}
-          type="datetime-local"
-          value={dateTimeLocalValue(round.closesAt)}
-          onChange={(event) => {
-            const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
-            updateRound(roundIndex, (current) => ({
-              ...current,
-              closesAt: nextClosesAt,
-            }));
-          }}
-        />
-      </div>
       <div className={styles.authoringScheduleGrid}>
         <div className={styles.formField}>
           <label htmlFor={`${round.id}-opens-at`}>Round opens</label>
@@ -90,24 +76,39 @@ export function OrganizerRoundEditor({
           />
         </div>
         <div className={styles.formField}>
-          <label htmlFor={`${round.id}-anonymization`}>Anonymization / blind review</label>
-          <select
-            id={`${round.id}-anonymization`}
-            value={round.anonymization ?? (round.blindReview ? "double" : "none")}
+          <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
+          <input
+            id={`${round.id}-closes-at`}
+            type="datetime-local"
+            value={dateTimeLocalValue(round.closesAt)}
             onChange={(event) => {
-              const nextAnonymization = event.currentTarget.value as "none" | "single" | "double";
+              const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
               updateRound(roundIndex, (current) => ({
                 ...current,
-                anonymization: nextAnonymization,
-                blindReview: nextAnonymization !== "none",
+                closesAt: nextClosesAt,
               }));
             }}
-          >
-            <option value="none">No anonymization</option>
-            <option value="single">Single-blind</option>
-            <option value="double">Double-blind</option>
-          </select>
+          />
         </div>
+      </div>
+      <div className={styles.formField}>
+        <label htmlFor={`${round.id}-anonymization`}>Anonymization / blind review</label>
+        <select
+          id={`${round.id}-anonymization`}
+          value={round.anonymization ?? (round.blindReview ? "double" : "none")}
+          onChange={(event) => {
+            const nextAnonymization = event.currentTarget.value as "none" | "single" | "double";
+            updateRound(roundIndex, (current) => ({
+              ...current,
+              anonymization: nextAnonymization,
+              blindReview: nextAnonymization !== "none",
+            }));
+          }}
+        >
+          <option value="none">No anonymization</option>
+          <option value="single">Single-blind</option>
+          <option value="double">Double-blind</option>
+        </select>
       </div>
       <OrganizerRoundTargeting controller={controller} round={round} roundIndex={roundIndex} />
       <section className={styles.criteriaList} aria-label={`${round.name} criteria authoring`}>
@@ -130,6 +131,16 @@ export function OrganizerRoundEditor({
       >
         Add criterion
       </Button>
+      {rounds.length > 1 ? (
+        <Button
+          type="button"
+          variant="destructive"
+          onClick={() => removeRound(roundIndex)}
+          disabled={busy || status !== "draft"}
+        >
+          Remove round
+        </Button>
+      ) : null}
     </fieldset>
   );
 }

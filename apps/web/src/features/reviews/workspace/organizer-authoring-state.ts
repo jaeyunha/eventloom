@@ -98,6 +98,11 @@ export function useOrganizerAuthoringState({
     setAssignmentRoundId(assignmentTarget.roundId);
     setAssignmentSubmissionId(assignmentTarget.submissionId);
   }, [assignmentTarget]);
+  useEffect(() => {
+    setAssignmentRoundId((currentRoundId) =>
+      rounds.some((round) => round.id === currentRoundId) ? currentRoundId : (rounds[0]?.id ?? ""),
+    );
+  }, [rounds]);
 
   useEffect(() => {
     const authoritativeReviewerIds = reviewerIdsForAssignmentTarget(

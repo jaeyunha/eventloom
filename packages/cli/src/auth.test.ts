@@ -18,6 +18,7 @@ interface SeenRequest {
   method: string;
   path: string;
   cookie: string | undefined;
+  origin?: string | undefined;
   body: string;
 }
 function memoryIo() {
@@ -582,6 +583,7 @@ describe("auth login and access discovery", () => {
         method: request.method ?? "",
         path: request.url ?? "",
         cookie: request.headers.cookie,
+        origin: request.headers.origin,
         body: await requestBody(request),
       });
       json(response, 500, {});
@@ -610,6 +612,7 @@ describe("auth login and access discovery", () => {
         method: "POST",
         path: "/api/auth/sign-out",
         cookie: `better-auth.session_token=${COOKIE}`,
+        origin: server.origin,
       }),
     ]);
     expect(`${failedRemote.stdout}${failedRemote.stderr}`).not.toContain(COOKIE);

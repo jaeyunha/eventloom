@@ -530,12 +530,10 @@ describe("speaker portal UI components", () => {
   });
 
   it("posts sign-out with session credentials before navigating to login", async () => {
-    const fetcher = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 204 }));
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
     const navigate = vi.fn();
 
-    await signOutAndRedirect(navigate);
+    await expect(signOutAndRedirect({ fetcher, navigate })).resolves.toBe(true);
 
     expect(fetcher).toHaveBeenCalledWith("/api/auth/sign-out", {
       method: "POST",
@@ -544,6 +542,15 @@ describe("speaker portal UI components", () => {
       body: "{}",
     });
     expect(navigate).toHaveBeenCalledWith("/login");
+  });
+
+  it("does not leave the portal or report completion when session revocation fails", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 503 }));
+    const navigate = vi.fn();
+
+    await expect(signOutAndRedirect({ fetcher, navigate })).resolves.toBe(false);
+
+    expect(navigate).not.toHaveBeenCalled();
   });
   it("discards deferred portal completions after the active context generation changes", async () => {
     let resolveCompletion!: () => void;

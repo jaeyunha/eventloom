@@ -1,19 +1,69 @@
-import { LayoutDashboard } from "lucide-react";
+import { CalendarX2, LayoutDashboard, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ThemeToggle } from "@/components/product-shell/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   MobileBottomNavigation,
   WorkspaceContextBar,
   WorkspaceShell,
 } from "@/components/workspace";
-import { workspaceNavigationItems } from "./admin-navigation";
+import { organizationEventsHref, workspaceNavigationItems } from "./admin-navigation";
 import styles from "./admin-shell.module.css";
 import { OrganizerOrganizationProvider } from "./admin-shell-context";
 import type { AdminShellController } from "./admin-shell-controller";
 import { AdminShellRail } from "./admin-shell-rail";
 import { OrganizerEventWorkspaceProvider } from "./organizer-event-workspace";
+
+export function EventWorkspaceResolutionState({
+  organizationId,
+  status,
+}: Readonly<{
+  organizationId: string;
+  status: "loading" | "unavailable";
+}>) {
+  const unavailable = status === "unavailable";
+  return (
+    <Empty
+      className={styles.eventWorkspaceState}
+      role={unavailable ? "alert" : "status"}
+      aria-live={unavailable ? "assertive" : "polite"}
+    >
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          {unavailable ? (
+            <CalendarX2 aria-hidden="true" />
+          ) : (
+            <LoaderCircle className={styles.eventWorkspaceSpinner} aria-hidden="true" />
+          )}
+        </EmptyMedia>
+        <EmptyTitle role="heading" aria-level={1}>
+          {unavailable ? "Event workspace unavailable" : "Loading event workspace"}
+        </EmptyTitle>
+        <EmptyDescription>
+          {unavailable
+            ? "We couldn’t load this event workspace. Return to the event list and try again."
+            : "Checking your access and event details."}
+        </EmptyDescription>
+      </EmptyHeader>
+      {unavailable ? (
+        <EmptyContent>
+          <Button asChild>
+            <Link href={organizationEventsHref(organizationId)}>Back to events</Link>
+          </Button>
+        </EmptyContent>
+      ) : null}
+    </Empty>
+  );
+}
 
 export function AdminShellView({
   children,
@@ -31,6 +81,11 @@ export function AdminShellView({
     pathname,
   } = controller;
   const mobileNavigation = workspaceNavigationItems(navigationGroups, pathname);
+  const eventContextLabel =
+    eventContext === null
+      ? "Organizer workspace"
+      : (currentEventName ??
+        (currentEventResolution?.status === "unavailable" ? "Event unavailable" : "Loading event"));
 
   return (
     <WorkspaceShell
@@ -48,9 +103,7 @@ export function AdminShellView({
               <ThemeToggle />
             </>
           }
-          event={
-            eventContext === null ? "Organizer workspace" : (currentEventName ?? "Loading event")
-          }
+          event={eventContextLabel}
           metadata={currentPageLabel}
           organization={currentOrganizationId ?? "Organization"}
         />
@@ -91,11 +144,12 @@ export function AdminShellView({
               {eventContext === null || currentEvent !== null ? (
                 children
               ) : (
-                <p role={currentEventResolution?.status === "unavailable" ? "alert" : "status"}>
-                  {currentEventResolution?.status === "unavailable"
-                    ? "This event workspace could not be found."
-                    : "Loading event workspace…"}
-                </p>
+                <EventWorkspaceResolutionState
+                  organizationId={currentOrganizationId}
+                  status={
+                    currentEventResolution?.status === "unavailable" ? "unavailable" : "loading"
+                  }
+                />
               )}
             </OrganizerEventWorkspaceProvider>
           </OrganizerOrganizationProvider>

@@ -32,7 +32,25 @@ printf 'WEB_SECRET=second\n' > "$REPO/apps/web/.env.local"
 printf 'API_SECRET=third\n' > "$REPO/apps/api/.dev.vars"
 printf 'example\n' > "$REPO/.env.example"
 
+# Non-local secret provisioning must never be followed by automatic dependency
+# installation. Refuse before creating the worktree so callers must opt out of
+# lifecycle scripts explicitly.
+for unsafe_mode in copy symlink; do
+  UNSAFE_OUTPUT="$TMP/${unsafe_mode}-install.out"
+  if (
+    cd "$REPO" && OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+      "$CREATE" --no-launch --env-mode "$unsafe_mode" "unsafe-$unsafe_mode" main \
+        >"$UNSAFE_OUTPUT" 2>&1
+  ); then
+    fail "$unsafe_mode mode accepted automatic dependency installation"
+  fi
+  grep -F -- '--no-install' "$UNSAFE_OUTPUT" >/dev/null || \
+    fail "$unsafe_mode mode did not explain the required --no-install flag"
+  assert test ! -e "$OVERRIDE/eventloom/unsafe-$unsafe_mode"
+done
+
 (
+
   cd "$REPO"
   OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
     "$CREATE" --no-launch --no-install --env-mode symlink feature/test main >/dev/null
@@ -55,6 +73,18 @@ assert grep -q updated "$WORKTREE/.env"
   OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
     "$CREATE" --no-launch --no-install feature/test main >/dev/null
 )
+
+# A reused worktree that already contains provisioned secrets must not run
+# dependency lifecycle scripts, even when the caller falls back to local mode.
+REUSE_OUTPUT="$TMP/reused-secret-install.out"
+if (
+  cd "$REPO" && OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --no-launch feature/test main >"$REUSE_OUTPUT" 2>&1
+); then
+  fail 'reused secret-bearing worktree accepted automatic dependency installation'
+fi
+grep -F -- '--no-install' "$REUSE_OUTPUT" >/dev/null || \
+  fail 'reused secret-bearing worktree did not explain the required --no-install flag'
 
 # Environment provisioning can be disabled explicitly.
 (

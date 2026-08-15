@@ -16,8 +16,8 @@ export function OrganizerWorkspaceSurface({
   const { seed, organizationId, view, setView } = controller;
   const tabs = [
     ["overview", "Overview"],
-    ["assignments", "Reviewers"],
-    ["setup", "Plan & rubric"],
+    ["setup", "Setup"],
+    ["assignments", "Assignments"],
     ["decisions", "Results"],
   ] as const;
   return (
@@ -30,8 +30,7 @@ export function OrganizerWorkspaceSurface({
           <p className={styles.eyebrow}>{seed.eventName} · organizer review</p>
           <h1>{seed.planName}</h1>
           <p className={styles.headerDescription}>
-            Configure the plan, repair review coverage, follow up with reviewers, and record final
-            program decisions.
+            Set up the plan, assign reviewers, track progress, and record final decisions.
           </p>
         </div>
         <div className={styles.headerSide}>
@@ -39,6 +38,7 @@ export function OrganizerWorkspaceSurface({
             eventId={seed.eventId}
             mode="organizer"
             organizationId={organizationId}
+            showPlanLink={false}
           />
           <Badge variant={planStatusVariant(seed.status)}>{formatPlanStatus(seed.status)}</Badge>
         </div>

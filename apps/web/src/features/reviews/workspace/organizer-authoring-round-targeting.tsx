@@ -27,7 +27,7 @@ export function OrganizerRoundTargeting({
     <details className={styles.reviewerTargeting}>
       <summary>
         <span>
-          <strong>Reviewer targeting</strong>
+          <strong>Reviewer eligibility</strong>
           <small>Choose who can receive assignments in this round.</small>
         </span>
         <span>
@@ -37,9 +37,9 @@ export function OrganizerRoundTargeting({
       </summary>
       <div className={styles.reviewerTargetingGrid} style={assignmentControlGridStyle}>
         <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-          <legend className={styles.cardLabel}>Round reviewer pool</legend>
+          <legend className={styles.cardLabel}>Eligible reviewers</legend>
           <label htmlFor={`${round.id}-reviewer-pool`}>
-            Verified organization reviewers for this round
+            Organization reviewers eligible for this round
           </label>
           <select
             id={`${round.id}-reviewer-pool`}
@@ -74,7 +74,7 @@ export function OrganizerRoundTargeting({
             {reviewerMembersLoading
               ? "Loading active, verified organization reviewers…"
               : (reviewerMembersError ??
-                `This pool applies only to ${round.name}; other rounds have independent pools. Member names are display-only.`)}
+                `Eligibility applies only to ${round.name}; configure every round independently.`)}
           </span>
         </fieldset>
         <fieldset className={styles.formField} style={assignmentControlFieldStyle}>

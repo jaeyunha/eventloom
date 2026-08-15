@@ -1491,6 +1491,7 @@ export class CfpService {
 
   async reopen(input: {
     tenantId: string;
+    eventId: string;
     submissionId: string;
     organizerId: string;
     expectedVersion: number;
@@ -1503,6 +1504,9 @@ export class CfpService {
       key,
       async () => {
         const current = await this.#getSubmission(input.tenantId, input.submissionId);
+        if (current.eventId !== input.eventId) {
+          throw new CfpError("FORBIDDEN", "The submission does not belong to this event.");
+        }
         if (current.status !== "submitted") {
           throw new CfpError("INVALID_TRANSITION", "Only a submitted record can be reopened.");
         }

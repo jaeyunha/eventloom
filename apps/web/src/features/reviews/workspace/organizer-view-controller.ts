@@ -46,7 +46,9 @@ export function useOrganizerWorkspaceViewController({
   const [aggregateError, setAggregateError] = useState<string | null>(null);
   const [aggregateSort, setAggregateSort] = useState<"ascending" | "descending">("descending");
   const [exportMessage, setExportMessage] = useState<string | null>(null);
-  const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">("overview");
+  const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">(
+    seed.status === "draft" ? "setup" : "overview",
+  );
   const [assignmentTarget, setAssignmentTarget] = useState<{
     readonly roundId: string;
     readonly submissionId: string;

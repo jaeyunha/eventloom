@@ -9,7 +9,7 @@ export interface AdminShellAccountProps {
   readonly currentOrganizationId: string | null;
   readonly eventScoped: boolean;
   readonly onSelectOrganization: (organizationId: string) => void;
-  readonly onSignOut: () => Promise<void>;
+  readonly onSignOut: () => Promise<boolean>;
 }
 
 export function AdminShellAccount({

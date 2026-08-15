@@ -1,12 +1,6 @@
 "use client";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import styles from "../review-workspace.module.css";
 import { ReviewerAssignmentList } from "./assignment-reviewer-assignment-list";
 import { OrganizerAuthoring } from "./organizer-authoring-organizer-authoring";
@@ -26,6 +20,23 @@ export function OrganizerAssignmentsPanel({
     assignmentTarget,
     setView,
   } = controller;
+  if (seed.status === "draft") {
+    return (
+      <section className={styles.section} aria-labelledby="assignments-unavailable-heading">
+        <div className={styles.viewIntro}>
+          <p className={styles.sectionEyebrow}>Assignments</p>
+          <h2 id="assignments-unavailable-heading">Open the plan before assigning reviewers</h2>
+          <p>
+            Finish the scorecard and reviewer eligibility settings, save the draft, and open the
+            plan. Submission assignments will become available here.
+          </p>
+          <Button type="button" onClick={() => setView("setup")}>
+            Finish plan setup
+          </Button>
+        </div>
+      </section>
+    );
+  }
   return (
     <>
       <OrganizerAuthoring
@@ -40,26 +51,16 @@ export function OrganizerAssignmentsPanel({
         assignmentTarget={assignmentTarget ?? undefined}
       />
       <div className={styles.viewIntro}>
-        <p className={styles.sectionEyebrow}>Reviewers</p>
-        <h2>Keep reviewer coverage moving</h2>
-        <p>Monitor completion, send reminders, and remove assignments that need to be replaced.</p>
-        <Button type="button" variant="outline" onClick={() => setView("assignments")}>
-          Add or update assignments
-        </Button>
+        <p className={styles.sectionEyebrow}>Assignments</p>
+        <h2>Progress and active assignments</h2>
+        <p>Monitor completed reviews, send reminders, and replace assignments as needed.</p>
       </div>
       {seed.assignments.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>No reviewers assigned</CardTitle>
-            <CardDescription>
-              Choose a submission and verified reviewers to begin this review round.
-            </CardDescription>
+            <CardTitle>No reviewer assignments yet</CardTitle>
+            <CardDescription>Use the assignment form above to assign reviewers.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <Button type="button" onClick={() => setView("assignments")}>
-              Assign reviewers
-            </Button>
-          </CardContent>
         </Card>
       ) : (
         <>

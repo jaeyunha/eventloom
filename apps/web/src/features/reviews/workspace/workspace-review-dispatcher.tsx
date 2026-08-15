@@ -60,7 +60,6 @@ export function ReviewWorkspaceDispatcher({
     return (
       <OrganizerPlanCreation
         eventId={eventId}
-        organizationId={explicitOrganizationId}
         baseUrl={baseUrl}
         onCreated={(plan) => {
           const refresh = { eventId, planId: plan.id };

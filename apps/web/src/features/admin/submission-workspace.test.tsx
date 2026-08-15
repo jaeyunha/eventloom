@@ -13,12 +13,49 @@ import {
   loadOrganizerEventName,
   mapCanonicalSubmission,
   mergeCanonicalSubmissionEvaluation,
+  ReviewDataNotice,
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
   submissionListState,
   submissionLoadErrorMessage,
   submissionLoadFailure,
 } from "./submission-workspace";
+
+describe("review data notices", () => {
+  it("treats a missing plan as setup guidance instead of a retryable error", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewDataNotice, {
+        state: {
+          status: "no_plan",
+          message: "No evaluation plan is configured for this event.",
+        },
+        onRetry: vi.fn(),
+        setupHref: "/admin/organizations/org/events/summit/reviews",
+      }),
+    );
+
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain("Set up review plan");
+    expect(markup).toContain('href="/admin/organizations/org/events/summit/reviews"');
+    expect(markup).not.toContain("Retry review data");
+  });
+
+  it("keeps retry available for a genuine review-data failure", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewDataNotice, {
+        state: {
+          status: "unavailable",
+          message: "Review data is temporarily unavailable.",
+        },
+        onRetry: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toMatch(/<button[^>]*type="button"[^>]*>Retry review data<\/button>/u);
+    expect(markup).not.toContain("Set up review plan");
+  });
+});
 
 const canonicalEnvelope = {
   submission: {

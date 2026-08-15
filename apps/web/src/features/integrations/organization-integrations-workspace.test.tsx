@@ -4,6 +4,24 @@ import { describe, expect, it } from "vitest";
 import { OrganizationIntegrationsWorkspace } from "./organization-integrations-workspace";
 
 describe("organization integrations workspace", () => {
+  it("exposes integration settings as exact in-page navigation destinations", () => {
+    const markup = renderToStaticMarkup(
+      createElement(OrganizationIntegrationsWorkspace, {
+        organizationId: "org/one",
+      }),
+    );
+    const navigation = markup.match(
+      /<nav[^>]*aria-label="Integration settings"[^>]*>[\s\S]*?<\/nav>/u,
+    )?.[0];
+
+    expect(navigation).toBeDefined();
+    expect(navigation).toContain('href="#connections"');
+    expect(navigation).toContain('href="#airtable"');
+    expect(navigation).toContain('href="#api-keys"');
+    expect(navigation).toContain('href="#event-bindings"');
+    expect(navigation?.match(/<a /gu)).toHaveLength(4);
+  });
+
   it("separates organization connections from event bindings", () => {
     const markup = renderToStaticMarkup(
       createElement(OrganizationIntegrationsWorkspace, {

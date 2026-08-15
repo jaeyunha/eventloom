@@ -340,16 +340,23 @@
   padding: var(--space-4) 0 var(--space-8);
 }
 
-@media (max-width: 48rem) {
-  .adminMain {
-    height: 100svh;
-    max-height: 100svh;
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-  }
+.eventWorkspaceState {
+  min-height: min(34rem, calc(100svh - 12rem));
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--card) 72%, var(--background));
+}
 
+.eventWorkspaceSpinner {
+  animation: event-workspace-spin 0.9s linear infinite;
+}
+
+@keyframes event-workspace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 48rem) {
   .adminContent {
     width: min(calc(100% - var(--space-4)), 94rem);
     padding-bottom: var(--space-6);
@@ -359,6 +366,10 @@
 @media (prefers-reduced-motion: reduce) {
   .eventContextChevron {
     transition: none;
+  }
+
+  .eventWorkspaceSpinner {
+    animation: none;
   }
 }
 
