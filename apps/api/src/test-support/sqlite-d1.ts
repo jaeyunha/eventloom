@@ -49,6 +49,12 @@ export class SqliteD1Statement {
     return { meta: { changes: this.database.run(expand(this.query, this.#values)) } };
   }
 
+  async raw<T extends unknown[]>(): Promise<T[]> {
+    return this.database
+      .query<Record<string, unknown>>(expand(this.query, this.#values))
+      .map((row) => Object.values(row) as T);
+  }
+
   expanded(): string {
     return expand(this.query, this.#values);
   }
@@ -57,6 +63,7 @@ export class SqliteD1Statement {
 export class SqliteD1 {
   readonly path: string;
   readonly #directory: string;
+  #beforeNextBatch: (() => void) | undefined;
 
   constructor(prefix: string, setupSql = "") {
     this.#directory = mkdtempSync(join(tmpdir(), prefix));
@@ -64,12 +71,24 @@ export class SqliteD1 {
     if (setupSql.trim().length > 0) this.executeScript(setupSql);
   }
 
+  withSession(_constraint?: string): SqliteD1 {
+    return this;
+  }
+
   prepare(query: string): SqliteD1Statement {
     return new SqliteD1Statement(this, query);
   }
 
+  beforeNextBatch(callback: () => void): void {
+    this.#beforeNextBatch = callback;
+  }
+
   async batch(statements: readonly SqliteD1Statement[]) {
+    const beforeBatch = this.#beforeNextBatch;
+    this.#beforeNextBatch = undefined;
+    beforeBatch?.();
     const script = [
+      ".bail on",
       "PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;",
       ...statements.flatMap((statement) => [
         `${statement.expanded()};`,

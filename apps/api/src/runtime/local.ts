@@ -86,6 +86,7 @@ import { InMemoryReportRepository, ReportService } from "../features/reports/ser
 import type { ReportProgramRecord } from "../features/reports/types";
 import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
 import type { Session } from "../features/sessions/types";
+import { CommunicationSpeakerCommunications } from "../features/speaker/communications";
 import { SpeakerService } from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
@@ -101,6 +102,8 @@ import type {
   SpeakerAsset,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
+  SpeakerOrganizerLifecycleRepository,
+  SpeakerOrganizerReadModel,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerProfile,
@@ -478,7 +481,9 @@ function localAuthRoutes(personas: LocalPersona[]): {
   };
 }
 
-class LocalSpeakerRepository implements SpeakerAccountWorkloadRepository {
+class LocalSpeakerRepository
+  implements SpeakerAccountWorkloadRepository, SpeakerOrganizerLifecycleRepository
+{
   readonly #submissions = new Map<string, SpeakerSubmission[]>();
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
@@ -486,6 +491,20 @@ class LocalSpeakerRepository implements SpeakerAccountWorkloadRepository {
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
   readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
+  readonly #importPreviews = new Map<
+    string,
+    Awaited<ReturnType<SpeakerOrganizerLifecycleRepository["saveOrganizerSpeakerImportPreview"]>>
+  >();
+  readonly #aggregateOperations = new Map<string, { digest: string; participantIds: string[] }>();
+
+  #aggregateOperationKey(
+    organizationId: string,
+    eventId: string,
+    operationType: "create" | "import" | "revoke" | "update",
+    idempotencyKey: string,
+  ): string {
+    return `${organizationId}\u0000${eventId}\u0000${operationType}\u0000${idempotencyKey}`;
+  }
 
   #contentKey(eventId: string, entityType: "session" | "speaker", entityId: string): string {
     return `${eventId}\u0000${entityType}\u0000${entityId}`;
@@ -670,8 +689,264 @@ class LocalSpeakerRepository implements SpeakerAccountWorkloadRepository {
       eventId,
       role: "owner" as const,
       submissionIds: submissions.map(({ id }) => id),
-      participantIds: [...new Set(submissions.flatMap(({ participantIds }) => participantIds))],
+      participantIds: [
+        ...new Set([
+          ...submissions.flatMap(({ participantIds }) => participantIds),
+          ...(this.#profiles.get(eventId) ?? []).map(({ participantId }) => participantId),
+        ]),
+      ],
     };
+  }
+
+  async listActiveParticipantIds(organizationId: string, eventId: string): Promise<string[]> {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) return [];
+    this.#ensureEvent(eventId);
+    return (this.#profiles.get(eventId) ?? [])
+      .filter(({ status }) => status !== "revoked")
+      .map(({ participantId }) => participantId)
+      .sort();
+  }
+
+  async getOrganizerReadModel(
+    eventId: string,
+    accountId: string,
+    resources: Parameters<SpeakerOrganizerLifecycleRepository["getOrganizerReadModel"]>[2],
+  ): Promise<SpeakerOrganizerReadModel | null> {
+    const scope = await this.getOrganizerAccessScope(eventId, accountId);
+    if (scope === null) return null;
+    const submissions = await this.listSubmissions(eventId, scope.submissionIds);
+    const profiles = resources.profiles === true ? clone(this.#profiles.get(eventId) ?? []) : [];
+    const tasks = resources.tasks === true ? clone(this.#tasks.get(eventId) ?? []) : [];
+    const assets = resources.assets === true ? clone(this.#assets.get(eventId) ?? []) : [];
+    const roster = profiles.map((profile) => {
+      const submissionId = submissions.find((submission) =>
+        submission.participantIds.includes(profile.participantId),
+      )?.id;
+      return {
+        id: profile.id,
+        eventId,
+        ...(submissionId === undefined ? {} : { submissionId }),
+        participantId: profile.participantId,
+        displayName: profile.displayName,
+        ...(profile.email === undefined ? {} : { email: profile.email }),
+        ...(profile.jobTitle === undefined ? {} : { jobTitle: profile.jobTitle }),
+        ...(profile.company === undefined ? {} : { company: profile.company }),
+        biography: profile.biography,
+        ...(profile.socialLinks === undefined ? {} : { socialLinks: profile.socialLinks }),
+        ...(profile.travelLogistics === undefined
+          ? {}
+          : { travelLogistics: profile.travelLogistics }),
+        ...(profile.sourceType === undefined ? {} : { sourceType: profile.sourceType }),
+        ...(profile.sourceId === undefined ? {} : { sourceId: profile.sourceId }),
+        role: "primary" as const,
+        status:
+          profile.status === "revoked"
+            ? ("revoked" as const)
+            : profile.status === "active"
+              ? ("active" as const)
+              : ("pending" as const),
+        workflowStatus: profile.status ?? "pending",
+        organizerStatus: profile.status ?? "pending",
+        version: profile.version,
+        createdAt: profile.updatedAt,
+        updatedAt: profile.updatedAt,
+      };
+    });
+    return { scope, submissions, roster, profiles, tasks, assets };
+  }
+
+  async resolveEventParticipant(
+    input: Parameters<SpeakerOrganizerLifecycleRepository["resolveEventParticipant"]>[0],
+  ): ReturnType<SpeakerOrganizerLifecycleRepository["resolveEventParticipant"]> {
+    this.#ensureEvent(input.eventId);
+    const profiles = this.#profiles.get(input.eventId) ?? [];
+    const matches = profiles.filter(
+      (profile) =>
+        profile.participantId === input.explicitParticipantId ||
+        (profile.sourceType === input.sourceType && profile.sourceId === input.sourceId) ||
+        (input.normalizedEmail !== undefined &&
+          profile.email?.trim().toLowerCase() === input.normalizedEmail),
+    );
+    if (matches.length > 1) {
+      return Promise.resolve({
+        state: "ambiguous",
+        candidateParticipantIds: matches.map((profile) => profile.participantId),
+      });
+    }
+    const participantId = matches[0]?.participantId ?? input.createParticipantId;
+    return Promise.resolve({
+      state: "resolved",
+      participantId,
+      submissionIds: (this.#submissions.get(input.eventId) ?? [])
+        .filter((submission) => submission.participantIds.includes(participantId))
+        .map((submission) => submission.id),
+      created: matches.length === 0,
+    });
+  }
+
+  saveOrganizerSpeakerImportPreview(
+    command: Parameters<
+      SpeakerOrganizerLifecycleRepository["saveOrganizerSpeakerImportPreview"]
+    >[0],
+  ): ReturnType<SpeakerOrganizerLifecycleRepository["saveOrganizerSpeakerImportPreview"]> {
+    const preview = {
+      previewId: command.previewId,
+      sourceDigest: command.sourceDigest,
+      rosterRevision: (this.#profiles.get(command.eventId) ?? []).length,
+      validRows: clone(command.rows),
+      invalidRows: [],
+    };
+    this.#importPreviews.set(command.previewId, preview);
+    return Promise.resolve(clone(preview));
+  }
+
+  async commitOrganizerSpeakerImport(
+    command: Parameters<SpeakerOrganizerLifecycleRepository["commitOrganizerSpeakerImport"]>[0],
+  ): ReturnType<SpeakerOrganizerLifecycleRepository["commitOrganizerSpeakerImport"]> {
+    const operationKey = this.#aggregateOperationKey(
+      command.organizationId,
+      command.eventId,
+      "import",
+      command.idempotencyKey,
+    );
+    const existing = this.#aggregateOperations.get(operationKey);
+    if (existing !== undefined) {
+      if (command.sourceDigest !== undefined && command.sourceDigest !== existing.digest) {
+        throw new Error("The import idempotency key belongs to another payload.");
+      }
+      return { participantIds: [...existing.participantIds], replayed: true };
+    }
+    const preview = this.#importPreviews.get(command.previewId);
+    if (
+      preview === undefined ||
+      (command.sourceDigest !== undefined && preview.sourceDigest !== command.sourceDigest)
+    ) {
+      throw new Error("The speaker import preview is invalid.");
+    }
+    const participantIds: string[] = [];
+    for (const row of preview.validRows) {
+      const participantId = `local-import:${command.previewId}:${row.rowNumber}`;
+      participantIds.push(participantId);
+      const result = await this.upsertOrganizerSpeakerAggregate({
+        organizationId: command.organizationId,
+        eventId: command.eventId,
+        accountId: command.accountId,
+        participantId,
+        profileId: `local-profile:${command.eventId}:${participantId}`,
+        displayName: row.displayName,
+        email: row.email,
+        jobTitle: row.jobTitle,
+        company: row.company,
+        biography: row.biography,
+        socialLinks: row.socialLinks,
+        travelLogistics: {
+          travelRequired: false,
+          arrivalAt: null,
+          departureAt: null,
+          accommodation: "",
+          dietaryRequirements: "",
+          accessibilityNeeds: "",
+          travelNotes: "",
+        },
+        status: row.status ?? "pending",
+        sourceType: "csv",
+        sourceId: `${command.previewId}:row:${row.rowNumber}`,
+        expectedVersion: null,
+        updatedAt: command.committedAt,
+      });
+      if (!result.ok) throw new Error("The speaker import could not be committed.");
+    }
+    this.#aggregateOperations.set(operationKey, {
+      digest: preview.sourceDigest ?? "",
+      participantIds,
+    });
+    return { participantIds, replayed: false };
+  }
+
+  upsertOrganizerSpeakerAggregate(
+    command: Parameters<SpeakerOrganizerLifecycleRepository["upsertOrganizerSpeakerAggregate"]>[0],
+  ): ReturnType<SpeakerOrganizerLifecycleRepository["upsertOrganizerSpeakerAggregate"]> {
+    this.#ensureEvent(command.eventId);
+    if (command.organizationId !== LOCAL_ORGANIZATION_ID) {
+      return Promise.resolve({ ok: false, reason: "not_found" });
+    }
+    const profiles = this.#profiles.get(command.eventId) ?? [];
+    const digest = command.sourceDigest ?? "";
+    const operationType =
+      command.expectedVersion === null
+        ? "create"
+        : command.status === "revoked"
+          ? "revoke"
+          : "update";
+    const operationIdempotencyKey =
+      command.expectedVersion === null
+        ? command.idempotencyKey
+        : `${command.participantId}:${command.expectedVersion}`;
+    if (operationIdempotencyKey !== undefined) {
+      const operationKey = this.#aggregateOperationKey(
+        command.organizationId,
+        command.eventId,
+        operationType,
+        operationIdempotencyKey,
+      );
+      const existing = this.#aggregateOperations.get(operationKey);
+      if (existing !== undefined) {
+        if (existing.digest !== digest) {
+          return Promise.resolve({ ok: false, reason: "version_conflict" });
+        }
+        const participantId = existing.participantIds[0];
+        const replayed = profiles.find((profile) => profile.participantId === participantId);
+        return Promise.resolve(
+          replayed === undefined
+            ? { ok: false, reason: "not_found" }
+            : { ok: true, value: clone(replayed) },
+        );
+      }
+    }
+    const index = profiles.findIndex((profile) => profile.participantId === command.participantId);
+    const current = profiles[index];
+    if (
+      command.expectedVersion === null
+        ? current !== undefined
+        : current?.version !== command.expectedVersion
+    ) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    const profile: SpeakerProfile = {
+      id: current?.id ?? command.profileId,
+      eventId: command.eventId,
+      participantId: command.participantId,
+      displayName: command.displayName,
+      email: command.email,
+      jobTitle: command.jobTitle,
+      company: command.company,
+      biography: command.biography,
+      socialLinks: clone(command.socialLinks),
+      travelLogistics: clone(command.travelLogistics),
+      status: command.status,
+      sourceType: command.sourceType,
+      sourceId: command.sourceId,
+      version: (current?.version ?? 0) + 1,
+      updatedAt: command.updatedAt,
+    };
+    if (index < 0) profiles.push(profile);
+    else profiles[index] = profile;
+    this.#profiles.set(command.eventId, profiles);
+    if (operationIdempotencyKey !== undefined) {
+      this.#aggregateOperations.set(
+        this.#aggregateOperationKey(
+          command.organizationId,
+          command.eventId,
+          operationType,
+          operationIdempotencyKey,
+        ),
+        {
+          digest,
+          participantIds: [command.participantId],
+        },
+      );
+    }
+    return Promise.resolve({ ok: true, value: clone(profile) });
   }
 
   async listSubmissions(eventId: string, submissionIds: readonly string[]) {
@@ -992,6 +1267,16 @@ class LocalSpeakerRepository implements SpeakerAccountWorkloadRepository {
       snapshot: clone(restored),
     });
     return { ok: true, value: clone(restored) };
+  }
+}
+
+class LocalSessionRepository extends InMemorySessionRepository {
+  constructor(private readonly speakerRepository: LocalSpeakerRepository) {
+    super();
+  }
+
+  override listSpeakerIds(tenantId: string, eventId: string): Promise<readonly string[]> {
+    return this.speakerRepository.listActiveParticipantIds(tenantId, eventId);
   }
 }
 
@@ -2033,14 +2318,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const authenticator = localAuthenticator(personas);
   const speakerRepository = new LocalSpeakerRepository();
   const privateAssetGateway = new LocalPrivateAssetGateway();
-  const speakerService = new SpeakerService(speakerRepository, privateAssetGateway, {
-    speakerSender: LOCAL_COMMUNICATION_SENDERS.speakers,
-    now: () => new Date(SEEDED_AT),
-    generateId: (() => {
-      let sequence = 0;
-      return () => `local-speaker-id-${++sequence}`;
-    })(),
-  });
+  let speakerService!: SpeakerService;
   const publicRepository = new LocalPublicApiRepository();
   const eventRepository = new InMemoryEventRepository();
   const eventService = new EventService(eventRepository, {
@@ -2077,7 +2355,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       })(),
     },
   );
-  const sessionRepository = new InMemorySessionRepository();
+  const sessionRepository = new LocalSessionRepository(speakerRepository);
   const agendaEngine = localAgendaEngine(aiProviders?.agenda);
   let sessionService!: SessionService;
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
@@ -2498,14 +2776,19 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     templates: [communicationTemplate],
     recipients: [
       {
-        id: "local-recipient-speaker",
+        id: "local-participant",
         participantId: "local-participant",
         tenantId: LOCAL_ORGANIZATION_ID,
         eventId: "demo-event",
         email: LOCAL_SPEAKER_EMAIL,
         displayName: "Alex Rivera",
         audiences: ["accepted_participants", "all_participants"],
-        data: { firstName: "Alex", sessionTitle: "Designing reliable community systems" },
+        data: {
+          first_name: "Alex",
+          display_name: "Alex Rivera",
+          email: LOCAL_SPEAKER_EMAIL,
+          sessionTitle: "Designing reliable community systems",
+        },
       } satisfies CommunicationRecipient,
     ],
     authorizedAudiences: {
@@ -2515,6 +2798,18 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const communicationService = new CommunicationService(communicationRepository, undefined, {
     clock: () => new Date(SEEDED_AT),
     senderIdentities: LOCAL_COMMUNICATION_SENDERS,
+  });
+  speakerService = new SpeakerService(speakerRepository, privateAssetGateway, {
+    speakerSender: LOCAL_COMMUNICATION_SENDERS.speakers,
+    now: () => new Date(SEEDED_AT),
+    generateId: (() => {
+      let sequence = 0;
+      return () => `local-speaker-id-${++sequence}`;
+    })(),
+    communications: new CommunicationSpeakerCommunications(
+      communicationService,
+      "http://127.0.0.1:3015",
+    ),
   });
   let programGraphSeeded!: Promise<void>;
   const reportRepository = new InMemoryReportRepository();

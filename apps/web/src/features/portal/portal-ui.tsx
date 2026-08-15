@@ -67,9 +67,63 @@ export function NoParticipantWorkspaceState() {
   );
 }
 
+export type PortalContentAvailability =
+  | "loading"
+  | "unavailable"
+  | "no-participant"
+  | "stale"
+  | "ready";
+
+export function portalContentAvailability(input: {
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly hasView: boolean;
+}): PortalContentAvailability {
+  if (input.loading && !input.hasView) return "loading";
+  if (input.error !== null && !input.hasView) return "unavailable";
+  if (!input.hasView) return "no-participant";
+  return input.error === null ? "ready" : "stale";
+}
+
+export function PortalUnavailableState({
+  error,
+  onRetry,
+}: Readonly<{ error: string; onRetry: () => void }>) {
+  return (
+    <div className={styles.statePanel} role="alert">
+      <span className={styles.stateIcon} aria-hidden="true">
+        !
+      </span>
+      <h1>We could not load your portal</h1>
+      <p>{error}</p>
+      <button className={styles.primaryButton} type="button" onClick={onRetry}>
+        Try again
+      </button>
+    </div>
+  );
+}
+
+export function PortalStaleDataNotice({
+  error,
+  onRetry,
+}: Readonly<{ error: string; onRetry: () => void }>) {
+  return (
+    <section className={styles.blockedNotice} role="alert" aria-labelledby="stale-portal-heading">
+      <div>
+        <strong id="stale-portal-heading">Showing stale portal data</strong>
+        <p>{error} The information below may be out of date.</p>
+      </div>
+      <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+        Try again
+      </button>
+    </section>
+  );
+}
+
 export function PortalContentState({ children }: Readonly<{ children: ReactNode }>) {
   const { error, loading, reload, view } = usePortal();
-  if (loading && !view) {
+  const availability = portalContentAvailability({ loading, error, hasView: view !== null });
+  if (availability === "loading") {
     return (
       <div className={styles.statePanel} role="status" aria-live="polite">
         <span className={styles.spinner} aria-hidden="true" />
@@ -78,22 +132,22 @@ export function PortalContentState({ children }: Readonly<{ children: ReactNode 
       </div>
     );
   }
-  if (error && !view) {
+  if (availability === "unavailable") {
     return (
-      <div className={styles.statePanel} role="alert">
-        <span className={styles.stateIcon} aria-hidden="true">
-          !
-        </span>
-        <h1>We could not load your portal</h1>
-        <p>{error}</p>
-        <button className={styles.primaryButton} type="button" onClick={() => void reload()}>
-          Try again
-        </button>
-      </div>
+      <PortalUnavailableState error={error ?? "The portal is unavailable."} onRetry={reload} />
     );
   }
-  if (!view) return <NoParticipantWorkspaceState />;
-  return <>{children}</>;
+  if (availability === "no-participant") {
+    return <NoParticipantWorkspaceState />;
+  }
+  return (
+    <>
+      {availability === "stale" ? (
+        <PortalStaleDataNotice error={error ?? "The latest refresh failed."} onRetry={reload} />
+      ) : null}
+      {children}
+    </>
+  );
 }
 
 export function SubmissionStatusBadge({ status }: Readonly<{ status: PortalSubmissionStatus }>) {
@@ -144,7 +198,17 @@ export function EmptyState({
   );
 }
 
-export function Progress({ value, label }: Readonly<{ value: number; label: string }>) {
+export function Progress({ value, label }: Readonly<{ value: number | null; label: string }>) {
+  if (value === null) {
+    return (
+      <div className={styles.progressBlock}>
+        <div className={styles.progressLabel}>
+          <span>{label}</span>
+          <strong>No tasks assigned</strong>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={styles.progressBlock}>
       <div className={styles.progressLabel}>
@@ -157,6 +221,7 @@ export function Progress({ value, label }: Readonly<{ value: number; label: stri
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={value}
+        aria-valuetext={`${value}% complete`}
         aria-label={label}
       >
         <span style={{ width: `${value}%` }} />

@@ -103,7 +103,7 @@ resources. Custom domains are recommended after DNS, Worker bindings,
 cookies/CORS, callbacks, health checks, and release evidence are configured and
 verified.
 
-Accelevents is a separate external event platform. It is not in the competition brief or evaluator requirements and is not a supported Eventloom runtime feature. No Accelevents credentials, setup, publication, synchronization, or release gate is required. Historical adapter code or references do not change that classification.
+Accelevents is a separate external event platform. Its one-way integration item was struck from the competition brief and is outside the evaluator requirements, so it is not a supported Eventloom runtime feature. No Accelevents credentials, setup, publication, synchronization, or release gate is required. Historical adapter code or references do not change that classification.
 
 ## Security and tenant invariants
 

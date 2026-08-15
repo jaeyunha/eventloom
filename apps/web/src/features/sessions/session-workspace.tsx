@@ -4,7 +4,9 @@ import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   StatusBadge,
@@ -20,6 +22,8 @@ import {
   type SessionContentStatus,
   type SessionHistoryEntry,
   type SessionRecord,
+  type SessionSpeakerCandidate,
+  type SessionSpeakerReference,
   type SessionsApi,
 } from "./api";
 import styles from "./session-workspace.module.css";
@@ -36,11 +40,14 @@ export interface SessionsWorkspaceViewProps {
   readonly sessions: readonly SessionRecord[];
   readonly selectedSessionId: string | null;
   readonly history: readonly SessionHistoryEntry[];
+  readonly speakers?: readonly SessionSpeakerCandidate[] | null;
   readonly loading?: boolean;
   readonly loadingHistory?: boolean;
+  readonly loadingSpeakers?: boolean;
   readonly busy?: boolean;
   readonly error?: string | null;
   readonly historyError?: string | null;
+  readonly speakerError?: string | null;
   readonly statusMessage?: string | null;
   readonly onSelectSession?: (sessionId: string) => void;
   readonly onSave?: (input: {
@@ -53,12 +60,18 @@ export interface SessionsWorkspaceViewProps {
     session: SessionRecord,
     contentStatus: SessionContentStatus,
   ) => Promise<void>;
+  readonly onSaveSpeakers?: (input: {
+    readonly sessionId: string;
+    readonly expectedVersion: number;
+    readonly speakerIds: readonly string[];
+  }) => Promise<void>;
   readonly onRestore?: (input: {
     readonly sessionId: string;
     readonly version: number;
     readonly expectedVersion: number;
   }) => Promise<void>;
   readonly onRetry?: () => void;
+  readonly onRetrySpeakers?: () => void;
 }
 
 function messageFrom(error: unknown): string {
@@ -80,6 +93,17 @@ function formatAction(action: SessionHistoryEntry["action"]): string {
 function formatTimestamp(value: string): string {
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) ? timestamp.toLocaleString() : value;
+}
+
+function formatSpeakerRole(role: string | undefined): string {
+  return role === undefined
+    ? "Role not specified"
+    : role.replace(/_/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+
+function assignmentReferences(session: SessionRecord): readonly SessionSpeakerReference[] {
+  const references = new Map(session.speakerRoster.map((reference) => [reference.id, reference]));
+  return session.speakerIds.map((id) => references.get(id) ?? { id });
 }
 
 function SessionEditor({
@@ -175,6 +199,156 @@ function SessionEditor({
   );
 }
 
+function SpeakerAssignments({
+  session,
+  speakers,
+  loading,
+  error,
+  busy,
+  onSave,
+  onRetry,
+}: Readonly<{
+  session: SessionRecord;
+  speakers: readonly SessionSpeakerCandidate[] | null;
+  loading: boolean;
+  error: string | null;
+  busy: boolean;
+  onSave?: SessionsWorkspaceViewProps["onSaveSpeakers"];
+  onRetry?: SessionsWorkspaceViewProps["onRetrySpeakers"];
+}>) {
+  const currentReferences = assignmentReferences(session);
+  const candidatesById = new Map((speakers ?? []).map((speaker) => [speaker.id, speaker]));
+  const options = [
+    ...currentReferences.map((reference) => ({
+      id: reference.id,
+      displayName:
+        reference.displayName ?? candidatesById.get(reference.id)?.displayName ?? reference.id,
+      ...(candidatesById.get(reference.id)?.jobTitle === undefined
+        ? {}
+        : { jobTitle: candidatesById.get(reference.id)?.jobTitle }),
+      ...(candidatesById.get(reference.id)?.company === undefined
+        ? {}
+        : { company: candidatesById.get(reference.id)?.company }),
+    })),
+    ...(speakers ?? []).filter((speaker) => !session.speakerIds.includes(speaker.id)),
+  ];
+  const [selectedIds, setSelectedIds] = useState<readonly string[]>(session.speakerIds);
+  const selected = new Set(selectedIds);
+  const changed =
+    selectedIds.length !== session.speakerIds.length ||
+    selectedIds.some((id) => !session.speakerIds.includes(id));
+
+  function toggle(speakerId: string, checked: boolean) {
+    setSelectedIds((current) =>
+      checked
+        ? current.includes(speakerId)
+          ? current
+          : [...current, speakerId]
+        : current.filter((id) => id !== speakerId),
+    );
+  }
+
+  async function submit(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!changed || !onSave) return;
+    await onSave({
+      sessionId: session.id,
+      expectedVersion: session.version,
+      speakerIds: selectedIds,
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Speaker assignments</CardTitle>
+        <CardDescription>
+          Review the assigned speakers, then add or remove people from the event roster.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className={styles.stack}>
+        <section
+          aria-labelledby={`current-speakers-${session.id}`}
+          className={styles.assignmentBlock}
+        >
+          <h3 id={`current-speakers-${session.id}`}>Current assignments</h3>
+          {currentReferences.length === 0 ? (
+            <p className={styles.muted}>No speakers are currently assigned to this session.</p>
+          ) : (
+            <ul className={styles.currentAssignments}>
+              {currentReferences.map((reference) => {
+                const candidate = candidatesById.get(reference.id);
+                return (
+                  <li className={styles.currentAssignment} key={reference.id}>
+                    <strong>
+                      {reference.displayName ?? candidate?.displayName ?? reference.id}
+                    </strong>
+                    <span className={styles.muted}>{formatSpeakerRole(reference.role)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        <form className={styles.assignmentForm} onSubmit={(event) => void submit(event)}>
+          <fieldset className={styles.assignmentFieldset} disabled={busy || onSave === undefined}>
+            <legend>Event speaker roster</legend>
+            {loading ? <p className={styles.muted}>Loading event speakers...</p> : null}
+            {error === null ? null : (
+              <Alert variant="destructive">
+                <AlertTitle>Speaker roster unavailable</AlertTitle>
+                <AlertDescription>
+                  {error} Current assignments are preserved while the roster is unavailable.
+                </AlertDescription>
+                {!onRetry ? null : (
+                  <Button size="sm" type="button" variant="outline" onClick={onRetry}>
+                    Retry speaker roster
+                  </Button>
+                )}
+              </Alert>
+            )}
+            {!loading && error === null && speakers !== null && speakers.length === 0 ? (
+              <p className={styles.muted}>No speakers are available in this event roster.</p>
+            ) : null}
+            {options.length === 0 ? null : (
+              <div className={styles.candidateList}>
+                {options.map((speaker) => {
+                  const checkboxId = `session-speaker-${session.id}-${speaker.id}`;
+                  const details = [speaker.jobTitle, speaker.company].filter(Boolean).join(" at ");
+                  return (
+                    <div className={styles.candidateRow} key={speaker.id}>
+                      <Checkbox
+                        checked={selected.has(speaker.id)}
+                        id={checkboxId}
+                        onCheckedChange={(checked) => toggle(speaker.id, checked === true)}
+                      />
+                      <Label className={styles.candidateLabel} htmlFor={checkboxId}>
+                        <span>{speaker.displayName}</span>
+                        {details.length === 0 ? null : (
+                          <span className={styles.muted}>{details}</span>
+                        )}
+                      </Label>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+          <div className={styles.assignmentActions}>
+            <span className={styles.muted} aria-live="polite">
+              {selectedIds.length} speaker{selectedIds.length === 1 ? "" : "s"} selected
+            </span>
+            <Button disabled={busy || !changed || !onSave} type="submit">
+              {busy ? "Saving..." : "Save speaker assignments"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SessionHistory({
   session,
   entries,
@@ -259,17 +433,22 @@ export function SessionsWorkspaceView({
   sessions,
   selectedSessionId,
   history,
+  speakers = null,
   loading = false,
   loadingHistory = false,
+  loadingSpeakers = false,
   busy = false,
   error = null,
   historyError = null,
+  speakerError = null,
   statusMessage = null,
   onSelectSession,
   onSave,
   onSetContentStatus,
+  onSaveSpeakers,
   onRestore,
   onRetry,
+  onRetrySpeakers,
 }: Readonly<SessionsWorkspaceViewProps>) {
   const selected = sessions.find((session) => session.id === selectedSessionId) ?? null;
 
@@ -305,7 +484,11 @@ export function SessionsWorkspaceView({
           )}
         </Alert>
       )}
-      {statusMessage === null ? null : <Alert>{statusMessage}</Alert>}
+      {statusMessage === null ? null : (
+        <Alert aria-live="polite" role="status">
+          {statusMessage}
+        </Alert>
+      )}
 
       <div className={styles.contentGrid}>
         <WorkspaceSurface
@@ -358,6 +541,16 @@ export function SessionsWorkspaceView({
                 onSave={onSave}
                 onSetContentStatus={onSetContentStatus}
               />
+              <SpeakerAssignments
+                busy={busy}
+                error={speakerError}
+                key={selected.id}
+                loading={loadingSpeakers}
+                session={selected}
+                speakers={speakers}
+                onRetry={onRetrySpeakers}
+                onSave={onSaveSpeakers}
+              />
               <SessionHistory
                 busy={busy}
                 entries={history}
@@ -388,9 +581,12 @@ function ScopedSessionsWorkspace({
   const [history, setHistory] = useState<readonly SessionHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [speakers, setSpeakers] = useState<readonly SessionSpeakerCandidate[] | null>(null);
+  const [loadingSpeakers, setLoadingSpeakers] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [speakerError, setSpeakerError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const historyGeneration = useRef(0);
 
@@ -413,6 +609,25 @@ function ScopedSessionsWorkspace({
         }
       } finally {
         if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [api],
+  );
+
+  const loadSpeakers = useCallback(
+    async (signal?: AbortSignal) => {
+      setLoadingSpeakers(true);
+      setSpeakerError(null);
+      try {
+        const next = await api.listSpeakers(signal);
+        if (signal?.aborted) return;
+        setSpeakers(next);
+      } catch (loadError) {
+        if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
+          setSpeakerError(messageFrom(loadError));
+        }
+      } finally {
+        if (!signal?.aborted) setLoadingSpeakers(false);
       }
     },
     [api],
@@ -447,8 +662,9 @@ function ScopedSessionsWorkspace({
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
+    void loadSpeakers(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [load, loadSpeakers]);
 
   useEffect(() => {
     if (selectedSessionId === null) {
@@ -496,9 +712,12 @@ function ScopedSessionsWorkspace({
       historyError={historyError}
       loading={loading}
       loadingHistory={loadingHistory}
+      loadingSpeakers={loadingSpeakers}
       organizationId={organizationId}
       selectedSessionId={selectedSessionId}
       sessions={sessions}
+      speakerError={speakerError}
+      speakers={speakers}
       statusMessage={statusMessage}
       onRestore={(input) =>
         mutate(
@@ -508,8 +727,12 @@ function ScopedSessionsWorkspace({
         )
       }
       onRetry={() => void load()}
+      onRetrySpeakers={() => void loadSpeakers()}
       onSave={(input) =>
         mutate(input.sessionId, () => api.updateContent(input), "Session content saved.")
+      }
+      onSaveSpeakers={(input) =>
+        mutate(input.sessionId, () => api.updateSpeakers(input), "Speaker assignments saved.")
       }
       onSelectSession={(sessionId) => {
         historyGeneration.current += 1;

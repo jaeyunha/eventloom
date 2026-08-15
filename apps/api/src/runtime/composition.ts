@@ -250,7 +250,7 @@ async function reminderAudienceRevision(candidates: readonly ReminderCandidate[]
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-class RuntimeReminderCandidateSource implements ReminderCandidateSource {
+export class RuntimeReminderCandidateSource implements ReminderCandidateSource {
   constructor(
     private readonly dependencies: ApiDependencies,
     private readonly database: D1Database,

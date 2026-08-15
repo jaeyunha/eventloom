@@ -83,6 +83,7 @@ export interface CommunicationPreviewInput {
   templateId: string;
   templateVersion?: number;
   audience: CommunicationAudience;
+  recipientIds?: readonly string[];
   data?: CommunicationRenderData;
 }
 
@@ -362,6 +363,40 @@ function dataFingerprint(data: CommunicationRenderData): string {
   return stableValue(data);
 }
 
+function canonicalSendPayload(input: {
+  purpose: CommunicationTemplatePurpose;
+  audience: CommunicationAudience | null;
+  templateId: string;
+  templateVersion: number;
+  recipientIds: readonly string[];
+  data: CommunicationRenderData;
+}): string {
+  return stableValue({
+    purpose: input.purpose,
+    audience: input.audience,
+    templateId: input.templateId,
+    templateVersion: input.templateVersion,
+    recipientIds: [...input.recipientIds].sort(),
+    data: input.data,
+  });
+}
+
+function sendMatchesPayload(
+  send: CommunicationSend,
+  input: Parameters<typeof canonicalSendPayload>[0],
+): boolean {
+  return (
+    canonicalSendPayload({
+      purpose: send.purpose,
+      audience: send.audience,
+      templateId: send.templateId,
+      templateVersion: send.templateVersion,
+      recipientIds: send.recipients.map((recipient) => recipient.id),
+      data: send.data,
+    }) === canonicalSendPayload(input)
+  );
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -421,22 +456,48 @@ export function renderCommunicationTemplate(
 }
 export const renderTemplate = renderCommunicationTemplate;
 
+function firstNameForRecipient(recipient: CommunicationRecipientSnapshot): string {
+  const configured = recipient.data.first_name ?? recipient.data.firstName;
+  if (typeof configured === "string" && configured.trim().length > 0) {
+    return configured.trim();
+  }
+  return recipient.displayName.trim().split(/\s+/u)[0] ?? recipient.displayName;
+}
+
 function renderDataForRecipient(
   data: CommunicationRenderData,
   recipient: CommunicationRecipientSnapshot,
 ): CommunicationRenderData {
+  const firstName = firstNameForRecipient(recipient);
   return {
     ...data,
     ...recipient.data,
     recipientId: recipient.id,
+    first_name: firstName,
+    display_name: recipient.displayName,
     email: recipient.email,
     displayName: recipient.displayName,
     recipient: {
       id: recipient.id,
-      email: recipient.email,
+      firstName,
       displayName: recipient.displayName,
+      email: recipient.email,
     },
   };
+}
+
+export function redactCommunicationProviderReason(value: string): string {
+  return value
+    .replace(/\b(https?:\/\/)([^\s/@:]+):([^\s/@]+)@/giu, "$1[REDACTED]@")
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/giu, "$1 [REDACTED]")
+    .replace(
+      /\b(api[-_ ]?key|access[-_ ]?token|auth(?:orization)?|password|secret|token)\b(\s*[:=]\s*)([^\s,;]+)/giu,
+      "$1$2[REDACTED]",
+    );
+}
+
+function providerReason(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : redactCommunicationProviderReason(value);
 }
 
 function deliveryAction(status: CommunicationDeliveryStatus): CommunicationAuditEntry["action"] {
@@ -498,7 +559,14 @@ function copySend(send: CommunicationSend): CommunicationSend {
   }));
   const deliveries = send.deliveries.map((delivery) => ({
     ...delivery,
-    history: delivery.history.map((entry) => ({ ...entry })),
+    failureReason:
+      delivery.failureReason === null
+        ? null
+        : redactCommunicationProviderReason(delivery.failureReason),
+    history: delivery.history.map((entry) => ({
+      ...entry,
+      reason: entry.reason === null ? null : redactCommunicationProviderReason(entry.reason),
+    })),
   }));
   const summary = summarizeDeliveries(deliveries, recipients.length);
   return {
@@ -508,7 +576,16 @@ function copySend(send: CommunicationSend): CommunicationSend {
     template: { ...send.template },
     recipients,
     deliveries,
-    history: send.history.map((entry) => ({ ...entry, details: cloneData(entry.details) })),
+    history: send.history.map((entry) => {
+      const details = cloneData(entry.details);
+      return {
+        ...entry,
+        details:
+          typeof details.reason === "string"
+            ? { ...details, reason: redactCommunicationProviderReason(details.reason) }
+            : details,
+      };
+    }),
   };
 }
 
@@ -873,6 +950,7 @@ export class CommunicationService {
     ) {
       throw invalidInput("Decision templates require a decision-status participant audience.");
     }
+    const recipientIds = this.validateRecipientIds(input.recipientIds);
     const authorization = this.assertAudienceAuthorized(actor.tenantId, input.eventId, audience);
     const templatePromise = this.resolveApprovedTemplate(
       actor.tenantId,
@@ -881,19 +959,29 @@ export class CommunicationService {
       input.templateVersion,
       input.purpose,
     );
-    const recipientsPromise = this.repository.listRecipients(
-      actor.tenantId,
-      input.eventId,
-      audience,
-    );
+    const recipientsPromise =
+      recipientIds === undefined
+        ? this.repository.listRecipients(actor.tenantId, input.eventId, audience)
+        : this.repository.getRecipientsByIds(actor.tenantId, input.eventId, recipientIds);
     const [, template, recipients] = await Promise.all([
       authorization,
       templatePromise,
       recipientsPromise,
     ]);
-    const snapshots = recipients.map((recipient) =>
-      this.assertRecipientScope(recipient, actor, input.eventId),
-    );
+    if (recipientIds !== undefined && recipients.length !== recipientIds.length) {
+      throw notFound("One or more preview recipients were not found for this event.");
+    }
+    const snapshots = recipients.map((recipient) => {
+      const snapshot = this.assertRecipientScope(recipient, actor, input.eventId);
+      if (
+        recipientIds !== undefined &&
+        snapshot.audiences.length > 0 &&
+        !snapshot.audiences.includes(audience)
+      ) {
+        throw notFound("One or more preview recipients do not belong to the selected audience.");
+      }
+      return snapshot;
+    });
     const data = cloneData(input.data);
     const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
       const renderedRecipient = renderCommunicationTemplate(
@@ -958,17 +1046,6 @@ export class CommunicationService {
   ): Promise<CommunicationSend> {
     requireOrganizer(actor, input.eventId);
     const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 300);
-    const existing = await this.repository.findSendByIdempotency(
-      actor.tenantId,
-      input.eventId,
-      idempotencyKey,
-    );
-    if (existing !== undefined) {
-      return copySend(existing);
-    }
-    if (this.deliveryAdapter === undefined) {
-      throw unavailable("Operational email delivery is not configured.");
-    }
     const preview = await this.repository.getPreview(
       actor.tenantId,
       input.eventId,
@@ -999,11 +1076,45 @@ export class CommunicationService {
     if (recipients.length === 0) {
       throw invalidInput("The selected audience has no recipients.");
     }
+    const existing = await this.repository.findSendByIdempotency(
+      actor.tenantId,
+      input.eventId,
+      idempotencyKey,
+    );
+    if (existing !== undefined) {
+      if (
+        !sendMatchesPayload(existing, {
+          purpose: preview.purpose,
+          audience: preview.audience,
+          templateId: template.id,
+          templateVersion: template.version,
+          recipientIds: recipients.map((recipient) => recipient.id),
+          data: preview.data,
+        })
+      ) {
+        throw conflict(
+          "The idempotency key was already used with a different communication payload.",
+        );
+      }
+      return copySend(existing);
+    }
+    if (this.deliveryAdapter === undefined) {
+      throw unavailable("Operational email delivery is not configured.");
+    }
+    const previewTemplate: CommunicationTemplate = {
+      ...template,
+      name: preview.template.name,
+      purpose: preview.template.purpose,
+      sender: preview.template.sender,
+      subject: preview.template.subject,
+      html: preview.template.html,
+      text: preview.template.text,
+    };
     const created = await this.createSend(actor, {
       eventId: input.eventId,
       purpose: preview.purpose,
       audience: preview.audience,
-      template,
+      template: previewTemplate,
       recipients,
       data: preview.data,
       idempotencyKey,
@@ -1036,17 +1147,6 @@ export class CommunicationService {
       }
     }
     const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 300);
-    const existing = await this.repository.findSendByIdempotency(
-      actor.tenantId,
-      input.eventId,
-      idempotencyKey,
-    );
-    if (existing !== undefined) {
-      return copySend(existing);
-    }
-    if (this.deliveryAdapter === undefined) {
-      throw unavailable("Operational email delivery is not configured.");
-    }
     if (input.recipientIds.length === 0) {
       throw invalidInput("At least one recipient is required.");
     }
@@ -1068,13 +1168,39 @@ export class CommunicationService {
     const snapshots = recipients.map((recipient) =>
       this.assertRecipientScope(recipient, actor, input.eventId),
     );
+    const data = cloneData(input.data);
+    const existing = await this.repository.findSendByIdempotency(
+      actor.tenantId,
+      input.eventId,
+      idempotencyKey,
+    );
+    if (existing !== undefined) {
+      if (
+        !sendMatchesPayload(existing, {
+          purpose,
+          audience: null,
+          templateId: template.id,
+          templateVersion: template.version,
+          recipientIds: snapshots.map((recipient) => recipient.id),
+          data,
+        })
+      ) {
+        throw conflict(
+          "The idempotency key was already used with a different communication payload.",
+        );
+      }
+      return copySend(existing);
+    }
+    if (this.deliveryAdapter === undefined) {
+      throw unavailable("Operational email delivery is not configured.");
+    }
     const created = await this.createSend(actor, {
       eventId: input.eventId,
       purpose,
       audience: null,
       template,
       recipients: snapshots,
-      data: cloneData(input.data),
+      data,
       idempotencyKey,
       previewId: null,
     });
@@ -1148,6 +1274,17 @@ export class CommunicationService {
     return copyPreview(preview);
   }
 
+  async listSends(
+    actor: CommunicationActor,
+    eventId: string,
+  ): Promise<readonly CommunicationSend[]> {
+    requireOrganizer(actor, eventId);
+    if (this.repository.listSends === undefined) {
+      throw unavailable("Durable communication send history is not configured.");
+    }
+    return (await this.repository.listSends(actor.tenantId, eventId)).map(copySend);
+  }
+
   async getSend(
     actor: CommunicationActor,
     eventId: string,
@@ -1202,6 +1339,7 @@ export class CommunicationService {
       throw notFound("The delivery recipient was not found.");
     }
     const status = input.status;
+    const reason = providerReason(input.reason);
     const terminalStatus =
       delivery.status === "delivered" ||
       delivery.status === "bounced" ||
@@ -1213,7 +1351,7 @@ export class CommunicationService {
       status === delivery.status &&
       (input.providerMessageId === undefined ||
         input.providerMessageId === delivery.providerMessageId) &&
-      (input.reason === undefined || input.reason === delivery.failureReason)
+      (reason === undefined || reason === delivery.failureReason)
     ) {
       return copySend(send);
     }
@@ -1229,7 +1367,7 @@ export class CommunicationService {
       status,
       occurredAt,
       providerMessageId: input.providerMessageId ?? delivery.providerMessageId,
-      reason: input.reason ?? null,
+      reason: reason ?? null,
       actorId: actor.userId,
     };
     const nextDelivery: CommunicationDelivery = {
@@ -1238,7 +1376,7 @@ export class CommunicationService {
       providerMessageId: input.providerMessageId ?? delivery.providerMessageId,
       failureReason:
         status === "failed" || status === "bounced" || status === "complained"
-          ? (input.reason ?? delivery.failureReason)
+          ? (reason ?? delivery.failureReason)
           : null,
       attempts: delivery.attempts,
       history: [...delivery.history, historyEntry],
@@ -1257,7 +1395,7 @@ export class CommunicationService {
       occurredAt,
       details: {
         providerMessageId: input.providerMessageId ?? null,
-        reason: input.reason ?? null,
+        reason: reason ?? null,
       },
     };
     const deliveries = send.deliveries.map((candidate) =>
@@ -1366,6 +1504,28 @@ export class CommunicationService {
     if (!authorized) {
       throw forbidden("This recipient audience is not authorized for the event.");
     }
+  }
+
+  private validateRecipientIds(
+    recipientIds: readonly string[] | undefined,
+  ): readonly string[] | undefined {
+    if (recipientIds === undefined) return undefined;
+    if (recipientIds.length === 0) {
+      throw invalidInput(
+        "At least one preview recipient is required when recipientIds is provided.",
+      );
+    }
+    const validated = recipientIds.map((recipientId) => {
+      const normalized = requireText(recipientId, "Recipient id", 200);
+      if (normalized !== recipientId) {
+        throw invalidInput("Recipient ids cannot contain surrounding whitespace.");
+      }
+      return normalized;
+    });
+    if (new Set(validated).size !== validated.length) {
+      throw invalidInput("Recipient ids must be unique.");
+    }
+    return validated;
   }
 
   private assertRecipientScope(
@@ -1535,7 +1695,9 @@ export class CommunicationService {
       try {
         result = await this.deliveryAdapter.send(request);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : "The delivery provider failed.";
+        const reason = redactCommunicationProviderReason(
+          error instanceof Error ? error.message : "The delivery provider failed.",
+        );
         current = this.applyDeliveryResult(actor, current, recipient.id, {
           status: "failed",
           reason,
@@ -1543,12 +1705,13 @@ export class CommunicationService {
         await this.repository.saveSend(current);
         continue;
       }
+      const reason = providerReason(result.reason);
       current = this.applyDeliveryResult(actor, current, recipient.id, {
         status: result.status ?? "queued",
         ...(result.providerMessageId === undefined
           ? {}
           : { providerMessageId: result.providerMessageId }),
-        ...(result.reason === undefined ? {} : { reason: result.reason }),
+        ...(reason === undefined ? {} : { reason }),
       });
       await this.repository.saveSend(current);
     }
@@ -1579,7 +1742,7 @@ export class CommunicationService {
       status: result.status,
       occurredAt,
       providerMessageId: result.providerMessageId ?? current.providerMessageId,
-      reason: result.reason ?? null,
+      reason: providerReason(result.reason) ?? null,
       actorId: actor.userId,
     };
     const nextDelivery: CommunicationDelivery = {
@@ -1588,7 +1751,7 @@ export class CommunicationService {
       providerMessageId: result.providerMessageId ?? current.providerMessageId,
       failureReason:
         result.status === "failed" || result.status === "bounced" || result.status === "complained"
-          ? (result.reason ?? current.failureReason)
+          ? (providerReason(result.reason) ?? current.failureReason)
           : null,
       attempts: current.attempts + 1,
       history: [...current.history, historyEntry],
@@ -1604,7 +1767,7 @@ export class CommunicationService {
       occurredAt,
       details: {
         providerMessageId: result.providerMessageId ?? null,
-        reason: result.reason ?? null,
+        reason: providerReason(result.reason) ?? null,
       },
     };
     const deliveries = send.deliveries.map((delivery) =>
@@ -2357,6 +2520,16 @@ export class InMemoryCommunicationRepository implements CommunicationRepository 
         send.idempotencyKey === idempotencyKey,
     );
     return found === undefined ? undefined : copySend(found);
+  }
+
+  async listSends(tenantId: string, eventId: string): Promise<readonly CommunicationSend[]> {
+    return [...this.sends.values()]
+      .filter((send) => send.tenantId === tenantId && send.eventId === eventId)
+      .sort(
+        (left, right) =>
+          right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+      )
+      .map(copySend);
   }
 
   async getSend(

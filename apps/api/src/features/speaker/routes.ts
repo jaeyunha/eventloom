@@ -1102,10 +1102,11 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
-    const result = await dependencies.service.issueOrganizerUploadGrant({
+    const result = await dependencies.service.issueUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
       participantId: context.req.param("participantId"),
+      organizer: false,
       ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
       ...(body.supersedesAssetId === undefined
         ? {}
@@ -1410,21 +1411,13 @@ const canonicalSpeakerUpdateSchema = canonicalSpeakerSchema
     expectedVersion: z.number().int().nonnegative(),
   });
 
-const canonicalImportRowSchema = z.object({
-  rowNumber: z.number().int().positive(),
-  displayName: z.string().max(200),
-  email: z.string().max(320),
-  jobTitle: z.string().max(160),
-  company: z.string().max(200),
-  biography: z.string().max(20_000),
-  socialLinks: z.record(z.string(), z.string()).default({}),
-  status: z.string().max(80).optional(),
-});
-
-const canonicalImportCommitSchema = z.object({
-  rows: z.array(canonicalImportRowSchema).min(1).max(500),
-  idempotencyKey: z.string().trim().min(1).max(300),
-});
+const canonicalImportCommitSchema = z
+  .object({
+    previewId: z.string().trim().min(1).max(200),
+    sourceDigest: z.string().trim().min(1).max(200).optional(),
+    idempotencyKey: z.string().trim().min(1).max(300),
+  })
+  .strict();
 
 const canonicalTaskSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -1728,16 +1721,8 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       organizationId: organizationId(context),
       eventId: eventId(context),
       accountId: accountId(context),
-      rows: body.rows.map((row) => ({
-        rowNumber: row.rowNumber,
-        displayName: row.displayName,
-        email: row.email,
-        jobTitle: row.jobTitle,
-        company: row.company,
-        biography: row.biography,
-        socialLinks: row.socialLinks,
-        ...(row.status === undefined ? {} : { status: row.status }),
-      })),
+      previewId: body.previewId,
+      ...(body.sourceDigest === undefined ? {} : { sourceDigest: body.sourceDigest }),
       idempotencyKey: body.idempotencyKey,
     });
     return context.json({ data }, 201);

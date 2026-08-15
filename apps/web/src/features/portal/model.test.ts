@@ -152,17 +152,38 @@ describe("speaker portal view model", () => {
     expect(filterTasks(portal.tasks, "finished").map(({ id }) => id)).toEqual(["task-1"]);
   });
 
-  it("summarizes accepted submissions and readiness", () => {
+  it("distinguishes no tasks, in-progress work, and non-empty readiness", () => {
     expect(summarizePortal(portal)).toEqual({
       submissionCount: 2,
       acceptedCount: 1,
+      taskCount: 2,
       outstandingTaskCount: 1,
       completedTaskCount: 1,
       completionPercent: 50,
+      readinessState: "in-progress",
     });
+
+    expect(summarizePortal({ ...portal, tasks: [], outstandingTaskCount: 0 })).toMatchObject({
+      taskCount: 0,
+      outstandingTaskCount: 0,
+      completedTaskCount: 0,
+      completionPercent: null,
+      readinessState: "no-tasks",
+    });
+
     expect(
-      summarizePortal({ ...portal, tasks: [], outstandingTaskCount: 0 }).completionPercent,
-    ).toBe(100);
+      summarizePortal({
+        ...portal,
+        tasks: portal.tasks.map((candidate) => ({ ...candidate, status: "completed" as const })),
+        outstandingTaskCount: 0,
+      }),
+    ).toMatchObject({
+      taskCount: 2,
+      outstandingTaskCount: 0,
+      completedTaskCount: 2,
+      completionPercent: 100,
+      readinessState: "ready",
+    });
   });
   it("uses the server-selected primary participant for account identity", () => {
     const priya = {

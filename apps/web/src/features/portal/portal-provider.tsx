@@ -208,6 +208,28 @@ export function isPortalGenerationCurrent(
   return startedGeneration === activeGeneration;
 }
 
+export function portalViewMatchesSelection(
+  view: PortalView | null,
+  target: PortalContext,
+  selectedParticipantId: string | null,
+): boolean {
+  const viewContext = view?.context;
+  return (
+    viewContext !== undefined &&
+    viewContext.id === target.id &&
+    viewContext.eventId === target.eventId &&
+    (viewContext.selectedParticipantId ?? viewContext.primaryParticipantId ?? null) ===
+      selectedParticipantId
+  );
+}
+
+export function portalViewAfterLoadFailure(
+  previousView: PortalView | null,
+  preserveCurrentView: boolean,
+): PortalView | null {
+  return preserveCurrentView ? previousView : null;
+}
+
 function normalizeCapabilities(value: readonly PortalCapability[] | undefined): PortalCapability[] {
   if (!value) {
     return [];
@@ -777,14 +799,17 @@ export function PortalProvider({
       signal?: AbortSignal,
       prefetchedView?: PortalPrefetchResult,
       requestedParticipantId?: string | null,
+      preserveCurrentView = false,
     ): Promise<boolean> => {
       const generation = ++loadGeneration.current;
       const requestedSelection = requestedParticipantId ?? target.primaryParticipantId ?? null;
-      setContext(target);
-      setSelectedParticipantId(portalSelectedParticipantId(target, requestedSelection));
-      setCapabilities(normalizeCapabilities(target.capabilities));
-      setView(null);
-      clearWorkspace();
+      if (!preserveCurrentView) {
+        setContext(target);
+        setSelectedParticipantId(portalSelectedParticipantId(target, requestedSelection));
+        setCapabilities(normalizeCapabilities(target.capabilities));
+        setView(null);
+        clearWorkspace();
+      }
       setMutationError(null);
       setLoading(true);
       setError(null);
@@ -847,9 +872,14 @@ export function PortalProvider({
           return false;
         }
         if (generation === loadGeneration.current) {
-          setView(null);
-          setAuthoritativeView(null);
-          authoritativeViewRef.current = null;
+          setView((current) => portalViewAfterLoadFailure(current, preserveCurrentView));
+          setAuthoritativeView((current) =>
+            portalViewAfterLoadFailure(current, preserveCurrentView),
+          );
+          authoritativeViewRef.current = portalViewAfterLoadFailure(
+            authoritativeViewRef.current,
+            preserveCurrentView,
+          );
           setError(messageFrom(loadError));
           setLoading(false);
           setWorkspaceLoading(false);
@@ -920,11 +950,17 @@ export function PortalProvider({
   const reload = useCallback(async () => {
     if (context) {
       const target = contexts.find((candidate) => candidate.id === context.id) ?? context;
-      await hydrate(target, undefined, undefined, selectedParticipantId);
+      await hydrate(
+        target,
+        undefined,
+        undefined,
+        selectedParticipantId,
+        portalViewMatchesSelection(view, target, selectedParticipantId),
+      );
     } else {
       await loadInitial();
     }
-  }, [context, contexts, hydrate, loadInitial, selectedParticipantId]);
+  }, [context, contexts, hydrate, loadInitial, selectedParticipantId, view]);
 
   const switchContext = useCallback(
     async (contextId: string): Promise<boolean> => {

@@ -263,7 +263,8 @@ export interface SpeakerAsset {
 export interface SpeakerRosterEntry {
   id: string;
   eventId: string;
-  submissionId: string;
+  /** Accepted CFP submission identity; absent for organizer-created profile-only speakers. */
+  submissionId?: string;
   participantId: string;
   displayName: string;
   email?: string;
@@ -380,8 +381,62 @@ export interface SpeakerImportIssue {
 }
 
 export interface SpeakerImportPreview {
+  /** Durable server-issued preview identity. Required by the canonical D1 commit path. */
+  previewId?: string;
+  /** Digest of the exact validated source payload. */
+  sourceDigest?: string;
+  /** Canonical profile-set revision observed when the preview was issued. */
+  rosterRevision?: number;
   validRows: readonly SpeakerImportRow[];
   invalidRows: readonly SpeakerImportIssue[];
+}
+
+export interface SaveOrganizerSpeakerImportPreviewCommand {
+  organizationId: string;
+  eventId: string;
+  accountId: string;
+  previewId: string;
+  sourceDigest: string;
+  rows: readonly SpeakerImportRow[];
+  createdAt: string;
+}
+
+export interface CommitOrganizerSpeakerImportCommand {
+  organizationId: string;
+  eventId: string;
+  accountId: string;
+  previewId: string;
+  sourceDigest?: string;
+  idempotencyKey: string;
+  participantIds?: readonly string[];
+  committedAt: string;
+}
+
+export interface OrganizerSpeakerAggregateResult {
+  participantIds: readonly string[];
+  replayed: boolean;
+}
+
+export interface UpsertOrganizerSpeakerAggregateCommand {
+  organizationId: string;
+  eventId: string;
+  accountId: string;
+  participantId: string;
+  profileId: string;
+  displayName: string;
+  email: string;
+  jobTitle: string;
+  company: string;
+  biography: string;
+  socialLinks: Readonly<Record<string, string>>;
+  travelLogistics: SpeakerTravelLogistics;
+  status: string;
+  sourceType: SpeakerParticipantSourceType;
+  sourceId: string;
+  expectedVersion: number | null;
+  idempotencyKey?: string;
+  sourceDigest?: string;
+  updatedAt: string;
 }
 
 export interface SpeakerInvitationPreview {
@@ -1095,6 +1150,34 @@ export interface SpeakerRepository {
   ): Promise<RepositoryResult<SpeakerContentRecord>>;
   getReminder?(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null>;
   saveReminder?(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord>;
+}
+
+/**
+ * Mandatory canonical boundary for organizer speaker identity, create/update, and import lifecycle.
+ * Production composition must provide this alongside the portal/workload repository.
+ */
+export interface SpeakerOrganizerLifecycleRepository {
+  getOrganizerAccessScope(
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerOrganizerAccessScope | null>;
+  getOrganizerReadModel(
+    eventId: string,
+    accountId: string,
+    resources: SpeakerOrganizerReadResources,
+  ): Promise<SpeakerOrganizerReadModel | null>;
+  resolveEventParticipant(
+    input: ResolveEventParticipantInput,
+  ): Promise<SpeakerParticipantResolution>;
+  saveOrganizerSpeakerImportPreview(
+    command: SaveOrganizerSpeakerImportPreviewCommand,
+  ): Promise<SpeakerImportPreview>;
+  commitOrganizerSpeakerImport(
+    command: CommitOrganizerSpeakerImportCommand,
+  ): Promise<OrganizerSpeakerAggregateResult>;
+  upsertOrganizerSpeakerAggregate(
+    command: UpsertOrganizerSpeakerAggregateCommand,
+  ): Promise<RepositoryResult<SpeakerProfile>>;
 }
 
 /** Mandatory repository boundary for organization-qualified account speaker workload reads. */

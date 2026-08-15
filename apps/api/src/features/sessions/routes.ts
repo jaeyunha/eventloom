@@ -67,7 +67,11 @@ type ErrorStatus = 400 | 401 | 403 | 404 | 409;
 const identifier = z.string().trim().min(1).max(128);
 const expectedVersion = z.number().int().positive();
 const speakerReference = z
-  .object({ id: identifier, role: z.string().trim().min(1).max(64).optional() })
+  .object({
+    id: identifier,
+    displayName: z.string().trim().min(1).max(200).optional(),
+    role: z.string().trim().min(1).max(64).optional(),
+  })
   .strict();
 const sessionCreate = z
   .object({

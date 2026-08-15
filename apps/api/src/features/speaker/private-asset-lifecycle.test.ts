@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { FakeAirtableTransport } from "../../infrastructure/airtable";
-import { AirtableSpeakerRepository, R2PrivateAssetGateway } from "../../runtime/airtable";
+import { R2PrivateAssetGateway } from "../../infrastructure/cloudflare/private-assets";
 import { createSpeakerRoutes } from "./routes";
 import { SpeakerService } from "./service";
+import { withTestSpeakerOrganizerLifecycle } from "./test-lifecycle-adapter";
 import type {
   PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
@@ -625,7 +625,7 @@ describe("private speaker asset lifecycle", () => {
   it("registers an opaque upload, validates transfer, rejects replay, and finalizes ready assets", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-1",
@@ -671,7 +671,7 @@ describe("private speaker asset lifecycle", () => {
   it("re-authorizes the same pending asset from immutable persisted metadata", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-retry",
@@ -715,7 +715,7 @@ describe("private speaker asset lifecycle", () => {
     const gateway = new CapabilityGateway();
     const missingInspection = gateway as unknown as { inspectObject?: unknown };
     missingInspection.inspectObject = undefined;
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-no-inspect",
@@ -745,7 +745,7 @@ describe("private speaker asset lifecycle", () => {
   it("keeps upload tasks blocked until a ready asset exists and denies another tenant", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-1",
@@ -779,7 +779,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const ids = ["asset-1", "asset-2"];
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => ids.shift() ?? "asset-3",
@@ -832,7 +832,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const ids = ["task-asset-1", "task-transition-1", "task-asset-2", "task-transition-2"];
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => ids.shift() ?? "generated-id",
@@ -975,10 +975,35 @@ describe("private speaker asset lifecycle", () => {
     ).rejects.toThrow();
   });
 
+  it("accepts participant-scoped capabilities without a submission binding", async () => {
+    const bucket = new MemoryBucket();
+    const gateway = new R2PrivateAssetGateway(bucket as never, "https://api.invalid");
+    const { submissionId: _submissionId, ...participantBinding } = binding({
+      capabilityId: "participant-asset",
+      objectKey: "events/event-1/participants/participant-1/headshot/participant-asset",
+      contentType: "image/png",
+      fileName: "headshot.png",
+    });
+    const upload = await gateway.registerUploadCapability(participantBinding);
+
+    await expect(
+      gateway.consumeUploadCapability(
+        participantBinding.capabilityId,
+        opaqueToken(upload.url),
+        new Request("https://api.invalid", {
+          method: "PUT",
+          headers: { "content-type": participantBinding.contentType },
+          body: "abc",
+        }),
+      ),
+    ).resolves.toMatchObject({ contentType: "image/png", sizeBytes: 3 });
+    await expect(gateway.verifyUploadCapability(participantBinding)).resolves.toBe(true);
+  });
+
   it("does not expose object keys from transfer responses", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-1",
@@ -1011,7 +1036,7 @@ describe("private speaker asset lifecycle", () => {
   it("routes pending-upload re-authorization without accepting replacement metadata", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-retry-route",
@@ -1077,10 +1102,14 @@ describe("speaker participant workspace authorization and projections", () => {
       submissionIds: ["submission-2"],
       participantIds: ["participant-2"],
     });
-    const service = new SpeakerService(repository, new CapabilityGateway(), {
-      speakerSender,
-      now: () => new Date(now),
-    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
     await expect(service.listPortalContexts("account-1")).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ eventId: "event-1", name: "Event One" }),
@@ -1101,11 +1130,15 @@ describe("speaker participant workspace authorization and projections", () => {
       participantIds: ["participant-1"],
       capabilities: ["asset-read"],
     });
-    const service = new SpeakerService(repository, new CapabilityGateway(), {
-      speakerSender,
-      now: () => new Date(now),
-      generateId: () => "generated-participant",
-    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+        generateId: () => "generated-participant",
+      },
+    );
     await expect(
       service.addRosterEntry({
         eventId: "event-1",
@@ -1164,7 +1197,7 @@ describe("speaker participant workspace authorization and projections", () => {
       role: "owner",
     });
     const ids = ["asset-history-1", "asset-history-2", "comment-1"];
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: () => ids.shift() ?? "generated-id",
@@ -1314,10 +1347,14 @@ describe("speaker participant workspace authorization and projections", () => {
 
   it("validates versioned task responses and keeps immutable response history", async () => {
     const repository = new LifecycleRepository();
-    const service = new SpeakerService(repository, new CapabilityGateway(), {
-      speakerSender,
-      now: () => new Date(now),
-    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
     const form = await service.getTaskForm("event-1", "account-1", "upload-task");
     expect(form).toMatchObject({
       taskId: "upload-task",
@@ -1378,10 +1415,14 @@ describe("speaker participant workspace authorization and projections", () => {
 
   it("orders published resources and strips unsafe HTML and URLs", async () => {
     const repository = new LifecycleRepository();
-    const service = new SpeakerService(repository, new CapabilityGateway(), {
-      speakerSender,
-      now: () => new Date(now),
-    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
     const resources = await service.listResources("event-1", "account-1");
     expect(resources).toEqual([
       expect.objectContaining({ id: "resource-1", url: "https://docs.example.test/guide" }),
@@ -1526,7 +1567,7 @@ describe("organizer content-management contracts", () => {
     });
     const gateway = new CapabilityGateway();
     gateway.uploaded.add("opaque/r2/pending-headshot");
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: (() => {
@@ -1702,10 +1743,14 @@ it("projects exactly one latest ready asset as the organizer current version", a
       currentVersionId: "family-v2",
     },
   );
-  const service = new SpeakerService(repository, new CapabilityGateway(), {
-    speakerSender,
-    now: () => new Date(now),
-  });
+  const service = new SpeakerService(
+    withTestSpeakerOrganizerLifecycle(repository),
+    new CapabilityGateway(),
+    {
+      speakerSender,
+      now: () => new Date(now),
+    },
+  );
 
   const matrix = await service.listDeliverables("event-1", "organizer");
   const row = matrix.items.find((item) => item.task.id === "upload-task");
@@ -1715,209 +1760,6 @@ it("projects exactly one latest ready asset as the organizer current version", a
     "family-v2",
     "family-v3-pending",
   ]);
-});
-describe("Airtable speaker content revisions", () => {
-  it("persists immutable session and speaker history, restores by scoped version, and rejects cross-event access", async () => {
-    const transport = new FakeAirtableTransport();
-    const tenantId = "tenant-content";
-    const eventId = "event-content";
-    const otherEventId = "event-content-other";
-    for (const id of [eventId, otherEventId]) {
-      transport.seed({
-        baseId: "base-test",
-        table: "Events",
-        fields: {
-          "Application ID": id,
-          "Settings JSON": JSON.stringify({ id, organizationId: tenantId, name: id }),
-        },
-      });
-    }
-    transport.seed({
-      baseId: "base-test",
-      table: "Sessions",
-      fields: {
-        "Application ID": "session-content",
-        "Metadata JSON": JSON.stringify({
-          id: "session-content",
-          tenantId,
-          eventId,
-          title: "Original session",
-          description: "Original abstract",
-          status: "Draft",
-          durationMinutes: 45,
-          capacityRequired: 0,
-          trackIds: [],
-          tagIds: [],
-          speakerIds: ["participant-content"],
-          speakerRoster: [],
-          resourceIds: [],
-          version: 1,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: "seed",
-          updatedBy: "seed",
-          history: [],
-        }),
-      },
-    });
-    const profileId = `speaker-profile:${eventId}:participant-content`;
-    transport.seed({
-      baseId: "base-test",
-      table: "Speaker Profiles",
-      fields: {
-        "Application ID": profileId,
-        Version: 1,
-        Biography: JSON.stringify({
-          id: profileId,
-          tenantId,
-          eventId,
-          participantId: "participant-content",
-          displayName: "Content Speaker",
-          biography: "Original biography",
-          socialLinks: { website: "https://example.test/original" },
-          headshotAssetId: "headshot-original",
-          status: "confirmed",
-          travelLogistics: {
-            travelRequired: false,
-            arrivalAt: null,
-            departureAt: null,
-            accommodation: "",
-            dietaryRequirements: "",
-            accessibilityNeeds: "",
-            travelNotes: "Keep this",
-          },
-          version: 1,
-          updatedAt: now,
-        }),
-      },
-    });
-    const database = {} as ConstructorParameters<typeof AirtableSpeakerRepository>[0]["database"];
-    const repository = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport,
-      database,
-    });
-
-    const sessionUpdate = await repository.updateContent({
-      eventId,
-      accountId: "organizer-1",
-      entityType: "session",
-      entityId: "session-content",
-      expectedVersion: 1,
-      description: "Updated abstract",
-      updatedAt: "2026-08-09T01:00:00.000Z",
-    });
-    expect(sessionUpdate).toMatchObject({
-      ok: true,
-      value: { description: "Updated abstract", version: 2, updatedBy: "organizer-1" },
-    });
-    const sessionHistoryBeforeRestore = await repository.listContentHistory(
-      eventId,
-      "session",
-      "session-content",
-    );
-    expect(sessionHistoryBeforeRestore).toMatchObject([
-      {
-        action: "created",
-        version: 1,
-        actorAccountId: "seed",
-        snapshot: { tenantId, eventId, entityId: "session-content", version: 1 },
-      },
-      {
-        action: "updated",
-        version: 2,
-        actorAccountId: "organizer-1",
-        occurredAt: "2026-08-09T01:00:00.000Z",
-        snapshot: { description: "Updated abstract", version: 2 },
-      },
-    ]);
-    await expect(
-      repository.restoreContentVersion({
-        eventId: otherEventId,
-        accountId: "organizer-2",
-        entityType: "session",
-        entityId: "session-content",
-        version: 1,
-        expectedVersion: 2,
-        updatedAt: "2026-08-09T02:00:00.000Z",
-      }),
-    ).resolves.toEqual({ ok: false, reason: "not_found" });
-
-    const sessionRestore = await repository.restoreContentVersion({
-      eventId,
-      accountId: "organizer-2",
-      entityType: "session",
-      entityId: "session-content",
-      version: 1,
-      expectedVersion: 2,
-      updatedAt: "2026-08-09T02:00:00.000Z",
-    });
-    expect(sessionRestore).toMatchObject({
-      ok: true,
-      value: { description: "Original abstract", version: 3, updatedBy: "organizer-2" },
-    });
-
-    const speakerUpdate = await repository.updateContent({
-      eventId,
-      accountId: "organizer-1",
-      entityType: "speaker",
-      entityId: "participant-content",
-      expectedVersion: 1,
-      biography: "Updated biography",
-      socialLinks: { website: "https://example.test/updated" },
-      updatedAt: "2026-08-09T01:30:00.000Z",
-    });
-    expect(speakerUpdate).toMatchObject({
-      ok: true,
-      value: { biography: "Updated biography", version: 2, updatedBy: "organizer-1" },
-    });
-    const speakerRestore = await repository.restoreContentVersion({
-      eventId,
-      accountId: "organizer-2",
-      entityType: "speaker",
-      entityId: "participant-content",
-      version: 1,
-      expectedVersion: 2,
-      updatedAt: "2026-08-09T02:30:00.000Z",
-    });
-    expect(speakerRestore).toMatchObject({
-      ok: true,
-      value: {
-        biography: "Original biography",
-        socialLinks: { website: "https://example.test/original" },
-        headshotAssetId: "headshot-original",
-        status: "confirmed",
-        version: 3,
-        updatedBy: "organizer-2",
-      },
-    });
-
-    const reloaded = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport,
-      database,
-    });
-    const sessionHistory = await reloaded.listContentHistory(eventId, "session", "session-content");
-    expect(sessionHistory).toHaveLength(3);
-    expect(sessionHistory.slice(0, 2)).toEqual(sessionHistoryBeforeRestore);
-    expect(sessionHistory[2]).toMatchObject({
-      action: "restored",
-      version: 3,
-      actorAccountId: "organizer-2",
-      occurredAt: "2026-08-09T02:00:00.000Z",
-      snapshot: { description: "Original abstract", version: 3 },
-    });
-    await expect(
-      reloaded.listContentHistory(otherEventId, "speaker", "participant-content"),
-    ).resolves.toEqual([]);
-    await expect(
-      reloaded.listContentHistory(eventId, "speaker", "participant-content"),
-    ).resolves.toMatchObject([
-      { action: "created", version: 1 },
-      { action: "updated", version: 2, actorAccountId: "organizer-1" },
-      { action: "restored", version: 3, actorAccountId: "organizer-2" },
-    ]);
-  });
 });
 describe("organizer immutable content history", () => {
   it("records attributed session edits and restores an earlier version with optimistic concurrency", async () => {
@@ -2007,10 +1849,14 @@ describe("organizer immutable content history", () => {
       });
       return { ok: true, value: structuredClone(current) };
     };
-    const service = new SpeakerService(repository, new CapabilityGateway(), {
-      speakerSender,
-      now: () => new Date(now),
-    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
     const first = await service.updateContent({
       eventId: "event-1",
       accountId: "organizer",
@@ -2251,7 +2097,7 @@ describe("organizer deliverables exports", () => {
     repository.appendAssetAudit = async (entry) => {
       audits.push(entry);
     };
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
       generateId: (() => {
@@ -2391,7 +2237,7 @@ describe("organizer deliverables exports", () => {
       body: new TextEncoder().encode("ready-v1"),
       contentType: "application/pdf",
     });
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
     });
@@ -2424,7 +2270,7 @@ describe("organizer deliverables exports", () => {
     const gateway = new CapabilityGateway();
     const missingGateway = gateway as unknown as { readObject?: unknown };
     missingGateway.readObject = undefined;
-    const service = new SpeakerService(repository, gateway, {
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
     });

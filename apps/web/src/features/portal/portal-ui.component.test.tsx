@@ -8,8 +8,11 @@ import {
   NoParticipantWorkspaceState,
   PageHeading,
   PortalFrame,
+  PortalStaleDataNotice,
+  PortalUnavailableState,
   Progress,
   portalAssetStateLabel,
+  portalContentAvailability,
   portalContentMode,
   portalNavigation,
   portalNavigationItemActive,
@@ -378,14 +381,60 @@ describe("speaker portal UI components", () => {
     expect(task).toContain("Needs changes");
   });
 
-  it("renders readiness with native progress semantics", () => {
-    const markup = renderToStaticMarkup(
+  it("renders in-progress and ready values with native progress semantics", () => {
+    const inProgress = renderToStaticMarkup(
       createElement(Progress, { value: 60, label: "Speaker readiness" }),
     );
+    const ready = renderToStaticMarkup(
+      createElement(Progress, { value: 100, label: "Speaker readiness" }),
+    );
 
-    expect(markup).toContain('role="progressbar"');
-    expect(markup).toContain('aria-valuenow="60"');
-    expect(markup).toContain('aria-label="Speaker readiness"');
+    expect(inProgress).toContain('role="progressbar"');
+    expect(inProgress).toContain('aria-valuenow="60"');
+    expect(inProgress).toContain('aria-label="Speaker readiness"');
+    expect(ready).toContain('aria-valuenow="100"');
+    expect(ready).toContain("100%");
+  });
+
+  it("renders zero tasks as neutral copy without a percentage or progressbar", () => {
+    const markup = renderToStaticMarkup(
+      createElement(Progress, { value: null, label: "Speaker readiness" }),
+    );
+
+    expect(markup).toContain("No tasks assigned");
+    expect(markup).not.toContain('role="progressbar"');
+    expect(markup).not.toContain("%");
+    expect(markup).not.toContain("Ready");
+  });
+
+  it("distinguishes retryable unavailability from labeled stale data", () => {
+    expect(
+      portalContentAvailability({ loading: false, error: "Network unavailable", hasView: false }),
+    ).toBe("unavailable");
+    expect(
+      portalContentAvailability({ loading: false, error: "Network unavailable", hasView: true }),
+    ).toBe("stale");
+
+    const unavailable = renderToStaticMarkup(
+      createElement(PortalUnavailableState, {
+        error: "Network unavailable",
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(unavailable).toContain('role="alert"');
+    expect(unavailable).toContain("We could not load your portal");
+    expect(unavailable).toContain("Try again");
+
+    const stale = renderToStaticMarkup(
+      createElement(PortalStaleDataNotice, {
+        error: "Refresh failed",
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(stale).toContain('role="alert"');
+    expect(stale).toContain("Showing stale portal data");
+    expect(stale).toContain("Refresh failed");
+    expect(stale).toContain("Try again");
   });
 
   it("keeps primary portal pages and restored operational workspaces visible", () => {

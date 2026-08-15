@@ -1,0 +1,729 @@
+import type { D1Database, Queue } from "@cloudflare/workers-types";
+import { afterEach, describe, expect, it } from "vitest";
+import type { Submission } from "../../../features/cfp/model";
+import type { CfpRepository } from "../../../features/cfp/service";
+import type { Session, SessionRepository } from "../../../features/sessions/types";
+import { AirtableEvaluationAcceptanceHandoff } from "../../../runtime/airtable";
+import { D1BetterAuthGateway } from "../../../runtime/cloudflare";
+import {
+  createSpeakerLifecycleFixture,
+  privateCapabilityParts,
+  type SpeakerLifecycleFixture,
+  speakerLifecycleIds,
+} from "../../../test-support/speaker-lifecycle";
+import { D1SpeakerRepository } from "./speaker";
+
+const fixtures: SpeakerLifecycleFixture[] = [];
+
+async function tokenDigest(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+const {
+  organizationId,
+  eventId,
+  organizerAccountId,
+  priyaAccountId,
+  marcusAccountId,
+  acceptedAccountId,
+  acceptedParticipantId,
+  acceptedSubmissionId,
+  outsiderAccountId,
+  otherOrganizationId,
+  otherEventId,
+  otherOrganizerAccountId,
+} = speakerLifecycleIds;
+
+afterEach(() => {
+  for (const fixture of fixtures.splice(0)) fixture.dispose();
+});
+
+describe("Airtable-free speaker lifecycle on canonical D1", () => {
+  it("roundtrips organizer, participant, task, profile, and private-headshot state", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const createPhase = fixture.createPhase;
+
+    let priyaParticipantId = "";
+    let marcusParticipantId = "";
+    {
+      const { service } = createPhase();
+      const admitted = await service.createOrganizerSpeaker({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        displayName: "Accepted Speaker",
+        email: "accepted@example.test",
+        jobTitle: "Platform Engineer",
+        company: "Accepted Co",
+        biography: "Accepted speaker biography.",
+        socialLinks: {},
+        status: "confirmed",
+        idempotencyKey: "admit-accepted-speaker",
+        sourceType: "cfp",
+        sourceId: acceptedSubmissionId,
+        explicitParticipantId: acceptedParticipantId,
+      });
+      expect(admitted.speakers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            participantId: acceptedParticipantId,
+            status: "confirmed",
+            sessions: [
+              expect.objectContaining({
+                submissionId: `speaker-submission:${acceptedSubmissionId}`,
+                status: "accepted",
+              }),
+            ],
+          }),
+        ]),
+      );
+
+      const created = await service.createOrganizerSpeaker({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        displayName: "Priya Nair",
+        email: "priya@example.test",
+        jobTitle: "Staff Engineer",
+        company: "Durable Systems",
+        biography: "Initial Priya biography.",
+        socialLinks: {},
+        status: "confirmed",
+        idempotencyKey: "create-priya",
+      });
+      priyaParticipantId =
+        created.speakers.find((speaker) => speaker.email === "priya@example.test")?.participantId ??
+        "";
+      expect(priyaParticipantId).not.toBe("");
+
+      const preview = await service.previewSpeakerImport({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        csv: [
+          "displayName,email,jobTitle,company,biography,status,linkedin",
+          "Marcus Chen,marcus@example.test,Developer Advocate,Cloud Co,Marcus biography,confirmed,https://linkedin.com/in/marcus-chen",
+        ].join("\n"),
+      });
+      expect(preview.invalidRows).toEqual([]);
+      if (preview.previewId === undefined || preview.sourceDigest === undefined) {
+        throw new Error("Expected a durable server-issued import preview.");
+      }
+      const imported = await service.commitSpeakerImport({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        previewId: preview.previewId,
+        sourceDigest: preview.sourceDigest,
+        idempotencyKey: "import-marcus",
+      });
+      expect(imported.speakers).toHaveLength(3);
+      marcusParticipantId =
+        imported.speakers.find((speaker) => speaker.email === "marcus@example.test")
+          ?.participantId ?? "";
+      expect(marcusParticipantId).not.toBe("");
+    }
+
+    {
+      for (const [accountId, token] of [
+        [priyaAccountId, "manual-speaker-session"],
+        [marcusAccountId, "imported-speaker-session"],
+      ] as const) {
+        await fixture.database
+          .prepare(
+            `INSERT INTO auth_sessions
+               (id,user_id,token_digest,expires_at,created_at,updated_at)
+             VALUES (?,?,?,?,?,?)`,
+          )
+          .bind(
+            `session:${accountId}`,
+            accountId,
+            await tokenDigest(token),
+            "2100-08-15T04:00:00.000Z",
+            "2099-08-15T04:00:00.000Z",
+            "2099-08-15T04:00:00.000Z",
+          )
+          .run();
+      }
+      const gateway = new D1BetterAuthGateway(fixture.database as unknown as D1Database);
+      await expect(gateway.resolveSession("manual-speaker-session")).resolves.toMatchObject({
+        userId: priyaAccountId,
+        speakerGrants: [
+          {
+            organizationId,
+            speakerProfileId: `profile:${eventId}:${priyaParticipantId}`,
+          },
+        ],
+      });
+      await expect(gateway.resolveSession("imported-speaker-session")).resolves.toMatchObject({
+        userId: marcusAccountId,
+        speakerGrants: [
+          {
+            organizationId,
+            speakerProfileId: `profile:${eventId}:${marcusParticipantId}`,
+          },
+        ],
+      });
+    }
+
+    {
+      const { repository, service } = createPhase();
+      const priyaScope = await repository.getAccessScope(eventId, priyaAccountId);
+      expect(priyaScope).toMatchObject({
+        tenantId: organizationId,
+        participantIds: [priyaParticipantId],
+      });
+      expect(priyaScope.capabilitiesByParticipant?.[priyaParticipantId]).toEqual(
+        expect.arrayContaining(["profile-self", "task-response", "asset-read", "asset-write"]),
+      );
+      const acceptedScope = await repository.getAccessScope(eventId, acceptedAccountId);
+      expect(acceptedScope).toMatchObject({
+        tenantId: organizationId,
+        submissionIds: [acceptedSubmissionId],
+        participantIds: [acceptedParticipantId],
+      });
+      expect(acceptedScope.capabilitiesByParticipant?.[acceptedParticipantId]).toEqual(
+        expect.arrayContaining(["profile-self", "task-response", "asset-read", "asset-write"]),
+      );
+      await expect(repository.listPortalContexts(priyaAccountId)).resolves.toEqual([
+        expect.objectContaining({
+          organizationId,
+          eventId,
+          participantIds: [priyaParticipantId],
+        }),
+      ]);
+      await expect(service.listProfiles(eventId, priyaAccountId)).resolves.toEqual([
+        expect.objectContaining({ participantId: priyaParticipantId }),
+      ]);
+      await expect(service.listProfiles(eventId, outsiderAccountId)).resolves.toEqual([]);
+      await expect(
+        service.listOrganizerSpeakerRoster(otherOrganizationId, eventId, organizerAccountId),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        service.listOrganizerSpeakerRoster(organizationId, otherEventId, organizerAccountId),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    }
+
+    {
+      const { service } = createPhase();
+      const roster = await service.listOrganizerSpeakerRoster(
+        organizationId,
+        eventId,
+        organizerAccountId,
+      );
+      const priya = roster.speakers.find((speaker) => speaker.participantId === priyaParticipantId);
+      if (priya === undefined) throw new Error("Expected Priya in the organizer roster.");
+      await service.updateOrganizerSpeaker({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        participantId: priyaParticipantId,
+        expectedVersion: priya.version,
+        displayName: priya.displayName,
+        email: priya.email,
+        jobTitle: priya.jobTitle,
+        company: priya.company,
+        biography: priya.biography,
+        socialLinks: priya.socialLinks,
+        status: "travel_confirmed",
+        travelLogistics: {
+          travelRequired: true,
+          arrivalAt: "2100-01-09T18:00:00.000Z",
+          accommodation: "Conference hotel",
+          dietaryRequirements: "Vegetarian",
+          travelNotes: "Airport transfer requested.",
+        },
+      });
+    }
+
+    const priyaTaskIds: string[] = [];
+    let marcusTaskId = "";
+    {
+      const { service } = createPhase();
+      for (const [title, participantId] of [
+        ["Confirm badge name", priyaParticipantId],
+        ["Confirm travel details", priyaParticipantId],
+        ["Review event guide", marcusParticipantId],
+      ] as const) {
+        const assigned = await service.assignOrganizerSpeakerTask({
+          organizationId,
+          eventId,
+          accountId: organizerAccountId,
+          title,
+          description: `${title} before arrival.`,
+          dueAt: "2100-01-01T00:00:00.000Z",
+          assignments: [{ participantId, submissionId: null }],
+        });
+        const taskId = assigned.tasks[0]?.taskId;
+        if (taskId === undefined) throw new Error("Expected a persisted general speaker task.");
+        if (participantId === priyaParticipantId) priyaTaskIds.push(taskId);
+        else marcusTaskId = taskId;
+      }
+      expect(priyaTaskIds).toHaveLength(2);
+      expect(marcusTaskId).not.toBe("");
+    }
+
+    {
+      const { service } = createPhase();
+      const portalTasks = await service.listTasks(eventId, priyaAccountId);
+      expect(portalTasks.map((task) => task.id).sort()).toEqual([...priyaTaskIds].sort());
+      for (const taskId of priyaTaskIds) {
+        const task = portalTasks.find((candidate) => candidate.id === taskId);
+        if (task === undefined) throw new Error("Expected Priya's portal task.");
+        await service.transitionTask({
+          eventId,
+          accountId: priyaAccountId,
+          taskId,
+          toStatus: "completed",
+          expectedVersion: task.version,
+        });
+      }
+    }
+
+    {
+      const { service } = createPhase();
+      const roster = await service.listOrganizerSpeakerRoster(
+        organizationId,
+        eventId,
+        organizerAccountId,
+      );
+      expect(
+        roster.speakers.find((speaker) => speaker.participantId === priyaParticipantId)
+          ?.taskSummary,
+      ).toEqual({ total: 2, completed: 2, overdue: 0 });
+      expect(
+        roster.speakers.find((speaker) => speaker.participantId === marcusParticipantId)
+          ?.taskSummary,
+      ).toEqual({ total: 1, completed: 0, overdue: 0 });
+      const allTasks = await service.listOrganizerSpeakerTasks(
+        organizationId,
+        eventId,
+        organizerAccountId,
+      );
+      expect(allTasks.tasks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ taskId: priyaTaskIds[0], status: "completed" }),
+          expect.objectContaining({ taskId: priyaTaskIds[1], status: "completed" }),
+          expect.objectContaining({ taskId: marcusTaskId, status: "not_started" }),
+        ]),
+      );
+    }
+
+    {
+      const { service } = createPhase();
+      const portalProfiles = await service.listProfiles(eventId, priyaAccountId);
+      const profile = portalProfiles.find(
+        (candidate) => candidate.participantId === priyaParticipantId,
+      );
+      if (profile === undefined) throw new Error("Expected Priya's portal profile.");
+      await service.updateProfile({
+        eventId,
+        accountId: priyaAccountId,
+        participantId: priyaParticipantId,
+        biography: "Priya's participant-edited biography.",
+        socialLinks: {
+          linkedin: "https://linkedin.com/in/priya-nair",
+          website: "https://priya.example.test",
+        },
+        expectedVersion: profile.version,
+      });
+    }
+
+    {
+      const { service } = createPhase();
+      await expect(
+        service.getOrganizerSpeaker(
+          organizationId,
+          eventId,
+          organizerAccountId,
+          priyaParticipantId,
+        ),
+      ).resolves.toMatchObject({
+        biography: "Priya's participant-edited biography.",
+        socialLinks: {
+          linkedin: "https://linkedin.com/in/priya-nair",
+          website: "https://priya.example.test",
+        },
+        status: "travel_confirmed",
+        travelLogistics: expect.objectContaining({
+          travelRequired: true,
+          accommodation: "Conference hotel",
+          dietaryRequirements: "Vegetarian",
+        }),
+      });
+    }
+
+    const headshotBytes = new TextEncoder().encode("fake-png-headshot");
+    let headshotAssetId = "";
+    {
+      const { service } = createPhase();
+      const authorization = await service.issueUploadGrant({
+        eventId,
+        accountId: priyaAccountId,
+        participantId: priyaParticipantId,
+        kind: "headshot",
+        fileName: "priya.png",
+        contentType: "image/png",
+        sizeBytes: headshotBytes.byteLength,
+      });
+      headshotAssetId = authorization.asset.id;
+      expect(authorization.asset).toMatchObject({
+        participantId: priyaParticipantId,
+        kind: "headshot",
+        state: "pending_upload",
+      });
+      expect(authorization.asset.submissionId).toBeUndefined();
+      const uploadCapability = privateCapabilityParts(authorization.grant.url);
+      await service.consumeUploadCapability(
+        uploadCapability.capabilityId,
+        uploadCapability.token,
+        new Request("https://api.example.test/private-upload", {
+          method: "PUT",
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(headshotBytes.byteLength),
+          },
+          body: headshotBytes,
+        }),
+      );
+      await service.finalizeUpload({
+        eventId,
+        accountId: priyaAccountId,
+        assetId: headshotAssetId,
+        state: "ready",
+      });
+    }
+
+    {
+      const { service } = createPhase();
+      const portalProfiles = await service.listProfiles(eventId, priyaAccountId);
+      const profile = portalProfiles.find(
+        (candidate) => candidate.participantId === priyaParticipantId,
+      );
+      if (profile === undefined) throw new Error("Expected Priya's reloaded portal profile.");
+      await service.updateProfile({
+        eventId,
+        accountId: priyaAccountId,
+        participantId: priyaParticipantId,
+        headshotAssetId,
+        expectedVersion: profile.version,
+      });
+    }
+
+    {
+      const { service } = createPhase();
+      await expect(
+        service.getOrganizerSpeaker(
+          organizationId,
+          eventId,
+          organizerAccountId,
+          priyaParticipantId,
+        ),
+      ).resolves.toMatchObject({ headshotAssetId });
+      await expect(
+        service.listOrganizerSpeakerAssets(
+          organizationId,
+          eventId,
+          organizerAccountId,
+          priyaParticipantId,
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          assetId: headshotAssetId,
+          kind: "headshot",
+          fileName: "priya.png",
+          contentType: "image/png",
+          byteSize: headshotBytes.byteLength,
+          status: "ready",
+        }),
+      ]);
+      const grant = await service.issueOrganizerDownloadGrant({
+        eventId,
+        accountId: organizerAccountId,
+        assetId: headshotAssetId,
+      });
+      const downloadCapability = privateCapabilityParts(grant.url);
+      const downloaded = await service.consumeDownloadCapability(
+        downloadCapability.capabilityId,
+        downloadCapability.token,
+      );
+      expect(downloaded).toMatchObject({
+        contentType: "image/png",
+        sizeBytes: headshotBytes.byteLength,
+        fileName: "priya.png",
+      });
+      expect(new Uint8Array(await new Response(downloaded.body).arrayBuffer())).toEqual(
+        headshotBytes,
+      );
+      await expect(
+        service.issueOrganizerDownloadGrant({
+          eventId,
+          accountId: otherOrganizerAccountId,
+          assetId: headshotAssetId,
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(service.listAssets(eventId, outsiderAccountId)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    }
+
+    {
+      const { service } = createPhase();
+      const marcus = await service.getOrganizerSpeaker(
+        organizationId,
+        eventId,
+        organizerAccountId,
+        marcusParticipantId,
+      );
+      await service.updateOrganizerSpeaker({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        participantId: marcusParticipantId,
+        expectedVersion: marcus.version,
+        displayName: marcus.displayName,
+        email: marcus.email,
+        jobTitle: marcus.jobTitle,
+        company: marcus.company,
+        biography: marcus.biography,
+        socialLinks: marcus.socialLinks,
+        travelLogistics: marcus.travelLogistics,
+        status: "revoked",
+      });
+    }
+
+    {
+      const { repository, service } = createPhase();
+      await expect(repository.getAccessScope(eventId, marcusAccountId)).resolves.toEqual({
+        submissionIds: [],
+        participantIds: [],
+      });
+      await expect(
+        service.getOrganizerSpeaker(
+          organizationId,
+          eventId,
+          organizerAccountId,
+          marcusParticipantId,
+        ),
+      ).resolves.toMatchObject({ status: "revoked" });
+      await expect(repository.getAccessScope(otherEventId, priyaAccountId)).resolves.toEqual({
+        submissionIds: [],
+        participantIds: [],
+      });
+    }
+  });
+
+  it("provisions accepted participant access only through the canonical grant boundary", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    fixture.database.executeScript(`
+      UPDATE auth_users SET email = 'accepted@example.com' WHERE id = '${acceptedAccountId}';
+      UPDATE participants
+         SET email = 'accepted@example.com', normalized_email = 'accepted@example.com'
+       WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+         AND id = '${acceptedParticipantId}';
+    `);
+    const database = fixture.database as unknown as D1Database;
+    const submission: Submission = {
+      id: acceptedSubmissionId,
+      tenantId: organizationId,
+      eventId,
+      formId: "accepted-form",
+      ownerAccountId: acceptedAccountId,
+      formVersion: 1,
+      version: 1,
+      status: "submitted",
+      completedSteps: [],
+      answers: { title: "Accepted lifecycle session" },
+      participants: [
+        {
+          id: acceptedParticipantId,
+          firstName: "Accepted",
+          lastName: "Speaker",
+          email: "accepted@example.com",
+          role: "primary",
+          biography: "Accepted speaker biography.",
+          answers: {},
+        },
+      ],
+      secondaryContacts: [],
+      createdAt: "2099-08-15T04:00:00.000Z",
+      updatedAt: "2099-08-15T04:00:00.000Z",
+      submittedAt: "2099-08-15T04:00:00.000Z",
+    };
+    const handoff = new AirtableEvaluationAcceptanceHandoff({
+      cfp: {
+        async getSubmission(requestedOrganizationId: string, requestedSubmissionId: string) {
+          return requestedOrganizationId === organizationId &&
+            requestedSubmissionId === acceptedSubmissionId
+            ? submission
+            : null;
+        },
+      } as unknown as CfpRepository,
+      speakers: new D1SpeakerRepository(database),
+      sessions: {
+        async getSession() {
+          return null;
+        },
+        async listTracks() {
+          return [];
+        },
+        async listFormats() {
+          return [];
+        },
+        async listTags() {
+          return [];
+        },
+        async listLevels() {
+          return [];
+        },
+        async putSession(session: Session) {
+          return session;
+        },
+        async appendAudit() {},
+      } as unknown as SessionRepository,
+      database,
+      queue: { async send() {} } as unknown as Queue,
+      senderAddresses: {
+        auth: "login@example.test",
+        speakers: "speakers@example.test",
+        calendar: "calendar@example.test",
+      },
+    });
+
+    await handoff.accept({
+      tenantId: organizationId,
+      eventId,
+      planId: "accepted-plan",
+      submissionId: acceptedSubmissionId,
+      decisionId: "accepted-decision",
+      decidedBy: organizerAccountId,
+      decidedAt: "2099-08-15T04:00:00.000Z",
+      reason: "Accepted",
+      idempotencyKey: "accepted-handoff",
+    });
+
+    expect(
+      fixture.database.query<{ participant_id: string; user_id: string }>(
+        `SELECT participant_id, user_id FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${acceptedParticipantId}' AND revoked_at IS NULL`,
+      ),
+    ).toEqual([{ participant_id: acceptedParticipantId, user_id: acceptedAccountId }]);
+    expect(
+      fixture.database.query(
+        `SELECT * FROM speaker_grants WHERE organization_id = '${organizationId}'`,
+      ),
+    ).toEqual([]);
+
+    await fixture.database
+      .prepare(
+        `INSERT INTO auth_sessions
+           (id,user_id,token_digest,expires_at,created_at,updated_at)
+         VALUES (?,?,?,?,?,?)`,
+      )
+      .bind(
+        "session:accepted",
+        acceptedAccountId,
+        await tokenDigest("accepted-speaker-session"),
+        "2100-08-15T04:00:00.000Z",
+        "2099-08-15T04:00:00.000Z",
+        "2099-08-15T04:00:00.000Z",
+      )
+      .run();
+    const gateway = new D1BetterAuthGateway(database);
+    await expect(gateway.resolveSession("accepted-speaker-session")).resolves.toMatchObject({
+      userId: acceptedAccountId,
+      speakerGrants: [
+        {
+          organizationId,
+          speakerProfileId: `speaker-profile:${eventId}:${acceptedParticipantId}`,
+        },
+      ],
+    });
+  });
+
+  it("aborts a lost organizer aggregate update without committing side effects", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const { repository, service } = fixture.createPhase();
+    const created = await service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Race Speaker",
+      email: "race@example.test",
+      jobTitle: "Engineer",
+      company: "Race Co",
+      biography: "Before the race.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "create-race-speaker",
+    });
+    const speaker = created.speakers.find((candidate) => candidate.email === "race@example.test");
+    if (speaker === undefined) throw new Error("Expected the race speaker fixture.");
+    const command = {
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      participantId: speaker.participantId,
+      profileId: `profile:${eventId}:${speaker.participantId}`,
+      displayName: speaker.displayName,
+      email: speaker.email,
+      jobTitle: speaker.jobTitle,
+      company: speaker.company,
+      biography: "Losing writer biography.",
+      socialLinks: speaker.socialLinks,
+      travelLogistics: speaker.travelLogistics,
+      status: speaker.status,
+      sourceType: "manual" as const,
+      sourceId: `manual:${eventId}:${speaker.participantId}`,
+      expectedVersion: speaker.version,
+      sourceDigest: "losing-writer-digest",
+      updatedAt: "2099-08-15T05:00:00.000Z",
+    };
+
+    fixture.database.beforeNextBatch(() => {
+      fixture.database.run(
+        `UPDATE speaker_profiles SET version = version + 1
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${speaker.participantId}' AND version = ${speaker.version}`,
+      );
+    });
+    await expect(repository.upsertOrganizerSpeakerAggregate(command)).resolves.toEqual({
+      ok: false,
+      reason: "version_conflict",
+    });
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM speaker_aggregate_operations
+          WHERE operation_type = 'update' AND participant_ids_json = '["${speaker.participantId}"]'`,
+      )[0]?.count,
+    ).toBe(0);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM audit_events
+          WHERE id = 'speaker-update:${eventId}:${speaker.participantId}:${speaker.version}'`,
+      )[0]?.count,
+    ).toBe(0);
+    expect(
+      fixture.database.query<{ biography: string }>(
+        `SELECT biography FROM speaker_profiles
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${speaker.participantId}'`,
+      )[0]?.biography,
+    ).toBe("Before the race.");
+
+    const winningCommand = {
+      ...command,
+      expectedVersion: speaker.version + 1,
+      sourceDigest: "winning-writer-digest",
+    };
+    const applied = await repository.upsertOrganizerSpeakerAggregate(winningCommand);
+    expect(applied).toMatchObject({ ok: true, value: { version: speaker.version + 2 } });
+    await expect(repository.upsertOrganizerSpeakerAggregate(winningCommand)).resolves.toEqual(
+      applied,
+    );
+  });
+});

@@ -301,7 +301,7 @@ export class D1ReportRepository implements ReportRepository {
         ).all<Row>(),
         statement(
           this.database,
-          `SELECT DISTINCT COALESCE(sr.id,p.id) id,COALESCE(sr.display_name,p.display_name,ss.display_name) display_name,COALESCE(sr.biography,sp.biography,'') biography,COALESCE(sr.email,p.email) email FROM session_speakers ss LEFT JOIN speaker_roster sr ON sr.organization_id=ss.organization_id AND sr.event_id=ss.event_id AND (sr.id=ss.speaker_id OR sr.participant_id=ss.speaker_id) LEFT JOIN participants p ON p.organization_id=ss.organization_id AND p.event_id=ss.event_id AND p.id=ss.speaker_id LEFT JOIN submission_participants sp ON sp.organization_id=p.organization_id AND sp.event_id=p.event_id AND sp.participant_id=p.id WHERE ss.organization_id=? AND ss.event_id=? AND ss.session_id=? ORDER BY id`,
+          `SELECT DISTINCT p.id,COALESCE(profile.display_name,p.display_name,ss.display_name) display_name,COALESCE(profile.biography,sp.biography,'') biography,COALESCE(profile.email,p.email) email FROM session_speakers ss JOIN participants p ON p.organization_id=ss.organization_id AND p.event_id=ss.event_id AND p.id=ss.speaker_id LEFT JOIN speaker_profiles profile ON profile.organization_id=p.organization_id AND profile.event_id=p.event_id AND profile.participant_id=p.id LEFT JOIN submission_participants sp ON sp.organization_id=p.organization_id AND sp.event_id=p.event_id AND sp.participant_id=p.id WHERE ss.organization_id=? AND ss.event_id=? AND ss.session_id=? ORDER BY p.id`,
           [scope.tenantId, scope.eventId, text(s.id)],
         ).all<Row>(),
         statement(

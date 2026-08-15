@@ -1,4 +1,6 @@
+import { CommunicationError } from "../communications/service";
 import { allSpeakerPortalCapabilities, capabilityAllows } from "./capabilities";
+import type { SpeakerCommunications } from "./communications";
 import type {
   FinalizeSpeakerAssetCommand,
   PrivateAssetCapabilityBinding,
@@ -31,9 +33,9 @@ import type {
   SpeakerImportIssue,
   SpeakerImportPreview,
   SpeakerImportRow,
-  SpeakerInvitationDeliveryInput,
   SpeakerInvitationPreview,
   SpeakerInvitationResult,
+  SpeakerOrganizerLifecycleRepository,
   SpeakerOrganizerProfileInput,
   SpeakerOrganizerReadModel,
   SpeakerParticipantResolution,
@@ -102,7 +104,7 @@ export type SpeakerServiceErrorCode =
 export class SpeakerServiceError extends Error {
   constructor(
     readonly code: SpeakerServiceErrorCode,
-    readonly status: 400 | 404 | 409 | 410,
+    readonly status: 400 | 404 | 409 | 410 | 503,
     message: string,
   ) {
     super(message);
@@ -233,29 +235,6 @@ export interface SpeakerReminderEligibility {
     | "no_reminder_offset";
 }
 
-type SpeakerEmailRepository = {
-  listSpeakerEmailTemplates?: (
-    organizationId: string,
-    eventId: string,
-  ) => Promise<readonly SpeakerEmailTemplate[]>;
-  saveSpeakerEmailTemplate?: (template: SpeakerEmailTemplate) => Promise<SpeakerEmailTemplate>;
-  getSpeakerEmailPreview?: (
-    organizationId: string,
-    eventId: string,
-    previewId: string,
-  ) => Promise<SpeakerEmailPreview | null>;
-  saveSpeakerEmailPreview?: (preview: SpeakerEmailPreview) => Promise<SpeakerEmailPreview>;
-  listSpeakerEmailSends?: (
-    organizationId: string,
-    eventId: string,
-  ) => Promise<readonly SpeakerEmailSend[]>;
-  getSpeakerEmailSend?: (
-    organizationId: string,
-    eventId: string,
-    sendId: string,
-  ) => Promise<SpeakerEmailSend | null>;
-  saveSpeakerEmailSend?: (send: SpeakerEmailSend) => Promise<SpeakerEmailSend>;
-};
 export interface SpeakerServiceOptions {
   speakerSender: string;
   now?: () => Date;
@@ -264,7 +243,9 @@ export interface SpeakerServiceOptions {
   /** Alias retained so adapters can name the injected delivery explicitly. */
   reminderDelivery?: SpeakerReminderDelivery;
   invitationDelivery?: SpeakerReminderDelivery;
+  /** Test-only compatibility; production speaker email uses communications. */
   emailDelivery?: SpeakerEmailDelivery;
+  communications?: SpeakerCommunications;
 }
 
 type EditableSpeakerProfileInput = SpeakerOrganizerProfileInput & {
@@ -1157,80 +1138,11 @@ function requireSpeakerSender(value: string): string {
   return value;
 }
 
-function speakerEmailFirstName(displayName: string): string {
-  const first = displayName.trim().split(/\s+/u)[0];
-  return first === undefined || first.length === 0 ? displayName.trim() : first;
-}
-async function speakerEmailSendId(
-  organizationId: string,
-  eventId: string,
-  idempotencyKey: string,
-): Promise<string> {
+async function speakerSourceDigest(value: string): Promise<string> {
   const digest = new Uint8Array(
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(`${organizationId}:${eventId}:${idempotencyKey}`),
-    ),
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
   );
-  return `speaker-email-send:${[...digest]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-function escapeSpeakerEmailHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function renderSpeakerEmail(
-  source: string,
-  recipient: {
-    displayName: string;
-    firstName: string;
-    email: string;
-  },
-  html: boolean,
-): string {
-  const values = {
-    first_name: recipient.firstName,
-    display_name: recipient.displayName,
-    email: recipient.email,
-  };
-  return source.replace(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/gu, (_match, token: string) => {
-    const value = values[token as keyof typeof values];
-    if (value === undefined) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        `The email template token ${token} is not supported.`,
-      );
-    }
-    return html ? escapeSpeakerEmailHtml(value) : value;
-  });
-}
-
-function speakerEmailTokens(...sources: readonly string[]): string[] {
-  const tokens = new Set<string>();
-  for (const source of sources) {
-    for (const match of source.matchAll(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/gu)) {
-      const token = match[1];
-      if (token !== undefined) tokens.add(token);
-    }
-  }
-  const allowed = new Set(["first_name", "display_name", "email"]);
-  if ([...tokens].some((token) => !allowed.has(token))) {
-    const invalid = [...tokens].find((token) => !allowed.has(token));
-    throw new SpeakerServiceError(
-      "VALIDATION_ERROR",
-      400,
-      `The email template token ${invalid ?? "unknown"} is not supported.`,
-    );
-  }
-  return [...tokens];
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function normalizeSocialLinks(
@@ -1392,17 +1304,11 @@ function canonicalSpeakerSubmissionId(value: string): string {
 function sameSpeakerSubmission(left: string, right: string): boolean {
   return canonicalSpeakerSubmissionId(left) === canonicalSpeakerSubmissionId(right);
 }
-const crmRosterWorkflowStatus = "crm-prospect";
-
-function isCrmRosterEntry(entry: SpeakerRosterEntry): boolean {
-  return (
-    entry.workflowStatus === crmRosterWorkflowStatus &&
-    canonicalSpeakerSubmissionId(entry.submissionId).startsWith("speaker-submission:crm-contact:")
-  );
-}
-
 function isOrganizerManagedRosterEntry(entry: SpeakerRosterEntry): boolean {
-  return isCrmRosterEntry(entry) && entry.organizerStatus !== undefined;
+  return (
+    entry.organizerStatus !== undefined &&
+    (entry.sourceType === "manual" || entry.sourceType === "csv" || entry.sourceType === "crm")
+  );
 }
 function organizerRecordTenantMatches(value: unknown, tenantId: string): boolean {
   if (value === null || typeof value !== "object") return false;
@@ -1574,21 +1480,12 @@ export class SpeakerService {
   private readonly assetCache = new Map<string, SpeakerAsset>();
   private readonly assetAuditCache = new Map<string, SpeakerAssetAuditEntry[]>();
   private readonly delivery: SpeakerReminderDelivery | undefined;
-  private readonly emailDelivery: SpeakerEmailDelivery | undefined;
   private readonly speakerSender: string;
-  private readonly emailTemplateCache = new Map<string, SpeakerEmailTemplate[]>();
-  private readonly emailPreviewCache = new Map<string, SpeakerEmailPreview>();
-  private readonly emailSendCache = new Map<string, SpeakerEmailSend>();
+  private readonly communications: SpeakerCommunications | undefined;
   private readonly reminderCache = new Map<string, SpeakerReminderQueueResult>();
-  private readonly organizerSpeakerCache = new Map<string, SpeakerRosterEntry[]>();
-  private readonly speakerImportCache = new Map<string, SpeakerWorkspaceRoster>();
-  private readonly speakerImportFingerprints = new Map<string, string>();
-  private readonly speakerCreateCache = new Map<string, SpeakerWorkspaceRoster>();
-  private readonly speakerCreateFingerprints = new Map<string, string>();
-  private readonly invitationCache = new Map<string, SpeakerInvitationResult>();
 
   constructor(
-    private readonly repository: SpeakerRepository,
+    private readonly repository: SpeakerRepository & Partial<SpeakerOrganizerLifecycleRepository>,
     private readonly assetGateway: PrivateAssetGateway,
     options: SpeakerServiceOptions,
   ) {
@@ -1596,7 +1493,7 @@ export class SpeakerService {
     this.now = options.now ?? (() => new Date());
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.delivery = options.delivery ?? options.invitationDelivery ?? options.reminderDelivery;
-    this.emailDelivery = options.emailDelivery;
+    this.communications = options.communications;
   }
   async resolveEventParticipant(
     input: Omit<ResolveEventParticipantInput, "createParticipantId">,
@@ -1611,24 +1508,15 @@ export class SpeakerService {
     const normalizedEmail =
       input.normalizedEmail === undefined ? undefined : importEmail(input.normalizedEmail);
     const createParticipantId = `participant:${this.generateId()}`;
-    const resolver = this.repository.resolveEventParticipant;
-    const resolution =
-      resolver === undefined
-        ? {
-            state: "resolved" as const,
-            participantId: explicitParticipantId ?? createParticipantId,
-            submissionIds: [],
-            created: explicitParticipantId === undefined,
-          }
-        : await resolver.call(this.repository, {
-            organizationId,
-            eventId,
-            sourceType: input.sourceType,
-            sourceId,
-            ...(explicitParticipantId === undefined ? {} : { explicitParticipantId }),
-            ...(normalizedEmail === undefined ? {} : { normalizedEmail }),
-            createParticipantId,
-          });
+    const resolution = await this.organizerLifecycle().resolveEventParticipant({
+      organizationId,
+      eventId,
+      sourceType: input.sourceType,
+      sourceId,
+      ...(explicitParticipantId === undefined ? {} : { explicitParticipantId }),
+      ...(normalizedEmail === undefined ? {} : { normalizedEmail }),
+      createParticipantId,
+    });
     if (resolution.state === "ambiguous") {
       return {
         state: "ambiguous",
@@ -1688,7 +1576,10 @@ export class SpeakerService {
             scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submissionId)),
         ),
       );
-      if (context.eventId.trim().length === 0 || contextSubmissionIds.length === 0) {
+      if (
+        context.eventId.trim().length === 0 ||
+        (contextSubmissionIds.length === 0 && participantIds.length === 0)
+      ) {
         return [];
       }
       const contextScope: SpeakerAccessScope = {
@@ -2212,6 +2103,7 @@ export class SpeakerService {
     const stored = rosterEntries.filter(
       (entry) =>
         entry.eventId === eventId &&
+        entry.submissionId !== undefined &&
         sameSpeakerSubmission(entry.submissionId, canonicalSubmissionId),
     );
     const byParticipant = new Map<string, SpeakerRosterEntry>();
@@ -2306,7 +2198,7 @@ export class SpeakerService {
           scope.participantIds.includes(participantId),
         ),
       ),
-      ...roster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
+      ...roster.filter(isOrganizerManagedRosterEntry).map((entry) => entry.participantId),
     ]);
     const tasks = await this.repository.listTasks(eventId, participantIds);
     return this.organizerTasksFromSources(eventId, scope, acceptedSubmissions, roster, tasks);
@@ -2326,7 +2218,7 @@ export class SpeakerService {
       ]),
     );
     const manualByParticipant = new Map(
-      roster.filter(isCrmRosterEntry).map((entry) => [entry.participantId, entry]),
+      roster.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
     );
     const acceptedParticipantIds = new Set(
       acceptedSubmissions.flatMap((submission) =>
@@ -2401,7 +2293,7 @@ export class SpeakerService {
       input.accountId,
     );
     const manualParticipantIds = new Set(
-      organizerRoster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
+      organizerRoster.filter(isOrganizerManagedRosterEntry).map((entry) => entry.participantId),
     );
     if (
       assignments.some(
@@ -2575,7 +2467,8 @@ export class SpeakerService {
       current === null
         ? undefined
         : roster.find(
-            (entry) => entry.participantId === current.participantId && isCrmRosterEntry(entry),
+            (entry) =>
+              entry.participantId === current.participantId && isOrganizerManagedRosterEntry(entry),
           );
     const participantAllowed =
       current !== null &&
@@ -2773,7 +2666,7 @@ export class SpeakerService {
             scope.participantIds.includes(participantId),
           ),
         ),
-        ...roster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
+        ...roster.filter(isOrganizerManagedRosterEntry).map((entry) => entry.participantId),
       ]);
       const storedTasks = await this.repository.listTasks(eventId, participantIds);
       tasks = this.organizerTasksFromSources(
@@ -4167,30 +4060,11 @@ export class SpeakerService {
     accountId: string,
   ): Promise<readonly SpeakerEmailTemplate[]> {
     await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    const store = this.repository as SpeakerRepository & SpeakerEmailRepository;
-    const persisted = store.listSpeakerEmailTemplates
-      ? await store.listSpeakerEmailTemplates(organizationId, eventId)
-      : [];
-    const cached =
-      store.listSpeakerEmailTemplates === undefined
-        ? (this.emailTemplateCache.get(`${organizationId}:${eventId}`) ?? [])
-        : [];
-    const byKey = new Map(
-      [...persisted, ...cached].map((template) => [
-        `${template.id}:${template.version}`,
-        structuredClone(template),
-      ]),
-    );
-    const templates = [...byKey.values()].sort(
-      (left, right) => left.id.localeCompare(right.id) || left.version - right.version,
-    );
-    if (store.listSpeakerEmailTemplates === undefined) {
-      this.emailTemplateCache.set(
-        `${organizationId}:${eventId}`,
-        templates.map((template) => structuredClone(template)),
-      );
+    try {
+      return await this.requireCommunications().listTemplates(organizationId, eventId, accountId);
+    } catch (error) {
+      return this.communicationFailure(error, "EMAIL_TEMPLATE_NOT_FOUND");
     }
-    return templates;
   }
 
   async createOrganizerSpeakerEmailTemplate(input: {
@@ -4209,58 +4083,14 @@ export class SpeakerService {
       input.eventId,
       input.accountId,
     );
-    const name = normalizeUserText(input.name, "The email template name", 200);
-    const subject = normalizeUserText(input.subject, "The email subject", 500, true);
-    const html = normalizeUserText(input.html, "The email HTML", 100_000, true);
-    const text = normalizeUserText(input.text, "The email text", 100_000, true);
-    const variables = speakerEmailTokens(subject, html, text);
-    const id =
-      input.templateId?.trim() ||
-      `speaker-email:${input.organizationId}:${input.eventId}:${this.generateId()}`;
-    if (id.length > 200) {
-      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The email template ID is too long.");
+    try {
+      return await this.requireCommunications().createTemplate({
+        ...input,
+        status: input.status ?? "approved",
+      });
+    } catch (error) {
+      return this.communicationFailure(error, "VERSION_CONFLICT");
     }
-    const templates = await this.listOrganizerSpeakerEmailTemplates(
-      input.organizationId,
-      input.eventId,
-      input.accountId,
-    );
-    const latestVersion = templates
-      .filter((template) => template.id === id)
-      .reduce((maximum, template) => Math.max(maximum, template.version), 0);
-    const now = this.now().toISOString();
-    const template: SpeakerEmailTemplate = {
-      id,
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-      name,
-      version: latestVersion + 1,
-      status: input.status ?? "approved",
-      sender: this.speakerSender,
-      subject,
-      html,
-      text,
-      variables,
-      createdBy: input.accountId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    const store = this.repository as SpeakerRepository & SpeakerEmailRepository;
-    const stored =
-      store.saveSpeakerEmailTemplate === undefined
-        ? template
-        : await store.saveSpeakerEmailTemplate(structuredClone(template));
-    if (store.saveSpeakerEmailTemplate === undefined) {
-      const cacheKey = `${input.organizationId}:${input.eventId}`;
-      const next = [
-        ...(this.emailTemplateCache.get(cacheKey) ?? []).filter(
-          (candidate) => !(candidate.id === stored.id && candidate.version === stored.version),
-        ),
-        structuredClone(stored),
-      ];
-      this.emailTemplateCache.set(cacheKey, next);
-    }
-    return structuredClone(stored);
   }
 
   async createOrganizerSpeakerEmailTemplateVersion(input: {
@@ -4273,20 +4103,19 @@ export class SpeakerService {
     text: string;
     status?: "draft" | "approved";
   }): Promise<SpeakerEmailTemplate> {
-    const templates = await this.listOrganizerSpeakerEmailTemplates(
+    await this.requireOrganizerOrganizationScope(
       input.organizationId,
       input.eventId,
       input.accountId,
     );
-    const current = templates
-      .filter((template) => template.id === input.templateId)
-      .sort((left, right) => right.version - left.version)[0];
-    if (current === undefined) throw notFound();
-    return this.createOrganizerSpeakerEmailTemplate({
-      ...input,
-      name: current.name,
-      status: input.status ?? "approved",
-    });
+    try {
+      return await this.requireCommunications().createTemplateVersion({
+        ...input,
+        status: input.status ?? "approved",
+      });
+    } catch (error) {
+      return this.communicationFailure(error, "VERSION_CONFLICT");
+    }
   }
 
   async previewOrganizerSpeakerEmails(input: {
@@ -4302,103 +4131,16 @@ export class SpeakerService {
       input.eventId,
       input.accountId,
     );
-    const templates = await this.listOrganizerSpeakerEmailTemplates(
-      input.organizationId,
-      input.eventId,
-      input.accountId,
-    );
-    const template = templates
-      .filter(
-        (candidate) =>
-          candidate.id === input.templateId &&
-          (input.templateVersion === undefined || candidate.version === input.templateVersion) &&
-          candidate.status === "approved",
-      )
-      .sort((left, right) => right.version - left.version)[0];
-    if (template === undefined) {
-      throw new SpeakerServiceError(
-        "EMAIL_TEMPLATE_NOT_FOUND",
-        409,
-        "The approved speaker email template or requested version was not found.",
+    try {
+      return await this.requireCommunications().preview(input);
+    } catch (error) {
+      return this.communicationFailure(
+        error,
+        error instanceof CommunicationError && error.message.includes("template")
+          ? "EMAIL_TEMPLATE_NOT_FOUND"
+          : "EMAIL_PARTICIPANT_NOT_FOUND",
       );
     }
-    const requested = unique(input.participantIds);
-    if (requested.length === 0) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "Select at least one speaker for the email preview.",
-      );
-    }
-    const roster = await this.listOrganizerSpeakerRoster(
-      input.organizationId,
-      input.eventId,
-      input.accountId,
-    );
-    const speakers = requested.map((participantId) => {
-      const speaker = roster.speakers.find(
-        (candidate) => candidate.participantId === participantId,
-      );
-      if (speaker === undefined) {
-        throw new SpeakerServiceError(
-          "EMAIL_PARTICIPANT_NOT_FOUND",
-          409,
-          "The selected speaker participant was not found in this event roster.",
-        );
-      }
-      if (speaker.email.trim().length === 0) {
-        throw new SpeakerServiceError(
-          "EMAIL_RECIPIENT_EMAIL_MISSING",
-          400,
-          "The selected speaker participant does not have an email address.",
-        );
-      }
-      const displayName = speaker.displayName.trim();
-      const firstName = speakerEmailFirstName(displayName);
-      const recipient = { displayName, firstName, email: speaker.email.trim() };
-      return {
-        participantId,
-        displayName,
-        firstName,
-        email: recipient.email,
-        subject: renderSpeakerEmail(template.subject, recipient, false),
-        html: renderSpeakerEmail(template.html, recipient, true),
-        text: renderSpeakerEmail(template.text, recipient, false),
-      };
-    });
-    const first = speakers[0];
-    if (first === undefined) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "Select at least one speaker for the email preview.",
-      );
-    }
-    const now = this.now();
-    const preview: SpeakerEmailPreview = {
-      id: this.generateId(),
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-      templateId: template.id,
-      templateVersion: template.version,
-      sender: template.sender,
-      recipientIds: speakers.map((speaker) => speaker.participantId),
-      recipients: speakers,
-      subject: first.subject,
-      html: first.html,
-      text: first.text,
-      createdAt: now.toISOString(),
-      expiresAt: new Date(now.getTime() + 15 * 60_000).toISOString(),
-    };
-    const store = this.repository as SpeakerRepository & SpeakerEmailRepository;
-    const stored =
-      store.saveSpeakerEmailPreview === undefined
-        ? preview
-        : await store.saveSpeakerEmailPreview(structuredClone(preview));
-    if (store.saveSpeakerEmailPreview === undefined) {
-      this.emailPreviewCache.set(stored.id, structuredClone(stored));
-    }
-    return structuredClone(stored);
   }
 
   async sendOrganizerSpeakerEmails(input: {
@@ -4408,200 +4150,16 @@ export class SpeakerService {
     previewId: string;
     idempotencyKey: string;
   }): Promise<SpeakerEmailSend> {
-    const scope = await this.requireOrganizerOrganizationScope(
+    await this.requireOrganizerOrganizationScope(
       input.organizationId,
       input.eventId,
       input.accountId,
     );
-    const idempotencyKey = normalizeUserText(
-      input.idempotencyKey,
-      "The email idempotency key",
-      300,
-    );
-    const cacheKey = `${input.organizationId}:${input.eventId}:${idempotencyKey}`;
-    const store = this.repository as SpeakerRepository & SpeakerEmailRepository;
-    const existingCached =
-      store.listSpeakerEmailSends === undefined ? this.emailSendCache.get(cacheKey) : undefined;
-    if (existingCached !== undefined) return structuredClone(existingCached);
-    const persistedSends = store.listSpeakerEmailSends
-      ? await store.listSpeakerEmailSends(input.organizationId, input.eventId)
-      : [];
-    const existing = persistedSends.find((send) => send.idempotencyKey === idempotencyKey);
-    if (existing !== undefined) {
-      if (store.listSpeakerEmailSends === undefined) {
-        this.emailSendCache.set(cacheKey, structuredClone(existing));
-      }
-      return structuredClone(existing);
+    try {
+      return await this.requireCommunications().send(input);
+    } catch (error) {
+      return this.communicationFailure(error, "VERSION_CONFLICT");
     }
-    const preview =
-      store.getSpeakerEmailPreview === undefined
-        ? (this.emailPreviewCache.get(input.previewId) ?? null)
-        : await store.getSpeakerEmailPreview(input.organizationId, input.eventId, input.previewId);
-    if (
-      preview === null ||
-      preview === undefined ||
-      preview.organizationId !== input.organizationId ||
-      preview.eventId !== input.eventId
-    ) {
-      throw notFound();
-    }
-    if (Date.parse(preview.expiresAt) <= this.now().getTime()) {
-      throw new SpeakerServiceError(
-        "VERSION_CONFLICT",
-        409,
-        "The email preview has expired; create a new preview.",
-      );
-    }
-    const currentRoster = await this.listOrganizerSpeakerRoster(
-      input.organizationId,
-      input.eventId,
-      input.accountId,
-    );
-    const allowedRecipientIds = new Set(
-      currentRoster.speakers.map((speaker) => speaker.participantId),
-    );
-    if (preview.recipientIds.some((participantId) => !allowedRecipientIds.has(participantId))) {
-      throw notFound();
-    }
-    const now = this.now().toISOString();
-    const deliveries = preview.recipients.map((recipient) => ({
-      participantId: recipient.participantId,
-      email: recipient.email,
-      status: "queued" as const,
-      providerMessageId: null,
-      reason: null,
-    }));
-    const history: SpeakerEmailSend["history"][number][] = [
-      {
-        occurredAt: now,
-        action: "send_created",
-        participantId: null,
-        details: {
-          templateId: preview.templateId,
-          templateVersion: preview.templateVersion,
-          recipientCount: preview.recipients.length,
-          previewId: preview.id,
-        },
-      },
-      ...preview.recipients.map((recipient) => ({
-        occurredAt: now,
-        action: "delivery_queued" as const,
-        participantId: recipient.participantId,
-        details: { email: recipient.email },
-      })),
-    ];
-    let send: SpeakerEmailSend = {
-      id: await speakerEmailSendId(input.organizationId, input.eventId, idempotencyKey),
-      organizationId: scope.tenantId,
-      eventId: input.eventId,
-      templateId: preview.templateId,
-      templateVersion: preview.templateVersion,
-      sender: preview.sender,
-      idempotencyKey,
-      status: "queued",
-      recipientIds: [...preview.recipientIds],
-      deliveries,
-      history,
-      createdAt: now,
-      updatedAt: now,
-    };
-    if (store.saveSpeakerEmailSend !== undefined) {
-      send = await store.saveSpeakerEmailSend(structuredClone(send));
-    }
-    const emailDelivery = this.emailDelivery;
-    const queueEmail =
-      emailDelivery?.enqueueEmail?.bind(emailDelivery) ??
-      emailDelivery?.queueEmail?.bind(emailDelivery);
-    if (queueEmail === undefined) {
-      throw new SpeakerServiceError(
-        "REMINDER_UNAVAILABLE",
-        409,
-        "Transactional email delivery is not configured.",
-      );
-    }
-    for (const recipient of preview.recipients) {
-      let receipt: SpeakerEmailDeliveryReceipt;
-      try {
-        receipt = await queueEmail({
-          organizationId: input.organizationId,
-          eventId: input.eventId,
-          participantId: recipient.participantId,
-          recipientEmail: recipient.email,
-          displayName: recipient.displayName,
-          firstName: recipient.firstName,
-          sender: preview.sender,
-          templateId: preview.templateId,
-          templateVersion: preview.templateVersion,
-          subject: recipient.subject,
-          html: recipient.html,
-          text: recipient.text,
-          idempotencyKey: `${idempotencyKey}:${recipient.participantId}`,
-          actorAccountId: input.accountId,
-        });
-      } catch (error) {
-        receipt = {
-          status: "failed",
-          reason: error instanceof Error ? error.message : "The email queue rejected the message.",
-        };
-      }
-      const status = receipt.status ?? (receipt.duplicate === true ? "sent" : "queued");
-      const index = send.deliveries.findIndex(
-        (candidate) => candidate.participantId === recipient.participantId,
-      );
-      if (index < 0) continue;
-      const currentDelivery = send.deliveries[index];
-      if (currentDelivery === undefined) continue;
-      const nextDelivery: SpeakerEmailSend["deliveries"][number] = {
-        participantId: currentDelivery.participantId,
-        email: currentDelivery.email,
-        status,
-        providerMessageId: receipt.providerMessageId ?? null,
-        reason: receipt.reason ?? null,
-      };
-      send = {
-        ...send,
-        deliveries: send.deliveries.map((candidate, candidateIndex) =>
-          candidateIndex === index ? nextDelivery : candidate,
-        ),
-        history: [
-          ...send.history,
-          {
-            occurredAt: this.now().toISOString(),
-            action:
-              status === "failed"
-                ? "delivery_failed"
-                : status === "sent"
-                  ? "delivery_sent"
-                  : "delivery_queued",
-            participantId: recipient.participantId,
-            details: {
-              providerMessageId: receipt.providerMessageId ?? null,
-              reason: receipt.reason ?? null,
-            },
-          },
-        ],
-        updatedAt: this.now().toISOString(),
-      };
-      if (store.saveSpeakerEmailSend !== undefined) {
-        send = await store.saveSpeakerEmailSend(structuredClone(send));
-      }
-    }
-    const statuses = send.deliveries.map((delivery) => delivery.status);
-    const status: SpeakerEmailSend["status"] = statuses.every((candidate) => candidate === "failed")
-      ? "failed"
-      : statuses.every((candidate) => candidate === "sent")
-        ? "sent"
-        : statuses.some((candidate) => candidate === "failed")
-          ? "partial"
-          : "queued";
-    send = { ...send, status, updatedAt: this.now().toISOString() };
-    if (store.saveSpeakerEmailSend !== undefined) {
-      send = await store.saveSpeakerEmailSend(structuredClone(send));
-    }
-    if (store.saveSpeakerEmailSend === undefined) {
-      this.emailSendCache.set(cacheKey, structuredClone(send));
-    }
-    return structuredClone(send);
   }
 
   async listOrganizerSpeakerEmailHistory(
@@ -4610,21 +4168,11 @@ export class SpeakerService {
     accountId: string,
   ): Promise<readonly SpeakerEmailSend[]> {
     await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    const store = this.repository as SpeakerRepository & SpeakerEmailRepository;
-    const persisted = store.listSpeakerEmailSends
-      ? await store.listSpeakerEmailSends(organizationId, eventId)
-      : [];
-    const cached =
-      store.listSpeakerEmailSends === undefined
-        ? [...this.emailSendCache.values()].filter(
-            (send) => send.organizationId === organizationId && send.eventId === eventId,
-          )
-        : [];
-    const byId = new Map([...persisted, ...cached].map((send) => [send.id, structuredClone(send)]));
-    return [...byId.values()].sort(
-      (left, right) =>
-        right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id),
-    );
+    try {
+      return await this.requireCommunications().listHistory(organizationId, eventId, accountId);
+    } catch (error) {
+      return this.communicationFailure(error, "VERSION_CONFLICT");
+    }
   }
 
   async listSpeakerEmailHistory(
@@ -5370,7 +4918,7 @@ export class SpeakerService {
     }
 
     const submissionId =
-      taskSubject?.type === "participant"
+      taskSubject?.type === "participant" || (taskId === undefined && input.kind === "headshot")
         ? undefined
         : await this.resolveSubmissionId(
             input.eventId,
@@ -5729,6 +5277,7 @@ export class SpeakerService {
     const stored = (await this.repository.listRoster(eventId, target.canonicalSubmissionId)).filter(
       (entry) =>
         entry.eventId === eventId &&
+        entry.submissionId !== undefined &&
         sameSpeakerSubmission(entry.submissionId, target.canonicalSubmissionId),
     );
     const byParticipant = new Map<string, SpeakerRosterEntry>();
@@ -5890,6 +5439,7 @@ export class SpeakerService {
     const existing = existingEntries?.find(
       (entry) =>
         entry.participantId === input.participantId &&
+        entry.submissionId !== undefined &&
         sameSpeakerSubmission(entry.submissionId, target.canonicalSubmissionId),
     );
     if (existing === undefined) throw notFound();
@@ -5962,6 +5512,7 @@ export class SpeakerService {
     const existing = entries?.find(
       (entry) =>
         entry.participantId === input.participantId &&
+        entry.submissionId !== undefined &&
         sameSpeakerSubmission(entry.submissionId, target.canonicalSubmissionId),
     );
     if (existing === undefined) throw notFound();
@@ -6651,19 +6202,11 @@ export class SpeakerService {
       input.eventId,
       input.accountId,
     );
-    return this.createOrganizerSpeakerWithProjection(input, projection);
+    const roster = await this.createOrganizerSpeakerWithProjection(input, projection);
+    if (roster === undefined) throw notFound();
+    return roster;
   }
 
-  private createOrganizerSpeakerWithProjection(
-    input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
-    projection: OrganizerSpeakerMutationProjection,
-    materializeResponse?: true,
-  ): Promise<SpeakerWorkspaceRoster>;
-  private createOrganizerSpeakerWithProjection(
-    input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
-    projection: OrganizerSpeakerMutationProjection,
-    materializeResponse: false,
-  ): Promise<undefined>;
   private async createOrganizerSpeakerWithProjection(
     input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
     projection: OrganizerSpeakerMutationProjection,
@@ -6681,7 +6224,6 @@ export class SpeakerService {
     const sourceType = input.sourceType ?? "manual";
     const sourceId = input.sourceId?.trim() || idempotencyKey;
     const resolutionKey = `${sourceType}\u0000${sourceId}`;
-    const cacheKey = `${input.organizationId}:${input.eventId}:${input.accountId}:${idempotencyKey}`;
     const fingerprint = JSON.stringify({
       displayName,
       email,
@@ -6695,27 +6237,13 @@ export class SpeakerService {
       sourceId,
       explicitParticipantId: input.explicitParticipantId,
     });
-    if (materializeResponse) {
-      const cached = this.speakerCreateCache.get(cacheKey);
-      if (cached !== undefined) {
-        if (this.speakerCreateFingerprints.get(cacheKey) !== fingerprint) {
-          throw new SpeakerServiceError(
-            "VERSION_CONFLICT",
-            409,
-            "The idempotency key has already been used for another speaker.",
-          );
-        }
-        return structuredClone(cached);
-      }
-    }
-    const entries = projection.entries;
-    const matchingEmailEntries = entries.filter(
+    const matchingEmailEntries = projection.entries.filter(
       (entry) => entry.email?.trim().toLowerCase() === email,
     );
     if (matchingEmailEntries.length > 1) {
       throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
+        "IDENTITY_AMBIGUOUS",
+        409,
         "The event roster contains duplicate verified speaker emails.",
       );
     }
@@ -6740,7 +6268,9 @@ export class SpeakerService {
       );
     }
     const participantId = resolution.participantId;
-    const existingIdentity = entries.find((entry) => entry.participantId === participantId);
+    const existingIdentity = projection.entries.find(
+      (entry) => entry.participantId === participantId,
+    );
     if (
       matchingEmailEntries.some((entry) => entry.participantId !== participantId) ||
       (existingIdentity?.email !== undefined &&
@@ -6752,153 +6282,48 @@ export class SpeakerService {
         "The speaker email is already associated with another participant.",
       );
     }
-    const manual = resolution.created && existingIdentity === undefined;
-    const canonicalSubmissionId =
-      existingIdentity?.submissionId === undefined
-        ? resolution.submissionIds.length === 1
-          ? (resolution.submissionIds[0] as string)
-          : resolution.submissionIds.length > 1
-            ? (() => {
-                throw new SpeakerServiceError(
-                  "IDENTITY_AMBIGUOUS",
-                  409,
-                  "Select the participant source relationship explicitly.",
-                );
-              })()
-            : canonicalSpeakerSubmissionId(`crm-contact:${participantId}`)
-        : canonicalSpeakerSubmissionId(existingIdentity.submissionId);
-    if (!manual && !(existingIdentity !== undefined && isCrmRosterEntry(existingIdentity))) {
-      const submission = projection.acceptedSubmissions.find(
-        (candidate) =>
-          candidate.eventId === input.eventId &&
-          sameSpeakerSubmission(candidate.id, canonicalSubmissionId) &&
-          candidate.participantIds.includes(participantId),
-      );
-      if (submission === undefined && existingIdentity === undefined) throw notFound();
-    }
-    let writtenProfile: SpeakerProfile | undefined;
-    const existing = entries.find((entry) => entry.participantId === participantId);
-    if (existing !== undefined) {
-      if (existing.email !== undefined && existing.email.trim().toLowerCase() !== email) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "A speaker with that canonical participant already exists.",
-        );
-      }
-      let currentProfile =
-        projection.profiles.find(
-          (profile) => profile.eventId === input.eventId && profile.participantId === participantId,
-        ) ?? null;
-      if (currentProfile === null) {
-        currentProfile = await this.repository.getProfile(input.eventId, participantId);
-        if (currentProfile !== null) projection.profiles.push(currentProfile);
-      }
-      const needsProfile =
-        currentProfile === null ||
-        currentProfile.displayName !== displayName ||
-        currentProfile.email?.trim().toLowerCase() !== email ||
-        currentProfile.jobTitle !== jobTitle ||
-        currentProfile.company !== company ||
-        currentProfile.biography !== biography ||
-        JSON.stringify(currentProfile.socialLinks ?? currentProfile.social ?? {}) !==
-          JSON.stringify(socialLinks) ||
-        currentProfile.status !== status ||
-        JSON.stringify(currentProfile.travelLogistics) !== JSON.stringify(travelLogistics);
-      if (needsProfile) {
-        const updatedAt = this.now().toISOString();
-        const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
-        if (ensureOrganizerProfile !== undefined) {
-          writtenProfile = await ensureOrganizerProfile.call(this.repository, {
-            organizationId: input.organizationId,
-            eventId: input.eventId,
-            participantId,
-            displayName,
-            email,
-            jobTitle,
-            company,
-            travelLogistics,
-            biography,
-            socialLinks,
-            status,
-            updatedAt,
-          });
-        } else if (currentProfile !== null && this.repository.updateProfile !== undefined) {
-          const profileResult = await this.repository.updateProfile({
-            eventId: input.eventId,
-            participantId,
-            displayName,
-            email,
-            jobTitle,
-            company,
-            travelLogistics,
-            biography,
-            socialLinks,
-            status,
-            expectedVersion: currentProfile.version,
-            updatedAt,
-            actorAccountId: input.accountId,
-          });
-          if (!profileResult.ok) {
-            throw new SpeakerServiceError(
-              profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
-              profileResult.reason === "not_found" ? 404 : 409,
-              "The speaker profile changed. Reload it before saving.",
-            );
-          }
-          writtenProfile = profileResult.value;
-        } else if (currentProfile === null && this.repository.createProfile !== undefined) {
-          const profileResult = await this.repository.createProfile({
-            id: `profile:${input.eventId}:${participantId}`,
-            eventId: input.eventId,
-            participantId,
-            displayName,
-            email,
-            jobTitle,
-            company,
-            biography,
-            socialLinks,
-            travelLogistics,
-            status,
-            version: 1,
-            updatedAt,
-          });
-          if (!profileResult.ok) {
-            throw new SpeakerServiceError(
-              profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
-              profileResult.reason === "not_found" ? 404 : 409,
-              "The speaker profile could not be created.",
-            );
-          }
-          writtenProfile = profileResult.value;
-        } else {
-          throw notFound();
-        }
-      }
-      this.overlayOrganizerSpeakerMutationProjection(projection, undefined, writtenProfile);
+    const submissionId =
+      existingIdentity?.submissionId ??
+      (resolution.submissionIds.length === 1
+        ? (resolution.submissionIds[0] as string)
+        : resolution.submissionIds.length === 0
+          ? undefined
+          : (() => {
+              throw new SpeakerServiceError(
+                "IDENTITY_AMBIGUOUS",
+                409,
+                "Select the participant source relationship explicitly.",
+              );
+            })());
+    const currentProfile = projection.profiles.find(
+      (profile) => profile.eventId === input.eventId && profile.participantId === participantId,
+    );
+    if (
+      currentProfile !== undefined &&
+      currentProfile.displayName === displayName &&
+      currentProfile.email?.trim().toLowerCase() === email &&
+      currentProfile.jobTitle === jobTitle &&
+      currentProfile.company === company &&
+      currentProfile.biography === biography &&
+      JSON.stringify(currentProfile.socialLinks ?? currentProfile.social ?? {}) ===
+        JSON.stringify(socialLinks) &&
+      JSON.stringify(currentProfile.travelLogistics) === JSON.stringify(travelLogistics) &&
+      currentProfile.status === status
+    ) {
+      this.overlayOrganizerSpeakerMutationProjection(projection, undefined, currentProfile);
       if (!materializeResponse) return;
-      const roster = this.materializeOrganizerSpeakerMutationProjection(
+      return this.materializeOrganizerSpeakerMutationProjection(
         input.organizationId,
         input.eventId,
         projection,
       );
-      this.speakerCreateCache.set(cacheKey, structuredClone(roster));
-      this.speakerCreateFingerprints.set(cacheKey, fingerprint);
-      return roster;
     }
-    if (matchingEmailEntries.length > 0) {
-      throw new SpeakerServiceError(
-        "VERSION_CONFLICT",
-        409,
-        "A speaker with that verified email already exists.",
-      );
-    }
-    const now = this.now().toISOString();
-    const entry: SpeakerRosterEntry = {
-      id: `roster:${input.eventId}:${canonicalSubmissionId}:${participantId}`,
+    const aggregateResult = await this.organizerLifecycle().upsertOrganizerSpeakerAggregate({
+      organizationId: input.organizationId,
       eventId: input.eventId,
-      submissionId: canonicalSubmissionId,
+      accountId: input.accountId,
       participantId,
+      profileId: currentProfile?.id ?? `profile:${input.eventId}:${participantId}`,
       displayName,
       email,
       jobTitle,
@@ -6906,160 +6331,55 @@ export class SpeakerService {
       biography,
       socialLinks,
       travelLogistics,
+      status,
       sourceType,
       sourceId,
-      workflowStatus: manual ? crmRosterWorkflowStatus : status,
-      organizerStatus: status,
-      role: "primary",
-      status: status === "revoked" ? "revoked" : status === "active" ? "active" : "pending",
-      version: 1,
-      createdAt: now,
-      updatedAt: now,
-      authorAccountId: input.accountId,
-    };
-    if (this.repository.saveRoster === undefined) throw notFound();
-    const result = await this.repository.saveRoster(entry, null);
-    if (!result.ok) {
-      if (result.reason === "version_conflict" || result.reason === "invalid_state") {
-        if (!materializeResponse) {
-          throw new SpeakerServiceError(
-            "VERSION_CONFLICT",
-            409,
-            "The speaker roster changed. Reload it before saving.",
-          );
-        }
-        const projectedEntry = projection.entries.find(
-          (candidate) => candidate.participantId === participantId,
-        );
-        if (projectedEntry?.email?.trim().toLowerCase() === email) {
-          const projectedRoster = this.materializeOrganizerSpeakerMutationProjection(
-            input.organizationId,
-            input.eventId,
-            projection,
-          );
-          this.speakerCreateCache.set(cacheKey, structuredClone(projectedRoster));
-          this.speakerCreateFingerprints.set(cacheKey, fingerprint);
-          return projectedRoster;
-        }
-        const concurrentRoster = await this.listOrganizerSpeakerRoster(
-          input.organizationId,
-          input.eventId,
-          input.accountId,
-        );
-        const concurrent = concurrentRoster.speakers.find(
-          (speaker) => speaker.participantId === participantId,
-        );
-        if (concurrent?.email.trim().toLowerCase() === email) {
-          this.speakerCreateCache.set(cacheKey, structuredClone(concurrentRoster));
-          this.speakerCreateFingerprints.set(cacheKey, fingerprint);
-          return concurrentRoster;
-        }
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "The speaker roster changed. Reload it before saving.",
-        );
-      }
-      throw notFound();
+      expectedVersion: currentProfile?.version ?? null,
+      ...(currentProfile === undefined ? { idempotencyKey } : {}),
+      sourceDigest: fingerprint,
+      updatedAt: this.now().toISOString(),
+    });
+    if (!aggregateResult.ok) {
+      throw new SpeakerServiceError(
+        aggregateResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
+        aggregateResult.reason === "not_found" ? 404 : 409,
+        "The speaker aggregate changed. Reload it before saving.",
+      );
     }
-    const storedEntry = result.value;
-    const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
-    if (ensureOrganizerProfile !== undefined) {
-      writtenProfile = await ensureOrganizerProfile.call(this.repository, {
-        organizationId: input.organizationId,
+    const writtenProfile = aggregateResult.value;
+    this.overlayOrganizerSpeakerMutationProjection(
+      projection,
+      {
+        id: writtenProfile.id,
         eventId: input.eventId,
+        ...(submissionId === undefined ? {} : { submissionId }),
         participantId,
         displayName,
         email,
         jobTitle,
         company,
-        travelLogistics,
         biography,
         socialLinks,
-        status,
-        updatedAt: now,
+        travelLogistics,
         sourceType,
         sourceId,
-      });
-    } else {
-      const currentProfile =
-        projection.profiles.find(
-          (profile) => profile.eventId === input.eventId && profile.participantId === participantId,
-        ) ?? null;
-      if (currentProfile !== null && this.repository.updateProfile !== undefined) {
-        const profileResult = await this.repository.updateProfile({
-          eventId: input.eventId,
-          participantId,
-          displayName,
-          email,
-          jobTitle,
-          company,
-          travelLogistics,
-          biography,
-          socialLinks,
-          status,
-          expectedVersion: currentProfile.version,
-          updatedAt: now,
-          actorAccountId: input.accountId,
-        });
-        if (!profileResult.ok) {
-          throw new SpeakerServiceError(
-            profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
-            profileResult.reason === "not_found" ? 404 : 409,
-            "The speaker profile changed. Reload it before saving.",
-          );
-        }
-        writtenProfile = profileResult.value;
-      } else if (currentProfile === null && this.repository.createProfile !== undefined) {
-        const profile: SpeakerProfile = {
-          id: `profile:${input.eventId}:${participantId}`,
-          eventId: input.eventId,
-          participantId,
-          displayName,
-          email,
-          jobTitle,
-          company,
-          biography,
-          socialLinks,
-          travelLogistics,
-          status,
-          sourceType,
-          sourceId,
-          version: 1,
-          updatedAt: now,
-        };
-        const profileResult = await this.repository.createProfile(profile);
-        if (!profileResult.ok) {
-          throw new SpeakerServiceError(
-            profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
-            profileResult.reason === "not_found" ? 404 : 409,
-            "The speaker profile could not be created.",
-          );
-        }
-        writtenProfile = profileResult.value;
-      } else {
-        throw notFound();
-      }
-    }
-    if (materializeResponse) {
-      const organizerCacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
-      this.organizerSpeakerCache.set(organizerCacheKey, [
-        ...(this.organizerSpeakerCache.get(organizerCacheKey) ?? []).filter(
-          (candidate) => candidate.participantId !== participantId,
-        ),
-        storedEntry,
-      ]);
-    }
-    this.overlayOrganizerSpeakerMutationProjection(projection, storedEntry, writtenProfile);
+        role: "primary",
+        status: status === "revoked" ? "revoked" : status === "active" ? "active" : "pending",
+        workflowStatus: status,
+        organizerStatus: status,
+        version: writtenProfile.version,
+        createdAt: writtenProfile.updatedAt,
+        updatedAt: writtenProfile.updatedAt,
+        authorAccountId: input.accountId,
+      },
+      writtenProfile,
+    );
     if (!materializeResponse) return;
-    const roster = this.materializeOrganizerSpeakerMutationProjection(
+    return this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
       projection,
     );
-    this.speakerCreateCache.set(cacheKey, structuredClone(roster));
-    this.speakerCreateFingerprints.set(cacheKey, fingerprint);
-    return roster;
   }
 
   async updateOrganizerSpeaker(input: {
@@ -7083,35 +6403,20 @@ export class SpeakerService {
       input.accountId,
       input.participantId,
     );
-    const scope = projection.scope;
     assertExpectedVersion(input.expectedVersion);
-    const entries = projection.entries;
-    const existing = entries.find((entry) => entry.participantId === input.participantId);
-    if (
-      !scope.participantIds.includes(input.participantId) &&
-      !(existing !== undefined && isCrmRosterEntry(existing))
-    ) {
-      throw notFound();
-    }
-    let currentProfile =
+    const existing = projection.entries.find(
+      (entry) => entry.participantId === input.participantId,
+    );
+    const currentProfile =
       projection.profiles.find(
         (profile) =>
           profile.eventId === input.eventId && profile.participantId === input.participantId,
-      ) ?? null;
-    if (currentProfile === null) {
-      currentProfile = await this.repository.getProfile(input.eventId, input.participantId);
-      if (currentProfile !== null) projection.profiles.push(currentProfile);
-    }
-    if (existing === undefined && currentProfile === null) throw notFound();
-    if (
-      existing !== undefined &&
-      currentProfile !== null &&
-      (existing.version !== currentProfile.version || existing.version !== input.expectedVersion)
-    ) {
+      ) ?? (await this.repository.getProfile(input.eventId, input.participantId));
+    if (currentProfile === null || currentProfile.version !== input.expectedVersion) {
       throw new SpeakerServiceError(
         "VERSION_CONFLICT",
         409,
-        "The speaker roster and profile revisions diverged. Reload before saving.",
+        "The speaker has changed. Reload it before saving.",
       );
     }
     const displayName = importText(input.displayName, "The speaker name", 200);
@@ -7121,19 +6426,11 @@ export class SpeakerService {
     const biography = importText(input.biography, "The speaker biography", 20_000);
     const status = importText(input.status, "The speaker status", 80);
     const socialLinks = normalizeSocialLinks(input.socialLinks) ?? {};
-    const existingTravelLogistics = existing?.travelLogistics ?? currentProfile?.travelLogistics;
-    const currentTravelLogistics =
-      existingTravelLogistics === undefined
-        ? undefined
-        : travelLogisticsFrom(existingTravelLogistics);
-    const travelLogistics =
-      input.travelLogistics === undefined
-        ? currentTravelLogistics
-        : normalizeTravelLogistics({
-            ...(currentTravelLogistics ?? {}),
-            ...input.travelLogistics,
-          });
-    const duplicate = entries.find(
+    const travelLogistics = normalizeTravelLogistics({
+      ...(currentProfile.travelLogistics ?? {}),
+      ...(input.travelLogistics ?? {}),
+    });
+    const duplicate = projection.entries.find(
       (entry) =>
         entry.participantId !== input.participantId && entry.email?.trim().toLowerCase() === email,
     );
@@ -7144,147 +6441,46 @@ export class SpeakerService {
         "A speaker with that email already exists.",
       );
     }
-
-    let persistedEntry: SpeakerRosterEntry | undefined;
-    let persistedProfile: SpeakerProfile | undefined;
-    if (
-      existing !== undefined &&
-      !existing.id.startsWith("profile-roster:") &&
-      this.repository.saveRoster !== undefined
-    ) {
-      if (existing.version !== input.expectedVersion) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "The speaker has changed. Reload it before saving.",
-        );
-      }
-      const updated: SpeakerRosterEntry = {
-        ...existing,
+    const sourceType = currentProfile.sourceType ?? existing?.sourceType ?? "manual";
+    const sourceId = currentProfile.sourceId ?? existing?.sourceId ?? input.participantId;
+    const aggregateResult = await this.organizerLifecycle().upsertOrganizerSpeakerAggregate({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      accountId: input.accountId,
+      participantId: input.participantId,
+      profileId: currentProfile.id,
+      displayName,
+      email,
+      jobTitle,
+      company,
+      biography,
+      socialLinks,
+      travelLogistics,
+      status,
+      sourceType,
+      sourceId,
+      expectedVersion: input.expectedVersion,
+      sourceDigest: JSON.stringify({
         displayName,
         email,
         jobTitle,
         company,
         biography,
         socialLinks,
-        ...(travelLogistics === undefined ? {} : { travelLogistics }),
-        workflowStatus: isCrmRosterEntry(existing) ? crmRosterWorkflowStatus : status,
-        organizerStatus: status,
-        status: status === "revoked" ? "revoked" : status === "active" ? "active" : existing.status,
-        version: existing.version + 1,
-        updatedAt: this.now().toISOString(),
-        authorAccountId: input.accountId,
-      };
-      const result = await this.repository.saveRoster(updated, input.expectedVersion);
-      if (!result.ok) {
-        if (result.reason === "version_conflict" || result.reason === "invalid_state") {
-          throw new SpeakerServiceError(
-            "VERSION_CONFLICT",
-            409,
-            "The speaker has changed. Reload it before saving.",
-          );
-        }
-        throw notFound();
-      }
-      persistedEntry = result.value;
-      const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
-      if (ensureOrganizerProfile !== undefined) {
-        persistedProfile = await ensureOrganizerProfile.call(this.repository, {
-          organizationId: input.organizationId,
-          eventId: input.eventId,
-          participantId: input.participantId,
-          displayName,
-          email,
-          jobTitle,
-          company,
-          biography,
-          socialLinks,
-          ...(travelLogistics === undefined ? {} : { travelLogistics }),
-          status,
-          updatedAt: result.value.updatedAt,
-        });
-      } else {
-        if (currentProfile === null || this.repository.updateProfile === undefined)
-          throw notFound();
-        const profileResult = await this.repository.updateProfile({
-          eventId: input.eventId,
-          participantId: input.participantId,
-          displayName,
-          email,
-          jobTitle,
-          company,
-          biography,
-          socialLinks,
-          ...(travelLogistics === undefined ? {} : { travelLogistics }),
-          status,
-          expectedVersion: currentProfile.version,
-          updatedAt: result.value.updatedAt,
-          actorAccountId: input.accountId,
-        });
-        if (!profileResult.ok) {
-          throw new SpeakerServiceError(
-            profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
-            profileResult.reason === "not_found" ? 404 : 409,
-            "The speaker profile changed. Reload it before saving.",
-          );
-        }
-        persistedProfile = profileResult.value;
-      }
-    } else {
-      if (currentProfile === null || currentProfile.version !== input.expectedVersion) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "The speaker has changed. Reload it before saving.",
-        );
-      }
-      if (this.repository.updateProfile === undefined) throw notFound();
-      const result = await this.repository.updateProfile({
-        eventId: input.eventId,
-        participantId: input.participantId,
-        displayName,
-        email,
-        jobTitle,
-        company,
+        travelLogistics,
         status,
-        biography,
-        socialLinks,
-        ...(travelLogistics === undefined ? {} : { travelLogistics }),
-        ...(currentProfile.headshotAssetId === undefined
-          ? {}
-          : { headshotAssetId: currentProfile.headshotAssetId }),
         expectedVersion: input.expectedVersion,
-        updatedAt: this.now().toISOString(),
-        actorAccountId: input.accountId,
-      });
-      if (!result.ok) {
-        if (result.reason === "version_conflict" || result.reason === "invalid_state") {
-          throw new SpeakerServiceError(
-            "VERSION_CONFLICT",
-            409,
-            "The speaker has changed. Reload it before saving.",
-          );
-        }
-        throw notFound();
-      }
-      persistedProfile = result.value;
-    }
-
-    this.overlayOrganizerSpeakerMutationProjection(projection, persistedEntry, persistedProfile);
-    const cacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
-    const cached = this.organizerSpeakerCache.get(cacheKey) ?? [];
-    const cachedEntry = cached.find((entry) => entry.participantId === input.participantId);
-    if (persistedEntry !== undefined || cachedEntry !== undefined) {
-      const projectedEntry = projection.entries.find(
-        (entry) => entry.participantId === input.participantId,
+      }),
+      updatedAt: this.now().toISOString(),
+    });
+    if (!aggregateResult.ok) {
+      throw new SpeakerServiceError(
+        aggregateResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
+        aggregateResult.reason === "not_found" ? 404 : 409,
+        "The speaker has changed. Reload it before saving.",
       );
-      if (projectedEntry !== undefined) {
-        this.organizerSpeakerCache.set(cacheKey, [
-          ...cached.filter((entry) => entry.participantId !== input.participantId),
-          projectedEntry,
-        ]);
-      }
     }
+    this.overlayOrganizerSpeakerMutationProjection(projection, undefined, aggregateResult.value);
     return this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
@@ -7304,6 +6500,9 @@ export class SpeakerService {
       input.accountId,
     );
     const bytes = new TextEncoder().encode(input.csv).byteLength;
+    if (input.csv.includes("\uFFFD")) {
+      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The CSV is not valid UTF-8.");
+    }
     if (bytes === 0 || bytes > speakerImportMaximumBytes) {
       throw new SpeakerServiceError(
         "VALIDATION_ERROR",
@@ -7419,178 +6618,69 @@ export class SpeakerService {
         });
       }
     }
-    return { validRows, invalidRows };
+    const previewId = `speaker-import-preview:${this.generateId()}`;
+    const sourceDigest = await speakerSourceDigest(input.csv);
+    const persisted = await this.organizerLifecycle().saveOrganizerSpeakerImportPreview({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      accountId: input.accountId,
+      previewId,
+      sourceDigest,
+      rows: validRows,
+      createdAt: this.now().toISOString(),
+    });
+    return { ...persisted, invalidRows };
   }
 
   async commitSpeakerImport(input: {
     organizationId: string;
     eventId: string;
     accountId: string;
-    rows: readonly SpeakerImportRow[];
+    previewId?: string;
+    sourceDigest?: string;
+    rows?: readonly SpeakerImportRow[];
     idempotencyKey: string;
   }): Promise<SpeakerWorkspaceRoster> {
-    const key = input.idempotencyKey.trim();
-    if (key.length === 0 || key.length > 300) {
-      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "An idempotency key is required.");
-    }
-    const cacheKey = `${input.organizationId}:${input.eventId}:${input.accountId}:${key}`;
-    const fingerprint = JSON.stringify(input.rows);
-    const cached = this.speakerImportCache.get(cacheKey);
-    if (cached !== undefined) {
-      await this.requireOrganizerOrganizationScope(
-        input.organizationId,
-        input.eventId,
-        input.accountId,
+    const idempotencyKey = normalizeUserText(
+      input.idempotencyKey,
+      "The import idempotency key",
+      300,
+    );
+    const previewId = input.previewId?.trim();
+    if (previewId === undefined || previewId.length === 0) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "A server-issued speaker import preview is required.",
       );
-      if (this.speakerImportFingerprints.get(cacheKey) !== fingerprint) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "The import idempotency key has already been used for another payload.",
-        );
-      }
-      return structuredClone(cached);
     }
-
-    const projection = await this.organizerSpeakerMutationProjection(
+    try {
+      await this.organizerLifecycle().commitOrganizerSpeakerImport({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        accountId: input.accountId,
+        previewId,
+        ...(input.sourceDigest === undefined ? {} : { sourceDigest: input.sourceDigest }),
+        idempotencyKey,
+        committedAt: this.now().toISOString(),
+      });
+    } catch (error) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        error instanceof Error ? error.message : "The speaker import could not be committed.",
+      );
+    }
+    const persisted = await this.organizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
       input.accountId,
     );
-    if (input.rows.length > speakerImportMaximumRows) {
-      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The CSV contains too many rows.");
-    }
-    if (input.rows.length === 0) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "The import rows are invalid or stale.",
-      );
-    }
-    const seenEmails = new Set(
-      projection.entries
-        .map((entry) => entry.email?.trim().toLowerCase())
-        .filter((email): email is string => email !== undefined),
-    );
-    const rows: SpeakerImportRow[] = [];
-    let invalid = false;
-    for (let index = 0; index < input.rows.length; index += 1) {
-      const source = input.rows[index];
-      if (source === undefined) {
-        invalid = true;
-        continue;
-      }
-      try {
-        const displayName = importText(source.displayName, "The speaker name", 200);
-        const email = importEmail(source.email);
-        const jobTitle = importText(source.jobTitle, "The speaker job title", 160);
-        const company = importText(source.company, "The speaker company", 200);
-        const biography = importText(source.biography, "The speaker biography", 20_000);
-        if (seenEmails.has(email)) {
-          invalid = true;
-          continue;
-        }
-        const socialLinkValues: Record<string, string> = {};
-        for (const key of ["twitter", "linkedin", "website"]) {
-          const value = source.socialLinks[key]?.trim();
-          if (value !== undefined && value.length > 0) socialLinkValues[key] = value;
-        }
-        const socialLinks = normalizeSocialLinks(socialLinkValues) ?? {};
-        const status =
-          source.status === undefined || source.status.trim().length === 0
-            ? undefined
-            : importText(source.status, "The speaker status", 80);
-        seenEmails.add(email);
-        rows.push({
-          rowNumber: source.rowNumber,
-          displayName,
-          email,
-          jobTitle,
-          company,
-          biography,
-          socialLinks,
-          ...(status === undefined ? {} : { status }),
-        });
-      } catch {
-        invalid = true;
-      }
-    }
-    if (invalid || rows.length !== input.rows.length) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "The import rows are invalid or stale.",
-      );
-    }
-    const canonicalParticipantIds = new Set<string>();
-    for (const row of rows) {
-      const sourceId = `${input.idempotencyKey}:row:${row.rowNumber}`;
-      const resolution = await this.resolveEventParticipant({
-        organizationId: input.organizationId,
-        eventId: input.eventId,
-        sourceType: "csv",
-        sourceId,
-        normalizedEmail: row.email,
-      });
-      projection.participantResolutions.set(`csv\u0000${sourceId}`, resolution);
-      if (resolution.state === "ambiguous") {
-        throw new SpeakerServiceError(
-          "IDENTITY_AMBIGUOUS",
-          409,
-          "An import row matches multiple event participants.",
-        );
-      }
-      if (canonicalParticipantIds.has(resolution.participantId)) {
-        throw new SpeakerServiceError(
-          "IDENTITY_AMBIGUOUS",
-          409,
-          "Multiple import rows resolve to the same participant.",
-        );
-      }
-      canonicalParticipantIds.add(resolution.participantId);
-    }
-
-    for (const row of rows) {
-      await this.createOrganizerSpeakerWithProjection(
-        {
-          organizationId: input.organizationId,
-          eventId: input.eventId,
-          accountId: input.accountId,
-          displayName: row.displayName,
-          email: row.email,
-          jobTitle: row.jobTitle,
-          company: row.company,
-          biography: row.biography,
-          socialLinks: row.socialLinks,
-          status: row.status ?? "pending",
-          idempotencyKey: `${input.idempotencyKey}:row:${row.rowNumber}`,
-          sourceType: "csv",
-          sourceId: `${input.idempotencyKey}:row:${row.rowNumber}`,
-        },
-        projection,
-        false,
-      );
-    }
-    const importedEmails = new Set(rows.map((row) => row.email));
-    const importedEntries = projection.entries.filter(
-      (entry) => entry.email !== undefined && importedEmails.has(entry.email.trim().toLowerCase()),
-    );
-    const importedParticipantIds = new Set(importedEntries.map((entry) => entry.participantId));
-    const organizerCacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
-    this.organizerSpeakerCache.set(organizerCacheKey, [
-      ...(this.organizerSpeakerCache.get(organizerCacheKey) ?? []).filter(
-        (entry) => !importedParticipantIds.has(entry.participantId),
-      ),
-      ...importedEntries,
-    ]);
-    const roster = this.materializeOrganizerSpeakerMutationProjection(
+    return this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
-      projection,
+      persisted,
     );
-    this.speakerImportCache.set(cacheKey, structuredClone(roster));
-    this.speakerImportFingerprints.set(cacheKey, fingerprint);
-    return roster;
   }
 
   async listOrganizerSpeakerTasks(
@@ -7652,7 +6742,11 @@ export class SpeakerService {
       );
       if (submission !== undefined) return true;
       const manual = manualByParticipant.get(asset.participantId);
-      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, submissionId);
+      return (
+        manual !== undefined &&
+        manual.submissionId !== undefined &&
+        sameSpeakerSubmission(manual.submissionId, submissionId)
+      );
     });
     return {
       organizationId,
@@ -7698,7 +6792,7 @@ export class SpeakerService {
       input.accountId,
     );
     const manualParticipantIds = new Set(
-      roster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
+      roster.filter(isOrganizerManagedRosterEntry).map((entry) => entry.participantId),
     );
     const participantIds = unique(input.assignments.map((assignment) => assignment.participantId));
     if (
@@ -7800,6 +6894,7 @@ export class SpeakerService {
         (speakerSubmissionAllowed(scope.submissionIds, asset.submissionId) ||
           (rosterEntry !== undefined &&
             asset.submissionId !== undefined &&
+            rosterEntry.submissionId !== undefined &&
             sameSpeakerSubmission(rosterEntry.submissionId, asset.submissionId))),
     );
     return assets.map((asset) => this.workspaceAsset(asset, null));
@@ -7811,25 +6906,17 @@ export class SpeakerService {
     accountId: string,
     participantIds: readonly string[],
   ): Promise<readonly SpeakerInvitationPreview[]> {
-    const roster = await this.listOrganizerSpeakerRoster(organizationId, eventId, accountId);
-    const requested = unique(participantIds);
-    return requested.map((participantId) => {
-      const speaker = roster.speakers.find(
-        (candidate) => candidate.participantId === participantId,
-      );
-      if (
-        speaker === undefined ||
-        speaker.email.trim().length === 0 ||
-        speaker.status === "revoked"
-      ) {
-        return {
-          participantId,
-          recipientEmail: speaker?.email ?? "",
-          state: "blocked" as const,
-        };
-      }
-      return { participantId, recipientEmail: speaker.email, state: "ready" as const };
-    });
+    await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
+    try {
+      return await this.requireCommunications().previewInvitations({
+        organizationId,
+        eventId,
+        accountId,
+        participantIds: unique(participantIds),
+      });
+    } catch (error) {
+      return this.communicationFailure(error, "EMAIL_PARTICIPANT_NOT_FOUND");
+    }
   }
 
   async sendOrganizerSpeakerInvitations(input: {
@@ -7840,214 +6927,124 @@ export class SpeakerService {
     templateId: string;
     idempotencyKey: string;
   }): Promise<SpeakerInvitationResult> {
-    const templateId = importText(input.templateId, "The invitation template", 200);
-    const idempotencyKey = importText(input.idempotencyKey, "The invitation idempotency key", 300);
-    const previews = await this.previewOrganizerSpeakerInvitations(
+    await this.requireOrganizerOrganizationScope(
       input.organizationId,
       input.eventId,
       input.accountId,
-      input.participantIds,
     );
-    const recipients = previews.filter((preview) => preview.state === "ready");
-    if (recipients.length === 0) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "No eligible speaker invitation recipient exists.",
-      );
-    }
-    const cacheKey = `${input.organizationId}:${input.eventId}:${idempotencyKey}`;
-    const cached = this.invitationCache.get(cacheKey);
-    if (cached !== undefined) {
-      const cachedRecipients = cached.recipients.map((recipient) =>
-        recipient.status === "failed"
-          ? structuredClone(recipient)
-          : { ...recipient, status: "duplicate" as const },
-      );
-      const failed = cachedRecipients.some((recipient) => recipient.status === "failed");
-      return {
-        ...structuredClone(cached),
-        status: failed ? "failed" : "duplicate",
-        duplicate: !failed,
-        recipients: cachedRecipients,
-      };
-    }
-    const delivery = this.delivery;
-    if (
-      delivery === undefined ||
-      (delivery.enqueueInvitation === undefined &&
-        delivery.queueInvitation === undefined &&
-        delivery.enqueue === undefined &&
-        delivery.queue === undefined)
-    ) {
-      throw new SpeakerServiceError(
-        "REMINDER_UNAVAILABLE",
-        409,
-        "Transactional invitation delivery is not configured.",
-      );
-    }
-    const deliver = async (recipient: SpeakerInvitationPreview) => {
-      const command: SpeakerInvitationDeliveryInput = {
+    try {
+      return await this.requireCommunications().sendInvitations({
         organizationId: input.organizationId,
         eventId: input.eventId,
-        participantId: recipient.participantId,
-        recipientEmail: recipient.recipientEmail,
-        templateId,
-        idempotencyKey,
-        actorAccountId: input.accountId,
-      };
-      if (delivery.enqueueInvitation !== undefined) {
-        return delivery.enqueueInvitation(command);
+        accountId: input.accountId,
+        participantIds: unique(input.participantIds),
+        idempotencyKey: importText(input.idempotencyKey, "The invitation idempotency key", 300),
+      });
+    } catch (error) {
+      return this.communicationFailure(error, "VERSION_CONFLICT");
+    }
+  }
+
+  private communicationFailure(error: unknown, fallbackCode: SpeakerServiceErrorCode): never {
+    if (error instanceof CommunicationError) {
+      if (error.status === 503) {
+        throw new SpeakerServiceError(
+          "REMINDER_UNAVAILABLE",
+          503,
+          "Durable speaker communications are unavailable.",
+        );
       }
-      if (delivery.queueInvitation !== undefined) {
-        return delivery.queueInvitation(command);
-      }
-      if (delivery.enqueue !== undefined) {
-        return delivery.enqueue(command as never);
-      }
-      if (delivery.queue !== undefined) {
-        return delivery.queue(command as never);
-      }
+      const status: 400 | 404 | 409 =
+        error.status === 403 ? 404 : error.status === 404 ? 409 : error.status;
+      const message =
+        fallbackCode === "EMAIL_TEMPLATE_NOT_FOUND"
+          ? "The approved speaker email template or requested version was not found."
+          : fallbackCode === "EMAIL_PARTICIPANT_NOT_FOUND"
+            ? "The selected speaker participant was not found in this event roster."
+            : error.message;
+      throw new SpeakerServiceError(fallbackCode, status, message);
+    }
+    throw error;
+  }
+
+  private requireCommunications(): SpeakerCommunications {
+    if (this.communications === undefined) {
       throw new SpeakerServiceError(
         "REMINDER_UNAVAILABLE",
         409,
-        "Transactional invitation delivery is not configured.",
+        "Durable speaker communications are not configured.",
       );
-    };
-    const recipientResults = await Promise.all(
-      previews.map(async (recipient) => {
-        if (recipient.state === "blocked") {
-          return {
-            participantId: recipient.participantId,
-            recipientEmail: recipient.recipientEmail,
-            status: "failed" as const,
-            receiptId: null,
-          };
-        }
-        try {
-          const receipt = await deliver(recipient);
-          return {
-            participantId: recipient.participantId,
-            recipientEmail: recipient.recipientEmail,
-            status:
-              receipt.status ??
-              (receipt.duplicate === true
-                ? ("duplicate" as const)
-                : receipt.queued === false
-                  ? ("failed" as const)
-                  : ("queued" as const)),
-            receiptId: receipt.id ?? null,
-          };
-        } catch {
-          return {
-            participantId: recipient.participantId,
-            recipientEmail: recipient.recipientEmail,
-            status: "failed" as const,
-            receiptId: null,
-          };
-        }
-      }),
-    );
-    const aggregateStatus: SpeakerInvitationResult["status"] = recipientResults.some(
-      (recipient) => recipient.status === "failed",
-    )
-      ? "failed"
-      : recipientResults.some((recipient) => recipient.status === "queued")
-        ? "queued"
-        : recipientResults.some((recipient) => recipient.status === "sent")
-          ? "sent"
-          : "duplicate";
-    const result: SpeakerInvitationResult = {
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-      idempotencyKey,
-      status: aggregateStatus,
-      duplicate: recipientResults.every((recipient) => recipient.status === "duplicate"),
-      recipients: recipientResults,
-    };
-    this.invitationCache.set(cacheKey, structuredClone(result));
-    return structuredClone(result);
+    }
+    return this.communications;
   }
 
-  private organizerSpeakerCacheKey(organizationId: string, eventId: string): string {
-    return `${organizationId}:${eventId}`;
+  private organizerLifecycle(): SpeakerOrganizerLifecycleRepository {
+    const repository = this.repository;
+    if (
+      repository.getOrganizerAccessScope === undefined ||
+      repository.getOrganizerReadModel === undefined ||
+      repository.resolveEventParticipant === undefined ||
+      repository.saveOrganizerSpeakerImportPreview === undefined ||
+      repository.commitOrganizerSpeakerImport === undefined ||
+      repository.upsertOrganizerSpeakerAggregate === undefined
+    ) {
+      throw new SpeakerServiceError(
+        "NOT_FOUND",
+        404,
+        "The canonical organizer speaker lifecycle is unavailable.",
+      );
+    }
+    return repository as SpeakerRepository & SpeakerOrganizerLifecycleRepository;
   }
+
   private async organizerSpeakerMutationProjection(
     organizationId: string,
     eventId: string,
     accountId: string,
     includeProfileParticipantId?: string,
   ): Promise<OrganizerSpeakerMutationProjection> {
-    const getOrganizerReadModel = this.repository.getOrganizerReadModel;
-    let scope: SpeakerAccessScope & { tenantId: string; organizer: true };
-    let acceptedSubmissions: readonly SpeakerSubmission[];
-    let rosterProjection: { entries: SpeakerRosterEntry[]; profiles: SpeakerProfile[] };
-    let model: SpeakerOrganizerReadModel | undefined;
-
-    if (getOrganizerReadModel !== undefined) {
-      const readModel = await getOrganizerReadModel.call(this.repository, eventId, accountId, {
-        profiles: true,
-        tasks: true,
-        assets: true,
-      });
-      const isReadModelCollection = (value: unknown): value is readonly object[] =>
-        Array.isArray(value) &&
-        value.every((candidate) => candidate !== null && typeof candidate === "object");
-      if (
-        readModel === null ||
-        typeof readModel !== "object" ||
-        !isReadModelCollection(readModel.submissions) ||
-        !isReadModelCollection(readModel.roster) ||
-        !isReadModelCollection(readModel.profiles) ||
-        !isReadModelCollection(readModel.tasks) ||
-        !isReadModelCollection(readModel.assets)
-      ) {
-        throw notFound();
-      }
-      scope = this.readModelScope(readModel, eventId);
-      if (scope.tenantId !== organizationId) throw notFound();
-      model = readModel;
-      const submissions = readModel.submissions.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-      const modelRoster = readModel.roster.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-      const cachedRoster =
-        this.organizerSpeakerCache.get(this.organizerSpeakerCacheKey(organizationId, eventId)) ??
-        [];
-      const roster = [
-        ...modelRoster,
-        ...cachedRoster.filter(
-          (entry) =>
-            entry.eventId === eventId &&
-            entry.authorAccountId === accountId &&
-            organizerRecordTenantMatches(entry, scope.tenantId) &&
-            !modelRoster.some((candidate) => candidate.id === entry.id),
-        ),
-      ];
-      const profileParticipantIds = new Set([
-        ...scope.participantIds,
-        ...(includeProfileParticipantId === undefined ? [] : [includeProfileParticipantId]),
-      ]);
-      const profiles = readModel.profiles.filter(
-        (candidate) =>
-          organizerRecordTenantMatches(candidate, scope.tenantId) &&
-          candidate.eventId === eventId &&
-          profileParticipantIds.has(candidate.participantId),
-      );
-      acceptedSubmissions = this.acceptedOrganizerSubmissionsFrom(eventId, scope, submissions);
-      rosterProjection = {
-        entries: this.organizerRosterEntriesFromReadModel(eventId, scope, roster, profiles),
-        profiles: [...profiles],
-      };
-    } else {
-      scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-      [acceptedSubmissions, rosterProjection] = await Promise.all([
-        this.acceptedOrganizerSubmissions(eventId, scope),
-        this.organizerRosterProjection(organizationId, eventId, scope, accountId),
-      ]);
+    const readModel = await this.organizerLifecycle().getOrganizerReadModel(eventId, accountId, {
+      profiles: true,
+      tasks: true,
+      assets: true,
+    });
+    const isReadModelCollection = (value: unknown): value is readonly object[] =>
+      Array.isArray(value) &&
+      value.every((candidate) => candidate !== null && typeof candidate === "object");
+    if (
+      readModel === null ||
+      typeof readModel !== "object" ||
+      !isReadModelCollection(readModel.submissions) ||
+      !isReadModelCollection(readModel.roster) ||
+      !isReadModelCollection(readModel.profiles) ||
+      !isReadModelCollection(readModel.tasks) ||
+      !isReadModelCollection(readModel.assets)
+    ) {
+      throw notFound();
     }
+    const scope = this.readModelScope(readModel, eventId);
+    if (scope.tenantId !== organizationId) throw notFound();
+    const submissions = readModel.submissions.filter((candidate) =>
+      organizerRecordTenantMatches(candidate, scope.tenantId),
+    );
+    const roster = readModel.roster.filter((candidate) =>
+      organizerRecordTenantMatches(candidate, scope.tenantId),
+    );
+    const profileParticipantIds = new Set([
+      ...scope.participantIds,
+      ...(includeProfileParticipantId === undefined ? [] : [includeProfileParticipantId]),
+    ]);
+    const profiles = readModel.profiles.filter(
+      (candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId) &&
+        candidate.eventId === eventId &&
+        profileParticipantIds.has(candidate.participantId),
+    );
+    const acceptedSubmissions = this.acceptedOrganizerSubmissionsFrom(eventId, scope, submissions);
+    const rosterProjection = {
+      entries: this.organizerRosterEntriesFromReadModel(eventId, scope, roster, profiles),
+      profiles: [...profiles],
+    };
 
     const acceptedParticipantIds = new Set(
       acceptedSubmissions.flatMap((submission) =>
@@ -8057,10 +7054,13 @@ export class SpeakerService {
       ),
     );
     const entries = rosterProjection.entries.filter(
-      (entry) => acceptedParticipantIds.has(entry.participantId) || isCrmRosterEntry(entry),
+      (entry) =>
+        acceptedParticipantIds.has(entry.participantId) || isOrganizerManagedRosterEntry(entry),
     );
-    const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
-    const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
+    const organizerParticipantIds = entries
+      .filter(isOrganizerManagedRosterEntry)
+      .map((entry) => entry.participantId);
+    const participantIds = unique([...acceptedParticipantIds, ...organizerParticipantIds]);
     const acceptedSubmissionById = new Map(
       acceptedSubmissions.map((submission) => [
         canonicalSpeakerSubmissionId(submission.id),
@@ -8071,21 +7071,12 @@ export class SpeakerService {
       entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
     );
 
-    let taskCandidates: readonly SpeakerTask[];
-    let assetCandidates: readonly SpeakerAsset[];
-    if (model === undefined) {
-      [taskCandidates, assetCandidates] = await Promise.all([
-        this.repository.listTasks(eventId, participantIds),
-        this.assetsForParticipants(eventId, participantIds),
-      ]);
-    } else {
-      taskCandidates = model.tasks.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-      assetCandidates = model.assets.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-    }
+    const taskCandidates = readModel.tasks.filter((candidate) =>
+      organizerRecordTenantMatches(candidate, scope.tenantId),
+    );
+    const assetCandidates = readModel.assets.filter((candidate) =>
+      organizerRecordTenantMatches(candidate, scope.tenantId),
+    );
     const tasks = taskCandidates.filter((task) => {
       const subject = speakerTaskSubject(task);
       if (
@@ -8121,7 +7112,11 @@ export class SpeakerService {
       );
       if (submission !== undefined) return submission.participantIds.includes(asset.participantId);
       const manual = manualByParticipant.get(asset.participantId);
-      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, asset.submissionId);
+      return (
+        manual !== undefined &&
+        manual.submissionId !== undefined &&
+        sameSpeakerSubmission(manual.submissionId, asset.submissionId)
+      );
     });
     return {
       scope,
@@ -8202,9 +7197,7 @@ export class SpeakerService {
     if (profileIndex < 0) projection.profiles.push(profile);
     else projection.profiles[profileIndex] = profile;
     const entryIndex = projection.entries.findIndex(
-      (candidate) =>
-        candidate.participantId === profile.participantId &&
-        candidate.id.startsWith("profile-roster:"),
+      (candidate) => candidate.participantId === profile.participantId,
     );
     const currentEntry = projection.entries[entryIndex];
     if (entryIndex < 0 || currentEntry === undefined) return;
@@ -8265,8 +7258,9 @@ export class SpeakerService {
       (entry) =>
         entry.participantId === asset.participantId &&
         isOrganizerManagedRosterEntry(entry) &&
-        asset.submissionId !== undefined &&
-        sameSpeakerSubmission(entry.submissionId, asset.submissionId),
+        (asset.submissionId === undefined ||
+          (entry.submissionId !== undefined &&
+            sameSpeakerSubmission(entry.submissionId, asset.submissionId))),
     );
     if (manual === undefined) throw notFound();
   }
@@ -8277,13 +7271,15 @@ export class SpeakerService {
     profiles: readonly SpeakerProfile[],
   ): SpeakerRosterEntry[] {
     const allowedSubmissions = new Set(scope.submissionIds.map(canonicalSpeakerSubmissionId));
-    const isAllowedSubmission = (submissionId: string): boolean =>
+    const isAllowedSubmission = (submissionId: string | undefined): boolean =>
+      submissionId !== undefined &&
       [...allowedSubmissions].some((allowed) => sameSpeakerSubmission(allowed, submissionId));
     const entries = roster.filter(
       (entry) =>
         entry.eventId === eventId &&
-        (isAllowedSubmission(entry.submissionId) || isCrmRosterEntry(entry)) &&
-        (scope.participantIds.includes(entry.participantId) || isCrmRosterEntry(entry)),
+        (isAllowedSubmission(entry.submissionId) || isOrganizerManagedRosterEntry(entry)) &&
+        (scope.participantIds.includes(entry.participantId) ||
+          isOrganizerManagedRosterEntry(entry)),
     );
     for (const profile of profiles) {
       if (
@@ -8293,13 +7289,13 @@ export class SpeakerService {
       ) {
         continue;
       }
-      const submissionId = canonicalSpeakerSubmissionId(
-        scope.submissionIds[0] ?? `organizer:${eventId}`,
-      );
+      const submissionId = scope.submissionIds[0];
       entries.push({
-        id: `profile-roster:${eventId}:${profile.participantId}`,
+        id: profile.id,
         eventId,
-        submissionId,
+        ...(submissionId === undefined
+          ? {}
+          : { submissionId: canonicalSpeakerSubmissionId(submissionId) }),
         participantId: profile.participantId,
         displayName: profile.displayName,
         ...(profile.email === undefined ? {} : { email: profile.email }),
@@ -8344,109 +7340,18 @@ export class SpeakerService {
     scope: SpeakerAccessScope,
     accountId: string,
   ): Promise<SpeakerRosterEntry[]> {
-    return (await this.organizerRosterProjection(organizationId, eventId, scope, accountId))
-      .entries;
-  }
-
-  private async organizerRosterProjection(
-    organizationId: string,
-    eventId: string,
-    scope: SpeakerAccessScope,
-    accountId: string,
-  ): Promise<{ entries: SpeakerRosterEntry[]; profiles: SpeakerProfile[] }> {
-    const allowedSubmissions = new Set(scope.submissionIds.map(canonicalSpeakerSubmissionId));
-    const isAllowedSubmission = (submissionId: string): boolean =>
-      [...allowedSubmissions].some((allowed) => sameSpeakerSubmission(allowed, submissionId));
-    const listRosterForEvent = this.repository.listRosterForEvent;
-    const listRoster = this.repository.listRoster;
-    const storedEntriesPromise =
-      listRosterForEvent !== undefined
-        ? listRosterForEvent.call(this.repository, eventId)
-        : listRoster === undefined
-          ? Promise.resolve([])
-          : Promise.all(
-              unique(scope.submissionIds.map(canonicalSpeakerSubmissionId)).map((submissionId) =>
-                listRoster.call(this.repository, eventId, submissionId),
-              ),
-            ).then((batches) => batches.flat());
-    const profilesPromise = this.repository.listProfiles(eventId, scope.participantIds);
-    const [storedEntries, profiles] = await Promise.all([storedEntriesPromise, profilesPromise]);
-    const entries: SpeakerRosterEntry[] = [];
-    entries.push(
-      ...storedEntries.filter(
-        (entry) =>
-          entry.eventId === eventId &&
-          (isAllowedSubmission(entry.submissionId) || isCrmRosterEntry(entry)) &&
-          (scope.participantIds.includes(entry.participantId) ||
-            isCrmRosterEntry(entry) ||
-            this.organizerSpeakerCache
-              .get(this.organizerSpeakerCacheKey(organizationId, eventId))
-              ?.some(
-                (candidate) =>
-                  candidate.participantId === entry.participantId &&
-                  candidate.authorAccountId === accountId,
-              )),
-      ),
+    const readModel = await this.organizerLifecycle().getOrganizerReadModel(eventId, accountId, {
+      profiles: true,
+    });
+    if (readModel === null || readModel.scope.tenantId !== organizationId) throw notFound();
+    const canonicalScope = this.readModelScope(readModel, eventId);
+    if (scope.tenantId !== canonicalScope.tenantId) throw notFound();
+    return this.organizerRosterEntriesFromReadModel(
+      eventId,
+      canonicalScope,
+      readModel.roster,
+      readModel.profiles,
     );
-    const cached =
-      this.organizerSpeakerCache.get(this.organizerSpeakerCacheKey(organizationId, eventId)) ?? [];
-    for (const entry of cached) {
-      if (
-        entry.eventId === eventId &&
-        entry.authorAccountId === accountId &&
-        (isAllowedSubmission(entry.submissionId) || isCrmRosterEntry(entry)) &&
-        !entries.some((candidate) => candidate.id === entry.id)
-      ) {
-        entries.push(entry);
-      }
-    }
-    for (const profile of profiles) {
-      if (!entries.some((entry) => entry.participantId === profile.participantId)) {
-        const submissionId = canonicalSpeakerSubmissionId(
-          scope.submissionIds[0] ?? `organizer:${eventId}`,
-        );
-        entries.push({
-          id: `profile-roster:${eventId}:${profile.participantId}`,
-          eventId,
-          submissionId,
-          participantId: profile.participantId,
-          displayName: profile.displayName,
-          ...(profile.email === undefined ? {} : { email: profile.email }),
-          ...(profile.jobTitle === undefined ? {} : { jobTitle: profile.jobTitle }),
-          ...(profile.company === undefined ? {} : { company: profile.company }),
-          ...(profile.biography === undefined ? {} : { biography: profile.biography }),
-          ...(profile.socialLinks === undefined
-            ? profile.social === undefined
-              ? {}
-              : { socialLinks: profile.social }
-            : { socialLinks: profile.socialLinks }),
-          ...(profile.headshotAssetId === undefined
-            ? {}
-            : { headshotAssetId: profile.headshotAssetId }),
-          ...(profile.travelLogistics === undefined
-            ? {}
-            : { travelLogistics: profile.travelLogistics }),
-          role: "primary",
-          status: profile.status === "revoked" ? "revoked" : "active",
-          ...(profile.status === undefined ? {} : { workflowStatus: profile.status }),
-          version: profile.version,
-          createdAt: profile.updatedAt,
-          updatedAt: profile.updatedAt,
-        });
-      }
-    }
-    const byParticipant = new Map<string, SpeakerRosterEntry>();
-    for (const entry of entries) {
-      const current = byParticipant.get(entry.participantId);
-      if (
-        current === undefined ||
-        entry.updatedAt.localeCompare(current.updatedAt) > 0 ||
-        (entry.updatedAt === current.updatedAt && entry.id < current.id)
-      ) {
-        byParticipant.set(entry.participantId, entry);
-      }
-    }
-    return { entries: [...byParticipant.values()], profiles };
   }
 
   private organizerSpeakerRecord(
@@ -8485,10 +7390,7 @@ export class SpeakerService {
       socialLinks: profile?.socialLinks ?? profile?.social ?? entry.socialLinks ?? {},
       travelLogistics: travelLogisticsFrom(profile?.travelLogistics ?? entry.travelLogistics),
       headshotAssetId: profile?.headshotAssetId ?? entry.headshotAssetId ?? null,
-      status:
-        isCrmRosterEntry(entry) && !isOrganizerManagedRosterEntry(entry)
-          ? crmRosterWorkflowStatus
-          : (profile?.status ?? entry.organizerStatus ?? entry.workflowStatus ?? entry.status),
+      status: profile?.status ?? entry.organizerStatus ?? entry.workflowStatus ?? entry.status,
       sessions: submissions
         .filter((submission) => submission.participantIds.includes(participantId))
         .map((submission) => ({

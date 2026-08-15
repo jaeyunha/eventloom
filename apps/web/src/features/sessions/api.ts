@@ -1,5 +1,18 @@
 export type SessionContentStatus = "Approved" | "Needs changes";
 
+export interface SessionSpeakerReference {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly role?: string;
+}
+
+export interface SessionSpeakerCandidate {
+  readonly id: string;
+  readonly displayName: string;
+  readonly jobTitle?: string;
+  readonly company?: string;
+}
+
 export interface SessionRecord {
   readonly id: string;
   readonly eventId: string;
@@ -8,6 +21,8 @@ export interface SessionRecord {
   readonly status: string;
   readonly contentStatus?: SessionContentStatus;
   readonly durationMinutes: number;
+  readonly speakerIds: readonly string[];
+  readonly speakerRoster: readonly SessionSpeakerReference[];
   readonly version: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -40,6 +55,12 @@ export interface SessionsApi {
     readonly title?: string;
     readonly description?: string;
     readonly contentStatus?: SessionContentStatus;
+  }): Promise<SessionRecord>;
+  listSpeakers(signal?: AbortSignal): Promise<readonly SessionSpeakerCandidate[]>;
+  updateSpeakers(input: {
+    readonly sessionId: string;
+    readonly expectedVersion: number;
+    readonly speakerIds: readonly string[];
   }): Promise<SessionRecord>;
   listHistory(sessionId: string, signal?: AbortSignal): Promise<readonly SessionHistoryEntry[]>;
   restoreVersion(input: {
@@ -83,6 +104,40 @@ function contentStatusFrom(value: unknown): SessionContentStatus | undefined {
   throw new TypeError("The session response contains an invalid content status.");
 }
 
+function stringArrayFrom(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`The session response contains an invalid ${field}.`);
+  }
+  const values = value.map((item) => {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      throw new TypeError(`The session response contains an invalid ${field}.`);
+    }
+    return item;
+  });
+  if (new Set(values).size !== values.length) {
+    throw new TypeError(`The session response contains duplicate ${field}.`);
+  }
+  return values;
+}
+
+function speakerReferenceFrom(value: unknown): SessionSpeakerReference {
+  if (!isRecord(value) || typeof value.id !== "string" || value.id.trim().length === 0) {
+    throw new TypeError("The session response contains an invalid speaker roster.");
+  }
+  if (
+    (value.displayName !== undefined &&
+      (typeof value.displayName !== "string" || value.displayName.trim().length === 0)) ||
+    (value.role !== undefined && (typeof value.role !== "string" || value.role.trim().length === 0))
+  ) {
+    throw new TypeError("The session response contains an invalid speaker roster.");
+  }
+  return {
+    id: value.id,
+    ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    ...(typeof value.role === "string" ? { role: value.role } : {}),
+  };
+}
+
 function sessionFrom(value: unknown, eventId: string): SessionRecord {
   if (
     !isRecord(value) ||
@@ -104,6 +159,17 @@ function sessionFrom(value: unknown, eventId: string): SessionRecord {
   }
 
   const contentStatus = contentStatusFrom(value.contentStatus);
+  const speakerIds = stringArrayFrom(value.speakerIds, "speaker IDs");
+  if (!Array.isArray(value.speakerRoster)) {
+    throw new TypeError("The session response contains an invalid speaker roster.");
+  }
+  const speakerRoster = value.speakerRoster.map(speakerReferenceFrom);
+  if (new Set(speakerRoster.map((reference) => reference.id)).size !== speakerRoster.length) {
+    throw new TypeError("The session response contains duplicate speaker roster entries.");
+  }
+  if (speakerRoster.some((reference) => !speakerIds.includes(reference.id))) {
+    throw new TypeError("The session response contains a speaker roster outside its speaker IDs.");
+  }
   return {
     id: value.id,
     eventId,
@@ -112,6 +178,8 @@ function sessionFrom(value: unknown, eventId: string): SessionRecord {
     status: value.status,
     ...(contentStatus === undefined ? {} : { contentStatus }),
     durationMinutes: value.durationMinutes,
+    speakerIds,
+    speakerRoster,
     version: value.version,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
@@ -174,6 +242,30 @@ function historyFrom(value: unknown): SessionHistoryEntry {
   };
 }
 
+function speakerCandidateFrom(value: unknown): SessionSpeakerCandidate {
+  if (
+    !isRecord(value) ||
+    typeof value.participantId !== "string" ||
+    value.participantId.trim().length === 0 ||
+    typeof value.displayName !== "string" ||
+    value.displayName.trim().length === 0 ||
+    (value.jobTitle !== undefined && typeof value.jobTitle !== "string") ||
+    (value.company !== undefined && typeof value.company !== "string")
+  ) {
+    throw new TypeError("The speaker roster response contains an invalid speaker.");
+  }
+  return {
+    id: value.participantId,
+    displayName: value.displayName,
+    ...(typeof value.jobTitle === "string" && value.jobTitle.trim().length > 0
+      ? { jobTitle: value.jobTitle }
+      : {}),
+    ...(typeof value.company === "string" && value.company.trim().length > 0
+      ? { company: value.company }
+      : {}),
+  };
+}
+
 async function errorFrom(response: Response): Promise<SessionsApiError> {
   const body = await response.json().catch(() => undefined);
   const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
@@ -202,10 +294,11 @@ export function createSessionsApi(
     throw new TypeError("An event ID is required for session requests.");
   }
 
-  const apiBase = `${baseUrl.trim().replace(/\/+$/u, "")}/api/admin/organizations/${segment(organizationScope)}/events/${segment(eventScope)}/sessions`;
+  const eventApiBase = `${baseUrl.trim().replace(/\/+$/u, "")}/api/admin/organizations/${segment(organizationScope)}/events/${segment(eventScope)}`;
+  const apiBase = `${eventApiBase}/sessions`;
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetcher(`${apiBase}${path}`, {
+  async function requestAt<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+    const response = await fetcher(`${base}${path}`, {
       ...init,
       cache: "no-store",
       credentials: "include",
@@ -213,6 +306,10 @@ export function createSessionsApi(
     });
     if (!response.ok) throw await errorFrom(response);
     return unwrapData(await response.json()) as T;
+  }
+
+  function request<T>(path: string, init?: RequestInit): Promise<T> {
+    return requestAt<T>(apiBase, path, init);
   }
 
   return {
@@ -243,6 +340,41 @@ export function createSessionsApi(
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload),
+        }),
+        eventScope,
+      );
+    },
+
+    async listSpeakers(signal) {
+      const value = await requestAt<unknown>(
+        eventApiBase,
+        "/speakers",
+        signal === undefined ? undefined : { signal },
+      );
+      if (
+        !isRecord(value) ||
+        value.organizationId !== organizationScope ||
+        value.eventId !== eventScope ||
+        !Array.isArray(value.speakers)
+      ) {
+        throw new TypeError("The speaker roster response does not match the requested event.");
+      }
+      const speakers = value.speakers.map(speakerCandidateFrom);
+      if (new Set(speakers.map((speaker) => speaker.id)).size !== speakers.length) {
+        throw new TypeError("The speaker roster response contains duplicate speakers.");
+      }
+      return speakers;
+    },
+
+    async updateSpeakers(input) {
+      return sessionFrom(
+        await request<unknown>(`/${segment(input.sessionId)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            expectedVersion: input.expectedVersion,
+            speakerIds: input.speakerIds,
+          }),
         }),
         eventScope,
       );

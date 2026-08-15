@@ -6,6 +6,8 @@ import {
   loadPortalRosters,
   portalContextLabel,
   portalContextResponseForTarget,
+  portalViewAfterLoadFailure,
+  portalViewMatchesSelection,
   profileAssetBelongsToPortalContext,
 } from "./portal-provider";
 import type {
@@ -25,6 +27,28 @@ const target: PortalContext = {
   participantIds: ["participant-1"],
   primaryParticipantId: "participant-1",
 };
+
+it("retains the previous portal view only for a failed same-context refresh", () => {
+  const previousView = {
+    submissions: [],
+    profiles: [],
+    tasks: [],
+    outstandingTaskCount: 0,
+    context: { ...target, selectedParticipantId: "participant-1" },
+  } satisfies PortalView;
+
+  expect(portalViewMatchesSelection(previousView, target, "participant-1")).toBe(true);
+  expect(
+    portalViewMatchesSelection(
+      previousView,
+      { ...target, id: "portal:other:event-1" },
+      "participant-1",
+    ),
+  ).toBe(false);
+  expect(portalViewMatchesSelection(previousView, target, "participant-2")).toBe(false);
+  expect(portalViewAfterLoadFailure(previousView, true)).toBe(previousView);
+  expect(portalViewAfterLoadFailure(previousView, false)).toBeNull();
+});
 
 it("uses the event name from the authorized context", () => {
   const context = {

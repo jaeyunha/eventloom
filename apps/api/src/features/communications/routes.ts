@@ -42,12 +42,19 @@ const createTemplateVersionSchema = z.object({
 });
 
 const approveTemplateSchema = z.object({ version: z.number().int().positive() });
+const recipientIdsSchema = z
+  .array(z.string().min(1).max(200))
+  .min(1)
+  .refine((recipientIds) => new Set(recipientIds).size === recipientIds.length, {
+    message: "Recipient ids must be unique.",
+  });
 const previewSchema = z.object({
   eventId: z.string().min(1).optional(),
   purpose: purposeSchema,
   templateId: z.string().min(1),
   templateVersion: z.number().int().positive().optional(),
   audience: audienceSchema,
+  recipientIds: recipientIdsSchema.optional(),
   data: dataSchema,
 });
 const sendSchema = z.object({
@@ -239,6 +246,7 @@ export function createCommunicationRoutes(
         templateId: body.templateId,
         audience: body.audience,
         ...(body.templateVersion === undefined ? {} : { templateVersion: body.templateVersion }),
+        ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
         ...(body.data === undefined ? {} : { data: body.data }),
       }),
     );
@@ -289,6 +297,12 @@ export function createCommunicationRoutes(
       ...(body.action === undefined ? {} : { action: body.action }),
     };
     return context.json(await service.sendTransactional(current, transactional), 201);
+  });
+
+  routes.get("/sends", async (context) => {
+    const current = actor(context);
+    const eventId = eventIdFor(context, {});
+    return context.json({ sends: await service.listSends(current, eventId) });
   });
 
   routes.get("/sends/:sendId", async (context) => {

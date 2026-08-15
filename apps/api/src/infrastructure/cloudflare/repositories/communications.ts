@@ -1,4 +1,7 @@
-import { CommunicationError } from "../../../features/communications/service";
+import {
+  CommunicationError,
+  redactCommunicationProviderReason,
+} from "../../../features/communications/service";
 import type {
   CommunicationAudience,
   CommunicationAuditEntry,
@@ -217,8 +220,9 @@ export class D1CommunicationRepository implements CommunicationRepository {
       FROM communication_recipients r WHERE r.organization_id=? AND r.event_id=? AND r.id IN (${recipientIds.map(() => "?").join(",")}) ORDER BY r.id`,
       [tenantId, eventId, ...recipientIds],
     ).all<Row>();
-    return rows(result).map(
-      (row): CommunicationRecipient => ({
+    const recipients = new Map<string, CommunicationRecipient>();
+    for (const row of rows(result)) {
+      recipients.set(text(row.id), {
         id: text(row.id),
         ...(row.participant_id == null ? {} : { participantId: text(row.participant_id) }),
         tenantId,
@@ -227,8 +231,14 @@ export class D1CommunicationRepository implements CommunicationRepository {
         displayName: text(row.display_name),
         audiences: parseJson(text(row.audiences_json), []),
         data: parseJson(text(row.data_json), {}),
-      }),
-    );
+      });
+    }
+    const ordered: CommunicationRecipient[] = [];
+    for (const recipientId of recipientIds) {
+      const recipient = recipients.get(recipientId);
+      if (recipient !== undefined) ordered.push(recipient);
+    }
+    return ordered;
   }
 
   async isAudienceAuthorized(tenantId: string, eventId: string, audience: CommunicationAudience) {
@@ -249,13 +259,22 @@ export class D1CommunicationRepository implements CommunicationRepository {
       [tenantId, eventId, previewId],
     ).first<Row>();
     if (root === null) return undefined;
-    const template = await this.getTemplate(
-      tenantId,
-      eventId,
-      text(root.template_id),
-      number(root.template_version),
-    );
+    const [template, previewAudit] = await Promise.all([
+      this.getTemplate(tenantId, eventId, text(root.template_id), number(root.template_version)),
+      statement(
+        this.database,
+        "SELECT details_json FROM audit_events WHERE tenant_id=? AND resource_type='communication_preview' AND resource_id=? ORDER BY occurred_at DESC,id DESC LIMIT 1",
+        [tenantId, previewId],
+      ).first<Row>(),
+    ]);
     if (template === undefined) return undefined;
+    const auditedTemplate =
+      previewAudit === null
+        ? undefined
+        : parseJson<{ after?: { template?: CommunicationTemplateSnapshot } }>(
+            text(previewAudit.details_json),
+            {},
+          ).after?.template;
     const result = await statement(
       this.database,
       `SELECT r.*, p.organization_id, p.event_id FROM communication_preview_recipients r JOIN communication_previews p ON p.id=r.preview_id WHERE p.organization_id=? AND p.event_id=? AND r.preview_id=? ORDER BY r.ordinal`,
@@ -284,7 +303,7 @@ export class D1CommunicationRepository implements CommunicationRepository {
       recipientIds: recipients.map((r) => r.id),
       recipients,
       recipientPreviews,
-      template: {
+      template: auditedTemplate ?? {
         id: template.id,
         name: template.name,
         purpose: template.purpose,
@@ -379,6 +398,22 @@ export class D1CommunicationRepository implements CommunicationRepository {
     return row === null ? undefined : this.getSend(tenantId, eventId, text(row.id));
   }
 
+  async listSends(tenantId: string, eventId: string) {
+    const result = await statement(
+      this.database,
+      "SELECT id FROM communication_sends WHERE organization_id=? AND event_id=? ORDER BY created_at DESC,id DESC",
+      [tenantId, eventId],
+    ).all<Row>();
+    const reconstructed = await Promise.all(
+      rows(result).map((row) => this.getSend(tenantId, eventId, text(row.id))),
+    );
+    const sends: CommunicationSend[] = [];
+    for (const send of reconstructed) {
+      if (send !== undefined) sends.push(send);
+    }
+    return sends;
+  }
+
   async getSend(tenantId: string, eventId: string, sendId: string) {
     const root = await statement(
       this.database,
@@ -394,7 +429,7 @@ export class D1CommunicationRepository implements CommunicationRepository {
       ).all<Row>(),
       statement(
         this.database,
-        `SELECT d.* FROM communication_deliveries d JOIN communication_sends s ON s.id=d.send_id WHERE s.organization_id=? AND s.event_id=? AND d.send_id=? ORDER BY d.recipient_id`,
+        `SELECT d.* FROM communication_deliveries d JOIN communication_sends s ON s.id=d.send_id JOIN communication_send_recipients r ON r.send_id=d.send_id AND r.recipient_id=d.recipient_id WHERE s.organization_id=? AND s.event_id=? AND d.send_id=? ORDER BY r.rowid`,
         [tenantId, eventId, sendId],
       ).all<Row>(),
       statement(
@@ -416,7 +451,10 @@ export class D1CommunicationRepository implements CommunicationRepository {
         status: row.status as CommunicationDeliveryHistoryEntry["status"],
         occurredAt: text(row.occurred_at),
         providerMessageId: nullable(row.provider_message_id),
-        reason: nullable(row.reason),
+        reason:
+          nullable(row.reason) === null
+            ? null
+            : redactCommunicationProviderReason(text(row.reason)),
         actorId: text(row.actor_id),
       });
       historyBy.set(text(row.recipient_id), list);
@@ -428,21 +466,35 @@ export class D1CommunicationRepository implements CommunicationRepository {
       ),
       status: row.status as CommunicationDelivery["status"],
       providerMessageId: nullable(row.provider_message_id),
-      failureReason: nullable(row.failure_reason),
+      failureReason:
+        nullable(row.failure_reason) === null
+          ? null
+          : redactCommunicationProviderReason(text(row.failure_reason)),
       attempts: number(row.attempts),
       history: historyBy.get(text(row.recipient_id)) ?? [],
     }));
-    const history: CommunicationAuditEntry[] = rows(auditResult).map((row) => ({
-      id: text(row.id),
-      tenantId,
-      eventId,
-      sendId,
-      recipientId: nullable(row.recipient_id),
-      action: row.action as CommunicationAuditEntry["action"],
-      actorId: nullable(row.actor_id) ?? text(root.created_by),
-      occurredAt: text(row.occurred_at),
-      details: parseJson(text(row.details_json), {}),
-    }));
+    const historyById = new Map<string, CommunicationAuditEntry>();
+    for (const row of rows(auditResult)) {
+      const details = parseJson<{ after?: { history?: readonly CommunicationAuditEntry[] } }>(
+        text(row.details_json),
+        {},
+      );
+      for (const entry of details.after?.history ?? []) {
+        if (entry.tenantId === tenantId && entry.eventId === eventId && entry.sendId === sendId) {
+          historyById.set(entry.id, {
+            ...entry,
+            details:
+              typeof entry.details.reason === "string"
+                ? {
+                    ...entry.details,
+                    reason: redactCommunicationProviderReason(entry.details.reason),
+                  }
+                : { ...entry.details },
+          });
+        }
+      }
+    }
+    const history = [...historyById.values()];
     return {
       id: sendId,
       tenantId,

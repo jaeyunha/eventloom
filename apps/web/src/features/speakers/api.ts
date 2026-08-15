@@ -207,12 +207,15 @@ export interface SpeakerImportIssue {
 }
 
 export interface SpeakerImportPreview {
+  readonly previewId: string;
+  readonly sourceDigest: string;
   readonly validRows: readonly SpeakerImportRow[];
   readonly invalidRows: readonly SpeakerImportIssue[];
 }
 
 export interface SpeakerImportCommitInput {
-  readonly rows: readonly SpeakerImportRow[];
+  readonly previewId: string;
+  readonly sourceDigest: string;
   readonly idempotencyKey: string;
 }
 
@@ -509,20 +512,61 @@ function parseSpeakerInvitationResult(value: unknown): SpeakerInvitationResult {
   };
 }
 
+const SPEAKER_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+function safeSpeakerErrorCode(value: unknown): string {
+  return typeof value === "string" && SPEAKER_ERROR_CODE_PATTERN.test(value)
+    ? value
+    : "SPEAKER_REQUEST_FAILED";
+}
+
+function safeSpeakerTraceId(value: unknown): string | undefined {
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
+}
+
+function parseSpeakerImportPreview(value: unknown): SpeakerImportPreview {
+  if (!isRecord(value)) {
+    throw new SpeakerAuthoritativeDataError("The speaker import preview is invalid.");
+  }
+  if (
+    typeof value.previewId !== "string" ||
+    value.previewId.trim().length === 0 ||
+    typeof value.sourceDigest !== "string" ||
+    value.sourceDigest.trim().length === 0 ||
+    !Array.isArray(value.validRows) ||
+    !Array.isArray(value.invalidRows)
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker import preview is missing its durable preview artifact.",
+    );
+  }
+  return {
+    previewId: value.previewId,
+    sourceDigest: value.sourceDigest,
+    validRows: value.validRows as readonly SpeakerImportRow[],
+    invalidRows: value.invalidRows as readonly SpeakerImportIssue[],
+  };
+}
+
 async function errorFrom(response: Response): Promise<SpeakerApiError> {
-  const body = (await response.json().catch(() => undefined)) as SpeakerErrorResponse | undefined;
+  const body = (await response.json().catch(() => undefined)) as unknown;
+  const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
   return new SpeakerApiError(
-    body?.error?.code ?? "SPEAKER_REQUEST_FAILED",
-    body?.error?.message ?? "The speaker request could not be completed.",
-    response.status,
-    body?.error?.traceId,
+    safeSpeakerErrorCode(error?.code),
+    typeof error?.message === "string" && error.message.trim().length > 0
+      ? error.message
+      : "The speaker request could not be completed.",
+    Number.isSafeInteger(response.status) && response.status >= 400 && response.status <= 599
+      ? response.status
+      : 500,
+    safeSpeakerTraceId(error?.traceId),
   );
 }
 
 export interface SpeakerApi {
   list(signal?: AbortSignal): Promise<SpeakerRosterEnvelope>;
   get(participantId: string, signal?: AbortSignal): Promise<SpeakerRecord>;
-  create(input: SpeakerCreateInput): Promise<SpeakerRosterEnvelope>;
+  create(input: SpeakerCreateInput, signal?: AbortSignal): Promise<SpeakerRosterEnvelope>;
   update(participantId: string, input: SpeakerUpdateInput): Promise<SpeakerRosterEnvelope>;
   getSessions(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerSession[]>;
   getAssets(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerAsset[]>;
@@ -696,8 +740,8 @@ export function createSpeakerApi(
         signal === undefined ? undefined : { signal },
       ).then((value) => assertSpeakerParticipant(value, participantId, normalizedEventId));
     },
-    create(input) {
-      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input).then((value) =>
+    create(input, signal) {
+      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input, signal).then((value) =>
         assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
@@ -754,11 +798,11 @@ export function createSpeakerApi(
     previewImport(file, signal) {
       const body = new FormData();
       body.append("file", file);
-      return request<SpeakerImportPreview>("/imports/preview", {
+      return request<unknown>("/imports/preview", {
         method: "POST",
         body,
         ...(signal === undefined ? {} : { signal }),
-      });
+      }).then(parseSpeakerImportPreview);
     },
     commitImport(input, signal) {
       return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal).then((value) =>

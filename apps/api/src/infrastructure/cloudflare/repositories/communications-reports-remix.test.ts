@@ -7,7 +7,7 @@ import { D1CommunicationRepository } from "./communications";
 import { D1RemixRepository } from "./remix";
 import { D1ReportRepository } from "./reports";
 
-function database() {
+function database(resultsFor: (query: string) => readonly Record<string, unknown>[] = () => []) {
   const queries: string[] = [];
   const db = {
     prepare(query: string) {
@@ -20,7 +20,7 @@ function database() {
           return null;
         },
         async all() {
-          return { results: [] };
+          return { results: resultsFor(query) };
         },
         async run() {
           return { meta: { changes: 1 } };
@@ -63,6 +63,60 @@ describe("D1 communications, reports, and remix repositories", () => {
     await new D1CommunicationRepository(communications).updateTemplate(template);
 
     expect(communications.queries.at(-1)).toContain("UPDATE communication_templates");
+  });
+
+  it("reads report speakers from canonical tenant-qualified profiles and participants", async () => {
+    const reports = database((query) => {
+      if (query.includes("FROM sessions s")) {
+        return [
+          {
+            id: "session-1",
+            title: "Canonical session",
+            description: "Description",
+            status: "accepted",
+            room_name: null,
+            track_names_json: "[]",
+            format_name: null,
+          },
+        ];
+      }
+      if (
+        query.includes("FROM session_speakers ss") &&
+        query.includes("speaker_profiles profile")
+      ) {
+        return [
+          {
+            id: "participant-1",
+            display_name: "Canonical Speaker",
+            biography: "Canonical biography",
+            email: "speaker@example.test",
+          },
+        ];
+      }
+      return [];
+    });
+
+    const records = await new D1ReportRepository(reports).listProgramRecords({
+      tenantId: "org-1",
+      eventId: "event-1",
+      requesterId: "organizer-1",
+      relationships: ["sessions", "speakers"],
+      fields: ["speakers.id", "speakers.displayName", "speakers.biography", "speakers.email"],
+      includePersonalData: true,
+    });
+
+    expect(records[0]?.speakers).toEqual([
+      {
+        id: "participant-1",
+        displayName: "Canonical Speaker",
+        biography: "Canonical biography",
+        email: "speaker@example.test",
+      },
+    ]);
+    const sql = reports.queries.join("\n");
+    expect(sql).toContain("speaker_profiles profile");
+    expect(sql).toContain("profile.organization_id=p.organization_id");
+    expect(sql).not.toContain("speaker_roster");
   });
 
   it("batches tenant-scoped immutable writes, CAS guards, audit, and sync jobs", async () => {
