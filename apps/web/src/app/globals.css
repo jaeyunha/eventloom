@@ -96,7 +96,7 @@
 
 @layer base {
   body {
-    min-width: 20rem;
+    min-width: 320px;
     background: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-sans);
@@ -114,6 +114,25 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     @apply bg-background text-foreground;
+  }
+
+  .dialog-grid {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .dialog-grid > * {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  @media (max-width: 42rem) {
+    [data-slot="dialog-content"]:has(.dialog-grid) {
+      width: calc(100vw - 32px);
+      max-width: calc(100vw - 32px);
+      padding: 16px;
+    }
   }
 
   h1,
@@ -2464,4 +2483,18 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+@media (max-width: 42rem) {
+  [data-slot="dialog-content"]:has(> .dialog-grid) {
+    width: calc(100vw - 32px);
+    max-width: calc(100vw - 32px);
+    padding: 16px;
+  }
+
+  [data-slot="dialog-content"]:has(> .dialog-grid) > .dialog-grid {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
 }
