@@ -2168,13 +2168,13 @@
   .product-nav {
     width: 100%;
     margin-left: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
+    overflow: visible;
   }
 
   .product-nav ul {
-    width: max-content;
-    min-width: 100%;
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
     justify-content: flex-start;
   }
 
