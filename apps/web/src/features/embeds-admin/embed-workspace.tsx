@@ -540,6 +540,10 @@ export function parseEmbedPublicationResponse(
   expectedOrganizationId?: string,
   expectedEventId?: string,
 ): EmbedPublicationState | null {
+  if (isRecord(payload) && payload.data === null) return null;
+  if (isRecord(payload) && Array.isArray(payload.data)) {
+    throw responseError("publication response must contain a data object.");
+  }
   const data = responseData(payload, "publication response");
   if (Object.keys(data).length === 0) return null;
   const organizationId = requiredResponseString(data.organizationId, "publication.organizationId");

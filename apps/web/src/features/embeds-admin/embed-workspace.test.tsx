@@ -10,6 +10,7 @@ import {
   EmbedWorkspaceView,
   iframeSnippet,
   normalizeEmbedSlug,
+  parseEmbedPublicationResponse,
   publicAgendaCalendarUrl,
   publicEmbedUrl,
   scriptSnippet,
@@ -75,6 +76,21 @@ const eventRecord: EmbedEventRecord = {
   createdBy: "organizer-1",
   updatedBy: "organizer-1",
 };
+
+describe("embed publication response parsing", () => {
+  it("accepts a nullable data envelope for an unpublished event", () => {
+    expect(parseEmbedPublicationResponse({ data: null }, "org-1", "event-1")).toBeNull();
+  });
+
+  it.each([{}, { data: "unpublished" }, { data: [] }])(
+    "rejects an invalid publication envelope: %j",
+    (payload) => {
+      expect(() => parseEmbedPublicationResponse(payload, "org-1", "event-1")).toThrow(
+        "publication response",
+      );
+    },
+  );
+});
 
 describe("authoritative embed configuration transport", () => {
   it("replaces the complete event configuration list with expectedVersion", async () => {
