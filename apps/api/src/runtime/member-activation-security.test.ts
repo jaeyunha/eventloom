@@ -32,8 +32,8 @@ function invitation(): MemberInvitation {
   };
 }
 
-  describe("D1 member activation credential protection", () => {
-    it("stores an expensive verifier, rejects a different retry, and clears it on finalization", async () => {
+describe("D1 member activation credential protection", () => {
+  it("stores an expensive verifier, rejects a different retry, and clears it on finalization", async () => {
     const database = new SqliteD1("eventloom-member-activation-", identityMigration);
     try {
       const d1 = database as unknown as D1Database;

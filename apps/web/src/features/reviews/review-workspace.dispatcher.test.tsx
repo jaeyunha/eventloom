@@ -95,7 +95,7 @@ describe("review workspace public dispatcher", () => {
       }),
     );
 
-    expect(organizer).toContain("organizer review");
+    expect(organizer).toContain("Organizer review");
     expect(organizer).not.toContain("Only your assigned submission is available");
     expect(evaluator).toContain("Only your assigned submission is available");
     expect(evaluator).not.toContain("Create evaluation plan");

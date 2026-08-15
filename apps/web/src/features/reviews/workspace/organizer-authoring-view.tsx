@@ -35,8 +35,8 @@ export function OrganizerAuthoringView({
         {assignmentOnly
           ? "Choose a round and submission, then select eligible reviewers. Preview assignments and apply them without editing the plan or rubric. Existing assignments remain unchanged."
           : isDraft
-            ? "Shape the review schedule, track targeting, reviewer eligibility, assignment limits, and rubric before opening this version for reviewers. Round review teams are managed from the Review team tab."
-            : "Inspect the live grading configuration. Its rounds and rubric are locked to protect existing assignments and reviews; create a revision before changing rounds, eligibility, assignment limits, or scorecard criteria."}
+            ? "Set the review schedule, track targeting, assignment limits, and scorecard before opening the plan. Round review teams are managed afterward in Assignments."
+            : "Review the active plan. Create an editable revision before changing rounds, track targeting, assignment limits, or scorecard criteria."}
       </p>
       {assignmentOnly ? <OrganizerAssignmentCoverage controller={controller} /> : null}
       {!assignmentOnly ? <OrganizerAuthoringWorkbench controller={controller} /> : null}

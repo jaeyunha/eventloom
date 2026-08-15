@@ -48,9 +48,7 @@
   border: 1px solid var(--admin-border);
   border-radius: calc(var(--admin-radius-md) - var(--admin-space-1));
   background: color-mix(in srgb, var(--admin-surface) 96%, var(--admin-canvas));
-  box-shadow:
-    0 1px 2px rgb(24 24 27 / 4%),
-    inset 0 1px 0 rgb(255 255 255 / 38%);
+  box-shadow: var(--shadow-card);
 }
 
 .groupHeader {

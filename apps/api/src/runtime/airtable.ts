@@ -6476,9 +6476,10 @@ async function enqueueCommunicationDeliveryOutbox(input: {
   readonly database: D1Database;
   readonly queue: Queue<CloudflareOutboxMessage>;
   readonly request: CommunicationDeliveryRequest;
+  readonly now?: string;
 }): Promise<void> {
   const { request } = input;
-  const now = new Date().toISOString();
+  const now = input.now ?? new Date().toISOString();
   const fallbackJobId = `runtime:${request.tenantId}:communications:${request.idempotencyKey}`;
   await input.database
     .prepare(
@@ -6794,6 +6795,7 @@ export class AirtableCommunicationDeliveryAdapter implements CommunicationDelive
   constructor(
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
+    private readonly clock: () => Date = () => new Date(),
   ) {}
 
   async send(request: CommunicationDeliveryRequest) {
@@ -6801,6 +6803,7 @@ export class AirtableCommunicationDeliveryAdapter implements CommunicationDelive
       database: this.database,
       queue: this.queue,
       request,
+      now: this.clock().toISOString(),
     });
     return { status: "queued" as const };
   }

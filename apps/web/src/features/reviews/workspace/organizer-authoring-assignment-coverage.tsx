@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
@@ -42,7 +42,10 @@ export function OrganizerAssignmentCoverage({
     organizationId,
   } = controller;
   const selectedRound = rounds.find((round) => round.id === assignmentRoundId);
-  const poolReviewerIds = new Set(reviewerPool.pool?.reviewerIds ?? []);
+  const poolReviewerIds = useMemo(
+    () => new Set(reviewerPool.pool?.reviewerIds ?? []),
+    [reviewerPool.pool?.reviewerIds],
+  );
   const poolGrants = new Map(
     reviewerPool.pool?.grants.map((grant) => [grant.reviewerId, grant]) ?? [],
   );
@@ -61,7 +64,7 @@ export function OrganizerAssignmentCoverage({
     setAssignmentReviewerIds((current) =>
       current.filter((reviewerId) => poolReviewerIds.has(reviewerId)),
     );
-  }, [assignmentRoundId, reviewerPool.pool?.version, reviewTeamReady, setAssignmentReviewerIds]);
+  }, [poolReviewerIds, reviewTeamReady, setAssignmentReviewerIds]);
 
   return (
     <section className={styles.assignmentCoverageTask} aria-labelledby="assignment-task-heading">

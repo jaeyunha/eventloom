@@ -839,16 +839,17 @@ describe("review workspace", () => {
       expect(markup).toContain("Test Summit Local");
       expect(markup).toContain("test-summit-local");
       expect(markup).not.toContain("87aad17-5e75-4732-9085-65df6b8e9a9b");
-      expect(markup).toContain("Organizer review setup");
+      expect(markup).toContain("Organizer setup");
       expect(markup).toContain('id="create-plan-name"');
       expect(markup).toContain('for="create-plan-name"');
-      expect(markup).toContain('id="create-plan-rounds"');
-      expect(markup).toContain('id="create-plan-first-rubric"');
-      expect(markup).toContain('id="create-plan-first-criterion"');
-      expect(markup).toContain('id="create-plan-blind-review"');
-      expect(markup).toContain("Create draft plan");
-      expect(markup).toContain("Round review teams are managed after creation from Review team.");
+      expect(markup).toContain('aria-describedby="create-plan-name-description"');
+      expect(markup).not.toContain('id="create-plan-rounds"');
+      expect(markup).not.toContain('id="create-plan-first-rubric"');
+      expect(markup).not.toContain('id="create-plan-first-criterion"');
+      expect(markup).not.toContain('id="create-plan-blind-review"');
       expect(markup).not.toContain('id="create-plan-event-id"');
+      expect(markup).toContain("Create draft plan");
+      expect(markup).toContain("One editable round is created now.");
     } finally {
       organizerEventWorkspace.current = null;
     }
@@ -1016,7 +1017,7 @@ describe("review workspace", () => {
         }),
       );
 
-      expect(markup).toContain(
+      expect(markup).not.toContain(
         'href="/admin/organizations/org-selected/events/summit-2026/reviews"',
       );
       expect(markup).not.toContain(
@@ -1026,7 +1027,7 @@ describe("review workspace", () => {
       expect(markup).not.toContain("Reviewer AI workspace");
       expect(markup).toContain('href="/admin/organizations/org-selected/members?tab=invite"');
       expect(markup).toContain("Invite reviewers");
-      expect(markup).toContain("Review team");
+      expect(markup).toContain("Assignments");
 
       expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
     } finally {
@@ -2146,12 +2147,12 @@ describe("review workspace", () => {
       ).toBe("Round 2");
       expect(
         (
-          findHost(tree, (props) => props.id === "round-2-reviewer-pool").props as Record<
+          findHost(tree, (props) => props.id === "round-2-track-filter").props as Record<
             string,
             unknown
           >
         ).value,
-      ).toEqual([]);
+      ).toBe("");
       findHost(tree, (props) => props["aria-label"] === "Overall quality input type");
 
       const roundName = hostElements(tree).find(

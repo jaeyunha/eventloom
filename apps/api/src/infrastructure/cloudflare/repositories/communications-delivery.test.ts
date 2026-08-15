@@ -298,6 +298,7 @@ describe("D1 communication delivery", () => {
         {
           send: async (message: CloudflareOutboxMessage) => queued.push(message),
         } as unknown as Queue<CloudflareOutboxMessage>,
+        () => new Date(SNAPSHOT_TIME),
       ),
       {
         clock: () => new Date(SNAPSHOT_TIME),
