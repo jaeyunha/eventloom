@@ -12,6 +12,7 @@ import {
   isCfpCloseDatePast,
   loadCfpEditorConfiguration,
   persistCfpConfiguration,
+  resolveCfpEditorStepIndex,
   selectEditorForm,
   summarizeRule,
   toFormConfiguration,
@@ -20,6 +21,30 @@ import {
 import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 
 describe("CFP editor", () => {
+  it("blocks forward editor navigation until the current step is valid", () => {
+    expect(
+      resolveCfpEditorStepIndex({
+        currentIndex: 1,
+        requestedIndex: 2,
+        currentStepValid: false,
+      }),
+    ).toBe(1);
+    expect(
+      resolveCfpEditorStepIndex({
+        currentIndex: 1,
+        requestedIndex: 2,
+        currentStepValid: true,
+      }),
+    ).toBe(2);
+    expect(
+      resolveCfpEditorStepIndex({
+        currentIndex: 3,
+        requestedIndex: 1,
+        currentStepValid: false,
+      }),
+    ).toBe(1);
+  });
+
   it("keeps sticky section targets below the organizer header and navigator", () => {
     expect(cfpSectionScrollOffset(52, 64)).toBe(132);
     expect(cfpActiveSectionThreshold(52, 64)).toBe(156);
@@ -77,6 +102,41 @@ describe("CFP editor", () => {
     expect(calls).toEqual(["event", "forms"]);
     expect(loaded).toEqual({ event, form });
   });
+
+  it("deduplicates concurrent loads for the same editor scope", async () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    const event = {
+      id: "event-1",
+      tenantId: "organization-1",
+      version: 3,
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conference",
+      timezone: "America/New_York",
+      opensAt: "2027-01-01T05:00:00.000Z",
+      closesAt: "2027-02-01T05:00:00.000Z",
+    };
+    const form = toFormConfiguration(configuration, "organization-1", "event-1");
+    const calls: string[] = [];
+    const api = {
+      getEvent: async () => {
+        calls.push("event");
+        return event;
+      },
+      listForms: async () => {
+        calls.push("forms");
+        return [form];
+      },
+    } as unknown as CfpApi;
+    const input = { organizationId: "organization-1", eventId: "event-1" };
+
+    await Promise.all([
+      loadCfpEditorConfiguration(api, input),
+      loadCfpEditorConfiguration(api, input),
+    ]);
+
+    expect(calls).toEqual(["event", "forms"]);
+  });
+
   it("validates date ordering and identifies past close dates", () => {
     expect(validateCfpDateRange("2026-08-10", "2026-08-10")).toBe(
       "The close date must be after the open date.",

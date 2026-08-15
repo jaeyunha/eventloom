@@ -924,6 +924,17 @@
 
 /* -------------------------------------------------------- action footer */
 
+.accountModeSwitch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.accountModeSwitch > * {
+  width: 100%;
+}
+
 .actions {
   position: sticky;
   z-index: 4;
@@ -1314,6 +1325,10 @@
   .backButton,
   .draftButton {
     width: 100%;
+  }
+
+  .actionsSingleSecondary .backButton {
+    grid-column: 1 / -1;
   }
 
   .primaryButton {
