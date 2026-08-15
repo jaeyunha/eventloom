@@ -989,8 +989,11 @@ export async function installPortalApi(
       const body = requestBody(request);
       const participantId = stringValue(body, "participantId");
       const taskId = body.taskId === undefined ? undefined : stringValue(body, "taskId");
-      const submissionId =
+      const requestedSubmissionId =
         body.submissionId === undefined ? undefined : stringValue(body, "submissionId");
+      const task =
+        taskId === undefined ? undefined : state.tasks.find((candidate) => candidate.id === taskId);
+      const submissionId = requestedSubmissionId ?? task?.submissionId ?? undefined;
       const kind = stringValue(body, "kind") as PortalAssetSeed["kind"];
       const fileName = stringValue(body, "fileName");
       const contentType = stringValue(body, "contentType");
@@ -998,7 +1001,7 @@ export async function installPortalApi(
       const supersedesAssetId =
         body.supersedesAssetId === undefined ? undefined : stringValue(body, "supersedesAssetId");
       expect(state.context.participantIds).toContain(participantId);
-      if (taskId !== undefined) expect(state.tasks.some((task) => task.id === taskId)).toBe(true);
+      if (taskId !== undefined) expect(task).toBeDefined();
       if (submissionId !== undefined) expect(state.context.submissionIds).toContain(submissionId);
       const superseded =
         supersedesAssetId === undefined
