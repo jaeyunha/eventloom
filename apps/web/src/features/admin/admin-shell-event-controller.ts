@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { OrganizerEventContext } from "./admin-navigation";
 import { fetchOrganizerEventWorkspace } from "./admin-shell-event";
 import {
-  canonicalOrganizerEventPath,
+  canonicalOrganizerEventHref,
   type OrganizerEventRouteIdentity,
 } from "./organizer-event-route";
 
@@ -64,15 +64,15 @@ export function useOrganizerEvent(
 
   useEffect(() => {
     if (eventContext === null || currentEvent === null) return;
-    const canonicalPath = canonicalOrganizerEventPath(
+    const canonicalHref = canonicalOrganizerEventHref(
       pathname,
+      searchParams.toString(),
       eventContext.organizationId,
       eventContext.eventId,
       currentEvent,
     );
-    if (!canonicalPath) return;
-    const query = searchParams.toString();
-    router.replace(query ? `${canonicalPath}?${query}` : canonicalPath, { scroll: false });
+    if (!canonicalHref) return;
+    router.replace(canonicalHref, { scroll: false });
   }, [currentEvent, eventContext, pathname, router, searchParams]);
 
   return {

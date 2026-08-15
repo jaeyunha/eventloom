@@ -58,14 +58,14 @@ export function resolveOrganizerEventReference(
 
 export function organizerEventWorkspaceHref(
   organizationId: string,
-  eventSlug: string,
+  eventReference: string,
   suffix = "",
 ): string {
   const normalizedSuffix = suffix === "" || suffix.startsWith("/") ? suffix : `/${suffix}`;
   return `/admin/organizations/${routeSegment(
     organizationId,
     "Organization ID",
-  )}/events/${routeSegment(eventSlug, "Event slug")}${normalizedSuffix}`;
+  )}/events/${routeSegment(eventReference, "Event reference")}${normalizedSuffix}`;
 }
 
 export function canonicalOrganizerEventPath(
@@ -74,12 +74,29 @@ export function canonicalOrganizerEventPath(
   eventReference: string,
   event: OrganizerEventRouteIdentity,
 ): string | null {
-  if (eventReference === event.slug) return null;
+  if (eventReference === event.id) return null;
 
   const incomingBasePath = organizerEventWorkspaceHref(organizationId, eventReference);
   if (pathname !== incomingBasePath && !pathname.startsWith(`${incomingBasePath}/`)) return null;
 
-  const canonicalBasePath = organizerEventWorkspaceHref(organizationId, event.slug);
+  const canonicalBasePath = organizerEventWorkspaceHref(organizationId, event.id);
   const canonicalPath = `${canonicalBasePath}${pathname.slice(incomingBasePath.length)}`;
   return canonicalPath === pathname ? null : canonicalPath;
+}
+
+export function canonicalOrganizerEventHref(
+  pathname: string,
+  query: string,
+  organizationId: string,
+  eventReference: string,
+  event: OrganizerEventRouteIdentity,
+): string | null {
+  const canonicalPath = canonicalOrganizerEventPath(
+    pathname,
+    organizationId,
+    eventReference,
+    event,
+  );
+  if (canonicalPath === null) return null;
+  return query === "" ? canonicalPath : `${canonicalPath}?${query}`;
 }
