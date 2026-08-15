@@ -1214,6 +1214,7 @@
   display: grid;
   gap: 0.45rem;
   justify-items: start;
+  padding: 1rem;
 }
 .emptyStateTitle {
   margin: 0;
@@ -2490,6 +2491,11 @@
   .adminContent .metricsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .adminContent .metricDataCard:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+    border-right: 0;
+  }
 }
 
 @media (max-width: 44rem) {
@@ -2507,6 +2513,10 @@
     }
 
     .overviewPanelHeader {
+      padding-inline: 0.85rem;
+    }
+
+    .emptyState {
       padding-inline: 0.85rem;
     }
   }
