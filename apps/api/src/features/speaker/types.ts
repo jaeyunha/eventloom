@@ -1275,6 +1275,8 @@ export interface PrivateAssetGateway {
   inspectObject?(
     command: Pick<PrivateAssetCapabilityBinding, "objectKey" | "contentType" | "sizeBytes">,
   ): Promise<PrivateAssetObjectMetadata | null>;
+  verifyUploadCapability?(command: PrivateAssetCapabilityBinding): Promise<boolean>;
+  invalidateUploadCapability?(command: PrivateAssetCapabilityBinding): Promise<void>;
   readObject?(command: PrivateAssetCapabilityBinding): Promise<PrivateDownloadObject | null>;
 }
 

@@ -91,7 +91,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     string,
     {
       capability: StoredPrivateCapability;
-      state: "pending" | "uploaded" | "consumed";
+      state: "pending" | "scanning" | "uploaded" | "consumed";
     }
   >();
 
@@ -211,13 +211,15 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     if (body.byteLength !== capability.sizeBytes) {
       throw new Error("The uploaded object size does not match the capability.");
     }
-    await this.claim(capabilityId, row.scan_result_code ?? "", "uploaded");
+    const payload = row.scan_result_code ?? "";
+    await this.claim(capabilityId, payload, "scanning");
     try {
       await this.#bucket.put(capability.objectKey, body, {
         httpMetadata: { contentType: capability.contentType },
       });
+      await this.claim(capabilityId, payload, "uploaded", "scanning");
     } catch (error) {
-      await this.releaseClaim(capabilityId, capabilityPayload(capability));
+      await this.releaseClaim(capabilityId, payload);
       throw error;
     }
     return {
@@ -301,23 +303,28 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       capability.eventId !== binding.eventId ||
       capability.submissionId !== binding.submissionId ||
       capability.participantId !== binding.participantId ||
-      capability.objectKey !== binding.objectKey
+      capability.objectKey !== binding.objectKey ||
+      (row.state !== "pending" && row.state !== "uploaded")
     ) {
-      return;
+      throw new Error("The upload capability cannot be invalidated.");
     }
     if (this.#database === undefined) {
       const stored = this.#memory.get(binding.capabilityId);
-      if (stored !== undefined) stored.state = "consumed";
+      if (stored === undefined) throw new Error("The upload capability cannot be invalidated.");
+      stored.state = "consumed";
       return;
     }
-    await this.#database
+    const result = await this.#database
       .prepare(
         `UPDATE private_uploads
             SET state = 'deleted', updated_at = ?
-          WHERE id = ? AND scan_result_code = ?`,
+          WHERE id = ? AND state IN ('pending', 'uploaded') AND scan_result_code = ?`,
       )
       .bind(new Date().toISOString(), binding.capabilityId, row.scan_result_code)
       .run();
+    if ((result.meta?.changes ?? 0) !== 1) {
+      throw new Error("The upload capability cannot be invalidated.");
+    }
   }
 
   async readObject(binding: PrivateAssetCapabilityBinding): Promise<PrivateDownloadObject | null> {
@@ -370,6 +377,22 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
   ): Promise<void> {
     const payload = capabilityPayload(capability);
     if (this.#database === undefined) {
+      const existing = this.#memory.get(capabilityId);
+      const canReplace =
+        existing === undefined ||
+        existing.state === "pending" ||
+        (capability.kind === "download" && existing.state !== "scanning");
+      if (!canReplace) {
+        throw new Error("The private asset capability cannot be reauthorized.");
+      }
+      if (
+        existing !== undefined &&
+        (existing.capability.objectKey !== capability.objectKey ||
+          existing.capability.contentType !== capability.contentType ||
+          existing.capability.sizeBytes !== capability.sizeBytes)
+      ) {
+        throw new Error("The private asset capability binding is immutable.");
+      }
       this.#memory.set(capabilityId, { capability, state });
       return;
     }
@@ -403,21 +426,32 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     ) {
       throw new Error("The private asset capability binding is immutable.");
     }
-    await this.#database
+    const canReplace =
+      existing.state === "pending" ||
+      (capability.kind === "download" && existing.state !== "scanning");
+    if (!canReplace) {
+      throw new Error("The private asset capability cannot be reauthorized.");
+    }
+    const statePredicate =
+      capability.kind === "upload" ? "state = 'pending'" : "state <> 'scanning'";
+    const result = await this.#database
       .prepare(
         `UPDATE private_uploads
             SET state = ?, scan_result_code = ?, updated_at = ?
-          WHERE id = ?`,
+          WHERE id = ? AND ${statePredicate}`,
       )
       .bind(state, payload, new Date().toISOString(), capabilityId)
       .run();
+    if ((result.meta?.changes ?? 0) !== 1) {
+      throw new Error("The private asset capability cannot be reauthorized.");
+    }
   }
 
   private async claim(
     capabilityId: string,
     expectedPayload: string,
-    nextState: string,
-    expectedState: "pending" | "uploaded" = "pending",
+    nextState: "scanning" | "uploaded" | "download-consumed",
+    expectedState: "pending" | "scanning" | "uploaded" = "pending",
   ): Promise<void> {
     if (this.#database === undefined) {
       const stored = this.#memory.get(capabilityId);
@@ -428,7 +462,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       ) {
         throw new Error("The capability has already been used.");
       }
-      stored.state = nextState === "download-consumed" ? "consumed" : "uploaded";
+      stored.state = nextState === "download-consumed" ? "consumed" : nextState;
       return;
     }
     const databaseState = nextState === "download-consumed" ? expectedState : nextState;
@@ -455,16 +489,22 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
   private async releaseClaim(capabilityId: string, payload: string): Promise<void> {
     if (this.#database === undefined) {
       const stored = this.#memory.get(capabilityId);
-      if (stored !== undefined) stored.state = "pending";
+      if (
+        stored !== undefined &&
+        stored.state === "scanning" &&
+        capabilityPayload(stored.capability) === payload
+      ) {
+        stored.state = "pending";
+      }
       return;
     }
     await this.#database
       .prepare(
         `UPDATE private_uploads
-            SET state = 'pending', scan_result_code = ?, updated_at = ?
-          WHERE id = ? AND state = 'uploaded'`,
+            SET state = 'pending', updated_at = ?
+          WHERE id = ? AND state = 'scanning' AND scan_result_code = ?`,
       )
-      .bind(payload, new Date().toISOString(), capabilityId)
+      .bind(new Date().toISOString(), capabilityId, payload)
       .run();
   }
 }

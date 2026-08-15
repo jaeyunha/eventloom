@@ -1420,6 +1420,29 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     };
   }
 
+  async verifyUploadCapability(binding: PrivateAssetCapabilityBinding) {
+    const capability = this.#capabilities.get(binding.capabilityId);
+    return (
+      capability !== undefined &&
+      capability.kind === "upload" &&
+      capability.state === "uploaded" &&
+      this.sameBinding(capability.binding, binding)
+    );
+  }
+
+  async invalidateUploadCapability(binding: PrivateAssetCapabilityBinding) {
+    const capability = this.#capabilities.get(binding.capabilityId);
+    if (
+      capability === undefined ||
+      capability.kind !== "upload" ||
+      capability.state === "consumed" ||
+      !this.sameBinding(capability.binding, binding)
+    ) {
+      throw new Error("The upload capability cannot be invalidated.");
+    }
+    capability.state = "consumed";
+  }
+
   async inspectObject(
     command: Pick<PrivateAssetCapabilityBinding, "objectKey" | "contentType" | "sizeBytes">,
   ) {
@@ -1452,6 +1475,23 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       sizeBytes: object.bytes.byteLength,
       fileName: binding.fileName,
     };
+  }
+
+  private sameBinding(
+    left: PrivateAssetCapabilityBinding,
+    right: PrivateAssetCapabilityBinding,
+  ): boolean {
+    return (
+      left.tenantId === right.tenantId &&
+      left.eventId === right.eventId &&
+      left.submissionId === right.submissionId &&
+      left.participantId === right.participantId &&
+      left.taskId === right.taskId &&
+      left.objectKey === right.objectKey &&
+      left.contentType === right.contentType &&
+      left.sizeBytes === right.sizeBytes &&
+      left.fileName === right.fileName
+    );
   }
 
   private expired(expiresAt: string): boolean {

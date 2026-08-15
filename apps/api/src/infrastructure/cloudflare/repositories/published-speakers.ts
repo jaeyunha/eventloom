@@ -48,6 +48,17 @@ export interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjec
   readonly id: string;
   readonly organizationId: string;
   readonly eventId: string;
+  readonly headshots: Readonly<
+    Record<
+      string,
+      {
+        readonly assetId: string;
+        readonly objectKey: string;
+        readonly contentType: PublishedSpeakerHeadshot["contentType"];
+        readonly sizeBytes: number;
+      }
+    >
+  >;
 }
 
 interface D1PublishedEventProjection {
@@ -71,6 +82,11 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
     agenda: PublishedAgendaRevision,
     agendaSourceHash: string,
   ): Promise<void> {
+    const assets =
+      (await this.speakers.listAssets?.(
+        record.eventId,
+        record.speakers.map((speaker) => speaker.id),
+      )) ?? [];
     const statements: D1PreparedStatement[] = [
       this.database
         .prepare(
@@ -134,13 +150,33 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
       );
     }
     for (const [ordinal, speaker] of record.speakers.entries()) {
+      const requestedHeadshot = record.headshots[speaker.id];
+      const headshot =
+        requestedHeadshot === undefined
+          ? undefined
+          : assets.find(
+                (asset) =>
+                  asset.id === requestedHeadshot.assetId &&
+                  asset.eventId === record.eventId &&
+                  asset.participantId === speaker.id &&
+                  asset.kind === "headshot" &&
+                  asset.state === "ready" &&
+                  asset.reviewState === "approved" &&
+                  asset.objectKey === requestedHeadshot.objectKey &&
+                  publishedHeadshotContentType(asset.contentType) ===
+                    requestedHeadshot.contentType &&
+                  asset.sizeBytes === requestedHeadshot.sizeBytes,
+              ) === undefined
+            ? undefined
+            : requestedHeadshot;
       statements.push(
         this.database
           .prepare(
             `INSERT OR IGNORE INTO program_speaker_projection_entries
                (projection_id, id, participant_id, session_ids_json, display_name, title,
-                company, bio, avatar_url, ordinal)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 company, bio, avatar_url, avatar_asset_id, avatar_object_key,
+                 avatar_content_type, avatar_size_bytes, ordinal)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             record.id,
@@ -152,6 +188,10 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
             speaker.organization,
             speaker.biography,
             speaker.photoUrl,
+            headshot?.assetId ?? null,
+            headshot?.objectKey ?? null,
+            headshot?.contentType ?? null,
+            headshot?.sizeBytes ?? null,
             ordinal,
           ),
       );
@@ -290,41 +330,53 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
       speakerRevisionId,
       speakerRevisionNumber,
     );
+    if (projection === null) return null;
     const normalizedSpeakerId = speakerId.trim();
-    const publicSpeaker = projection?.speakers.find(
+    const publicSpeaker = projection.speakers.find(
       (candidate) =>
         candidate.id === normalizedSpeakerId &&
         candidate.photoUrl === publishedSpeakerPhotoPath(event.slug, normalizedSpeakerId),
     );
     if (publicSpeaker === undefined) return null;
-    const assets = await this.speakers.listAssets?.(event.id, [normalizedSpeakerId]);
-    if (assets === undefined) return null;
-    const asset = assets.find(
-      (candidate) =>
-        candidate.participantId === normalizedSpeakerId &&
-        candidate.kind === "headshot" &&
-        candidate.state === "ready" &&
-        candidate.reviewState === "approved" &&
-        (candidate.releasedVersionId === candidate.id ||
-          candidate.approvedVersionId === candidate.id),
-    );
-    if (asset === undefined || asset.sizeBytes <= 0 || !Number.isSafeInteger(asset.sizeBytes)) {
+    const headshot = await this.database
+      .prepare(
+        `SELECT avatar_asset_id, avatar_object_key, avatar_content_type, avatar_size_bytes
+           FROM program_speaker_projection_entries
+          WHERE projection_id = ? AND participant_id = ? AND avatar_url = ?
+          LIMIT 1`,
+      )
+      .bind(projection.revision.id, normalizedSpeakerId, publicSpeaker.photoUrl)
+      .first<{
+        avatar_asset_id: string | null;
+        avatar_object_key: string | null;
+        avatar_content_type: string | null;
+        avatar_size_bytes: number | null;
+      }>();
+    if (
+      headshot === null ||
+      headshot.avatar_asset_id === null ||
+      headshot.avatar_object_key === null ||
+      headshot.avatar_content_type === null ||
+      headshot.avatar_size_bytes === null ||
+      headshot.avatar_size_bytes <= 0 ||
+      !Number.isSafeInteger(headshot.avatar_size_bytes)
+    ) {
       return null;
     }
-    const contentType = publishedHeadshotContentType(asset.contentType);
+    const contentType = publishedHeadshotContentType(headshot.avatar_content_type);
     if (contentType === null) return null;
-    const object = await this.privateFiles.get(asset.objectKey);
+    const object = await this.privateFiles.get(headshot.avatar_object_key);
     if (
       object === null ||
       object.body === null ||
-      object.size !== asset.sizeBytes ||
+      object.size !== headshot.avatar_size_bytes ||
       object.httpMetadata?.contentType?.trim().toLowerCase() !== contentType
     ) {
       return null;
     }
     const body = await object.arrayBuffer();
-    return body.byteLength === asset.sizeBytes
-      ? { body, contentType, sizeBytes: asset.sizeBytes }
+    return body.byteLength === headshot.avatar_size_bytes
+      ? { body, contentType, sizeBytes: headshot.avatar_size_bytes }
       : null;
   }
 

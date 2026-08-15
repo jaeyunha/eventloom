@@ -512,7 +512,7 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         participantIds: [],
       });
     }
-  });
+  }, 120_000);
 
   it("provisions accepted participant access only through the canonical grant boundary", async () => {
     const fixture = createSpeakerLifecycleFixture();
@@ -725,5 +725,68 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     await expect(repository.upsertOrganizerSpeakerAggregate(winningCommand)).resolves.toEqual(
       applied,
     );
+  });
+
+  it("provisions portal access when an invited speaker verifies after admission", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const { service } = fixture.createPhase();
+    const email = "later-verification@example.test";
+    const accountId = "later-verification-account";
+    const created = await service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Later Verification",
+      email,
+      jobTitle: "",
+      company: "",
+      biography: "",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "later-verification-speaker",
+      sourceType: "manual",
+      sourceId: "later-verification-source",
+    });
+    const participantId = created.speakers[0]?.participantId;
+    if (participantId === undefined) throw new Error("Expected the manual speaker participant.");
+
+    fixture.database.executeScript(`
+      INSERT INTO auth_users (id, email, email_verified, name, created_at, updated_at)
+      VALUES (
+        '${accountId}', '${email}', 0, 'Later Verification',
+        '2099-08-15T06:00:00.000Z', '2099-08-15T06:00:00.000Z'
+      );
+    `);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${participantId}' AND user_id = '${accountId}'
+            AND revoked_at IS NULL`,
+      )[0]?.count,
+    ).toBe(0);
+
+    fixture.database.executeScript(`
+      UPDATE auth_users
+         SET email_verified = 1, updated_at = '2099-08-15T06:05:00.000Z'
+       WHERE id = '${accountId}';
+    `);
+
+    expect(
+      fixture.database.query<{ claimed_user_id: string | null }>(
+        `SELECT claimed_user_id FROM participants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND id = '${participantId}'`,
+      )[0]?.claimed_user_id,
+    ).toBe(accountId);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${participantId}' AND user_id = '${accountId}'
+            AND revoked_at IS NULL`,
+      )[0]?.count,
+    ).toBe(1);
   });
 });

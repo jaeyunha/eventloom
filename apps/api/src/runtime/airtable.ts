@@ -8429,7 +8429,15 @@ export function createD1ApplicationDependencies(
           }
         }
 
-        const headshotSpeakerIds = new Set<string>();
+        const publishedHeadshots = new Map<
+          string,
+          {
+            assetId: string;
+            objectKey: string;
+            contentType: "image/jpeg" | "image/png" | "image/webp";
+            sizeBytes: number;
+          }
+        >();
         for (const profile of profiles) {
           if (profile.headshotAssetId === undefined) continue;
           const asset = assets.find(
@@ -8451,7 +8459,12 @@ export function createD1ApplicationDependencies(
           ) {
             continue;
           }
-          headshotSpeakerIds.add(profile.participantId);
+          publishedHeadshots.set(profile.participantId, {
+            assetId: asset.id,
+            objectKey: asset.objectKey,
+            contentType,
+            sizeBytes: asset.sizeBytes,
+          });
         }
 
         const speakers = profiles
@@ -8464,7 +8477,7 @@ export function createD1ApplicationDependencies(
               jobTitle: profile.jobTitle ?? null,
               organization: profile.company ?? null,
               biography: profile.biography,
-              photoUrl: headshotSpeakerIds.has(profile.participantId)
+              photoUrl: publishedHeadshots.has(profile.participantId)
                 ? publishedSpeakerPhotoPath(event.slug, profile.participantId)
                 : null,
               sessionIds: speakerSessions.map((session) => session.id),
@@ -8476,7 +8489,8 @@ export function createD1ApplicationDependencies(
           })
           .sort((left, right) => left.displayName.localeCompare(right.displayName));
         const agendaHash = await publicationSourceHash(revision);
-        const speakerHash = await publicationSourceHash(speakers);
+        const headshots = Object.fromEntries(publishedHeadshots);
+        const speakerHash = await publicationSourceHash({ speakers, headshots });
         const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
           id: revision.id,
           organizationId,
@@ -8495,6 +8509,7 @@ export function createD1ApplicationDependencies(
             publishedAt: revision.publishedAt,
           },
           speakers,
+          headshots,
           sourceHash: speakerHash,
         };
         await publishedSpeakerProjections.putPublishedSpeakers(

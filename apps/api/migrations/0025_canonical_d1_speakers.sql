@@ -5,6 +5,10 @@ PRAGMA foreign_keys = ON;
 
 ALTER TABLE speaker_profiles ADD COLUMN admitted_by_account_id TEXT;
 ALTER TABLE speaker_profiles ADD COLUMN admitted_at TEXT;
+ALTER TABLE program_speaker_projection_entries ADD COLUMN avatar_asset_id TEXT;
+ALTER TABLE program_speaker_projection_entries ADD COLUMN avatar_object_key TEXT;
+ALTER TABLE program_speaker_projection_entries ADD COLUMN avatar_content_type TEXT;
+ALTER TABLE program_speaker_projection_entries ADD COLUMN avatar_size_bytes INTEGER;
 
 CREATE TABLE speaker_import_previews (
   id TEXT NOT NULL PRIMARY KEY,
@@ -168,6 +172,113 @@ BEGIN
      AND au.email = NEW.email COLLATE NOCASE
      AND au.email_verified = 1
      AND NEW.status <> 'revoked'
+  ON CONFLICT(organization_id, event_id, participant_id, user_id) DO UPDATE SET
+    permissions_json = excluded.permissions_json,
+    updated_at = excluded.updated_at,
+    revoked_at = NULL;
+END;
+
+CREATE TRIGGER auth_users_provision_speaker_grant_insert
+AFTER INSERT ON auth_users
+WHEN NEW.email_verified = 1
+BEGIN
+  UPDATE participants
+     SET claimed_user_id = NEW.id,
+         updated_at = NEW.updated_at
+   WHERE normalized_email = lower(trim(NEW.email))
+     AND (claimed_user_id IS NULL OR claimed_user_id = NEW.id)
+     AND EXISTS (
+       SELECT 1
+         FROM speaker_profiles sp
+        WHERE sp.organization_id = participants.organization_id
+          AND sp.event_id = participants.event_id
+          AND sp.participant_id = participants.id
+          AND lower(trim(COALESCE(sp.email, ''))) = lower(trim(NEW.email))
+          AND sp.status <> 'revoked'
+     );
+
+  INSERT INTO participant_grants (
+    organization_id, event_id, participant_id, user_id, permissions_json,
+    created_at, updated_at, revoked_at
+  )
+  SELECT sp.organization_id, sp.event_id, sp.participant_id, NEW.id,
+         '["edit_own_profile","manage_own_assets","view_own_tasks","update_own_tasks"]',
+         NEW.updated_at, NEW.updated_at, NULL
+    FROM speaker_profiles sp
+   WHERE lower(trim(COALESCE(sp.email, ''))) = lower(trim(NEW.email))
+     AND sp.status <> 'revoked'
+  ON CONFLICT(organization_id, event_id, participant_id, user_id) DO UPDATE SET
+    permissions_json = excluded.permissions_json,
+    updated_at = excluded.updated_at,
+    revoked_at = NULL;
+END;
+
+CREATE TRIGGER auth_users_reconcile_speaker_grant_update
+AFTER UPDATE OF email, email_verified ON auth_users
+BEGIN
+  UPDATE participant_grants
+     SET revoked_at = NEW.updated_at,
+         updated_at = NEW.updated_at
+   WHERE user_id = NEW.id
+     AND revoked_at IS NULL
+     AND (
+       NEW.email_verified <> 1
+       OR NOT EXISTS (
+         SELECT 1
+           FROM speaker_profiles sp
+          WHERE sp.organization_id = participant_grants.organization_id
+            AND sp.event_id = participant_grants.event_id
+            AND sp.participant_id = participant_grants.participant_id
+            AND lower(trim(COALESCE(sp.email, ''))) = lower(trim(NEW.email))
+            AND sp.status <> 'revoked'
+       )
+     );
+
+  UPDATE participants
+     SET claimed_user_id = NULL,
+         updated_at = NEW.updated_at
+   WHERE claimed_user_id = NEW.id
+     AND (
+       NEW.email_verified <> 1
+       OR normalized_email <> lower(trim(NEW.email))
+       OR NOT EXISTS (
+         SELECT 1
+           FROM speaker_profiles sp
+          WHERE sp.organization_id = participants.organization_id
+            AND sp.event_id = participants.event_id
+            AND sp.participant_id = participants.id
+            AND lower(trim(COALESCE(sp.email, ''))) = lower(trim(NEW.email))
+            AND sp.status <> 'revoked'
+       )
+     );
+
+  UPDATE participants
+     SET claimed_user_id = NEW.id,
+         updated_at = NEW.updated_at
+   WHERE NEW.email_verified = 1
+     AND normalized_email = lower(trim(NEW.email))
+     AND (claimed_user_id IS NULL OR claimed_user_id = NEW.id)
+     AND EXISTS (
+       SELECT 1
+         FROM speaker_profiles sp
+        WHERE sp.organization_id = participants.organization_id
+          AND sp.event_id = participants.event_id
+          AND sp.participant_id = participants.id
+          AND lower(trim(COALESCE(sp.email, ''))) = lower(trim(NEW.email))
+          AND sp.status <> 'revoked'
+     );
+
+  INSERT INTO participant_grants (
+    organization_id, event_id, participant_id, user_id, permissions_json,
+    created_at, updated_at, revoked_at
+  )
+  SELECT sp.organization_id, sp.event_id, sp.participant_id, NEW.id,
+         '["edit_own_profile","manage_own_assets","view_own_tasks","update_own_tasks"]',
+         NEW.updated_at, NEW.updated_at, NULL
+    FROM speaker_profiles sp
+   WHERE NEW.email_verified = 1
+     AND lower(trim(COALESCE(sp.email, ''))) = lower(trim(NEW.email))
+     AND sp.status <> 'revoked'
   ON CONFLICT(organization_id, event_id, participant_id, user_id) DO UPDATE SET
     permissions_json = excluded.permissions_json,
     updated_at = excluded.updated_at,

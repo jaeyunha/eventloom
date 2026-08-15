@@ -502,6 +502,7 @@ class LifecycleRepository implements SpeakerRepository {
 class CapabilityGateway implements PrivateAssetGateway {
   readonly uploadBindings: PrivateAssetCapabilityBinding[] = [];
   readonly downloadBindings: PrivateAssetCapabilityBinding[] = [];
+  readonly invalidatedUploadBindings: PrivateAssetCapabilityBinding[] = [];
   readonly uploaded = new Set<string>();
   readonly objects = new Map<string, { body: Uint8Array; contentType: string }>();
 
@@ -519,6 +520,17 @@ class CapabilityGateway implements PrivateAssetGateway {
       headers: { "content-type": binding.contentType },
       expiresAt: binding.expiresAt,
     });
+  }
+  verifyUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<boolean> {
+    return Promise.resolve(
+      this.uploaded.has(binding.objectKey) &&
+        this.uploadBindings.filter((candidate) => candidate.capabilityId === binding.capabilityId)
+          .length <= 1,
+    );
+  }
+  invalidateUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<void> {
+    this.invalidatedUploadBindings.push(binding);
+    return Promise.resolve();
   }
   registerDownloadCapability(
     binding: PrivateAssetCapabilityBinding,
@@ -593,7 +605,9 @@ function opaqueToken(url: string): string {
 
 class MemoryBucket {
   readonly objects = new Map<string, { body: Uint8Array; contentType: string }>();
+  beforePut?: () => Promise<void>;
   async put(key: string, body: ArrayBuffer, options: { httpMetadata: { contentType: string } }) {
+    await this.beforePut?.();
     this.objects.set(key, {
       body: new Uint8Array(body),
       contentType: options.httpMetadata.contentType,
@@ -666,6 +680,9 @@ describe("private speaker asset lifecycle", () => {
       state: "ready",
     });
     expect(finalized.state).toBe("ready");
+    expect(gateway.invalidatedUploadBindings).toEqual([
+      expect.objectContaining({ capabilityId: authorization.asset.id }),
+    ]);
   });
 
   it("re-authorizes the same pending asset from immutable persisted metadata", async () => {
@@ -708,6 +725,42 @@ describe("private speaker asset lifecycle", () => {
         assetId: original.asset.id,
       }),
     ).rejects.toMatchObject({ code: "ASSET_UPLOAD_RETRY_INVALID" });
+  });
+
+  it("rejects finalization while the latest upload capability remains pending", async () => {
+    const repository = new LifecycleRepository();
+    const gateway = new CapabilityGateway();
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+      speakerSender,
+      now: () => new Date(now),
+      generateId: () => "asset-pending-retry",
+    });
+    const original = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    gateway.uploaded.add(original.asset.objectKey);
+    await service.reauthorizePendingUpload({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: original.asset.id,
+    });
+
+    await expect(
+      service.finalizeAsset({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: original.asset.id,
+        state: "ready",
+      }),
+    ).rejects.toMatchObject({ code: "ASSET_FINALIZATION_INVALID" });
+    expect(gateway.invalidatedUploadBindings).toHaveLength(0);
   });
 
   it("does not finalize a ready asset without persisted object metadata", async () => {
@@ -975,6 +1028,54 @@ describe("private speaker asset lifecycle", () => {
     ).rejects.toThrow();
   });
 
+  it("does not verify an upload until the replacement object write completes", async () => {
+    const bucket = new MemoryBucket();
+    const gateway = new R2PrivateAssetGateway(bucket as never, "https://api.invalid");
+    const uploadBinding = binding();
+    bucket.objects.set(uploadBinding.objectKey, {
+      body: new TextEncoder().encode("old"),
+      contentType: uploadBinding.contentType,
+    });
+    const upload = await gateway.registerUploadCapability(uploadBinding);
+    let signalPutStarted: (() => void) | undefined;
+    let releasePut: (() => void) | undefined;
+    const putStarted = new Promise<void>((resolve) => {
+      signalPutStarted = resolve;
+    });
+    const putReleased = new Promise<void>((resolve) => {
+      releasePut = resolve;
+    });
+    bucket.beforePut = async () => {
+      signalPutStarted?.();
+      await putReleased;
+    };
+
+    const consuming = gateway.consumeUploadCapability(
+      uploadBinding.capabilityId,
+      opaqueToken(upload.url),
+      new Request("https://api.invalid", {
+        method: "PUT",
+        headers: {
+          "content-type": uploadBinding.contentType,
+          "content-length": String(uploadBinding.sizeBytes),
+        },
+        body: new Uint8Array(uploadBinding.sizeBytes),
+      }),
+    );
+    await putStarted;
+
+    await expect(gateway.verifyUploadCapability(uploadBinding)).resolves.toBe(false);
+    await expect(gateway.invalidateUploadCapability(uploadBinding)).rejects.toThrow(
+      /cannot be invalidated/u,
+    );
+    await expect(gateway.registerUploadCapability(uploadBinding)).rejects.toThrow(
+      /cannot be reauthorized/u,
+    );
+    releasePut?.();
+    await consuming;
+    await expect(gateway.verifyUploadCapability(uploadBinding)).resolves.toBe(true);
+  });
+
   it("accepts participant-scoped capabilities without a submission binding", async () => {
     const bucket = new MemoryBucket();
     const gateway = new R2PrivateAssetGateway(bucket as never, "https://api.invalid");
@@ -997,7 +1098,15 @@ describe("private speaker asset lifecycle", () => {
         }),
       ),
     ).resolves.toMatchObject({ contentType: "image/png", sizeBytes: 3 });
+    await expect(gateway.registerUploadCapability(participantBinding)).rejects.toThrow(
+      /cannot be reauthorized/u,
+    );
     await expect(gateway.verifyUploadCapability(participantBinding)).resolves.toBe(true);
+    await expect(gateway.invalidateUploadCapability(participantBinding)).resolves.toBeUndefined();
+    await expect(gateway.verifyUploadCapability(participantBinding)).resolves.toBe(false);
+    await expect(gateway.registerUploadCapability(participantBinding)).rejects.toThrow(
+      /cannot be reauthorized/u,
+    );
   });
 
   it("does not expose object keys from transfer responses", async () => {

@@ -1640,7 +1640,7 @@ export class SpeakerService {
           }
           const visibleSubmissions = [...visibleById.values()];
           const submissionIds = unique(visibleSubmissions.map((submission) => submission.id));
-          if (submissionIds.length === 0) return undefined;
+          if (submissionIds.length === 0 && primaryParticipantId === undefined) return undefined;
           const projectedScope =
             primaryParticipantId === undefined
               ? { ...contextScope, submissionIds, participantIds: [] }
@@ -1668,15 +1668,29 @@ export class SpeakerService {
     const projectedContexts = projected.flatMap((context) =>
       context === undefined ? [] : [context],
     );
-    return projectedContexts.sort(
-      (left, right) =>
-        left.name.localeCompare(right.name) || left.eventId.localeCompare(right.eventId),
-    );
+    return projectedContexts
+      .filter(
+        (context) =>
+          context.submissionIds.length > 0 ||
+          !projectedContexts.some(
+            (candidate) =>
+              candidate.id !== context.id &&
+              candidate.eventId === context.eventId &&
+              candidate.submissionIds.length > 0 &&
+              candidate.participantIds.some((participantId) =>
+                context.participantIds.includes(participantId),
+              ),
+          ),
+      )
+      .sort(
+        (left, right) =>
+          left.name.localeCompare(right.name) || left.eventId.localeCompare(right.eventId),
+      );
   }
 
   async getPortalContext(eventId: string, accountId: string): Promise<SpeakerPortalContext> {
     const scope = await this.getScope(eventId, accountId);
-    if (scope.submissionIds.length === 0) throw notFound();
+    if (scope.submissionIds.length === 0 && scope.participantIds.length === 0) throw notFound();
     const discoveredContexts = (await this.listPortalContexts(accountId)).filter(
       (context) => context.eventId === eventId,
     );
@@ -1694,7 +1708,7 @@ export class SpeakerService {
         primaryParticipantId === undefined ||
         portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
     );
-    if (submissions.length === 0) throw notFound();
+    if (submissions.length === 0 && primaryParticipantId === undefined) throw notFound();
     const submissionIds = submissions.map((submission) => submission.id);
     const projectedScope =
       primaryParticipantId === undefined
@@ -1719,7 +1733,7 @@ export class SpeakerService {
 
   async getPortal(eventId: string, accountId: string): Promise<SpeakerPortalView> {
     const scope = await this.getScope(eventId, accountId);
-    if (scope.submissionIds.length === 0) throw notFound();
+    if (scope.submissionIds.length === 0 && scope.participantIds.length === 0) throw notFound();
     const primaryParticipantId = portalPrimaryParticipantId(scope);
     const listRosterForEvent = this.repository.listRosterForEvent;
     const prefetchedRosterPromise: Promise<readonly SpeakerRosterEntry[] | undefined> =
@@ -1794,7 +1808,7 @@ export class SpeakerService {
               primaryParticipantId,
             },
       );
-    if (submissions.length === 0) throw notFound();
+    if (submissions.length === 0 && primaryParticipantId === undefined) throw notFound();
     const projectedScope =
       primaryParticipantId === undefined
         ? {
@@ -5930,17 +5944,33 @@ export class SpeakerService {
       );
     }
     const rejectionReason = normalizeRejectionReason(input.rejectionReason);
+    const capabilityBinding: PrivateAssetCapabilityBinding = {
+      capabilityId: asset.id,
+      tenantId: asset.tenantId ?? scope.tenantId ?? input.eventId,
+      eventId: asset.eventId,
+      ...(asset.submissionId === undefined ? {} : { submissionId: asset.submissionId }),
+      participantId: asset.participantId,
+      ...(asset.taskId === undefined ? {} : { taskId: asset.taskId }),
+      objectKey: asset.objectKey,
+      contentType: asset.contentType,
+      sizeBytes: asset.sizeBytes,
+      fileName: asset.fileName,
+      expiresAt: asset.createdAt,
+    };
     if (input.state === "ready") {
       const inspectObject = this.assetGateway.inspectObject;
-      if (inspectObject === undefined) {
+      const verifyUploadCapability = this.assetGateway.verifyUploadCapability;
+      if (inspectObject === undefined || verifyUploadCapability === undefined) {
         throw new SpeakerServiceError(
           "CAPABILITY_UNAVAILABLE",
           409,
-          "Uploaded object inspection is not configured for asset finalization.",
+          "Uploaded object verification is not configured for asset finalization.",
         );
       }
+      let verified = false;
       let metadata: Awaited<ReturnType<NonNullable<PrivateAssetGateway["inspectObject"]>>>;
       try {
+        verified = await verifyUploadCapability.call(this.assetGateway, capabilityBinding);
         metadata = await inspectObject.call(this.assetGateway, {
           objectKey: asset.objectKey,
           contentType: asset.contentType,
@@ -5954,6 +5984,7 @@ export class SpeakerService {
         );
       }
       if (
+        !verified ||
         metadata === null ||
         metadata.sizeBytes !== asset.sizeBytes ||
         metadata.contentType.trim().toLowerCase() !== asset.contentType.trim().toLowerCase()
@@ -5964,6 +5995,23 @@ export class SpeakerService {
           "The uploaded object does not match the authorized asset.",
         );
       }
+    }
+    const invalidateUploadCapability = this.assetGateway.invalidateUploadCapability;
+    if (invalidateUploadCapability === undefined) {
+      throw new SpeakerServiceError(
+        "CAPABILITY_UNAVAILABLE",
+        409,
+        "Upload capability invalidation is not configured for asset finalization.",
+      );
+    }
+    try {
+      await invalidateUploadCapability.call(this.assetGateway, capabilityBinding);
+    } catch {
+      throw new SpeakerServiceError(
+        "ASSET_FINALIZATION_INVALID",
+        409,
+        "The upload capability is no longer valid for this asset.",
+      );
     }
     const command: FinalizeSpeakerAssetCommand = {
       eventId: input.eventId,

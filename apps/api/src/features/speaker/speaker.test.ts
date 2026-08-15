@@ -2428,6 +2428,58 @@ describe("SpeakerService portal access", () => {
       },
     });
   });
+  it("preserves a participant-only portal context for a manual speaker", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: [],
+      participantIds: ["participant-manual"],
+      primaryParticipantId: "participant-manual",
+      capabilities: ["profile-self", "task-response"],
+    });
+    repository.profiles.push(profile("participant-manual"));
+    repository.portalContexts.push({
+      id: "portal:org-1:event-1",
+      eventId: "event-1",
+      name: "Manual speaker event",
+      capabilities: ["profile-self", "task-response"],
+      submissionIds: [],
+      participantIds: ["participant-manual"],
+      primaryParticipantId: "participant-manual",
+    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new FakePrivateAssetGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
+
+    await expect(service.listPortalContexts("account-1")).resolves.toEqual([
+      expect.objectContaining({
+        submissionIds: [],
+        participantIds: ["participant-manual"],
+        primaryParticipantId: "participant-manual",
+      }),
+    ]);
+    await expect(service.getPortalContext("event-1", "account-1")).resolves.toEqual(
+      expect.objectContaining({
+        submissionIds: [],
+        participantIds: ["participant-manual"],
+      }),
+    );
+    await expect(service.getPortal("event-1", "account-1")).resolves.toMatchObject({
+      submissions: [],
+      profiles: [expect.objectContaining({ participantId: "participant-manual" })],
+      tasks: [],
+      context: {
+        submissionIds: [],
+        participantIds: ["participant-manual"],
+        primaryParticipantId: "participant-manual",
+      },
+    });
+  });
   it("fails closed when an event has multiple viable portal contexts", async () => {
     const repository = new CountingPortalRepository();
     repository.scopes.set("event-1:account-1", {
