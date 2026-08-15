@@ -13,12 +13,23 @@ import type { SpeakerEmailTemplate } from "./service";
 
 export type { SpeakerCommunications } from "./communications-types";
 export const SPEAKER_WELCOME_TEMPLATE_ID = "speaker-approved-welcome";
+const encoder = new TextEncoder();
 const welcome = {
   name: "Approved speaker welcome",
   subject: "Welcome to the speaker portal",
   html: '<p>Hello {{first_name}},</p><p>Welcome. <a href="{{portal_url}}">Sign in to the speaker portal</a> to continue.</p>',
   text: "Hello {{first_name}},\n\nWelcome. Sign in to the speaker portal to continue: {{portal_url}}",
 } as const;
+
+async function scopedWelcomeTemplateId(organizationId: string, eventId: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", encoder.encode(`${organizationId}\u0000${eventId}`)),
+  );
+  const suffix = [...digest.subarray(0, 12)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `${SPEAKER_WELCOME_TEMPLATE_ID}:${suffix}`;
+}
 
 export class CommunicationSpeakerCommunications implements SpeakerCommunications {
   constructor(
@@ -196,6 +207,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     eventId: string;
     accountId: string;
   }): Promise<SpeakerEmailTemplate> {
+    const templateId = await scopedWelcomeTemplateId(input.organizationId, input.eventId);
     const templates = await this.listTemplates(
       input.organizationId,
       input.eventId,
@@ -204,7 +216,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     const exact = templates
       .filter(
         (template) =>
-          template.id === SPEAKER_WELCOME_TEMPLATE_ID &&
+          (template.id === templateId || template.id === SPEAKER_WELCOME_TEMPLATE_ID) &&
           template.status === "approved" &&
           template.subject === welcome.subject &&
           template.html === welcome.html &&
@@ -212,11 +224,11 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       )
       .sort((left, right) => right.version - left.version)[0];
     if (exact !== undefined) return exact;
-    const exists = templates.some((template) => template.id === SPEAKER_WELCOME_TEMPLATE_ID);
+    const exists = templates.some((template) => template.id === templateId);
     return exists
       ? this.createTemplateVersion({
           ...input,
-          templateId: SPEAKER_WELCOME_TEMPLATE_ID,
+          templateId,
           subject: welcome.subject,
           html: welcome.html,
           text: welcome.text,
@@ -224,7 +236,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
         })
       : this.createTemplate({
           ...input,
-          templateId: SPEAKER_WELCOME_TEMPLATE_ID,
+          templateId,
           name: welcome.name,
           subject: welcome.subject,
           html: welcome.html,

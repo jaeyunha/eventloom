@@ -173,6 +173,63 @@ describe("durable speaker communications", () => {
     );
   });
 
+  it("keeps the built-in welcome template isolated across events", async () => {
+    const lifecycle = fixture();
+    const phase = lifecycle.createPhase();
+    await createSpeaker(
+      phase.service,
+      lifecycle.database,
+      "participant-first-event",
+      "Priya Raman",
+      "priya@example.test",
+    );
+    lifecycle.database.executeScript(`
+      INSERT INTO communication_recipients
+        (id,organization_id,event_id,participant_id,email,display_name,data_json,updated_at)
+      VALUES
+        ('participant-second-event','${ids.organizationId}','event-second',
+         'participant-second-event','ada@example.test','Ada Lovelace',
+         '{"first_name":"Ada","display_name":"Ada Lovelace","email":"ada@example.test"}',
+         '2099-08-15T04:00:00.000Z');
+      INSERT INTO communication_recipient_audiences
+        (organization_id,event_id,recipient_id,audience)
+      VALUES
+        ('${ids.organizationId}','event-second','participant-second-event','all_participants');
+    `);
+    const deliveryRequests: CommunicationDeliveryRequest[] = [];
+    const { facade } = communications(
+      lifecycle.database as unknown as D1Database,
+      deliveryRequests,
+    );
+
+    await expect(
+      facade.previewInvitations({
+        organizationId: ids.organizationId,
+        eventId: ids.eventId,
+        accountId: ids.organizerAccountId,
+        participantIds: ["participant-first-event"],
+      }),
+    ).resolves.toHaveLength(1);
+    await expect(
+      facade.previewInvitations({
+        organizationId: ids.organizationId,
+        eventId: "event-second",
+        accountId: ids.organizerAccountId,
+        participantIds: ["participant-second-event"],
+      }),
+    ).resolves.toHaveLength(1);
+
+    const templates = lifecycle.database.query<{ id: string; event_id: string }>(
+      `SELECT id,event_id
+         FROM communication_templates
+        WHERE organization_id='${ids.organizationId}'
+          AND purpose='organizer_group_email'
+        ORDER BY event_id`,
+    );
+    expect(templates).toHaveLength(2);
+    expect(new Set(templates.map((template) => template.id))).toHaveProperty("size", 2);
+  });
+
   it("persists versions, exact previews, sends, provider timestamps, and history across recreation", async () => {
     const lifecycle = fixture();
     const phase = lifecycle.createPhase();
