@@ -514,6 +514,67 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     }
   }, 120_000);
 
+  it("accepts a persisted profile CAS when remote batch metadata reports zero changes", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const admitted = await fixture.createPhase().service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Remote metadata speaker",
+      email: "remote-metadata@example.test",
+      jobTitle: "Engineer",
+      company: "Example",
+      biography: "Original biography.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "remote-metadata-speaker",
+      sourceType: "manual",
+    });
+    const admittedSpeaker = admitted.speakers.find(
+      (speaker) => speaker.displayName === "Remote metadata speaker",
+    );
+    if (admittedSpeaker === undefined) throw new Error("Expected the admitted speaker.");
+    const current = await fixture
+      .createPhase()
+      .repository.getProfile(eventId, admittedSpeaker.participantId);
+    if (current === null) throw new Error("Expected the admitted speaker profile.");
+    const misleadingDatabase = new Proxy(fixture.database, {
+      get(target, property) {
+        if (property === "batch") {
+          return async (statements: Parameters<typeof target.batch>[0]) => {
+            const results = await target.batch(statements);
+            return results.map((result, index) =>
+              index === 0 ? { ...result, meta: { ...result.meta, changes: 0 } } : result,
+            );
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const repository = new D1SpeakerRepository(misleadingDatabase as unknown as D1Database);
+    const updatedAt = "2099-08-15T05:00:00.000Z";
+
+    await expect(
+      repository.updateProfile({
+        eventId,
+        participantId: admittedSpeaker.participantId,
+        biography: "Persisted despite misleading remote metadata.",
+        expectedVersion: current.version,
+        updatedAt,
+        actorAccountId: admittedSpeaker.participantId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        biography: "Persisted despite misleading remote metadata.",
+        version: current.version + 1,
+        updatedAt,
+      },
+    });
+  });
+
   it("provisions accepted participant access only through the canonical grant boundary", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);

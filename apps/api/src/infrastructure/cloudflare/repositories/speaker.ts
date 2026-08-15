@@ -1432,9 +1432,16 @@ export class D1SpeakerRepository
             updatedAt: command.updatedAt,
           })),
     ]);
-    if ((results[0]?.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
     const persisted = await this.getProfile(command.eventId, command.participantId);
-    return persisted === null ? { ok: false, reason: "not_found" } : { ok: true, value: persisted };
+    if (persisted === null) return { ok: false, reason: "not_found" };
+    if (
+      (results[0]?.meta?.changes ?? 0) !== 1 &&
+      (persisted.version !== command.expectedVersion + 1 ||
+        persisted.updatedAt !== command.updatedAt)
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    return { ok: true, value: persisted };
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
