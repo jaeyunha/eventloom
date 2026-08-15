@@ -854,9 +854,16 @@ async function installDynamicCfpApi(
       });
       return;
     }
+    if (request.method() === "GET" && url.pathname === "/api/auth/get-session") {
+      await route.fallback();
+      return;
+    }
     expect(request.headers().cookie).toContain(`${E2E_SESSION_COOKIE}=${session.token}`);
 
-    if (request.method() === "POST" && url.pathname === "/api/auth/sign-in/email") {
+    if (
+      request.method() === "POST" &&
+      (url.pathname === "/api/auth/sign-in/email" || url.pathname === "/api/auth/sign-up/email")
+    ) {
       await fulfillCfpJson(route, {
         token: session.token,
         user: {

@@ -210,6 +210,8 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
     <WorkspaceShell
       className={styles.portalShell}
       contextBar={contextBar}
+      data-role-workspace="participant"
+      data-role-workspace-shell="true"
       navigation={desktopRail}
       mobileNavigation={
         navigation ? (

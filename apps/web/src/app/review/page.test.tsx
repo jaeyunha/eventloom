@@ -15,6 +15,13 @@ describe("ReviewerPage", () => {
     expect(markup).toContain("Reviewer queue");
     expect(markup).not.toContain("Create evaluation plan");
     expect((markup.match(/<main\b/gu) ?? []).length).toBe(1);
+    expect(markup).toContain('data-role-workspace-shell="true"');
+    expect(markup).toContain('data-role-workspace="reviewer"');
+    expect(markup).toContain('aria-label="Reviewer workspace"');
+    expect(markup).toContain('aria-current="page"');
+    expect(markup).toContain('id="reviewer-main"');
+    expect(markup).toContain('href="/work"');
+    expect(markup).toContain('data-reviewer-sign-out="true"');
   });
 
   it("signs out through the same-origin gateway before returning to login", async () => {

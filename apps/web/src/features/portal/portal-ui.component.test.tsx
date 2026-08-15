@@ -12,6 +12,7 @@ import {
   portalAssetStateLabel,
   portalContentMode,
   portalNavigation,
+  portalNavigationItemActive,
   portalRouteAuthorized,
   SubmissionStatusBadge,
   signOutAndRedirect,
@@ -410,6 +411,18 @@ describe("speaker portal UI components", () => {
     ]);
   });
 
+  it("marks the participant navigation item matching the route and workspace", () => {
+    expect(portalNavigationItemActive("/portal", "/portal", null)).toBe(true);
+    expect(portalNavigationItemActive("/portal", "/portal", "files")).toBe(false);
+    expect(portalNavigationItemActive("/portal/submissions", "/portal/submissions/one", null)).toBe(
+      true,
+    );
+    expect(portalNavigationItemActive("/portal?workspace=files", "/portal", "files")).toBe(true);
+    expect(portalNavigationItemActive("/portal?workspace=wiki", "/portal", "resources")).toBe(
+      false,
+    );
+  });
+
   it("formats truthful private-asset metadata and states", () => {
     expect(formatPortalFileSize(1_536)).toBe("1.5 KiB");
     expect(formatPortalFileSize(-1)).toBe("Unknown size");
@@ -477,6 +490,9 @@ describe("speaker portal UI components", () => {
       </PortalProvider>,
     );
 
+    expect(markup).toContain('data-role-workspace-shell="true"');
+    expect(markup).toContain('data-role-workspace="participant"');
+    expect(markup).toContain('id="portal-content"');
     expect(markup).not.toContain('aria-label="Speaker portal"');
     expect(markup).toContain('aria-haspopup="menu"');
     expect(markup).not.toContain(">Sign out</button>");

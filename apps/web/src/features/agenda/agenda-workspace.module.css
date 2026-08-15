@@ -1609,6 +1609,20 @@
   }
 }
 
+.workspace {
+  width: 100%;
+  margin-inline: 0;
+  padding: 0 0 3rem;
+}
+
+.workspace > header {
+  margin: 0;
+}
+
+.pageHeading h1 {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
+
 @container agenda-workspace (max-width: 84rem) {
   .workspaceGrid {
     grid-template-areas:

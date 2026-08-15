@@ -22,6 +22,19 @@ export const portalNavigation = [
   { href: "/portal?workspace=wiki", label: "Wiki", icon: "◫" },
 ] as const;
 
+export function portalNavigationItemActive(
+  href: string,
+  pathname: string,
+  workspace: string | null,
+): boolean {
+  const workspaceMatch = href.match(/[?&]workspace=([^&]+)/);
+  if (workspaceMatch?.[1] !== undefined) {
+    return pathname === "/portal" && workspace === workspaceMatch[1];
+  }
+  if (href === "/portal") return pathname === "/portal" && workspace === null;
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function PageHeading({
   eyebrow,
   title,

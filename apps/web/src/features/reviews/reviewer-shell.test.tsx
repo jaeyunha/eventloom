@@ -13,13 +13,16 @@ describe("ReviewerShell", () => {
     );
 
     expect(markup).toContain('data-reviewer-shell="true"');
+    expect(markup).toContain('data-role-workspace-shell="true"');
+    expect(markup).toContain('data-role-workspace="reviewer"');
     expect(markup).toContain('href="#reviewer-main"');
     expect(markup).toContain('id="reviewer-main"');
     expect(markup).toContain('aria-label="Reviewer workspace"');
-    expect(markup).toContain('aria-label="Reviewer mobile navigation"');
+    expect(markup).toContain('data-slot="sidebar"');
+    expect(markup).toContain('data-slot="sidebar-inset"');
     expect(markup).toContain('href="/review"');
     expect(markup).toContain('href="/work"');
-    expect(markup).toContain("Queue");
+    expect(markup).toContain("Review queue");
     expect(markup).toContain("All work");
     expect(markup).toContain("Reviewer");
     expect(markup).toContain("All assigned events");
@@ -39,7 +42,11 @@ describe("ReviewerShell", () => {
     expect(css).not.toMatch(/\brgba?\(/u);
     expect(css).not.toContain(".topbar");
     expect(css).not.toContain(".main");
-    expect(css).toContain("var(--background)");
-    expect(css).toContain("var(--space-");
+    expect(css).not.toContain(".rail");
+    expect(css).not.toContain(".brand");
+    expect(css).toContain("height: 100svh");
+    expect(css).toContain("overflow: hidden");
+    expect(css).toContain("var(--sidebar-border)");
+    expect(css).toContain("var(--muted-foreground)");
   });
 });

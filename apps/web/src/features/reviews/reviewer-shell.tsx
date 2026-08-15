@@ -1,78 +1,15 @@
 "use client";
 
-import { ClipboardList, LayoutDashboard, LogOut } from "lucide-react";
+import { Inbox, LayoutDashboard, LogOut } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ThemeToggle } from "@/components/product-shell/theme-toggle";
 import { Button } from "@/components/ui/button";
-import {
-  DesktopNavigation,
-  MobileBottomNavigation,
-  WorkspaceContextBar,
-  type WorkspaceNavigationItem,
-  WorkspaceShell,
-} from "@/components/workspace";
+import { RoleWorkspaceShell } from "@/components/workspace/role-workspace-shell";
 import { signOutAccount } from "@/features/account/account-actions";
 import styles from "./reviewer-shell.module.css";
 
 export const signOutReviewerSession = signOutAccount;
-
-const reviewerNavigation: readonly WorkspaceNavigationItem[] = [
-  {
-    href: "/review",
-    label: "Queue",
-    icon: ClipboardList,
-    current: true,
-  },
-  {
-    href: "/work",
-    label: "All work",
-    icon: LayoutDashboard,
-  },
-];
-
-function ReviewerRail() {
-  return (
-    <div className={styles.rail}>
-      <Link className={styles.brand} href="/review" aria-label="Eventloom reviewer workspace">
-        <span className={styles.brandMark} aria-hidden="true">
-          EL
-        </span>
-        <span className={styles.brandCopy}>
-          <strong>Eventloom</strong>
-          <small>Reviewer workspace</small>
-        </span>
-      </Link>
-      <div className={styles.navigationGroup}>
-        <p className={styles.navigationLabel}>Workspace</p>
-        <DesktopNavigation ariaLabel="Reviewer workspace" items={reviewerNavigation} />
-      </div>
-      <div className={styles.roleSummary}>
-        <strong>Reviewer</strong>
-        <span>Assigned evaluation access</span>
-      </div>
-    </div>
-  );
-}
-
-function ReviewerActions() {
-  return (
-    <div className={styles.accountActions}>
-      <ThemeToggle />
-      <Button
-        aria-label="Sign out"
-        data-reviewer-sign-out="true"
-        size="sm"
-        type="button"
-        variant="ghost"
-        onClick={() => void signOutAccount()}
-      >
-        <LogOut data-icon="inline-start" aria-hidden="true" />
-        <span className={styles.actionLabel}>Sign out</span>
-      </Button>
-    </div>
-  );
-}
 
 export interface ReviewerShellProps {
   readonly children: ReactNode;
@@ -86,27 +23,62 @@ export function ReviewerShell({
   organization = "Reviewer",
 }: ReviewerShellProps) {
   return (
-    <WorkspaceShell
+    <RoleWorkspaceShell
       className={styles.shell}
-      contextBar={
-        <WorkspaceContextBar
-          actions={<ReviewerActions />}
-          event={event}
-          organization={organization}
-        />
-      }
       data-reviewer-shell="true"
-      mainId="reviewer-main"
-      mobileNavigation={
-        <MobileBottomNavigation
-          ariaLabel="Reviewer mobile navigation"
-          items={reviewerNavigation}
-          visibleItemCount={2}
-        />
+      brandHref="/review"
+      contextLabel={event}
+      currentPageLabel="Review queue"
+      footer={
+        <div className={styles.account}>
+          <div className={styles.accountCopy}>
+            <strong>{organization}</strong>
+            <span>Assigned evaluation access</span>
+          </div>
+          <Button
+            className={styles.signOut}
+            data-reviewer-sign-out="true"
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={() => void signOutReviewerSession()}
+          >
+            <LogOut data-icon="inline-start" aria-hidden="true" />
+            <span>Sign out</span>
+          </Button>
+        </div>
       }
-      navigation={<ReviewerRail />}
+      headerActions={
+        <nav className={styles.actions} aria-label="Reviewer account navigation">
+          <Button asChild size="sm" variant="ghost">
+            <Link href="/work">
+              <LayoutDashboard data-icon="inline-start" aria-hidden="true" />
+              <span className={styles.allWorkLabel}>All work</span>
+            </Link>
+          </Button>
+          <ThemeToggle />
+        </nav>
+      }
+      mainId="reviewer-main"
+      navigationGroups={[
+        {
+          label: "Review",
+          items: [
+            {
+              current: true,
+              href: "/review",
+              icon: Inbox,
+              label: "Review queue",
+            },
+          ],
+        },
+      ]}
+      navigationLabel="Reviewer workspace"
+      roleLabel="Reviewer workspace"
+      skipLabel="Skip to reviewer workspace"
+      workspace="reviewer"
     >
       {children}
-    </WorkspaceShell>
+    </RoleWorkspaceShell>
   );
 }

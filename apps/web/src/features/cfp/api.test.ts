@@ -116,8 +116,10 @@ describe("CFP authenticated session", () => {
   it("does not fall back to account creation when sign-in fails", async () => {
     let requestCount = 0;
     let requestInit: RequestInit | undefined;
-    const api = createCfpApi("https://web.example.com", (async (_input, init) => {
+    let requestUrl = "";
+    const api = createCfpApi("https://web.example.com", (async (input, init) => {
       requestCount += 1;
+      requestUrl = String(input);
       requestInit = init;
       return Response.json(
         {
@@ -141,6 +143,7 @@ describe("CFP authenticated session", () => {
       }),
     ).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
     expect(requestCount).toBe(1);
+    expect(requestUrl).toBe("https://web.example.com/api/auth/sign-in/email");
     expect(JSON.parse(String(requestInit?.body))).toEqual({
       email: "speaker@example.com",
       password: "StrongPass1!",

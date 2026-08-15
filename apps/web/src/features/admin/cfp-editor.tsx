@@ -24,6 +24,7 @@ import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 import { useOrganizerEventId } from "./organizer-event-workspace";
 
+const ORGANIZER_SCROLL_CONTAINER_ID = "admin-content";
 const STICKY_SECTION_GAP = 16;
 const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = [
   "application/pdf",
@@ -45,6 +46,18 @@ export function cfpActiveSectionThreshold(
   navigationHeight: number,
 ): number {
   return cfpSectionScrollOffset(organizerHeaderHeight, navigationHeight) + 24;
+}
+
+export function cfpContainerScrollTop(
+  containerScrollTop: number,
+  targetTop: number,
+  containerTop: number,
+  navigationHeight: number,
+): number {
+  return Math.max(
+    0,
+    containerScrollTop + targetTop - containerTop - cfpSectionScrollOffset(0, navigationHeight),
+  );
 }
 
 type FieldType =
@@ -1186,7 +1199,6 @@ export function CfpEditor({
       active = false;
     };
   }, [api, eventId, requestedFormId, resolvedOrganizationId]);
-
   function updateConfiguration<K extends keyof CfpConfiguration>(
     key: K,
     value: CfpConfiguration[K],
@@ -1409,7 +1421,12 @@ export function CfpEditor({
     }
     setActiveSection(SECTION_LINKS[nextIndex]?.id ?? "event-details");
     setMobileSectionsOpen(false);
-    window.scrollTo({ top: 0, behavior: "auto" });
+    const scrollContainer = document.getElementById(ORGANIZER_SCROLL_CONTAINER_ID);
+    if (scrollContainer === null) {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    } else {
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+    }
   }
 
   function handlePreviewSubmit(event: FormEvent<HTMLFormElement>): void {

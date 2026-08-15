@@ -28,4 +28,17 @@ describe("organizer workspace theme", () => {
     expect(shellStyles).toContain(":global(.dark) .calendarRail");
     expect(shellStyles).toContain(":global(.dark) .calendarCellOutside");
   });
+
+  it("keeps every organizer route inside one inset workspace shell", () => {
+    expect(shellSource).toContain("<WorkspaceShell");
+    expect(shellSource).toContain("className={styles.adminShell");
+    expect(shellSource).toContain("mainClassName={styles.adminMain");
+    expect(shellSource).toContain('data-role-workspace="organizer"');
+    expect(shellStyles).toMatch(
+      /\.adminShell\s*\{[\s\S]*grid-template-columns:\s*14rem[\s\S]*height:\s*100svh;[\s\S]*overflow:\s*hidden;/,
+    );
+    expect(shellStyles).toMatch(/\.railBody\s*\{[\s\S]*overflow-y:\s*auto;/);
+    expect(shellStyles).toMatch(/\.adminMain\s*\{[\s\S]*overflow-y:\s*auto;/);
+    expect(shellStyles).toMatch(/\.adminMain\s*\{[\s\S]*border:\s*1px solid var\(--border\);/);
+  });
 });

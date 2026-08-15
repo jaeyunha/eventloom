@@ -33,7 +33,11 @@
   --admin-settings-content-width: 52rem;
   --admin-settings-wide-width: 68rem;
   --admin-sticky-offset: 4.25rem;
-  background: var(--background);
+  grid-template-columns: 14rem minmax(0, 1fr);
+  height: 100svh;
+  min-height: 100svh;
+  overflow: hidden;
+  background: var(--sidebar);
   color: var(--foreground);
   font-family: var(--font-sans);
 }
@@ -42,8 +46,8 @@
   display: grid;
   min-height: 100%;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-2);
 }
 
 .railHeader,
@@ -60,7 +64,7 @@
 }
 
 .railBody {
-  gap: var(--space-3);
+  gap: var(--space-2);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -313,7 +317,19 @@
 }
 
 .adminMain {
+  height: calc(100svh - var(--space-4));
+  min-width: 0;
+  min-height: 0;
+  max-height: calc(100svh - var(--space-4));
+  margin: var(--space-2) var(--space-2) var(--space-2) 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-top: var(--admin-sticky-offset);
+  border: 1px solid var(--border);
+  border-radius: var(--admin-radius-lg);
   background: var(--background);
+  box-shadow: var(--shadow-card);
 }
 
 .adminContent {
@@ -323,6 +339,15 @@
 }
 
 @media (max-width: 48rem) {
+  .adminMain {
+    height: 100svh;
+    max-height: 100svh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
   .adminContent {
     width: min(calc(100% - var(--space-4)), 94rem);
     padding-bottom: var(--space-6);

@@ -925,3 +925,54 @@
     grid-column: 2;
   }
 }
+
+.viewport {
+  width: 100%;
+  margin: 0;
+  padding: 0 0 3rem;
+}
+
+.pageHeader {
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0 0 1.25rem;
+}
+
+.pageHeader h1 {
+  max-width: 32ch;
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+}
+
+.pageIntro {
+  margin-top: 0.55rem;
+  font-size: 0.875rem;
+}
+
+.sectionNav {
+  top: 0.75rem;
+  margin: 1rem 0;
+  padding: 0.35rem;
+  border-radius: 0.625rem;
+  box-shadow: 0 4px 16px rgb(29 34 51 / 4%);
+}
+
+.workspaceGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
+  gap: 1rem;
+}
+
+.summaryAside {
+  top: 0.75rem;
+}
+
+.panel {
+  padding: clamp(1rem, 2vw, 1.5rem);
+}
+
+@media (max-width: 56rem) {
+  .workspaceGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

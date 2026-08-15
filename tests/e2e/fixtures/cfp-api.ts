@@ -240,7 +240,10 @@ export async function installCfpApi(
       await route.fallback();
       return;
     }
-    if (request.method() === "POST" && url.pathname === "/api/auth/sign-in/email") {
+    if (
+      request.method() === "POST" &&
+      (url.pathname === "/api/auth/sign-in/email" || url.pathname === "/api/auth/sign-up/email")
+    ) {
       await fulfillJson(route, {
         token: session.token,
         user: {

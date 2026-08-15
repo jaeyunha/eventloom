@@ -56,6 +56,8 @@ export function AdminShellView({
         />
       }
       data-admin-shell="true"
+      data-role-workspace="organizer"
+      data-role-workspace-shell="true"
       mainClassName={styles.adminMain ?? ""}
       mainId="admin-content"
       mobileNavigation={
