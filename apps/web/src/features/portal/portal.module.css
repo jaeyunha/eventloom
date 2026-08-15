@@ -1400,6 +1400,7 @@
 
 .taskMetadata {
   display: flex;
+  flex-wrap: wrap;
   gap: 1.2rem;
   margin: 0.8rem 0 0 3.1rem;
   min-width: 0;

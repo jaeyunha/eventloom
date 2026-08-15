@@ -6,3 +6,4 @@ export * from "./lifecycle";
 export * from "./reviews";
 export * from "./submissions";
 export * from "./tasks";
+export * from "./uploads";

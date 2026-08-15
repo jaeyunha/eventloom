@@ -1,5 +1,6 @@
 "use client";
 
+import { formatUploadMimeTypes } from "@eventloom/contracts";
 import { type ChangeEvent, useState } from "react";
 import { Button, Input } from "../../components/ui";
 import { WorkspaceActionBar, WorkspaceFormSection } from "../../components/workspace";
@@ -18,6 +19,7 @@ export function PortalTaskUpload({ task }: Readonly<{ task: PortalTask }>) {
   const [error, setError] = useState<string | null>(null);
   const policy = getTaskUploadPolicy(task);
   const kind = task.acceptedAssetKinds?.[0];
+  const acceptedTypeSummary = policy.valid ? formatUploadMimeTypes(policy.allowedMimeTypes) : "";
   const busy = busyTaskIds.has(task.id) || phase === "processing";
 
   function choose(event: ChangeEvent<HTMLInputElement>) {
@@ -90,7 +92,7 @@ export function PortalTaskUpload({ task }: Readonly<{ task: PortalTask }>) {
           {!kind
             ? "Upload unavailable: no accepted file kind was provided."
             : policy.valid
-              ? `Accepted: ${policy.allowedMimeTypes.join(", ")}. Maximum ${formatPortalFileSize(policy.maxBytes)}.`
+              ? `Accepted: ${acceptedTypeSummary}. Maximum ${formatPortalFileSize(policy.maxBytes)}.`
               : policy.error}
         </small>
       </label>
