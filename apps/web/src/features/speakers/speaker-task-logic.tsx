@@ -37,10 +37,7 @@ export function createSpeakerTaskAssignment(
 }
 
 export function speakerTaskDefinitionId(task: SpeakerTask): string {
-  const participantSuffix = `:${task.participantId}`;
-  return task.taskId.endsWith(participantSuffix)
-    ? task.taskId.slice(0, -participantSuffix.length)
-    : task.taskId;
+  return task.definitionId;
 }
 
 export function speakerOnboardingTaskDefinitions(

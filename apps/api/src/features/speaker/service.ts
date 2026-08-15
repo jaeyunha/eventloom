@@ -2397,7 +2397,8 @@ export class SpeakerService {
               submissionId: assignment.submissionId,
             };
       const task: SpeakerTask = {
-        id: assignments.length === 1 ? baseId : `${baseId}:${index + 1}`,
+        id: assignments.length === 1 ? baseId : `${baseId}:assignment:${index + 1}`,
+        definitionId: baseId,
         eventId: input.eventId,
         submissionId: assignment.submissionId,
         participantId: assignment.participantId,
@@ -3641,7 +3642,7 @@ export class SpeakerService {
       });
       if (model === null) throw notFound();
       const scope = this.readModelScope(model, eventId);
-      const acceptedParticipantIds = new Set(
+      const listedParticipantIds = new Set(
         this.acceptedOrganizerSubmissionsFrom(eventId, scope, model.submissions).flatMap(
           (submission) =>
             submission.participantIds.filter((participantId) =>
@@ -3649,17 +3650,30 @@ export class SpeakerService {
             ),
         ),
       );
+      for (const entry of this.organizerRosterEntriesFromReadModel(
+        eventId,
+        scope,
+        model.roster,
+        model.profiles,
+      )) {
+        if (isOrganizerManagedRosterEntry(entry)) listedParticipantIds.add(entry.participantId);
+      }
       return model.profiles.filter(
-        (profile) =>
-          profile.eventId === eventId && acceptedParticipantIds.has(profile.participantId),
+        (profile) => profile.eventId === eventId && listedParticipantIds.has(profile.participantId),
       );
     }
 
     const scope = await this.requireOrganizerScope(eventId, accountId);
-    const acceptedParticipantIds = await this.acceptedOrganizerParticipantIds(eventId, scope);
-    const profiles = await this.repository.listProfiles(eventId, [...acceptedParticipantIds]);
+    const listedParticipantIds = new Set(
+      await this.acceptedOrganizerParticipantIds(eventId, scope),
+    );
+    const entries = await this.organizerRosterEntries(scope.tenantId, eventId, scope, accountId);
+    for (const entry of entries) {
+      if (isOrganizerManagedRosterEntry(entry)) listedParticipantIds.add(entry.participantId);
+    }
+    const profiles = await this.repository.listProfiles(eventId, [...listedParticipantIds]);
     return profiles.filter(
-      (profile) => profile.eventId === eventId && acceptedParticipantIds.has(profile.participantId),
+      (profile) => profile.eventId === eventId && listedParticipantIds.has(profile.participantId),
     );
   }
 
@@ -7432,6 +7446,7 @@ export class SpeakerService {
       );
     }).length;
     return {
+      eventId,
       participantId,
       displayName: profile?.displayName ?? entry.displayName ?? participantId,
       email: profile?.email ?? entry.email ?? "",
@@ -7492,6 +7507,7 @@ export class SpeakerService {
   private workspaceTask(task: SpeakerTask): SpeakerWorkspaceTask {
     return {
       taskId: task.id,
+      definitionId: task.definitionId ?? task.id.replace(/:assignment:\d+$/u, ""),
       participantId: task.participantId,
       title: task.title,
       description: task.description ?? task.instructions ?? "",

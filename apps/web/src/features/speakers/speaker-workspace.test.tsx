@@ -42,6 +42,7 @@ import {
 } from "./speaker-workspace";
 
 const speaker: SpeakerRecord = {
+  eventId: "event-1",
   participantId: "participant-1",
   displayName: "Priya Raman",
   email: "priya@example.test",
@@ -91,6 +92,7 @@ const pendingAsset: SpeakerAsset = {
 
 const task = {
   taskId: "task-1",
+  definitionId: "task-1",
   participantId: "participant-1",
   title: "Confirm participation",
   description: "General speaker onboarding task.",
@@ -143,7 +145,12 @@ describe("speaker API adapter", () => {
       }
       return new Response(
         JSON.stringify({
-          data: { ...roster, organizationId: "org/1", eventId: "event/1" },
+          data: {
+            ...roster,
+            organizationId: "org/1",
+            eventId: "event/1",
+            speakers: roster.speakers.map((record) => ({ ...record, eventId: "event/1" })),
+          },
         }),
         { status: 200 },
       );
@@ -804,7 +811,7 @@ describe("speaker workspace contracts", () => {
       ),
     ).rejects.toThrow("different organization, event, or profile");
   });
-  it("applies exact roster and progress filters, including zero-task speakers as incomplete", () => {
+  it("applies exact roster and progress filters without treating zero-task speakers as incomplete", () => {
     const secondSpeaker: SpeakerRecord = {
       ...speaker,
       participantId: "participant-2",
@@ -834,7 +841,7 @@ describe("speaker workspace contracts", () => {
 
     expect(speakerProgressMatches([completedTask], "complete")).toBe(true);
     expect(speakerProgressMatches([], "complete")).toBe(false);
-    expect(speakerProgressMatches([], "incomplete")).toBe(true);
+    expect(speakerProgressMatches([], "incomplete")).toBe(false);
     expect(
       filterSpeakerRoster([speaker, secondSpeaker], rows, {
         query: " marcus ",
@@ -842,7 +849,7 @@ describe("speaker workspace contracts", () => {
         session: "session-2",
         progress: "incomplete",
       }).map((candidate) => candidate.participantId),
-    ).toEqual(["participant-2"]);
+    ).toEqual([]);
     expect(
       filterSpeakerRoster([speaker, secondSpeaker], rows, {
         query: "",
@@ -897,25 +904,39 @@ describe("speaker workspace contracts", () => {
     });
   });
 
-  it("reconstructs three API-loaded onboarding definitions with exact assignees and dates", () => {
+  it("groups API-loaded onboarding assignments by the server task definition identity", () => {
     const tasks: SpeakerTask[] = [
-      { ...task, taskId: "definition-1:participant-1", participantId: "participant-1" },
-      { ...task, taskId: "definition-1:participant-2", participantId: "participant-2" },
       {
         ...task,
-        taskId: "definition-2",
+        taskId: "definition-1:1",
+        definitionId: "definition-1",
+        participantId: "participant-1",
+      },
+      {
+        ...task,
+        taskId: "definition-1:2",
+        definitionId: "definition-1",
+        participantId: "participant-2",
+      },
+      {
+        ...task,
+        taskId: "definition-2:1",
+        definitionId: "definition-2",
         title: "Review biography",
         dueAt: "2027-04-05",
       },
       {
         ...task,
-        taskId: "definition-3",
-        title: "Confirm logistics",
-        dueAt: "2027-04-09",
+        taskId: "definition-2:2",
+        definitionId: "definition-2",
+        participantId: "participant-2",
+        title: "Review biography",
+        dueAt: "2027-04-05",
       },
       {
         ...task,
         taskId: "file-request-1",
+        definitionId: "file-request-1",
         title: "Upload slides",
         description: "A deliverable task.",
         type: "file_request",
@@ -945,21 +966,15 @@ describe("speaker workspace contracts", () => {
         definitionId: "definition-2",
         title: "Review biography",
         dueAt: "2027-04-05",
-        participantIds: ["participant-1"],
-      },
-      {
-        definitionId: "definition-3",
-        title: "Confirm logistics",
-        dueAt: "2027-04-09",
-        participantIds: ["participant-1"],
+        participantIds: ["participant-1", "participant-2"],
       },
     ]);
     expect(
       validateSpeakerTaskAssignment(
-        { title: "Fourth", dueAt: "2027-04-10", participantIds: ["participant-1"] },
+        { title: "Third", dueAt: "2027-04-10", participantIds: ["participant-1"] },
         definitions.length,
       ),
-    ).toContain("Exactly 3");
+    ).toBeNull();
     expect(
       createSpeakerTaskAssignment({
         title: " Confirm logistics ",

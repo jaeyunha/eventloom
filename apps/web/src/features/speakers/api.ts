@@ -154,6 +154,7 @@ export interface SpeakerSession {
 
 export interface SpeakerTask {
   readonly taskId: string;
+  readonly definitionId: string;
   readonly participantId: string;
   readonly title: string;
   readonly description: string;
@@ -166,6 +167,7 @@ export interface SpeakerTask {
 }
 
 export interface SpeakerRecord {
+  readonly eventId: string;
   readonly participantId: string;
   readonly displayName: string;
   readonly email: string;
@@ -372,6 +374,7 @@ export function assertSpeakerRosterScope(
   for (const speaker of value.speakers) {
     if (
       !isRecord(speaker) ||
+      speaker.eventId !== eventId ||
       typeof speaker.participantId !== "string" ||
       speaker.participantId.trim().length === 0 ||
       participantIds.has(speaker.participantId)

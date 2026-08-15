@@ -60,6 +60,7 @@ const speakerRosterFixture = {
   speakers: [
     {
       participantId: "speaker-e2e",
+      eventId: EVENT_ID,
       displayName: "Avery Morgan",
       email: "avery@example.test",
       jobTitle: "Program lead",
@@ -760,7 +761,7 @@ test("plan and rubric renders an open plan as a focused read-only workbench", as
   ] as const) {
     await page.setViewportSize(viewport);
     await page.goto(organizerReviewsUrl);
-    await page.getByRole("tab", { name: "Plan & rubric" }).click();
+    await page.getByRole("tab", { name: "Setup" }).click();
 
     const workbench = page.locator('[data-layout="plan-authoring-workbench"]');
     const summary = page.getByRole("complementary", { name: "Plan authoring summary" });
@@ -817,7 +818,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
   await page.goto(organizerReviewsUrl);
 
   const overviewTab = page.getByRole("tab", { name: "Overview" });
-  const reviewersTab = page.getByRole("tab", { name: "Reviewers" });
+  const reviewersTab = page.getByRole("tab", { name: "Assignments" });
   const overviewTable = page.getByRole("table", {
     name: "Submission review progress, score, decision, and attention status.",
   });
@@ -827,7 +828,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
     .first();
 
   await expect(overviewTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: "Plan & rubric" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Setup" })).toBeVisible();
   await expect(reviewersTab).toBeVisible();
   await expect(page.getByRole("tab", { name: "Results" })).toBeVisible();
   await expect(overviewTable).toBeVisible();
@@ -851,7 +852,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
   await expect(page.getByRole("combobox", { name: "Round" }).locator("option:checked")).toHaveText(
     targetRoundName ?? "",
   );
-  await expect(page.getByRole("combobox", { name: "Submission needing coverage" })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "Submission" })).toHaveValue(
     targetSubmissionId ?? "",
   );
 
@@ -863,7 +864,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
       height: tab.getBoundingClientRect().height,
     })),
   );
-  expect(tabMetrics.find((tab) => tab.selected)?.label).toBe("Reviewers");
+  expect(tabMetrics.find((tab) => tab.selected)?.label).toBe("Assignments");
   expect(tabMetrics.find((tab) => tab.selected)?.underlineOpacity).toBe("1");
   expect(
     tabMetrics.filter((tab) => !tab.selected).every((tab) => tab.underlineOpacity === "0"),
@@ -901,7 +902,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(organizerReviewsUrl);
-  await page.getByRole("tab", { name: "Reviewers" }).click();
+  await page.getByRole("tab", { name: "Assignments" }).click();
 
   const mobileManageAction = page
     .getByRole("table", { name: "Active reviewer assignments and protected history" })
@@ -935,9 +936,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
   await page.getByRole("tab", { name: "Overview" }).click();
   const tabListBox = await page.locator('[data-slot="tabs-list"]').boundingBox();
   const overviewKickerBox = await page
-    .locator("#review-panel-overview")
-    .getByText("Review operations", { exact: true })
-    .first()
+    .getByRole("region", { name: "Review plan summary" })
     .boundingBox();
   expect(tabListBox).not.toBeNull();
   expect(overviewKickerBox).not.toBeNull();

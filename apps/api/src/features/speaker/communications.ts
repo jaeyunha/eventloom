@@ -113,7 +113,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
             ? {}
             : { templateVersion: input.templateVersion }),
           recipientIds: input.participantIds,
-          data: input.data ?? {},
+          data: { ...(input.data ?? {}), portal_url: this.portalUrl() },
         },
       ),
     );

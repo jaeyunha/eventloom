@@ -257,8 +257,8 @@ describe("durable speaker communications", () => {
       templateId: "speaker-update",
       name: "Speaker update",
       subject: "Hello {{first_name}}",
-      html: "<p>Hello {{display_name}}</p>",
-      text: "Hello {{first_name}} at {{email}}",
+      html: '<p>Hello {{display_name}} at <a href="{{portal_url}}">the portal</a></p>',
+      text: "Hello {{first_name}} at {{email}}: {{portal_url}}",
       status: "approved",
     });
     const version = await first.facade.createTemplateVersion({
@@ -267,8 +267,8 @@ describe("durable speaker communications", () => {
       accountId: ids.organizerAccountId,
       templateId: template.id,
       subject: "Update for {{first_name}}",
-      html: "<p>Update for {{display_name}}</p>",
-      text: "Update for {{first_name}} at {{email}}",
+      html: '<p>Update for {{display_name}} at <a href="{{portal_url}}">the portal</a></p>',
+      text: "Update for {{first_name}} at {{email}}: {{portal_url}}",
       status: "approved",
     });
     const preview = await first.facade.preview({
@@ -278,8 +278,15 @@ describe("durable speaker communications", () => {
       participantIds: ["participant-priya"],
       templateId: version.id,
       templateVersion: version.version,
+      data: { portal_url: "https://attacker.example.test/override" },
     });
     expect(preview.recipientIds).toEqual(["participant-priya"]);
+    expect(preview.recipients[0]).toMatchObject({
+      html: expect.stringContaining("https://event.example.test/login?next=/portal"),
+      text: expect.stringContaining("https://event.example.test/login?next=/portal"),
+    });
+    expect(preview.recipients[0]?.html).not.toContain("attacker.example.test");
+    expect(preview.recipients[0]?.text).not.toContain("attacker.example.test");
 
     const second = communications(database, delivered);
     const send = await second.facade.send({

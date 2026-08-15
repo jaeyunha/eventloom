@@ -175,6 +175,8 @@ export interface SpeakerProfile {
 }
 
 export interface SpeakerTask {
+  /** Stable identity shared by every per-speaker row created from one task assignment request. */
+  definitionId?: string;
   /** Authoritative organization identity when the storage adapter exposes it. */
   tenantId?: string;
   /** Optional MIME policy for organizer-created file requests. */
@@ -321,6 +323,7 @@ export interface SpeakerWorkspaceAsset {
 
 export interface SpeakerWorkspaceTask {
   taskId: string;
+  definitionId: string;
   participantId: string;
   title: string;
   description: string;
@@ -340,6 +343,7 @@ export interface SpeakerWorkspaceTaskSummary {
 }
 
 export interface SpeakerWorkspaceRecord {
+  eventId: string;
   participantId: string;
   displayName: string;
   email: string;

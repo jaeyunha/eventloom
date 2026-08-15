@@ -963,7 +963,10 @@ describe("SpeakerService organizer aggregate reads", () => {
       submission("submission-declined", "participant-1", "declined"),
       submission("submission-other-event", "participant-2", "accepted", "event-2"),
     );
-    repository.profiles.push(profile("participant-1"), profile("participant-2"));
+    repository.profiles.push(profile("participant-1"), profile("participant-2"), {
+      ...profile("participant-manual"),
+      displayName: "Manual Speaker",
+    });
     repository.roster.push({
       id: "manual-roster",
       eventId: "event-1",
@@ -1087,6 +1090,7 @@ describe("SpeakerService organizer aggregate reads", () => {
 
     await expect(service.listOrganizerProfiles("event-1", "account-1")).resolves.toEqual([
       expect.objectContaining({ participantId: "participant-1" }),
+      expect.objectContaining({ participantId: "participant-manual" }),
     ]);
     await expect(service.listOrganizerAssets("event-1", "account-1")).resolves.toEqual([
       expect.objectContaining({ id: "accepted-asset" }),
@@ -1601,7 +1605,7 @@ describe("SpeakerService organizer speaker writes", () => {
       });
 
       expect(roster.speakers).toEqual([
-        expect.objectContaining({ participantId: "participant-1" }),
+        expect.objectContaining({ eventId: "event-1", participantId: "participant-1" }),
       ]);
     },
   );
@@ -1669,6 +1673,10 @@ describe("SpeakerService organizer speaker writes", () => {
       "participant-1",
       "participant-2",
     ]);
+    expect(new Set(taskEnvelope.tasks.map((task) => task.definitionId))).toEqual(
+      new Set([taskEnvelope.tasks[0]?.definitionId]),
+    );
+    expect(taskEnvelope.tasks[0]?.definitionId).toBeTruthy();
     expect(taskEnvelope.organizationId).toBe("org-1");
     expect(taskEnvelope.eventId).toBe("event-1");
   });

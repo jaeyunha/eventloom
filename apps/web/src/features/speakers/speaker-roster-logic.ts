@@ -147,7 +147,7 @@ export function speakerProgressMatches(
 ): boolean {
   if (filter === "all") return true;
   const complete = speakerProgressComplete(tasks);
-  return filter === "complete" ? complete : !complete;
+  return filter === "complete" ? complete : tasks.length > 0 && !complete;
 }
 
 export interface SpeakerRosterFilterState {
