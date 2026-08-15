@@ -1509,6 +1509,7 @@ export function SubmissionListWorkspace({
                                 <Link
                                   className={styles.submissionLink}
                                   href={submissionHref(eventId, submission.id, organizationId)}
+                                  title={submission.title}
                                 >
                                   {submission.title}
                                 </Link>

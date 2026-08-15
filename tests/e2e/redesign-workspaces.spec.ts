@@ -14,6 +14,41 @@ function buttonHeight(element: HTMLElement): number {
   return element.getBoundingClientRect().height;
 }
 
+function textContrastRatio(element: HTMLElement): number {
+  const parseRgb = (value: string): readonly [number, number, number] => {
+    const channels = value
+      .match(/[\d.]+/g)
+      ?.slice(0, 3)
+      .map(Number);
+    return [channels?.[0] ?? 0, channels?.[1] ?? 0, channels?.[2] ?? 0];
+  };
+  const relativeLuminance = (color: readonly [number, number, number]): number => {
+    const [red, green, blue] = color.map((channel) => {
+      const normalized = channel / 255;
+      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * (red ?? 0) + 0.7152 * (green ?? 0) + 0.0722 * (blue ?? 0);
+  };
+
+  let backgroundElement: HTMLElement | null = element;
+  let backgroundColor = "rgb(255, 255, 255)";
+  while (backgroundElement) {
+    const candidate = getComputedStyle(backgroundElement).backgroundColor;
+    if (candidate !== "rgba(0, 0, 0, 0)" && candidate !== "transparent") {
+      backgroundColor = candidate;
+      break;
+    }
+    backgroundElement = backgroundElement.parentElement;
+  }
+
+  const foregroundLuminance = relativeLuminance(parseRgb(getComputedStyle(element).color));
+  const backgroundLuminance = relativeLuminance(parseRgb(backgroundColor));
+  return (
+    (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+  );
+}
+
 test.beforeEach(async ({ context }) => {
   await context.addCookies([
     {
@@ -52,6 +87,38 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
   await page.screenshot({
     path: testInfo.outputPath("account-hub-mobile.png"),
     fullPage: true,
+  });
+});
+
+test("keeps submission content legible in dark mode", async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem("theme", "dark"));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(submissionsUrl);
+
+  const queue = page.getByRole("table", { name: /Submissions for / });
+  await queue.getByRole("link").first().click();
+
+  const readableSubmissionText = [
+    page.getByText("Submission content", { exact: true }),
+    page.locator('section[aria-labelledby="abstract-heading"] > p'),
+    page.locator('section[aria-labelledby="timeline-heading"] ol p').first(),
+  ];
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  for (const text of readableSubmissionText) {
+    await expect(text).toBeVisible();
+    expect(await text.evaluate(textContrastRatio)).toBeGreaterThanOrEqual(4.5);
+  }
+  await page.screenshot({
+    path: testInfo.outputPath("submission-dark-desktop.png"),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileAbstract = page.locator('section[aria-labelledby="abstract-heading"] > p');
+  await expect(mobileAbstract).toBeVisible();
+  await mobileAbstract.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("submission-dark-mobile.png"),
   });
 });
 

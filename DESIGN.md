@@ -113,12 +113,22 @@ levels rather than inventing a new visual grammar per feature.
 
 ## 3. Typography
 
-- UI family: Inter with system sans fallbacks.
-- Workhorse weights: 520 for navigation, 590-650 for emphasis, 680 for page
-  titles. Avoid traditional 700+ dashboard heaviness.
+- UI family: Inter Variable, loaded once at the application root, with system
+  sans fallbacks. Component styles must consume the shared font token rather
+  than naming an unloaded family directly.
+- Enable optical sizing, antialiasing, and Inter's legibility alternates for
+  ambiguous UI glyphs. Disable synthetic bold and italic faces.
+- Workhorse weights: 480-520 for navigation and ordinary controls, 590-620 for
+  emphasis, and 640-680 for page titles. Reserve 700+ for exceptional display
+  moments rather than routine dashboard hierarchy.
 - Page title: 24-32px, tight tracking.
 - Panel title: 12-13px.
-- Navigation and rows: 10-12px.
+- Navigation and rows: 12-14px. Captions may use 11px when contrast and spacing
+  keep them readable.
+- Dense UI copy uses 1.4-1.5 line-height; paragraphs, abstracts, notes, and other
+  reading content use 1.55-1.7.
+- Headings use -0.02em to -0.035em tracking. Body copy stays at normal tracking;
+  uppercase captions use restrained positive tracking.
 - Metrics use tabular numerals and compact negative tracking.
 - Marketing display: 56-72px desktop, 38-48px mobile, weight 620-680,
   line-height 0.98-1.04, balanced wrapping.

@@ -68,7 +68,7 @@
 
 .eyebrow {
   margin: 0 0 0.35rem;
-  color: #65656d;
+  color: var(--admin-muted);
   font-size: 0.68rem;
   font-weight: 620;
   letter-spacing: 0.01em;
@@ -463,8 +463,11 @@
 
 .submissionLink {
   display: block;
+  overflow: hidden;
   font-size: 0.9rem;
   line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .submissionMeta,
@@ -516,8 +519,8 @@
 }
 
 .toneNeutral {
-  background: #eef1f5;
-  color: #586273;
+  background: var(--admin-blue-soft);
+  color: var(--admin-muted);
 }
 
 .toneDanger {
@@ -648,7 +651,7 @@
 
 .abstract {
   margin: 1rem 0 0;
-  color: #374151;
+  color: var(--admin-ink);
   font-size: 1rem;
   line-height: 1.75;
 }
@@ -738,7 +741,7 @@
 
 .timeline p {
   margin-top: 0.35rem;
-  color: #4b5563;
+  color: var(--admin-muted);
   font-size: 0.82rem;
   line-height: 1.5;
 }
@@ -830,7 +833,7 @@
   padding: 0.5rem 0.6rem;
   border-left: 3px solid var(--admin-amber);
   background: var(--admin-amber-soft);
-  color: #704b10;
+  color: var(--admin-amber);
   font-size: 0.75rem;
   line-height: 1.45;
 }
@@ -843,7 +846,7 @@
   padding: 0.65rem;
   border-radius: 0.4rem;
   background: var(--admin-amber-soft);
-  color: #704b10;
+  color: var(--admin-amber);
   font-size: 0.78rem;
   line-height: 1.5;
 }
@@ -861,7 +864,7 @@
 }
 
 .reopenPanel > p:not(.eyebrow):not(.auditCallout) {
-  color: #4b5563;
+  color: var(--admin-muted);
   line-height: 1.6;
 }
 
@@ -870,7 +873,7 @@
   padding: 0.75rem;
   border-left: 3px solid var(--admin-red);
   background: var(--admin-red-soft);
-  color: #753030;
+  color: var(--admin-red);
   font-size: 0.8rem;
   line-height: 1.55;
 }
@@ -949,7 +952,7 @@
   gap: 0.55rem;
   align-items: flex-start;
   margin: 0.35rem 0;
-  color: #4b5563;
+  color: var(--admin-muted);
   font-size: 0.8rem;
   line-height: 1.45;
 }
