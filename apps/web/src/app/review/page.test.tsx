@@ -9,6 +9,11 @@ describe("ReviewerPage", () => {
     const markup = renderToStaticMarkup(createElement(ReviewerPage));
 
     expect(markup).toContain('data-reviewer-shell="true"');
+    expect(markup).toContain('data-role-workspace-shell="true"');
+    expect(markup).toContain('data-role-workspace="reviewer"');
+    expect(markup).toContain('aria-label="Reviewer workspace navigation"');
+    expect(markup).toContain('aria-current="page"');
+    expect(markup).toContain('id="reviewer-content"');
     expect(markup).toContain('href="/work"');
     expect(markup).toContain('data-reviewer-sign-out="true"');
   });

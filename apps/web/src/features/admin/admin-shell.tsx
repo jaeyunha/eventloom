@@ -3,7 +3,14 @@
 import { CalendarDays, ChevronDown, LayoutDashboard, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 import { ThemeToggle } from "@/components/product-shell/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -513,7 +520,10 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
 
   return (
     <TooltipProvider>
-      <SidebarProvider className={styles.adminShell}>
+      <SidebarProvider
+        className={styles.adminShell}
+        style={{ "--sidebar-width": "14rem" } as CSSProperties}
+      >
         <a
           className="fixed left-3 top-3 z-50 -translate-y-24 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background transition-transform focus:translate-y-0"
           href="#admin-content"
@@ -521,7 +531,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
           Skip to organizer content
         </a>
 
-        <Sidebar aria-label="Organizer workspace" collapsible="icon">
+        <Sidebar aria-label="Organizer workspace" collapsible="icon" variant="inset">
           <SidebarHeader className={styles.sidebarHeader}>
             <SidebarMenu>
               <SidebarMenuItem>

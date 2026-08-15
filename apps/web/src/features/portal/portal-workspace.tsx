@@ -22,14 +22,6 @@ import type {
 
 export type PortalWorkspaceSection = "co-speakers" | "files" | "tasks" | "resources" | "wiki";
 
-const sections: readonly { id: PortalWorkspaceSection; label: string; href: string }[] = [
-  { id: "co-speakers", label: "Co-speakers", href: "/portal?workspace=co-speakers" },
-  { id: "files", label: "Uploaded files", href: "/portal?workspace=files" },
-  { id: "tasks", label: "Requests & tasks", href: "/portal/tasks" },
-  { id: "resources", label: "Resources", href: "/portal?workspace=resources" },
-  { id: "wiki", label: "Wiki", href: "/portal?workspace=wiki" },
-];
-
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "Unknown size";
   if (value < 1_024) return `${value} B`;
@@ -398,13 +390,6 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
           </p>
         </div>
       </header>
-      <nav aria-label="Participant workspace" className={styles.segmentedControl}>
-        {sections.map((item) => (
-          <a key={item.id} href={item.href} aria-current={item.id === section ? "page" : undefined}>
-            {item.label}
-          </a>
-        ))}
-      </nav>
       <WorkspaceError />
       <WorkspaceMutationError />
       {workspaceLoading ? (

@@ -1304,3 +1304,31 @@
   border-radius: var(--radius-md);
   box-shadow: none;
 }
+
+.workspaceRoot {
+  min-height: auto;
+  background: transparent;
+}
+
+.workspaceRoot > header {
+  margin: 0;
+}
+
+.workspaceHeader {
+  padding: 0 0 1.25rem;
+  background: transparent;
+}
+
+.workspaceHeader h1 {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+.workspaceMain {
+  container-type: inline-size;
+}
+
+@container (max-width: 64rem) {
+  .reviewDesk[data-detail-open="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
