@@ -76,7 +76,8 @@ test("unauthenticated organizer routes fail closed before rendering workspace ch
 test("unauthenticated speaker routes redirect to sign-in without rendering portal chrome", async ({
   page,
 }) => {
+  const redirect = page.waitForURL(/\/login\?next=%2Fportal$/, { timeout: 15_000 });
   await page.goto("/portal");
-  await expect(page).toHaveURL(/\/login\?next=%2Fportal$/);
+  await redirect;
   await expect(page.getByText("Speaker portal", { exact: true })).toHaveCount(0);
 });

@@ -18,6 +18,8 @@ import {
   type WorkOrganizationSummary,
 } from "./work-hub-model";
 
+const ORGANIZER_ORGANIZATION_STORAGE_KEY = "eventloom.organizer-organization";
+
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 async function jsonOrNull(response: Response): Promise<unknown> {
@@ -37,7 +39,12 @@ function organizationsFrom(value: unknown): readonly WorkOrganizationSummary[] {
     if (typeof item !== "object" || item === null) return [];
     const candidate = item as Record<string, unknown>;
     return typeof candidate.organizationId === "string" && typeof candidate.name === "string"
-      ? [{ organizationId: candidate.organizationId, name: candidate.name }]
+      ? [
+          {
+            organizationId: candidate.organizationId,
+            name: candidate.name,
+          },
+        ]
       : [];
   });
 }
