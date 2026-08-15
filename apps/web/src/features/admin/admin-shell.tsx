@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useAdminShellController } from "./admin-shell-controller";
+import type { OrganizerAuthentication } from "./admin-shell-session";
 import { AdminShellView } from "./admin-shell-view";
 
 export {
@@ -29,8 +30,18 @@ export {
   fetchOrganizerEventWorkspace,
 } from "./admin-shell-event";
 
+export function shouldRenderAdminShell(
+  authentication: OrganizerAuthentication,
+  publicMemberSetup: boolean,
+): boolean {
+  return publicMemberSetup || authentication === "authenticated";
+}
+
 export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const controller = useAdminShellController();
   if (controller.publicMemberSetup) return <>{children}</>;
+  if (!shouldRenderAdminShell(controller.authentication, false)) {
+    return <span aria-hidden="true" data-admin-route-state={controller.authentication} hidden />;
+  }
   return <AdminShellView controller={controller}>{children}</AdminShellView>;
 }

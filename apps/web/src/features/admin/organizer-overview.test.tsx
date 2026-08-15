@@ -43,7 +43,6 @@ const mockedRouter = vi.hoisted(() => ({ push: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => mockedPathname.value,
-  useSearchParams: () => new URLSearchParams(),
   useRouter: () => mockedRouter,
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -843,21 +842,19 @@ describe("admin navigation", () => {
       createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
     );
 
-    expect(output).toContain("Eventloom");
+    expect(output).not.toContain("Eventloom");
     expect(output).not.toContain("Program");
     expect(output).not.toContain("Content operations");
     expect(output).not.toContain("Publish");
-    expect(output).toContain("Search or jump to");
-    expect(output).toContain('aria-keyshortcuts="Meta+K Control+K"');
+    expect(output).not.toContain("Search or jump to");
     expect(output).not.toContain("Primary organizer content");
-    expect(output).toContain('aria-busy="true"');
-    expect(output).toContain("Checking organizer access");
+    expect(output).toContain('data-admin-route-state="checking"');
   });
   it("groups event-scoped navigation by organizer workflow", () => {
     mockedPathname.value = "/admin/organizations/ai-engineer/events/event-live/agenda";
     try {
-      const output = renderToStaticMarkup(
-        createElement(AdminShell, null, createElement("p", null, "Event workspace content")),
+      const output = JSON.stringify(
+        organizerNavigationGroupsFor(qualifiedEventContext(mockedPathname.value), "ai-engineer"),
       );
 
       expect(output).toContain("Program");
@@ -867,8 +864,6 @@ describe("admin navigation", () => {
       expect(output).toContain("Integrations");
       expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
       expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/integrations");
-      expect(output).not.toContain("Event workspace content");
-      expect(output).toContain("Checking organizer access");
     } finally {
       mockedPathname.value = "/admin";
     }

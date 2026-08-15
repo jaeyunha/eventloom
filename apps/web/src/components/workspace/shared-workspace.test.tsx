@@ -67,6 +67,15 @@ describe("shared workspace shell", () => {
     expect(markup).toContain('aria-haspopup="dialog"');
     expect(markup).toContain('data-slot="sheet-trigger"');
   });
+
+  it("keeps the desktop sidebar edge borderless beside inset content", () => {
+    const css = readFileSync(
+      fileURLToPath(new URL("./workspace-shell.module.css", import.meta.url)),
+      "utf8",
+    );
+
+    expect(css).toMatch(/\.desktopNavigation\s*\{[\s\S]*border-right:\s*0;/u);
+  });
 });
 
 describe("shared workspace content", () => {

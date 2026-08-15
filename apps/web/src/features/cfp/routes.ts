@@ -1,5 +1,9 @@
 import type { CfpStep } from "./types";
 
+export function cfpStepRequiresAuthentication(step: CfpStep): boolean {
+  return step !== "welcome" && step !== "account";
+}
+
 export function getCfpStepRoute(
   organizationId: string,
   eventSlug: string,

@@ -35,7 +35,12 @@ import { CharacterCount, Field, Input } from "./cfp-field";
 import { useCfpStartupStore } from "./cfp-startup-provider";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
-import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
+import {
+  cfpStepRequiresAuthentication,
+  getCfpStepRoute,
+  getNextCfpStep,
+  getPreviousCfpStep,
+} from "./routes";
 import {
   CFP_STEPS,
   type CfpDraft,
@@ -1924,6 +1929,21 @@ export function CfpWizard({
     verificationResumeRequestedRef.current = true;
     formRef.current?.requestSubmit();
   }, [authenticatedSession, hydrated, step, verificationState]);
+
+  useEffect(() => {
+    if (
+      hydrated &&
+      cfpStepRequiresAuthentication(step) &&
+      authenticatedSession === null &&
+      routeIdentity !== null
+    ) {
+      router.replace(getCfpStepRoute(routeIdentity.organizationId, eventSlug, "account"));
+    }
+  }, [authenticatedSession, eventSlug, hydrated, routeIdentity, router, step]);
+
+  if (cfpStepRequiresAuthentication(step) && (!hydrated || authenticatedSession === null)) {
+    return <span aria-hidden="true" data-cfp-route-state="checking-session" hidden />;
+  }
 
   if (!hydrated) {
     return (

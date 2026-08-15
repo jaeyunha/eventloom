@@ -12,14 +12,13 @@ export { portalContentMode, portalRouteAuthorized, signOutAndRedirect } from "./
 
 /** Legacy route inventory retained for callers that still inspect the portal destinations. */
 export const portalNavigation = [
-  { href: "/portal", label: "Home", icon: "⌂" },
+  { href: "/portal", label: "My events", icon: "⌂" },
   { href: "/portal/submissions", label: "Submissions", icon: "▤" },
-  { href: "/portal/tasks", label: "Requests & tasks", icon: "✓" },
+  { href: "/portal/tasks", label: "Tasks", icon: "✓" },
   { href: "/portal/profile", label: "Profile", icon: "◉" },
-  { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: "◎" },
-  { href: "/portal?workspace=files", label: "Uploaded files", icon: "▱" },
-  { href: "/portal?workspace=resources", label: "Resources", icon: "◇" },
-  { href: "/portal?workspace=wiki", label: "Wiki", icon: "◫" },
+  { href: "/portal?workspace=co-speakers", label: "Sessions", icon: "◎" },
+  { href: "/portal?workspace=files", label: "Files", icon: "▱" },
+  { href: "/portal?workspace=resources", label: "Event guide", icon: "◇" },
 ] as const;
 
 export function portalNavigationItemActive(

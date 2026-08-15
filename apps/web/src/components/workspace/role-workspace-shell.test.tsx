@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Inbox } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -40,5 +42,14 @@ describe("RoleWorkspaceShell", () => {
     expect(markup).toContain('aria-current="page"');
     expect(markup).toContain('id="reviewer-content"');
     expect(markup).toContain("Assigned submissions");
+  });
+
+  it("keeps the role sidebar edge borderless beside the inset panel", () => {
+    const css = readFileSync(
+      fileURLToPath(new URL("./role-workspace-shell.module.css", import.meta.url)),
+      "utf8",
+    );
+
+    expect(css).toMatch(/\.sidebar\s*\{[\s\S]*border-right:\s*0;/u);
   });
 });

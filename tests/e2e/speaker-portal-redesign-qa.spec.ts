@@ -35,16 +35,19 @@ async function expectNoPageOverflow(page: Page): Promise<void> {
 }
 
 async function expectCurrentNavigation(page: Page, label: string): Promise<void> {
-  const mobile = (page.viewportSize()?.width ?? 0) < 768;
-  if (mobile) {
-    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
-  }
-  const navigation = page.getByRole("link", { name: label, exact: true });
+  const mobile = (page.viewportSize()?.width ?? 0) <= 768;
+  const navigationName =
+    label === "Files"
+      ? "Accepted session tools"
+      : mobile
+        ? "Participant mobile navigation"
+        : "Participant workspace";
+  const navigation = page
+    .getByRole("navigation", { name: navigationName })
+    .getByRole("link", { name: label, exact: true })
+    .and(page.locator('a[aria-current="page"]'));
   await expect(navigation).toHaveCount(1);
-  await expect(navigation).toHaveAttribute("aria-current", "page");
-  if (mobile) {
-    await page.keyboard.press("Escape");
-  }
+  await expect(navigation).toBeVisible();
 }
 
 async function openAcceptedSpeakerTasks(page: Page): Promise<void> {
@@ -52,29 +55,43 @@ async function openAcceptedSpeakerTasks(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Requests & tasks" })).toBeVisible();
   await expect(page.getByText("Accepted speaker checklist", { exact: true })).toBeVisible();
 
+  await page
+    .getByRole("navigation", { name: "Task inbox" })
+    .getByRole("button", { name: new RegExp(`^${formTaskTitle}`) })
+    .click();
   const formTask = page.getByRole("article", { name: formTaskTitle });
   await expect(formTask).toBeVisible();
   await expect(
     formTask.getByText(`Session · ${acceptedSessionTitle}`, { exact: true }),
   ).toBeVisible();
   await expect(
-    formTask.getByText("This requirement applies only to this accepted session.", { exact: true }),
+    formTask.getByText("Applies only to this accepted session.", { exact: true }),
   ).toBeVisible();
 
-  const form = formTask.getByRole("region", { name: "Speaker details response" });
-  await expect(form.getByRole("button", { name: "Save response" })).toBeVisible();
-  await expect(formTask.getByRole("button", { name: "Submit for review" })).toBeVisible();
-  await expectCurrentNavigation(page, "Requests & tasks");
+  const form = formTask.getByRole("region", { name: "Speaker details" });
+  await expect(form.getByRole("button", { name: "Save draft" })).toBeVisible();
+  await expect(formTask.getByRole("button", { name: "Submit response" })).toBeVisible();
+  await expectCurrentNavigation(page, "Tasks");
 }
 
 async function openAcceptedSpeakerFiles(page: Page): Promise<void> {
   await page.goto(`/portal?workspace=files&event=${evaluatorEventId}`);
-  await expect(page.getByRole("region", { name: "files workspace" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Uploaded files" })).toBeVisible();
-  const fileCard = page.getByRole("article", { name: seededFileName });
+  await expect(page.getByRole("heading", { level: 1, name: "Files" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 2, name: `Files for ${acceptedSessionTitle}` }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Session attribution")).toHaveValue("submission-evaluator");
+  const fileCard = page.getByRole("region", { name: seededFileName });
   await expect(fileCard).toBeVisible();
-  await expect(page.getByRole("form", { name: "Upload another private file" })).toBeVisible();
-  await expectCurrentNavigation(page, "Uploaded files");
+  await expect(page.getByRole("button", { name: "Upload private file" })).toBeVisible();
+  const sessionsHref = await page
+    .getByRole("navigation", { name: "Accepted session tools" })
+    .getByRole("link", { name: "Sessions", exact: true })
+    .getAttribute("href");
+  expect(sessionsHref).toContain("workspace=co-speakers");
+  expect(sessionsHref).toContain(`event=${evaluatorEventId}`);
+  expect(sessionsHref).toContain("participant=participant-ada");
+  await expectCurrentNavigation(page, "Files");
 }
 
 test("speaker tasks and files stay focused on desktop", async ({ authSession, page }, testInfo) => {

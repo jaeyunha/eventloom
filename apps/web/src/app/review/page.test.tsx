@@ -1,9 +1,13 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { signOutReviewerSession } from "../../features/reviews/reviewer-shell";
 import ReviewerLayout from "./layout";
 import ReviewerPage from "./page";
+
+vi.mock("@/features/auth/authenticated-route-guard", () => ({
+  AuthenticatedRouteGuard: ({ children }: Readonly<{ children: ReactNode }>) => children,
+}));
 
 describe("ReviewerPage", () => {
   it("composes the evaluator-only page inside the route shell with one main landmark", () => {

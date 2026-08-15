@@ -84,7 +84,12 @@ export function RoleWorkspaceShell({
           {skipLabel}
         </a>
 
-        <Sidebar aria-label={navigationLabel} collapsible="icon" variant="inset">
+        <Sidebar
+          aria-label={navigationLabel}
+          className={styles.sidebar}
+          collapsible="icon"
+          variant="inset"
+        >
           <SidebarHeader className={styles.sidebarHeader}>
             <SidebarMenu>
               <SidebarMenuItem>

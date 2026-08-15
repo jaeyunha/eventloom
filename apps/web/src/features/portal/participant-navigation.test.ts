@@ -58,6 +58,9 @@ describe("participant navigation", () => {
       desktopLabel: "Files",
       mobileLabel: "Files",
     });
+    expect(navigation.secondary.find((item) => item.id === "sessions")?.href).toBe(
+      "/portal?workspace=co-speakers&event=event%2Fsummit&participant=participant%201",
+    );
   });
 
   it("does not infer acceptance or lose an existing event query", () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui";
 import { WorkspaceState } from "@/components/workspace";
 import { AssetDetails } from "./portal-asset-details";
@@ -8,10 +9,12 @@ import { EventGuideWorkspaceView } from "./portal-event-guide";
 import { type FilesWorkspaceUpload, FilesWorkspaceView } from "./portal-files-workspace";
 import { portalContextLabel, usePortal } from "./portal-provider";
 import { safePublishedUrl } from "./portal-published-content";
+import { participantDashboardHref } from "./participant-dashboard-model";
 import { SessionsWorkspaceView } from "./portal-sessions-workspace";
 import styles from "./portal-workspace.module.css";
 
 export { groupPortalAssetVersions } from "./portal-assets";
+export type { PortalAssetVersionFamily } from "./portal-assets";
 export type { EventGuideWorkspaceViewProps } from "./portal-event-guide";
 export { EventGuideWorkspaceView } from "./portal-event-guide";
 export type { FilesWorkspaceUpload, FilesWorkspaceViewProps } from "./portal-files-workspace";
@@ -37,6 +40,7 @@ const navigation: readonly { surface: PortalWorkspaceSurface; label: string; hre
 
 export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspaceSection }>) {
   const portal = usePortal();
+  const searchParams = useSearchParams();
   const {
     context,
     view,
@@ -107,6 +111,13 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
     portal.can("roster-manage") && Boolean(selectedRoster?.capabilities.manage);
   const canInvite = canManageRoster && Boolean(selectedRoster?.capabilities.invite);
   const participantId = context.primaryParticipantId ?? view.profiles[0]?.participantId ?? null;
+  const workspaceQuery = new URLSearchParams(searchParams.toString());
+  workspaceQuery.set("event", context.eventId);
+  if (participantId) workspaceQuery.set("participant", participantId);
+  const workspaceNavigation = navigation.map((item) => ({
+    ...item,
+    href: participantDashboardHref(item.href, context, `?${workspaceQuery.toString()}`),
+  }));
 
   async function upload(input: FilesWorkspaceUpload): Promise<boolean> {
     return portal.uploadWorkspaceFile(input);
@@ -120,8 +131,8 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
 
   return (
     <div className={styles.page}>
-      <nav className={styles.navigation} aria-label="Participant workspace">
-        {navigation.map((item) => (
+      <nav className={styles.navigation} aria-label="Accepted session tools">
+        {workspaceNavigation.map((item) => (
           <a
             key={item.surface}
             href={item.href}

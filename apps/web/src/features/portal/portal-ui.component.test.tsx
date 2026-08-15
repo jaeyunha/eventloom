@@ -390,14 +390,13 @@ describe("speaker portal UI components", () => {
 
   it("keeps primary portal pages and restored operational workspaces visible", () => {
     expect(portalNavigation.map(({ label }) => label)).toEqual([
-      "Home",
+      "My events",
       "Submissions",
-      "Requests & tasks",
+      "Tasks",
       "Profile",
-      "Co-speakers",
-      "Uploaded files",
-      "Resources",
-      "Wiki",
+      "Sessions",
+      "Files",
+      "Event guide",
     ]);
     expect(portalNavigation.map(({ href }) => href)).toEqual([
       "/portal",
@@ -407,7 +406,6 @@ describe("speaker portal UI components", () => {
       "/portal?workspace=co-speakers",
       "/portal?workspace=files",
       "/portal?workspace=resources",
-      "/portal?workspace=wiki",
     ]);
   });
 
@@ -492,7 +490,7 @@ describe("speaker portal UI components", () => {
 
     expect(markup).toContain('data-role-workspace-shell="true"');
     expect(markup).toContain('data-role-workspace="participant"');
-    expect(markup).toContain('id="portal-content"');
+    expect(markup).toContain('id="workspace-main"');
     expect(markup).not.toContain('aria-label="Speaker portal"');
     expect(markup).toContain('aria-haspopup="menu"');
     expect(markup).not.toContain(">Sign out</button>");

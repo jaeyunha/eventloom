@@ -78,7 +78,9 @@ function isActive(pathname: string, item: ParticipantNavigationId, pathnameQuery
     case "profile":
       return pathname === "/portal/profile";
     case "sessions":
-      return pathname === "/portal" && pathnameQuery === "sessions";
+      return (
+        pathname === "/portal" && (pathnameQuery === "co-speakers" || pathnameQuery === "sessions")
+      );
     case "files":
       return pathname === "/portal" && pathnameQuery === "files";
     case "event-guide":
@@ -131,7 +133,7 @@ export function createParticipantNavigation(
   const secondary: ParticipantNavigationItem[] = [];
   if (accepted) {
     secondary.push(
-      item("sessions", "Sessions", "/portal?workspace=sessions", "secondary", navigationInput),
+      item("sessions", "Sessions", "/portal?workspace=co-speakers", "secondary", navigationInput),
     );
     if (hasCapability(input.capabilities, "asset-read")) {
       secondary.push(

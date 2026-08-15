@@ -20,8 +20,12 @@ export default async function SpeakerPortalPage({
     const event = Array.isArray(query.event) ? query.event[0] : query.event;
     redirect(event ? `/portal/tasks?event=${encodeURIComponent(event)}` : "/portal/tasks");
   }
-  if (requested !== undefined && workspaceSections.has(requested as PortalWorkspaceSection)) {
-    return <PortalWorkspace section={requested as PortalWorkspaceSection} />;
+  const requestedSection = requested === "sessions" ? "co-speakers" : requested;
+  if (
+    requestedSection !== undefined &&
+    workspaceSections.has(requestedSection as PortalWorkspaceSection)
+  ) {
+    return <PortalWorkspace section={requestedSection as PortalWorkspaceSection} />;
   }
   return <PortalHome />;
 }

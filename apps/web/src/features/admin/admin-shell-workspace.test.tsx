@@ -13,6 +13,15 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+vi.mock("./admin-shell-session", () => ({
+  useOrganizerSession: () => ({
+    authenticatedOrganizationId: "org",
+    authentication: "authenticated",
+    availableOrganizationIds: ["org"],
+    setAuthenticatedOrganizationId: vi.fn(),
+  }),
+}));
+
 describe("organizer shared workspace shell", () => {
   it("renders the organizer role through one shared main landmark on desktop and mobile", () => {
     const markup = renderToStaticMarkup(

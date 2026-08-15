@@ -4,7 +4,6 @@
   gap: var(--space-4);
 }
 
-.navigation,
 .list,
 .stack,
 .compactList,
@@ -16,6 +15,7 @@
 }
 
 .navigation {
+  display: none;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-1);
   padding: var(--space-1);
@@ -214,6 +214,10 @@
   .navigation,
   .fields {
     grid-template-columns: 1fr;
+  }
+
+  .navigation {
+    display: grid;
   }
 }
 
