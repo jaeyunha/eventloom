@@ -12,7 +12,12 @@ import {
   submissionSchema,
   submissionSteps,
 } from "./model";
-import { evaluateFormRules, validateCfpForm, validateSubmissionAnswers } from "./rules";
+import {
+  evaluateFormRules,
+  validateCfpForm,
+  validateSubmissionAnswerCompatibility,
+  validateSubmissionAnswers,
+} from "./rules";
 import { sanitizeForm, sanitizePlainText, sanitizeRichText, sanitizeSubmission } from "./sanitize";
 
 export type CfpErrorCode =
@@ -443,6 +448,22 @@ function validateFileRequestShapes(
   return issues;
 }
 
+function rebaseDraftToCurrentForm(submission: Submission, form: CfpForm): Submission {
+  if (submission.formVersion === form.version) return submission;
+  const issues = [
+    ...validateSubmissionAnswerCompatibility(form, submission.answers, submission.participants),
+    ...validateFileRequestShapes(form, submission, { enforceRequired: false }),
+  ];
+  if (submission.formVersion > form.version || issues.length > 0) {
+    throw new CfpError("CONFLICT", "The CFP form is incompatible with this historical draft.", {
+      submissionFormVersion: submission.formVersion,
+      currentFormVersion: form.version,
+      issues,
+    });
+  }
+  return { ...submission, formVersion: form.version };
+}
+
 function allowedMimeType(allowed: string, actual: string): boolean {
   const normalizedAllowed = allowed.trim().toLowerCase();
   const normalizedActual = actual.trim().toLowerCase();
@@ -488,6 +509,104 @@ function ensureSubmissionSchemaVersion(submission: Submission, form: CfpForm): v
       },
     );
   }
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => valuesEqual(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.hasOwn(rightRecord, key) && valuesEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
+function preserveUnchangedAnswers(
+  sanitized: Record<string, unknown>,
+  candidate: Record<string, unknown>,
+  current: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(sanitized).map(([key, value]) => [
+      key,
+      Object.hasOwn(current, key) && valuesEqual(candidate[key], current[key])
+        ? current[key]
+        : value,
+    ]),
+  );
+}
+
+function sanitizeDraftChanges(
+  candidate: Submission,
+  current: Submission,
+  form: CfpForm,
+): Submission {
+  const sanitized = sanitizeSubmission(candidate, form);
+  const currentParticipants = new Map(
+    current.participants.map((participant) => [participant.id, participant]),
+  );
+  const currentContacts = new Map(
+    current.secondaryContacts.map((contact) => [contact.id, contact]),
+  );
+  return {
+    ...sanitized,
+    answers: preserveUnchangedAnswers(sanitized.answers, candidate.answers, current.answers),
+    participants: sanitized.participants.map((participant, index) => {
+      const candidateParticipant = candidate.participants[index];
+      const currentParticipant = currentParticipants.get(participant.id);
+      if (candidateParticipant === undefined || currentParticipant === undefined)
+        return participant;
+      return {
+        ...participant,
+        firstName: valuesEqual(candidateParticipant.firstName, currentParticipant.firstName)
+          ? currentParticipant.firstName
+          : participant.firstName,
+        lastName: valuesEqual(candidateParticipant.lastName, currentParticipant.lastName)
+          ? currentParticipant.lastName
+          : participant.lastName,
+        email: valuesEqual(candidateParticipant.email, currentParticipant.email)
+          ? currentParticipant.email
+          : participant.email,
+        biography: valuesEqual(candidateParticipant.biography, currentParticipant.biography)
+          ? currentParticipant.biography
+          : participant.biography,
+        answers: preserveUnchangedAnswers(
+          participant.answers,
+          candidateParticipant.answers,
+          currentParticipant.answers,
+        ),
+      };
+    }),
+    secondaryContacts: sanitized.secondaryContacts.map((contact, index) => {
+      const candidateContact = candidate.secondaryContacts[index];
+      const currentContact = currentContacts.get(contact.id);
+      if (candidateContact === undefined || currentContact === undefined) return contact;
+      return {
+        ...contact,
+        name: valuesEqual(candidateContact.name, currentContact.name)
+          ? currentContact.name
+          : contact.name,
+        email: valuesEqual(candidateContact.email, currentContact.email)
+          ? currentContact.email
+          : contact.email,
+      };
+    }),
+  };
 }
 interface CfpFileUploadContext {
   event: EventCfp;
@@ -884,8 +1003,8 @@ export class CfpService {
     const event = await this.#getEvent(input.tenantId, submission.eventId);
     const form = await this.#getForm(input.tenantId, submission.formId);
     ensureEventFormMatch(event, form);
-    ensureSubmissionSchemaVersion(submission, form);
-    return sanitizeSubmission(submission, form);
+    const rebased = rebaseDraftToCurrentForm(submission, form);
+    return submission.formVersion === form.version ? sanitizeSubmission(rebased, form) : rebased;
   }
 
   async createForm(input: {
@@ -1253,65 +1372,49 @@ export class CfpService {
           this.#getForm(input.tenantId, current.formId),
         ]);
         ensureEventFormMatch(event, form);
-        const usesCurrentSchema = current.formVersion === form.version;
-        if (!usesCurrentSchema && input.answers !== undefined) {
-          ensureSubmissionSchemaVersion(current, form);
-        }
-        if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
+        const rebasedCurrent = rebaseDraftToCurrentForm(current, form);
+        if (input.formVersion !== undefined && input.formVersion !== form.version) {
           throw new CfpError("CONFLICT", "The submission schema version is stale.", {
             expectedFormVersion: input.formVersion,
-            currentFormVersion: current.formVersion,
+            currentFormVersion: form.version,
           });
         }
         this.#ensureEditable(current, event);
 
         const parsed = submissionSchema.parse({
-          ...current,
+          ...rebasedCurrent,
           version: current.version + 1,
+          formVersion: form.version,
           completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
           answers:
             input.answers === undefined
-              ? current.answers
-              : { ...current.answers, ...input.answers },
-          participants: input.participants ?? current.participants,
-          secondaryContacts: input.secondaryContacts ?? current.secondaryContacts,
+              ? rebasedCurrent.answers
+              : { ...rebasedCurrent.answers, ...input.answers },
+          participants: input.participants ?? rebasedCurrent.participants,
+          secondaryContacts: input.secondaryContacts ?? rebasedCurrent.secondaryContacts,
           updatedAt: this.#clock.now().toISOString(),
         });
-        const next = usesCurrentSchema
-          ? sanitizeSubmission(parsed, form)
-          : {
-              ...parsed,
-              answers: current.answers,
-              participants: parsed.participants.map((participant) => ({
-                ...participant,
-                firstName: sanitizePlainText(participant.firstName),
-                lastName: sanitizePlainText(participant.lastName),
-                email: sanitizePlainText(participant.email).toLowerCase(),
-                biography: sanitizeRichText(participant.biography),
-                answers:
-                  current.participants.find((candidate) => candidate.id === participant.id)
-                    ?.answers ?? {},
-              })),
-              secondaryContacts: parsed.secondaryContacts.map((contact) => ({
-                ...contact,
-                name: sanitizePlainText(contact.name),
-                email: sanitizePlainText(contact.email).toLowerCase(),
-              })),
-            };
+        const compatibilityIssues = [
+          ...validateSubmissionAnswerCompatibility(form, parsed.answers, parsed.participants),
+          ...validateFileRequestShapes(form, parsed, { enforceRequired: false }),
+        ];
+        if (compatibilityIssues.length > 0) {
+          throw new CfpError(
+            "VALIDATION_FAILED",
+            "The draft answers are incompatible with the CFP form.",
+            {
+              issues: compatibilityIssues,
+            },
+          );
+        }
+        const next = sanitizeDraftChanges(parsed, current, form);
         if (next.participants.length > form.settings.speakerLimit) {
           throw new CfpError(
             "VALIDATION_FAILED",
             `This form allows at most ${form.settings.speakerLimit} speakers.`,
           );
         }
-        const fileIssues = usesCurrentSchema
-          ? [
-              ...validateFileRequestShapes(form, next, {
-                enforceRequired: false,
-              }),
-              ...(await this.#validateFileRequestAssets(form, next)),
-            ]
-          : [];
+        const fileIssues = await this.#validateFileRequestAssets(form, next);
         if (fileIssues.length > 0) {
           throw new CfpError("VALIDATION_FAILED", "The file request payload is invalid.", {
             issues: fileIssues,

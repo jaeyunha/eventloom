@@ -453,6 +453,33 @@ function validateFieldSet(
   return issues;
 }
 
+export function validateSubmissionAnswerCompatibility(
+  form: CfpForm,
+  answers: Record<string, unknown>,
+  participants: SubmissionParticipant[],
+): AnswerValidationIssue[] {
+  const issues: AnswerValidationIssue[] = [];
+  for (const field of form.submissionFields) {
+    const issue = validateFieldValue(field, answers[field.key]);
+    if (issue) issues.push(issue);
+  }
+  for (const [index, participant] of participants.entries()) {
+    const participantAnswers: Record<string, unknown> = {
+      ...participant.answers,
+      firstName: participant.firstName,
+      lastName: participant.lastName,
+      email: participant.email,
+    };
+    for (const field of form.participantFields) {
+      const issue = validateFieldValue(field, participantAnswers[field.key]);
+      if (issue) {
+        issues.push({ ...issue, path: `participants.${index}.${field.key}` });
+      }
+    }
+  }
+  return issues;
+}
+
 export function validateSubmissionAnswers(
   form: CfpForm,
   answers: Record<string, unknown>,

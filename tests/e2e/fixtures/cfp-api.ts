@@ -81,11 +81,16 @@ function errorBody(code: string, message: string): string {
   return JSON.stringify({ error: { code, message, traceId: "trace-cfp-fixture" } });
 }
 
-async function fulfillJson(route: Route, data: unknown, status = 200): Promise<void> {
+async function fulfillJson(
+  route: Route,
+  data: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Promise<void> {
   await route.fulfill({
     status,
     contentType: "application/json",
-    headers: CORS_HEADERS,
+    headers: { ...CORS_HEADERS, ...headers },
     body: JSON.stringify({ data }),
   });
 }
@@ -223,6 +228,7 @@ export async function installCfpApi(
     updatedAt: UPDATED_AT,
   };
   const requests: Request[] = [];
+  let authenticated = false;
   const publicPath = `/api/public/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${eventSlug}`;
   const apiPath = `/api/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
   const draftPath = `${apiPath}/submissions/${submission.id}/draft`;
@@ -237,22 +243,48 @@ export async function installCfpApi(
       return;
     }
     if (request.method() === "GET" && url.pathname === "/api/auth/get-session") {
-      await route.fallback();
-      return;
-    }
-    if (
-      request.method() === "POST" &&
-      (url.pathname === "/api/auth/sign-in/email" || url.pathname === "/api/auth/sign-up/email")
-    ) {
+      if (!authenticated) {
+        await fulfillJson(route, null);
+        return;
+      }
       await fulfillJson(route, {
-        token: session.token,
+        session: {
+          id: session.token,
+          userId: session.userId,
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        },
         user: {
           id: session.userId,
           email: session.email,
           name: session.displayName,
           emailVerified: true,
         },
+        memberships: [],
+        speakerGrants: [],
       });
+      return;
+    }
+    if (
+      request.method() === "POST" &&
+      (url.pathname === "/api/auth/sign-in/email" || url.pathname === "/api/auth/sign-up/email")
+    ) {
+      authenticated = true;
+      await fulfillJson(
+        route,
+        {
+          token: session.token,
+          user: {
+            id: session.userId,
+            email: session.email,
+            name: session.displayName,
+            emailVerified: true,
+          },
+        },
+        200,
+        {
+          "set-cookie": `${E2E_SESSION_COOKIE}=${session.token}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      );
       return;
     }
     if (request.headers().cookie?.includes(`${E2E_SESSION_COOKIE}=${session.token}`) !== true) {

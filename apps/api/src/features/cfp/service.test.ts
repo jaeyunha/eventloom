@@ -1573,19 +1573,41 @@ describe("CFP submission lifecycle", () => {
     ]);
     expect(records[0]?.submission.participants).toEqual(canonicalSubmission.participants);
   });
-  it("lists submitted records against the current schema after a form revision", async () => {
+  it("loads and rebases a historical draft after a compatible form revision", async () => {
     const { service, repository } = createFixture();
     const previousForm = buildForm();
     const currentForm = buildForm({
       version: previousForm.version + 1,
-      submissionFields: previousForm.submissionFields.map((field) => ({
-        ...field,
-        label: `Current ${field.label}`,
-      })),
-      participantFields: previousForm.participantFields.map((field) => ({
-        ...field,
-        label: `Current ${field.label}`,
-      })),
+      submissionFields: [
+        ...previousForm.submissionFields.map((field) => ({
+          ...field,
+          label: `Current ${field.label}`,
+        })),
+        {
+          id: "field_session_goal",
+          sectionId: "session",
+          key: "sessionGoal",
+          label: "Session goal",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+      participantFields: [
+        ...previousForm.participantFields.map((field) => ({
+          ...field,
+          label: `Current ${field.label}`,
+        })),
+        {
+          id: "participant_pronouns",
+          sectionId: "people",
+          key: "pronouns",
+          label: "Pronouns",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
     });
     repository.forms.set(currentForm.id, structuredClone(currentForm));
     repository.events.set(
@@ -1605,10 +1627,12 @@ describe("CFP submission lifecycle", () => {
       ...originalSubmission,
       id: "submission_old_schema",
       formVersion: previousForm.version,
+      status: "draft" as const,
+      submittedAt: undefined,
       answers: {
         title: "Legacy title",
         format: "talk",
-        legacyAnswer: "preserve exactly",
+        legacyAnswer: "  preserve <exactly>  ",
       },
       participants: [
         primaryParticipant,
@@ -1639,11 +1663,23 @@ describe("CFP submission lifecycle", () => {
     expect(records[0]?.submission.answers).toEqual(storedSubmission.answers);
     expect(records[0]?.submission.participants).toEqual(storedSubmission.participants);
     expect(records[0]?.submissionFields.map(({ id }) => id)).toEqual(
-      previousForm.submissionFields.map(({ id }) => id),
+      currentForm.submissionFields.map(({ id }) => id),
     );
     expect(records[0]?.participantFields.map(({ id }) => id)).toEqual(
-      previousForm.participantFields.map(({ id }) => id),
+      currentForm.participantFields.map(({ id }) => id),
     );
+
+    const loaded = await service.loadDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: storedSubmission.id,
+      ownerAccountId: storedSubmission.ownerAccountId,
+    });
+    expect(loaded).toEqual({
+      ...storedSubmission,
+      formVersion: currentForm.version,
+    });
+    expect(repository.submissions.get(storedSubmission.id)).toEqual(storedSubmission);
 
     await expect(
       service.saveDraft({
@@ -1651,55 +1687,85 @@ describe("CFP submission lifecycle", () => {
         eventId: "event_1",
         submissionId: storedSubmission.id,
         ownerAccountId: storedSubmission.ownerAccountId,
-        expectedVersion: storedSubmission.version,
-        formVersion: storedSubmission.formVersion,
-        idempotencyKey: "stale-form-revision-write",
-        answers: { title: "Rejected stale update" },
+        expectedVersion: loaded.version + 1,
+        formVersion: loaded.formVersion,
+        idempotencyKey: "legacy-form-stale-submission-version",
       }),
     ).rejects.toMatchObject({
       code: "CONFLICT",
-      message: "The CFP form schema version is no longer available for this submission.",
-      details: {
-        submissionFormVersion: previousForm.version,
-        currentFormVersion: currentForm.version,
-      },
+      message: "The submission has changed since it was loaded.",
     });
     expect(repository.submissions.get(storedSubmission.id)).toEqual(storedSubmission);
 
-    const participantOnlyUpdate = await service.saveDraft({
+    const coAuthor = {
+      id: "participant_3",
+      firstName: " Marcus ",
+      lastName: " Okafor ",
+      email: "MARCUS@EXAMPLE.COM",
+      role: "co_speaker" as const,
+      biography: "<b>Co-author</b>",
+      answers: { pronouns: "he/him" },
+    };
+    const rebased = await service.saveDraft({
       tenantId: "tenant_1",
       eventId: "event_1",
       submissionId: storedSubmission.id,
       ownerAccountId: storedSubmission.ownerAccountId,
-      expectedVersion: storedSubmission.version,
-      formVersion: storedSubmission.formVersion,
-      idempotencyKey: "legacy-form-participant-update",
+      expectedVersion: loaded.version,
+      formVersion: loaded.formVersion,
+      idempotencyKey: "legacy-form-add-co-author",
       completedStep: "participant",
-      participants: [
-        ...storedSubmission.participants,
-        {
-          id: "participant_2",
-          firstName: " Marcus ",
-          lastName: " Okafor ",
-          email: "MARCUS@EXAMPLE.COM",
-          role: "co_speaker",
-          biography: "<b>Co-author</b>",
-          answers: { legacyField: "must not be interpreted by the current schema" },
-        },
-      ],
+      answers: loaded.answers,
+      participants: [...loaded.participants, coAuthor],
     });
-    expect(participantOnlyUpdate.answers).toEqual(storedSubmission.answers);
-    expect(participantOnlyUpdate.participants).toContainEqual({
-      id: "participant_2",
+    expect(rebased.formVersion).toBe(currentForm.version);
+    expect(rebased.answers).toEqual(storedSubmission.answers);
+    expect(rebased.participants.slice(0, 2)).toEqual(storedSubmission.participants);
+    expect(rebased.participants[2]).toEqual({
+      ...coAuthor,
       firstName: "Marcus",
       lastName: "Okafor",
       email: "marcus@example.com",
-      role: "co_speaker",
       biography: "bCo-author/b",
-      answers: {
-        firstName: "Grace",
-        legacyRole: "co-speaker",
+    });
+    expect(repository.submissions.get(storedSubmission.id)).toEqual(rebased);
+  });
+
+  it("rejects a historical draft when a populated stable field key becomes incompatible", async () => {
+    const { service, repository } = createFixture();
+    const staleSubmission = buildOrganizerSubmission({
+      id: "submission_incompatible_schema",
+      status: "draft",
+      submittedAt: undefined,
+      answers: { title: "Legacy title", format: "talk" },
+    });
+    repository.submissions.set(staleSubmission.id, structuredClone(staleSubmission));
+    repository.forms.set(
+      "form_1",
+      buildForm({
+        version: 2,
+        submissionFields: buildForm().submissionFields.map((field) =>
+          field.key === "format" ? { ...field, options: ["workshop"] } : field,
+        ),
+      }),
+    );
+
+    await expect(
+      service.loadDraft({
+        tenantId: "tenant_1",
+        eventId: "event_1",
+        submissionId: staleSubmission.id,
+        ownerAccountId: staleSubmission.ownerAccountId,
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "The CFP form is incompatible with this historical draft.",
+      details: {
+        submissionFormVersion: 1,
+        currentFormVersion: 2,
+        issues: [expect.objectContaining({ path: "answers.format", code: "invalid_option" })],
       },
     });
+    expect(repository.submissions.get(staleSubmission.id)).toEqual(staleSubmission);
   });
 });
