@@ -356,3 +356,7 @@
     width: 100%;
   }
 }
+
+.previewRail {
+  top: 0.75rem;
+}

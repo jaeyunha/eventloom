@@ -26,4 +26,13 @@ describe("organizer workspace theme", () => {
     expect(shellStyles).toContain(":global(.dark) .calendarRail");
     expect(shellStyles).toContain(":global(.dark) .calendarCellOutside");
   });
+
+  it("keeps every organizer route inside one inset workspace shell", () => {
+    expect(shellSource).toContain('variant="inset"');
+    expect(shellStyles).toMatch(
+      /\.adminShell\s*\{[\s\S]*height:\s*100svh;[\s\S]*overflow:\s*hidden;/,
+    );
+    expect(shellStyles).toMatch(/\.sidebarContent\s*\{[\s\S]*flex:\s*1;[\s\S]*overflow-y:\s*auto;/);
+    expect(shellStyles).toMatch(/\.accountFooter\s*\{[\s\S]*flex:\s*0 0 auto;/);
+  });
 });

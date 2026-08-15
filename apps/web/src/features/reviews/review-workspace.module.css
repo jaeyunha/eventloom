@@ -3614,3 +3614,18 @@
     padding: var(--space-3);
   }
 }
+
+.workspace {
+  width: 100%;
+  margin: 0;
+  padding: 0 0 3rem;
+}
+
+.workspaceHeader {
+  padding: 0 0 1.25rem;
+}
+
+.workspaceHeader h1,
+.statusPage h1 {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}

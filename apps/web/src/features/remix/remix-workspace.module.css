@@ -371,3 +371,18 @@
     font-weight: 600;
   }
 }
+
+.workspace {
+  width: 100%;
+  margin: 0;
+  padding: 0 0 3rem;
+}
+
+.header h1,
+.statusPage h1 {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+.sectionNav {
+  top: 0.75rem;
+}

@@ -24,6 +24,7 @@ import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 
 const ORGANIZER_STICKY_HEADER_HEIGHT = 52;
+const ORGANIZER_SCROLL_CONTAINER_ID = "admin-content";
 const STICKY_SECTION_GAP = 16;
 const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = [
   "application/pdf",
@@ -45,6 +46,18 @@ export function cfpActiveSectionThreshold(
   navigationHeight: number,
 ): number {
   return cfpSectionScrollOffset(organizerHeaderHeight, navigationHeight) + 24;
+}
+
+export function cfpContainerScrollTop(
+  containerScrollTop: number,
+  targetTop: number,
+  containerTop: number,
+  navigationHeight: number,
+): number {
+  return Math.max(
+    0,
+    containerScrollTop + targetTop - containerTop - cfpSectionScrollOffset(0, navigationHeight),
+  );
 }
 
 type FieldType =
@@ -1151,16 +1164,16 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     );
     if (sections.length === 0) return;
 
+    const scrollContainer = document.getElementById(ORGANIZER_SCROLL_CONTAINER_ID);
     let frame: number | null = null;
     const updateActiveSection = () => {
       if (frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
         const navigationHeight = sectionNavRef.current?.getBoundingClientRect().height ?? 0;
-        const threshold = cfpActiveSectionThreshold(
-          ORGANIZER_STICKY_HEADER_HEIGHT,
-          navigationHeight,
-        );
+        const scrollContainerTop =
+          scrollContainer?.getBoundingClientRect().top ?? ORGANIZER_STICKY_HEADER_HEIGHT;
+        const threshold = scrollContainerTop + cfpActiveSectionThreshold(0, navigationHeight);
         let currentId: (typeof SECTION_LINKS)[number]["id"] =
           (sections[0]?.id as (typeof SECTION_LINKS)[number]["id"] | undefined) ?? "event-details";
         for (const section of sections) {
@@ -1175,11 +1188,12 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     };
 
     updateActiveSection();
-    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    const scrollTarget = scrollContainer ?? window;
+    scrollTarget.addEventListener("scroll", updateActiveSection, { passive: true });
     window.addEventListener("resize", updateActiveSection);
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
-      window.removeEventListener("scroll", updateActiveSection);
+      scrollTarget.removeEventListener("scroll", updateActiveSection);
       window.removeEventListener("resize", updateActiveSection);
     };
   }, []);
@@ -1376,16 +1390,30 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     const isMobile = window.matchMedia("(max-width: 44rem)").matches;
     const scrollToTarget = () => {
       const navigationHeight = sectionNavRef.current?.getBoundingClientRect().height ?? 0;
-      const top = Math.max(
-        0,
-        target.getBoundingClientRect().top +
-          window.scrollY -
-          cfpSectionScrollOffset(ORGANIZER_STICKY_HEADER_HEIGHT, navigationHeight),
-      );
+      const scrollContainer = document.getElementById(ORGANIZER_SCROLL_CONTAINER_ID);
+      const targetTop = target.getBoundingClientRect().top;
+      const top =
+        scrollContainer === null
+          ? Math.max(
+              0,
+              targetTop +
+                window.scrollY -
+                cfpSectionScrollOffset(ORGANIZER_STICKY_HEADER_HEIGHT, navigationHeight),
+            )
+          : cfpContainerScrollTop(
+              scrollContainer.scrollTop,
+              targetTop,
+              scrollContainer.getBoundingClientRect().top,
+              navigationHeight,
+            );
       const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ? "auto"
         : "smooth";
-      window.scrollTo({ top, behavior });
+      if (scrollContainer === null) {
+        window.scrollTo({ top, behavior });
+      } else {
+        scrollContainer.scrollTo({ top, behavior });
+      }
     };
     if (isMobile) {
       window.requestAnimationFrame(scrollToTarget);

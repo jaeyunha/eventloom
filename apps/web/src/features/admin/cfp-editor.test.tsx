@@ -5,6 +5,7 @@ import type { CfpApi } from "../cfp/api";
 import {
   CfpEditor,
   cfpActiveSectionThreshold,
+  cfpContainerScrollTop,
   cfpSectionScrollOffset,
   closeCfpNowConfiguration,
   closeCfpNowInstant,
@@ -20,9 +21,10 @@ import {
 import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 
 describe("CFP editor", () => {
-  it("keeps sticky section targets below the organizer header and navigator", () => {
+  it("keeps sticky section targets inside the organizer panel scroll container", () => {
     expect(cfpSectionScrollOffset(52, 64)).toBe(132);
     expect(cfpActiveSectionThreshold(52, 64)).toBe(156);
+    expect(cfpContainerScrollTop(120, 460, 48, 64)).toBe(452);
   });
 
   it("starts in a truthful loading state without fixture configuration", () => {

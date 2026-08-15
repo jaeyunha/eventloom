@@ -538,3 +538,31 @@
     border-bottom: 1px solid var(--color-border, #dfe2e8);
   }
 }
+
+.page {
+  min-height: auto;
+  padding: 0 0 3rem;
+  background: transparent;
+}
+
+.content {
+  width: 100%;
+  margin: 0;
+}
+
+.header {
+  padding: 0 0 1.25rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.header h1 {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+.workflowNavigation {
+  top: 0.75rem;
+}
