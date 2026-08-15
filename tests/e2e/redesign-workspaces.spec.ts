@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 const ORGANIZATION_ID = "local-organization";
 const EVENT_ID = "demo-event";
@@ -10,17 +10,119 @@ const speakersUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/
 const organizerReviewsUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/reviews`;
 const reviewerUrl = "/review";
 
+const organizerSessionFixture = {
+  session: {
+    id: "organizer-session-e2e",
+    userId: "organizer-e2e",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  },
+  user: {
+    id: "organizer-e2e",
+    email: "organizer@example.test",
+    name: "Olivia Organizer",
+    emailVerified: true,
+  },
+  memberships: [{ organizationId: ORGANIZATION_ID, role: "owner" }],
+  speakerGrants: [],
+};
+
+const organizerEventFixture = {
+  id: EVENT_ID,
+  organizationId: ORGANIZATION_ID,
+  slug: EVENT_ID,
+  name: "Open Sessionboard Conference",
+  status: "active",
+  timeZone: "America/Los_Angeles",
+  startsAt: "2026-09-18T16:00:00.000Z",
+  endsAt: "2026-09-18T23:00:00.000Z",
+  venue: "Eventloom Hall",
+  cfpSettings: {
+    enabled: true,
+    opensAt: "2026-08-01T07:00:00.000Z",
+    closesAt: "2026-09-15T07:00:00.000Z",
+  },
+  defaultCalendarSettings: {
+    durationMinutes: 30,
+    timeZone: "America/Los_Angeles",
+    location: "Eventloom Hall",
+  },
+  version: 1,
+  createdAt: "2026-08-08T12:00:00.000Z",
+  updatedAt: "2026-08-08T12:00:00.000Z",
+  createdBy: "organizer-e2e",
+  updatedBy: "organizer-e2e",
+};
+
+const speakerRosterFixture = {
+  organizationId: ORGANIZATION_ID,
+  eventId: EVENT_ID,
+  speakers: [
+    {
+      participantId: "speaker-e2e",
+      displayName: "Avery Morgan",
+      email: "avery@example.test",
+      jobTitle: "Program lead",
+      company: "Community Systems Lab",
+      biography: "Avery coordinates community programs and speaker onboarding.",
+      socialLinks: {},
+      travelLogistics: {
+        travelRequired: false,
+        arrivalAt: null,
+        departureAt: null,
+        accommodation: "",
+        dietaryRequirements: "",
+        accessibilityNeeds: "",
+        travelNotes: "",
+      },
+      headshotAssetId: null,
+      status: "accepted",
+      sessions: [
+        {
+          submissionId: "speaker-e2e-submission",
+          title: "Reliable community systems",
+          status: "accepted",
+        },
+      ],
+      taskSummary: { total: 1, completed: 0, overdue: 0 },
+      assets: [],
+      version: 1,
+      updatedAt: "2026-08-08T12:00:00.000Z",
+    },
+  ],
+};
+
+async function installSpeakerWorkspaceFixture(page: Page): Promise<void> {
+  await Promise.all([
+    page.route("**/api/auth/get-session", async (route) => {
+      await route.fulfill({ json: organizerSessionFixture });
+    }),
+    page.route(`**/api/admin/organizations/${ORGANIZATION_ID}/events`, async (route) => {
+      await route.fulfill({ json: { data: [organizerEventFixture] } });
+    }),
+    page.route(
+      `**/api/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/speakers`,
+      async (route) => {
+        await route.fulfill({ json: { data: speakerRosterFixture } });
+      },
+    ),
+  ]);
+}
+
 function buttonHeight(element: HTMLElement): number {
   return element.getBoundingClientRect().height;
 }
 
 function textContrastRatio(element: HTMLElement): number {
-  const parseRgb = (value: string): readonly [number, number, number] => {
-    const channels = value
-      .match(/[\d.]+/g)
-      ?.slice(0, 3)
-      .map(Number);
-    return [channels?.[0] ?? 0, channels?.[1] ?? 0, channels?.[2] ?? 0];
+  const toSrgb = (value: string): readonly [number, number, number] => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d");
+    if (context === null) return [0, 0, 0];
+    context.fillStyle = value;
+    context.fillRect(0, 0, 1, 1);
+    const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+    return [red ?? 0, green ?? 0, blue ?? 0];
   };
   const relativeLuminance = (color: readonly [number, number, number]): number => {
     const [red, green, blue] = color.map((channel) => {
@@ -41,8 +143,8 @@ function textContrastRatio(element: HTMLElement): number {
     backgroundElement = backgroundElement.parentElement;
   }
 
-  const foregroundLuminance = relativeLuminance(parseRgb(getComputedStyle(element).color));
-  const backgroundLuminance = relativeLuminance(parseRgb(backgroundColor));
+  const foregroundLuminance = relativeLuminance(toSrgb(getComputedStyle(element).color));
+  const backgroundLuminance = relativeLuminance(toSrgb(backgroundColor));
   return (
     (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
     (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
@@ -65,13 +167,69 @@ test.beforeEach(async ({ context }) => {
 test("keeps capability-derived account workspaces usable on desktop and mobile", async ({
   page,
 }, testInfo) => {
+  await page.route("**/api/auth/get-session", async (route) => {
+    await route.fulfill({
+      json: {
+        session: { id: "session-1" },
+        user: { id: "user-1", email: "casey@example.com", name: "Casey Morgan" },
+        memberships: [
+          { organizationId: "org-a", role: "owner" },
+          { organizationId: "org-b", role: "reviewer" },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/admin/organizations/org-a/members/organizations", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [
+          { organizationId: "org-a", name: "Civic Design Guild" },
+          { organizationId: "org-b", name: "Open Research Network" },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/admin/evaluations/reviewer/workspace", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          assignments: [
+            {
+              assignment: { status: "assigned" },
+              plan: { eventName: "Research Exchange 2027" },
+            },
+          ],
+        },
+      },
+    });
+  });
+  await page.route("**/api/speaker/portal/contexts", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [
+          {
+            id: "context-1",
+            eventId: "event-1",
+            name: "Human-Centered Summit",
+            capabilities: ["submission-edit"],
+            submissionIds: ["submission-1"],
+            participantIds: [],
+          },
+        ],
+      },
+    });
+  });
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/work");
 
-  await expect(page.getByRole("heading", { name: "Your work" })).toBeVisible();
-  const organizerCard = page.locator('[data-account-capability="organizer"]');
-  const workspaceLink = organizerCard.getByRole("link", { name: "Open workspace" });
+  await expect(page.getByRole("heading", { name: "Where do you want to work?" })).toBeVisible();
+  const organizerCard = page.locator('[data-workspace="organizer"]');
+  const reviewerCard = page.locator('[data-workspace="reviewer"]');
+  const participantCard = page.locator('[data-workspace="participant"]');
+  const workspaceLink = organizerCard.getByRole("link", { name: "Manage events" });
   await expect(organizerCard).toBeVisible();
+  await expect(reviewerCard.getByRole("link", { name: "Review assignments" })).toBeVisible();
+  await expect(participantCard.getByRole("link", { name: "View my proposals" })).toBeVisible();
   await expect(workspaceLink).toHaveAttribute("href", "/admin");
   expect(await workspaceLink.evaluate(buttonHeight)).toBeGreaterThanOrEqual(44);
   await page.screenshot({
@@ -81,7 +239,7 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Your work" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Where do you want to work?" })).toBeVisible();
   expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
   expect(await workspaceLink.evaluate(buttonHeight)).toBeGreaterThanOrEqual(44);
   await page.screenshot({
@@ -261,6 +419,7 @@ test("submission queue keeps the dense table visible beside the selected review"
 test("speaker workspace presents the roster as a compact master-detail table", async ({
   page,
 }, testInfo) => {
+  await installSpeakerWorkspaceFixture(page);
   for (const viewport of [
     { name: "desktop", width: 1440, height: 1000 },
     { name: "tablet", width: 820, height: 1180 },
@@ -321,6 +480,165 @@ test("speaker workspace presents the roster as a compact master-detail table", a
   }
 });
 
+test("speaker workspace reflows at 320px with 200% text zoom", async ({ page }) => {
+  await installSpeakerWorkspaceFixture(page);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto(speakersUrl);
+  await expect(page.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
+
+  await page.locator("html").evaluate(async (element) => {
+    await new Promise<void>((resolve, reject) => {
+      const root = document.documentElement;
+      const body = document.body;
+      let animationFrame = 0;
+      let lastSignature = "";
+      let stableFrames = 0;
+      const observer = new ResizeObserver(() => {
+        stableFrames = 0;
+      });
+      const timeout = window.setTimeout(() => {
+        observer.disconnect();
+        cancelAnimationFrame(animationFrame);
+        reject(new Error("Text-zoom layout did not settle."));
+      }, 2_000);
+      const checkLayout = () => {
+        const signature = [
+          root.clientWidth,
+          root.scrollWidth,
+          body.clientWidth,
+          body.scrollWidth,
+        ].join(":");
+        if (signature === lastSignature) {
+          stableFrames += 1;
+        } else {
+          lastSignature = signature;
+          stableFrames = 0;
+        }
+        if (stableFrames >= 4) {
+          window.clearTimeout(timeout);
+          observer.disconnect();
+          resolve();
+          return;
+        }
+        animationFrame = requestAnimationFrame(checkLayout);
+      };
+      observer.observe(root);
+      observer.observe(body);
+      element.style.fontSize = "200%";
+      animationFrame = requestAnimationFrame(checkLayout);
+    });
+  });
+
+  const layout = await page.evaluate(() => ({
+    bodyWidth: document.body.scrollWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    mainCount: document.querySelectorAll("main").length,
+    viewportWidth: document.documentElement.clientWidth,
+    rootAncestors: (() => {
+      const root = document.querySelector<HTMLElement>(
+        '[class*="speaker-workspace-module"][class*="workspace"]',
+      );
+      const ancestors = [];
+      let element: HTMLElement | null = root;
+      while (element && element !== document.documentElement) {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        ancestors.push({
+          className: element.className,
+          display: style.display,
+          left: Math.round(rect.left),
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          right: Math.round(rect.right),
+          width: Math.round(rect.width),
+        });
+        element = element.parentElement;
+      }
+      return ancestors;
+    })(),
+    internalOverflows: Array.from(
+      document.querySelectorAll<HTMLElement>('[aria-labelledby="speaker-detail-heading"] *'),
+    )
+      .map((element) => ({
+        className: element.className,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        tagName: element.tagName,
+        text: element.textContent?.trim().slice(0, 100),
+      }))
+      .filter((element) => element.scrollWidth > element.clientWidth + 1)
+      .sort(
+        (left, right) =>
+          right.scrollWidth - right.clientWidth - (left.scrollWidth - left.clientWidth),
+      )
+      .slice(0, 12),
+    surfaces: Array.from(document.querySelectorAll<HTMLElement>('[class*="speaker-workspace"]'))
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const ancestors = [];
+        let ancestor: HTMLElement | null = element;
+        while (ancestor && ancestor !== document.documentElement && ancestors.length < 6) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const ancestorStyle = getComputedStyle(ancestor);
+          ancestors.push({
+            className: ancestor.className,
+            left: Math.round(ancestorRect.left),
+            paddingLeft: ancestorStyle.paddingLeft,
+            paddingRight: ancestorStyle.paddingRight,
+            right: Math.round(ancestorRect.right),
+            width: Math.round(ancestorRect.width),
+          });
+          ancestor = ancestor.parentElement;
+        }
+        return {
+          ancestors,
+          className: element.className,
+          display: style.display,
+          gridTemplateColumns: style.gridTemplateColumns,
+          minWidth: style.minWidth,
+          right: Math.round(rect.right),
+          scrollWidth: element.scrollWidth,
+          width: Math.round(rect.width),
+        };
+      })
+      .filter((element) => element.right > document.documentElement.clientWidth + 1),
+    overflowing: Array.from(document.querySelectorAll<HTMLElement>("body *"))
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          className: element.className,
+          containedByTableViewport: element.closest('[class*="speakerTableViewport"]') !== null,
+          display: style.display,
+          gridTemplateColumns: style.gridTemplateColumns,
+          minWidth: style.minWidth,
+          right: Math.round(rect.right),
+          tagName: element.tagName,
+          text: element.textContent?.trim().slice(0, 80),
+          width: Math.round(rect.width),
+        };
+      })
+      .filter(
+        (element) =>
+          (element.right > document.documentElement.clientWidth + 1 || element.right < -1) &&
+          !element.containedByTableViewport,
+      )
+      .sort((left, right) => right.right - left.right)
+      .slice(0, 12),
+  }));
+
+  const overflowMessage = JSON.stringify({
+    overflowing: layout.overflowing.slice(0, 20),
+    rootAncestors: layout.rootAncestors,
+    surfaces: layout.surfaces.slice(0, 20),
+  });
+  expect(layout.bodyWidth, overflowMessage).toBeLessThanOrEqual(320);
+  expect(layout.documentWidth, overflowMessage).toBeLessThanOrEqual(320);
+  expect(layout.viewportWidth).toBe(320);
+  expect(layout.mainCount).toBe(1);
+});
+
 test("reviewer queue opens one focused scorecard without hiding assigned work", async ({
   context,
   page,
@@ -373,7 +691,8 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     await expect(scorecard).toBeFocused();
     await expect(page.locator("#review-workspace")).toHaveCount(1);
     await expect(page.locator("#review-content")).toHaveCount(1);
-    await expect(scorecard.getByRole("heading", { name: "Submit review" })).toHaveCount(1);
+    await expect(scorecard.getByRole("button", { name: "Submit review" })).toHaveCount(1);
+    await expect(scorecard.getByText("Autosave ready", { exact: true })).toBeVisible();
     await expect(scorecard.getByRole("button", { name: "Save draft" })).toHaveCount(0);
     await expect(scorecard.getByRole("button", { name: "Declare conflict" })).toBeVisible();
     await expect(scorecard.getByRole("spinbutton", { name: /Human score/u })).toHaveCount(0);

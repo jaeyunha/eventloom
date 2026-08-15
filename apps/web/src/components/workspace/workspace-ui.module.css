@@ -45,7 +45,12 @@
   align-items: center;
 }
 
+.titleRow {
+  min-width: 0;
+}
+
 .titleBlock {
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -94,7 +99,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
   border-radius: 0.6rem;
   background: color-mix(in srgb, var(--card) 94%, var(--background));
-  box-shadow: 0 1px 2px rgb(15 23 42 / 0.025);
 }
 
 .toolbarGroup {
@@ -165,7 +169,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
   border-radius: 0.65rem;
   background: var(--card);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 0.025);
 }
 
 .surfaceHeader {
