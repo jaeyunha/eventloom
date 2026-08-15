@@ -557,7 +557,10 @@ describe("speaker API adapter", () => {
       title: task.title,
       description: task.description,
       dueAt: task.dueAt,
-      participantIds: ["participant-1", "participant-2"],
+      assignments: [
+        { participantId: "participant-1", submissionId: null },
+        { participantId: "participant-2", submissionId: null },
+      ],
     });
     expect(String(calls[2]?.input)).toBe(
       "https://api.example.test/api/admin/organizations/org-1/events/event-1/speaker-tasks",

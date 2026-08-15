@@ -828,7 +828,15 @@ export function createSpeakerApi(
       });
     },
     assignTasks(input) {
-      return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", input);
+      return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", {
+        title: input.title,
+        description: input.description,
+        dueAt: input.dueAt,
+        assignments: input.participantIds.map((participantId) => ({
+          participantId,
+          submissionId: null,
+        })),
+      });
     },
     previewInvitations(input) {
       return jsonRequest<readonly SpeakerInvitationPreview[]>(
