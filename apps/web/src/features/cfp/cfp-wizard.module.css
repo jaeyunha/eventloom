@@ -235,7 +235,7 @@
   list-style: none;
 }
 
-.desktopStepper > nav > ol > li {
+.desktopStepper :where(nav > ol > li) {
   display: block;
   min-width: 0;
 }
@@ -250,8 +250,8 @@
   border-radius: 1px;
 }
 
-.desktopStepper > nav a,
-.desktopStepper > nav li > div {
+.desktopStepper :where(nav a),
+.desktopStepper :where(nav li > div) {
   min-width: 0;
   gap: var(--space-2);
   grid-template-columns: 2rem minmax(0, 1fr);
@@ -290,7 +290,7 @@
   margin: 0;
 }
 
-.publicShell .railMeta div {
+.railMeta > div {
   display: grid;
   gap: 0.15rem;
 }
@@ -622,11 +622,6 @@
   border: 0;
 }
 
-.fileInput:focus-visible + .fileButton {
-  outline: 3px solid color-mix(in oklab, var(--color-brand) 35%, transparent);
-  outline-offset: 2px;
-}
-
 .fileButton {
   display: inline-flex;
   min-height: 2.75rem;
@@ -658,6 +653,11 @@
 .fileButton[aria-disabled="true"] {
   cursor: wait;
   opacity: 0.65;
+}
+
+.fileInput:focus-visible + .fileButton {
+  outline: 3px solid color-mix(in oklab, var(--color-brand) 35%, transparent);
+  outline-offset: 2px;
 }
 
 .filePickerHint {
@@ -984,6 +984,17 @@
 }
 
 /* -------------------------------------------------------- action footer */
+
+.accountModeSwitch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.accountModeSwitch > * {
+  width: 100%;
+}
 
 .actions {
   position: sticky;
@@ -1376,6 +1387,10 @@
   .backButton,
   .draftButton {
     width: 100%;
+  }
+
+  .actionsSingleSecondary .backButton {
+    grid-column: 1 / -1;
   }
 
   .primaryButton {

@@ -24,7 +24,6 @@ import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 import { useOrganizerEventId } from "./organizer-event-workspace";
 
-const ORGANIZER_STICKY_HEADER_HEIGHT = 52;
 const STICKY_SECTION_GAP = 16;
 const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = [
   "application/pdf",
@@ -216,6 +215,19 @@ const SECTION_LINKS = [
   { id: "public-preview", label: "Public preview" },
 ] as const;
 
+export function resolveCfpEditorStepIndex(input: {
+  currentIndex: number;
+  requestedIndex: number;
+  currentStepValid: boolean;
+}): number {
+  const lastIndex = SECTION_LINKS.length - 1;
+  const requestedIndex = Math.min(lastIndex, Math.max(0, input.requestedIndex));
+  if (requestedIndex > input.currentIndex && !input.currentStepValid) {
+    return input.currentIndex;
+  }
+  return requestedIndex;
+}
+
 const TIMEZONE_OPTIONS = [
   "UTC",
   "America/Los_Angeles",
@@ -346,38 +358,58 @@ export function selectEditorForm(
     })[0];
 }
 
+type CfpEditorLoadResult = {
+  readonly event: CfpEventConfiguration;
+  readonly form: CfpFormConfiguration | undefined;
+};
+
+const inFlightCfpEditorLoads = new WeakMap<CfpApi, Map<string, Promise<CfpEditorLoadResult>>>();
+
 export async function loadCfpEditorConfiguration(
   api: CfpApi,
   input: { readonly organizationId: string; readonly eventId: string; readonly formId?: string },
-): Promise<{
-  readonly event: CfpEventConfiguration;
-  readonly form: CfpFormConfiguration | undefined;
-}> {
-  const event = await api.getEvent({
-    organizationId: input.organizationId,
-    eventId: input.eventId,
-  });
-  if (input.formId !== undefined) {
-    try {
-      const form = await api.getForm({
-        organizationId: input.organizationId,
-        eventId: input.eventId,
-        formId: input.formId,
-      });
-      return { event, form };
-    } catch (error) {
-      if (!(error instanceof CfpApiError) || error.status !== 404) throw error;
-      return { event, form: undefined };
+): Promise<CfpEditorLoadResult> {
+  const cacheKey = `${input.organizationId}\u0000${input.eventId}\u0000${input.formId ?? ""}`;
+  const apiLoads =
+    inFlightCfpEditorLoads.get(api) ?? new Map<string, Promise<CfpEditorLoadResult>>();
+  inFlightCfpEditorLoads.set(api, apiLoads);
+  const existing = apiLoads.get(cacheKey);
+  if (existing !== undefined) return existing;
+
+  const request = (async (): Promise<CfpEditorLoadResult> => {
+    const event = await api.getEvent({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+    });
+    if (input.formId !== undefined) {
+      try {
+        const form = await api.getForm({
+          organizationId: input.organizationId,
+          eventId: input.eventId,
+          formId: input.formId,
+        });
+        return { event, form };
+      } catch (error) {
+        if (!(error instanceof CfpApiError) || error.status !== 404) throw error;
+        return { event, form: undefined };
+      }
     }
+    const forms = await api.listForms({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+    });
+    return {
+      event,
+      form: selectEditorForm(forms, input.organizationId, input.eventId),
+    };
+  })();
+  apiLoads.set(cacheKey, request);
+
+  try {
+    return await request;
+  } finally {
+    if (apiLoads.get(cacheKey) === request) apiLoads.delete(cacheKey);
   }
-  const forms = await api.listForms({
-    organizationId: input.organizationId,
-    eventId: input.eventId,
-  });
-  return {
-    event,
-    form: selectEditorForm(forms, input.organizationId, input.eventId),
-  };
 }
 
 function editorFieldType(kind: string): FieldType {
@@ -1068,8 +1100,10 @@ export function CfpEditor({
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
   const [mobileSectionsOpen, setMobileSectionsOpen] = useState(false);
+  const previewResultRef = useRef<HTMLDivElement | null>(null);
   const sectionNavRef = useRef<HTMLElement | null>(null);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [preparedPublishVersion, setPreparedPublishVersion] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pastCloseAcknowledged, setPastCloseAcknowledged] = useState(false);
@@ -1079,7 +1113,7 @@ export function CfpEditor({
     format: "Workshop · 60 minutes",
     level: "Introductory",
   });
-  const [previewMessage, setPreviewMessage] = useState("");
+  const [previewSubmissionKey, setPreviewSubmissionKey] = useState<string | null>(null);
   const [publicLinkCopied, setPublicLinkCopied] = useState(false);
   const [configurationLoadState, setConfigurationLoadState] = useState<
     "loading" | "ready" | "error"
@@ -1152,44 +1186,6 @@ export function CfpEditor({
       active = false;
     };
   }, [api, eventId, requestedFormId, resolvedOrganizationId]);
-  useEffect(() => {
-    const sections = SECTION_LINKS.map((section) => document.getElementById(section.id)).filter(
-      (section): section is HTMLElement => section !== null,
-    );
-    if (sections.length === 0) return;
-
-    let frame: number | null = null;
-    const updateActiveSection = () => {
-      if (frame !== null) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = null;
-        const navigationHeight = sectionNavRef.current?.getBoundingClientRect().height ?? 0;
-        const threshold = cfpActiveSectionThreshold(
-          ORGANIZER_STICKY_HEADER_HEIGHT,
-          navigationHeight,
-        );
-        let currentId: (typeof SECTION_LINKS)[number]["id"] =
-          (sections[0]?.id as (typeof SECTION_LINKS)[number]["id"] | undefined) ?? "event-details";
-        for (const section of sections) {
-          if (section.getBoundingClientRect().top <= threshold) {
-            currentId = section.id as (typeof SECTION_LINKS)[number]["id"];
-          } else {
-            break;
-          }
-        }
-        setActiveSection(currentId);
-      });
-    };
-
-    updateActiveSection();
-    window.addEventListener("scroll", updateActiveSection, { passive: true });
-    window.addEventListener("resize", updateActiveSection);
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      window.removeEventListener("scroll", updateActiveSection);
-      window.removeEventListener("resize", updateActiveSection);
-    };
-  }, []);
 
   function updateConfiguration<K extends keyof CfpConfiguration>(
     key: K,
@@ -1265,40 +1261,57 @@ export function CfpEditor({
     setSaveState("idle");
   }
 
-  async function handleSave(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  async function saveConfiguration(): Promise<{
+    event: CfpEventConfiguration;
+    form: CfpFormConfiguration;
+  } | null> {
     setSaveError(null);
     if (!resolvedOrganizationId || !resolvedFormId) {
       setSaveState("error");
       setSaveError("An organizer organization and form are required before saving.");
-      return;
+      return null;
     }
     if (dateValidationError !== null) {
       setSaveState("error");
       setSaveError(dateValidationError);
-      return;
+      return null;
     }
     if (closeDatePast && !pastCloseAcknowledged) {
       setSaveState("error");
       setSaveError("A past close date requires explicit organizer confirmation before saving.");
-      return;
+      return null;
     }
     try {
       setSaveState("saving");
-      const { event: savedEvent, form: savedForm } = await persistCfpConfiguration(api, {
+      const saved = await persistCfpConfiguration(api, {
         configuration,
         organizationId: resolvedOrganizationId,
         eventId,
         formId: resolvedFormId,
       });
-      setConfiguration((current) => configurationFromServer(current, savedEvent, savedForm));
+      setConfiguration((current) => configurationFromServer(current, saved.event, saved.form));
       setSaveState("saved");
+      return saved;
     } catch (error) {
       setSaveState("error");
       setSaveError(
         error instanceof Error ? error.message : "The CFP configuration could not be saved.",
       );
+      return null;
     }
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    await saveConfiguration();
+  }
+
+  async function requestPublish(): Promise<void> {
+    setSaveError(null);
+    const saved = await saveConfiguration();
+    if (saved === null) return;
+    setPreparedPublishVersion(saved.form.version);
+    setPublishDialogOpen(true);
   }
   async function handleCloseNow(): Promise<void> {
     setSaveError(null);
@@ -1347,11 +1360,11 @@ export function CfpEditor({
     }
   }
 
-  async function handlePublish(): Promise<void> {
+  async function handlePublish(expectedVersion: number | null): Promise<void> {
     setSaveError(null);
-    if (!resolvedOrganizationId || !resolvedFormId || configuration.formVersion === undefined) {
+    if (!resolvedOrganizationId || !resolvedFormId || expectedVersion === null) {
       setSaveState("error");
-      setSaveError("Save the CFP configuration before publishing.");
+      setSaveError("The CFP configuration must be saved before publishing.");
       return;
     }
     try {
@@ -1360,7 +1373,7 @@ export function CfpEditor({
         organizationId: resolvedOrganizationId,
         eventId,
         formId: resolvedFormId,
-        expectedVersion: configuration.formVersion,
+        expectedVersion,
       });
       setConfiguration((current) => ({
         ...current,
@@ -1368,6 +1381,7 @@ export function CfpEditor({
         status: published.status,
         formVersion: published.version,
       }));
+      setPreparedPublishVersion(null);
       setSaveState("saved");
     } catch (error) {
       setSaveState("error");
@@ -1376,34 +1390,32 @@ export function CfpEditor({
   }
 
   function openSection(id: (typeof SECTION_LINKS)[number]["id"]): void {
-    setActiveSection(id);
-    setMobileSectionsOpen(false);
-    const target = document.getElementById(id);
-    if (!target) return;
-    const isMobile = window.matchMedia("(max-width: 44rem)").matches;
-    const scrollToTarget = () => {
-      const navigationHeight = sectionNavRef.current?.getBoundingClientRect().height ?? 0;
-      const top = Math.max(
-        0,
-        target.getBoundingClientRect().top +
-          window.scrollY -
-          cfpSectionScrollOffset(ORGANIZER_STICKY_HEADER_HEIGHT, navigationHeight),
-      );
-      const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "auto"
-        : "smooth";
-      window.scrollTo({ top, behavior });
-    };
-    if (isMobile) {
-      window.requestAnimationFrame(scrollToTarget);
-    } else {
-      scrollToTarget();
+    const currentIndex = SECTION_LINKS.findIndex((section) => section.id === activeSection);
+    const requestedIndex = SECTION_LINKS.findIndex((section) => section.id === id);
+    const currentSection = document.getElementById(activeSection);
+    const invalidControl = Array.from(
+      currentSection?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+        "input, select, textarea",
+      ) ?? [],
+    ).find((control) => !control.disabled && !control.checkValidity());
+    const nextIndex = resolveCfpEditorStepIndex({
+      currentIndex,
+      requestedIndex,
+      currentStepValid: invalidControl === undefined,
+    });
+    if (nextIndex === currentIndex && requestedIndex > currentIndex) {
+      invalidControl?.reportValidity();
+      return;
     }
+    setActiveSection(SECTION_LINKS[nextIndex]?.id ?? "event-details");
+    setMobileSectionsOpen(false);
+    window.scrollTo({ top: 0, behavior: "auto" });
   }
 
   function handlePreviewSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    setPreviewMessage(configuration.successMessage);
+    setPreviewSubmissionKey(previewStateKey);
+    window.requestAnimationFrame(() => previewResultRef.current?.focus());
   }
 
   const configuredFieldForKey = (key: string) =>
@@ -1462,6 +1474,19 @@ export function CfpEditor({
   const selectedRuleFieldKey = fieldKeyForRuleField(primaryCondition.field, ruleFields);
   const selectedRuleField = ruleFields.find((field) => field.key === selectedRuleFieldKey);
   const selectedRuleOptions = fieldOptionValues(selectedRuleField);
+  const activeSectionIndex = Math.max(
+    0,
+    SECTION_LINKS.findIndex((section) => section.id === activeSection),
+  );
+  const previewStateKey = JSON.stringify({ configuration, previewResponses });
+  const submittedPreviewResult =
+    previewSubmissionKey === previewStateKey
+      ? {
+          confirmationBody: configuration.confirmationBody,
+          confirmationTitle: configuration.confirmationTitle,
+          successMessage: configuration.successMessage,
+        }
+      : null;
 
   if (!resolvedOrganizationId) {
     return (
@@ -1508,9 +1533,17 @@ export function CfpEditor({
   const publicRoute = configuration.slug
     ? getCfpStepRoute(resolvedOrganizationId, configuration.slug, "welcome")
     : null;
+  const publicLinkAvailable = publicRoute !== null && configuration.status === "published";
 
   async function copyPublicLink(): Promise<void> {
-    if (!publicRoute || typeof navigator === "undefined" || !navigator.clipboard) return;
+    if (
+      !publicLinkAvailable ||
+      !publicRoute ||
+      typeof navigator === "undefined" ||
+      !navigator.clipboard
+    ) {
+      return;
+    }
     const publicUrl = new URL(publicRoute, window.location.origin).toString();
     await navigator.clipboard.writeText(publicUrl);
     setPublicLinkCopied(true);
@@ -1528,31 +1561,44 @@ export function CfpEditor({
             accessible public form.
           </p>
         </div>
-        <div className={styles.headerActions}>
-          {publicRoute ? (
-            <>
-              <button className={styles.secondaryButton} type="button" onClick={copyPublicLink}>
-                {publicLinkCopied ? "Copied" : "Copy public link"}
-              </button>
-              <a className={styles.secondaryButton} href={publicRoute}>
-                View public form
-              </a>
-              <span className="sr-only" aria-live="polite">
-                {publicLinkCopied ? "Public CFP link copied to clipboard." : ""}
+        <div className={styles.headerActionArea}>
+          <div className={styles.headerActions}>
+            {publicLinkAvailable && publicRoute ? (
+              <>
+                <button className={styles.secondaryButton} type="button" onClick={copyPublicLink}>
+                  {publicLinkCopied ? "Copied" : "Copy public link"}
+                </button>
+                <a className={styles.secondaryButton} href={publicRoute}>
+                  View public form
+                </a>
+                <span className="sr-only" aria-live="polite">
+                  {publicLinkCopied ? "Public CFP link copied to clipboard." : ""}
+                </span>
+              </>
+            ) : (
+              <span className={styles.publicationHint}>
+                Public link available after publishing.
               </span>
-            </>
+            )}
+            <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
+              Save changes
+            </button>
+            {activeSection === "public-preview" ? (
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => void requestPublish()}
+                disabled={saveState === "saving"}
+              >
+                {saveState === "saving" ? "Checking form…" : "Publish form"}
+              </button>
+            ) : null}
+          </div>
+          {saveState === "error" && saveError ? (
+            <p className={styles.headerActionStatus} role="alert">
+              {saveError}
+            </p>
           ) : null}
-          <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
-            Save changes
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => setPublishDialogOpen(true)}
-            disabled={saveState === "saving"}
-          >
-            Publish form
-          </button>
         </div>
       </header>
 
@@ -1605,12 +1651,14 @@ export function CfpEditor({
           id="cfp-editor-form"
           className={styles.editorForm}
           aria-label="Event and CFP configuration"
+          noValidate
           onSubmit={handleSave}
         >
           <section
             id="event-details"
             className={styles.panel}
             aria-labelledby="event-details-heading"
+            hidden={activeSection !== "event-details"}
           >
             <div className={styles.sectionHeading}>
               <div>
@@ -1831,7 +1879,12 @@ export function CfpEditor({
             </fieldset>
           </section>
 
-          <section id="messaging" className={styles.panel} aria-labelledby="messaging-heading">
+          <section
+            id="messaging"
+            className={styles.panel}
+            aria-labelledby="messaging-heading"
+            hidden={activeSection !== "messaging"}
+          >
             <div className={styles.sectionHeading}>
               <div>
                 <p className={styles.sectionKicker}>02 / applicant experience</p>
@@ -1914,7 +1967,12 @@ export function CfpEditor({
             </div>
           </section>
 
-          <section id="taxonomy" className={styles.panel} aria-labelledby="taxonomy-heading">
+          <section
+            id="taxonomy"
+            className={styles.panel}
+            aria-labelledby="taxonomy-heading"
+            hidden={activeSection !== "taxonomy"}
+          >
             <div className={styles.sectionHeading}>
               <div>
                 <p className={styles.sectionKicker}>03 / organizer vocabulary</p>
@@ -2018,6 +2076,7 @@ export function CfpEditor({
             id="fields-rules"
             className={styles.panel}
             aria-labelledby="fields-rules-heading"
+            hidden={activeSection !== "fields-rules"}
           >
             <div className={styles.sectionHeading}>
               <div>
@@ -2031,9 +2090,6 @@ export function CfpEditor({
             </p>
             <fieldset className={styles.fieldList}>
               <legend>Applicant fields</legend>
-              <button className={styles.secondaryButton} type="button" onClick={addField}>
-                Add custom field
-              </button>
               {configuration.fields.map((field) => (
                 <div className={styles.fieldRuleRow} key={field.id}>
                   <div className={styles.formGrid}>
@@ -2123,6 +2179,9 @@ export function CfpEditor({
                   </button>
                 </div>
               ))}
+              <button className={styles.secondaryButton} type="button" onClick={addField}>
+                Add custom field
+              </button>
             </fieldset>
             {configuration.participantFields && configuration.participantFields.length > 0 ? (
               <fieldset className={styles.fieldList}>
@@ -2291,12 +2350,12 @@ export function CfpEditor({
               <div>
                 <dt>Public URL</dt>
                 <dd>
-                  {publicRoute ? (
+                  {publicLinkAvailable && publicRoute ? (
                     <a href={publicRoute}>
                       /cfp/organizations/{resolvedOrganizationId}/events/{configuration.slug}
                     </a>
                   ) : (
-                    "Unavailable until event scope and slug are loaded."
+                    "Available after this CFP is published."
                   )}
                 </dd>
               </div>
@@ -2344,6 +2403,7 @@ export function CfpEditor({
         id="public-preview"
         className={styles.previewPanel}
         aria-labelledby="public-preview-heading"
+        hidden={activeSection !== "public-preview"}
       >
         <div className={styles.previewPanelHeader}>
           <div>
@@ -2354,7 +2414,7 @@ export function CfpEditor({
               submission.
             </p>
           </div>
-          {publicRoute ? (
+          {publicLinkAvailable && publicRoute ? (
             <a className={styles.secondaryButton} href={publicRoute}>
               Open public route
             </a>
@@ -2365,6 +2425,7 @@ export function CfpEditor({
           <form
             className={styles.publicForm}
             aria-label="Public CFP form preview"
+            onInput={() => setPreviewSubmissionKey(null)}
             onSubmit={handlePreviewSubmit}
           >
             <p className={styles.previewEyebrow}>{configuration.eventName} · Call for proposals</p>
@@ -2457,12 +2518,21 @@ export function CfpEditor({
             <button className={styles.primaryButton} type="submit">
               Submit preview response
             </button>
-            <p className={styles.previewConfirmation}>
-              <strong>{configuration.confirmationTitle}</strong> — {configuration.confirmationBody}
-            </p>
-            <p className={styles.previewSuccess} role="status" aria-live="polite">
-              {previewMessage || configuration.successMessage}
-            </p>
+            {submittedPreviewResult ? (
+              <div
+                ref={previewResultRef}
+                className={styles.previewSubmissionResult}
+                role="status"
+                aria-live="polite"
+                tabIndex={-1}
+              >
+                <p className={styles.previewConfirmation}>
+                  <strong>{submittedPreviewResult.confirmationTitle}</strong> —{" "}
+                  {submittedPreviewResult.confirmationBody}
+                </p>
+                <p className={styles.previewSuccess}>{submittedPreviewResult.successMessage}</p>
+              </div>
+            ) : null}
           </form>
 
           <aside className={styles.previewDetails} aria-label="Public form behavior">
@@ -2488,7 +2558,40 @@ export function CfpEditor({
           </aside>
         </div>
       </section>
-      <AlertDialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
+      <nav className={styles.editorStepActions} aria-label="CFP editor progress">
+        <button
+          className={styles.secondaryButton}
+          disabled={activeSectionIndex === 0}
+          onClick={() => openSection(SECTION_LINKS[activeSectionIndex - 1]?.id ?? "event-details")}
+          type="button"
+        >
+          ← Back
+        </button>
+        <span className={styles.editorStepStatus}>
+          Step {activeSectionIndex + 1} of {SECTION_LINKS.length}
+        </span>
+        {activeSectionIndex < SECTION_LINKS.length - 1 ? (
+          <button
+            className={styles.primaryButton}
+            onClick={() => {
+              const nextSection = SECTION_LINKS[activeSectionIndex + 1];
+              if (nextSection !== undefined) openSection(nextSection.id);
+            }}
+            type="button"
+          >
+            Next →
+          </button>
+        ) : (
+          <span />
+        )}
+      </nav>
+      <AlertDialog
+        open={publishDialogOpen}
+        onOpenChange={(open) => {
+          setPublishDialogOpen(open);
+          if (!open) setPreparedPublishVersion(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Publish this CFP form?</AlertDialogTitle>
@@ -2502,8 +2605,9 @@ export function CfpEditor({
             <AlertDialogAction
               disabled={saveState === "saving"}
               onClick={() => {
+                const expectedVersion = preparedPublishVersion;
                 setPublishDialogOpen(false);
-                void handlePublish();
+                void handlePublish(expectedVersion);
               }}
             >
               Publish form

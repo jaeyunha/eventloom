@@ -8,6 +8,7 @@ import {
 import { createCfpStartupStore } from "./cfp-startup-provider";
 import {
   canResumeCfpSubmission,
+  canSaveCfpDraftAtStep,
   cfpConfirmationEmailMessage,
   cfpReviewAudienceLevel,
   cfpSubmissionErrorKey,
@@ -32,6 +33,14 @@ import {
 } from "./types";
 
 describe("CFP flow", () => {
+  it("starts draft saving only after authentication reaches the proposal", () => {
+    expect(
+      (["welcome", "account", "submission", "participants", "review"] as const).map((step) =>
+        canSaveCfpDraftAtStep(step),
+      ),
+    ).toEqual([false, false, true, true, true]);
+  });
+
   it("keeps published abstract and description controls independent", () => {
     const draft = createEmptyDraft("future-conf");
     draft.submission.description = "Legacy summary";

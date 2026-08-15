@@ -564,6 +564,12 @@ export function shouldAuthenticateCfpAccount(
   return step === "account" && session === null;
 }
 
+type CfpAccountMode = "sign_in" | "sign_up";
+
+export function canSaveCfpDraftAtStep(step: CfpStep): boolean {
+  return step === "submission" || step === "participants" || step === "review";
+}
+
 function configuredCfpIdentity(
   eventSlug: string,
   organizationId?: string,
@@ -1084,6 +1090,7 @@ export function CfpWizard({
   const [verificationState, setVerificationState] = useState<CfpVerificationState | null>(null);
   const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
   const [password, setPassword] = useState("");
+  const [accountMode, setAccountMode] = useState<CfpAccountMode>("sign_in");
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -1736,6 +1743,13 @@ export function CfpWizard({
     if (step === "account" && authenticatedSession) {
       delete nextErrors["account.password"];
     }
+    if (step === "account" && !authenticatedSession && accountMode === "sign_in") {
+      for (const key of Object.keys(nextErrors)) {
+        if (key !== "account.email" && key !== "account.password") {
+          delete nextErrors[key];
+        }
+      }
+    }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
       focusFirstError(nextErrors);
@@ -1748,6 +1762,7 @@ export function CfpWizard({
       ? async (candidateDraft: CfpDraft) => {
           const authentication = await api.authenticateAccount({
             email: candidateDraft.account.email,
+            mode: accountMode,
             password,
             name: `${candidateDraft.account.firstName} ${candidateDraft.account.lastName}`.trim(),
             ...(typeof window === "undefined"
@@ -1992,12 +2007,14 @@ export function CfpWizard({
         ) : null}
         {step === "account" ? (
           <AccountStep
+            accountMode={accountMode}
             authenticatedSession={authenticatedSession}
             confirmedApplicantContext={confirmedApplicantContext}
             draft={draft}
             errors={errors}
             onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
             password={password}
+            setAccountMode={setAccountMode}
             setPassword={setPassword}
             updateDraft={updateDraft}
             verificationState={verificationState}
@@ -2043,7 +2060,9 @@ export function CfpWizard({
           />
         ) : null}
 
-        <div className={styles.actions}>
+        <div
+          className={`${styles.actions} ${step === "account" ? styles.actionsSingleSecondary : ""}`}
+        >
           {step !== "welcome" ? (
             <Button
               className={styles.backButton}
@@ -2058,8 +2077,7 @@ export function CfpWizard({
             <span />
           )}
           <div className={styles.forwardActions}>
-            {step !== "welcome" &&
-            (step !== "account" || process.env.NEXT_PUBLIC_APP_ENV === "local") ? (
+            {canSaveCfpDraftAtStep(step) ? (
               <Button
                 className={styles.draftButton}
                 onClick={() => void saveNow()}
@@ -2085,7 +2103,9 @@ export function CfpWizard({
                 {step === "account"
                   ? authenticatedSession
                     ? "Continue →"
-                    : "Continue with email →"
+                    : accountMode === "sign_in"
+                      ? "Sign in →"
+                      : "Create account →"
                   : null}
                 {step === "submission" ? "Next step →" : null}
                 {step === "participants" ? "Continue to review →" : null}
@@ -2170,20 +2190,24 @@ interface StepFormProps {
 }
 
 function AccountStep({
+  accountMode,
   draft,
   errors,
   confirmedApplicantContext,
   onConfirmApplicantContext,
   password,
+  setAccountMode,
   setPassword,
   updateDraft,
   authenticatedSession,
   verificationState,
   onUseDifferentEmail,
 }: StepFormProps & {
+  accountMode: CfpAccountMode;
   confirmedApplicantContext: boolean;
   onConfirmApplicantContext: () => void;
   password: string;
+  setAccountMode: (mode: CfpAccountMode) => void;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
   verificationState: CfpVerificationState | null;
@@ -2238,7 +2262,9 @@ function AccountStep({
       <h1>
         {authenticatedSession
           ? `Continue as ${authenticatedSession.name}`
-          : "Create account or sign in"}
+          : accountMode === "sign_in"
+            ? "Sign in"
+            : "Create account"}
       </h1>
       {authenticatedSession && !confirmedApplicantContext ? (
         <div className={styles.identityBoundary} role="note">
@@ -2262,9 +2288,31 @@ function AccountStep({
       ) : null}
       {!authenticatedSession ? (
         <p>
-          Enter an existing account password to sign in. If the email is new, the same action
-          creates the account.
+          {accountMode === "sign_in"
+            ? "Enter the email and password for your existing Eventloom account."
+            : "Create an Eventloom account to own this proposal and receive submission updates."}
         </p>
+      ) : null}
+      {!authenticatedSession ? (
+        <fieldset className={styles.accountModeSwitch}>
+          <legend className="sr-only">Account mode</legend>
+          <Button
+            aria-pressed={accountMode === "sign_in"}
+            onClick={() => setAccountMode("sign_in")}
+            type="button"
+            variant={accountMode === "sign_in" ? "default" : "outline"}
+          >
+            Sign in
+          </Button>
+          <Button
+            aria-pressed={accountMode === "sign_up"}
+            onClick={() => setAccountMode("sign_up")}
+            type="button"
+            variant={accountMode === "sign_up" ? "default" : "outline"}
+          >
+            Create account
+          </Button>
+        </fieldset>
       ) : null}
       <div className={styles.sectionPanel}>
         <Field
@@ -2311,95 +2359,101 @@ function AccountStep({
                 />
               )}
             </Field>
-            <ul className={styles.passwordChecks}>
-              <PasswordCheck passed={checks.minimumLength}>
-                Password includes at least 8 characters
-              </PasswordCheck>
-              <PasswordCheck passed={checks.specialCharacter}>
-                Password includes at least 1 special character
-              </PasswordCheck>
-              <PasswordCheck passed={checks.number}>
-                Password includes at least 1 number
-              </PasswordCheck>
-              <PasswordCheck passed={checks.capitalLetter}>
-                Password includes at least 1 capital letter
-              </PasswordCheck>
-            </ul>
+            {accountMode === "sign_up" ? (
+              <ul className={styles.passwordChecks}>
+                <PasswordCheck passed={checks.minimumLength}>
+                  Password includes at least 8 characters
+                </PasswordCheck>
+                <PasswordCheck passed={checks.specialCharacter}>
+                  Password includes at least 1 special character
+                </PasswordCheck>
+                <PasswordCheck passed={checks.number}>
+                  Password includes at least 1 number
+                </PasswordCheck>
+                <PasswordCheck passed={checks.capitalLetter}>
+                  Password includes at least 1 capital letter
+                </PasswordCheck>
+              </ul>
+            ) : null}
           </>
         )}
-        <div className={styles.twoColumns}>
-          <Field
-            error={errors["account.firstName"]}
-            label="First Name"
-            name="account.firstName"
-            required
-          >
-            {(controlProps) => (
-              <>
-                <Input
-                  {...controlProps}
-                  maxLength={255}
-                  onChange={(event) =>
-                    updateDraft((current) => ({
-                      ...current,
-                      account: { ...current.account, firstName: event.target.value },
-                    }))
-                  }
-                  value={draft.account.firstName}
-                />
-                <CharacterCount current={draft.account.firstName.length} maximum={255} />
-              </>
-            )}
-          </Field>
-          <Field
-            error={errors["account.lastName"]}
-            label="Last Name"
-            name="account.lastName"
-            required
-          >
-            {(controlProps) => (
-              <>
-                <Input
-                  {...controlProps}
-                  maxLength={255}
-                  onChange={(event) =>
-                    updateDraft((current) => ({
-                      ...current,
-                      account: { ...current.account, lastName: event.target.value },
-                    }))
-                  }
-                  value={draft.account.lastName}
-                />
-                <CharacterCount current={draft.account.lastName.length} maximum={255} />
-              </>
-            )}
-          </Field>
-        </div>
-        <label className={styles.consent} data-error-key="account.acceptedTerms">
-          <input
-            aria-invalid={Boolean(errors["account.acceptedTerms"])}
-            checked={draft.account.acceptedTerms}
-            id="account.acceptedTerms"
-            onChange={(event) =>
-              updateDraft((current) => ({
-                ...current,
-                account: { ...current.account, acceptedTerms: event.target.checked },
-              }))
-            }
-            type="checkbox"
-          />
-          <span>
-            I agree to the <a href="#terms">Terms of Service</a> and{" "}
-            <a href="#privacy">Privacy Policy</a>.{" "}
-            <span aria-hidden="true" className={styles.required}>
-              *
-            </span>
-          </span>
-        </label>
-        {errors["account.acceptedTerms"] ? (
-          <span className={styles.fieldError} role="alert">
-            {errors["account.acceptedTerms"]}
-          </span>
+        {authenticatedSession || accountMode === "sign_up" ? (
+          <>
+            <div className={styles.twoColumns}>
+              <Field
+                error={errors["account.firstName"]}
+                label="First Name"
+                name="account.firstName"
+                required
+              >
+                {(controlProps) => (
+                  <>
+                    <Input
+                      {...controlProps}
+                      maxLength={255}
+                      onChange={(event) =>
+                        updateDraft((current) => ({
+                          ...current,
+                          account: { ...current.account, firstName: event.target.value },
+                        }))
+                      }
+                      value={draft.account.firstName}
+                    />
+                    <CharacterCount current={draft.account.firstName.length} maximum={255} />
+                  </>
+                )}
+              </Field>
+              <Field
+                error={errors["account.lastName"]}
+                label="Last Name"
+                name="account.lastName"
+                required
+              >
+                {(controlProps) => (
+                  <>
+                    <Input
+                      {...controlProps}
+                      maxLength={255}
+                      onChange={(event) =>
+                        updateDraft((current) => ({
+                          ...current,
+                          account: { ...current.account, lastName: event.target.value },
+                        }))
+                      }
+                      value={draft.account.lastName}
+                    />
+                    <CharacterCount current={draft.account.lastName.length} maximum={255} />
+                  </>
+                )}
+              </Field>
+            </div>
+            <label className={styles.consent} data-error-key="account.acceptedTerms">
+              <input
+                aria-invalid={Boolean(errors["account.acceptedTerms"])}
+                checked={draft.account.acceptedTerms}
+                id="account.acceptedTerms"
+                onChange={(event) =>
+                  updateDraft((current) => ({
+                    ...current,
+                    account: { ...current.account, acceptedTerms: event.target.checked },
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>
+                I agree to the <a href="#terms">Terms of Service</a> and{" "}
+                <a href="#privacy">Privacy Policy</a>.{" "}
+                <span aria-hidden="true" className={styles.required}>
+                  *
+                </span>
+              </span>
+            </label>
+            {errors["account.acceptedTerms"] ? (
+              <span className={styles.fieldError} role="alert">
+                {errors["account.acceptedTerms"]}
+              </span>
+            ) : null}
+          </>
         ) : null}
         {errors["account.auth"] ? (
           <p id="account.auth" className={styles.fieldError} role="alert">

@@ -68,16 +68,10 @@ describe("CFP authenticated session", () => {
 
     await expect(api.getSession()).resolves.toBeNull();
   });
-  it("falls back from invalid credentials to sign-up and hands off verified session data", async () => {
+  it("creates an account explicitly and hands off verified session data", async () => {
     const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
     const api = createCfpApi("https://web.example.com", (async (input, init) => {
       requests.push({ url: String(input), init });
-      if (requests.length === 1) {
-        return Response.json(
-          { error: { code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid credentials." } },
-          { status: 401 },
-        );
-      }
       return Response.json({
         token: "signup-token",
         user: {
@@ -91,6 +85,7 @@ describe("CFP authenticated session", () => {
     await expect(
       api.authenticateAccount({
         email: " Ada@Example.com ",
+        mode: "sign_up",
         password: "StrongPass1!",
         name: "Ada Speaker",
         verificationCallbackUrl:
@@ -106,18 +101,11 @@ describe("CFP authenticated session", () => {
       },
     });
     expect(requests.map((request) => request.url)).toEqual([
-      "https://web.example.com/api/auth/sign-in/email",
       "https://web.example.com/api/auth/sign-up/email",
     ]);
     expect(requests.every((request) => request.init?.credentials === "include")).toBe(true);
     expect(requests[0]?.init?.method).toBe("POST");
-    expect(requests[1]?.init?.method).toBe("POST");
     expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
-      email: "ada@example.com",
-      password: "StrongPass1!",
-      callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
-    });
-    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
       email: "ada@example.com",
       password: "StrongPass1!",
       name: "Ada Speaker",
@@ -125,39 +113,39 @@ describe("CFP authenticated session", () => {
     });
   });
 
-  it("falls back to sign-up when the gateway normalizes an anonymous sign-in", async () => {
+  it("does not fall back to account creation when sign-in fails", async () => {
     let requestCount = 0;
-    const api = createCfpApi("https://web.example.com", (async () => {
+    let requestInit: RequestInit | undefined;
+    const api = createCfpApi("https://web.example.com", (async (_input, init) => {
       requestCount += 1;
-      if (requestCount === 1) {
-        return Response.json(
-          {
-            error: {
-              code: "AUTHENTICATION_REQUIRED",
-              message: "The authentication request could not be completed.",
-            },
+      requestInit = init;
+      return Response.json(
+        {
+          error: {
+            code: "AUTHENTICATION_REQUIRED",
+            message: "The authentication request could not be completed.",
           },
-          { status: 401 },
-        );
-      }
-      return Response.json({
-        token: "signup-token",
-        user: {
-          email: "speaker@example.com",
-          name: "New Speaker",
-          emailVerified: true,
         },
-      });
+        { status: 401 },
+      );
     }) as typeof fetch);
 
     await expect(
       api.authenticateAccount({
         email: "speaker@example.com",
+        mode: "sign_in",
         password: "StrongPass1!",
         name: "New Speaker",
+        verificationCallbackUrl:
+          "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
       }),
-    ).resolves.toMatchObject({ status: "authenticated" });
-    expect(requestCount).toBe(2);
+    ).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+    expect(requestCount).toBe(1);
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      email: "speaker@example.com",
+      password: "StrongPass1!",
+      callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
+    });
   });
 
   it("fails closed when a successful sign-in omits a usable verified session", async () => {
@@ -170,6 +158,7 @@ describe("CFP authenticated session", () => {
     await expect(
       api.authenticateAccount({
         email: "ada@example.com",
+        mode: "sign_in",
         password: "StrongPass1!",
         name: "Ada Speaker",
       }),
@@ -198,6 +187,7 @@ describe("CFP authenticated session", () => {
     await expect(
       api.authenticateAccount({
         email: "ada@example.com",
+        mode: "sign_up",
         password: "StrongPass1!",
         name: "Ada Speaker",
       }),
@@ -507,6 +497,7 @@ describe("CFP mutation schema versions", () => {
       );
       const pending = api.authenticateAccount({
         email: "speaker@example.com",
+        mode: "sign_in",
         password: "Password1!",
         name: "Fresh Speaker",
       });

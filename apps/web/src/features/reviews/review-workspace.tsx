@@ -31,6 +31,7 @@ export { createEvaluationPlan } from "./workspace/organizer-create-evaluation-pl
 export type { CreateEvaluationPlanFormInput } from "./workspace/organizer-create-evaluation-plan-form-input";
 export { loadCreatedOrganizerPlan } from "./workspace/organizer-load-created-organizer-plan";
 export { loadOrganizerData } from "./workspace/organizer-load-organizer-data";
+export { loadRoundAggregates } from "./workspace/organizer-load-round-aggregates";
 export { mapRoundAggregates } from "./workspace/organizer-map-round-aggregates";
 export { mapSeedRoundAggregates } from "./workspace/organizer-map-seed-round-aggregates";
 export { OrganizerDetailStatus } from "./workspace/organizer-organizer-detail-status";
