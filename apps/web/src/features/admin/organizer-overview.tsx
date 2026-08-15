@@ -761,8 +761,8 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
           <p className={styles.muted} role="status">
             No events are available for this organization yet.
           </p>
-          <Link className={styles.primaryButton} href="/admin/events">
-            Manage events
+          <Link className={styles.primaryButton} href="/admin/events?create=1">
+            Create event
           </Link>
         </div>
       </div>
@@ -2416,6 +2416,7 @@ export interface OrganizerEventsViewProps {
   readonly state: OrganizerEventsViewState;
   readonly busy?: boolean;
   readonly notice?: string | null;
+  readonly initialEditor?: "create" | undefined;
   readonly onRetry?: (() => void) | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
@@ -2493,6 +2494,7 @@ function OrganizerEventsLoaded({
   data,
   busy,
   notice,
+  initialEditor,
   onCreate,
   onUpdate,
   onArchive,
@@ -2500,6 +2502,7 @@ function OrganizerEventsLoaded({
   readonly data: OrganizerEventsData;
   readonly busy: boolean;
   readonly notice: string | null;
+  readonly initialEditor?: "create" | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
     | ((
@@ -2510,7 +2513,7 @@ function OrganizerEventsLoaded({
     | undefined;
   readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }>) {
-  const [editor, setEditor] = useState<"create" | string | null>(null);
+  const [editor, setEditor] = useState<"create" | string | null>(initialEditor ?? null);
   const [view, setView] = useState<"calendar" | "list">("calendar");
   const [visibleMonth, setVisibleMonth] = useState(() => initialCalendarMonth(data.events));
   const [archiveTarget, setArchiveTarget] = useState<OrganizerEventRecord | null>(null);
@@ -2892,6 +2895,7 @@ export function OrganizerEventsView({
   state,
   busy = false,
   notice = null,
+  initialEditor,
   onRetry,
   onCreate,
   onUpdate,
@@ -2926,6 +2930,7 @@ export function OrganizerEventsView({
         data={data}
         busy={busy}
         notice={notice}
+        {...(initialEditor === undefined ? {} : { initialEditor })}
         onCreate={authoritative ? onCreate : undefined}
         onUpdate={authoritative ? onUpdate : undefined}
         onArchive={authoritative ? onArchive : undefined}
@@ -2945,9 +2950,11 @@ function organizerEventsErrorMessage(error: unknown): string {
 export function OrganizerEvents({
   api: providedApi,
   config: providedConfig,
+  initialEditor,
 }: Readonly<{
   readonly api?: OrganizerEventsApi;
   readonly config?: OrganizerOverviewConfigResult;
+  readonly initialEditor?: "create" | undefined;
 }> = {}) {
   const authenticatedOrganizationId = useOrganizerOrganizationId();
   const config = useMemo(
@@ -3145,6 +3152,7 @@ export function OrganizerEvents({
       state={state}
       busy={busy}
       notice={notice}
+      {...(initialEditor === undefined ? {} : { initialEditor })}
       onRetry={() => void load()}
       onCreate={api ? create : undefined}
       onUpdate={api ? update : undefined}

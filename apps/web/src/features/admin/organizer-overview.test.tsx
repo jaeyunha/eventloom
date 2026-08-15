@@ -36,6 +36,7 @@ import {
   resolveOrganizerOverviewConfig,
   validateOrganizerEventForm,
 } from "./organizer-overview";
+import { organizerRouteResolverHref } from "./organizer-route-resolver";
 
 const mockedPathname = vi.hoisted(() => ({ value: "/admin" }));
 const mockedRouter = vi.hoisted(() => ({ push: vi.fn() }));
@@ -179,6 +180,7 @@ describe("organizer overview", () => {
     expect(output).toContain("No events yet");
     expect(output).toContain("No events are available for this organization yet.");
     expect(output).toContain("Manage events");
+    expect(output).toContain('href="/admin/events?create=1"');
   });
 
   it("renders the accessible dashboard skeleton and understandable failure states", () => {
@@ -439,6 +441,29 @@ describe("organizer overview", () => {
     expect(output).not.toContain("Organization events and their current status");
     expect(output).not.toContain(">Agenda<");
   });
+
+  it("opens the event creation form from an explicit initial state", () => {
+    const output = renderToStaticMarkup(
+      createElement(OrganizerEventsView, {
+        state: {
+          status: "loaded",
+          data: {
+            organizationId: eventRecord.organizationId,
+            events: [],
+          },
+        },
+        initialEditor: "create",
+        onCreate: async () => undefined,
+        onUpdate: async () => undefined,
+      }),
+    );
+
+    expect(output).toContain('id="organizer-event-editor"');
+    expect(output).toContain('name="name"');
+    expect(output).toContain('aria-controls="organizer-event-editor"');
+    expect(output).toContain('aria-expanded="true"');
+  });
+
   it("retains event records after refresh failure and disables stale mutations", () => {
     const output = renderToStaticMarkup(
       createElement(OrganizerEventsView, {
@@ -644,6 +669,12 @@ describe("organizer overview", () => {
   });
 });
 describe("admin navigation", () => {
+  it("preserves the create-event intent when resolving the organization route", () => {
+    expect(organizerRouteResolverHref("org-1", "events", true)).toBe(
+      "/admin/organizations/org-1/events?create=1",
+    );
+  });
+
   it("exposes every qualified event workflow area in order with working route shapes", () => {
     const eventContext = { organizationId: "org/live", eventId: "event/live" };
     const items = eventNavigationFor(eventContext);

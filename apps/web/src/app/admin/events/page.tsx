@@ -1,5 +1,10 @@
 import { OrganizerRouteResolver } from "@/features/admin/organizer-route-resolver";
 
-export default function AdminEventsPage() {
-  return <OrganizerRouteResolver destination="events" />;
+export default async function AdminEventsPage({
+  searchParams,
+}: {
+  readonly searchParams: Promise<{ readonly create?: string | readonly string[] }>;
+}) {
+  const params = await searchParams;
+  return <OrganizerRouteResolver createEvent={params.create === "1"} destination="events" />;
 }
