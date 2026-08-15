@@ -31,14 +31,14 @@ function assetsForTask(task: PortalTask, assets: readonly PortalAsset[]): Portal
 }
 
 export type TaskAssetResolution = {
-  status: "empty" | "ready" | "pending" | "rejected" | "missing-metadata" | "conflict";
-  assets: readonly PortalAsset[];
-  pointers: AssetPointerSnapshot;
-  latest: PortalAsset | undefined;
-  current: PortalAsset | undefined;
-  approved: PortalAsset | undefined;
-  released: PortalAsset | undefined;
-  error: string | null;
+  readonly status: "empty" | "ready" | "pending" | "rejected" | "missing-metadata" | "conflict";
+  readonly assets: readonly PortalAsset[];
+  readonly pointers: AssetPointerSnapshot;
+  readonly latest: PortalAsset | undefined;
+  readonly current: PortalAsset | undefined;
+  readonly approved: PortalAsset | undefined;
+  readonly released: PortalAsset | undefined;
+  readonly error: string | null;
 };
 
 export function resolveTaskAsset(
