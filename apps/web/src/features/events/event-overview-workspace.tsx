@@ -9,6 +9,7 @@ import {
   WorkspaceHeader,
   WorkspaceSurface,
 } from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { EventOverviewContent } from "./event-overview-content";
 import {
   type EventOverviewData,
@@ -29,7 +30,11 @@ type LoadState =
 
 export { loadEventOverviewData, loadEventOverviewName };
 
-export function EventOverviewWorkspace({ organizationId, eventId }: EventOverviewWorkspaceProps) {
+export function EventOverviewWorkspace({
+  organizationId,
+  eventId: fallbackEventId,
+}: EventOverviewWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const [reloadToken, setReloadToken] = useState(0);
   const [state, setState] = useState<LoadState>({ status: "loading" });
 

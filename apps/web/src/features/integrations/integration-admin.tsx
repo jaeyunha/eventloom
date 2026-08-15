@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button } from "../../components/ui";
 import { SettingsShell } from "@/components/workspace/settings-ui";
 import {
   WorkspaceBreadcrumb,
@@ -9,6 +8,8 @@ import {
   WorkspaceMetaItem,
   workspaceClassNames,
 } from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { Button } from "../../components/ui";
 import {
   createIntegrationAdminApi,
   type IntegrationAdminApi,
@@ -66,12 +67,13 @@ function messageFrom(error: unknown): string {
 }
 
 export function IntegrationAdmin({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
   section,
   initialSnapshot,
   api: injectedApi,
 }: IntegrationAdminProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(() => injectedApi ?? createIntegrationAdminApi(""), [injectedApi]);
   const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
     initialSnapshot ?? null,

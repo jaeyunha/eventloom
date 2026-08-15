@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   Accordion,
   AccordionContent,
@@ -1134,9 +1135,10 @@ function ProfileFields({
 
 export function SpeakerWorkspace({
   organizationId,
-  eventId,
+  eventId: fallbackEventId,
   api: providedApi,
 }: SpeakerWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const [api, setApi] = useState<SpeakerApi | null>(providedApi ?? null);
   const [activeView, setActiveView] = useState<"roster" | "tasks" | "email">("roster");
   const [roster, setRoster] = useState<SpeakerRosterEnvelope | null>(null);

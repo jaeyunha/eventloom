@@ -51,6 +51,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createReportsApi,
   type ReportDefinition,
@@ -1367,9 +1368,10 @@ export function DirtySelectionDialog({
 
 export function ReportsWorkspace({
   organizationId,
-  eventId,
+  eventId: fallbackEventId,
   baseUrl: explicitBaseUrl,
 }: ReportsWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const baseUrl = apiBaseUrl(explicitBaseUrl);
   const testMode = process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test";
   const initialDefinition = seededDefinition(eventId);

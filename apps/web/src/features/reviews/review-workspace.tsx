@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -1757,12 +1758,13 @@ export async function loadCreatedOrganizerPlan(
 }
 
 export function ReviewWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   mode = "organizer",
   initialState,
   organizationId: explicitOrganizationId,
   memberApi: providedMemberApi,
 }: ReviewWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const baseUrl = apiBaseUrl();
   const reviewerOrganizationId = configuredOrganizationId(explicitOrganizationId);
   const initialStateProvided = initialState !== undefined;

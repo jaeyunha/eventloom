@@ -16,6 +16,7 @@ import {
   WorkspaceMetaItem,
   WorkspaceSurface,
 } from "@/components/workspace/workspace-ui";
+import { useOrganizerEventSlug } from "@/features/admin/organizer-event-workspace";
 import type { EventOverviewData } from "./event-overview-data";
 import {
   eventOverviewAttention,
@@ -109,7 +110,8 @@ export function EventOverviewContent({
   organizationId: string;
   eventId: string;
 }>) {
-  const base = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`;
+  const eventSlug = useOrganizerEventSlug(eventId);
+  const base = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}`;
   const eventStatus = data.event.status.charAt(0).toUpperCase() + data.event.status.slice(1);
   return (
     <>

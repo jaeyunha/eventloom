@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import {
   AlertDialog,
@@ -299,7 +300,12 @@ function CapabilityUnavailable({
   );
 }
 
-export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: RemixWorkspaceProps) {
+export function RemixWorkspace({
+  organizationId,
+  eventId: fallbackEventId,
+  api: apiOverride,
+}: RemixWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const scopeValid = organizationId.trim().length > 0 && eventId.trim().length > 0;
   const api = useMemo<RemixApi | null>(() => {
     if (apiOverride !== undefined) return apiOverride;

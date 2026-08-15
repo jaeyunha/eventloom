@@ -19,6 +19,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "@/features/admin/admin-shell.module.css";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import workspaceStyles from "./embed-workspace.module.css";
 
 export type EmbedWidgetId = "sessions" | "speakers" | "agenda" | "itinerary" | "gallery";
@@ -2822,10 +2823,11 @@ async function loadEmbedPublication(
 
 export function EmbedWorkspace({
   organizationId,
-  eventId,
+  eventId: fallbackEventId,
   api: providedApi,
   publicOrigin,
 }: EmbedWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const scopeKey = workspaceScopeKey(organizationId, eventId);
   const [state, setState] = useState<EmbedLoadState>({ status: "loading", scopeKey });
   const [loadedApi, setLoadedApi] = useState<Pick<

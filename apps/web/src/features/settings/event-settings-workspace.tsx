@@ -55,6 +55,10 @@ import {
   WorkspaceMetaItem,
 } from "@/components/workspace/workspace-ui";
 import {
+  useOrganizerEventId,
+  useOrganizerEventSlug,
+} from "@/features/admin/organizer-event-workspace";
+import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
   defaultSessionStatuses,
@@ -312,6 +316,7 @@ function SettingsSectionNavigation({
   section: EventSettingsSection;
 }>) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const eventSlug = useOrganizerEventSlug(eventId);
 
   const groups = useMemo(() => {
     const grouped = new Map<string, (typeof eventSettingsSections)[number][]>();
@@ -330,7 +335,7 @@ function SettingsSectionNavigation({
         <li key={item.id}>
           <Link
             className={`${styles.navigationLink} ${section === item.id ? styles.navigationLinkActive : ""}`}
-            href={eventSettingsSectionHref(organizationId, eventId, item.id)}
+            href={eventSettingsSectionHref(organizationId, eventSlug, item.id)}
             aria-current={section === item.id ? "page" : undefined}
             onClick={() => setMobileOpen(false)}
           >
@@ -1671,8 +1676,9 @@ export function eventSettingsWorkspaceScopeKey(organizationId: string, eventId: 
 }
 
 export function EventSettingsWorkspace(props: Readonly<EventSettingsWorkspaceProps>) {
-  const scopeKey = eventSettingsWorkspaceScopeKey(props.organizationId, props.eventId);
-  return <ScopedEventSettingsWorkspace key={scopeKey} {...props} />;
+  const eventId = useOrganizerEventId(props.eventId);
+  const scopeKey = eventSettingsWorkspaceScopeKey(props.organizationId, eventId);
+  return <ScopedEventSettingsWorkspace key={scopeKey} {...props} eventId={eventId} />;
 }
 
 function ScopedEventSettingsWorkspace({

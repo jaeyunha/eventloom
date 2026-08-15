@@ -44,6 +44,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { createScopedReadFlightCoordinator } from "@/lib/scoped-read-flight";
 import {
   COMMUNICATION_AUDIENCES,
@@ -1831,7 +1832,7 @@ export function CommunicationsWorkspaceView({
 }
 
 export function CommunicationsWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
   api: providedApi,
   initialTemplates,
@@ -1842,6 +1843,7 @@ export function CommunicationsWorkspace({
   initialReminderFacts = null,
   providerState: initialProviderState = "unknown",
 }: CommunicationsWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(
     () => providedApi ?? createCommunicationApi("", organizationId),
     [organizationId, providedApi],
