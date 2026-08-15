@@ -3925,6 +3925,51 @@ describe("SpeakerService private asset authorization", () => {
     });
   });
 
+  it("accepts standard headshot, presentation, and supporting-document formats", async () => {
+    const { service } = createFixture();
+
+    const headshot = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      kind: "headshot",
+      fileName: "speaker.webp",
+      contentType: "image/webp",
+      sizeBytes: 100,
+    });
+    const slides = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "slides-task",
+      kind: "slides",
+      fileName: "conference-slides.pptx",
+      contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      sizeBytes: 100,
+    });
+    const supportingDocument = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      kind: "supporting_file",
+      fileName: "speaker-notes.docx",
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      sizeBytes: 100,
+    });
+
+    expect([headshot.asset, slides.asset, supportingDocument.asset]).toMatchObject([
+      { kind: "headshot", contentType: "image/webp" },
+      {
+        kind: "slides",
+        contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      },
+      {
+        kind: "supporting_file",
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
+    ]);
+  });
+
   it("enforces participant, task, media-type, and size policies before issuing access", async () => {
     const { gateway, service } = createFixture();
 

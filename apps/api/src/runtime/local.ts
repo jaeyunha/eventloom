@@ -1,4 +1,4 @@
-import type { ApiScope } from "@eventloom/contracts";
+import { type ApiScope, standardPresentationUploadMimeTypes } from "@eventloom/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaCatalogSynchronizer } from "../features/agenda/catalog-sync";
 import { AgendaEngine, AgendaError } from "../features/agenda/engine";
@@ -2319,11 +2319,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         type: featured ? "upload" : "form",
         title: featured ? "Upload your presentation slides" : "Complete your speaker profile",
         description: featured
-          ? "Upload the final PDF slides for your accepted session."
+          ? "Upload the final PDF or PowerPoint slides for your accepted session."
           : "Review your public name and biography before the program is published.",
         ...(featured
           ? {
-              allowedMimeTypes: ["application/pdf"],
+              allowedMimeTypes: [...standardPresentationUploadMimeTypes],
               maxBytes: 25 * 1024 * 1024,
               acceptedAssetKinds: ["slides" as const],
             }

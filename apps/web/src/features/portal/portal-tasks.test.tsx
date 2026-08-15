@@ -88,6 +88,24 @@ describe("portal task deliverable helpers", () => {
       valid: false,
       error: expect.stringContaining("limit"),
     });
+
+    const friendlyPolicy = getTaskUploadPolicy(
+      task({
+        allowedMimeTypes: [
+          "application/pdf",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "application/vnd.ms-powerpoint",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "image/*",
+        ],
+        maxBytes: 1_000,
+      }),
+    );
+    expect(validateTaskUpload({ type: "text/html", size: 100 }, friendlyPolicy)).toEqual({
+      valid: false,
+      error: "This file type is not allowed. Accepted types: PDF, Word, PowerPoint, Images.",
+    });
   });
 
   it("distinguishes participant tasks from session tasks and reports missing accepted sessions", () => {

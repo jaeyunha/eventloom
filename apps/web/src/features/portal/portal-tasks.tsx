@@ -1,5 +1,6 @@
 "use client";
 
+import { formatUploadMimeTypes } from "@eventloom/contracts";
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react";
 import {
   filterTasks,
@@ -263,7 +264,7 @@ export function validateTaskUpload(
   if (!mimeTypeAllowed(file.type, policy.allowedMimeTypes)) {
     return {
       valid: false,
-      error: `This file type is not allowed. Accepted types: ${policy.allowedMimeTypes.join(", ")}.`,
+      error: `This file type is not allowed. Accepted types: ${formatUploadMimeTypes(policy.allowedMimeTypes)}.`,
     };
   }
   if (!Number.isFinite(file.size) || file.size < 0 || file.size > policy.maxBytes) {
@@ -1046,7 +1047,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
               {!uploadKind
                 ? "Upload unavailable: the server did not specify an accepted file kind."
                 : policy.valid
-                  ? `Accepted types: ${policy.allowedMimeTypes.join(", ")}. Maximum: ${formatPortalFileSize(policy.maxBytes)}.`
+                  ? `Accepted types: ${formatUploadMimeTypes(policy.allowedMimeTypes)}. Maximum: ${formatPortalFileSize(policy.maxBytes)}.`
                   : policy.error}
             </small>
           </label>

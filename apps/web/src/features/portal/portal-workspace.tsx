@@ -1,5 +1,12 @@
 "use client";
 
+import {
+  formatUploadMimeTypes,
+  standardImageUploadMimeTypes,
+  standardPresentationUploadMimeTypes,
+  standardSupportingFileUploadMimeTypes,
+  standardUploadMaximumBytes,
+} from "@eventloom/contracts";
 import { type FormEvent, Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import styles from "./portal.module.css";
 import {
@@ -40,6 +47,23 @@ type PortalUploadTask = PortalTask & {
   readonly allowedMimeTypes?: readonly string[];
   readonly maxBytes?: number;
   readonly maxSizeBytes?: number;
+};
+
+const workspaceUploadPolicies: Readonly<
+  Record<PortalAsset["kind"], { mimeTypes: readonly string[]; maxBytes: number }>
+> = {
+  headshot: {
+    mimeTypes: standardImageUploadMimeTypes,
+    maxBytes: standardUploadMaximumBytes.headshot,
+  },
+  slides: {
+    mimeTypes: standardPresentationUploadMimeTypes,
+    maxBytes: standardUploadMaximumBytes.slides,
+  },
+  supporting_file: {
+    mimeTypes: standardSupportingFileUploadMimeTypes,
+    maxBytes: standardUploadMaximumBytes.supporting_file,
+  },
 };
 
 function uploadTaskPolicy(task: PortalTask): PortalUploadTask {
@@ -734,6 +758,7 @@ function FilesWorkspace() {
   const [commentDraft, setCommentDraft] = useState("");
   const families = useMemo(() => groupPortalAssetVersions(workspace.assets), [workspace.assets]);
   const selectedFamily = families.find((family) => family.id === selectedFamilyId);
+  const uploadPolicy = workspaceUploadPolicies[kind];
   useEffect(() => {
     if (!context) return;
     setSelectedFile(null);
@@ -842,6 +867,7 @@ function FilesWorkspace() {
               onChange={(event) => {
                 const nextKind = event.currentTarget.value as PortalAsset["kind"];
                 setKind(nextKind);
+                setSelectedFile(null);
                 if (selectedFamily && selectedFamily.kind !== nextKind) setSelectedFamilyId("");
               }}
             >
@@ -855,9 +881,14 @@ function FilesWorkspace() {
             <input
               required
               type="file"
+              accept={uploadPolicy.mimeTypes.join(",")}
               onChange={(event) => setSelectedFile(event.currentTarget.files?.[0] ?? null)}
             />
-            <small>{selectedFile?.name ?? "No file selected"}</small>
+            <small>
+              Accepted: {formatUploadMimeTypes(uploadPolicy.mimeTypes)}. Maximum:{" "}
+              {formatBytes(uploadPolicy.maxBytes)}.
+              {selectedFile ? ` Selected: ${selectedFile.name}.` : ""}
+            </small>
           </label>
           <button
             className={styles.primaryButton}
@@ -923,6 +954,9 @@ function FilesWorkspace() {
                     </span>
                     <span>
                       <strong>Size</strong> {formatBytes(displayAsset.sizeBytes)}
+                    </span>
+                    <span>
+                      <strong>Format</strong> {displayAsset.contentType}
                     </span>
                     <span>
                       <strong>Uploaded</strong> {formatDate(latestAsset.createdAt)}
@@ -1038,7 +1072,7 @@ export function AssetDetails({
           return (
             <li key={version.id}>
               <span>
-                {`Version ${version.version ?? "?"} · ${version.fileName} · ${portalFileStatus(version)} · ${formatDate(version.createdAt)}`}
+                {`Version ${version.version ?? "?"} · ${version.fileName} · ${version.contentType} · ${formatBytes(version.sizeBytes)} · ${portalFileStatus(version)} · ${formatDate(version.createdAt)}`}
               </span>{" "}
               {pointerLabels.length > 0 ? (
                 pointerLabels.map((label) => <strong key={label}> {label}</strong>)
@@ -1140,6 +1174,7 @@ function UploadTaskCard({ task }: Readonly<{ task: PortalTask }>) {
   const acceptedKinds = policyTask.acceptedAssetKinds ?? [];
   const kind = acceptedKinds[0];
   const allowedMimeTypes = policyTask.allowedMimeTypes ?? [];
+  const acceptedTypeSummary = formatUploadMimeTypes(allowedMimeTypes);
   const maxBytes = policyTask.maxBytes ?? policyTask.maxSizeBytes;
   const busy = busyTaskIds.has(task.id);
   const canUpload =
@@ -1162,7 +1197,7 @@ function UploadTaskCard({ task }: Readonly<{ task: PortalTask }>) {
       return;
     }
     if (allowedMimeTypes.length > 0 && !mimeMatches(selectedFile, allowedMimeTypes)) {
-      setFormError(`This task accepts ${allowedMimeTypes.join(", ")} only.`);
+      setFormError(`This task accepts ${acceptedTypeSummary} only.`);
       return;
     }
     if (maxBytes !== undefined && selectedFile.size > maxBytes) {
@@ -1209,7 +1244,7 @@ function UploadTaskCard({ task }: Readonly<{ task: PortalTask }>) {
       {task.description ? <p className={styles.taskDescription}>{task.description}</p> : null}
       <p className={styles.toolbarDescription}>
         Accepted file type{allowedMimeTypes.length === 1 ? "" : "s"}:{" "}
-        {allowedMimeTypes.length > 0 ? allowedMimeTypes.join(", ") : "Configured by the server"}.
+        {allowedMimeTypes.length > 0 ? acceptedTypeSummary : "Configured by the server"}.
         {maxBytes === undefined ? "" : ` Maximum size: ${formatBytes(maxBytes)}.`}
         {acceptedKinds.length > 0 ? ` File kind: ${acceptedKinds.join(", ")}.` : ""}
       </p>

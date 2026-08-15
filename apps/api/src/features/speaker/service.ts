@@ -1,3 +1,9 @@
+import {
+  standardImageUploadMimeTypes,
+  standardPresentationUploadMimeTypes,
+  standardSupportingFileUploadMimeTypes,
+  standardUploadMaximumBytes,
+} from "@eventloom/contracts";
 import { allSpeakerPortalCapabilities, capabilityAllows } from "./capabilities";
 import type {
   FinalizeSpeakerAssetCommand,
@@ -304,22 +310,18 @@ const uploadPolicies: Record<
   { maximumBytes: number; contentTypes: ReadonlySet<string>; stripMetadata: boolean }
 > = {
   headshot: {
-    maximumBytes: 5 * 1024 * 1024,
-    contentTypes: new Set(["image/jpeg", "image/png", "image/webp"]),
+    maximumBytes: standardUploadMaximumBytes.headshot,
+    contentTypes: new Set(standardImageUploadMimeTypes),
     stripMetadata: true,
   },
   slides: {
-    maximumBytes: 100 * 1024 * 1024,
-    contentTypes: new Set([
-      "application/pdf",
-      "application/vnd.ms-powerpoint",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ]),
+    maximumBytes: standardUploadMaximumBytes.slides,
+    contentTypes: new Set(standardPresentationUploadMimeTypes),
     stripMetadata: false,
   },
   supporting_file: {
-    maximumBytes: 25 * 1024 * 1024,
-    contentTypes: new Set(["application/pdf", "image/jpeg", "image/png", "text/plain"]),
+    maximumBytes: standardUploadMaximumBytes.supporting_file,
+    contentTypes: new Set(standardSupportingFileUploadMimeTypes),
     stripMetadata: false,
   },
 };

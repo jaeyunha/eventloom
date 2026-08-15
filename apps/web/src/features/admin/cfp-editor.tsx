@@ -1,5 +1,6 @@
 "use client";
 
+import { standardFileRequestMimeTypes } from "@eventloom/contracts";
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
@@ -25,12 +26,7 @@ import styles from "./cfp-editor.module.css";
 
 const ORGANIZER_STICKY_HEADER_HEIGHT = 52;
 const STICKY_SECTION_GAP = 16;
-const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = [
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-  "text/plain",
-] as const;
+const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = standardFileRequestMimeTypes;
 const DEFAULT_FILE_REQUEST_MAX_BYTES = 25 * 1024 * 1024;
 
 export function cfpSectionScrollOffset(

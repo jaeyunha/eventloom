@@ -407,7 +407,17 @@ describe("CFP editor", () => {
       kind: "file_request",
       required: true,
       fileRequest: {
-        allowedMimeTypes: ["application/pdf", "image/jpeg", "image/png", "text/plain"],
+        allowedMimeTypes: [
+          "application/pdf",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "application/vnd.ms-powerpoint",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "text/plain",
+        ],
         maxBytes: 25 * 1024 * 1024,
         required: true,
         owner: "submission",

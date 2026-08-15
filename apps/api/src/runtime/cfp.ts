@@ -1,3 +1,4 @@
+import { standardPresentationUploadMimeTypes } from "@eventloom/contracts";
 import type {
   AuditEntry,
   CfpForm,
@@ -116,7 +117,7 @@ function localFixtureForm(tenantId: string, eventId: string, formId = "main-cfp"
         required: false,
         options: [],
         fileRequest: {
-          allowedMimeTypes: ["application/pdf"],
+          allowedMimeTypes: [...standardPresentationUploadMimeTypes],
           maxBytes: 10 * 1024 * 1024,
           required: false,
           owner: "submission",
