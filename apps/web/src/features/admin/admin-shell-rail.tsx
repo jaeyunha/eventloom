@@ -63,7 +63,7 @@ export function AdminShellRail({ controller }: Readonly<{ controller: AdminShell
         />
       </div>
 
-      <div className={styles.railBody}>
+      <div className={styles.railBody} data-scroll-region="sidebar-navigation">
         {eventContext !== null && currentEventName !== null ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -111,6 +111,7 @@ export function AdminShellRail({ controller }: Readonly<{ controller: AdminShell
               <DesktopNavigation
                 ariaLabel={`${group.label} organizer navigation`}
                 items={workspaceNavigationItemsForGroup(group, pathname)}
+                variant="embedded"
               />
             </div>
           ))}

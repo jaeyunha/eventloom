@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -543,6 +545,37 @@ describe("speaker portal UI components", () => {
     expect(markup).not.toContain('aria-label="Speaker portal"');
     expect(markup).toContain('aria-haspopup="menu"');
     expect(markup).not.toContain(">Sign out</button>");
+  });
+
+  it("applies one shared content inset across participant pages", () => {
+    const shellSource = readFileSync(
+      fileURLToPath(new URL("./portal-shell.tsx", import.meta.url)),
+      "utf8",
+    );
+    const shellStyles = readFileSync(
+      fileURLToPath(new URL("./portal-shell.module.css", import.meta.url)),
+      "utf8",
+    );
+    const pageHeadingStyles = readFileSync(
+      fileURLToPath(new URL("./portal.module.css", import.meta.url)),
+      "utf8",
+    );
+    const workspaceHeaderStyles = readFileSync(
+      fileURLToPath(new URL("../../components/workspace/workspace-ui.module.css", import.meta.url)),
+      "utf8",
+    );
+
+    expect(shellSource).toContain("contentBodyClassName={styles.workspaceContent");
+    expect(shellSource).toContain('data-scroll-region="sidebar-navigation"');
+    expect(shellSource).toContain('variant="embedded"');
+    expect(shellStyles).toMatch(
+      /\.workspaceContent\s*\{[\s\S]*--workspace-heading-padding-inline:\s*0px;[\s\S]*padding:\s*var\(--space-4\);/u,
+    );
+    expect(shellStyles).toMatch(
+      /\.navGroups\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow-y:\s*auto;/u,
+    );
+    expect(pageHeadingStyles).toContain("var(--workspace-heading-padding-inline, 1rem)");
+    expect(workspaceHeaderStyles).toContain("var(--workspace-heading-padding-inline, 1.5rem)");
   });
 
   it("posts sign-out with session credentials before navigating to login", async () => {

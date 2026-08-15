@@ -919,6 +919,76 @@ test("agenda workspace exposes all five accessible view modes without an unavail
   }
 });
 
+test("organizer sidebar keeps every event destination reachable at constrained height", async ({
+  authSession,
+  page,
+}, testInfo) => {
+  await installOrganizerApi(page, authSession);
+
+  for (const viewport of [
+    { name: "normal", width: 1440, height: 900 },
+    { name: "zoomed-out", width: 1800, height: 1125 },
+  ] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto(agendaUrl(PRIMARY_EVENT_ID));
+    await expectAgendaWorkspace(page);
+    await expect(page.getByText("Organization workspace", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .locator('[data-scroll-region="sidebar-navigation"]')
+        .getByRole("link", { name: "Integrations", exact: true }),
+    ).toBeInViewport();
+    await page.screenshot({
+      path: testInfo.outputPath(`organizer-sidebar-${viewport.name}.png`),
+      fullPage: true,
+    });
+  }
+
+  await page.setViewportSize({ width: 1152, height: 620 });
+  await page.goto(agendaUrl(PRIMARY_EVENT_ID));
+  await expectAgendaWorkspace(page);
+
+  const navigation = page.locator('[data-scroll-region="sidebar-navigation"]');
+  const integrationsLink = navigation.getByRole("link", {
+    name: "Integrations",
+    exact: true,
+  });
+  const footerLabel = page.getByText("Organization workspace", { exact: true });
+  const main = page.locator("#admin-content");
+
+  await expect(navigation).toBeVisible();
+  await expect(footerLabel).toBeVisible();
+
+  const metrics = await navigation.evaluate((element) => {
+    const node = element as HTMLElement;
+    return {
+      clientHeight: node.clientHeight,
+      overflowY: getComputedStyle(node).overflowY,
+      scrollHeight: node.scrollHeight,
+    };
+  });
+  expect(metrics.overflowY).toBe("auto");
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+
+  const footerBefore = await footerLabel.boundingBox();
+  const mainScrollBefore = await main.evaluate((element) => (element as HTMLElement).scrollTop);
+
+  await navigation.evaluate((element) => {
+    const node = element as HTMLElement;
+    node.scrollTop = node.scrollHeight;
+  });
+
+  await expect(integrationsLink).toBeInViewport();
+  await expect(footerLabel).toBeVisible();
+
+  const footerAfter = await footerLabel.boundingBox();
+  const mainScrollAfter = await main.evaluate((element) => (element as HTMLElement).scrollTop);
+  expect(footerBefore).not.toBeNull();
+  expect(footerAfter).not.toBeNull();
+  expect(Math.abs((footerAfter?.y ?? 0) - (footerBefore?.y ?? 0))).toBeLessThan(1);
+  expect(mainScrollAfter).toBe(mainScrollBefore);
+});
+
 test("agenda day navigation supports direct multi-day jumps at responsive widths", async ({
   authSession,
   page,

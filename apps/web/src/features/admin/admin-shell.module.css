@@ -1,4 +1,5 @@
 .adminShell {
+  --admin-sidebar-bg: color-mix(in srgb, var(--sidebar) 96%, var(--foreground) 4%);
   --admin-ink: var(--foreground);
   --admin-muted: var(--muted-foreground);
   --admin-subtle: var(--muted-foreground);
@@ -37,17 +38,20 @@
   height: 100svh;
   min-height: 100svh;
   overflow: hidden;
-  background: var(--sidebar);
+  background: var(--admin-sidebar-bg);
   color: var(--foreground);
   font-family: var(--font-sans);
 }
 
 .rail {
   display: grid;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: var(--space-2);
   padding: var(--space-2);
+  overflow: hidden;
+  background: var(--admin-sidebar-bg);
 }
 
 .railHeader,
@@ -71,7 +75,11 @@
 }
 
 .navigationGroups {
-  gap: var(--space-4);
+  gap: 1rem;
+}
+
+.navigationGroup {
+  gap: 0.25rem;
 }
 
 .brand {
@@ -94,7 +102,7 @@
   background: var(--primary);
   color: var(--primary-foreground);
   font-size: var(--admin-text-small);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .brandCopy {
@@ -123,7 +131,7 @@
 .commandButton {
   display: flex;
   width: 100%;
-  min-height: var(--space-7);
+  min-height: 2.5rem;
   gap: var(--space-2);
   align-items: center;
   padding-inline: var(--space-3);
@@ -166,19 +174,23 @@
 }
 
 .navigationLabel {
-  margin: 0 0 var(--space-2) var(--space-2);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  margin: 0 0 var(--space-1) var(--space-2);
+  color: var(--muted-foreground);
+  font-size: var(--admin-text-small);
+  font-weight: 520;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-transform: none;
 }
 
 .eventContext {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   width: 100%;
+  min-height: 2.5rem;
   gap: var(--space-2);
   align-items: center;
-  padding: var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
@@ -196,8 +208,8 @@
 
 .eventContextIcon {
   display: grid;
-  width: var(--space-6);
-  height: var(--space-6);
+  width: var(--space-5);
+  height: var(--space-5);
   place-items: center;
   border-radius: var(--radius-md);
   background: var(--muted);
@@ -252,7 +264,7 @@
 .organizationCard {
   display: grid;
   gap: var(--space-1);
-  padding-top: var(--space-3);
+  padding-top: var(--space-2);
   border-top: 1px solid var(--border);
 }
 
@@ -261,13 +273,13 @@
   min-width: 0;
   gap: var(--space-2);
   align-items: center;
-  padding: var(--space-1) var(--space-2);
+  padding: 0.25rem var(--space-2);
 }
 
 .organizationAvatar {
   display: grid;
-  width: var(--space-7);
-  height: var(--space-7);
+  width: 2rem;
+  height: 2rem;
   flex: none;
   place-items: center;
   border-radius: var(--radius-md);
@@ -297,7 +309,7 @@
 
 .organizationSelect {
   width: 100%;
-  min-height: var(--space-7);
+  min-height: 2rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--background);
@@ -308,7 +320,9 @@
 
 .organizationAction {
   width: 100%;
+  min-height: 2rem;
   justify-content: flex-start;
+  font-size: var(--admin-text-small);
 }
 
 .signOutAction:hover {
@@ -317,19 +331,7 @@
 }
 
 .adminMain {
-  height: calc(100svh - var(--space-4));
-  min-width: 0;
-  min-height: 0;
-  max-height: calc(100svh - var(--space-4));
-  margin: var(--space-2) var(--space-2) var(--space-2) 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   scroll-padding-top: var(--admin-sticky-offset);
-  border: 1px solid var(--border);
-  border-radius: var(--admin-radius-lg);
-  background: var(--background);
-  box-shadow: var(--shadow-card);
 }
 
 .adminContent {
@@ -689,28 +691,6 @@
   padding: 0.65rem clamp(1rem, 3vw, 2rem);
   border-bottom: 1px solid var(--admin-border);
   background: color-mix(in srgb, var(--background) 96%, transparent);
-}
-
-.brand {
-  display: inline-flex;
-  min-width: max-content;
-  gap: 0.65rem;
-  align-items: center;
-  color: var(--admin-ink);
-  text-decoration: none;
-}
-
-.brandMark {
-  display: grid;
-  width: 2rem;
-  height: 2rem;
-  place-items: center;
-  border-radius: 0.35rem;
-  background: var(--admin-ink);
-  color: var(--primary-foreground);
-  font-size: 0.6875rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
 }
 
 .brandText {

@@ -69,12 +69,20 @@ describe("shared workspace shell", () => {
   });
 
   it("keeps the desktop sidebar edge borderless beside inset content", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./workspace-shell.tsx", import.meta.url)),
+      "utf8",
+    );
     const css = readFileSync(
       fileURLToPath(new URL("./workspace-shell.module.css", import.meta.url)),
       "utf8",
     );
 
+    expect(source).toContain("styles.insetPanel");
     expect(css).toMatch(/\.desktopNavigation\s*\{[\s\S]*border-right:\s*0;/u);
+    expect(css).toMatch(
+      /\.insetPanel\s*\{[\s\S]*margin:\s*var\(--space-2\);[\s\S]*border:\s*1px solid var\(--border\);[\s\S]*border-radius:\s*var\(--radius-lg\);/u,
+    );
   });
 });
 

@@ -131,15 +131,23 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           <small>Participant workspace</small>
         </span>
       </Link>
-      <div className={styles.navGroups}>
+      <div className={styles.navGroups} data-scroll-region="sidebar-navigation">
         <div>
           <p className={styles.navLabel}>Workspace</p>
-          <DesktopNavigation ariaLabel="Participant workspace" items={primaryItems} />
+          <DesktopNavigation
+            ariaLabel="Participant workspace"
+            items={primaryItems}
+            variant="embedded"
+          />
         </div>
         {secondaryItems.length === 0 ? null : (
           <div>
             <p className={styles.navLabel}>Accepted sessions</p>
-            <DesktopNavigation ariaLabel="Accepted session tools" items={secondaryItems} />
+            <DesktopNavigation
+              ariaLabel="Accepted session tools"
+              items={secondaryItems}
+              variant="embedded"
+            />
           </div>
         )}
       </div>
@@ -209,6 +217,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <WorkspaceShell
       className={styles.portalShell}
+      contentBodyClassName={styles.workspaceContent ?? ""}
       contextBar={contextBar}
       data-role-workspace="participant"
       data-role-workspace-shell="true"
