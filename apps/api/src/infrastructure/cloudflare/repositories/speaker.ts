@@ -12,6 +12,7 @@ import {
   speakerTasks,
   submissions,
 } from "../../../db/schema";
+import type { Submission, SubmissionParticipant } from "../../../features/cfp/model";
 import { allSpeakerPortalCapabilities } from "../../../features/speaker/capabilities";
 import type {
   FinalizeSpeakerAssetCommand,
@@ -22,14 +23,20 @@ import type {
   SpeakerAccountWorkloadRepository,
   SpeakerAsset,
   SpeakerAssetAuditEntry,
+  SpeakerAssetComment,
   SpeakerAssetReviewCommand,
+  SpeakerEventResource,
+  SpeakerOrganizerAccessScope,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerPortalContextScopeProjection,
   SpeakerProfile,
   SpeakerSubmission,
   SpeakerTask,
+  SpeakerTaskFormDefinition,
   SpeakerTaskRepositoryCommand,
+  SpeakerTaskResponseRecord,
+  SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
@@ -57,6 +64,8 @@ export function portalSubmissionStatus(
 
 const json = (value: unknown): string => JSON.stringify(value);
 const auditLabel = "__speaker_asset_audit__";
+const d1SubmissionId = (value: string): string =>
+  value.startsWith("speaker-submission:") ? value.slice("speaker-submission:".length) : value;
 
 type EventScope = { organizationId: string; eventId: string };
 
@@ -88,25 +97,31 @@ function participantCapabilities(row: Record<string, unknown>): {
   capabilitiesByParticipant: Record<string, readonly SpeakerPortalCapability[]>;
 } {
   const participantIds = commaSeparatedIds(row.participant_ids);
-  const capabilities = portalCapabilities(row.capabilities_json);
+  const storedCapabilities = portalCapabilities(row.capabilities_json);
   const grantedParticipantIds = new Set(commaSeparatedIds(row.granted_participant_ids));
+  // Legacy projections did not expose ownership. Treat only an explicit zero as non-owner so old
+  // stored contexts keep their submission-edit behavior while D1 grant revocation fails closed.
+  const ownsSubmission = row.owns_submission === undefined || Number(row.owns_submission) > 0;
   const primaryParticipantId =
     typeof row.primary_participant_id === "string" ? row.primary_participant_id : undefined;
-  return {
-    participantIds,
-    capabilities,
-    capabilitiesByParticipant: Object.fromEntries(
-      participantIds.map((participantId) => [
-        participantId,
-        capabilities.filter(
-          (capability) =>
-            capability === "submission-edit" ||
-            (grantedParticipantIds.has(participantId) &&
-              (capability !== "roster-manage" || participantId === primaryParticipantId)),
-        ),
-      ]),
+  const capabilitiesByParticipant = Object.fromEntries(
+    participantIds.map((participantId) => [
+      participantId,
+      storedCapabilities.filter(
+        (capability) =>
+          (capability === "submission-edit"
+            ? ownsSubmission || grantedParticipantIds.has(participantId)
+            : grantedParticipantIds.has(participantId)) &&
+          (capability !== "roster-manage" || participantId === primaryParticipantId),
+      ),
+    ]),
+  );
+  const capabilities = storedCapabilities.filter((capability) =>
+    participantIds.some((participantId) =>
+      capabilitiesByParticipant[participantId]?.includes(capability),
     ),
-  };
+  );
+  return { participantIds, capabilities, capabilitiesByParticipant };
 }
 
 const grantedSpeakerProfileIdsSql = `(
@@ -125,6 +140,19 @@ const grantedSpeakerProfileIdsSql = `(
      AND sg.revoked_at IS NULL
      AND sp.event_id = pc.event_id
 ) AS granted_speaker_profile_ids`;
+
+const ownsSubmissionSql = `EXISTS (
+  SELECT 1
+    FROM portal_context_submissions owned_pcs
+    JOIN submissions owned_s
+      ON owned_s.organization_id = owned_pcs.organization_id
+     AND owned_s.event_id = owned_pcs.event_id
+     AND owned_s.id = owned_pcs.submission_id
+   WHERE owned_pcs.organization_id = pc.organization_id
+     AND owned_pcs.event_id = pc.event_id
+     AND owned_pcs.context_id = pc.id
+     AND owned_s.owner_account_id = pc.account_id
+) AS owns_submission`;
 
 const grantedParticipantIdsSql = `(
   SELECT group_concat(DISTINCT sp.participant_id)
@@ -220,6 +248,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     const context = await session
       .prepare(
         `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
+              ${ownsSubmissionSql},
               ${grantedParticipantIdsSql},
               group_concat(DISTINCT pcp.participant_id) AS participant_ids,
               group_concat(DISTINCT pcs.submission_id) AS submission_ids
@@ -287,6 +316,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     const context = await this.#db
       .prepare(
         `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
+                ${ownsSubmissionSql},
                 ${grantedParticipantIdsSql},
                 group_concat(DISTINCT pcp.participant_id) AS participant_ids,
                 group_concat(DISTINCT pcs.submission_id) AS submission_ids
@@ -328,6 +358,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
       .prepare(
         `SELECT pc.organization_id, pc.event_id, pc.id, pc.name, pc.slug, pc.status,
                 pc.primary_participant_id, pc.capabilities_json,
+                ${ownsSubmissionSql},
                 ${grantedSpeakerProfileIdsSql},
                 ${grantedParticipantIdsSql},
                 group_concat(DISTINCT pcp.participant_id) AS participant_ids,
@@ -426,17 +457,312 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     return (await this.listPortalContextScopes(accountId)).map(({ context }) => context);
   }
 
+  async getOrganizerAccessScope(
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerOrganizerAccessScope | null> {
+    if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
+    const membership = await this.#db
+      .prepare(
+        `SELECT e.organization_id, m.role
+           FROM events e
+           JOIN organization_memberships m
+             ON m.organization_id = e.organization_id
+            AND m.user_id = ?
+          WHERE e.id = ? AND m.role IN ('owner', 'admin')
+          LIMIT 2`,
+      )
+      .bind(accountId, eventId)
+      .all<{ organization_id: string; role: "owner" | "admin" }>();
+    const memberships = membership.results ?? [];
+    const authority = memberships.length === 1 ? memberships[0] : undefined;
+    if (authority === undefined) return null;
+    const accepted = await this.#db
+      .prepare(
+        `SELECT s.id AS submission_id, sp.participant_id
+           FROM submissions s
+           JOIN evaluation_decisions d
+             ON d.organization_id = s.organization_id
+            AND d.event_id = s.event_id
+            AND d.submission_id = s.id
+            AND d.status = 'accepted'
+            AND d.id = (
+              SELECT latest.id
+                FROM evaluation_decisions latest
+               WHERE latest.organization_id = s.organization_id
+                 AND latest.event_id = s.event_id
+                 AND latest.submission_id = s.id
+               ORDER BY latest.updated_at DESC, latest.version DESC, latest.id DESC
+               LIMIT 1
+            )
+      LEFT JOIN submission_participants sp
+             ON sp.organization_id = s.organization_id
+            AND sp.event_id = s.event_id
+            AND sp.submission_id = s.id
+          WHERE s.organization_id = ? AND s.event_id = ?
+          ORDER BY s.id, sp.ordinal`,
+      )
+      .bind(authority.organization_id, eventId)
+      .all<{ submission_id: string; participant_id: string | null }>();
+    return {
+      tenantId: authority.organization_id,
+      eventId,
+      role: authority.role,
+      submissionIds: [...new Set((accepted.results ?? []).map((row) => row.submission_id))],
+      participantIds: [
+        ...new Set(
+          (accepted.results ?? []).flatMap((row) =>
+            row.participant_id === null ? [] : [row.participant_id],
+          ),
+        ),
+      ],
+    };
+  }
+
+  async ensureAcceptedSubmission(input: {
+    readonly submission: Submission;
+    readonly updatedAt: string;
+  }): Promise<SpeakerSubmission> {
+    const { submission } = input;
+    const event = await this.#db
+      .prepare(
+        `SELECT organization_id, id, name, slug, status
+           FROM events
+          WHERE organization_id = ? AND id = ?
+          LIMIT 1`,
+      )
+      .bind(submission.tenantId, submission.eventId)
+      .first<{
+        organization_id: string;
+        id: string;
+        name: string;
+        slug: string;
+        status: string;
+      }>();
+    if (event === null) throw new Error("The accepted speaker event was not found.");
+    const primary =
+      submission.participants.find((participant) => participant.role === "primary") ??
+      submission.participants[0];
+    if (primary === undefined) throw new Error("An accepted submission must contain a speaker.");
+
+    const ownedSubmissions = await this.#db
+      .prepare(
+        `SELECT s.id AS submission_id, sp.participant_id
+           FROM submissions s
+      LEFT JOIN submission_participants sp
+             ON sp.organization_id = s.organization_id
+            AND sp.event_id = s.event_id
+            AND sp.submission_id = s.id
+          WHERE s.organization_id = ? AND s.event_id = ? AND s.owner_account_id = ?
+          ORDER BY s.id, sp.ordinal`,
+      )
+      .bind(submission.tenantId, submission.eventId, submission.ownerAccountId)
+      .all<{ submission_id: string; participant_id: string | null }>();
+    const ownerSubmissionIds = [
+      ...new Set((ownedSubmissions.results ?? []).map((row) => row.submission_id)),
+    ];
+    const ownerParticipantIds = [
+      ...new Set(
+        (ownedSubmissions.results ?? []).flatMap((row) =>
+          row.participant_id === null ? [] : [row.participant_id],
+        ),
+      ),
+    ];
+    await this.#ensurePortalContext({
+      organizationId: submission.tenantId,
+      event,
+      accountId: submission.ownerAccountId,
+      primaryParticipantId: primary.id,
+      submissionIds: ownerSubmissionIds.length === 0 ? [submission.id] : ownerSubmissionIds,
+      participantIds:
+        ownerParticipantIds.length === 0
+          ? submission.participants.map((participant) => participant.id)
+          : ownerParticipantIds,
+      updatedAt: input.updatedAt,
+    });
+
+    const identities = await this.#db
+      .prepare(
+        `SELECT sp.participant_id, p.claimed_user_id, u.id AS verified_user_id
+           FROM submission_participants sp
+           JOIN participants p
+             ON p.organization_id = sp.organization_id
+            AND p.event_id = sp.event_id
+            AND p.id = sp.participant_id
+      LEFT JOIN auth_users u
+             ON lower(u.email) = lower(p.email)
+            AND u.email_verified = 1
+          WHERE sp.organization_id = ? AND sp.event_id = ? AND sp.submission_id = ?
+          ORDER BY sp.ordinal, u.id`,
+      )
+      .bind(submission.tenantId, submission.eventId, submission.id)
+      .all<{
+        participant_id: string;
+        claimed_user_id: string | null;
+        verified_user_id: string | null;
+      }>();
+    const accountsByParticipant = new Map<string, Set<string>>();
+    for (const row of identities.results ?? []) {
+      const accounts = accountsByParticipant.get(row.participant_id) ?? new Set<string>();
+      if (row.claimed_user_id !== null) accounts.add(row.claimed_user_id);
+      if (row.verified_user_id !== null) accounts.add(row.verified_user_id);
+      accountsByParticipant.set(row.participant_id, accounts);
+    }
+    for (const [participantId, accounts] of accountsByParticipant) {
+      if (accounts.size !== 1) continue;
+      const accountId = [...accounts][0];
+      if (accountId === undefined || accountId === submission.ownerAccountId) continue;
+      await this.#ensurePortalContext({
+        organizationId: submission.tenantId,
+        event,
+        accountId,
+        primaryParticipantId: participantId,
+        submissionIds: [submission.id],
+        participantIds: [participantId],
+        updatedAt: input.updatedAt,
+      });
+    }
+
+    const title =
+      typeof submission.answers.title === "string" && submission.answers.title.trim().length > 0
+        ? submission.answers.title.trim()
+        : submission.id;
+    return {
+      tenantId: submission.tenantId,
+      id: submission.id,
+      eventId: submission.eventId,
+      formId: submission.formId,
+      title,
+      status: "accepted",
+      participantIds: submission.participants.map((participant) => participant.id),
+      primaryParticipantId: primary.id,
+      version: submission.version,
+      updatedAt: input.updatedAt,
+    };
+  }
+
+  async ensureProfile(input: {
+    readonly eventId: string;
+    readonly participant: SubmissionParticipant;
+    readonly updatedAt: string;
+    readonly organizationId?: string;
+  }): Promise<SpeakerProfile> {
+    const scope = await this.#eventScope(input.eventId);
+    if (
+      scope === null ||
+      (input.organizationId !== undefined && input.organizationId !== scope.organizationId)
+    ) {
+      throw new Error("The accepted speaker profile event was not found.");
+    }
+    const existing = await this.#db
+      .prepare(
+        `SELECT id, display_name, email, job_title, company, status, biography, social_links_json,
+                travel_required, arrival_at, departure_at, accommodation, dietary_requirements,
+                accessibility_needs, travel_notes, headshot_asset_id, source_type, source_id,
+                version, updated_at
+           FROM speaker_profiles
+          WHERE organization_id = ? AND event_id = ? AND participant_id = ?
+          LIMIT 1`,
+      )
+      .bind(scope.organizationId, input.eventId, input.participant.id)
+      .first<Record<string, unknown>>();
+    const displayName =
+      `${input.participant.firstName.trim()} ${input.participant.lastName.trim()}`.trim() ||
+      input.participant.id;
+    const email = input.participant.email.trim().toLowerCase();
+    if (existing !== null) {
+      const changed =
+        String(existing.display_name) !== displayName || String(existing.email ?? "") !== email;
+      if (changed) {
+        const result = await this.#db
+          .prepare(
+            `UPDATE speaker_profiles
+                SET display_name = ?, email = ?, version = version + 1, updated_at = ?
+              WHERE organization_id = ? AND event_id = ? AND participant_id = ? AND version = ?`,
+          )
+          .bind(
+            displayName,
+            email.length === 0 ? null : email,
+            input.updatedAt,
+            scope.organizationId,
+            input.eventId,
+            input.participant.id,
+            Number(existing.version),
+          )
+          .run();
+        if ((result.meta?.changes ?? 0) !== 1) {
+          throw new Error("The accepted speaker profile changed during projection.");
+        }
+      }
+      const persisted = await this.getProfile(input.eventId, input.participant.id);
+      if (persisted === null) throw new Error("The accepted speaker profile was not persisted.");
+      return persisted;
+    }
+    const profile: SpeakerProfile = {
+      id: `speaker-profile:${input.eventId}:${input.participant.id}`,
+      eventId: input.eventId,
+      participantId: input.participant.id,
+      displayName,
+      ...(email.length === 0 ? {} : { email }),
+      biography: input.participant.biography,
+      status: "accepted",
+      sourceType: "cfp",
+      sourceId: input.participant.id,
+      version: 1,
+      updatedAt: input.updatedAt,
+    };
+    const created = await this.createProfile(profile);
+    if (!created.ok) throw new Error("The accepted speaker profile was not persisted.");
+    return created.value;
+  }
+
+  async ensureVerifiedSpeakerGrant(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly participantId: string;
+    readonly email: string;
+    readonly createdAt: string;
+  }): Promise<boolean> {
+    const profile = await this.getProfile(input.eventId, input.participantId);
+    const email = input.email.trim().toLowerCase();
+    if (profile === null || email.length === 0 || profile.email?.trim().toLowerCase() !== email) {
+      return false;
+    }
+    const users = await this.#db
+      .prepare(
+        `SELECT id
+           FROM auth_users
+          WHERE lower(email) = lower(?) AND email_verified = 1
+          ORDER BY id
+          LIMIT 2`,
+      )
+      .bind(email)
+      .all<{ id: string }>();
+    const matches = users.results ?? [];
+    const user = matches.length === 1 ? matches[0] : undefined;
+    if (user === undefined) return false;
+    await this.#db
+      .prepare(
+        `INSERT INTO speaker_grants
+           (organization_id, speaker_profile_id, user_id, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, NULL)
+         ON CONFLICT (organization_id, speaker_profile_id, user_id) DO NOTHING`,
+      )
+      .bind(input.organizationId, profile.id, user.id, input.createdAt)
+      .run();
+    return true;
+  }
+
   async listSubmissions(
     eventId: string,
     submissionIds: readonly string[],
   ): Promise<SpeakerSubmission[]> {
     if (submissionIds.length === 0) return [];
+    const storedSubmissionIds = [...new Set(submissionIds.map(d1SubmissionId))];
     const rows = await this.#orm
       .select()
       .from(submissions)
-      .where(
-        and(eq(submissions.eventId, eventId), inArray(submissions.id, [...new Set(submissionIds)])),
-      );
+      .where(and(eq(submissions.eventId, eventId), inArray(submissions.id, storedSubmissionIds)));
     const result: SpeakerSubmission[] = [];
     for (const row of rows) {
       const links = await this.#db
@@ -470,7 +796,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
       const decision = await this.#db
         .withSession("first-primary")
         .prepare(
-          "SELECT status FROM evaluation_decisions WHERE organization_id = ? AND event_id = ? AND submission_id = ? LIMIT 1",
+          "SELECT status FROM evaluation_decisions WHERE organization_id = ? AND event_id = ? AND submission_id = ? ORDER BY updated_at DESC, version DESC, id DESC LIMIT 1",
         )
         .bind(row.organizationId, row.eventId, row.id)
         .first<{ status: string }>();
@@ -511,7 +837,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
         and(
           eq(submissions.organizationId, organizationId),
           eq(submissions.eventId, eventId),
-          inArray(submissions.id, [...new Set(submissionIds)]),
+          inArray(submissions.id, [...new Set(submissionIds.map(d1SubmissionId))]),
         ),
       );
     const result: OrganizationQualifiedSpeakerSubmission[] = [];
@@ -741,6 +1067,120 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     return Promise.all(rows.map((row) => this.#task(row)));
   }
 
+  async getTaskForm(eventId: string, taskId: string): Promise<SpeakerTaskFormDefinition | null> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return null;
+    const row = await this.#db
+      .prepare(
+        `SELECT id, event_id, task_id, title, description, fields_json, version, published, updated_at
+           FROM speaker_task_forms
+          WHERE organization_id = ? AND event_id = ? AND task_id = ? AND published = 1
+          LIMIT 1`,
+      )
+      .bind(scope.organizationId, eventId, taskId)
+      .first<Record<string, unknown>>();
+    if (row === null) return null;
+    return {
+      id: String(row.id),
+      eventId: String(row.event_id),
+      taskId: String(row.task_id),
+      title: String(row.title),
+      ...(String(row.description ?? "").length === 0
+        ? {}
+        : { description: String(row.description) }),
+      fields: this.#storedJson(row.fields_json) as SpeakerTaskFormDefinition["fields"],
+      version: Number(row.version),
+      published: Boolean(row.published),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async listTaskResponses(
+    eventId: string,
+    taskId: string,
+    participantId: string,
+  ): Promise<SpeakerTaskResponseRecord[]> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return [];
+    const rows = await this.#db
+      .prepare(
+        `SELECT id, event_id, task_id, participant_id, definition_version, answers_json,
+                status, version, feedback, submitted_at, updated_at
+           FROM speaker_task_responses
+          WHERE organization_id = ? AND event_id = ? AND task_id = ? AND participant_id = ?
+          ORDER BY version ASC, updated_at ASC, id ASC`,
+      )
+      .bind(scope.organizationId, eventId, taskId, participantId)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => ({
+      id: String(row.id),
+      eventId: String(row.event_id),
+      taskId: String(row.task_id),
+      participantId: String(row.participant_id),
+      definitionVersion: Number(row.definition_version),
+      answers: this.#storedJson(row.answers_json) as SpeakerTaskResponseRecord["answers"],
+      status: String(row.status) as SpeakerTaskResponseRecord["status"],
+      version: Number(row.version),
+      updatedAt: String(row.updated_at),
+      ...(row.feedback === null || row.feedback === undefined
+        ? {}
+        : { feedback: String(row.feedback) }),
+      ...(row.submitted_at === null || row.submitted_at === undefined
+        ? {}
+        : { submittedAt: String(row.submitted_at) }),
+    }));
+  }
+
+  async saveTaskResponse(
+    response: SpeakerTaskResponseRecord,
+    expectedVersion: number | null,
+  ): Promise<RepositoryResult<SpeakerTaskResponseRecord>> {
+    const scope = await this.#eventScope(response.eventId);
+    if (scope === null) return { ok: false, reason: "not_found" };
+    const currentVersion = expectedVersion ?? 0;
+    if (response.version !== currentVersion + 1) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    try {
+      const result = await this.#db
+        .prepare(
+          `INSERT INTO speaker_task_responses
+             (id, organization_id, event_id, task_id, participant_id, definition_version,
+              answers_json, status, version, feedback, submitted_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE COALESCE((
+                    SELECT MAX(version)
+                      FROM speaker_task_responses
+                     WHERE organization_id = ? AND event_id = ? AND task_id = ? AND participant_id = ?
+                  ), 0) = ?`,
+        )
+        .bind(
+          response.id,
+          scope.organizationId,
+          response.eventId,
+          response.taskId,
+          response.participantId,
+          response.definitionVersion,
+          json(response.answers),
+          response.status,
+          response.version,
+          response.feedback ?? null,
+          response.submittedAt ?? null,
+          response.updatedAt,
+          scope.organizationId,
+          response.eventId,
+          response.taskId,
+          response.participantId,
+          currentVersion,
+        )
+        .run();
+      if ((result.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
+    } catch {
+      return { ok: false, reason: "version_conflict" };
+    }
+    return { ok: true, value: structuredClone(response) };
+  }
+
   async createTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
     return this.#saveTask(command, true);
   }
@@ -961,6 +1401,109 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     return this.reviewAsset(command);
   }
 
+  async listAssetHistory(eventId: string, versionFamilyId: string): Promise<SpeakerAsset[]> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return [];
+    const rows = await this.#db
+      .prepare(
+        `SELECT *
+           FROM speaker_assets
+          WHERE organization_id = ? AND event_id = ? AND version_family_id = ?
+          ORDER BY version ASC, created_at ASC, id ASC`,
+      )
+      .bind(scope.organizationId, eventId, versionFamilyId)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => this.#assetRecord(row));
+  }
+
+  async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return [];
+    const rows = await this.#db
+      .prepare(
+        `SELECT id, event_id, asset_id, version_id, body, author_label, version, created_at, updated_at
+           FROM speaker_asset_comments
+          WHERE organization_id = ? AND event_id = ? AND asset_id = ? AND version_id = ?
+            AND author_label <> ?
+          ORDER BY created_at ASC, version ASC, id ASC`,
+      )
+      .bind(scope.organizationId, eventId, assetId, assetId, auditLabel)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => this.#assetCommentRecord(row));
+  }
+
+  async createAssetComment(comment: SpeakerAssetComment): Promise<SpeakerAssetComment> {
+    const scope = await this.#eventScope(comment.eventId);
+    if (scope === null || comment.versionId !== comment.assetId) {
+      throw new Error("The version-specific speaker asset does not exist.");
+    }
+    const asset = await this.#db
+      .prepare(
+        `SELECT id
+           FROM speaker_assets
+          WHERE organization_id = ? AND event_id = ? AND id = ?
+          LIMIT 1`,
+      )
+      .bind(scope.organizationId, comment.eventId, comment.assetId)
+      .first<Record<string, unknown>>();
+    if (asset === null) throw new Error("The version-specific speaker asset does not exist.");
+    await this.#db
+      .prepare(
+        `INSERT INTO speaker_asset_comments
+           (id, organization_id, event_id, asset_id, version_id, body, author_label,
+            author_account_id, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        comment.id,
+        scope.organizationId,
+        comment.eventId,
+        comment.assetId,
+        comment.versionId,
+        comment.body,
+        comment.authorLabel,
+        comment.authorAccountId ?? null,
+        comment.version ?? 1,
+        comment.createdAt,
+        comment.updatedAt ?? comment.createdAt,
+      )
+      .run();
+    return structuredClone(comment);
+  }
+
+  async listEventResources(eventId: string): Promise<SpeakerEventResource[]> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return [];
+    const rows = await this.#db
+      .prepare(
+        `SELECT id, event_id, title, summary, html, url, sort_order, updated_at
+           FROM speaker_event_resources
+          WHERE organization_id = ? AND event_id = ? AND status = 'published'
+          ORDER BY sort_order ASC, id ASC`,
+      )
+      .bind(scope.organizationId, eventId)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => this.#resourceRecord(row));
+  }
+
+  async listWikiPages(eventId: string): Promise<SpeakerWikiPage[]> {
+    const scope = await this.#eventScope(eventId);
+    if (scope === null) return [];
+    const rows = await this.#db
+      .prepare(
+        `SELECT id, event_id, title, slug, summary, html, url, sort_order, updated_at
+           FROM speaker_wiki_pages
+          WHERE organization_id = ? AND event_id = ? AND status = 'published'
+          ORDER BY sort_order ASC, id ASC`,
+      )
+      .bind(scope.organizationId, eventId)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map((row) => ({
+      ...this.#resourceRecord(row),
+      slug: String(row.slug),
+    }));
+  }
+
   async appendAssetAudit(entry: SpeakerAssetAuditEntry): Promise<void> {
     await this.#db.batch([this.#auditStatement(entry)]);
   }
@@ -979,6 +1522,119 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
     return rows
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .map((row) => JSON.parse(row.body) as SpeakerAssetAuditEntry);
+  }
+
+  async #ensurePortalContext(input: {
+    organizationId: string;
+    event: { id: string; name: string; slug: string; status: string };
+    accountId: string;
+    primaryParticipantId: string;
+    submissionIds: readonly string[];
+    participantIds: readonly string[];
+    updatedAt: string;
+  }): Promise<void> {
+    const contextId = `portal-context:${input.organizationId}:${input.event.id}:${input.accountId}`;
+    const capabilities: readonly SpeakerPortalCapability[] = [
+      "profile-self",
+      "submission-edit",
+      "task-response",
+      "asset-read",
+      "asset-write",
+      "asset-comment",
+    ];
+    const current = await this.#db
+      .prepare(
+        `SELECT version, capabilities_json, name, slug, status, primary_participant_id
+           FROM portal_contexts
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND account_id = ?
+          LIMIT 1`,
+      )
+      .bind(input.organizationId, input.event.id, contextId, input.accountId)
+      .first<Record<string, unknown>>();
+    if (current === null) {
+      await this.#db
+        .prepare(
+          `INSERT INTO portal_contexts
+             (id, organization_id, event_id, account_id, name, slug, status,
+              primary_participant_id, capabilities_json, version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+           ON CONFLICT (id) DO NOTHING`,
+        )
+        .bind(
+          contextId,
+          input.organizationId,
+          input.event.id,
+          input.accountId,
+          input.event.name,
+          `${input.event.slug}--${input.accountId}`,
+          input.event.status,
+          input.primaryParticipantId,
+          json(capabilities),
+          input.updatedAt,
+          input.updatedAt,
+        )
+        .run();
+    } else {
+      const stored = portalCapabilities(current.capabilities_json);
+      const nextCapabilities = [...new Set([...stored, ...capabilities])];
+      const changed =
+        String(current.name) !== input.event.name ||
+        String(current.status) !== input.event.status ||
+        String(current.primary_participant_id) !== input.primaryParticipantId ||
+        JSON.stringify(stored) !== JSON.stringify(nextCapabilities);
+      if (changed) {
+        const result = await this.#db
+          .prepare(
+            `UPDATE portal_contexts
+                SET name = ?, status = ?, primary_participant_id = ?, capabilities_json = ?,
+                    version = version + 1, updated_at = ?
+              WHERE organization_id = ? AND event_id = ? AND id = ? AND account_id = ?
+                AND version = ?`,
+          )
+          .bind(
+            input.event.name,
+            input.event.status,
+            input.primaryParticipantId,
+            json(nextCapabilities),
+            input.updatedAt,
+            input.organizationId,
+            input.event.id,
+            contextId,
+            input.accountId,
+            Number(current.version),
+          )
+          .run();
+        if ((result.meta?.changes ?? 0) !== 1) {
+          throw new Error("The speaker portal context changed during acceptance projection.");
+        }
+      }
+    }
+    const statements: D1PreparedStatement[] = [];
+    for (const submissionId of [...new Set(input.submissionIds)]) {
+      statements.push(
+        this.#db
+          .prepare(
+            `INSERT INTO portal_context_submissions
+               (organization_id, event_id, context_id, submission_id)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (organization_id, event_id, context_id, submission_id) DO NOTHING`,
+          )
+          .bind(input.organizationId, input.event.id, contextId, submissionId),
+      );
+    }
+    for (const participantId of [...new Set(input.participantIds)]) {
+      statements.push(
+        this.#db
+          .prepare(
+            `INSERT INTO portal_context_participants
+               (organization_id, event_id, context_id, participant_id)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (organization_id, event_id, context_id, participant_id) DO NOTHING`,
+          )
+          .bind(input.organizationId, input.event.id, contextId, participantId),
+      );
+    }
+    if (statements.length > 0) await this.#db.batch(statements);
   }
 
   async #saveTask(
@@ -1005,7 +1661,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
             task.id,
             scope.organizationId,
             task.eventId,
-            task.submissionId,
+            task.submissionId === null ? null : d1SubmissionId(task.submissionId),
             task.participantId,
             task.type,
             task.owner,
@@ -1030,7 +1686,7 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
           )
           .bind(
-            task.submissionId,
+            task.submissionId === null ? null : d1SubmissionId(task.submissionId),
             task.participantId,
             task.type,
             task.owner,
@@ -1175,6 +1831,97 @@ export class D1SpeakerRepository implements SpeakerAccountWorkloadRepository {
       },
       version: row.version,
       updatedAt: row.updatedAt,
+    };
+  }
+
+  #storedJson(value: unknown): unknown {
+    return typeof value === "string" ? JSON.parse(value) : value;
+  }
+
+  #resourceRecord(row: Record<string, unknown>): SpeakerEventResource {
+    return {
+      id: String(row.id),
+      eventId: String(row.event_id),
+      title: String(row.title),
+      ...(row.summary === null || row.summary === undefined
+        ? {}
+        : { summary: String(row.summary) }),
+      ...(row.html === null || row.html === undefined ? {} : { html: String(row.html) }),
+      ...(row.url === null || row.url === undefined ? {} : { url: String(row.url) }),
+      order: Number(row.sort_order),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  #assetCommentRecord(row: Record<string, unknown>): SpeakerAssetComment {
+    return {
+      id: String(row.id),
+      eventId: String(row.event_id),
+      assetId: String(row.asset_id),
+      versionId: String(row.version_id),
+      body: String(row.body),
+      authorLabel: String(row.author_label),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      version: Number(row.version),
+    };
+  }
+
+  #assetRecord(row: Record<string, unknown>): SpeakerAsset {
+    return {
+      id: String(row.id),
+      tenantId: String(row.organization_id),
+      eventId: String(row.event_id),
+      ...(row.submission_id === null || row.submission_id === undefined
+        ? {}
+        : { submissionId: String(row.submission_id) }),
+      participantId: String(row.participant_id),
+      ...(row.task_id === null || row.task_id === undefined ? {} : { taskId: String(row.task_id) }),
+      kind: String(row.kind) as SpeakerAsset["kind"],
+      objectKey: String(row.object_key),
+      fileName: String(row.file_name),
+      contentType: String(row.content_type),
+      sizeBytes: Number(row.size_bytes),
+      state: String(row.state) as SpeakerAsset["state"],
+      createdAt: String(row.created_at),
+      version: Number(row.version),
+      versionFamilyId: String(row.version_family_id),
+      ...(row.supersedes_asset_id === null || row.supersedes_asset_id === undefined
+        ? {}
+        : { supersedesAssetId: String(row.supersedes_asset_id) }),
+      commentThreadId: String(row.comment_thread_id),
+      versionId: String(row.id),
+      ...(row.review_state === null || row.review_state === undefined
+        ? {}
+        : { reviewState: String(row.review_state) as NonNullable<SpeakerAsset["reviewState"]> }),
+      ...(row.review_note === null || row.review_note === undefined
+        ? {}
+        : { reviewNote: String(row.review_note) }),
+      ...(row.reviewed_at === null || row.reviewed_at === undefined
+        ? {}
+        : { reviewedAt: String(row.reviewed_at) }),
+      ...(row.reviewed_by === null || row.reviewed_by === undefined
+        ? {}
+        : { reviewedBy: String(row.reviewed_by) }),
+      reviewVersion: Number(row.review_version),
+      ...(row.latest_version_id === null || row.latest_version_id === undefined
+        ? {}
+        : { latestVersionId: String(row.latest_version_id) }),
+      ...(row.current_version_id === null || row.current_version_id === undefined
+        ? {}
+        : { currentVersionId: String(row.current_version_id) }),
+      ...(row.approved_version_id === null || row.approved_version_id === undefined
+        ? {}
+        : { approvedVersionId: String(row.approved_version_id) }),
+      ...(row.released_version_id === null || row.released_version_id === undefined
+        ? {}
+        : { releasedVersionId: String(row.released_version_id) }),
+      ...(row.rejection_reason === null || row.rejection_reason === undefined
+        ? {}
+        : { rejectionReason: String(row.rejection_reason) }),
+      ...(row.finalized_at === null || row.finalized_at === undefined
+        ? {}
+        : { finalizedAt: String(row.finalized_at) }),
     };
   }
 
