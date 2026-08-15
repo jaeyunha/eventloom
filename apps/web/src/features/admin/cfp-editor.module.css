@@ -56,6 +56,58 @@
   align-items: stretch;
 }
 
+.headerActionArea {
+  display: grid;
+  justify-items: end;
+  gap: 0.45rem;
+}
+
+.publicationHint {
+  align-self: center;
+  max-width: 12rem;
+  color: var(--color-muted, #697181);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.headerActionStatus {
+  max-width: 36rem;
+  margin: 0;
+  color: var(--color-danger, #b42318);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.editorStepActions {
+  position: sticky;
+  z-index: 4;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) auto minmax(7rem, 1fr);
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--color-surface, #fff) 94%, transparent);
+  box-shadow: 0 -0.6rem 1.4rem rgb(23 23 23 / 7%);
+  backdrop-filter: blur(12px);
+}
+
+.editorStepActions > :last-child {
+  justify-self: end;
+}
+
+.editorStepStatus {
+  color: var(--color-muted, #697181);
+  font-size: 0.82rem;
+  font-weight: 750;
+  text-align: center;
+}
+
 .primaryButton,
 .secondaryButton,
 .sectionNav button {
@@ -716,6 +768,17 @@
   color: var(--color-success, #18794e);
 }
 
+.previewSubmissionResult {
+  display: grid;
+  outline: none;
+}
+
+.previewSubmissionResult:focus-visible {
+  border-radius: 0.55rem;
+  outline: 3px solid color-mix(in srgb, var(--color-brand, #5065e8) 32%, transparent);
+  outline-offset: 0.25rem;
+}
+
 .previewDetails {
   display: grid;
   align-content: start;
@@ -807,6 +870,38 @@
   .headerActions {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .headerActionArea {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .headerActionStatus,
+  .publicationHint {
+    max-width: none;
+    text-align: left;
+  }
+
+  .editorStepActions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .editorStepStatus {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .editorStepActions > :first-child {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+  }
+
+  .editorStepActions > :last-child {
+    grid-column: 2;
+    grid-row: 2;
+    width: 100%;
   }
 
   .headerActions > * {

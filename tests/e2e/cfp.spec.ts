@@ -155,11 +155,12 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/account$`));
 
   await page.getByLabel("Your Email Address:").fill("ada@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Ada");
   await page.getByLabel("Last Name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await page.getByRole("button", { name: "Create account →" }).click();
   await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
 
   await page.getByLabel("Title").fill("Designing calm incident response");
@@ -312,7 +313,7 @@ test("required CFP validation announces errors and focuses the first invalid fie
   page,
 }) => {
   await page.goto("/cfp/organizations/evaluator-org/events/validation-check/account");
-  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await page.getByRole("button", { name: "Sign in →" }).click();
 
   const errorSummary = page.getByRole("alert").filter({ hasText: "Check the highlighted fields." });
   await expect(errorSummary).toBeVisible();
@@ -328,14 +329,21 @@ test("CFP draft survives a reload without submitting", async ({ page, authSessio
     eventName: "Resume Draft Test Event",
   });
   await page.goto("/cfp/organizations/evaluator-org/events/resume-check/account");
+  await expect(page.getByRole("button", { name: "Save as draft" })).toHaveCount(0);
   await page.getByLabel("Your Email Address:").fill("resume@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByLabel("Password:").fill("ResumeDraft!26");
   await page.getByLabel("First Name").fill("Resilient");
+  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Create account →" }).click();
+  await expect(page).toHaveURL(/\/resume-check\/submission$/);
+  await page.getByLabel("Title").fill("A persisted draft title");
   await page.getByRole("button", { name: "Save as draft" }).click();
   await expect(page.getByText("Draft saved", { exact: true })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByLabel("Your Email Address:")).toHaveValue("resume@example.test");
-  await expect(page.getByLabel("First Name")).toHaveValue("Resilient");
+  await expect(page.getByLabel("Title")).toHaveValue("A persisted draft title");
 });
 const CFP_ORGANIZATION_ID = "ai-engineer";
 const CFP_EVENT_ID = "open-sessionboard-conf";
@@ -946,11 +954,12 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));
 
   await page.getByLabel("Your Email Address:").fill("cfp-e2e@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Ada");
   await page.getByLabel("Last Name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await page.getByRole("button", { name: "Create account →" }).click();
   await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/submission$`));
 
   await expect(page.getByRole("heading", { level: 2, name: "Session proposal" })).toBeVisible();
@@ -1112,11 +1121,12 @@ test("CFP rejects a stale draft version without abandoning the five-step session
   const harness = await installDynamicCfpApi(page, authSession, { conflictOnDraftPatch: 1 });
   await page.goto(`${CFP_PATH}/account`);
   await page.getByLabel("Your Email Address:").fill("stale-cfp@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Stale");
   await page.getByLabel("Last Name").fill("Writer");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await page.getByRole("button", { name: "Create account →" }).click();
 
   await expect(page.getByText("The CFP submission has changed.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Your Email Address:")).toHaveValue("stale-cfp@example.test");

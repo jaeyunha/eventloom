@@ -369,6 +369,7 @@ export interface CfpApi {
   }): Promise<PublishedCfp>;
   authenticateAccount(input: {
     email: string;
+    mode: "sign_in" | "sign_up";
     password: string;
     name: string;
     verificationCallbackUrl?: string;
@@ -578,18 +579,6 @@ function isEmailNotVerifiedError(response: Response, body: unknown): boolean {
   return (
     fields.code === "EMAIL_NOT_VERIFIED" ||
     (response.status === 403 && fields.message?.toLowerCase().includes("verif") === true)
-  );
-}
-
-function isInvalidCredentialsError(response: Response, body: unknown): boolean {
-  const fields = authErrorFields(body);
-  return (
-    fields.code === "INVALID_EMAIL_OR_PASSWORD" ||
-    fields.code === "AUTHENTICATION_REQUIRED" ||
-    (response.status === 401 &&
-      (fields.message?.toLowerCase().includes("password") === true ||
-        fields.message?.toLowerCase().includes("email") === true ||
-        fields.message?.toLowerCase().includes("credential") === true))
   );
 }
 
@@ -887,26 +876,25 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
     },
     authenticateAccount: async (input) => {
       const email = input.email.trim().toLowerCase();
-      const signIn = await authRequest(fetcher, authBase, "/sign-in/email", {
-        email,
-        password: input.password,
-      });
-
-      if (signIn.response.ok) {
-        const session = authenticatedSessionFrom(signIn.body);
-        if (session !== null) return { status: "authenticated", session };
-        if (hasUnverifiedAuthUser(signIn.body)) return { status: "verification_required" };
-        throw authError(
-          signIn.response,
-          signIn.body,
-          "AUTH_SESSION_NOT_CREATED",
-          "Your sign-in session could not be established.",
-        );
-      }
-      if (isEmailNotVerifiedError(signIn.response, signIn.body)) {
-        return { status: "verification_required" };
-      }
-      if (!isInvalidCredentialsError(signIn.response, signIn.body)) {
+      if (input.mode === "sign_in") {
+        const signIn = await authRequest(fetcher, authBase, "/sign-in/email", {
+          email,
+          password: input.password,
+        });
+        if (signIn.response.ok) {
+          const session = authenticatedSessionFrom(signIn.body);
+          if (session !== null) return { status: "authenticated", session };
+          if (hasUnverifiedAuthUser(signIn.body)) return { status: "verification_required" };
+          throw authError(
+            signIn.response,
+            signIn.body,
+            "AUTH_SESSION_NOT_CREATED",
+            "Your sign-in session could not be established.",
+          );
+        }
+        if (isEmailNotVerifiedError(signIn.response, signIn.body)) {
+          return { status: "verification_required" };
+        }
         throw authError(
           signIn.response,
           signIn.body,
