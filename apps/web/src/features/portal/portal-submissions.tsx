@@ -1,148 +1,18 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
-import type { CfpSubmissionPointerIdentity } from "../cfp/draft-persistence";
-import { getCfpStepRoute } from "../cfp/routes";
-import {
-  filterSubmissions,
-  portalSubmissionEditTarget,
-  portalSubmissionIdsMatch,
-  submissionStatusPresentation,
-} from "./model";
+import { filterSubmissions, portalSubmissionIdsMatch } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
-import {
-  EmptyState,
-  formatPortalDate,
-  PageHeading,
-  PortalContentState,
-  SubmissionStatusBadge,
-} from "./portal-ui";
-import type { PortalContext, PortalSubmission } from "./types";
+import { PortalSubmissionCard } from "./portal-submission-card";
+import { EmptyState, PageHeading, PortalContentState } from "./portal-ui";
 
-export function canonicalPortalSubmissionId(id: string): string {
-  const normalized = id.trim();
-  const prefix = "speaker-submission:";
-  return normalized.toLocaleLowerCase().startsWith(prefix)
-    ? normalized.slice(prefix.length).trim()
-    : normalized;
-}
-
-const submissionTitleAcronyms = new Set(["ai", "api", "cfp", "ci", "llm", "qa", "ui", "ux"]);
-const submissionTitleMinorWords = new Set([
-  "a",
-  "an",
-  "and",
-  "at",
-  "by",
-  "for",
-  "in",
-  "of",
-  "on",
-  "or",
-  "the",
-  "to",
-  "with",
-]);
-
-function humanizeCanonicalSubmissionReference(reference: string): string {
-  const marker = /(?:^|[-_/:])submission[-_/:]/iu.exec(reference);
-  const titleReference =
-    marker === null || marker.index === undefined
-      ? reference
-      : reference.slice(marker.index + marker[0].length);
-  const words = titleReference
-    .replace(/[-_]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-  if (words.length === 0) return "Untitled submission";
-  return words
-    .map((word, index) => {
-      const normalized = word.toLocaleLowerCase();
-      if (submissionTitleAcronyms.has(normalized)) return normalized.toLocaleUpperCase();
-      if (index > 0 && submissionTitleMinorWords.has(normalized)) return normalized;
-      return `${normalized[0]?.toLocaleUpperCase() ?? ""}${normalized.slice(1)}`;
-    })
-    .join(" ");
-}
-
-function isMachineSubmissionTitle(
-  title: string,
-  submission: Pick<PortalSubmission, "id" | "title">,
-): boolean {
-  const normalizedTitle = title.trim().toLocaleLowerCase();
-  if (normalizedTitle.length === 0) return true;
-  const prefix = "speaker-submission:";
-  const references = [submission.id, canonicalPortalSubmissionId(submission.id)].map((reference) =>
-    reference.toLocaleLowerCase(),
-  );
-  return references.includes(normalizedTitle) || normalizedTitle.startsWith(prefix);
-}
-
-export function portalSubmissionDisplayTitle(
-  submission: Pick<PortalSubmission, "id" | "title">,
-  equivalents: readonly Pick<PortalSubmission, "id" | "title">[] = [],
-): string {
-  const equivalent = equivalents.find(
-    (candidate) =>
-      portalSubmissionIdsMatch(candidate.id, submission.id) &&
-      !isMachineSubmissionTitle(candidate.title, candidate),
-  );
-  if (equivalent !== undefined && equivalent.title.trim().length > 0) {
-    return equivalent.title.trim();
-  }
-  if (
-    !isMachineSubmissionTitle(submission.title, submission) &&
-    submission.title.trim().length > 0
-  ) {
-    return submission.title.trim();
-  }
-  return humanizeCanonicalSubmissionReference(canonicalPortalSubmissionId(submission.id));
-}
-
-export interface PortalSubmissionActionTargets {
-  editHref: string;
-  newProposalHref: string;
-  pointerKey: string;
-  identity: CfpSubmissionPointerIdentity;
-}
-
-export function portalSubmissionActionTargets(
-  context: PortalContext | null,
-  submission: PortalSubmission,
-): PortalSubmissionActionTargets | null {
-  const formId = submission.formId?.trim();
-  if (context === null || formId === undefined || formId.length === 0) return null;
-  const contextStatus = context.status?.trim().toLocaleLowerCase();
-  if (["draft", "closed", "archived", "inactive", "cancelled"].includes(contextStatus ?? "")) {
-    return null;
-  }
-  const closeAt = submission.closeAt?.trim();
-  if (closeAt !== undefined && closeAt.length > 0) {
-    const closeTime = Date.parse(closeAt);
-    if (!Number.isFinite(closeTime) || closeTime <= Date.now()) return null;
-  }
-  const editableSubmission =
-    submission.status === "accepted"
-      ? { ...submission, status: "submitted" as const, formId }
-      : { ...submission, formId };
-  const editTarget = portalSubmissionEditTarget(context, editableSubmission);
-  if (editTarget === null) return null;
-  const eventSlug = context.slug?.trim() || context.eventId.trim();
-  const organizationId = context.organizationId?.trim() || context.id.split(":")[1]?.trim() || "";
-  if (eventSlug.length === 0 || organizationId === undefined || organizationId.length === 0) {
-    return null;
-  }
-  return {
-    editHref: editTarget.href,
-    newProposalHref: getCfpStepRoute(organizationId, eventSlug, "welcome"),
-    pointerKey: editTarget.pointerKey,
-    identity: { organizationId, eventId: context.eventId, formId },
-  };
-}
+export {
+  canonicalPortalSubmissionId,
+  type PortalSubmissionActionTargets,
+  portalSubmissionActionTargets,
+  portalSubmissionDisplayTitle,
+} from "./portal-submission-model";
 
 export function PortalSubmissions() {
   return (
@@ -160,17 +30,18 @@ function PortalSubmissionsContent() {
     (candidate, index, all) =>
       all.findIndex((other) => portalSubmissionIdsMatch(other.id, candidate.id)) === index,
   );
+
   return (
-    <>
+    <div className={styles.submissionsPage}>
       <PageHeading
-        eyebrow="Owned proposals"
+        eyebrow={context?.name ?? "Selected event"}
         title="Submissions"
-        description="A submitted proposal appears here immediately. Follow it through review and into the event program."
+        description="Follow each proposal from its persisted submission state through the event decision."
       />
       <section className={styles.panel} aria-labelledby="submissions-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="submissions-heading">All submissions</h2>
+            <h2 id="submissions-heading">Submission statuses</h2>
             <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
@@ -189,7 +60,7 @@ function PortalSubmissionsContent() {
         {view.submissions.length === 0 ? (
           <EmptyState
             title="No submissions yet"
-            description="A proposal appears here immediately after you submit it."
+            description="A proposal appears here after it is persisted for this event."
           />
         ) : submissions.length === 0 ? (
           <EmptyState
@@ -207,65 +78,19 @@ function PortalSubmissionsContent() {
           />
         ) : (
           <div className={styles.submissionGrid}>
-            {submissions.map((submission) => {
-              const presentation = submissionStatusPresentation(submission.status);
-              const accepted = submission.status.toLowerCase() === "accepted";
-              const editTarget = can("submission-edit")
-                ? portalSubmissionEditTarget(context, submission)
-                : null;
-              return (
-                <article key={submission.id} className={styles.submissionTile}>
-                  <div className={styles.submissionTileTop}>
-                    <span className={styles.documentIcon} aria-hidden="true">
-                      ▤
-                    </span>
-                    <SubmissionStatusBadge status={submission.status} />
-                  </div>
-                  <div>
-                    <p className={styles.submissionId}>Submission {submission.id}</p>
-                    <h3>{portalSubmissionDisplayTitle(submission, view.submissions)}</h3>
-                    <p>{presentation.description}</p>
-                  </div>
-                  <footer>
-                    <span>
-                      {submission.version === undefined ? "" : `Revision ${submission.version} · `}
-                      Updated {formatPortalDate(submission.updatedAt) ?? "recently"}
-                    </span>
-                    {accepted ? (
-                      <strong className={styles.acceptedMessage}>Your proposal was accepted</strong>
-                    ) : null}
-                    {editTarget === null ? null : (
-                      <Link
-                        href={editTarget.href}
-                        aria-label={`Edit proposal ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
-                        onClick={() =>
-                          window.localStorage.setItem(
-                            editTarget.pointerKey,
-                            canonicalPortalSubmissionId(submission.id),
-                          )
-                        }
-                      >
-                        Edit proposal
-                      </Link>
-                    )}
-                    <Link
-                      href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
-                      aria-label={`View submission status for ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
-                    >
-                      View submission status <span aria-hidden="true">→</span>
-                    </Link>
-                    {accepted ? (
-                      <Link href={`/portal${eventQuery}`} className={styles.primaryTextLink}>
-                        Open speaker workspace <span aria-hidden="true">→</span>
-                      </Link>
-                    ) : null}
-                  </footer>
-                </article>
-              );
-            })}
+            {submissions.map((submission) => (
+              <PortalSubmissionCard
+                key={submission.id}
+                canEdit={can("submission-edit")}
+                context={context}
+                eventQuery={eventQuery}
+                equivalents={view.submissions}
+                submission={submission}
+              />
+            ))}
           </div>
         )}
       </section>
-    </>
+    </div>
   );
 }

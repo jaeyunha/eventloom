@@ -562,7 +562,7 @@ export function portalSubmissionEditTarget(
   if (
     context === null ||
     submission.formId === undefined ||
-    (submission.status !== "submitted" && submission.status !== "under_review") ||
+    !["draft", "submitted", "under_review"].includes(submission.status) ||
     submission.eventId !== context.eventId ||
     !context.submissionIds.some((authorizedId) =>
       portalSubmissionIdsMatch(authorizedId, submission.id),
@@ -574,7 +574,7 @@ export function portalSubmissionEditTarget(
     return null;
   }
   const eventSlug = context.slug?.trim() || context.eventId;
-  const organizationId = context.id.split(":")[1]?.trim();
+  const organizationId = context.organizationId?.trim() || context.id.split(":")[1]?.trim();
   if (!organizationId) return null;
   return {
     href: getCfpStepRoute(organizationId, eventSlug, "submission"),
