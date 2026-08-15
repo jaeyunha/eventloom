@@ -231,9 +231,10 @@ export interface MemberIdentityRepository {
   getInvitation(invitationId: string): Promise<MemberInvitation | null>;
   createInvitation(input: MemberInvitation): Promise<void>;
   markInvitationDelivered(invitationId: string, deliveredAt: string): Promise<MemberInvitation>;
+  /** Sensitive ephemeral credential; implementations must never persist it without slow hashing. */
   claimInvitationActivation(
     invitationId: string,
-    activationDigest: string,
+    activationCredential: string,
     acceptedAt: string,
   ): Promise<MemberInvitation>;
   activateUser(userId: string, name: string | null, updatedAt: string): Promise<MemberUser>;

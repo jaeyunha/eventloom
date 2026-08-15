@@ -3,32 +3,25 @@
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { Button } from "../../../components/ui/button";
-import { Checkbox } from "../../../components/ui/checkbox";
-import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
+import { useOrganizerEventWorkspace } from "../../admin/organizer-event-workspace";
 import styles from ".././review-workspace.module.css";
 import type { ApiPlan } from "./api-api-plan";
-import { ReviewNavigation } from "./evaluator-queue-review-navigation";
-import { parseNumericAuthoringValue } from "./model-parse-numeric-authoring-value";
 import { createEvaluationPlan } from "./organizer-create-evaluation-plan";
 import { validateCreateEvaluationPlanForm } from "./organizer-validate-create-evaluation-plan-form";
 
 export function OrganizerPlanCreation({
   eventId,
   baseUrl,
-  organizationId,
   onCreated,
 }: Readonly<{
   eventId: string;
-  organizationId?: string | undefined;
   baseUrl: string;
   onCreated: (plan: ApiPlan) => void;
 }>) {
+  const event = useOrganizerEventWorkspace();
+  const eventName = event?.name ?? "Current event";
+  const eventSlug = event?.slug;
   const [name, setName] = useState("");
-  const [roundCount, setRoundCount] = useState(1);
-  const [firstRoundTitle, setFirstRoundTitle] = useState("Initial review");
-  const [firstRubricTitle, setFirstRubricTitle] = useState("Evaluation rubric");
-  const [firstCriterionTitle, setFirstCriterionTitle] = useState("Overall quality");
-  const [blindReview, setBlindReview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -37,11 +30,6 @@ export function OrganizerPlanCreation({
     const input = {
       eventId,
       name,
-      roundCount,
-      firstRoundTitle,
-      firstRubricTitle,
-      firstCriterionTitle,
-      blindReview,
     };
     const validationMessage = validateCreateEvaluationPlanForm(input);
     if (validationMessage !== null) {
@@ -68,105 +56,94 @@ export function OrganizerPlanCreation({
       <a className={styles.skipLink} href="#review-content">
         Skip to review workspace content
       </a>
-      <header className={styles.workspaceHeader}>
+      <header className={`${styles.workspaceHeader} ${styles.planCreationHeader}`}>
         <div>
-          <p className={styles.eyebrow}>Organizer review setup</p>
+          <p className={styles.eyebrow}>{eventName} · organizer</p>
           <h1>Create evaluation plan</h1>
         </div>
-        <ReviewNavigation eventId={eventId} mode="organizer" organizationId={organizationId} />
       </header>
-      <section id="review-content" className={styles.section} aria-labelledby="create-plan-heading">
-        <div className={styles.sectionHeading}>
-          <div>
+      <section
+        id="review-content"
+        className={`${styles.section} ${styles.planCreationSection}`}
+        aria-labelledby="create-plan-heading"
+      >
+        <div className={styles.planCreationContent}>
+          <div className={styles.planCreationHeading}>
             <p className={styles.sectionEyebrow}>Organizer setup</p>
             <h2 id="create-plan-heading">Create the first evaluation plan</h2>
-          </div>
-        </div>
-        <p className={styles.sectionIntro}>
-          Start with one or more rounds and a first rubric. Round review teams are managed after
-          creation from Review team.
-        </p>
-        <form onSubmit={(event) => void submit(event)} aria-describedby="create-plan-help">
-          <div className={styles.summaryGrid}>
-            <div className={styles.formField}>
-              <label htmlFor="create-plan-name">Plan name</label>
-              <input
-                id="create-plan-name"
-                value={name}
-                onChange={(event) => setName(event.currentTarget.value)}
-                autoComplete="off"
-                required
-              />
-            </div>
-            <div className={styles.formField}>
-              <label htmlFor="create-plan-rounds">Rounds</label>
-              <input
-                id="create-plan-rounds"
-                type="number"
-                min={1}
-                max={10}
-                step={1}
-                value={roundCount}
-                onChange={(event) =>
-                  setRoundCount(parseNumericAuthoringValue(roundCount, event.currentTarget.value))
-                }
-                required
-              />
-            </div>
-            <Field orientation="horizontal" className={styles.checkboxField}>
-              <Checkbox
-                id="create-plan-blind-review"
-                checked={blindReview}
-                onCheckedChange={(checked) => setBlindReview(checked === true)}
-              />
-              <FieldContent>
-                <FieldLabel htmlFor="create-plan-blind-review">Blind review</FieldLabel>
-                <FieldDescription>Hide submitter identity from reviewers.</FieldDescription>
-              </FieldContent>
-            </Field>
-          </div>
-          <div className={styles.summaryGrid}>
-            <div className={styles.formField}>
-              <label htmlFor="create-plan-first-round">First round title</label>
-              <input
-                id="create-plan-first-round"
-                value={firstRoundTitle}
-                onChange={(event) => setFirstRoundTitle(event.currentTarget.value)}
-                required
-              />
-            </div>
-            <div className={styles.formField}>
-              <label htmlFor="create-plan-first-rubric">First rubric title</label>
-              <input
-                id="create-plan-first-rubric"
-                value={firstRubricTitle}
-                onChange={(event) => setFirstRubricTitle(event.currentTarget.value)}
-                required
-              />
-            </div>
-            <div className={styles.formField}>
-              <label htmlFor="create-plan-first-criterion">First criterion title</label>
-              <input
-                id="create-plan-first-criterion"
-                value={firstCriterionTitle}
-                onChange={(event) => setFirstCriterionTitle(event.currentTarget.value)}
-                required
-              />
-            </div>
-          </div>
-          <p className={styles.fieldHint} id="create-plan-help">
-            Event access comes from the organizer route. The first draft is ready for authoring
-            after creation.
-          </p>
-          {message ? (
-            <p className={styles.formError} role="alert">
-              {message}
+            <p className={styles.sectionIntro}>
+              The draft starts with one editable round and a starter scorecard. Configure rounds,
+              dates, blind review, and scorecard criteria in Setup. Review teams and assignments
+              follow after the plan opens.
             </p>
-          ) : null}
-          <Button type="submit" disabled={busy}>
-            {busy ? "Creating…" : "Create evaluation plan"}
-          </Button>
-        </form>
+          </div>
+
+          <form
+            className={styles.planCreationForm}
+            onSubmit={(event) => void submit(event)}
+            aria-describedby="create-plan-help"
+          >
+            <div className={styles.planCreationGroup}>
+              <div className={styles.planCreationGroupHeading}>
+                <h3>Plan basics</h3>
+                <p>Name the plan and confirm its event.</p>
+              </div>
+              <div className={styles.planSettingRows}>
+                <div className={styles.planSettingRow}>
+                  <div className={styles.planSettingCopy}>
+                    <label htmlFor="create-plan-name">Plan name</label>
+                    <p id="create-plan-name-description">
+                      A short internal name organizers will recognize.
+                    </p>
+                  </div>
+                  <div className={styles.planSettingControl}>
+                    <input
+                      id="create-plan-name"
+                      value={name}
+                      onChange={(event) => setName(event.currentTarget.value)}
+                      aria-describedby="create-plan-name-description"
+                      autoComplete="off"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className={styles.planSettingRow}>
+                  <div className={styles.planSettingCopy}>
+                    <span className={styles.planSettingLabel}>Event</span>
+                    <p>This plan applies only to this event workspace.</p>
+                  </div>
+                  <fieldset className={styles.planEventValue}>
+                    <legend className="sr-only">Event</legend>
+                    <strong>{eventName}</strong>
+                    {eventSlug === undefined ? null : <span>/{eventSlug}</span>}
+                  </fieldset>
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.planCreationFooter}>
+              <div>
+                <p
+                  className={`${styles.fieldHint} ${styles.planCreationHint}`}
+                  id="create-plan-help"
+                >
+                  One editable round is created now. Complete its setup before opening the plan.
+                </p>
+                {message ? (
+                  <p className={styles.formError} role="alert">
+                    {message}
+                  </p>
+                ) : null}
+              </div>
+              <div className={styles.planCreationActions}>
+                <Button type="submit" disabled={busy}>
+                  {busy ? "Creating…" : "Create draft plan"}
+                </Button>
+              </div>
+            </div>
+          </form>
+        </div>
       </section>
     </div>
   );

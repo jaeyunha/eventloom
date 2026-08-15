@@ -868,6 +868,31 @@
   line-height: 1.6;
 }
 
+.reviewPlanNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--radius-sm);
+  background: var(--admin-blue-soft);
+  color: var(--admin-blue-dark);
+}
+
+.reviewPlanNoticeCopy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.reviewPlanNoticeCopy p {
+  margin: 0;
+  color: var(--admin-muted);
+  line-height: 1.5;
+}
+
 .auditCallout {
   margin: 1rem 0;
   padding: 0.75rem;
@@ -876,6 +901,13 @@
   color: var(--admin-red);
   font-size: 0.8rem;
   line-height: 1.55;
+}
+
+@media (max-width: 40rem) {
+  .reviewPlanNotice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .reopenPanel form {

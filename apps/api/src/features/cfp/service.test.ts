@@ -1107,6 +1107,7 @@ describe("CFP submission lifecycle", () => {
 
     const reopened = await service.reopen({
       tenantId: "tenant_1",
+      eventId: "event_1",
       submissionId: ready.id,
       organizerId: "organizer_1",
       expectedVersion: submitted.submission.version,
@@ -1140,6 +1141,32 @@ describe("CFP submission lifecycle", () => {
     });
     expect(withdrawn.status).toBe("withdrawn");
     expect(repository.audits.at(-1)).toMatchObject({ action: "submission_withdrawn" });
+  });
+  it("does not let an event organizer reopen a submission from another event", async () => {
+    const repository = new MemoryRepository();
+    const foreignSubmission = buildOrganizerSubmission({
+      id: "submission_event_b",
+      eventId: "event_b",
+      version: 7,
+    });
+    repository.submissions.set(foreignSubmission.id, structuredClone(foreignSubmission));
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.reopen({
+        tenantId: "tenant_1",
+        eventId: "event_1",
+        submissionId: foreignSubmission.id,
+        organizerId: "event_a_organizer",
+        expectedVersion: foreignSubmission.version,
+        reason: "Cross-event reopen attempt",
+        idempotencyKey: "cross-event-reopen",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(repository.submissions.get(foreignSubmission.id)).toEqual(foreignSubmission);
+    expect(repository.versions).toEqual([]);
+    expect(repository.audits).toEqual([]);
   });
   it("creates a new authenticated submission with authoritative versions before review", async () => {
     const { service, repository } = createFixture();

@@ -1,4 +1,4 @@
-import { hashPassword } from "better-auth/crypto";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
 import type { ApiBindings, ApiDependencies } from "../app";
 import { parseCommunicationIdentityEnvironment } from "../env";
 import { RequestAuthenticator } from "../features/auth/authenticator";
@@ -194,6 +194,8 @@ interface MemberInvitationEnvelope {
   readonly kind: "member_invitation";
   readonly invitation: MemberInvitation;
   readonly usedAt: string | null;
+  readonly activationCredentialHash: string | null;
+  /** Temporary dual-read field for pre-0025 envelopes. New writes keep it null. */
   readonly activationDigest: string | null;
 }
 
@@ -594,15 +596,25 @@ function invitationEnvelope(value: unknown): MemberInvitationEnvelope | null {
     typeof candidate.expiresAt !== "string" ||
     (candidate.deliveredAt !== null && typeof candidate.deliveredAt !== "string") ||
     (candidate.acceptedAt !== null && typeof candidate.acceptedAt !== "string") ||
-    (value.activationDigest !== null && typeof value.activationDigest !== "string") ||
     (value.usedAt !== null && typeof value.usedAt !== "string")
+  ) {
+    return null;
+  }
+  const activationDigest = value.activationDigest === undefined ? null : value.activationDigest;
+  const activationCredentialHash =
+    value.activationCredentialHash === undefined ? null : value.activationCredentialHash;
+  if (
+    (activationDigest !== null && typeof activationDigest !== "string") ||
+    (activationCredentialHash !== null && typeof activationCredentialHash !== "string") ||
+    (activationDigest !== null && activationCredentialHash !== null)
   ) {
     return null;
   }
   return {
     kind: "member_invitation",
     invitation: candidate as unknown as MemberInvitation,
-    activationDigest: value.activationDigest as string | null,
+    activationCredentialHash: activationCredentialHash as string | null,
+    activationDigest: activationDigest as string | null,
     usedAt: value.usedAt as string | null,
   };
 }
@@ -1314,6 +1326,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
       kind: "member_invitation",
       invitation: cloneValue(input),
       usedAt: null,
+      activationCredentialHash: null,
       activationDigest: null,
     };
     const temporaryDigest = await sha256(randomToken());
@@ -1360,7 +1373,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
   async claimInvitationActivation(
     invitationId: string,
-    activationDigest: string,
+    activationCredential: string,
     acceptedAt: string,
   ): Promise<MemberInvitation> {
     const row = await this.database
@@ -1376,7 +1389,46 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     const parsed = this.parseInvitationRow(row);
     if (parsed === null) throw new MemberRepositoryConflictError("The invitation does not exist.");
     if (parsed.envelope.invitation.status === "accepted") {
-      if (parsed.envelope.activationDigest !== activationDigest) {
+      if (parsed.envelope.activationCredentialHash === null) {
+        if (
+          parsed.envelope.activationDigest === null ||
+          (await sha256(activationCredential)) !== parsed.envelope.activationDigest
+        ) {
+          throw new MemberRepositoryConflictError(
+            "The invitation is already being activated with different account details.",
+          );
+        }
+        const upgradedEnvelope: MemberInvitationEnvelope = {
+          ...parsed.envelope,
+          activationCredentialHash: await hashPassword(activationCredential),
+          activationDigest: null,
+        };
+        const result = await this.database
+          .prepare(
+            `UPDATE auth_verifications
+                SET identifier = ?, updated_at = ?
+              WHERE id = ? AND identifier = ?`,
+          )
+          .bind(
+            invitationIdentifier(upgradedEnvelope),
+            parsed.envelope.invitation.updatedAt,
+            invitationId,
+            row.identifier,
+          )
+          .run();
+        if (Number(result.meta?.changes ?? 1) !== 1) {
+          throw new MemberRepositoryConflictError(
+            "The invitation activation claim was superseded.",
+          );
+        }
+        return cloneValue(parsed.envelope.invitation);
+      }
+      if (
+        !(await verifyPassword({
+          hash: parsed.envelope.activationCredentialHash,
+          password: activationCredential,
+        }))
+      ) {
         throw new MemberRepositoryConflictError(
           "The invitation is already being activated with different account details.",
         );
@@ -1395,10 +1447,12 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
       acceptedAt,
       updatedAt: acceptedAt,
     };
+    const activationCredentialHash = await hashPassword(activationCredential);
     const updatedEnvelope: MemberInvitationEnvelope = {
       ...parsed.envelope,
       invitation: updatedInvitation,
-      activationDigest,
+      activationCredentialHash,
+      activationDigest: null,
     };
     const result = await this.database
       .prepare(
@@ -1669,7 +1723,12 @@ export class D1MemberAuthBoundary implements MemberAuthBoundary {
       return false;
     }
     const usedAt = new Date().toISOString();
-    const usedEnvelope: MemberInvitationEnvelope = { ...parsed, usedAt };
+    const usedEnvelope: MemberInvitationEnvelope = {
+      ...parsed,
+      usedAt,
+      activationCredentialHash: null,
+      activationDigest: null,
+    };
     const result = await this.database
       .prepare(
         `UPDATE auth_verifications

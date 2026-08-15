@@ -68,7 +68,7 @@ export function OrganizerAssignmentCoverage({
       <div className={styles.assignmentTaskHeader}>
         <div>
           <p className={styles.sectionEyebrow}>Assignment task</p>
-          <h3 id="assignment-task-heading">Fill missing reviewer slots</h3>
+          <h3 id="assignment-task-heading">Assign reviewers</h3>
         </div>
         <span className={styles.assignmentSelectionCount} aria-live="polite">
           {assignmentReviewerIds.length} selected
@@ -92,10 +92,10 @@ export function OrganizerAssignmentCoverage({
           </select>
         </fieldset>
         <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-          <legend className={styles.cardLabel}>Coverage guidance</legend>
+          <legend className={styles.cardLabel}>Assignment limit</legend>
           <span className={styles.fieldHint}>
-            The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Select reviewer
-            candidates to fill missing reviewer slots. Existing assignments remain unchanged.
+            The plan allows up to {maxAssignmentsPerReviewer} assignments per reviewer. Select
+            eligible reviewers for this submission. Existing assignments remain unchanged.
           </span>
         </fieldset>
       </div>
@@ -116,7 +116,7 @@ export function OrganizerAssignmentCoverage({
       />
       <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
         <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-          <label htmlFor="assignment-submission-id">Submission needing coverage</label>
+          <label htmlFor="assignment-submission-id">Submission</label>
           <select
             id="assignment-submission-id"
             style={assignmentControlSelectStyle}
@@ -135,8 +135,8 @@ export function OrganizerAssignmentCoverage({
           </select>
           <span className={styles.fieldHint} id="assignment-submission-help">
             {seed.aggregates.length === 0
-              ? "No submissions are available for coverage."
-              : "Choose a submission from the authoritative event material. Existing assignments remain unchanged."}
+              ? "No submissions are available."
+              : "Choose a submission for this round. Existing assignments remain unchanged."}
           </span>
         </fieldset>
         <fieldset
@@ -144,7 +144,7 @@ export function OrganizerAssignmentCoverage({
           style={assignmentControlFieldStyle}
           aria-describedby="assignment-reviewer-help"
         >
-          <legend className={styles.cardLabel}>Reviewer candidates</legend>
+          <legend className={styles.cardLabel}>Eligible reviewers</legend>
           <div className={styles.assignmentCandidateToolbar}>
             <label htmlFor="assignment-reviewer-search">Search reviewers</label>
             <Input
@@ -168,7 +168,7 @@ export function OrganizerAssignmentCoverage({
           <ul
             id="assignment-reviewer-candidates"
             className={styles.assignmentCandidateList}
-            aria-label="Verified organization reviewers"
+            aria-label="Eligible reviewers"
           >
             {visiblePoolReviewers.map((member) => {
               const inputId = `assignment-reviewer-${member.userId}`;
@@ -226,7 +226,7 @@ export function OrganizerAssignmentCoverage({
         onClick={previewAssignments}
         disabled={busy || status !== "open" || !reviewerDirectoryReady || !reviewTeamReady}
       >
-        Preview coverage
+        Preview assignments
       </Button>
       <OrganizerAssignmentPreview preview={assignmentPreview} />
       <Button
@@ -241,7 +241,7 @@ export function OrganizerAssignmentCoverage({
           assignmentPreview === null
         }
       >
-        Apply coverage
+        Apply assignments
       </Button>
     </section>
   );

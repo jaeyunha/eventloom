@@ -20,6 +20,19 @@ export function useOrganizerRoundActions(scope: OrganizerAuthoringState) {
       }),
     );
   }
+  function removeRound(roundIndex: number): void {
+    const removedRoundId = rounds[roundIndex]?.id;
+    if (removedRoundId === undefined) return;
+    setRounds((currentRounds) => {
+      if (currentRounds.length <= 1) return currentRounds;
+      const nextRounds = currentRounds.filter((round) => round.id !== removedRoundId);
+      if (nextRounds.length === currentRounds.length) return currentRounds;
+      return nextRounds.map((round, index) => ({
+        ...round,
+        sequence: index + 1,
+      }));
+    });
+  }
 
   function updateRound(
     roundIndex: number,
@@ -47,32 +60,50 @@ export function useOrganizerRoundActions(scope: OrganizerAuthoringState) {
   }
 
   function addRound(): void {
-    const source = rounds[rounds.length - 1];
-    if (source === undefined) return;
-    const sequence = rounds.length + 1;
-    setRounds((current) => [
-      ...current,
-      {
-        ...source,
-        id: `round-${sequence}`,
-        name: `Round ${sequence}`,
-        sequence,
-        opensAt: null,
-        closesAt: null,
-        blindReview: source.blindReview,
-        anonymization: source.anonymization,
-        reviewerPool: source.reviewerPool,
-        trackFilter: source.trackFilter,
-        rubric: {
-          ...source.rubric,
-          id: `rubric-round-${sequence}`,
-          name: `${source.rubric.name} ${sequence}`,
-          criteria: source.rubric.criteria.map((criterion) => ({
-            ...criterion,
-          })),
+    setRounds((currentRounds) => {
+      const sequence = currentRounds.length + 1;
+      let suffix = sequence;
+      const existingIds = new Set(currentRounds.map((round) => round.id));
+      const existingNames = new Set(currentRounds.map((round) => round.name.trim().toLowerCase()));
+      while (
+        existingIds.has(`round-${suffix}`) ||
+        existingNames.has(`round ${suffix}`.toLowerCase())
+      ) {
+        suffix += 1;
+      }
+      const id = `round-${suffix}`;
+      const name = `Round ${suffix}`;
+      return [
+        ...currentRounds,
+        {
+          id,
+          name,
+          sequence,
+          opensAt: null,
+          closesAt: null,
+          blindReview: false,
+          anonymization: "none",
+          reviewerPool: { reviewerIds: [] },
+          trackFilter: null,
+          rubric: {
+            id: `rubric-${id}`,
+            name: "Evaluation rubric",
+            criteria: [
+              {
+                id: `${id}-criterion-overall-quality`,
+                label: "Overall quality",
+                description: "Describe the evidence reviewers should consider.",
+                minimum: 1,
+                maximum: 5,
+                weight: 1,
+                required: true,
+                inputType: "numeric",
+              },
+            ],
+          },
         },
-      },
-    ]);
+      ];
+    });
   }
 
   function addCriterion(roundIndex: number): void {
@@ -98,6 +129,14 @@ export function useOrganizerRoundActions(scope: OrganizerAuthoringState) {
       };
     });
   }
-  return { ...scope, removeCriterion, updateRound, updateCriterion, addRound, addCriterion };
+  return {
+    ...scope,
+    removeCriterion,
+    removeRound,
+    updateRound,
+    updateCriterion,
+    addRound,
+    addCriterion,
+  };
 }
 export type OrganizerRoundActions = ReturnType<typeof useOrganizerRoundActions>;

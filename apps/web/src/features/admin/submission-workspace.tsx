@@ -969,11 +969,27 @@ function ProgressMeter({
     </span>
   );
 }
-function ReviewDataNotice({
+export function ReviewDataNotice({
   state,
   onRetry,
-}: Readonly<{ state: ReviewDataState; onRetry: () => void }>) {
+  setupHref,
+}: Readonly<{ state: ReviewDataState; onRetry: () => void; setupHref?: string }>) {
   if (state.status === "ready" || state.status === "pending") return null;
+  if (state.status === "no_plan") {
+    return (
+      <div className={styles.reviewPlanNotice} role="status">
+        <div className={styles.reviewPlanNoticeCopy}>
+          <strong>Review plan not set up</strong>
+          <p>{state.message} Review progress will appear after the plan is created.</p>
+        </div>
+        {setupHref === undefined ? null : (
+          <Button asChild size="sm" variant="outline">
+            <Link href={setupHref}>Set up review plan</Link>
+          </Button>
+        )}
+      </div>
+    );
+  }
   return (
     <div className={styles.auditCallout} role="alert">
       <p>{state.message}</p>
@@ -1311,6 +1327,11 @@ export function SubmissionListWorkspace({
                   <ReviewDataNotice
                     state={evaluationLoadState}
                     onRetry={() => setEvaluationReloadVersion((current) => current + 1)}
+                    {...(eventSlug === null
+                      ? {}
+                      : {
+                          setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
+                        })}
                   />
                   <fieldset className={styles.toolbar} aria-label="Submission filters">
                     <legend className={styles.srOnly}>Filter submissions</legend>
@@ -1884,6 +1905,7 @@ export function SubmissionDetailWorkspace({
   const [notFound, setNotFound] = useState(false);
   const [reloadVersion, setReloadVersion] = useState(0);
   const [eventName, setEventName] = useState(initialOrganizerEventName);
+  const [eventSlug, setEventSlug] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -1899,11 +1921,15 @@ export function SubmissionDetailWorkspace({
     setLoadError(null);
     setNotFound(false);
     setEventName(initialOrganizerEventName());
+    setEventSlug(null);
     const controller = new AbortController();
 
     void loadOrganizerEventIdentity(baseUrl, organizationId, eventId, controller.signal)
       .then((event) => {
-        if (active) setEventName(event.name);
+        if (active) {
+          setEventName(event.name);
+          setEventSlug(event.slug);
+        }
       })
       .catch(() => undefined);
     void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, controller.signal)
@@ -2174,6 +2200,11 @@ export function SubmissionDetailWorkspace({
               <ReviewDataNotice
                 state={submission.reviewData ?? { status: "ready" as const }}
                 onRetry={() => setReloadVersion((current) => current + 1)}
+                {...(eventSlug === null
+                  ? {}
+                  : {
+                      setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
+                    })}
               />
               {reviewDataIsReady(submission) ? (
                 submittedReviewRead.status === "error" ? (

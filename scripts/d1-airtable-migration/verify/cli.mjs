@@ -8,8 +8,9 @@ import { rollbackReadCutover, transitionTenant } from "./cutover.mjs";
 const HELP = `D1/Airtable shadow verification and tenant cutover tooling
 
 Usage:
-  node scripts/d1-airtable-migration/verify/cli.mjs compare --source FILE --target FILE [--explanations FILE] [--json]
-  node scripts/d1-airtable-migration/verify/cli.mjs transition --tenant ID --to read-d1|write-d1 --reason TEXT --adapter FILE [--report FILE]
+  node scripts/d1-airtable-migration/verify/cli.mjs compare --source FILE --target FILE [--explanations FILE] [--tenant ID] [--environment NAME] [--json]
+  node scripts/d1-airtable-migration/verify/cli.mjs transition --tenant ID --to read-d1|write-d1 --reason TEXT --adapter FILE [--report FILE] [--environment NAME]
+
   node scripts/d1-airtable-migration/verify/cli.mjs rollback --tenant ID --reason TEXT --adapter FILE
 
 Commands:
@@ -115,7 +116,8 @@ export async function runCli(argv, io = {}) {
   const options = parseOptions(argv.slice(1));
 
   if (command === "compare") {
-    rejectUnknown(options, ["source", "target", "explanations", "json"]);
+    rejectUnknown(options, ["source", "target", "explanations", "tenant", "environment", "json"]);
+
     const sourcePath = requireOption(options, "source");
     const targetPath = requireOption(options, "target");
     const source = await readJson(sourcePath, "source snapshot");
@@ -124,13 +126,21 @@ export async function runCli(argv, io = {}) {
       options.explanations === undefined
         ? []
         : await readJson(options.explanations, "drift explanations");
-    const report = compareSnapshots({ source, target, explanations });
+    const report = compareSnapshots({
+      source,
+      target,
+      explanations,
+      ...(options.tenant === undefined ? {} : { tenantId: options.tenant }),
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+    });
+
     stdout(options.json ? JSON.stringify(report, null, 2) : renderMismatchReport(report));
     return report.safeForReadCutover ? 0 : 2;
   }
 
   if (command === "transition") {
-    rejectUnknown(options, ["tenant", "to", "reason", "adapter", "report"]);
+    rejectUnknown(options, ["tenant", "to", "reason", "adapter", "report", "environment"]);
+
     const to = requireOption(options, "to");
     if (to !== "read-d1" && to !== "write-d1") {
       throw new CliError("ARGUMENT_INVALID", "--to must be read-d1 or write-d1.");
@@ -147,7 +157,9 @@ export async function runCli(argv, io = {}) {
       markerAdapter: adapters.markerAdapter,
       fenceAdapter: adapters.fenceAdapter,
       verificationReport,
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
     });
+
     stdout(JSON.stringify(marker, null, 2));
     return 0;
   }

@@ -150,7 +150,11 @@ case "$LAUNCHER" in
   auto|cmux|none) ;;
   *) fail "invalid launcher: $LAUNCHER" ;;
 esac
+if [ "$INSTALL" = true ] && { [ "$ENV_MODE" = copy ] || [ "$ENV_MODE" = symlink ]; }; then
+  fail "--env-mode $ENV_MODE provisions non-local secret files; use --no-install to prevent dependency lifecycle scripts from accessing them"
+fi
 [ "$PROMPT_SET" = false ] || [ -z "$PROMPT_FILE" ] || \
+
   fail 'use either --prompt or --prompt-file, not both'
 if [ -n "$PROMPT_FILE" ]; then
   [ -f "$PROMPT_FILE" ] || fail "prompt file does not exist: $PROMPT_FILE"
@@ -300,15 +304,23 @@ EOF
   )
 }
 
-provision_env_files
-
 if [ "$INSTALL" = true ]; then
+  EXISTING_ENV_FILE=$(find "$WORKTREE_PATH" \
+    \( -type d \( -name .git -o -name node_modules -o -name .next -o -name .wrangler -o -name dist \) -prune \) -o \
+    \( \( -type f -o -type l \) \
+      \( -name .env -o -name '.env.*' -o -name .dev.vars -o -name '.dev.vars.*' \) \
+      ! -name .env.example ! -name '.env.*.example' -print -quit \))
+  if [ -n "$EXISTING_ENV_FILE" ]; then
+    fail 'refusing dependency installation in a worktree that already contains environment files; use --no-install'
+  fi
   command -v bun >/dev/null 2>&1 || fail 'bun is required; use --no-install to skip setup'
   printf 'Installing dependencies in %s\n' "$WORKTREE_PATH"
   (cd "$WORKTREE_PATH" && bun install --frozen-lockfile)
 else
   printf 'Dependency installation skipped.\n'
 fi
+
+provision_env_files
 
 trap - ERR
 

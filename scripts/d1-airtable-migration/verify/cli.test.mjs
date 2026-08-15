@@ -70,11 +70,26 @@ test("CLI comparison returns zero for zero drift and two for unexplained drift",
   const drifted = fileURLToPath(new URL("./fixtures/explained-drift-target.json", import.meta.url));
   const explanations = fileURLToPath(new URL("./fixtures/explanations.json", import.meta.url));
 
-  const clean = await invoke(["compare", "--source", source, "--target", target, "--json"]);
+  const clean = await invoke([
+    "compare",
+    "--source",
+    source,
+    "--target",
+    target,
+    "--tenant",
+    "tenant-1",
+    "--environment",
+    "staging",
+    "--json",
+  ]);
   assert.equal(clean.code, 0);
-  assert.equal(JSON.parse(clean.stdout).status, "match");
+  const cleanReport = JSON.parse(clean.stdout);
+  assert.equal(cleanReport.status, "match");
+  assert.equal(cleanReport.tenantId, "tenant-1");
+  assert.equal(cleanReport.environment, "staging");
 
   const unexplained = await invoke(["compare", "--source", source, "--target", drifted]);
+
   assert.equal(unexplained.code, 2);
   assert.match(unexplained.stdout, /UNEXPLAINED/);
 

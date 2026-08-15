@@ -1,3 +1,5 @@
+import { validateVerificationReport } from "./compare.mjs";
+
 export const CUTOVER_STATES = Object.freeze(["shadow", "read-d1", "write-d1"]);
 
 export class CutoverError extends Error {
@@ -51,6 +53,22 @@ function normalizeMarker(marker, tenantId) {
       "Cutover marker version must be a non-negative integer.",
     );
   }
+  if (
+    marker.verificationReportHash !== undefined &&
+    (typeof marker.verificationReportHash !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(marker.verificationReportHash))
+  ) {
+    throw new CutoverError(
+      "MARKER_INVALID",
+      "Cutover marker verification report hash must be a 64-character lowercase hex digest.",
+    );
+  }
+  if (marker.state !== "shadow" && marker.verificationReportHash === undefined) {
+    throw new CutoverError(
+      "MARKER_INVALID",
+      "Cutover marker must retain its verification report hash after read cutover.",
+    );
+  }
   return marker;
 }
 
@@ -60,33 +78,86 @@ export async function transitionTenant({
   markerAdapter,
   fenceAdapter,
   verificationReport,
+  environment,
   reason,
   now = () => new Date(),
 } = {}) {
   tenantId = requiredText(tenantId, "Tenant ID");
+
   reason = requiredText(reason, "Transition reason");
   assertState(to, "Target state");
   assertAdapterMethod(markerAdapter, "readMarker");
   assertAdapterMethod(markerAdapter, "compareAndSetMarker");
 
   const current = normalizeMarker(await markerAdapter.readMarker({ tenantId }), tenantId);
+  const markerEnvironment =
+    current.environment === undefined
+      ? undefined
+      : requiredText(current.environment, "Marker environment").toLowerCase();
+  const requestedEnvironment =
+    environment === undefined
+      ? undefined
+      : requiredText(environment, "Cutover environment").toLowerCase();
+  if (
+    markerEnvironment !== undefined &&
+    requestedEnvironment !== undefined &&
+    markerEnvironment !== requestedEnvironment
+  ) {
+    throw new CutoverError(
+      "MARKER_ENVIRONMENT_MISMATCH",
+      "Cutover environment cannot relabel an existing marker.",
+    );
+  }
+  const targetEnvironment = markerEnvironment ?? requestedEnvironment;
   if (!allowedTransition(current.state, to)) {
     throw new CutoverError(
       "ILLEGAL_TRANSITION",
+
       `Illegal cutover transition ${current.state} -> ${to}; transitions are forward-only and single-step.`,
       { from: current.state, to },
     );
   }
-  if (current.state === "shadow" && verificationReport?.safeForReadCutover !== true) {
-    throw new CutoverError(
-      "VERIFICATION_REQUIRED",
-      "shadow -> read-d1 requires a comparison report with no unexplained drift.",
-    );
+  let verifiedReport;
+  if (current.state === "shadow") {
+    try {
+      verifiedReport = validateVerificationReport(verificationReport);
+    } catch {
+      throw new CutoverError(
+        "VERIFICATION_INVALID",
+        "shadow -> read-d1 requires a valid versioned comparison report.",
+      );
+    }
+    if (verifiedReport.tenantId !== tenantId) {
+      throw new CutoverError(
+        "VERIFICATION_TENANT_MISMATCH",
+        "Verification report belongs to a different tenant.",
+      );
+    }
+    if (targetEnvironment !== undefined && verifiedReport.environment !== targetEnvironment) {
+      throw new CutoverError(
+        "VERIFICATION_ENVIRONMENT_MISMATCH",
+
+        "Verification report belongs to a different environment.",
+      );
+    }
+    if (verifiedReport.environment !== undefined && targetEnvironment === undefined) {
+      throw new CutoverError(
+        "VERIFICATION_ENVIRONMENT_MISMATCH",
+        "Verification report environment cannot be bound to the cutover target.",
+      );
+    }
+    if (verifiedReport.safeForReadCutover !== true) {
+      throw new CutoverError(
+        "VERIFICATION_REQUIRED",
+        "shadow -> read-d1 requires a comparison report with no unexplained drift.",
+      );
+    }
   }
 
   let fenceToken;
   if (to === "write-d1") {
     assertAdapterMethod(fenceAdapter, "acquireWriteFence");
+
     assertAdapterMethod(fenceAdapter, "releaseWriteFence");
     fenceToken = await fenceAdapter.acquireWriteFence({
       tenantId,
@@ -108,12 +179,16 @@ export async function transitionTenant({
     version: current.version + 1,
     transitionedAt: transitionedAt.toISOString(),
     reason,
-    ...(verificationReport?.reportHash === undefined
-      ? {}
-      : { verificationReportHash: verificationReport.reportHash }),
+    ...(targetEnvironment === undefined ? {} : { environment: targetEnvironment }),
+    ...(verifiedReport === undefined
+      ? current.verificationReportHash === undefined
+        ? {}
+        : { verificationReportHash: current.verificationReportHash }
+      : { verificationReportHash: verifiedReport.reportHash }),
   };
 
   let stored;
+
   try {
     stored = normalizeMarker(
       await markerAdapter.compareAndSetMarker({

@@ -42,7 +42,8 @@ function isCacheableApiRead(
   origin: string,
 ): boolean {
   if (requestMethod(input, init) !== "GET") return false;
-  if (init?.cache === "no-cache" || init?.cache === "reload") return false;
+  const cacheMode = init?.cache ?? (input instanceof Request ? input.cache : undefined);
+  if (cacheMode === "no-cache" || cacheMode === "no-store" || cacheMode === "reload") return false;
 
   const url = requestUrl(input, origin);
   if (url.origin !== origin || !url.pathname.startsWith("/api/")) return false;
@@ -58,6 +59,15 @@ function cacheKey(input: RequestInfo | URL, init: RequestInit | undefined, origi
   const credentials =
     init?.credentials ?? (input instanceof Request ? input.credentials : "same-origin");
   return `${url.href}\u0000${credentials}\u0000${headers.get("accept") ?? ""}`;
+}
+
+function responseAllowsStorage(response: Response): boolean {
+  const cacheControl = response.headers.get("cache-control");
+  if (cacheControl === null) return true;
+  return !cacheControl.split(",").some((directive) => {
+    const name = directive.trim().split("=", 1)[0]?.toLowerCase();
+    return name === "no-store" || name === "private";
+  });
 }
 
 function abortedFetch(signal: AbortSignal): Promise<Response> {
@@ -120,7 +130,11 @@ export function createApiNavigationCachedFetch(
     }
 
     const response = await fetcher(input, init);
-    if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
+    if (
+      response.ok &&
+      responseAllowsStorage(response) &&
+      response.headers.get("content-type")?.includes("application/json")
+    ) {
       store(key, response.clone(), currentTime);
     }
     return response;

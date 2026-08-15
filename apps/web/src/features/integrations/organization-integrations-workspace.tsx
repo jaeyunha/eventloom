@@ -22,7 +22,7 @@ export function OrganizationIntegrationsWorkspace({
   const organizationBase = `/admin/organizations/${encodeURIComponent(organizationId)}`;
 
   return (
-    <main className={`${workspaceClassNames.page} ${styles.workspace}`}>
+    <div className={`${workspaceClassNames.page} ${styles.workspace}`}>
       <WorkspaceHeader
         breadcrumb={
           <WorkspaceBreadcrumb>
@@ -34,7 +34,9 @@ export function OrganizationIntegrationsWorkspace({
         description="Manage organization-owned connections and credentials, then configure event-specific delivery and webhooks inside each event."
         metadata={
           <>
-            <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
+            <WorkspaceMetaItem>
+              Organization <span className={styles.organizationId}>{organizationId}</span>
+            </WorkspaceMetaItem>
             <WorkspaceMetaItem>D1 remains authoritative</WorkspaceMetaItem>
           </>
         }
@@ -42,6 +44,7 @@ export function OrganizationIntegrationsWorkspace({
       />
 
       <SettingsShell
+        className={styles.settingsShell}
         wide
         navigation={
           <nav className={styles.navigation} aria-label="Integration settings">
@@ -100,6 +103,6 @@ export function OrganizationIntegrationsWorkspace({
           </SettingGroup>
         </div>
       </SettingsShell>
-    </main>
+    </div>
   );
 }

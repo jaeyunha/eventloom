@@ -934,12 +934,12 @@ export class MemberService {
     }
     const user = await this.#userForInvitation(invitation);
     const name = input.name === undefined ? user.name : nullableText(input.name, "name", 200);
-    const activationDigest = await sha256(JSON.stringify([claim.tokenDigest, name, passwordValue]));
+    const activationCredential = JSON.stringify([claim.tokenDigest, name, passwordValue]);
     let accepted: MemberInvitation;
     try {
       accepted = await this.#identity.claimInvitationActivation(
         invitation.id,
-        activationDigest,
+        activationCredential,
         isoDate(this.#clock(), "clock"),
       );
     } catch (error) {
@@ -1277,7 +1277,7 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
   readonly #users = new Map<string, MemberUser>();
   readonly #memberships = new Map<string, MemberMembership>();
   readonly #invitations = new Map<string, MemberInvitation>();
-  readonly #activationDigests = new Map<string, string>();
+  readonly #activationCredentials = new Map<string, string>();
   readonly #organizations = new Map<string, OrganizationRecord>();
 
   constructor(seed: MemberRepositorySeed & OrganizationRepositorySeed = {}) {
@@ -1575,7 +1575,7 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
 
   async claimInvitationActivation(
     invitationId: string,
-    activationDigest: string,
+    activationCredential: string,
     acceptedAt: string,
   ): Promise<MemberInvitation> {
     const current = this.#invitations.get(invitationId);
@@ -1583,7 +1583,7 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
       throw new MemberRepositoryConflictError("The invitation does not exist.");
     }
     if (current.status === "accepted") {
-      if (this.#activationDigests.get(invitationId) !== activationDigest) {
+      if (this.#activationCredentials.get(invitationId) !== activationCredential) {
         throw new MemberRepositoryConflictError(
           "The invitation is already being activated with different account details.",
         );
@@ -1600,7 +1600,7 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
       updatedAt: acceptedAt,
     };
     this.#invitations.set(invitationId, updated);
-    this.#activationDigests.set(invitationId, activationDigest);
+    this.#activationCredentials.set(invitationId, activationCredential);
     return clone(updated);
   }
 

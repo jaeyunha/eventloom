@@ -15,15 +15,13 @@ export function OrganizerAuthoringView({
     >
       <div className={styles.sectionHeading}>
         <div>
-          <p className={styles.sectionEyebrow}>
-            {assignmentOnly ? "Coverage operations" : "Organizer authoring"}
-          </p>
+          <p className={styles.sectionEyebrow}>{assignmentOnly ? "Assignments" : "Setup"}</p>
           <h2 id="authoring-heading">
             {assignmentOnly
-              ? "Manage reviewer coverage"
+              ? "Assign reviewers"
               : isDraft
-                ? "Draft configuration"
-                : "Live configuration"}
+                ? "Configure the plan"
+                : "Current plan configuration"}
           </h2>
         </div>
         {!assignmentOnly ? (
@@ -35,10 +33,10 @@ export function OrganizerAuthoringView({
       </div>
       <p className={styles.sectionIntro}>
         {assignmentOnly
-          ? "Choose a submission that needs attention, fill missing reviewer slots, preview coverage, and apply coverage without editing the plan or rubric. Existing assignments remain unchanged."
+          ? "Choose a round and submission, then select eligible reviewers. Preview assignments and apply them without editing the plan or rubric. Existing assignments remain unchanged."
           : isDraft
-            ? "Shape the review schedule, track targeting, and rubric before opening this version for reviewers. Round review teams are managed from the Review team tab."
-            : "Inspect the live grading configuration. Its rounds and rubric are locked to protect existing assignments and reviews; create a revision before changing them."}
+            ? "Shape the review schedule, track targeting, reviewer eligibility, assignment limits, and rubric before opening this version for reviewers. Round review teams are managed from the Review team tab."
+            : "Inspect the live grading configuration. Its rounds and rubric are locked to protect existing assignments and reviews; create a revision before changing rounds, eligibility, assignment limits, or scorecard criteria."}
       </p>
       {assignmentOnly ? <OrganizerAssignmentCoverage controller={controller} /> : null}
       {!assignmentOnly ? <OrganizerAuthoringWorkbench controller={controller} /> : null}

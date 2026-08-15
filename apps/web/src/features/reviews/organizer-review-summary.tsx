@@ -24,7 +24,7 @@ export function OrganizerReviewSummary({
       <header className={styles.header}>
         <div className={styles.heading}>
           <div className={styles.kickerRow}>
-            <span>Review operations</span>
+            <span>Plan overview</span>
             <Badge variant="outline">{planStatusLabel}</Badge>
           </div>
           <h2 id="review-overview-title">{planName}</h2>
@@ -33,10 +33,10 @@ export function OrganizerReviewSummary({
         <div className={styles.headerActions}>
           <Button variant="outline" onClick={onOpenReviewers} data-action="open-reviewers">
             <Users data-icon="inline-start" aria-hidden="true" />
-            Reviewers
+            Assignments
           </Button>
           <Button onClick={onOpenPlan} data-action="open-plan">
-            Review plan
+            Plan setup
             <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
           </Button>
         </div>

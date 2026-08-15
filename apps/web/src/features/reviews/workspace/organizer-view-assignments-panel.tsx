@@ -25,10 +25,28 @@ export function OrganizerAssignmentsPanel({
     onAuthoritativePlan,
     onAssignmentsPersisted,
     assignmentTarget,
+    setView,
   } = controller;
   const invitationHref = controller.organizationId
     ? `/admin/organizations/${encodeURIComponent(controller.organizationId)}/members?tab=invite`
     : "/admin/events";
+  if (seed.status === "draft") {
+    return (
+      <section className={styles.section} aria-labelledby="assignments-unavailable-heading">
+        <div className={styles.viewIntro}>
+          <p className={styles.sectionEyebrow}>Assignments</p>
+          <h2 id="assignments-unavailable-heading">Open the plan before assigning reviewers</h2>
+          <p>
+            Finish the rounds, dates, and scorecards in Setup, save the draft, and open the plan.
+            Round review teams and submission assignments will become available here.
+          </p>
+          <Button type="button" onClick={() => setView("setup")}>
+            Finish plan setup
+          </Button>
+        </div>
+      </section>
+    );
+  }
   return (
     <>
       <div className={styles.viewIntro}>
@@ -54,6 +72,11 @@ export function OrganizerAssignmentsPanel({
         assignmentOnly
         assignmentTarget={assignmentTarget ?? undefined}
       />
+      <div className={styles.viewIntro}>
+        <p className={styles.sectionEyebrow}>Assignments</p>
+        <h2>Progress and active assignments</h2>
+        <p>Monitor completed reviews, send reminders, and replace assignments as needed.</p>
+      </div>
       {seed.assignments.length === 0 ? (
         <Card>
           <CardHeader>

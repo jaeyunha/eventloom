@@ -507,7 +507,11 @@ export class AuthClient {
   async signOut(profile: StoredProfile): Promise<void> {
     const response = await request(this.fetcher, requestUrl(this.origin, "/api/auth/sign-out"), {
       method: "POST",
-      headers: { accept: "application/json", cookie: cookieHeader(profile) },
+      headers: {
+        accept: "application/json",
+        cookie: cookieHeader(profile),
+        origin: this.origin,
+      },
     });
     if (!response.ok) throw new AuthClientError("transport", "Remote session invalidation failed");
   }

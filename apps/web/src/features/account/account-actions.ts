@@ -9,12 +9,14 @@ export async function signOutAccount({
 }: Readonly<{
   fetcher?: AccountActionFetcher;
   navigate?: (path: string) => void;
-}> = {}): Promise<void> {
-  await fetcher("/api/auth/sign-out", {
+}> = {}): Promise<boolean> {
+  const response = await fetcher("/api/auth/sign-out", {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json" },
     body: "{}",
-  }).catch(() => undefined);
+  }).catch(() => null);
+  if (response === null || !response.ok) return false;
   navigate("/login");
+  return true;
 }

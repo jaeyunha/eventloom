@@ -40,8 +40,21 @@ import {
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
 
+const organizerEventWorkspace = vi.hoisted(() => ({
+  current: null as {
+    readonly id: string;
+    readonly name: string;
+    readonly organizationId: string;
+    readonly slug: string;
+  } | null,
+}));
+
 vi.mock("@/features/admin/organizer-event-workspace", () => ({
-  useOrganizerEventId: (fallbackEventId?: string) => fallbackEventId,
+  useOrganizerEventId: (fallbackEventId?: string) =>
+    organizerEventWorkspace.current?.id ?? fallbackEventId,
+  useOrganizerEventSlug: (fallbackEventReference: string) =>
+    organizerEventWorkspace.current?.slug ?? fallbackEventReference,
+  useOrganizerEventWorkspace: () => organizerEventWorkspace.current,
 }));
 
 it("derives an active plan closing date from its final round", () => {
@@ -806,89 +819,76 @@ describe("review workspace", () => {
     expect(loader).toHaveBeenNthCalledWith(2, "event-empty", "", authoritative.planId);
   });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
-    const markup = renderToStaticMarkup(
-      createElement(ReviewWorkspace, {
-        eventId: "event-empty",
-        mode: "organizer",
-        initialState: { organizerPlanMissing: true },
-      }),
-    );
+    organizerEventWorkspace.current = {
+      id: "87aad17-5e75-4732-9085-65df6b8e9a9b",
+      name: "Test Summit Local",
+      organizationId: "org-selected",
+      slug: "test-summit-local",
+    };
+    try {
+      const markup = renderToStaticMarkup(
+        createElement(ReviewWorkspace, {
+          eventId: "test-summit-local",
+          organizationId: "org-selected",
+          mode: "organizer",
+          initialState: { organizerPlanMissing: true },
+        }),
+      );
 
-    expect(markup).toContain("Create the first evaluation plan");
-    expect(markup).toContain("Organizer review setup");
-    expect(markup).not.toContain("event-empty · organizer");
-    expect(markup).toContain('id="create-plan-name"');
-    expect(markup).not.toContain('id="create-plan-event-id"');
-    expect(markup).toContain('id="create-plan-rounds"');
-    expect(markup).toContain('id="create-plan-first-rubric"');
-    expect(markup).toContain('id="create-plan-first-criterion"');
-    expect(markup).toContain('id="create-plan-blind-review"');
-    expect(markup).toContain("Round review teams are managed after creation from Review team.");
+      expect(markup).toContain("Create the first evaluation plan");
+      expect(markup).toContain("Test Summit Local");
+      expect(markup).toContain("test-summit-local");
+      expect(markup).not.toContain("87aad17-5e75-4732-9085-65df6b8e9a9b");
+      expect(markup).toContain("Organizer review setup");
+      expect(markup).toContain('id="create-plan-name"');
+      expect(markup).toContain('for="create-plan-name"');
+      expect(markup).toContain('id="create-plan-rounds"');
+      expect(markup).toContain('id="create-plan-first-rubric"');
+      expect(markup).toContain('id="create-plan-first-criterion"');
+      expect(markup).toContain('id="create-plan-blind-review"');
+      expect(markup).toContain("Create draft plan");
+      expect(markup).toContain("Round review teams are managed after creation from Review team.");
+      expect(markup).not.toContain('id="create-plan-event-id"');
+    } finally {
+      organizerEventWorkspace.current = null;
+    }
   });
 
-  it("builds the exact canonical DTO for a multi-round blind draft", () => {
+  it("builds the exact canonical DTO for one editable starter round", () => {
     expect(
       buildEvaluationPlanCreateDto({
         eventId: "event-99",
         name: "  Program committee  ",
-        roundCount: 2,
-        firstRoundTitle: "First pass",
-        firstRubricTitle: "Proposal rubric",
-        firstCriterionTitle: "Quality",
-        blindReview: true,
       }),
     ).toEqual({
       id: "plan-event-99-program-committee",
       eventId: "event-99",
       name: "Program committee",
-      blindReview: true,
+      blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 5 },
       rounds: [
         {
           id: "round-1",
-          name: "First pass",
+          name: "Initial review",
           sequence: 1,
           opensAt: null,
           closesAt: null,
-          blindReview: true,
-          anonymization: "double",
+          blindReview: false,
+          anonymization: "none",
           rubric: {
             id: "rubric-1",
-            name: "Proposal rubric",
+            name: "Evaluation rubric",
             criteria: [
               {
                 id: "criterion-1-1",
-                label: "Quality",
+                label: "Overall quality",
                 description: "Describe the evidence reviewers should consider.",
                 minimum: 1,
                 maximum: 5,
                 weight: 1,
                 required: true,
-              },
-            ],
-          },
-        },
-        {
-          id: "round-2",
-          name: "First pass 2",
-          sequence: 2,
-          opensAt: null,
-          closesAt: null,
-          blindReview: true,
-          anonymization: "double",
-          rubric: {
-            id: "rubric-2",
-            name: "Proposal rubric 2",
-            criteria: [
-              {
-                id: "criterion-2-1",
-                label: "Quality 2",
-                description: "Describe the evidence reviewers should consider.",
-                minimum: 1,
-                maximum: 5,
-                weight: 1,
-                required: true,
+                inputType: "numeric",
               },
             ],
           },
@@ -901,11 +901,6 @@ describe("review workspace", () => {
     const input = {
       eventId: "event-empty",
       name: "Program committee",
-      roundCount: 1,
-      firstRoundTitle: "Initial review",
-      firstRubricTitle: "Evaluation rubric",
-      firstCriterionTitle: "Overall quality",
-      blindReview: false,
     };
     const requests: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const responsePlan = { id: "plan-created" };
@@ -929,11 +924,6 @@ describe("review workspace", () => {
     const input = {
       eventId: "event-empty",
       name: "Program committee",
-      roundCount: 1,
-      firstRoundTitle: "Initial review",
-      firstRubricTitle: "Evaluation rubric",
-      firstCriterionTitle: "Overall quality",
-      blindReview: false,
     };
 
     await expect(
@@ -954,24 +944,14 @@ describe("review workspace", () => {
       validateCreateEvaluationPlanForm({
         eventId: "event-1",
         name: " ",
-        roundCount: 1,
-        firstRoundTitle: "Initial review",
-        firstRubricTitle: "Rubric",
-        firstCriterionTitle: "Quality",
-        blindReview: false,
       }),
     ).toBe("Plan name is required.");
     expect(
       validateCreateEvaluationPlanForm({
-        eventId: "event-1",
+        eventId: "",
         name: "Plan",
-        roundCount: 11,
-        firstRoundTitle: "Initial review",
-        firstRubricTitle: "Rubric",
-        firstCriterionTitle: "Quality",
-        blindReview: false,
       }),
-    ).toBe("Rounds must be a whole number between 1 and 10.");
+    ).toBe("Event ID is required.");
   });
 
   it("does not render demo seed content when no initial state is supplied", () => {
@@ -1008,7 +988,7 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Review operations");
+    expect(markup).toContain("Plan overview");
     expect(markup).toContain("Organizer review");
     expect(markup).toContain("Open for review");
     expect(markup).toContain("Initial committee review");
@@ -1020,23 +1000,38 @@ describe("review workspace", () => {
     expect(markup).not.toContain("Blind review");
   });
   it("keeps organizer review navigation scoped to the selected organization", () => {
-    const markup = renderToStaticMarkup(
-      createElement(ReviewWorkspace, {
-        eventId: "summit-2026",
-        mode: "organizer",
-        organizationId: "org-selected",
-        initialState: organizerState,
-      }),
-    );
+    organizerEventWorkspace.current = {
+      id: "87aad17-5e75-4732-9085-65df6b8e9a9b",
+      name: "Summit 2026",
+      organizationId: "org-selected",
+      slug: "summit-2026",
+    };
+    try {
+      const markup = renderToStaticMarkup(
+        createElement(ReviewWorkspace, {
+          eventId: "summit-2026",
+          mode: "organizer",
+          organizationId: "org-selected",
+          initialState: organizerState,
+        }),
+      );
 
-    expect(markup).toContain('href="/admin/organizations/org-selected/events/summit-2026/reviews"');
-    expect(markup).not.toContain('href="/review"');
-    expect(markup).not.toContain("Reviewer AI workspace");
-    expect(markup).toContain('href="/admin/organizations/org-selected/members?tab=invite"');
-    expect(markup).toContain("Invite reviewers");
-    expect(markup).toContain("Review team");
+      expect(markup).toContain(
+        'href="/admin/organizations/org-selected/events/summit-2026/reviews"',
+      );
+      expect(markup).not.toContain(
+        'href="/admin/organizations/org-selected/events/87aad17-5e75-4732-9085-65df6b8e9a9b/reviews"',
+      );
+      expect(markup).not.toContain('href="/review"');
+      expect(markup).not.toContain("Reviewer AI workspace");
+      expect(markup).toContain('href="/admin/organizations/org-selected/members?tab=invite"');
+      expect(markup).toContain("Invite reviewers");
+      expect(markup).toContain("Review team");
 
-    expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
+      expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
+    } finally {
+      organizerEventWorkspace.current = null;
+    }
   });
 
   it("omits redundant reviewer navigation in evaluator mode", () => {
@@ -1061,11 +1056,27 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Plan &amp; rubric");
+    expect(markup).toContain("Setup");
     expect(markup).not.toContain("Configure the evaluation plan");
     expect(markup).not.toContain("Add round");
     expect(markup).not.toContain("Add criterion");
     expect(markup).not.toContain("Round reviewer pool");
+  });
+
+  it("opens draft plans directly in setup", () => {
+    const plan = testPlan("event-empty");
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "event-empty",
+        mode: "organizer",
+        initialState: { organizer: { ...plan, status: "draft" } },
+      }),
+    );
+
+    expect(markup).toContain("Configure the plan");
+    expect(markup).toContain("Add round");
+    expect(markup).toContain("Reviews per submission");
+    expect(markup).not.toContain("Plan overview");
   });
 
   it("keeps round reviewer-pool editing out of plan authoring", () => {
@@ -1381,8 +1392,8 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain('aria-live="polite"');
     expect(evaluatorMarkup).toContain("Autosave ready");
     expect(organizerMarkup).toContain('role="tablist"');
-    expect(organizerMarkup).toContain("Plan &amp; rubric");
-    expect(organizerMarkup).toContain("Reviewers");
+    expect(organizerMarkup).toContain("Setup");
+    expect(organizerMarkup).toContain("Assignments");
     expect(organizerMarkup).toContain("Results");
     expect(organizerMarkup).not.toContain("criteriaList");
     expect(organizerMarkup).not.toContain("criterionEditor");
@@ -1404,8 +1415,8 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(organizerMarkup).toContain("Plan &amp; rubric");
-    expect(organizerMarkup).toContain("Reviewers");
+    expect(organizerMarkup).toContain("Setup");
+    expect(organizerMarkup).toContain("Assignments");
     expect(organizerMarkup).toContain("Results");
     expect(organizerMarkup).not.toContain("Round reviewer pool");
     expect(organizerMarkup).not.toContain("Sort aggregate score");
@@ -1922,6 +1933,8 @@ describe("review workspace", () => {
       });
       vi.doMock("@/features/admin/organizer-event-workspace", () => ({
         useOrganizerEventId: (fallbackEventId?: string) => fallbackEventId,
+        useOrganizerEventSlug: (fallbackEventReference: string) => fallbackEventReference,
+        useOrganizerEventWorkspace: () => null,
       }));
       vi.doMock("./workspace/organizer-reviewer-pool-controller", () => ({
         useOrganizerReviewerPool: () => ({
@@ -2069,11 +2082,77 @@ describe("review workspace", () => {
       tree = renderTree();
       const organizerTabs = hostElements(tree).find((element) => {
         const props = element.props as Record<string, unknown>;
-        return props.value === "overview" && typeof props.onValueChange === "function";
+        return props.value === "setup" && typeof props.onValueChange === "function";
       });
       if (organizerTabs === undefined) throw new Error("Expected the organizer tab control.");
+      fireChange(organizerTabs, { value: "assignments" });
+      tree = renderTree();
+      findHost(tree, (props) => props.children === "Open the plan before assigning reviewers");
+      expect(
+        hostElements(tree).some(
+          (element) => (element.props as Record<string, unknown>).id === "assignment-submission-id",
+        ),
+      ).toBe(false);
+
+      fireChange(organizerTabs, { value: "decisions" });
+      tree = renderTree();
+      findHost(tree, (props) => props.children === "Results are not available yet");
+      expect(
+        hostElements(tree).some(
+          (element) =>
+            (element.props as Record<string, unknown>).id === "organizer-aggregate-round",
+        ),
+      ).toBe(false);
       fireChange(organizerTabs, { value: "setup" });
       tree = renderTree();
+      const reviewsPerSubmission = findHost(
+        tree,
+        (props) => props.id === "evaluation-plan-reviews-per-submission",
+      );
+      fireChange(reviewsPerSubmission, { value: "2" });
+      tree = renderTree();
+      expect(
+        (
+          findHost(tree, (props) => props.id === "evaluation-plan-reviews-per-submission")
+            .props as Record<string, unknown>
+        ).value,
+      ).toBe(2);
+      findHost(tree, (props) => props.id === "evaluation-plan-max-assignments-per-reviewer");
+
+      const initialRemoveRoundButtons = hostElements(tree).filter(
+        (element) => (element.props as Record<string, unknown>).children === "Remove round",
+      );
+      const removeCalibrationRound = initialRemoveRoundButtons.at(-1);
+      if (removeCalibrationRound === undefined)
+        throw new Error("Expected a removable second round.");
+      await fireClick(removeCalibrationRound);
+      tree = renderTree();
+      expect(
+        hostElements(tree).some(
+          (element) => (element.props as Record<string, unknown>).id === "round-calibration-name",
+        ),
+      ).toBe(false);
+      expect(
+        hostElements(tree).some(
+          (element) => (element.props as Record<string, unknown>).children === "Remove round",
+        ),
+      ).toBe(false);
+
+      await fireClick(findHost(tree, (props) => props.children === "Add round"));
+      tree = renderTree();
+      expect(
+        (findHost(tree, (props) => props.id === "round-2-name").props as Record<string, unknown>)
+          .value,
+      ).toBe("Round 2");
+      expect(
+        (
+          findHost(tree, (props) => props.id === "round-2-reviewer-pool").props as Record<
+            string,
+            unknown
+          >
+        ).value,
+      ).toEqual([]);
+      findHost(tree, (props) => props["aria-label"] === "Overall quality input type");
 
       const roundName = hostElements(tree).find(
         (element) => (element.props as Record<string, unknown>).id === "round-initial-name",
@@ -2130,6 +2209,23 @@ describe("review workspace", () => {
         ).checked,
         "required criterion state should update safely",
       ).toBe(false);
+      const removeInitialRound = hostElements(tree).find(
+        (element) => (element.props as Record<string, unknown>).children === "Remove round",
+      );
+      if (removeInitialRound === undefined)
+        throw new Error("Expected the initial round to be removable.");
+      await fireClick(removeInitialRound);
+      tree = renderTree();
+      await fireClick(findHost(tree, (props) => props.children === "Add round"));
+      tree = renderTree();
+      expect(
+        (findHost(tree, (props) => props.id === "round-2-name").props as Record<string, unknown>)
+          .value,
+      ).toBe("Round 2");
+      expect(
+        (findHost(tree, (props) => props.id === "round-3-name").props as Record<string, unknown>)
+          .value,
+      ).toBe("Round 3");
       stateSlots.length = 0;
       refSlots.length = 0;
       pendingUpdates.length = 0;
@@ -2206,7 +2302,7 @@ describe("review workspace", () => {
         ),
       ).toBe(false);
 
-      const previewButton = findHost(tree, (props) => props.children === "Preview coverage");
+      const previewButton = findHost(tree, (props) => props.children === "Preview assignments");
       expect(
         (previewButton.props as Record<string, unknown>).disabled,
         "distribution preview should be enabled for an open plan",
@@ -2215,7 +2311,7 @@ describe("review workspace", () => {
       tree = renderTree();
       expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/preview"))).toBe(true);
 
-      const applyButton = findHost(tree, (props) => props.children === "Apply coverage");
+      const applyButton = findHost(tree, (props) => props.children === "Apply assignments");
       expect(
         (applyButton.props as Record<string, unknown>).disabled,
         "distribution apply should enable after a current preview",

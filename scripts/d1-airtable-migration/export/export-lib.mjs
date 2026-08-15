@@ -188,14 +188,27 @@ function safeApiOrigin(value) {
   } catch {
     fail("CONFIGURATION_ERROR", "apiOrigin must be an absolute HTTP(S) URL.");
   }
-  if (!new Set(["http:", "https:"]).has(url.protocol) || url.username || url.password) {
-    fail("CONFIGURATION_ERROR", "apiOrigin must be an HTTP(S) origin without credentials.");
+  const loopback =
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]" ||
+    url.hostname === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(url.hostname);
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+    url.username ||
+    url.password
+  ) {
+    fail(
+      "CONFIGURATION_ERROR",
+      "apiOrigin must use HTTPS except for loopback HTTP and must not contain credentials.",
+    );
   }
   return url.origin;
 }
 
 async function airtableRequest({ fetchImplementation, accessToken, url, operation }) {
   let response;
+
   try {
     response = await fetchImplementation(url, {
       method: "GET",

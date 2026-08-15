@@ -10,8 +10,10 @@ function jsonResponse(value: unknown): Response {
 }
 
 describe("API navigation cache", () => {
-  it("reuses a successful private API read within the navigation window", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ value: "cached" }));
+  it("never caches a request that explicitly uses no-store", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => jsonResponse({ value: "cached" }));
     const cachedFetch = createApiNavigationCachedFetch(fetcher, {
       origin: ORIGIN,
       ttlMs: 60_000,
@@ -28,8 +30,29 @@ describe("API navigation cache", () => {
 
     await expect(first.json()).resolves.toEqual({ value: "cached" });
     await expect(second.json()).resolves.toEqual({ value: "cached" });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["no-store", "private, max-age=60"])(
+    "does not store responses declaring Cache-Control: %s",
+    async (cacheControl) => {
+      const fetcher = vi.fn<typeof fetch>().mockImplementation(
+        async () =>
+          new Response(JSON.stringify({ value: "fresh" }), {
+            headers: {
+              "cache-control": cacheControl,
+              "content-type": "application/json",
+            },
+          }),
+      );
+      const cachedFetch = createApiNavigationCachedFetch(fetcher, { origin: ORIGIN });
+
+      await cachedFetch("/api/admin/organizations/org-1/overview/core");
+      await cachedFetch("/api/admin/organizations/org-1/overview/core");
+
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("expires cached reads and fetches a fresh response", async () => {
     let currentTime = 1_000;

@@ -1,15 +1,26 @@
 import type { PortalCapability } from "./types";
 
-export async function signOutAndRedirect(
-  navigate: (path: string) => void = (path) => window.location.assign(path),
-): Promise<void> {
-  await fetch("/api/auth/sign-out", {
+export type PortalSignOutFetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export async function signOutAndRedirect({
+  fetcher = globalThis.fetch,
+  navigate = (path) => window.location.assign(path),
+}: Readonly<{
+  fetcher?: PortalSignOutFetcher;
+  navigate?: (path: string) => void;
+}> = {}): Promise<boolean> {
+  const response = await fetcher("/api/auth/sign-out", {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json" },
     body: "{}",
-  }).catch(() => undefined);
+  }).catch(() => null);
+  if (response === null || !response.ok) return false;
   navigate("/login");
+  return true;
 }
 
 export function portalRouteAuthorized(input: {

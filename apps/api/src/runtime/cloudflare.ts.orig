@@ -34,8 +34,6 @@ import type {
   MemberUser,
   SetupLinkClaim,
 } from "../features/members/types";
-import type { AirtableTransport } from "../infrastructure/airtable";
-import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareBindings,
   type CloudflareOutboxInvitationTransient,
@@ -69,9 +67,12 @@ export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
     readonly API_ORIGIN?: string;
     readonly RUNTIME_PROFILE?: string;
+    /** Legacy global Airtable bindings are ignored; each connection chooses its own credential and base. */
     readonly AIRTABLE_ACCESS_TOKEN?: string;
     readonly AIRTABLE_BASE_ID?: string;
     readonly AIRTABLE_BASE_DEV_ID?: string;
+    readonly AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?: string;
+    readonly AIRTABLE_PAT_CONNECTION_ENABLED?: string;
     readonly BETTER_AUTH_SECRET?: string;
     readonly OPENSEND_API_KEY?: string;
     readonly OPENSEND_SENDING_API_KEY?: string;
@@ -85,7 +86,6 @@ export type RuntimeBindings = ApiBindings &
     readonly AIRTABLE_API_ORIGIN?: string;
     readonly AIRTABLE_OAUTH_CLIENT_ID?: string;
     readonly AIRTABLE_OAUTH_CLIENT_SECRET?: string;
-    readonly AIRTABLE_TRANSPORT?: AirtableTransport;
     readonly AI?: CloudflareAiBinding;
     readonly AI_MODEL?: string;
     readonly AI_PROVIDER?: string;
@@ -2085,23 +2085,21 @@ export class CloudflareIntegrationAdminRepository
     return { summary, secret };
   }
 
-  async revokeApiKey(
-    organizationId: string,
-    apiKeyId: string,
-    eventId?: string,
-  ): Promise<boolean> {
+  async revokeApiKey(organizationId: string, apiKeyId: string, eventId?: string): Promise<boolean> {
     const now = new Date().toISOString();
     const existing = await this.database
       .prepare(
         `SELECT id FROM api_keys
-          WHERE id = ? AND organization_id = ? AND event_id = ? AND revoked_at IS NULL`,
+          WHERE id = ? AND organization_id = ? AND (? IS NULL OR event_id = ?) AND revoked_at IS NULL`,
       )
-      .bind(apiKeyId, organizationId, eventId)
+      .bind(apiKeyId, organizationId, eventId ?? null, eventId ?? null)
       .first<{ id?: unknown }>();
     if (existing === null) return false;
     await this.database
-      .prepare("UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE id = ?")
-      .bind(now, now, apiKeyId)
+      .prepare(
+        "UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE id = ? AND organization_id = ?",
+      )
+      .bind(now, now, apiKeyId, organizationId)
       .run();
     return true;
   }
@@ -2115,6 +2113,8 @@ const fixedOrigins = {
 } as const;
 
 const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
+const LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
+  "eventloom-integrated-local-airtable-credential-key-v2";
 const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
 const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
 
@@ -2127,11 +2127,18 @@ export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeB
   return {
     ...source,
     API_ORIGIN: fixedOrigins.local.api,
-    AIRTABLE_BASE_ID: source.AIRTABLE_BASE_DEV_ID?.trim() ?? "",
+    AIRTABLE_CREDENTIAL_ENCRYPTION_KEY:
+      source.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?.trim() || LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
     BETTER_AUTH_SECRET: LOCAL_BETTER_AUTH_SECRET,
     CACHE_INVALIDATION_URL: LOCAL_CACHE_INVALIDATION_URL,
     CACHE_INVALIDATION_TOKEN: LOCAL_CACHE_INVALIDATION_TOKEN,
   };
+}
+
+function patConnectionEnabled(value: string | undefined): boolean | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === undefined || normalized.length === 0 || normalized === "false") return false;
+  return normalized === "true" ? true : null;
 }
 
 function configuredApiOrigin(bindings: RuntimeBindings): string | null {
@@ -2281,6 +2288,19 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
   }
   if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
     issues.push("BETTER_AUTH_SECRET must contain at least 32 characters");
+  }
+  if (
+    environment !== "local" &&
+    nonEmpty(bindings.AIRTABLE_OAUTH_CLIENT_ID) &&
+    (!nonEmpty(bindings.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY) ||
+      bindings.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY.trim().length < 32)
+  ) {
+    issues.push(
+      "AIRTABLE_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters when Airtable OAuth is configured",
+    );
+  }
+  if (patConnectionEnabled(bindings.AIRTABLE_PAT_CONNECTION_ENABLED) === null) {
+    issues.push("AIRTABLE_PAT_CONNECTION_ENABLED must be true or false");
   }
   if (!nonEmpty(bindings.CACHE_INVALIDATION_URL)) {
     issues.push("CACHE_INVALIDATION_URL is required for the integrated runtime");
@@ -2437,32 +2457,9 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           : "better-auth.session_token",
     },
   );
-  const airtableConfigured =
-    nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN) && nonEmpty(bindings.AIRTABLE_BASE_ID);
-  const transport: AirtableTransport =
-    bindings.AIRTABLE_TRANSPORT ??
-    (airtableConfigured
-      ? new RetryingAirtableTransport(
-          new FetchAirtableTransport({
-            token: bindings.AIRTABLE_ACCESS_TOKEN ?? "",
-            ...(bindings.AIRTABLE_API_ORIGIN === undefined
-              ? {}
-              : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
-          }),
-        )
-      : {
-          request: async () => {
-            throw new Error("Airtable integration is not configured.");
-          },
-        });
   const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
-  const optionalAirtableBaseId = nonEmpty(bindings.AIRTABLE_BASE_ID)
-    ? bindings.AIRTABLE_BASE_ID
-    : "optional-airtable-disabled";
   const dependencies = createD1ApplicationDependencies({
     authenticator,
-    baseId: optionalAirtableBaseId,
-    transport,
     database: bindings.DB,
     agendaCoordinator: bindings.AGENDA_COORDINATOR,
     privateFiles: bindings.PRIVATE_FILES,
@@ -2502,26 +2499,33 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       })(),
     retryCalendarDelivery: async () => false,
   };
-  const airtableIntegration =
-    nonEmpty(bindings.AIRTABLE_OAUTH_CLIENT_ID) && nonEmpty(bindings.AIRTABLE_BASE_ID)
-      ? createAirtableIntegrationDependencies({
-          database: bindings.DB,
-          authenticator,
-          clientId: bindings.AIRTABLE_OAUTH_CLIENT_ID,
-          ...(bindings.AIRTABLE_OAUTH_CLIENT_SECRET === undefined
+  const airtableIntegration = nonEmpty(bindings.AIRTABLE_OAUTH_CLIENT_ID)
+    ? createAirtableIntegrationDependencies({
+        database: bindings.DB,
+        authenticator,
+        clientId: bindings.AIRTABLE_OAUTH_CLIENT_ID,
+        ...(bindings.AIRTABLE_OAUTH_CLIENT_SECRET === undefined
+          ? {}
+          : { clientSecret: bindings.AIRTABLE_OAUTH_CLIENT_SECRET }),
+        patConnectionsEnabled:
+          patConnectionEnabled(bindings.AIRTABLE_PAT_CONNECTION_ENABLED) === true,
+        webOrigin: bindings.WEB_ORIGIN,
+        redirectUri: `${apiOrigin.replace(/\/$/, "")}/api/integrations/airtable/oauth/callback`,
+        cipher: createAirtableSecretCipher({
+          credentialEncryptionKey: bindings.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY ?? "",
+          ...(bindings.BETTER_AUTH_SECRET === undefined
             ? {}
-            : { clientSecret: bindings.AIRTABLE_OAUTH_CLIENT_SECRET }),
-          defaultBaseId: bindings.AIRTABLE_BASE_ID,
-          redirectUri: `${(bindings.API_ORIGIN ?? bindings.WEB_ORIGIN).replace(/\/$/, "")}/api/integrations/airtable/organizations/{organizationId}/oauth/callback`,
-          cipher: createAirtableSecretCipher(bindings.BETTER_AUTH_SECRET ?? ""),
-          sessions: businessRepositories.sessions,
-          ...(bindings.AIRTABLE_API_ORIGIN === undefined
-            ? {}
-            : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
-        })
-      : undefined;
+            : { legacyBetterAuthSecret: bindings.BETTER_AUTH_SECRET }),
+        }),
+        sessions: businessRepositories.sessions,
+        ...(bindings.AIRTABLE_API_ORIGIN === undefined
+          ? {}
+          : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
+      })
+    : undefined;
   return {
     ...dependencies,
+    ...(dependencies.access === undefined ? {} : { access: dependencies.access }),
     auth: betterAuthRuntime,
     members: { service: memberService },
     integrations,
@@ -2529,35 +2533,84 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   };
 }
 
-function createAirtableSecretCipher(secret: string) {
-  const keyPromise = crypto.subtle
-    .digest("SHA-256", new TextEncoder().encode(`airtable:${secret}`))
-    .then((key) => crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt", "decrypt"]));
+export function createAirtableSecretCipher(input: {
+  credentialEncryptionKey: string;
+  legacyBetterAuthSecret?: string;
+}) {
+  const credentialEncryptionKey = input.credentialEncryptionKey.trim();
+  if (credentialEncryptionKey.length === 0) {
+    throw new TypeError("AIRTABLE_CREDENTIAL_ENCRYPTION_KEY is required for Airtable credentials.");
+  }
+  const credentialKeyPromise = createAirtableCipherKey(
+    `airtable-credential:v2:${credentialEncryptionKey}`,
+  );
+  // This branch is only for unversioned ciphertext created before v2. New data never derives from
+  // BETTER_AUTH_SECRET and legacy data must be reconnected before that secret is rotated.
+  const legacyKeyPromise = nonEmpty(input.legacyBetterAuthSecret)
+    ? createAirtableCipherKey(`airtable:${input.legacyBetterAuthSecret}`)
+    : null;
   return {
     encrypt: async (value: string) => {
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      const key = await keyPromise;
-      const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        key,
-        new TextEncoder().encode(value),
-      );
-      return `${encodeBase64Url(iv)}.${encodeBase64Url(new Uint8Array(encrypted))}`;
+      const encrypted = await encryptAirtableSecret(credentialKeyPromise, iv, value);
+      return `v2.${encodeBase64Url(iv)}.${encodeBase64Url(new Uint8Array(encrypted))}`;
     },
     decrypt: async (value: string) => {
-      const [iv, encrypted] = value.split(".");
-      if (iv === undefined || encrypted === undefined) {
+      const segments = value.split(".");
+      if (segments[0] === "v2") {
+        const [version, iv, encrypted] = segments;
+        if (
+          version !== "v2" ||
+          iv === undefined ||
+          encrypted === undefined ||
+          segments.length !== 3
+        ) {
+          throw new Error("Invalid Airtable secret reference.");
+        }
+        return decryptAirtableSecret(credentialKeyPromise, iv, encrypted);
+      }
+      const [iv, encrypted] = segments;
+      if (
+        iv === undefined ||
+        encrypted === undefined ||
+        segments.length !== 2 ||
+        legacyKeyPromise === null
+      ) {
         throw new Error("Invalid Airtable secret reference.");
       }
-      const key = await keyPromise;
-      const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: decodeBase64Url(iv) as Uint8Array<ArrayBuffer> },
-        key,
-        decodeBase64Url(encrypted),
-      );
-      return new TextDecoder().decode(decrypted);
+      return decryptAirtableSecret(legacyKeyPromise, iv, encrypted);
     },
   };
+}
+
+async function createAirtableCipherKey(keyMaterial: string): Promise<CryptoKey> {
+  const rawKey = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(keyMaterial));
+  return crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+async function encryptAirtableSecret(
+  keyPromise: Promise<CryptoKey>,
+  iv: Uint8Array,
+  value: string,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await keyPromise,
+    new TextEncoder().encode(value),
+  );
+}
+
+async function decryptAirtableSecret(
+  keyPromise: Promise<CryptoKey>,
+  iv: string,
+  encrypted: string,
+): Promise<string> {
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: decodeBase64Url(iv) as Uint8Array<ArrayBuffer> },
+    await keyPromise,
+    decodeBase64Url(encrypted),
+  );
+  return new TextDecoder().decode(decrypted);
 }
 
 function encodeBase64Url(bytes: Uint8Array): string {

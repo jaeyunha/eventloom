@@ -1,8 +1,13 @@
 import { canonicalHash, canonicalize, hashRecordSet } from "./canonical.mjs";
 
+const REPORT_STATUSES = new Set(["match", "explained-drift", "unexplained-drift"]);
+const MISMATCH_KINDS = new Set(["source-only", "target-only", "content"]);
+const HASH_PATTERN = /^[a-f0-9]{64}$/u;
+
 export class ComparisonError extends Error {
   constructor(code, message) {
     super(message);
+
     this.name = "ComparisonError";
     this.code = code;
   }
@@ -15,10 +20,72 @@ function requiredText(value, label) {
   return value.trim();
 }
 
+function plainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function exactKeys(value, required, optional = []) {
+  if (!plainObject(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  return (
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key))
+  );
+}
+
+function nonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validHash(value, nullable = false) {
+  return (nullable && value === null) || (typeof value === "string" && HASH_PATTERN.test(value));
+}
+
+function validExplanation(value, nullable = false) {
+  if (nullable && value === null) return true;
+  return (
+    exactKeys(value, ["domain", "recordId", "reason", "ticket"]) &&
+    typeof value.domain === "string" &&
+    value.domain.trim().length > 0 &&
+    typeof value.recordId === "string" &&
+    value.recordId.trim().length > 0 &&
+    typeof value.reason === "string" &&
+    value.reason.trim().length > 0 &&
+    (value.ticket === null || typeof value.ticket === "string")
+  );
+}
+
+function validMismatch(value) {
+  return (
+    exactKeys(value, [
+      "domain",
+      "recordId",
+      "kind",
+      "sourceHash",
+      "targetHash",
+      "explained",
+      "explanation",
+    ]) &&
+    typeof value.domain === "string" &&
+    value.domain.trim().length > 0 &&
+    typeof value.recordId === "string" &&
+    value.recordId.trim().length > 0 &&
+    MISMATCH_KINDS.has(value.kind) &&
+    validHash(value.sourceHash, true) &&
+    validHash(value.targetHash, true) &&
+    typeof value.explained === "boolean" &&
+    validExplanation(value.explanation, true) &&
+    value.explained === (value.explanation !== null)
+  );
+}
+
 function normalizeDomains(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new ComparisonError("INPUT_INVALID", `${label} must be an object keyed by domain.`);
   }
+
   const normalized = {};
   for (const domain of Object.keys(value).sort()) {
     if (!Array.isArray(value[domain])) {
@@ -138,9 +205,17 @@ export function compareDomainRecords({
   };
 }
 
-export function compareSnapshots({ source, target, explanations = [], identity } = {}) {
+export function compareSnapshots({
+  source,
+  target,
+  explanations = [],
+  identity,
+  tenantId,
+  environment,
+} = {}) {
   const sourceDomains = normalizeDomains(source, "source");
   const targetDomains = normalizeDomains(target, "target");
+
   const explanationIndex = normalizeExplanations(explanations);
   const domains = [
     ...new Set([...Object.keys(sourceDomains), ...Object.keys(targetDomains)]),
@@ -167,6 +242,10 @@ export function compareSnapshots({ source, target, explanations = [], identity }
   const unexplainedCount = mismatches.filter((mismatch) => !mismatch.explained).length;
   const report = {
     version: 1,
+    ...(tenantId === undefined ? {} : { tenantId: requiredText(tenantId, "Tenant ID") }),
+    ...(environment === undefined
+      ? {}
+      : { environment: requiredText(environment, "Environment").toLowerCase() }),
     status:
       mismatches.length === 0
         ? "match"
@@ -189,10 +268,137 @@ export function compareSnapshots({ source, target, explanations = [], identity }
   return { ...report, reportHash: canonicalHash(report) };
 }
 
+export function validateVerificationReport(report) {
+  const topLevelKeys = [
+    "version",
+    "status",
+    "safeForReadCutover",
+    "summary",
+    "domains",
+    "mismatches",
+    "unusedExplanations",
+    "reportHash",
+  ];
+  if (!exactKeys(report, topLevelKeys, ["tenantId", "environment"])) {
+    throw new ComparisonError("REPORT_INVALID", "Verification report has an invalid structure.");
+  }
+  if (
+    report.version !== 1 ||
+    !REPORT_STATUSES.has(report.status) ||
+    typeof report.safeForReadCutover !== "boolean" ||
+    !validHash(report.reportHash) ||
+    (report.tenantId !== undefined &&
+      (typeof report.tenantId !== "string" || report.tenantId.trim().length === 0)) ||
+    (report.environment !== undefined &&
+      (typeof report.environment !== "string" || report.environment.trim().length === 0))
+  ) {
+    throw new ComparisonError("REPORT_INVALID", "Verification report metadata is invalid.");
+  }
+  const summaryKeys = [
+    "domainCount",
+    "matchingDomains",
+    "mismatchCount",
+    "explainedCount",
+    "unexplainedCount",
+    "unusedExplanationCount",
+  ];
+  if (
+    !exactKeys(report.summary, summaryKeys) ||
+    !summaryKeys.every((key) => nonNegativeInteger(report.summary[key])) ||
+    !Array.isArray(report.domains) ||
+    !Array.isArray(report.mismatches) ||
+    !Array.isArray(report.unusedExplanations)
+  ) {
+    throw new ComparisonError("REPORT_INVALID", "Verification report summary is invalid.");
+  }
+  for (const domain of report.domains) {
+    if (
+      !exactKeys(domain, [
+        "domain",
+        "source",
+        "target",
+        "countMatches",
+        "hashMatches",
+        "status",
+        "mismatches",
+      ]) ||
+      typeof domain.domain !== "string" ||
+      domain.domain.trim().length === 0 ||
+      !exactKeys(domain.source, ["count", "hash"]) ||
+      !exactKeys(domain.target, ["count", "hash"]) ||
+      !nonNegativeInteger(domain.source.count) ||
+      !nonNegativeInteger(domain.target.count) ||
+      !validHash(domain.source.hash) ||
+      !validHash(domain.target.hash) ||
+      typeof domain.countMatches !== "boolean" ||
+      typeof domain.hashMatches !== "boolean" ||
+      !REPORT_STATUSES.has(domain.status) ||
+      !Array.isArray(domain.mismatches) ||
+      !domain.mismatches.every(validMismatch) ||
+      domain.mismatches.some((mismatch) => mismatch.domain !== domain.domain)
+    ) {
+      throw new ComparisonError("REPORT_INVALID", "Verification report domain data is invalid.");
+    }
+    const domainUnexplained = domain.mismatches.filter((mismatch) => !mismatch.explained).length;
+    const expectedDomainStatus =
+      domain.mismatches.length === 0
+        ? "match"
+        : domainUnexplained === 0
+          ? "explained-drift"
+          : "unexplained-drift";
+    if (
+      domain.countMatches !== (domain.source.count === domain.target.count) ||
+      domain.hashMatches !== (domain.source.hash === domain.target.hash) ||
+      domain.status !== expectedDomainStatus
+    ) {
+      throw new ComparisonError(
+        "REPORT_INVALID",
+        "Verification report domain values are inconsistent.",
+      );
+    }
+  }
+
+  if (
+    !report.mismatches.every(validMismatch) ||
+    !report.unusedExplanations.every(validExplanation)
+  ) {
+    throw new ComparisonError("REPORT_INVALID", "Verification report mismatch data is invalid.");
+  }
+
+  const flattenedMismatches = report.domains.flatMap((domain) => domain.mismatches);
+  const unexplainedCount = report.mismatches.filter((mismatch) => !mismatch.explained).length;
+  const expectedStatus =
+    report.mismatches.length === 0
+      ? "match"
+      : unexplainedCount === 0
+        ? "explained-drift"
+        : "unexplained-drift";
+  if (
+    canonicalize(flattenedMismatches) !== canonicalize(report.mismatches) ||
+    report.summary.domainCount !== report.domains.length ||
+    report.summary.matchingDomains !==
+      report.domains.filter((domain) => domain.status === "match").length ||
+    report.summary.mismatchCount !== report.mismatches.length ||
+    report.summary.explainedCount !== report.mismatches.length - unexplainedCount ||
+    report.summary.unexplainedCount !== unexplainedCount ||
+    report.summary.unusedExplanationCount !== report.unusedExplanations.length ||
+    report.safeForReadCutover !== (unexplainedCount === 0) ||
+    report.status !== expectedStatus
+  ) {
+    throw new ComparisonError("REPORT_INVALID", "Verification report values are inconsistent.");
+  }
+  const { reportHash, ...unsignedReport } = report;
+  if (canonicalHash(unsignedReport) !== reportHash) {
+    throw new ComparisonError("REPORT_HASH_MISMATCH", "Verification report hash is invalid.");
+  }
+  return report;
+}
+
 export function renderMismatchReport(report) {
   if (report === null || typeof report !== "object") {
     throw new ComparisonError("INPUT_INVALID", "Comparison report must be an object.");
   }
+
   const lines = [
     `Shadow comparison: ${report.status}`,
     `Domains: ${report.summary.domainCount}; mismatches: ${report.summary.mismatchCount} (${report.summary.unexplainedCount} unexplained)`,

@@ -53,6 +53,7 @@ import {
   webhookSubscriptionOpenApiPaths,
 } from "./integrations/webhooks/routes";
 import type { WebhookSubscriptionRepository } from "./integrations/webhooks/types";
+import { browserCookieMutationOriginProtection } from "./middleware/browser-cookie-mutation-origin";
 import {
   type AgendaRouteDependencies,
   createAgendaAdminRoutes,
@@ -468,6 +469,8 @@ export function createApp<
       context.header("cache-control", "no-store");
     }
   });
+
+  app.use("/api/*", browserCookieMutationOriginProtection());
 
   app.use(
     "*",
