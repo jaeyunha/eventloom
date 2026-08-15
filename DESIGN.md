@@ -75,9 +75,11 @@ levels rather than inventing a new visual grammar per feature.
   the shell leaves less than two comfortable fields.
 - Keep identity, canonical time zone, dates, and public location visible. Put
   optional CFP scheduling behind progressive disclosure.
-- The event name is the editable display title. The normalized event ID is a
-  separate stable routing and data-isolation identifier and must be visible
-  wherever similar event names could be confused.
+- The event name is the editable display title. The public slug is the
+  organization-scoped human identifier and should disambiguate similar names
+  in organizer-facing navigation. The normalized event ID remains a separate
+  stable routing and data-isolation identifier, but belongs only in explicitly
+  labeled technical or diagnostic surfaces.
 - New-event date controls disallow dates before the current day in the selected
   event time zone. End and CFP-close controls inherit the corresponding
   start/open lower bound.

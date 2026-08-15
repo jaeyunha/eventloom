@@ -254,6 +254,31 @@ describe("event settings progressive loading", () => {
 });
 
 describe("event settings API", () => {
+  it("resolves the human event identity from the organizer event collection", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return response([
+        {
+          id: "event-a",
+          organizationId: "org_a",
+          name: "Summit 2026",
+          slug: "summit-2026",
+        },
+      ]);
+    };
+
+    const api = createEventSettingsApi("", "org_a", fetcher);
+
+    await expect(api.getEventIdentity("event-a")).resolves.toEqual({
+      id: "event-a",
+      name: "Summit 2026",
+      slug: "summit-2026",
+    });
+    expect(calls).toEqual(["/api/admin/organizations/org_a/events"]);
+  });
+
   it("reads organization/event-qualified settings and library resources", async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -426,6 +451,11 @@ describe("event settings view", () => {
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
+        eventIdentity: {
+          id: "event-a",
+          name: "Summit 2026",
+          slug: "summit-2026",
+        },
         section: "history",
         state: { status: "loaded", data: overview },
       }),
@@ -438,7 +468,9 @@ describe("event settings view", () => {
     expect(output).toContain("Change history");
     expect(output).toContain("Session statuses");
     expect(output).toContain("Updated");
-    expect(output).toContain("Organization org_a · Event event-a");
+    expect(output).toContain("Summit 2026");
+    expect(output).toContain("Organization org_a · Public slug summit-2026");
+    expect(output).not.toContain("Organization org_a · Event event-a");
   });
 
   it("explains how session classification values affect the program", () => {

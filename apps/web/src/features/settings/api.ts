@@ -89,6 +89,13 @@ export interface EventSettingsData {
   readonly tags: readonly EventTaxonomyResource[];
   readonly audit: readonly EventSettingsAuditEntry[];
 }
+
+export interface EventIdentity {
+  readonly id: string;
+  readonly name: string;
+  readonly slug: string;
+}
+
 export type SessionSettings = SessionSettingsRecord;
 export type Room = EventRoom;
 export type Track = EventTaxonomyResource;
@@ -130,6 +137,7 @@ export interface SettingsUpdateInput {
 }
 
 export interface EventSettingsApi {
+  getEventIdentity(eventId: string, signal?: AbortSignal): Promise<EventIdentity>;
   getOverview(eventId: string, signal?: AbortSignal): Promise<EventSettingsData>;
   getWorkspace(eventId: string, signal?: AbortSignal): Promise<EventSettingsData>;
   getSettings(eventId: string, signal?: AbortSignal): Promise<SessionSettingsRecord>;
@@ -408,6 +416,22 @@ export function createEventSettingsApi(
   }
 
   const api: EventSettingsApi = {
+    async getEventIdentity(eventId, signal) {
+      const normalizedEventId = eventId.trim();
+      const events = await request<readonly EventIdentity[]>("", {
+        cache: "no-store",
+        ...(signal === undefined ? {} : { signal }),
+      });
+      const event = events.find((candidate) => candidate.id === normalizedEventId);
+      if (event === undefined) {
+        throw new EventSettingsApiError(
+          "EVENT_NOT_FOUND",
+          "The selected event is no longer available.",
+          404,
+        );
+      }
+      return event;
+    },
     getOverview(eventId, signal) {
       const path = eventPath(eventId);
       return Promise.all([

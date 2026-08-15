@@ -58,6 +58,7 @@ import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
   defaultSessionStatuses,
+  type EventIdentity,
   type EventRoom,
   type EventSettingsApi,
   EventSettingsApiError,
@@ -129,6 +130,7 @@ export interface EventSettingsWorkspaceActions {
 export interface EventSettingsWorkspaceViewProps {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly eventIdentity?: EventIdentity;
   readonly section?: EventSettingsSection;
   readonly state: EventSettingsWorkspaceState;
   readonly busy?: boolean;
@@ -137,8 +139,10 @@ export interface EventSettingsWorkspaceViewProps {
   readonly onRetry?: () => void;
 }
 
-function contextLabel(organizationId: string, eventId: string): string {
-  return `Organization ${organizationId} · Event ${eventId}`;
+function contextLabel(organizationId: string, eventIdentity?: EventIdentity): string {
+  return eventIdentity === undefined
+    ? `Organization ${organizationId} · Loading public identity…`
+    : `Organization ${organizationId} · Public slug ${eventIdentity.slug}`;
 }
 
 function normalizedSettings(settings: SessionSettingsRecord): SessionSettingsRecord {
@@ -1484,6 +1488,7 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
 export function EventSettingsWorkspaceView({
   organizationId,
   eventId,
+  eventIdentity,
   section = "workflow",
   state,
   busy = false,
@@ -1506,14 +1511,16 @@ export function EventSettingsWorkspaceView({
           <WorkspaceBreadcrumb>
             <Link href="/admin/events">Events</Link>
             <span aria-hidden="true">/</span>
-            <span>{eventId}</span>
+            <span>{eventIdentity?.name ?? "Event settings"}</span>
             <span aria-hidden="true">/</span>
             <span>Settings</span>
           </WorkspaceBreadcrumb>
         }
         title={sectionDefinition.label}
         description={sectionDefinition.description}
-        metadata={<WorkspaceMetaItem>{contextLabel(organizationId, eventId)}</WorkspaceMetaItem>}
+        metadata={
+          <WorkspaceMetaItem>{contextLabel(organizationId, eventIdentity)}</WorkspaceMetaItem>
+        }
       />
 
       {state.status === "error" || state.status === "config-error" ? (
@@ -1685,6 +1692,7 @@ function ScopedEventSettingsWorkspace({
     }
     return { status: "loading" };
   });
+  const [eventIdentity, setEventIdentity] = useState<EventIdentity>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const requestVersion = useRef(0);
@@ -1736,21 +1744,26 @@ function ScopedEventSettingsWorkspace({
         return;
       }
       setState((current) => (current.status === "loaded" ? current : { status: "loading" }));
+      setEventIdentity(undefined);
       setNotice(null);
       let coreCommitted = false;
       try {
-        const loaded = await loadEventSettingsProgressively(
-          api,
-          organizationId,
-          eventId,
-          (core) => {
-            if (!requestIsCurrent()) return;
-            coreCommitted = true;
-            setState({ status: "loaded", data: core, detailsStatus: "loading" });
-          },
-          signal,
-        );
+        const [identity, loaded] = await Promise.all([
+          api.getEventIdentity(eventId, signal),
+          loadEventSettingsProgressively(
+            api,
+            organizationId,
+            eventId,
+            (core) => {
+              if (!requestIsCurrent()) return;
+              coreCommitted = true;
+              setState({ status: "loaded", data: core, detailsStatus: "loading" });
+            },
+            signal,
+          ),
+        ]);
         if (requestIsCurrent()) {
+          setEventIdentity(identity);
           setState({ status: "loaded", data: loaded, detailsStatus: "loaded" });
         }
       } catch (error) {
@@ -1890,6 +1903,7 @@ function ScopedEventSettingsWorkspace({
     <EventSettingsWorkspaceView
       organizationId={organizationId}
       eventId={eventId}
+      {...(eventIdentity === undefined ? {} : { eventIdentity })}
       section={section}
       state={state}
       busy={busy}
