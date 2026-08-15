@@ -2593,7 +2593,8 @@ export function CfpEditor({
             onClick={() =>
               openSection(
                 SECTION_LINKS[activeSectionIndex + 1]?.id ??
-                  SECTION_LINKS[SECTION_LINKS.length - 1].id,
+                  SECTION_LINKS.at(-1)?.id ??
+                  "public-preview",
               )
             }
             type="button"

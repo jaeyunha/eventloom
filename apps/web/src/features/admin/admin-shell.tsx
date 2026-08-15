@@ -38,6 +38,10 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  LEGACY_ORGANIZER_ORGANIZATION_STORAGE_KEY,
+  ORGANIZER_ORGANIZATION_STORAGE_KEY,
+} from "@/lib/organizer-workspace-preference";
 import { sessionHasAuthenticatedUser } from "../auth/session";
 import { AdminCommandPalette } from "./admin-command-palette";
 import type { AdminCommandPage } from "./admin-command-palette-model";
@@ -63,8 +67,6 @@ export interface OrganizerNavigationGroup {
   items: readonly OrganizerNavigationItem[];
 }
 const OrganizerOrganizationContext = createContext<string | null>(null);
-const ORGANIZER_ORGANIZATION_STORAGE_KEY = "eventloom.organizer-organization";
-const LEGACY_ORGANIZER_ORGANIZATION_STORAGE_KEY = "open-sessionboard.organizer-organization";
 
 export function useOrganizerOrganizationId(): string | null {
   return useContext(OrganizerOrganizationContext);

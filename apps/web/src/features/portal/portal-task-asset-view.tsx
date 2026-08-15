@@ -2,11 +2,11 @@
 
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { Button, Textarea } from "../../components/ui";
-import { WorkspaceFormSection, WorkspaceState } from "../../components/workspace";
+import { WorkspaceFormSection, WorkspaceState } from "../../components/workspace/workspace-state";
 import { assetPointerLabels } from "./portal-assets";
 import { usePortal } from "./portal-provider";
-import { assetVersionId, commentsForAsset, type TaskAssetResolution } from "./portal-task-assets";
 import styles from "./portal-task-assets.module.css";
+import { assetVersionId, commentsForAsset, type TaskAssetResolution } from "./portal-tasks";
 import { formatPortalDate, formatPortalFileSize, portalAssetStateLabel } from "./portal-ui";
 import type { PortalAsset, PortalTask } from "./types";
 

@@ -547,7 +547,7 @@ export function shouldAuthenticateCfpAccount(
 
 type CfpAccountMode = "sign_in" | "sign_up";
 
-export function canSaveCfpDraftAtStep(step: CfpStep): boolean {
+export function canSaveCfpDraftAtStep(step: CfpStep | "complete"): boolean {
   return step === "submission" || step === "participants" || step === "review";
 }
 

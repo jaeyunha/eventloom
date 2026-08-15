@@ -367,7 +367,7 @@ export function resolveAssetPointers(
   return { status: "ready", ...values, error: null };
 }
 
-function assetVersionId(asset: PortalAsset): string {
+export function assetVersionId(asset: PortalAsset): string {
   const versionId = nonEmptyString(asRecord(asset)?.versionId);
   return versionId ?? asset.id;
 }

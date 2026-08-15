@@ -1,0 +1,95 @@
+.emptyState {
+  min-height: 12rem;
+  border-color: var(--border);
+  background: var(--card);
+}
+
+.errorState {
+  border-color: var(--border);
+}
+
+.stateAction,
+.formAction,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.formSection {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.formHeader {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.formTitle {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.formDescription {
+  max-width: 62ch;
+  margin: 0.25rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.formContent {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.actionBar {
+  position: sticky;
+  z-index: 5;
+  bottom: 0;
+  background: var(--background);
+}
+
+.actionSeparator {
+  background: var(--border);
+}
+
+.actionContent {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 3.5rem;
+  padding: 0.75rem 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 48rem) {
+  .formHeader,
+  .actionContent {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions {
+    justify-content: stretch;
+  }
+}
