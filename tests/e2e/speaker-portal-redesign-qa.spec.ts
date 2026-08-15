@@ -34,13 +34,23 @@ async function expectNoPageOverflow(page: Page): Promise<void> {
   );
 }
 
+async function expectCurrentNavigation(page: Page, label: string): Promise<void> {
+  const mobile = (page.viewportSize()?.width ?? 0) < 768;
+  if (mobile) {
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  }
+  const navigation = page.getByRole("link", { name: label, exact: true });
+  await expect(navigation).toHaveCount(1);
+  await expect(navigation).toHaveAttribute("aria-current", "page");
+  if (mobile) {
+    await page.keyboard.press("Escape");
+  }
+}
+
 async function openAcceptedSpeakerTasks(page: Page): Promise<void> {
   await page.goto(`/portal/tasks?event=${evaluatorEventId}`);
   await expect(page.getByRole("heading", { level: 1, name: "Requests & tasks" })).toBeVisible();
   await expect(page.getByText("Accepted speaker checklist", { exact: true })).toBeVisible();
-
-  const inbox = page.getByRole("navigation", { name: "Task inbox" });
-  await inbox.getByRole("button", { name: new RegExp(`^${formTaskTitle}`) }).click();
 
   const formTask = page.getByRole("article", { name: formTaskTitle });
   await expect(formTask).toBeVisible();
@@ -48,30 +58,23 @@ async function openAcceptedSpeakerTasks(page: Page): Promise<void> {
     formTask.getByText(`Session · ${acceptedSessionTitle}`, { exact: true }),
   ).toBeVisible();
   await expect(
-    formTask.getByText("Applies only to this accepted session.", { exact: true }),
+    formTask.getByText("This requirement applies only to this accepted session.", { exact: true }),
   ).toBeVisible();
 
-  const form = formTask.getByRole("region", { name: "Speaker details" });
-  await expect(form.getByRole("button", { name: "Save draft" })).toBeVisible();
-  await expect(form.getByRole("button", { name: "Submit response" })).toBeVisible();
-  await expect(form.getByRole("region", { name: "Workspace actions" })).toHaveCSS(
-    "position",
-    "sticky",
-  );
+  const form = formTask.getByRole("region", { name: "Speaker details response" });
+  await expect(form.getByRole("button", { name: "Save response" })).toBeVisible();
+  await expect(formTask.getByRole("button", { name: "Submit for review" })).toBeVisible();
+  await expectCurrentNavigation(page, "Requests & tasks");
 }
 
 async function openAcceptedSpeakerFiles(page: Page): Promise<void> {
   await page.goto(`/portal?workspace=files&event=${evaluatorEventId}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Files" })).toBeVisible();
-  await expect(page.getByLabel("Session attribution")).toHaveValue("submission-evaluator");
-  await expect(
-    page.getByRole("heading", { level: 2, name: `Files for ${acceptedSessionTitle}` }),
-  ).toBeVisible();
-
-  const fileDetail = page.getByRole("region", { name: seededFileName });
-  await expect(fileDetail.getByRole("heading", { level: 2, name: seededFileName })).toBeVisible();
-  await expect(fileDetail.getByText("Session ID", { exact: true })).toBeVisible();
-  await expect(fileDetail.getByText("submission-evaluator", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "files workspace" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Uploaded files" })).toBeVisible();
+  const fileCard = page.getByRole("article", { name: seededFileName });
+  await expect(fileCard).toBeVisible();
+  await expect(page.getByRole("form", { name: "Upload another private file" })).toBeVisible();
+  await expectCurrentNavigation(page, "Uploaded files");
 }
 
 test("speaker tasks and files stay focused on desktop", async ({ authSession, page }, testInfo) => {

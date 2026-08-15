@@ -1,9 +1,23 @@
 "use client";
 
-import { ChevronDown, LogOut, UserRound } from "lucide-react";
+import {
+  BookOpen,
+  ChevronDown,
+  ClipboardCheck,
+  FileText,
+  FolderOpen,
+  Home,
+  LayoutDashboard,
+  Library,
+  LogOut,
+  UserRound,
+  UsersRound,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
+import { ThemeToggle } from "@/components/product-shell/theme-toggle";
+import { RoleWorkspaceShell } from "@/components/workspace/role-workspace-shell";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { portalContextLabel, usePortal } from "./portal-provider";
@@ -15,14 +29,14 @@ import type {
 } from "./types";
 
 export const portalNavigation = [
-  { href: "/portal", label: "Home", icon: "⌂" },
-  { href: "/portal/submissions", label: "Submissions", icon: "▤" },
-  { href: "/portal/tasks", label: "Requests & tasks", icon: "✓" },
-  { href: "/portal/profile", label: "Profile", icon: "◉" },
-  { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: "◎" },
-  { href: "/portal?workspace=files", label: "Uploaded files", icon: "▱" },
-  { href: "/portal?workspace=resources", label: "Resources", icon: "◇" },
-  { href: "/portal?workspace=wiki", label: "Wiki", icon: "◫" },
+  { href: "/portal", label: "Home", icon: Home },
+  { href: "/portal/submissions", label: "Submissions", icon: FileText },
+  { href: "/portal/tasks", label: "Requests & tasks", icon: ClipboardCheck },
+  { href: "/portal/profile", label: "Profile", icon: UserRound },
+  { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: UsersRound },
+  { href: "/portal?workspace=files", label: "Uploaded files", icon: FolderOpen },
+  { href: "/portal?workspace=resources", label: "Resources", icon: Library },
+  { href: "/portal?workspace=wiki", label: "Wiki", icon: BookOpen },
 ] as const;
 
 const noParticipantWorkspaceDescription =
@@ -43,6 +57,19 @@ export async function signOutAndRedirect(
 function portalNavigationHref(href: string, eventQuery: string): string {
   if (eventQuery.length === 0) return href;
   return href.includes("?") ? `${href}&${eventQuery.slice(1)}` : `${href}${eventQuery}`;
+}
+
+export function portalNavigationItemActive(
+  href: string,
+  pathname: string,
+  workspace: string | null,
+): boolean {
+  const workspaceMatch = href.match(/[?&]workspace=([^&]+)/);
+  if (workspaceMatch?.[1] !== undefined) {
+    return pathname === "/portal" && workspace === workspaceMatch[1];
+  }
+  if (href === "/portal") return pathname === "/portal" && workspace === null;
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 export function portalRouteAuthorized(input: {
@@ -121,6 +148,27 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
     hasView: view !== null,
     routeAuthorized,
   });
+  const navigationGroups =
+    context === null
+      ? []
+      : [
+          {
+            label: "Your event",
+            items: visibleNavigation.map((item) => ({
+              badge:
+                item.href === "/portal/tasks" && (view?.outstandingTaskCount ?? 0) > 0
+                  ? view?.outstandingTaskCount
+                  : undefined,
+              current: portalNavigationItemActive(item.href, pathname, workspace),
+              href: portalNavigationHref(item.href, eventQuery),
+              icon: item.icon,
+              label: item.label,
+            })),
+          },
+        ];
+  const currentPageLabel =
+    visibleNavigation.find((item) => portalNavigationItemActive(item.href, pathname, workspace))
+      ?.label ?? "Participant workspace";
 
   async function selectContext(contextId: string) {
     setAccountMenuOpen(false);
@@ -133,15 +181,13 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
   }
 
   return (
-    <div className={styles.portalRoot}>
-      <a className={styles.skipLink} href="#portal-content">
-        Skip to portal content
-      </a>
-      <header className={styles.topbar}>
-        <Link className={styles.brand} href={`/portal${eventQuery}`}>
-          <span aria-hidden="true">EL</span>
-          <strong>Eventloom</strong>
-        </Link>
+    <RoleWorkspaceShell
+      brandHref={`/portal${eventQuery}`}
+      className={styles.portalRoot}
+      contentClassName={styles.portalMain}
+      contextLabel={context ? portalContextLabel(context) : "Submission access"}
+      currentPageLabel={currentPageLabel}
+      footer={
         <div className={styles.accountArea}>
           <button
             className={styles.accountTrigger}
@@ -211,7 +257,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
                 </p>
               )}
               <Link href="/work" role="menuitem">
-                <span aria-hidden="true">⌂</span>
+                <LayoutDashboard aria-hidden="true" size={14} />
                 All work
               </Link>
               <Link href={`/portal/profile${eventQuery}`} role="menuitem">
@@ -225,48 +271,27 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
             </div>
           ) : null}
         </div>
-      </header>
-      <div
-        className={`${styles.portalLayout} ${context ? "" : styles.portalLayoutWithoutNavigation}`}
-      >
-        {context ? (
-          <nav className={styles.portalNav} aria-label="Speaker portal">
-            <p className={styles.navLabel}>Your event</p>
-            {visibleNavigation.map((item) => (
-              <Link
-                key={item.href}
-                className={styles.navItem}
-                href={portalNavigationHref(item.href, eventQuery)}
-              >
-                <span aria-hidden="true">{item.icon}</span>
-                {item.label}
-                {item.href === "/portal/tasks" && (view?.outstandingTaskCount ?? 0) > 0 ? (
-                  <span className={styles.navCount}>
-                    {view?.outstandingTaskCount}
-                    <span className={styles.srOnly}> outstanding tasks</span>
-                  </span>
-                ) : null}
-              </Link>
-            ))}
-          </nav>
-        ) : null}
-        <main id="portal-content" className={styles.portalMain} tabIndex={-1}>
-          {contentMode === "children" ? (
-            children
-          ) : (
-            <section className={styles.statePanel} role="alert">
-              <h1>This workspace is not available</h1>
-              <p>
-                Your account does not have access to this speaker workspace for the selected event.
-              </p>
-              <Link href={portalNavigationHref("/portal/submissions", eventQuery)}>
-                View your submissions
-              </Link>
-            </section>
-          )}
-        </main>
-      </div>
-    </div>
+      }
+      headerActions={<ThemeToggle />}
+      mainId="portal-content"
+      navigationGroups={navigationGroups}
+      navigationLabel="Participant workspace navigation"
+      roleLabel="Participant workspace"
+      skipLabel="Skip to participant content"
+      workspace="participant"
+    >
+      {contentMode === "children" ? (
+        children
+      ) : (
+        <section className={styles.statePanel} role="alert">
+          <h1>This workspace is not available</h1>
+          <p>Your account does not have access to this speaker workspace for the selected event.</p>
+          <Link href={portalNavigationHref("/portal/submissions", eventQuery)}>
+            View your submissions
+          </Link>
+        </section>
+      )}
+    </RoleWorkspaceShell>
   );
 }
 

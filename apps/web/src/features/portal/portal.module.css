@@ -6,7 +6,8 @@
   --portal-muted: var(--muted-foreground);
   --portal-border: var(--border);
   --portal-surface: var(--card);
-  min-height: 100vh;
+  height: 100svh;
+  min-height: 0;
   background: var(--background);
   color: var(--portal-ink);
 }
@@ -65,15 +66,18 @@
 
 .accountArea {
   position: relative;
-  display: flex;
-  gap: 0.65rem;
-  align-items: center;
+  display: grid;
+  width: 100%;
+  min-width: 0;
 }
 
 .accountTrigger {
   display: flex;
+  width: 100%;
+  min-width: 0;
   gap: 0.65rem;
   align-items: center;
+  justify-content: flex-start;
   padding: 0.35rem 0.5rem;
   border: 1px solid transparent;
   border-radius: var(--radius);
@@ -122,8 +126,9 @@
 .contextMenu {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 0.5rem);
-  right: 0;
+  right: auto;
+  bottom: calc(100% + 0.5rem);
+  left: 0;
   display: grid;
   width: min(22rem, calc(100vw - 2rem));
   gap: 0.25rem;
@@ -292,10 +297,10 @@
 }
 
 .portalMain {
-  width: auto;
+  width: min(calc(100% - 2rem), 92rem);
   max-width: 92rem;
-  margin: 0;
-  padding: 1rem clamp(1rem, 2vw, 1.75rem) 3rem;
+  margin: 0 auto;
+  padding: 1rem 0 3rem;
 }
 
 .portalMain > header {
@@ -1661,7 +1666,8 @@
   }
 
   .portalMain {
-    padding: 1.25rem 1rem 2.5rem;
+    width: min(calc(100% - 1rem), 92rem);
+    padding: 0.65rem 0 2.5rem;
   }
 
   .pageHeading {
@@ -1770,5 +1776,49 @@
 @media (prefers-reduced-motion: reduce) {
   .spinner {
     animation: none;
+  }
+}
+
+.pageHeading {
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+  padding: 1.15rem 1rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--portal-border) 78%, transparent);
+}
+
+.pageHeading h1 {
+  max-width: 22ch;
+  font-size: clamp(1.6rem, 3vw, 2.05rem);
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.pageHeading > div > p:last-child {
+  max-width: 68ch;
+  color: var(--portal-muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  margin-bottom: 0.35rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 44rem) {
+  .accountCopy {
+    display: grid;
+  }
+
+  .pageHeading {
+    align-items: flex-start;
+    margin-bottom: 0.8rem;
+    padding: 0.85rem 0.75rem;
+  }
+
+  .pageHeading h1 {
+    font-size: 1.6rem;
   }
 }
