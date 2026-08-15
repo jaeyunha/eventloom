@@ -87,6 +87,7 @@ describe("workspace semantic surfaces", () => {
 
   it("lets context bars and speaker detail shrink at text zoom", () => {
     const shell = styleSource.get("./workspace-shell.module.css") ?? "";
+    const workspaceUi = styleSource.get("./workspace-ui.module.css") ?? "";
     const portalShell = styleSource.get("../../features/portal/portal-shell.module.css") ?? "";
     const speakers = styleSource.get("../../features/speakers/speaker-workspace.module.css") ?? "";
 
@@ -100,12 +101,14 @@ describe("workspace semantic surfaces", () => {
     expect(speakers).toMatch(
       /\.actionsStack\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su,
     );
+    expect(speakers).toMatch(/\.workspace\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%/su);
+    expect(speakers).toMatch(/\.workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su);
     expect(speakers).toMatch(
-      /\.workspace\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%/su,
+      /\.tabs,\s*\.view\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su,
     );
-    expect(speakers).toMatch(
-      /:global\(\.dialog-grid\)\s*>\s*\.view\s*\{[^}]*max-width:\s*100%/su,
-    );
+    expect(speakers).toMatch(/:global\(\.dialog-grid\)\s*>\s*\.view\s*\{[^}]*max-width:\s*100%/su);
+    expect(workspaceUi).toMatch(/\.titleRow\s*\{[^}]*min-width:\s*0/su);
+    expect(workspaceUi).toMatch(/\.titleBlock\s*\{[^}]*max-width:\s*100%/su);
     expect(speakers).toMatch(
       /\.workspace\s+\[data-slot="card-header"\],\s*\.workspace\s+\[data-slot="card-title"\],\s*\.workspace\s+\[data-slot="card-description"\]\s*\{[^}]*min-width:\s*0/su,
     );

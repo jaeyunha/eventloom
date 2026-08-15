@@ -2,6 +2,7 @@
   display: grid;
   width: 100%;
   max-width: 100%;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   min-width: 0;
   color: var(--foreground);
@@ -60,6 +61,7 @@
 .tabs,
 .view {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   min-width: 0;
 }
