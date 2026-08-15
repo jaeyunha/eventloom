@@ -54,8 +54,39 @@ async function accidentalCrossAxisScrollbars(
   state: string,
 ): Promise<ScrollbarFinding[]> {
   return page.locator("body *").evaluateAll(
-    (elements, context) =>
-      elements
+    (elements, context) => {
+      const identifyElement = (element: HTMLElement) => {
+        const slot = element.dataset.slot;
+        const role = element.getAttribute("role");
+        const label = element.getAttribute("aria-label");
+        const className =
+          typeof element.className === "string" && element.className.trim().length > 0
+            ? `.${element.className.trim().split(/\s+/u).slice(0, 3).join(".")}`
+            : "";
+        const text = element.textContent?.trim().replace(/\s+/gu, " ").slice(0, 60);
+        const identity = slot
+          ? `[data-slot="${slot}"]`
+          : role
+            ? `[role="${role}"]`
+            : element.id || element.tagName;
+        const descriptor = `${identity}${className}`;
+        const withLabel = label ? `${descriptor}[aria-label="${label}"]` : descriptor;
+        return text === undefined || text.length === 0 ? withLabel : `${withLabel}[text="${text}"]`;
+      };
+      const documentOverflow =
+        document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      const widestOffscreenElement = elements
+        .flatMap((element) => {
+          if (!(element instanceof HTMLElement)) return [];
+          const rect = element.getBoundingClientRect();
+          const overflow = Math.ceil(rect.right - document.documentElement.clientWidth);
+          return overflow > 0 && rect.width > 0 && rect.height > 0
+            ? [{ element, overflow, rect }]
+            : [];
+        })
+        .sort((left, right) => right.overflow - left.overflow)[0];
+
+      return elements
         .flatMap((element) => {
           if (!(element instanceof HTMLElement)) return [];
           const style = getComputedStyle(element);
@@ -78,19 +109,11 @@ async function accidentalCrossAxisScrollbars(
             horizontalOverflow <= 16;
           if (!tinyVerticalCrossAxis && !tinyHorizontalCrossAxis) return [];
 
-          const slot = element.dataset.slot;
-          const role = element.getAttribute("role");
-          const label = element.getAttribute("aria-label");
-          const identity = slot
-            ? `[data-slot="${slot}"]`
-            : role
-              ? `[role="${role}"]`
-              : element.id || element.tagName;
           return [
             {
               route: context.route,
               state: context.state,
-              element: label ? `${identity}[aria-label="${label}"]` : identity,
+              element: identifyElement(element),
               overflowX: style.overflowX,
               overflowY: style.overflowY,
               horizontalOverflow,
@@ -99,21 +122,27 @@ async function accidentalCrossAxisScrollbars(
           ];
         })
         .concat(
-          document.documentElement.scrollWidth > document.documentElement.clientWidth
+          documentOverflow > 0
             ? [
                 {
                   route: context.route,
                   state: context.state,
-                  element: "document",
+                  element:
+                    widestOffscreenElement === undefined
+                      ? "document"
+                      : `document via ${identifyElement(widestOffscreenElement.element)} ` +
+                        `[left=${Math.round(widestOffscreenElement.rect.left)}, ` +
+                        `right=${Math.round(widestOffscreenElement.rect.right)}, ` +
+                        `width=${Math.round(widestOffscreenElement.rect.width)}]`,
                   overflowX: "document",
                   overflowY: "document",
-                  horizontalOverflow:
-                    document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                  horizontalOverflow: documentOverflow,
                   verticalOverflow: 0,
                 },
               ]
             : [],
-        ),
+        );
+    },
     { route, state },
   );
 }

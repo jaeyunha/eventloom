@@ -4,6 +4,7 @@ export interface AdminCommandEvent {
   readonly endsAt: string;
   readonly id: string;
   readonly name: string;
+  readonly slug: string;
   readonly startsAt: string;
   readonly status: AdminCommandEventStatus;
 }
@@ -91,6 +92,7 @@ export function parseAdminCommandEventsResponse(payload: unknown): readonly Admi
       endsAt: eventDate(value.endsAt, "endsAt"),
       id: requiredString(value.id, "id"),
       name: requiredString(value.name, "name"),
+      slug: requiredString(value.slug, "slug"),
       startsAt: eventDate(value.startsAt, "startsAt"),
       status: eventStatus(value.status),
     };
@@ -151,7 +153,7 @@ export function buildAdminCommandResults({
             current: event.id === currentEventId,
             endsAt: event.endsAt,
             group: "Events",
-            href: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(event.id)}`,
+            href: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(event.slug)}`,
             key: `event:${event.id}`,
             kind: "event",
             label: event.name,

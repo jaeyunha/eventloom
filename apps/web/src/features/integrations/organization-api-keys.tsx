@@ -10,8 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SettingGroup, SettingRow } from "@/components/workspace/settings-ui";
 import { createIntegrationAdminApi, IntegrationAdminApiError } from "./api";
-import type { ApiKeySummary, OneTimeSecret } from "./types";
 import styles from "./organization-integrations-workspace.module.css";
+import type { ApiKeySummary, OneTimeSecret } from "./types";
 
 interface OrganizationApiKeysProps {
   readonly organizationId: string;

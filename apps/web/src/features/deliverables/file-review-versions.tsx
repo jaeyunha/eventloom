@@ -3,6 +3,7 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import styles from "./file-library.module.css";
 import {
   filePointerLabels,
   formatFileSize,
@@ -10,7 +11,6 @@ import {
   formatFileTime,
 } from "./file-library-model";
 import type { FileReviewContext } from "./file-review-types";
-import styles from "./file-library.module.css";
 
 interface FileReviewVersionsProps {
   readonly context: FileReviewContext;

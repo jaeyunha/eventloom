@@ -21,7 +21,7 @@ import {
   reviewAssignmentStatusSchema as lifecycleReviewAssignmentStatusSchema,
   reviewDecisionStatusSchema,
 } from "./lifecycle";
-import { mutationEnvelopeSchema, type MutationEnvelope } from "./submissions";
+import { type MutationEnvelope, mutationEnvelopeSchema } from "./submissions";
 
 export const rubricCriterionSchema = z
   .object({

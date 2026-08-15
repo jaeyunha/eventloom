@@ -356,6 +356,8 @@ describe("member workspace", () => {
 
     expect(markup).toContain("Organization settings");
     expect(markup).toContain("Refresh settings");
+    expect(markup).not.toContain('role="tablist"');
+    expect(markup).not.toContain('aria-label="Switch organization"');
     expect(markup).not.toContain("People directory");
     expect(markup).not.toContain("Reviewer pools");
   });

@@ -44,6 +44,7 @@ const mockedRouter = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("next/navigation", () => ({
   usePathname: () => mockedPathname.value,
   useRouter: () => mockedRouter,
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 const loadedCore: OrganizerOverviewCoreData = {
@@ -143,7 +144,7 @@ describe("organizer overview", () => {
     expect(output).toContain("Publish the remaining session");
     expect(output).toContain(">Open");
     expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
-    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
+    expect(output).toContain("/admin/organizations/ai-engineer/events/live-program/settings");
     expect(output).not.toContain("Keep your program moving");
     expect(output).not.toContain("Summit 2026");
   });
@@ -434,7 +435,7 @@ describe("organizer overview", () => {
     expect(output).toContain("September 2026");
     expect(output).toContain("Sun");
     expect(output).toContain("Mon");
-    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
+    expect(output).toContain("/admin/organizations/ai-engineer/events/live-program/settings");
     expect(output).toContain("America/Los_Angeles");
     expect(output).toContain("<table");
     expect(output).toContain("September 2026 events");

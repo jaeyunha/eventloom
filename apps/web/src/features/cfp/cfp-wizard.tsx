@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, FileText, Upload } from "lucide-react";
+import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   type ChangeEvent,
@@ -52,6 +52,15 @@ import {
   type ValidationErrors,
   validateStep,
 } from "./validation";
+import {
+  clearCfpVerificationContinuation,
+  createCfpVerificationCallbackUrl,
+  readCfpVerificationContinuation,
+  writeCfpVerificationContinuation,
+} from "./verification-continuation";
+
+const LOCAL_MAIL_INBOX_URL =
+  process.env.NODE_ENV === "development" ? "http://127.0.0.1:8025/" : null;
 
 const STEP_LABELS: Record<CfpStep, string> = {
   welcome: "Start",
@@ -386,7 +395,7 @@ function PublicCfpShell({
       <header className={styles.publicHeader}>
         <div className={styles.publicBrand}>
           <span aria-hidden="true" className={styles.brandMark}>
-            OS
+            E
           </span>
           <span>{resolvedOrganizationName}</span>
         </div>
@@ -487,6 +496,16 @@ class CfpVerificationRequiredError extends Error {
     this.name = "CfpVerificationRequiredError";
   }
 }
+
+type CfpVerificationState =
+  | {
+      readonly status: "waiting";
+      readonly email: string;
+    }
+  | {
+      readonly status: "resuming";
+      readonly email: string;
+    };
 
 function mutationIdempotencyKey(prefix: string): string {
   const suffix =
@@ -660,7 +679,7 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
   );
 }
 
-function submissionPayload(
+export function cfpSubmissionPayload(
   draft: CfpDraft,
   dynamicAnswers: DynamicAnswers,
   participantAnswers: ParticipantAnswers,
@@ -674,8 +693,10 @@ function submissionPayload(
     answers: {
       ...answers,
       title: draft.submission.title,
-      abstract: draft.submission.description,
-      description: draft.submission.description,
+      abstract: dynamicAnswers.abstract ?? draft.submission.description,
+      description:
+        dynamicAnswers.description ??
+        (dynamicAnswers.abstract === undefined ? draft.submission.description : ""),
       format: draft.submission.format,
       tags: draft.submission.tags,
       track: draft.submission.track,
@@ -733,19 +754,68 @@ export function cfpReviewAudienceLevel(
   }
   return { label: "Level", value: reviewValueString(legacyLevel) };
 }
+
+export function cfpReviewSubmissionDetails(
+  form: CfpPublishedForm | undefined,
+  draft: CfpDraft,
+  answers: DynamicAnswers,
+): readonly { key: string; label: string; value: string }[] {
+  if (form && form.submissionFields.length > 0) {
+    const resolvedAnswers = Object.fromEntries(
+      form.submissionFields.map((field) => [
+        field.key,
+        cfpSubmissionFieldValue(draft, answers, field.key),
+      ]),
+    );
+    const evaluated = evaluatePublishedFields(form, {
+      ...answers,
+      ...resolvedAnswers,
+      accountEmail: draft.account.email,
+      accountFirstName: draft.account.firstName,
+      accountLastName: draft.account.lastName,
+    });
+    return form.submissionFields.flatMap((field) => {
+      if (isFileField(field) || evaluated.fields.get(field.key)?.visible === false) return [];
+      const value = reviewValueString(cfpSubmissionFieldValue(draft, answers, field.key));
+      return value === "Not specified" ? [] : [{ key: field.key, label: field.label, value }];
+    });
+  }
+
+  return [
+    { key: "title", label: "Title", value: reviewValueString(draft.submission.title) },
+    {
+      key: "description",
+      label: "Description",
+      value: reviewValueString(draft.submission.description),
+    },
+    { key: "format", label: "Format", value: reviewValueString(draft.submission.format) },
+    { key: "tags", label: "Tags", value: reviewValueString(draft.submission.tags) },
+    { key: "track", label: "Track", value: reviewValueString(draft.submission.track) },
+    { key: "level", label: "Level", value: reviewValueString(draft.submission.level) },
+    { key: "language", label: "Language", value: reviewValueString(draft.submission.language) },
+  ].filter((item) => item.value !== "Not specified");
+}
+
 export function cfpConfirmationEmailMessage(recipient: string): string {
   const delivery =
     recipient.trim().length > 0 ? ` is queued for ${recipient.trim()}` : " is queued";
   return `A confirmation email${delivery} and will include the event name and talk title.`;
 }
 
-function submissionValue(draft: CfpDraft, answers: DynamicAnswers, key: string): unknown {
+export function cfpSubmissionFieldValue(
+  draft: CfpDraft,
+  answers: DynamicAnswers,
+  key: string,
+): unknown {
   switch (key) {
     case "title":
       return draft.submission.title;
     case "abstract":
+      return answers.abstract ?? draft.submission.description;
     case "description":
-      return draft.submission.description;
+      return (
+        answers.description ?? (answers.abstract === undefined ? draft.submission.description : "")
+      );
     case "format":
       return draft.submission.format;
     case "tags":
@@ -789,9 +859,10 @@ function participantValue(
       return answers[key];
   }
 }
-function formSubmissionErrorKey(key: string): string {
+export function cfpSubmissionErrorKey(key: string): string {
   if (key === "title") return "submission.title";
-  if (key === "abstract" || key === "description") return "submission.description";
+  if (key === "abstract") return "submission.abstract";
+  if (key === "description") return "submission.description";
   return `submission.${key}`;
 }
 
@@ -830,8 +901,11 @@ function dynamicFormErrors(
         required: fieldRequired(field),
       };
       if (!state.visible) continue;
-      const value = fieldValueForValidation(field, submissionValue(draft, answers, field.key));
-      const key = formSubmissionErrorKey(field.key);
+      const value = fieldValueForValidation(
+        field,
+        cfpSubmissionFieldValue(draft, answers, field.key),
+      );
+      const key = cfpSubmissionErrorKey(field.key);
       const fileState = fileStates[fileStateKey(field.key)];
       if (isFileField(field) && fileState?.status === "error") {
         errors[key] = fileState.message ?? `${field.label} could not be uploaded.`;
@@ -915,7 +989,8 @@ function removeFixedErrorsForDynamicForm(
   const keys = new Set(form.submissionFields.map((field) => field.key));
   const aliases: Record<string, string[]> = {
     "submission.title": ["title"],
-    "submission.description": ["abstract", "description"],
+    "submission.abstract": ["abstract"],
+    "submission.description": ["description"],
     "submission.format": ["format"],
     "submission.tags": ["tags"],
     "submission.track": ["track"],
@@ -1006,6 +1081,7 @@ export function CfpWizard({
   const [authenticatedSession, setAuthenticatedSession] = useState<CfpAuthenticatedSession | null>(
     null,
   );
+  const [verificationState, setVerificationState] = useState<CfpVerificationState | null>(null);
   const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<ValidationErrors>({});
@@ -1014,6 +1090,8 @@ export function CfpWizard({
   const [mutationPending, setMutationPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const submissionIdRef = useRef<string | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const verificationResumeRequestedRef = useRef(false);
   const fileDraftCreationRef = useRef<Promise<CfpServerSubmission> | null>(null);
   const versionRef = useRef(1);
   const formVersionRef = useRef<number | null>(null);
@@ -1104,6 +1182,8 @@ export function CfpWizard({
 
   useEffect(() => {
     setAuthenticatedSession(null);
+    setVerificationState(null);
+    verificationResumeRequestedRef.current = false;
     let active = true;
     const controller = new AbortController();
     if (!routeIdentity) {
@@ -1129,6 +1209,10 @@ export function CfpWizard({
           eventId: publishedCfp.event.id,
           formId: publishedCfp.form.id,
         };
+        const verificationContinuation =
+          step === "account"
+            ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
+            : null;
         const activeFormId = canonicalIdentity.formId;
         const pointerKey = getCfpSubmissionPointerStorageKey(
           canonicalIdentity.organizationId,
@@ -1221,6 +1305,34 @@ export function CfpWizard({
           setSaveState("idle");
           setSaveError(null);
         }
+        if (verificationContinuation !== null) {
+          const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
+          if (session === null) {
+            setDraft((current) => ({
+              ...current,
+              account: verificationContinuation.account,
+            }));
+            setVerificationState({
+              status: "waiting",
+              email: verificationContinuation.account.email,
+            });
+          } else if (session.email === continuationEmail) {
+            setDraft((current) =>
+              syncPrimaryParticipant(
+                draftWithAuthenticatedSession(
+                  {
+                    ...current,
+                    account: verificationContinuation.account,
+                  },
+                  session,
+                ),
+              ),
+            );
+            setVerificationState({ status: "resuming", email: session.email });
+          } else {
+            clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
+          }
+        }
         setHydrated(true);
       } catch (error) {
         if (!active) return;
@@ -1267,10 +1379,15 @@ export function CfpWizard({
           return { ...current, submission: { ...current.submission, title: String(value ?? "") } };
         }
         if (key === "abstract" || key === "description") {
-          return {
-            ...current,
-            submission: { ...current.submission, description: String(value ?? "") },
-          };
+          const hasPublishedAbstract =
+            published?.form.submissionFields.some((field) => field.key === "abstract") ?? false;
+          if (key === "abstract" || !hasPublishedAbstract) {
+            return {
+              ...current,
+              submission: { ...current.submission, description: String(value ?? "") },
+            };
+          }
+          return current;
         }
         if (key === "tags") {
           return {
@@ -1411,7 +1528,7 @@ export function CfpWizard({
       }
     }
     if (formVersion === null) throw new Error("The CFP form version is unavailable.");
-    const payload = submissionPayload(nextDraft, dynamicAnswers, participantAnswers);
+    const payload = cfpSubmissionPayload(nextDraft, dynamicAnswers, participantAnswers);
     const saved = await api.saveDraft({
       organizationId: identity.organizationId,
       eventId: identity.eventId,
@@ -1544,18 +1661,17 @@ export function CfpWizard({
       }
       setSaveState("saved");
       if (!identity) throw new Error("The CFP identity is not configured.");
+      if (step === "account") {
+        clearCfpVerificationContinuation(identity, window.localStorage);
+        setVerificationState(null);
+      }
       router.push(getCfpStepRoute(identity.organizationId, eventSlug, targetStep));
     } catch (error) {
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (error instanceof CfpVerificationRequiredError) {
-        const authErrors = {
-          "account.auth":
-            "Check your email to verify your account, then submit this step again to continue.",
-        };
-        setErrors(authErrors);
+        setErrors({});
         setSaveState("idle");
         setSaveError(null);
-        focusFirstError(authErrors);
         return;
       }
       if (isCfpSchemaVersionConflict(error)) {
@@ -1636,9 +1752,17 @@ export function CfpWizard({
             name: `${candidateDraft.account.firstName} ${candidateDraft.account.lastName}`.trim(),
             ...(typeof window === "undefined"
               ? {}
-              : { verificationCallbackUrl: window.location.href }),
+              : {
+                  verificationCallbackUrl: createCfpVerificationCallbackUrl(window.location.href),
+                }),
           });
           if (authentication.status === "verification_required") {
+            if (!identity) throw new Error("The CFP identity is not configured.");
+            writeCfpVerificationContinuation(identity, candidateDraft.account, window.localStorage);
+            setVerificationState({
+              status: "waiting",
+              email: candidateDraft.account.email.trim().toLowerCase(),
+            });
             throw new CfpVerificationRequiredError();
           }
           setAuthenticatedSession(authentication.session);
@@ -1762,6 +1886,30 @@ export function CfpWizard({
     window.location.reload();
   }
 
+  function useDifferentVerificationEmail(): void {
+    if (identity) clearCfpVerificationContinuation(identity, window.localStorage);
+    setVerificationState(null);
+    setPassword("");
+    updateDraft((current) => ({
+      ...current,
+      account: { ...current.account, email: "" },
+    }));
+  }
+
+  useEffect(() => {
+    if (
+      step !== "account" ||
+      !hydrated ||
+      authenticatedSession === null ||
+      verificationState?.status !== "resuming" ||
+      verificationResumeRequestedRef.current
+    ) {
+      return;
+    }
+    verificationResumeRequestedRef.current = true;
+    formRef.current?.requestSubmit();
+  }, [authenticatedSession, hydrated, step, verificationState]);
+
   if (!hydrated) {
     return (
       <PublicCfpShell step={step}>
@@ -1835,7 +1983,7 @@ export function CfpWizard({
           {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
         </p>
       ) : null}
-      <form noValidate onSubmit={(event) => void continueFlow(event)}>
+      <form ref={formRef} noValidate onSubmit={(event) => void continueFlow(event)}>
         {step === "welcome" ? (
           <WelcomeStep
             {...(published === null ? {} : { event: published.event, form: published.form })}
@@ -1852,6 +2000,8 @@ export function CfpWizard({
             password={password}
             setPassword={setPassword}
             updateDraft={updateDraft}
+            verificationState={verificationState}
+            onUseDifferentEmail={useDifferentVerificationEmail}
           />
         ) : null}
         {step === "submission" ? (
@@ -1920,7 +2070,7 @@ export function CfpWizard({
                 Save as draft
               </Button>
             ) : null}
-            {!submissionsClosed ? (
+            {!submissionsClosed && verificationState === null ? (
               <Button
                 className={styles.primaryButton}
                 disabled={
@@ -1947,9 +2097,13 @@ export function CfpWizard({
       </form>
       {step !== "welcome" ? (
         <div className={styles.sessionFooter}>
-          {authenticatedSession
-            ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
-            : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
+          {verificationState?.status === "waiting"
+            ? `Verification email sent to ${verificationState.email}.`
+            : verificationState?.status === "resuming"
+              ? `Email verified for ${verificationState.email}. Continuing to your proposal…`
+              : authenticatedSession
+                ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
+                : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
         </div>
       ) : null}
       <p
@@ -2024,13 +2178,60 @@ function AccountStep({
   setPassword,
   updateDraft,
   authenticatedSession,
+  verificationState,
+  onUseDifferentEmail,
 }: StepFormProps & {
   confirmedApplicantContext: boolean;
   onConfirmApplicantContext: () => void;
   password: string;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
+  verificationState: CfpVerificationState | null;
+  onUseDifferentEmail: () => void;
 }) {
+  if (verificationState !== null) {
+    const resuming = verificationState.status === "resuming";
+    return (
+      <section aria-live="polite" className={styles.verificationPending} role="status">
+        <span aria-hidden="true" className={styles.verificationIcon}>
+          <MailCheck />
+        </span>
+        <p className={styles.verificationEyebrow}>Email verification</p>
+        <h1>{resuming ? "Email verified" : "Check your inbox"}</h1>
+        {resuming ? (
+          <p>Verification is complete. We’re taking you to your proposal now.</p>
+        ) : (
+          <>
+            <p>We sent a verification link to:</p>
+            <strong className={styles.verificationRecipient}>{verificationState.email}</strong>
+            <p>After verification, you’ll return here and continue automatically.</p>
+            <p className={styles.verificationHint}>
+              {LOCAL_MAIL_INBOX_URL
+                ? "Local development captures this message in Mailpit instead of sending it to Gmail."
+                : "Open the link in this browser. If it is not in your inbox, check spam or promotions."}
+            </p>
+            <div className={styles.verificationActions}>
+              {LOCAL_MAIL_INBOX_URL ? (
+                <Button asChild className={styles.verificationAction} variant="secondary">
+                  <a data-local-mail-inbox href={LOCAL_MAIL_INBOX_URL}>
+                    Open local inbox
+                  </a>
+                </Button>
+              ) : null}
+              <Button
+                className={styles.verificationAction}
+                onClick={onUseDifferentEmail}
+                type="button"
+                variant="outline"
+              >
+                Use a different email
+              </Button>
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
   const checks = getPasswordChecks(password);
   return (
     <div>
@@ -2558,7 +2759,7 @@ function PublishedFieldControl({
               maxLength={typeof maxLength === "number" ? maxLength : 10000}
               onValueChange={onChange}
               placeholder={placeholder}
-              rows={7}
+              rows={field.key === "abstract" ? 6 : 4}
               value={valueString}
             />
           );
@@ -2682,8 +2883,12 @@ function DynamicSubmissionFields({
         const fields = form.submissionFields.filter((field) => field.sectionId === section.id);
         if (fields.length === 0) return null;
         return (
-          <section className={styles.sectionPanel} key={section.id}>
-            <h2>{section.title}</h2>
+          <section
+            aria-labelledby={`cfp-section-${section.id}`}
+            className={styles.sectionPanel}
+            key={section.id}
+          >
+            <h2 id={`cfp-section-${section.id}`}>{section.title}</h2>
             {section.description ? <p>{section.description}</p> : null}
             {fields.map((field) => {
               const fieldState = evaluated.fields.get(field.key) ?? {
@@ -2695,7 +2900,7 @@ function DynamicSubmissionFields({
                 fieldState.required === field.required
                   ? field
                   : { ...field, required: fieldState.required };
-              const errorKey = formSubmissionErrorKey(field.key);
+              const errorKey = cfpSubmissionErrorKey(field.key);
               return (
                 <PublishedFieldControl
                   key={field.id}
@@ -2708,7 +2913,7 @@ function DynamicSubmissionFields({
                   onFileStateChange={(state) =>
                     onFileUploadStateChange(fileStateKey(field.key), state)
                   }
-                  value={submissionValue(draft, answers, field.key)}
+                  value={cfpSubmissionFieldValue(draft, answers, field.key)}
                 />
               );
             })}
@@ -2882,22 +3087,6 @@ function ParticipantsStep({
               />
             )}
           </Field>
-          <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
-            {(controlProps) => (
-              <Input
-                {...controlProps}
-                autoComplete="tel"
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeParticipant(current, index, { mobilePhone: event.target.value }),
-                  )
-                }
-                placeholder="+1"
-                type="tel"
-                value={participant.mobilePhone}
-              />
-            )}
-          </Field>
           <Field
             error={errors[`participants.${index}.biography`]}
             label="Biography"
@@ -3040,9 +3229,15 @@ function DynamicParticipantsFields({
           mobilePhone: participant.mobilePhone,
         });
         return (
-          <section className={styles.participantCard} key={participant.id}>
+          <section
+            aria-labelledby={`participant-${participant.id}-heading`}
+            className={styles.participantCard}
+            key={participant.id}
+          >
             <div className={styles.participantCardHeading}>
-              <h2>{index === 0 ? "Primary speaker" : `Additional speaker ${index}`}</h2>
+              <h2 id={`participant-${participant.id}-heading`}>
+                {index === 0 ? "Primary speaker" : `Additional speaker ${index}`}
+              </h2>
               {index > 0 ? (
                 <Button
                   className={styles.removeButton}
@@ -3108,20 +3303,6 @@ function DynamicParticipantsFields({
                     onValueChange={(value) => updateParticipantField(index, "biography", value)}
                     rows={6}
                     value={participant.biography}
-                  />
-                )}
-              </Field>
-            ) : null}
-            {!configuredIdentityKeys.has("mobilePhone") ? (
-              <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
-                {(controlProps) => (
-                  <Input
-                    {...controlProps}
-                    onChange={(event) =>
-                      updateParticipantField(index, "mobilePhone", event.target.value)
-                    }
-                    type="tel"
-                    value={participant.mobilePhone}
                   />
                 )}
               </Field>
@@ -3259,7 +3440,7 @@ function ReviewStep({
   answers: DynamicAnswers;
 }) {
   const router = useRouter();
-  const audienceLevel = cfpReviewAudienceLevel(form, answers, draft.submission.level);
+  const submissionDetails = cfpReviewSubmissionDetails(form, draft, answers);
   const uploadedFiles =
     form?.submissionFields.flatMap((field) => {
       if (field.kind !== "file_request") return [];
@@ -3305,13 +3486,9 @@ function ReviewStep({
             ✎ Edit session
           </Button>
         </div>
-        <ReviewValue label="Title" value={draft.submission.title} />
-        <ReviewValue label="Description" value={draft.submission.description} />
-        <ReviewValue label="Format" value={draft.submission.format} />
-        <ReviewValue label="Tags" value={draft.submission.tags.join(", ")} />
-        <ReviewValue label="Track" value={draft.submission.track} />
-        <ReviewValue label={audienceLevel.label} value={audienceLevel.value} />
-        <ReviewValue label="Language" value={draft.submission.language || "Not specified"} />
+        {submissionDetails.map((detail) => (
+          <ReviewValue key={detail.key} label={detail.label} value={detail.value} />
+        ))}
         {uploadedFiles.length > 0 ? (
           <div className={styles.reviewFiles}>
             <p className={styles.reviewFilesLabel}>Uploaded files</p>
@@ -3350,7 +3527,6 @@ function ReviewStep({
               {participant.firstName} {participant.lastName} <span>{participant.role}</span>
             </h3>
             <ReviewValue label="Email" value={participant.email} />
-            <ReviewValue label="Mobile Phone" value={participant.mobilePhone || "Not provided"} />
             <ReviewValue label="Biography" value={participant.biography || "Not provided"} />
           </div>
         ))}

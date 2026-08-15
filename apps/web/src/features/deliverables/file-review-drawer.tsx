@@ -10,12 +10,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import styles from "./file-library.module.css";
 import { FileReviewComments } from "./file-review-comments";
 import { buildFileReviewContext } from "./file-review-model";
 import { FileReviewOverview } from "./file-review-overview";
 import type { FileReviewBodyProps, FileReviewDrawerProps } from "./file-review-types";
 import { FileReviewVersions } from "./file-review-versions";
-import styles from "./file-library.module.css";
 
 export function FileReviewDrawerBody({
   family,

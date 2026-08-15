@@ -5,12 +5,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import styles from "./file-library.module.css";
 import { FileLibraryExport } from "./file-library-export";
 import { FileLibraryFilters } from "./file-library-filters";
 import { buildFileLibraryRows, filterFileLibraryRows } from "./file-library-model";
 import { FileLibraryRows } from "./file-library-rows";
-import type { FileLibraryFilters as Filters, FileLibraryProps } from "./file-library-types";
-import styles from "./file-library.module.css";
+import type { FileLibraryProps, FileLibraryFilters as Filters } from "./file-library-types";
 
 const initialFilters: Filters = {
   query: "",

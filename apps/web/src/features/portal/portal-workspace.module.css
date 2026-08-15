@@ -1,0 +1,226 @@
+.page {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.navigation,
+.list,
+.stack,
+.compactList,
+.form,
+.fields,
+.versionList,
+.guideList {
+  display: grid;
+}
+
+.navigation {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+}
+
+.navigation a {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  font-weight: 650;
+  text-align: center;
+  text-decoration: none;
+}
+
+.navigation a[aria-current="page"] {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: var(--shadow-card);
+}
+
+.loading {
+  color: var(--muted-foreground);
+}
+
+.list,
+.compactList,
+.versionList,
+.guideList {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.list > li + li,
+.compactList > li + li,
+.versionList > li + li,
+.guideList > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.listButton,
+.guideButton {
+  width: 100%;
+  padding: var(--space-4);
+  border: 0;
+  border-left: var(--space-1) solid transparent;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+}
+
+.listButton[aria-current="true"],
+.guideButton[aria-current="true"] {
+  border-left-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 7%, var(--background));
+}
+
+.listButton span,
+.guideButton span,
+.muted,
+.help,
+.meta {
+  color: var(--muted-foreground);
+}
+
+.listButton strong,
+.listButton span,
+.guideButton strong,
+.guideButton span {
+  display: block;
+}
+
+.detail,
+.surfaceBody,
+.form,
+.fields,
+.stack {
+  gap: var(--space-4);
+}
+
+.detail,
+.surfaceBody {
+  display: grid;
+  padding: var(--space-4);
+}
+
+.compactList > li,
+.versionList > li {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+
+.row,
+.actions,
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.row {
+  justify-content: space-between;
+}
+
+.form {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted-foreground);
+  font-weight: 600;
+}
+
+.field input,
+.field select {
+  min-width: 0;
+  min-height: calc(var(--space-7) + var(--space-1));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+
+.notice {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.reviewNote {
+  padding: var(--space-3);
+  border-left: var(--space-1) solid var(--warning);
+  background: var(--warning-surface);
+  color: var(--foreground);
+}
+
+.article {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.article :is(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table) {
+  margin: 0;
+}
+
+.article :is(ul, ol) {
+  padding-left: var(--space-5);
+}
+
+.article a {
+  color: var(--primary);
+  font-weight: 650;
+}
+
+.article table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.article :is(th, td) {
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 48rem) {
+  .navigation,
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navigation a,
+  .listButton,
+  .guideButton {
+    transition: none;
+  }
+}

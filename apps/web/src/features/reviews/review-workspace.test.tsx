@@ -1901,6 +1901,9 @@ describe("review workspace", () => {
           useState: useStateMock,
         };
       });
+      vi.doMock("@/features/admin/organizer-event-workspace", () => ({
+        useOrganizerEventId: (fallbackEventId?: string) => fallbackEventId,
+      }));
       const reviewModule = await import("./review-workspace");
       const draftOrganizerState = testPlan("event-empty");
       let lifecycleStatus: "draft" | "open" = "draft";

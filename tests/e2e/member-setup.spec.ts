@@ -39,7 +39,9 @@ const acceptedInvitation = {
   acceptedAt: "2026-08-11T00:01:00.000Z",
 } as const;
 
-test("an invited evaluator sets a password and reaches My Evaluations", async ({ page }) => {
+test("an invited evaluator sets a password, reaches the work hub, and opens the reviewer queue", async ({
+  page,
+}) => {
   const requests: string[] = [];
 
   await page.route(
@@ -116,9 +118,18 @@ test("an invited evaluator sets a password and reaches My Evaluations", async ({
   await page.getByLabel("Confirm password").fill(PASSWORD);
   await page.getByRole("button", { name: "Accept invitation and sign in" }).click();
 
-  await expect(page).toHaveURL(/\/review$/u);
-  await expect(page.getByRole("heading", { name: "Reviewer queue" })).toBeVisible();
+  await expect(page).toHaveURL("/work");
+  await expect(page.getByRole("heading", { name: "Where do you want to work?" })).toBeVisible();
+  const reviewerWorkspace = page.locator('[data-workspace="reviewer"]');
+  await expect(reviewerWorkspace).toBeVisible();
+  await expect(reviewerWorkspace).toContainText("Reviewer workspace");
+  const reviewAssignments = reviewerWorkspace.getByRole("link", { name: "Review assignments" });
+  await expect(reviewAssignments).toHaveAttribute("href", "/review");
   expect(requests.slice(0, 3)).toEqual(["activate", "sign-in", "session"]);
+
+  await reviewAssignments.click();
+  await expect(page).toHaveURL("/review");
+  await expect(page.getByRole("heading", { name: "Reviewer queue" })).toBeVisible();
 });
 
 test("activation success survives an automatic sign-in failure without reusing the token", async ({

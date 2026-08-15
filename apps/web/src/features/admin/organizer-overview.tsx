@@ -426,8 +426,8 @@ function eventStatusLabel(status: string | null): string {
   return status && status.trim().length > 0 ? status : "Status unavailable";
 }
 
-function agendaHref(organizationId: string, eventId: string): string {
-  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`;
+function agendaHref(organizationId: string, eventSlug: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/agenda`;
 }
 
 function LoadingState() {
@@ -803,14 +803,14 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                     <Link
                       aria-label={`Open agenda for ${event.name}`}
                       className={styles.primaryButton}
-                      href={agendaHref(data.organizationId, event.id)}
+                      href={agendaHref(data.organizationId, event.slug ?? event.id)}
                     >
                       Open agenda
                     </Link>
                     <Link
                       aria-label={`Open settings for ${event.name}`}
                       className={styles.outlineButton}
-                      href={eventSettingsHref(data.organizationId, event.id)}
+                      href={eventSettingsHref(data.organizationId, event.slug ?? event.id)}
                     >
                       Settings
                     </Link>
@@ -843,14 +843,14 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
               <Link
                 aria-label={`Open agenda for ${event.name}`}
                 className={styles.primaryButton}
-                href={agendaHref(data.organizationId, event.id)}
+                href={agendaHref(data.organizationId, event.slug ?? event.id)}
               >
                 Open agenda
               </Link>
               <Link
                 aria-label={`Open settings for ${event.name}`}
                 className={styles.secondaryButton}
-                href={eventSettingsHref(data.organizationId, event.id)}
+                href={eventSettingsHref(data.organizationId, event.slug ?? event.id)}
               >
                 Settings
               </Link>
@@ -2300,8 +2300,8 @@ function formatEventManagementDates(event: OrganizerEventRecord): string {
   return `${start} – ${end}`;
 }
 
-function eventSettingsHref(organizationId: string, eventId: string): string {
-  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/settings`;
+function eventSettingsHref(organizationId: string, eventSlug: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/settings`;
 }
 export interface OrganizerCalendarDateCell {
   readonly date: Date;
@@ -2648,7 +2648,7 @@ function OrganizerEventsLoaded({
                         <li key={event.id}>
                           <Link
                             className={styles.upcomingLink}
-                            href={eventSettingsHref(data.organizationId, event.id)}
+                            href={eventSettingsHref(data.organizationId, event.slug ?? event.id)}
                           >
                             <span className={styles.upcomingTitleRow}>
                               <strong>{event.name}</strong>
@@ -2762,7 +2762,10 @@ function OrganizerEventsLoaded({
                                   {cellEvents.map((event) => (
                                     <Link
                                       className={styles.calendarEvent}
-                                      href={eventSettingsHref(data.organizationId, event.id)}
+                                      href={eventSettingsHref(
+                                        data.organizationId,
+                                        event.slug ?? event.id,
+                                      )}
                                       key={event.id}
                                       aria-label={event.name}
                                     >
@@ -2804,7 +2807,7 @@ function OrganizerEventsLoaded({
                         <td className={styles.eventNameCell}>
                           <Link
                             className={styles.eventName}
-                            href={eventSettingsHref(data.organizationId, event.id)}
+                            href={eventSettingsHref(data.organizationId, event.slug ?? event.id)}
                           >
                             {event.name}
                           </Link>
@@ -2822,10 +2825,17 @@ function OrganizerEventsLoaded({
                         <td>
                           <div className={styles.eventActions}>
                             <Button asChild size="sm" variant="outline">
-                              <Link href={agendaHref(data.organizationId, event.id)}>Agenda</Link>
+                              <Link href={agendaHref(data.organizationId, event.slug ?? event.id)}>
+                                Agenda
+                              </Link>
                             </Button>
                             <Button asChild size="sm" variant="outline">
-                              <Link href={eventSettingsHref(data.organizationId, event.id)}>
+                              <Link
+                                href={eventSettingsHref(
+                                  data.organizationId,
+                                  event.slug ?? event.id,
+                                )}
+                              >
                                 Settings
                               </Link>
                             </Button>

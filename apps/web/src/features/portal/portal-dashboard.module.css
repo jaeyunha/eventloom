@@ -1,0 +1,292 @@
+.dashboard {
+  min-width: 0;
+  background: var(--background);
+}
+
+.eventList {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.eventCard {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  animation: eventReveal 240ms ease both;
+}
+
+.eventCard:nth-child(2) {
+  animation-delay: 45ms;
+}
+.eventCard:nth-child(3) {
+  animation-delay: 90ms;
+}
+
+.eventCard[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  box-shadow: var(--shadow-surface);
+}
+
+.eventSummary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-4);
+}
+
+.eventMark,
+.submissionIcon,
+.calloutIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.eventMark {
+  width: var(--space-7);
+  height: var(--space-7);
+}
+
+.eventMark svg,
+.submissionIcon svg,
+.calloutIcon svg,
+.primaryAction svg,
+.selectAction svg,
+.readinessFacts svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.eventTitle h2,
+.preparationCallout h3,
+.sectionHeading h3,
+.submissionCopy h4 {
+  margin: 0;
+  color: var(--foreground);
+}
+
+.eventTitle h2 {
+  font-size: 1.05rem;
+}
+.eventTitle p,
+.contextHint,
+.preparationCallout p,
+.submissionCopy p,
+.emptyCopy {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.kicker {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.selectAction,
+.primaryAction,
+.rowAction,
+.sectionHeading a {
+  color: var(--foreground);
+  font-size: 0.76rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.selectAction,
+.primaryAction {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.primaryAction {
+  justify-content: center;
+  min-height: var(--space-7);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.contextHint {
+  padding: 0 var(--space-4) var(--space-4) calc(var(--space-7) + var(--space-3) + var(--space-4));
+}
+
+.selectedDetails {
+  display: grid;
+  gap: var(--space-4);
+  padding: 0 var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.preparationCallout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-4);
+  margin-top: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+  border-radius: var(--radius-lg);
+  background: var(--success-surface);
+}
+
+.calloutIcon {
+  width: var(--space-7);
+  height: var(--space-7);
+  color: var(--success);
+}
+.preparationCallout h3,
+.sectionHeading h3 {
+  font-size: 0.9rem;
+}
+
+.eventColumns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(16rem, 0.75fr);
+  gap: var(--space-4);
+}
+
+.submissionSection,
+.readinessPanel {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+}
+
+.sectionHeading {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.submissionList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.submissionList li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.submissionList li:last-child {
+  border-bottom: 0;
+}
+.submissionIcon {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+.submissionCopy h4 {
+  font-size: 0.82rem;
+}
+.rowAction {
+  white-space: nowrap;
+}
+.emptyCopy {
+  padding: var(--space-5);
+}
+
+.readinessPanel {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  padding: var(--space-3);
+}
+.readinessPanel > section {
+  border: 0;
+  background: transparent;
+}
+.readinessFacts {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-4);
+}
+.readinessFacts span {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@keyframes eventReveal {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 64rem) {
+  .eventColumns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 48rem) {
+  .eventList {
+    padding: var(--space-3);
+  }
+  .eventSummary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .eventSummary > :nth-child(n + 3) {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .preparationCallout {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .preparationCallout .primaryAction {
+    grid-column: 1 / -1;
+  }
+  .submissionList li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .submissionList li > :nth-child(n + 3) {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .contextHint {
+    padding-left: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eventCard {
+    animation: none;
+  }
+}

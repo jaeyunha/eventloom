@@ -35,6 +35,13 @@ export type AssetPointerSnapshot = {
   error: string | null;
 };
 
+export interface PortalAssetVersionFamily {
+  id: string;
+  kind: PortalAsset["kind"];
+  versions: readonly PortalAsset[];
+  current: PortalAsset;
+}
+
 export type PortalAssetFamilyResolution = {
   status: "empty" | "ready" | "pending" | "rejected" | "missing-metadata" | "conflict";
   assets: readonly PortalAsset[];
@@ -210,6 +217,35 @@ export function assetPointerLabels(
   if (matches(pointers.approvedVersionId)) labels.push("Approved");
   if (matches(pointers.releasedVersionId)) labels.push("Released");
   return labels;
+}
+
+function compareAssetVersions(left: PortalAsset, right: PortalAsset): number {
+  const versionDifference = (left.version ?? 0) - (right.version ?? 0);
+  if (versionDifference !== 0) return versionDifference;
+  const createdDifference = left.createdAt.localeCompare(right.createdAt);
+  return createdDifference !== 0 ? createdDifference : left.id.localeCompare(right.id);
+}
+
+/** Groups immutable versions without inferring an authoritative current pointer. */
+export function groupPortalAssetVersions(
+  assets: readonly PortalAsset[],
+): PortalAssetVersionFamily[] {
+  const grouped = new Map<string, PortalAsset[]>();
+  for (const asset of assets) {
+    const familyId = asset.versionFamilyId ?? asset.id;
+    const family = grouped.get(familyId);
+    if (family) family.push(asset);
+    else grouped.set(familyId, [asset]);
+  }
+
+  return [...grouped.entries()]
+    .map(([id, entries]) => {
+      const versions = [...entries].sort(compareAssetVersions);
+      const current = versions.at(-1);
+      if (!current) throw new Error("Asset version families cannot be empty.");
+      return { id, kind: current.kind, versions, current };
+    })
+    .sort((left, right) => compareAssetVersions(right.current, left.current));
 }
 
 export function portalFileStatus(asset: PortalAsset | undefined): string {

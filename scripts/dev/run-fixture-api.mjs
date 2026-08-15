@@ -57,6 +57,8 @@ const child = spawn(
     port,
     "--inspector-port",
     inspectorPort,
+    "--persist-to",
+    join(temporaryDirectory, "wrangler-state"),
   ],
   { cwd: apiDirectory, env: process.env, stdio: "inherit" },
 );

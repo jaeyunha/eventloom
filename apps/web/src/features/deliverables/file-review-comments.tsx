@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { DeliverableComment } from "./api";
+import styles from "./file-library.module.css";
 import { formatFileTime } from "./file-library-model";
 import type { FileReviewContext } from "./file-review-types";
-import styles from "./file-library.module.css";
 
 interface FileReviewCommentsProps {
   readonly context: FileReviewContext;

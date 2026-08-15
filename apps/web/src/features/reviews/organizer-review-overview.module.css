@@ -543,6 +543,12 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .attentionSummary {
+    transition: none;
+  }
+}
+
 @media (max-width: 30rem) {
   .headerActions,
   .mobileHeading,

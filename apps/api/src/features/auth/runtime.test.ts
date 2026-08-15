@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath, URL as NodeUrl } from "node:url";
 import type { D1Database } from "@cloudflare/workers-types";
 import { describe, expect, it } from "vitest";
+import { SqliteD1 } from "../../test-support/sqlite-d1";
 import { createBetterAuthRuntimeConfiguration } from "./configuration";
 import { createBetterAuthRuntime, createD1AuthAdapter } from "./runtime";
 
@@ -173,5 +176,78 @@ describe("Better Auth D1 runtime", () => {
     expect(response.status).toBe(200);
     expect(links).toHaveLength(1);
     expect(links[0]).toMatch(/^https:\/\/web\.example\.com\/api\/auth\/magic-link\/verify\?/u);
+  });
+  it("creates a verified session before redirecting an email verification callback", async () => {
+    const database = new SqliteD1(
+      "eventloom-auth-verification-",
+      [
+        readFileSync(
+          fileURLToPath(
+            new NodeUrl("../../../migrations/0001_identity_and_access.sql", import.meta.url),
+          ),
+          "utf8",
+        ),
+        readFileSync(
+          fileURLToPath(new NodeUrl("../../../migrations/0003_auth_password.sql", import.meta.url)),
+          "utf8",
+        ),
+      ].join("\n"),
+    );
+    try {
+      const links: string[] = [];
+      const runtime = createBetterAuthRuntime({
+        database: database as unknown as D1Database,
+        configuration: createBetterAuthRuntimeConfiguration({
+          secret: "a-secret-long-enough-for-better-auth-tests",
+          baseUrl: "https://web.example.com",
+          trustedOrigins: ["https://web.example.com"],
+        }),
+        environment: "staging",
+        sendMagicLink: async ({ url }) => {
+          links.push(url);
+        },
+      });
+      const callbackUrl =
+        "https://web.example.com/cfp/organizations/example/events/example/account?cfpVerification=complete";
+
+      const signUp = await runtime.handler(
+        new Request("https://web.example.com/api/auth/sign-up/email", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            origin: "https://web.example.com",
+          },
+          body: JSON.stringify({
+            name: "Verified Speaker",
+            email: "verified-speaker@example.com",
+            password: "StrongPass1!",
+            callbackURL: callbackUrl,
+          }),
+        }),
+      );
+
+      expect(signUp.status).toBe(200);
+      expect(links).toHaveLength(1);
+      const verification = await runtime.handler(new Request(links[0] ?? ""));
+      expect(verification.status).toBe(302);
+      expect(verification.headers.get("location")).toBe(callbackUrl);
+      const cookie = verification.headers.get("set-cookie")?.split(";")[0] ?? "";
+      expect(cookie).toContain("better-auth.session_token=");
+
+      const session = await runtime.handler(
+        new Request("https://web.example.com/api/auth/get-session", {
+          headers: { cookie },
+        }),
+      );
+      expect(session.status).toBe(200);
+      await expect(session.json()).resolves.toMatchObject({
+        user: {
+          email: "verified-speaker@example.com",
+          emailVerified: true,
+        },
+      });
+    } finally {
+      database.dispose();
+    }
   });
 });

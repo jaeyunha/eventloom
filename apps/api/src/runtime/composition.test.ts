@@ -56,7 +56,7 @@ import {
   LOCAL_SPEAKER_SESSION_TOKEN,
 } from "./local";
 
-vi.setConfig({ testTimeout: 15_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",

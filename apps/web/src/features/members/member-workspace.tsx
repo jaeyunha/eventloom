@@ -702,13 +702,6 @@ export function MemberWorkspace({
     }
   }
 
-  function switchOrganization(targetOrganizationId: string): void {
-    const target = targetOrganizationId.trim();
-    if (!target || typeof window === "undefined") return;
-    const destination = view === "settings" ? "settings" : "members";
-    window.location.assign(`/admin/organizations/${encodeURIComponent(target)}/${destination}`);
-  }
-
   function parseOrganizationConfigDraft(): Readonly<Record<string, unknown>> | null {
     try {
       const parsed: unknown = JSON.parse(organizationDraft.config);
@@ -813,7 +806,7 @@ export function MemberWorkspace({
           <h1 className={styles.title}>{settingsOnly ? "Settings" : "People"}</h1>
           <p className={styles.description}>
             {settingsOnly
-              ? "Manage this organization and choose the workspace where you want to work."
+              ? "Manage details and configuration for this organization."
               : "Keep your organization access clear, invite teammates, and choose evaluators when a review round is ready."}
           </p>
           <p className={styles.contextLine}>
@@ -841,26 +834,22 @@ export function MemberWorkspace({
 
       {error ? <StatusMessage message={error} error /> : null}
       {notice ? <StatusMessage message={notice} /> : null}
+      {settingsOnly && organizationsError ? (
+        <StatusMessage message={organizationsError} error />
+      ) : null}
 
       <Tabs
         value={activeTab}
         onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
         className={styles.tabs}
       >
-        <TabsList
-          className={styles.tabList}
-          aria-label={settingsOnly ? "Organization settings sections" : "People workspace sections"}
-        >
-          {settingsOnly ? (
-            <TabsTrigger value="settings">Organization settings</TabsTrigger>
-          ) : (
-            <>
-              <TabsTrigger value="people">People</TabsTrigger>
-              <TabsTrigger value="invite">Invite member</TabsTrigger>
-              <TabsTrigger value="pools">Reviewer pools</TabsTrigger>
-            </>
-          )}
-        </TabsList>
+        {!settingsOnly ? (
+          <TabsList className={styles.tabList} aria-label="People workspace sections">
+            <TabsTrigger value="people">People</TabsTrigger>
+            <TabsTrigger value="invite">Invite member</TabsTrigger>
+            <TabsTrigger value="pools">Reviewer pools</TabsTrigger>
+          </TabsList>
+        ) : null}
 
         <TabsContent value="people" className={styles.tabContent}>
           <Card>
@@ -1212,55 +1201,15 @@ export function MemberWorkspace({
           </Card>
         </TabsContent>
 
-        <TabsContent value="settings" className={styles.tabContent}>
+        <TabsContent value="settings" className={styles.tabContent} aria-label="Settings">
           <Card>
             <CardHeader>
               <CardTitle>Organization settings</CardTitle>
               <CardDescription>
-                Switch workspaces or update the current organization. Owner-only changes are checked
-                on the server.
+                Update the current organization. Owner-only changes are checked on the server.
               </CardDescription>
             </CardHeader>
             <CardContent className={styles.cardContent}>
-              <section
-                className={styles.settingsSection}
-                aria-labelledby="organization-switch-heading"
-              >
-                <div>
-                  <h2 id="organization-switch-heading" className={styles.sectionTitle}>
-                    Your organizations
-                  </h2>
-                  <p className={styles.fieldHint}>Choose where you want to manage people.</p>
-                </div>
-                <Select
-                  value={organizationId}
-                  onValueChange={switchOrganization}
-                  disabled={organizationsLoading}
-                >
-                  <SelectTrigger aria-label="Switch organization" className={styles.settingsSelect}>
-                    <SelectValue placeholder="Choose an organization" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {organizations.length === 0 ? (
-                      <SelectItem value={organizationId}>Current organization</SelectItem>
-                    ) : (
-                      organizations.map((organization) => (
-                        <SelectItem
-                          value={organization.organizationId}
-                          key={organization.organizationId}
-                        >
-                          {organization.name} · {roleLabel(organization.role)}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-                {organizationsLoading ? (
-                  <p className={styles.statusMessage}>Loading organizations…</p>
-                ) : null}
-                {organizationsError ? <StatusMessage message={organizationsError} error /> : null}
-              </section>
-
               <section
                 className={styles.settingsSection}
                 aria-labelledby="current-settings-heading"

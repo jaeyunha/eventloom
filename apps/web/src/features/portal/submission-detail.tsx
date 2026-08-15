@@ -9,7 +9,7 @@ import {
   canonicalPortalSubmissionId,
   portalSubmissionActionTargets,
   portalSubmissionDisplayTitle,
-} from "./portal-submissions";
+} from "./portal-submission-model";
 import {
   EmptyState,
   formatPortalDate,
@@ -18,82 +18,10 @@ import {
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
-import type { PortalSubmission, PortalSubmissionStatus } from "./types";
+import { SubmissionAnswers, SubmissionParticipants } from "./submission-detail-sections";
+import type { PortalSubmissionStatus } from "./types";
 
-function answerLabel(key: string): string {
-  return key
-    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
-    .replace(/[_-]+/gu, " ")
-    .replace(/^./u, (value) => value.toUpperCase());
-}
-
-function answerValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
-  if (Array.isArray(value)) return value.map(answerValue).join(", ");
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-export function SubmissionAnswers({
-  answers,
-}: {
-  readonly answers: Readonly<Record<string, unknown>>;
-}) {
-  const entries = Object.entries(answers);
-  if (entries.length === 0) return null;
-  return (
-    <section className={styles.panel} aria-labelledby="proposal-content-heading">
-      <div className={styles.panelHeading}>
-        <div>
-          <p className={styles.eyebrow}>Submitted proposal</p>
-          <h2 id="proposal-content-heading">Proposal content</h2>
-        </div>
-      </div>
-      <dl className={styles.submissionAnswers}>
-        {entries.map(([key, value]) => (
-          <div key={key}>
-            <dt>{answerLabel(key)}</dt>
-            <dd>{answerValue(value)}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
-}
-
-export function SubmissionParticipants({
-  participants,
-}: {
-  readonly participants: NonNullable<PortalSubmission["participants"]>;
-}) {
-  if (participants.length === 0) return null;
-  return (
-    <section className={styles.panel} aria-labelledby="submission-participants-heading">
-      <div className={styles.panelHeading}>
-        <div>
-          <p className={styles.eyebrow}>Proposal team</p>
-          <h2 id="submission-participants-heading">Participants</h2>
-        </div>
-      </div>
-      <div className={styles.taskStack}>
-        {participants.map((participant) => {
-          const displayName =
-            `${participant.firstName} ${participant.lastName}`.trim() || participant.email;
-          return (
-            <article className={styles.taskItem} key={participant.id}>
-              <div>
-                <h3>{displayName}</h3>
-                <p>{participant.email}</p>
-              </div>
-              <span>{participant.role === "primary" ? "Primary speaker" : "Co-author"}</span>
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
+export { SubmissionAnswers, SubmissionParticipants } from "./submission-detail-sections";
 
 const standardJourney: readonly PortalSubmissionStatus[] = [
   "submitted",
@@ -111,9 +39,7 @@ export function SubmissionDetail({ submissionId }: Readonly<{ submissionId: stri
 
 function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: string }>) {
   const { eventQuery, view, context, can } = usePortal();
-  if (!view) {
-    return null;
-  }
+  if (!view) return null;
   const submission = view.submissions.find((candidate) =>
     portalSubmissionIdsMatch(candidate.id, submissionId),
   );
@@ -130,6 +56,7 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
       />
     );
   }
+
   const presentation = submissionStatusPresentation(submission.status);
   const submissionTasks = view.tasks.filter(
     (task) =>
@@ -137,9 +64,10 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
   );
   const displayTitle = portalSubmissionDisplayTitle(submission, view.submissions);
   const currentJourneyIndex = standardJourney.indexOf(submission.status);
-  const actionTargets = can("submission-edit")
-    ? portalSubmissionActionTargets(context, submission)
-    : null;
+  const actionTargets =
+    can("submission-edit") && submission.status !== "accepted"
+      ? portalSubmissionActionTargets(context, submission)
+      : null;
   const cfpEventSlug = context?.slug?.trim() || context?.eventId.trim() || "";
 
   return (
@@ -148,13 +76,13 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
         <span aria-hidden="true">←</span> All submissions
       </Link>
       <PageHeading
-        eyebrow={`Submission ${submission.id}`}
+        eyebrow="Proposal status"
         title={displayTitle}
-        description="Your latest persisted proposal status and accepted-speaker requirements."
+        description="The latest persisted proposal status and any accepted-speaker requirements."
         action={<SubmissionStatusBadge status={submission.status} />}
       />
       {actionTargets === null ? null : (
-        <>
+        <div className={styles.headingAction}>
           <Link
             className={styles.primaryButton}
             href={actionTargets.editHref}
@@ -177,7 +105,7 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
           >
             Submit another proposal
           </Link>
-        </>
+        </div>
       )}
 
       <section className={`${styles.panel} ${styles.statusHero}`}>
@@ -230,7 +158,6 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
       )}
 
       {submission.answers ? <SubmissionAnswers answers={submission.answers} /> : null}
-
       {submission.participants ? (
         <SubmissionParticipants participants={submission.participants} />
       ) : null}
@@ -242,7 +169,9 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
               <p className={styles.eyebrow}>Accepted speaker checklist</p>
               <h2 id="accepted-tasks-heading">Tasks for this session</h2>
             </div>
-            <Link href={`/portal/tasks${eventQuery}`}>Open task workspace</Link>
+            {can("task-response") ? (
+              <Link href={`/portal/tasks${eventQuery}`}>Open task workspace</Link>
+            ) : null}
           </div>
           {submissionTasks.length === 0 ? (
             <EmptyState

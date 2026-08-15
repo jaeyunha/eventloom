@@ -1,19 +1,16 @@
 "use client";
 
-import { ChevronDown, LogOut, UserRound } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
 import styles from "./portal.module.css";
-import { portalContextLabel, usePortal } from "./portal-provider";
-import type {
-  PortalAssetState,
-  PortalCapability,
-  PortalSubmissionStatus,
-  PortalTaskStatus,
-} from "./types";
+import { usePortal } from "./portal-provider";
+import type { PortalAssetState, PortalSubmissionStatus, PortalTaskStatus } from "./types";
 
+export { PortalFrame } from "./portal-shell";
+export { portalContentMode, portalRouteAuthorized, signOutAndRedirect } from "./portal-shell-model";
+
+/** Legacy route inventory retained for callers that still inspect the portal destinations. */
 export const portalNavigation = [
   { href: "/portal", label: "Home", icon: "⌂" },
   { href: "/portal/submissions", label: "Submissions", icon: "▤" },
@@ -25,262 +22,12 @@ export const portalNavigation = [
   { href: "/portal?workspace=wiki", label: "Wiki", icon: "◫" },
 ] as const;
 
-const noParticipantWorkspaceDescription =
-  "Track your proposal in My submissions. Speaker tools unlock after an organizer accepts it.";
-
-export async function signOutAndRedirect(
-  navigate: (path: string) => void = (path) => window.location.assign(path),
-): Promise<void> {
-  await fetch("/api/auth/sign-out", {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-  }).catch(() => undefined);
-  navigate("/login");
-}
-
-function portalNavigationHref(href: string, eventQuery: string): string {
-  if (eventQuery.length === 0) return href;
-  return href.includes("?") ? `${href}&${eventQuery.slice(1)}` : `${href}${eventQuery}`;
-}
-
-export function portalRouteAuthorized(input: {
-  readonly pathname: string;
-  readonly workspace: string | null;
-  readonly submissionCount: number;
-  readonly can: (capability: PortalCapability) => boolean;
-}): boolean {
-  const { pathname, workspace, can } = input;
-  if (pathname === "/portal" && workspace === null) return true;
-  if (pathname.startsWith("/portal/submissions")) return true;
-  if (pathname === "/portal/tasks" || workspace === "tasks") return can("task-response");
-  if (pathname === "/portal/profile") return can("profile-self");
-  if (workspace === "co-speakers") return can("roster-manage");
-  if (workspace === "files") return can("asset-read");
-  if (workspace === "resources" || workspace === "wiki") return can("resource-read");
-  return true;
-}
-
-export function portalContentMode(input: {
-  readonly loading: boolean;
-  readonly error: string | null;
-  readonly hasView: boolean;
-  readonly routeAuthorized: boolean;
-}): "children" | "no-access" {
-  if (input.loading || (input.error !== null && !input.hasView)) return "children";
-  return input.routeAuthorized ? "children" : "no-access";
-}
-
-export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
-  const {
-    authorizedParticipantIds,
-    eventQuery,
-    view,
-    contexts,
-    context,
-    selectedParticipantId,
-    switchContext,
-    switchParticipant,
-    loading,
-    error,
-    can,
-  } = usePortal();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const displayName =
-    view?.profiles.find((candidate) => candidate.participantId === context?.primaryParticipantId)
-      ?.displayName ?? "Speaker";
-  const initials = displayName
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toLocaleUpperCase())
-    .join("");
-  const visibleNavigation = portalNavigation.filter((item) => {
-    if (item.href === "/portal" || item.href === "/portal/submissions") return true;
-    if (item.href === "/portal/tasks") return can("task-response");
-    if (item.href === "/portal/profile") return can("profile-self");
-    if (item.href.includes("workspace=co-speakers")) return can("roster-manage");
-    if (item.href.includes("workspace=files")) return can("asset-read");
-    if (item.href.includes("workspace=resources") || item.href.includes("workspace=wiki")) {
-      return can("resource-read");
-    }
-    return false;
-  });
-  const workspace = searchParams.get("workspace");
-  const routeAuthorized = portalRouteAuthorized({
-    pathname,
-    workspace,
-    submissionCount: context?.submissionIds.length ?? 0,
-    can,
-  });
-  const contentMode = portalContentMode({
-    loading,
-    error,
-    hasView: view !== null,
-    routeAuthorized,
-  });
-
-  async function selectContext(contextId: string) {
-    setAccountMenuOpen(false);
-    await switchContext(contextId);
-  }
-  function selectParticipant(participantId: string) {
-    if (switchParticipant(participantId)) {
-      setAccountMenuOpen(false);
-    }
-  }
-
-  return (
-    <div className={styles.portalRoot}>
-      <a className={styles.skipLink} href="#portal-content">
-        Skip to portal content
-      </a>
-      <header className={styles.topbar}>
-        <Link className={styles.brand} href={`/portal${eventQuery}`}>
-          <span aria-hidden="true">EL</span>
-          <strong>Eventloom</strong>
-        </Link>
-        <div className={styles.accountArea}>
-          <button
-            className={styles.accountTrigger}
-            type="button"
-            aria-haspopup="menu"
-            aria-label="Switch event or participant"
-            aria-expanded={accountMenuOpen}
-            aria-controls="portal-context-menu"
-            onClick={() => setAccountMenuOpen((open) => !open)}
-          >
-            <span className={styles.avatar} aria-hidden="true">
-              {initials || "SP"}
-            </span>
-            <span className={styles.accountCopy}>
-              <strong>{displayName}</strong>
-              <small>{context ? portalContextLabel(context) : "Speaker portal"}</small>
-            </span>
-            <ChevronDown aria-hidden="true" size={14} />
-          </button>
-          {accountMenuOpen ? (
-            <div
-              id="portal-context-menu"
-              className={styles.contextMenu}
-              role="menu"
-              aria-label="Switch event or participant"
-            >
-              <p className={styles.contextMenuLabel}>Event</p>
-              {contexts.length === 0 ? (
-                <span role="status">No authorized events</span>
-              ) : (
-                contexts.map((candidate) => (
-                  <button
-                    key={candidate.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={candidate.id === context?.id}
-                    disabled={loading}
-                    onClick={() => void selectContext(candidate.id)}
-                  >
-                    {portalContextLabel(candidate)}
-                  </button>
-                ))
-              )}
-              {authorizedParticipantIds.length > 0 ? (
-                <>
-                  <p className={styles.contextMenuLabel}>Participant</p>
-                  {authorizedParticipantIds.map((participantId, index) => (
-                    <button
-                      key={participantId}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={participantId === selectedParticipantId}
-                      disabled={loading}
-                      onClick={() => selectParticipant(participantId)}
-                    >
-                      {participantId === selectedParticipantId
-                        ? displayName
-                        : `Participant ${index + 1}`}
-                      <small>{participantId}</small>
-                    </button>
-                  ))}
-                </>
-              ) : (
-                <p className={styles.contextMenuHint}>
-                  Submission access is active. Participant tools unlock after the event links your
-                  speaker record.
-                </p>
-              )}
-              <Link href="/work" role="menuitem">
-                <span aria-hidden="true">⌂</span>
-                All work
-              </Link>
-              <Link href={`/portal/profile${eventQuery}`} role="menuitem">
-                <UserRound aria-hidden="true" size={14} />
-                Profile
-              </Link>
-              <button type="button" role="menuitem" onClick={() => void signOutAndRedirect()}>
-                <LogOut aria-hidden="true" size={14} />
-                Sign out
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </header>
-      <div
-        className={`${styles.portalLayout} ${context ? "" : styles.portalLayoutWithoutNavigation}`}
-      >
-        {context ? (
-          <nav className={styles.portalNav} aria-label="Speaker portal">
-            <p className={styles.navLabel}>Your event</p>
-            {visibleNavigation.map((item) => (
-              <Link
-                key={item.href}
-                className={styles.navItem}
-                href={portalNavigationHref(item.href, eventQuery)}
-              >
-                <span aria-hidden="true">{item.icon}</span>
-                {item.label}
-                {item.href === "/portal/tasks" && (view?.outstandingTaskCount ?? 0) > 0 ? (
-                  <span className={styles.navCount}>
-                    {view?.outstandingTaskCount}
-                    <span className={styles.srOnly}> outstanding tasks</span>
-                  </span>
-                ) : null}
-              </Link>
-            ))}
-          </nav>
-        ) : null}
-        <main id="portal-content" className={styles.portalMain} tabIndex={-1}>
-          {contentMode === "children" ? (
-            children
-          ) : (
-            <section className={styles.statePanel} role="alert">
-              <h1>This workspace is not available</h1>
-              <p>
-                Your account does not have access to this speaker workspace for the selected event.
-              </p>
-              <Link href={portalNavigationHref("/portal/submissions", eventQuery)}>
-                View your submissions
-              </Link>
-            </section>
-          )}
-        </main>
-      </div>
-    </div>
-  );
-}
-
 export function PageHeading({
   eyebrow,
   title,
   description,
   action,
-}: Readonly<{
-  eyebrow?: string;
-  title: string;
-  description: string;
-  action?: ReactNode;
-}>) {
+}: Readonly<{ eyebrow?: string; title: string; description: string; action?: ReactNode }>) {
   return (
     <header className={styles.pageHeading}>
       <div>
@@ -300,7 +47,9 @@ export function NoParticipantWorkspaceState() {
         ◇
       </span>
       <h1>Your speaker workspace is not open yet</h1>
-      <p>{noParticipantWorkspaceDescription}</p>
+      <p>
+        Track your proposal in My submissions. Speaker tools unlock after an organizer accepts it.
+      </p>
       <Link href="/portal/submissions">View my submissions</Link>
     </div>
   );
@@ -312,8 +61,8 @@ export function PortalContentState({ children }: Readonly<{ children: ReactNode 
     return (
       <div className={styles.statePanel} role="status" aria-live="polite">
         <span className={styles.spinner} aria-hidden="true" />
-        <h1>Loading your speaker portal</h1>
-        <p>Retrieving your sessions, profile, and tasks.</p>
+        <h1>Loading your participant workspace</h1>
+        <p>Retrieving your events and submissions.</p>
       </div>
     );
   }
@@ -331,9 +80,7 @@ export function PortalContentState({ children }: Readonly<{ children: ReactNode 
       </div>
     );
   }
-  if (!view) {
-    return <NoParticipantWorkspaceState />;
-  }
+  if (!view) return <NoParticipantWorkspaceState />;
   return <>{children}</>;
 }
 
@@ -359,9 +106,7 @@ export function TaskStatusBadge({ status }: Readonly<{ status: PortalTaskStatus 
 
 export function InlineMutationError() {
   const { clearMutationError, mutationError } = usePortal();
-  if (!mutationError) {
-    return null;
-  }
+  if (!mutationError) return null;
   return (
     <div className={styles.inlineError} role="alert">
       <p>{mutationError}</p>
@@ -409,18 +154,12 @@ export function Progress({ value, label }: Readonly<{ value: number; label: stri
 }
 
 export function formatPortalDate(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
   const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return null;
-  }
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
+  if (Number.isNaN(date.valueOf())) return null;
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(
+    date,
+  );
 }
 
 export function formatPortalFileSize(sizeBytes: number): string {
@@ -438,9 +177,7 @@ export function formatPortalFileSize(sizeBytes: number): string {
 }
 
 export function portalAssetStateLabel(state: PortalAssetState): string {
-  return {
-    pending_upload: "Processing upload",
-    ready: "Uploaded",
-    rejected: "Upload failed",
-  }[state];
+  return { pending_upload: "Processing upload", ready: "Uploaded", rejected: "Upload failed" }[
+    state
+  ];
 }

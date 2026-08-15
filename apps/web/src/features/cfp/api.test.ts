@@ -115,6 +115,7 @@ describe("CFP authenticated session", () => {
     expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
       email: "ada@example.com",
       password: "StrongPass1!",
+      callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
     });
     expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
       email: "ada@example.com",

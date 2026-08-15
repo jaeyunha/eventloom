@@ -101,7 +101,34 @@ bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
-The deterministic personas below belong to the fixture runtime only; they are not seeded by the default integrated `make dev` runtime and do not exist in staging or production.
+### Integrated local accounts
+
+The default `make dev` command uses real Better Auth records in the persistent
+Wrangler-local D1 database. It intentionally has no universal username or
+password committed to the repository and does not seed reusable accounts.
+Create accounts through the normal signup, invitation, CFP, and access-grant
+workflows.
+
+For operator-specific local testing, distinct Gmail aliases such as
+`<operator>+localorganizer@gmail.com`,
+`<operator>+localreviewer@gmail.com`, and
+`<operator>+localspeaker@gmail.com` can keep role contexts separate while
+delivering to one inbox. The alias does not grant a role; organization
+membership, review assignments, participant claims, and speaker grants remain
+authoritative. Store the chosen passwords outside the repository. Verification,
+magic-link, and password-recovery messages are captured by local Mailpit.
+
+Integrated accounts survive ordinary dev-server restarts because they live in
+the ignored `apps/api/.wrangler` state. Removing that local state removes the
+accounts. Do not use the fixture credentials below to sign in to the integrated
+runtime.
+
+### Fixture-only deterministic accounts
+
+The deterministic personas below remain part of the fixture runtime for
+repeatable fixture authentication and browser checks. They are not seeded by
+the default integrated `make dev` runtime and do not exist in staging or
+production.
 
 | Persona | Email | Password | Access |
 | --- | --- | --- | --- |
@@ -158,14 +185,10 @@ When `AI_PROVIDER=openai`, staging and production use OpenAI Responses and
 the same quality-first per-feature defaults in `apps/api/wrangler.toml`:
 Sol/medium for agenda and evaluation, Terra/low for remix.
 `OPENAI_MODEL=gpt-5.6-terra` is the fallback for any future advisory feature
-without an explicit override. Before deploying an environment with OpenAI,
-store its distinct key as a Cloudflare secret:
-
-```bash
-bunx wrangler secret put OPENAI_API_KEY --cwd apps/api --env staging
-```
-
-Use a separate key and the corresponding `production` environment only after staging acceptance. Never add either key to `wrangler.toml`; rotate or delete a secret when AI is disabled.
+without an explicit override. Put the environment-specific `OPENAI_API_KEY` in
+the ignored `.env.cloudflare-<environment>` file and run the Worker-secret sync
+described below. Use separate staging and production keys. Never add either key
+to `wrangler.toml`; rotate or delete a secret when AI is disabled.
 
 ## Cloudflare resources and API deployment
 
@@ -180,49 +203,63 @@ modifies the committed template.
 
 Copy `.env.cloudflare.example` to `.env.cloudflare-staging` and
 `.env.cloudflare-production`. These files are ignored. Staging and production
-deploys do not inherit provider credentials from the local root `.env`; export
-`CLOUDFLARE_API_TOKEN` from the secret manager and put account, resource, and
-origin identity in the selected Cloudflare environment file.
+deploys do not inherit provider credentials from the local root `.env`. Put the
+selected environment's account, deployment token, resource IDs, origins, and
+these Worker secret values in its ignored file:
 
-For production, preview the interactive Worker-secret installation plan:
+- `BETTER_AUTH_SECRET`
+- `OPENSEND_API_KEY`
+- `OPENAI_API_KEY`
+- `AIRTABLE_OAUTH_CLIENT_SECRET`
+- `AIRTABLE_CREDENTIAL_ENCRYPTION_KEY`
+- `CACHE_INVALIDATION_TOKEN`
+
+Generate a separate cache token for each environment:
 
 ```bash
+openssl rand -hex 32
+```
+
+Store the result as `CACHE_INVALIDATION_TOKEN` in that environment file. The
+sync script installs the same value on both the API and web Workers. Staging and
+production must use different values.
+
+Preview the staging or production synchronization plan without writing:
+
+```bash
+bun run cloudflare:secrets:staging -- --dry-run
 bun run cloudflare:secrets:production -- --dry-run
 ```
 
-Then export the Cloudflare deployment credential and run the installer:
+Apply one environment explicitly:
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID="<production account id>"
-export CLOUDFLARE_API_TOKEN="<deployment token>"
-bun run cloudflare:secrets:production
+bun run cloudflare:secrets:staging -- open-sessionboard:staging
+bun run cloudflare:secrets:production -- open-sessionboard:production
 ```
 
-Wrangler owns every hidden-value prompt; the installer never reads, writes, or prints Worker
-secret values. It installs `BETTER_AUTH_SECRET`, `OPENSEND_API_KEY`, `OPENAI_API_KEY`,
-`AIRTABLE_OAUTH_CLIENT_SECRET`, `AIRTABLE_CREDENTIAL_ENCRYPTION_KEY`, and
-`CACHE_INVALIDATION_TOKEN` on the API Worker, plus the same `CACHE_INVALIDATION_TOKEN` on the
-web Worker. Enter the identical production cache token at both cache-token prompts.
-
-The installer deliberately excludes `CLOUDFLARE_API_TOKEN`, `AIRTABLE_ACCESS_TOKEN`, and R2/AWS
-access credentials because those authenticate deployment tooling or external providers rather
-than application Workers.
-
-For staging or manual installation, configure required Worker Secrets directly. Airtable
-secrets are needed only for environments that enable the optional adapter. Never place these
-values in Wrangler configuration or commit them:
+The scripts never print secret values or put them on Wrangler command lines.
+They store only SHA-256 fingerprints in ignored, mode-`0600` files named
+`.cloudflare-secret-fingerprints-<environment>.json`. A secret is skipped when
+its local value matches the fingerprint from the last successful script upload.
+Cloudflare does not expose remote Worker secret values or versions, so use
+`--force` after any out-of-band secret change or if the local fingerprint file
+was copied from another machine:
 
 ```bash
-for secret in \
-  BETTER_AUTH_SECRET \
-  CACHE_INVALIDATION_TOKEN; do
-  bunx wrangler secret put "$secret" --cwd apps/api --env staging
-done
+bun run cloudflare:secrets:staging -- open-sessionboard:staging --force
 ```
 
-Repeat with `--env production` and production-specific values. Add the required `OPENSEND_API_KEY` for each environment and
-`OPENAI_API_KEY` when `AI_PROVIDER=openai`. Configure other integration secrets
-from `.env.example` only when that integration is enabled.
+The API Worker receives all six application secrets. The matching web Worker
+receives only `CACHE_INVALIDATION_TOKEN`. The sync deliberately excludes
+`CLOUDFLARE_API_TOKEN`, `AIRTABLE_ACCESS_TOKEN`, `AIRTABLE_BASE_ID`, and R2/AWS
+credentials from Worker bindings. Do not rotate
+`AIRTABLE_CREDENTIAL_ENCRYPTION_KEY` after encrypted organization credentials
+exist without a credential migration plan. Rotating `BETTER_AUTH_SECRET`
+invalidates existing authentication state.
+
+The deployment scripts still do not upload Worker secrets. Run the applicable
+secret sync explicitly before a guarded deployment whenever values change.
 
 Set `WEB_ORIGIN` to the web origin and `API_URL` to the API origin in the
 corresponding ignored environment file. The generated Wrangler configuration

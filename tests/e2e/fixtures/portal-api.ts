@@ -811,6 +811,8 @@ export async function installPortalApi(
         await notFound(route, "This event is not authorized for the speaker portal.");
         return;
       }
+      activeScenario = state;
+      syncView(state);
       await send(route, structuredClone(state.context));
       return;
     }
@@ -1078,6 +1080,8 @@ export async function installPortalApi(
         .filter((asset) => participantId === null || asset.participantId === participantId)
         .filter((asset) => versionFamilyId === null || asset.versionFamilyId === versionFamilyId)
         .map(publicAsset);
+      activeScenario = state;
+      syncView(state);
       await send(route, assets);
       return;
     }

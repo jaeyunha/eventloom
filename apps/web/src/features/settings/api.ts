@@ -430,7 +430,11 @@ export function createEventSettingsApi(
           404,
         );
       }
-      return event;
+      return {
+        id: event.id,
+        name: event.name,
+        slug: event.slug,
+      };
     },
     getOverview(eventId, signal) {
       const path = eventPath(eventId);

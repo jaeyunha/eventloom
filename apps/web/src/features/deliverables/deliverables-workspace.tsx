@@ -53,6 +53,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createDeliverablesApi,
   type DeliverableAsset,
@@ -78,10 +79,10 @@ import {
   type DeliverableTaskMatrix,
   deliverableAssetKinds,
 } from "./api";
-import { FileLibrary } from "./file-library";
-import { projectFileFamilies, type FileFamilyProjection } from "./file-family-model";
-import { FileReviewDrawer } from "./file-review-drawer";
 import styles from "./deliverables-workspace.module.css";
+import { type FileFamilyProjection, projectFileFamilies } from "./file-family-model";
+import { FileLibrary } from "./file-library";
+import { FileReviewDrawer } from "./file-review-drawer";
 
 const pageClass = styles.workspace;
 const sectionClass = styles.section;
@@ -2839,12 +2840,13 @@ function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableA
 }
 
 export function DeliverablesWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
   mode = "deliverables",
   api: providedApi,
   initialData,
 }: DeliverablesWorkspaceProps) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(
     () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
     [eventId, organizationId, providedApi],

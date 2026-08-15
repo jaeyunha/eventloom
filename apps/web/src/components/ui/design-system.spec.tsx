@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -10,6 +11,12 @@ import { filterOptions, SearchableSelect } from "./searchable-select";
 import { getStepState, Stepper } from "./stepper";
 
 describe("design system accessibility", () => {
+  it("restricts Tailwind source scanning to runtime web source", () => {
+    const globalsCss = readFileSync(new URL("../../app/globals.css", import.meta.url), "utf8");
+
+    expect(globalsCss).toContain('@import "tailwindcss" source("../");');
+  });
+
   it("marks step progress with ordered, current, and completed semantics", () => {
     const markup = renderToStaticMarkup(
       createElement(Stepper, {

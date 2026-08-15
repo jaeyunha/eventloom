@@ -10,7 +10,6 @@ import {
   AgendaSuggestionPanel,
   type AgendaSuggestionRunView,
   type AgendaViewMode,
-  AgendaWorkspace,
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
   canCommitAgendaAsyncCompletion,
@@ -275,14 +274,6 @@ describe("agenda organizer workspace", () => {
   it("invalidates stale, aborted, and unmounted deferred work", async () => {
     const scopeA = agendaWorkspaceScopeKey("organization-1", "event-a");
     const scopeB = agendaWorkspaceScopeKey("organization-1", "event-b");
-    const workspaceA = AgendaWorkspace({
-      organizationId: "organization-1",
-      eventId: "event-a",
-    });
-    const workspaceB = AgendaWorkspace({
-      organizationId: "organization-1",
-      eventId: "event-b",
-    });
     const token = { scopeKey: scopeA, generation: 1 };
     let currentScope = scopeA;
     let currentGeneration = 1;
@@ -303,8 +294,6 @@ describe("agenda organizer workspace", () => {
     await completion;
 
     expect(scopeA).not.toBe(scopeB);
-    expect(workspaceA.key).toBe(scopeA);
-    expect(workspaceB.key).toBe(scopeB);
     expect(commit).toBeNull();
     expect(isAgendaAsyncScopeTokenCurrent(token, currentScope, currentGeneration)).toBe(false);
     expect(canCommitAgendaAsyncCompletion(token, scopeA, 1, true)).toBe(true);

@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import styles from "./file-library.module.css";
 import {
   filePointerLabels,
   formatFileSize,
@@ -20,7 +21,6 @@ import {
   formatFileTime,
 } from "./file-library-model";
 import type { FileLibraryRow } from "./file-library-types";
-import styles from "./file-library.module.css";
 
 interface FileLibraryRowsProps {
   readonly rows: readonly FileLibraryRow[];

@@ -17,7 +17,6 @@ import {
 import { eventSettingsSectionHref } from "./event-settings-sections";
 import {
   canCommitEventSettingsAsyncCompletion,
-  EventSettingsWorkspace,
   EventSettingsWorkspaceView,
   eventSettingsSectionNavigation,
   eventSettingsWorkspaceScopeKey,
@@ -222,16 +221,6 @@ describe("event settings progressive loading", () => {
   it("rejects stale, aborted, and unmounted completions across event scopes", async () => {
     const scopeA = eventSettingsWorkspaceScopeKey("org_a", "event-a");
     const scopeB = eventSettingsWorkspaceScopeKey("org_a", "event-b");
-    const workspaceA = EventSettingsWorkspace({
-      organizationId: "org_a",
-      eventId: "event-a",
-      section: "workflow",
-    });
-    const workspaceB = EventSettingsWorkspace({
-      organizationId: "org_a",
-      eventId: "event-b",
-      section: "workflow",
-    });
     const pendingCompletion = deferred<string>();
     let currentRequestId = 1;
     let committed: string | null = null;
@@ -243,8 +232,6 @@ describe("event settings progressive loading", () => {
     pendingCompletion.resolve("event-a");
     await completion;
 
-    expect(workspaceA.key).toBe(scopeA);
-    expect(workspaceB.key).toBe(scopeB);
     expect(scopeA).not.toBe(scopeB);
     expect(committed).toBeNull();
     expect(canCommitEventSettingsAsyncCompletion(2, 2, true)).toBe(true);

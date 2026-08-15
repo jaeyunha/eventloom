@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { assetPointerLabels, resolveAssetPointers } from "./portal-assets";
 import {
+  actionTaskPresentation,
   commentsForAsset,
   getTaskUploadPolicy,
   portalTaskGroup,
   resolveTaskAsset,
   resolveTaskSubject,
+  sortTasksByUrgency,
   taskSubjectPresentation,
   validateTaskUpload,
 } from "./portal-tasks";
@@ -49,6 +51,37 @@ function asset(id: string, overrides: Record<string, unknown> = {}): PortalAsset
 }
 
 describe("portal task deliverable helpers", () => {
+  it("orders attention work by returned, overdue, due date, then stable title", () => {
+    const ordered = sortTasksByUrgency([
+      task({ id: "later", title: "Later", dueAt: "2026-08-20T00:00:00.000Z" }),
+      task({ id: "finished", title: "Finished", status: "completed" }),
+      task({ id: "overdue", title: "Overdue", status: "overdue" }),
+      task({ id: "returned", title: "Returned", status: "needs_changes" }),
+      task({ id: "sooner", title: "Sooner", dueAt: "2026-08-16T00:00:00.000Z" }),
+    ]);
+    expect(ordered.map((value) => value.id)).toEqual([
+      "returned",
+      "overdue",
+      "sooner",
+      "later",
+      "finished",
+    ]);
+  });
+
+  it("describes action tasks as completion confirmations without legal assent claims", () => {
+    const presentation = actionTaskPresentation(
+      task({
+        type: "action",
+        title: "Review event instructions",
+        description: "Read the organizer-provided arrival instructions.",
+        dueAt: "2026-08-20T00:00:00.000Z",
+      }),
+    );
+    expect(presentation.actionLabel).toBe("Confirm completion");
+    expect(presentation.content).toContain("arrival instructions");
+    expect(JSON.stringify(presentation)).not.toMatch(/sign|agreement|acceptance|assent|version/iu);
+  });
+
   it("groups content requests separately from other event tasks", () => {
     expect(portalTaskGroup(task({ type: "upload" }))).toBe("content-requests");
     expect(portalTaskGroup(task({ type: "form" }))).toBe("content-requests");

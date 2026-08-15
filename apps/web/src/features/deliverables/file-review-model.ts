@@ -5,7 +5,7 @@ import type {
   DeliverableSpeakerProfile,
   DeliverableTask,
 } from "./api";
-import { compareFileVersions, fileFamilyId, type FileFamilyProjection } from "./file-family-model";
+import { compareFileVersions, type FileFamilyProjection, fileFamilyId } from "./file-family-model";
 import type { FileReviewContext } from "./file-review-types";
 
 export function mergeFileReviewVersions(

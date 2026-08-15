@@ -890,6 +890,7 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
       const signIn = await authRequest(fetcher, authBase, "/sign-in/email", {
         email,
         password: input.password,
+        ...(input.verificationCallbackUrl ? { callbackURL: input.verificationCallbackUrl } : {}),
       });
 
       if (signIn.response.ok) {

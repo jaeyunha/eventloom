@@ -67,6 +67,7 @@
 .tabList {
   width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   justify-content: flex-start;
 }
 
@@ -310,10 +311,6 @@
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-}
-
-.settingsSelect {
-  width: min(100%, 28rem);
 }
 
 .srOnly {

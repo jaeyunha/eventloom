@@ -23,6 +23,7 @@ Kill-My-SaaS-Competition-Brief/
 .omo/
 apps/api/wrangler.generated.toml
 apps/web/wrangler.generated.jsonc
+.cloudflare-secret-fingerprints-*.json
 
 # Public-release exclusions
 .env.release-*

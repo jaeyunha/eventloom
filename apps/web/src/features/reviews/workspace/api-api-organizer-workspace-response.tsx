@@ -1,0 +1,17 @@
+"use client";
+
+import type { ApiAggregate } from "./api-api-aggregate";
+import type { ApiAssignment } from "./api-api-assignment";
+import type { ApiDecision } from "./api-api-decision";
+import type { ApiPlan } from "./api-api-plan";
+import type { ApiProgress } from "./api-api-progress";
+import type { ApiSubmission } from "./api-api-submission";
+
+export interface ApiOrganizerWorkspaceResponse {
+  readonly plan: ApiPlan;
+  readonly submissions: readonly ApiSubmission[];
+  readonly assignments: readonly ApiAssignment[];
+  readonly progress: ApiProgress;
+  readonly aggregates: readonly ApiAggregate[];
+  readonly decisions: Readonly<Record<string, ApiDecision>>;
+}

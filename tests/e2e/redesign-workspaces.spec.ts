@@ -6,6 +6,7 @@ const SESSION_COOKIE = "better-auth.session_token";
 const SESSION_TOKEN = "local-session";
 
 const submissionsUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/submissions`;
+const submissionDetailUrl = `${submissionsUrl}/submission_local_1`;
 const speakersUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/speakers`;
 const organizerReviewsUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/reviews`;
 const reviewerUrl = "/review";
@@ -251,10 +252,7 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
 test("keeps submission content legible in dark mode", async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("theme", "dark"));
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(submissionsUrl);
-
-  const queue = page.getByRole("table", { name: /Submissions for / });
-  await queue.getByRole("link").first().click();
+  await page.goto(submissionDetailUrl);
 
   const readableSubmissionText = [
     page.getByText("Submission content", { exact: true }),
@@ -283,6 +281,10 @@ test("keeps submission content legible in dark mode", async ({ page }, testInfo)
 test("submission queue keeps the dense table visible beside the selected review", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
+  const warmedDetailRoute = await page.request.get(submissionDetailUrl);
+  expect(warmedDetailRoute.ok()).toBe(true);
+
   for (const viewport of [
     { name: "desktop", width: 1440, height: 1000 },
     { name: "boundary", width: 1240, height: 1000 },
@@ -291,6 +293,9 @@ test("submission queue keeps the dense table visible beside the selected review"
   ] as const) {
     await page.setViewportSize(viewport);
     await page.goto(submissionsUrl);
+    await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible({
+      timeout: 15_000,
+    });
 
     const queue = page.getByRole("table", {
       name: /Submissions for /,
@@ -303,7 +308,8 @@ test("submission queue keeps the dense table visible beside the selected review"
 
     const firstSubmission = queue.getByRole("link").first();
     await expect(firstSubmission).toBeVisible();
-    await firstSubmission.click();
+    await expect(firstSubmission).toHaveAttribute("href", submissionDetailUrl);
+    await Promise.all([page.waitForURL(submissionDetailUrl), firstSubmission.click()]);
 
     await expect(page.locator('[data-layout="submission-review-desk"]')).toBeVisible();
     await expect(page.getByLabel("Submission review panel")).toBeVisible();

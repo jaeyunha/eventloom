@@ -8,12 +8,12 @@ import { createProductionRepairAdapter } from "./production-repair-adapter.mjs";
 import { createBetterAuthAccount } from "./provision-personas.mjs";
 import {
   APPLICATION_ID_FIELD,
-  buildSeedRecords,
   CHAIN_CONTEXT_KEYS,
   CHAIN_CONTEXT_VERSION,
   FOUNDATION_TABLES,
   FULL_CHAIN_MODE,
   SCENARIO_OWNED_TABLES,
+  buildSeedRecords,
   emptyChainContext,
   loadFixture,
   loadSeedConfig,

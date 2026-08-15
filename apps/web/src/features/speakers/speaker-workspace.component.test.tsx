@@ -27,6 +27,9 @@ describe("speaker workspace presentation", () => {
     expect(markup).toContain('data-slot="card"');
     expect(markup).toContain('data-slot="button"');
     expect(markup).toContain("Speaker operations");
+    expect(markup).toContain("Organization org-1");
+    expect(markup).toContain("Event event-1");
+    expect(markup).toContain('data-tone="neutral"');
     expect(markup).toContain('aria-label="Speaker attention filters"');
     expect(markup).toContain("All speakers");
     expect(markup).toContain("Overdue tasks");

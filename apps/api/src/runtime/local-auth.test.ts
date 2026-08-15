@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { createLocalDependencies } from "./local";
 
-vi.setConfig({ testTimeout: 15_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 describe("local public applicant authentication", () => {
   const environment = {

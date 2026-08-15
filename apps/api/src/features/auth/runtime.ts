@@ -638,7 +638,7 @@ export function createBetterAuthRuntime(options: BetterAuthRuntimeOptions): Bett
       expiresIn: 15 * 60,
       sendOnSignUp: true,
       sendOnSignIn: true,
-      autoSignInAfterVerification: false,
+      autoSignInAfterVerification: true,
       sendVerificationEmail: async ({ user, url, token }) => {
         try {
           await options.sendMagicLink({ email: user.email, url, token });

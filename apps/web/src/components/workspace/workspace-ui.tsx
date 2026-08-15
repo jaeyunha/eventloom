@@ -2,9 +2,9 @@ import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import styles from "./workspace-ui.module.css";
 
-type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
+export type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
 
-interface WorkspaceHeaderProps {
+export interface WorkspaceHeaderProps {
   readonly eyebrow?: ReactNode;
   readonly breadcrumb?: ReactNode;
   readonly title: ReactNode;
@@ -54,7 +54,7 @@ export function WorkspaceHeader({
   );
 }
 
-interface WorkspaceBreadcrumbProps {
+export interface WorkspaceBreadcrumbProps {
   readonly children: ReactNode;
   readonly className?: string;
 }
@@ -63,7 +63,7 @@ export function WorkspaceBreadcrumb({ children, className }: WorkspaceBreadcrumb
   return <nav className={cn(styles.breadcrumb, className)}>{children}</nav>;
 }
 
-interface WorkspaceMetaItemProps {
+export interface WorkspaceMetaItemProps {
   readonly icon?: ReactNode;
   readonly children: ReactNode;
   readonly className?: string;
@@ -78,7 +78,7 @@ export function WorkspaceMetaItem({ icon, children, className }: WorkspaceMetaIt
   );
 }
 
-interface CollectionToolbarProps {
+export interface CollectionToolbarProps {
   readonly label?: ReactNode;
   readonly primary?: ReactNode;
   readonly secondary?: ReactNode;
@@ -102,7 +102,7 @@ export function CollectionToolbar({
   );
 }
 
-interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
+export interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   readonly tone?: StatusTone;
   readonly dot?: boolean;
 }
@@ -115,14 +115,14 @@ export function StatusBadge({
   ...props
 }: StatusBadgeProps) {
   return (
-    <span className={cn(styles.status, styles[tone], className)} {...props}>
+    <span className={cn(styles.status, styles[tone], className)} data-tone={tone} {...props}>
       {dot ? <span className={styles.statusDot} aria-hidden="true" /> : null}
       {children}
     </span>
   );
 }
 
-interface WorkspaceSurfaceProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {
+export interface WorkspaceSurfaceProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {
   readonly title?: ReactNode;
   readonly description?: ReactNode;
   readonly actions?: ReactNode;
@@ -154,7 +154,7 @@ export function WorkspaceSurface({
   );
 }
 
-interface InspectorProps extends HTMLAttributes<HTMLElement> {
+export interface InspectorProps extends HTMLAttributes<HTMLElement> {
   readonly children: ReactNode;
 }
 
@@ -166,7 +166,7 @@ export function Inspector({ className, children, ...props }: InspectorProps) {
   );
 }
 
-interface InspectorSectionProps {
+export interface InspectorSectionProps {
   readonly title: ReactNode;
   readonly children?: ReactNode;
   readonly className?: string;
@@ -181,7 +181,7 @@ export function InspectorSection({ title, children, className }: InspectorSectio
   );
 }
 
-interface WorkspaceEmptyStateProps {
+export interface WorkspaceEmptyStateProps {
   readonly title: ReactNode;
   readonly description: ReactNode;
   readonly actions?: ReactNode;

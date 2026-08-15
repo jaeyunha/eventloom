@@ -9,11 +9,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import styles from "./file-library.module.css";
 import type {
   FileLibraryFilters as FileLibraryFilterState,
   FileLibraryRow,
 } from "./file-library-types";
-import styles from "./file-library.module.css";
 
 interface FileLibraryFiltersProps {
   readonly rows: readonly FileLibraryRow[];

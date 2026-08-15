@@ -91,7 +91,7 @@
 }
 
 .navCurrent {
-  border-color: rgb(80 101 232 / 30%);
+  border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
   background: var(--color-brand-soft);
   color: var(--color-brand-strong);
 }
@@ -132,7 +132,7 @@
   gap: 0.9rem;
   align-items: flex-start;
   padding: 1.15rem 1.25rem;
-  border: 1px solid rgb(80 101 232 / 30%);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
   border-radius: var(--radius-md);
   background: var(--color-surface);
 }
@@ -163,7 +163,7 @@
   place-items: center;
   border-radius: 50%;
   background: var(--color-brand);
-  color: white;
+  color: var(--primary-foreground);
   font-size: 0.8rem;
   font-weight: 800;
 }
@@ -221,7 +221,7 @@
 .scoreCard {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: #fcfcfe;
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-canvas));
 }
 
 .summaryCard {
@@ -479,11 +479,11 @@
 }
 
 .dotWarning {
-  background: #d49b16;
+  background: var(--warning);
 }
 
 .dotDanger {
-  background: #bd4545;
+  background: var(--failure);
 }
 
 .sectionIntro {
@@ -593,7 +593,7 @@
 .dangerButton:focus-visible,
 .navLink:focus-visible,
 .navCurrent:focus-visible {
-  outline: 3px solid rgb(80 101 232 / 45%);
+  outline: 3px solid color-mix(in srgb, var(--ring) 45%, transparent);
   outline-offset: 2px;
 }
 
@@ -637,7 +637,7 @@
 
 .primaryButton {
   background: var(--color-brand);
-  color: white;
+  color: var(--primary-foreground);
 }
 
 .primaryButton:hover {
@@ -656,13 +656,13 @@
 }
 
 .dangerButton {
-  border-color: #e1aaaa;
-  background: #fff6f6;
-  color: #9f3030;
+  border-color: color-mix(in srgb, var(--failure) 28%, var(--border));
+  background: var(--failure-surface);
+  color: var(--failure);
 }
 
 .dangerButton:hover {
-  background: #ffe9e9;
+  background: var(--failure-surface);
 }
 
 .primaryButton:disabled,
@@ -674,7 +674,7 @@
 
 .formError {
   margin: 0;
-  color: #a12e2e;
+  color: var(--failure);
   font-size: 0.82rem;
   font-weight: 700;
 }
@@ -787,9 +787,9 @@
 .aiSuggestion {
   flex: 1 1 auto;
   padding: 0.8rem;
-  border: 1px solid #ead79c;
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
   border-radius: var(--radius-sm);
-  background: #fffdf4;
+  background: var(--warning-surface);
 }
 
 .aiSuggestion > div:first-child {
@@ -840,13 +840,13 @@
 }
 
 .submitPanel {
-  border: 1px solid rgb(80 101 232 / 35%);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
   background: var(--color-brand-soft);
 }
 
 .conflictPanel {
-  border: 1px solid #e3b4b4;
-  background: #fffafa;
+  border: 1px solid color-mix(in srgb, var(--failure) 28%, var(--border));
+  background: var(--failure-surface);
 }
 
 .submitPanel > div:first-child,
@@ -868,7 +868,7 @@
   display: grid;
   gap: 0.75rem;
   padding: 1rem;
-  border: 1px solid rgb(80 101 232 / 35%);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
   border-radius: var(--radius-md);
   background: var(--color-surface);
 }
@@ -890,8 +890,8 @@
 
 .abstentionResult {
   margin-top: 2rem;
-  border-color: #e3b4b4;
-  background: #fffafa;
+  border-color: color-mix(in srgb, var(--failure) 28%, var(--border));
+  background: var(--failure-surface);
 }
 
 @media (max-width: 64rem) {
@@ -1051,7 +1051,7 @@
   padding: 0.55rem 0.65rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: #fcfcfe;
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-canvas));
 }
 
 .participantList strong {
@@ -1078,7 +1078,7 @@
   padding: 0.7rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: #fcfcfe;
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-canvas));
 }
 
 .submissionFields dt {
@@ -1124,7 +1124,7 @@
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-surface);
   backdrop-filter: blur(12px);
 }
 
@@ -1191,8 +1191,8 @@
 }
 
 .invalidCriterion {
-  border-color: #c94747;
-  box-shadow: 0 0 0 2px rgb(201 71 71 / 12%);
+  border-color: var(--failure);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--failure) 12%, transparent);
 }
 
 .ratingChoices {
@@ -1227,11 +1227,11 @@
   border-color: var(--color-brand);
   background: var(--color-brand-soft);
   color: var(--color-brand-strong);
-  box-shadow: 0 0 0 2px rgb(80 101 232 / 18%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
 }
 
 .ratingChoice:has(input:focus-visible) {
-  outline: 3px solid rgb(80 101 232 / 45%);
+  outline: 3px solid color-mix(in srgb, var(--ring) 45%, transparent);
   outline-offset: 2px;
 }
 
@@ -1246,7 +1246,7 @@
   padding: 1rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: #fcfcfe;
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-canvas));
 }
 
 .criterionEditor legend {
@@ -1540,7 +1540,7 @@
 
 .tabButton:focus-visible,
 .overviewAction:focus-visible {
-  outline: 3px solid rgb(37 39 45 / 28%);
+  outline: 3px solid color-mix(in srgb, var(--ring) 28%, transparent);
   outline-offset: 2px;
 }
 
@@ -1773,9 +1773,9 @@
 }
 
 .dangerButton {
-  border-color: #d8a6a6;
-  background: #fffafa;
-  color: #8f3030;
+  border-color: color-mix(in srgb, var(--failure) 28%, var(--border));
+  background: var(--failure-surface);
+  color: var(--failure);
 }
 
 .statusBadge {
@@ -1783,8 +1783,8 @@
 }
 
 .statusOpen {
-  background: #edf5ef;
-  color: #2e6b42;
+  background: var(--success-surface);
+  color: var(--success);
 }
 
 .statusScheduled {
@@ -1966,7 +1966,7 @@
 }
 
 .reviewerFilterField select:focus-visible {
-  outline: 3px solid rgb(37 39 45 / 24%);
+  outline: 3px solid color-mix(in srgb, var(--ring) 24%, transparent);
   outline-offset: 1px;
 }
 
@@ -2134,7 +2134,7 @@
 }
 
 .reviewerQueueAction:focus-visible {
-  outline: 3px solid rgb(37 39 45 / 28%);
+  outline: 3px solid color-mix(in srgb, var(--ring) 28%, transparent);
   outline-offset: 2px;
 }
 
@@ -2232,35 +2232,35 @@
 }
 
 .statusNeedsReview {
-  border-color: #d9c48c;
-  background: #fff9e8;
-  color: #80651d;
+  border-color: color-mix(in srgb, var(--warning) 28%, var(--border));
+  background: var(--warning-surface);
+  color: var(--warning);
 }
 
 .statusInProgress {
-  border-color: #b7c9e7;
-  background: #eef4ff;
-  color: #315487;
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, var(--background));
+  color: var(--primary);
 }
 
 .statusSubmitted,
 .statusAccepted {
-  border-color: #b4d6bd;
-  background: #edf7ef;
-  color: #2f6840;
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
+  background: var(--success-surface);
+  color: var(--success);
 }
 
 .statusRecused,
 .statusRejected {
-  border-color: #e1b5b5;
-  background: #fff1f1;
-  color: #8f3c3c;
+  border-color: color-mix(in srgb, var(--failure) 28%, var(--border));
+  background: var(--failure-surface);
+  color: var(--failure);
 }
 
 .statusWaitlisted {
-  border-color: #c9bddf;
-  background: #f4effb;
-  color: #684b8d;
+  border-color: color-mix(in srgb, var(--primary) 24%, var(--border));
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .collectionToolbar {
@@ -2272,7 +2272,7 @@
   padding: 1rem;
   border: 1px solid var(--color-border);
   border-radius: 0.75rem;
-  background: var(--color-surface-subtle);
+  background: color-mix(in srgb, var(--color-surface) 72%, var(--color-canvas));
 }
 
 .collectionToolbar .formField {
@@ -2290,7 +2290,7 @@
   margin: 1rem 0 0;
   padding: 1rem;
   border-radius: 0.75rem;
-  background: var(--color-surface-subtle);
+  background: color-mix(in srgb, var(--color-surface) 72%, var(--color-canvas));
   color: var(--color-muted);
   text-align: center;
 }
@@ -2303,7 +2303,7 @@
   scroll-margin-top: 1rem;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
+  background: color-mix(in srgb, var(--color-surface) 72%, var(--color-canvas));
 }
 
 .assignmentManagementEditor .sectionHeading {
@@ -2550,7 +2550,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
-  box-shadow: 0 0.35rem 1.2rem rgb(15 23 42 / 4%);
+  box-shadow: var(--shadow-card);
 }
 
 .authoringPanelHeader,
@@ -2605,7 +2605,7 @@
   border-color: color-mix(in srgb, var(--color-border), var(--color-ink) 12%);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
-  box-shadow: 0 0.4rem 1.5rem rgb(15 23 42 / 5%);
+  box-shadow: var(--shadow-card);
 }
 
 .authoringRoundCard > legend {
@@ -2643,7 +2643,7 @@
   overflow: clip;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-canvas), #fff 42%);
+  background: color-mix(in srgb, var(--color-canvas), var(--color-surface) 42%);
 }
 
 .reviewerTargeting > summary {
@@ -2706,7 +2706,7 @@
   padding: 1.1rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-canvas), #fff 62%);
+  background: color-mix(in srgb, var(--color-canvas), var(--color-surface) 62%);
 }
 
 .authoringRoundCard .criterionEditor + .criterionEditor {
@@ -2790,7 +2790,7 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-canvas), #fff 48%);
+  background: color-mix(in srgb, var(--color-canvas), var(--color-surface) 48%);
 }
 
 .readOnlyRoundStats > div + div {
@@ -2891,7 +2891,7 @@
   border: 1px solid color-mix(in srgb, var(--color-border), var(--color-ink) 10%);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
-  box-shadow: 0 0.5rem 1.8rem rgb(15 23 42 / 7%);
+  box-shadow: var(--shadow-card);
 }
 
 .authoringAside h3 {
@@ -3612,5 +3612,265 @@
   #review-panel-setup .authoringRoundCard,
   #review-panel-setup .authoringRoundCard .criterionEditor {
     padding: var(--space-3);
+  }
+}
+
+/* Evaluator workspace refinement */
+.evaluatorQueueMode,
+.evaluatorMode {
+  color: var(--foreground);
+}
+
+.evaluatorQueueMode .workspaceHeader,
+.evaluatorMode .workspaceHeader {
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.evaluatorQueueMode .reviewerWorkbench {
+  margin-top: var(--space-4);
+  overflow: hidden;
+  border-color: var(--border);
+  background: var(--background);
+}
+
+.evaluatorQueueMode .reviewerQueuePanel,
+.evaluatorQueueMode .reviewerDetailPanel {
+  min-inline-size: 0;
+  margin: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.evaluatorQueueMode .reviewerQueuePanel {
+  position: sticky;
+  top: 0;
+  max-block-size: 100dvh;
+  overflow-y: auto;
+}
+
+.evaluatorQueueGuidance {
+  min-block-size: 100%;
+  border: 0;
+  border-radius: 0;
+  background: var(--background);
+}
+
+.evaluatorQueueGuidance p {
+  padding: var(--space-4);
+  color: var(--muted-foreground);
+}
+
+.evaluatorQueueMode .reviewerStatusViews {
+  flex-wrap: nowrap;
+  max-inline-size: 100%;
+  padding-bottom: var(--space-2);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.evaluatorQueueMode .reviewerStatusViews button {
+  flex: 0 0 auto;
+}
+
+.evaluatorQueueMode .reviewerFilterBar {
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-color: var(--border);
+  background: var(--muted);
+}
+
+.evaluatorQueueMode .reviewerQueueList {
+  border-color: var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.evaluatorQueueMode .reviewerQueueCard {
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-color: var(--border);
+}
+
+.evaluatorQueueMode .reviewerQueueCardSelected {
+  background: var(--muted);
+  box-shadow: inset var(--space-1) 0 0 var(--primary);
+}
+
+.evaluatorMode .authorityNotice,
+.evaluatorMode .privacyNotice {
+  margin-top: var(--space-3);
+  border-color: var(--border);
+  background: var(--card);
+}
+
+.evaluatorMode .submissionPanel,
+.evaluatorMode > div > .section {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-color: var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: none;
+}
+
+.evaluatorMode .submissionContent {
+  gap: var(--space-5);
+}
+
+.evaluatorMode .submissionFields {
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-color: var(--border);
+}
+
+.evaluatorMode .submissionFields div,
+.evaluatorMode .participantList li {
+  padding: var(--space-3);
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+}
+
+.evaluatorMode .reviewProgressSummary {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-color: var(--border);
+  background: var(--background);
+}
+
+.evaluatorMode .scoreList {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.evaluatorMode .scoreCard {
+  scroll-margin-block: var(--space-5);
+  padding: var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.evaluatorMode .scoreCard + .scoreCard {
+  border-top: 1px solid var(--border);
+}
+
+.evaluatorMode .scoreCardHeader {
+  gap: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-color: var(--border);
+}
+
+.evaluatorMode .scoreControls {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+}
+
+.evaluatorMode .scoreControls > .formField {
+  min-inline-size: 0;
+}
+
+.evaluatorMode .ratingChoices {
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.evaluatorMode .ratingChoice {
+  min-width: var(--space-7);
+  min-height: var(--space-7);
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+}
+
+.evaluatorMode .ratingChoice:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.evaluatorMode .aiSuggestion {
+  padding: var(--space-3);
+  border-color: color-mix(in srgb, var(--warning) 36%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--warning-surface);
+}
+
+.evaluatorMode .commentRow {
+  gap: var(--space-3);
+  padding: var(--space-4) 0 0;
+  border-color: var(--border);
+}
+
+.evaluatorActionBar {
+  margin-top: var(--space-4);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  box-shadow: var(--shadow-card);
+}
+
+.evaluatorActionSummary {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.evaluatorActionSummary strong {
+  color: var(--foreground);
+}
+
+.evaluatorActionSummary > span:not(.formError) {
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 64rem) {
+  .evaluatorQueueMode .reviewerQueuePanel {
+    position: static;
+    max-block-size: none;
+  }
+}
+
+@media (max-width: 48rem) {
+  .evaluatorQueueMode .reviewerStatusViews {
+    display: flex;
+  }
+
+  .evaluatorQueueMode .reviewerStatusViews button {
+    width: auto;
+  }
+
+  .evaluatorMode .scoreControls {
+    grid-template-columns: 1fr;
+  }
+
+  .evaluatorMode .submissionPanel,
+  .evaluatorMode > div > .section,
+  .evaluatorQueueMode .reviewerQueuePanel,
+  .evaluatorQueueMode .reviewerDetailPanel {
+    padding: var(--space-3);
+  }
+
+  .evaluatorActionBar .confirmationActions,
+  .evaluatorActionBar button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evaluatorQueueMode .reviewerStatusViews,
+  .evaluatorMode [data-score-anchor] {
+    scroll-behavior: auto;
   }
 }

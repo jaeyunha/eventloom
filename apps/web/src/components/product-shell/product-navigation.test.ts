@@ -10,6 +10,10 @@ const requiredRoutes = [
 
 const navigationSource = readFileSync(new URL("./product-navigation.tsx", import.meta.url), "utf8");
 const homePageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+const landingPageSource = readFileSync(
+  new URL("../../features/landing/landing-page.tsx", import.meta.url),
+  "utf8",
+);
 
 describe("ProductNavigation", () => {
   it("keeps the landing navigation small, semantic, and free of dead destinations", () => {
@@ -34,16 +38,12 @@ describe("ProductNavigation", () => {
 });
 
 describe("Home", () => {
-  it("declares an accessible, truthful workflow landing page", () => {
-    expect(homePageSource).toContain('href="#main-content"');
-    expect(homePageSource).toContain('id="main-content"');
-    expect(homePageSource).toContain("Human-authoritative review");
-    expect(homePageSource).toContain("Conflict-safe scheduling");
-    expect(homePageSource).toContain("explicitly published");
-    expect(homePageSource).toContain("Run your speaker program");
-    expect(homePageSource).toContain("Explore the live product");
-    expect(homePageSource).toContain("Publish the program, not your working table");
-    expect(homePageSource).not.toContain("/docs/api");
-    expect(homePageSource).not.toContain("NEXT_PUBLIC_API_URL");
+  it("delegates to an accessible landing page shell", () => {
+    expect(homePageSource).toContain("import { LandingPage }");
+    expect(homePageSource).toContain("return <LandingPage />");
+    expect(landingPageSource).toContain('href="#main"');
+    expect(landingPageSource).toContain('id="main"');
+    expect(`${homePageSource}\n${landingPageSource}`).not.toContain("/docs/api");
+    expect(`${homePageSource}\n${landingPageSource}`).not.toContain("NEXT_PUBLIC_API_URL");
   });
 });

@@ -1,97 +1,78 @@
 .shell {
-  min-height: 100dvh;
   background: var(--background);
 }
 
-.topbar {
-  position: sticky;
-  z-index: 30;
-  top: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--background) 92%, transparent);
-  backdrop-filter: blur(16px);
-}
-
-.topbarInner {
-  display: flex;
-  width: min(calc(100% - 2rem), 76rem);
-  min-height: 3.75rem;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 auto;
+.rail {
+  display: grid;
+  min-height: 100%;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-4);
+  padding: var(--space-3);
 }
 
 .brand {
-  display: inline-flex;
-  gap: 0.75rem;
+  display: flex;
+  gap: var(--space-3);
   align-items: center;
+  padding: var(--space-2);
   color: var(--foreground);
   text-decoration: none;
 }
 
 .brandMark {
-  display: inline-grid;
-  width: 2rem;
-  height: 2rem;
+  display: grid;
+  width: var(--space-7);
+  height: var(--space-7);
+  flex: none;
   place-items: center;
-  border-radius: 0.55rem;
-  background: var(--foreground);
-  color: var(--background);
-  font-size: 0.72rem;
-  font-weight: 760;
-  letter-spacing: -0.02em;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 800;
 }
 
 .brandCopy {
   display: grid;
-  gap: 0.05rem;
 }
 
-.brandCopy strong {
-  font-size: 0.9rem;
-  font-weight: 680;
-  letter-spacing: -0.015em;
-}
-
-.brandCopy span {
+.brandCopy small,
+.navigationLabel,
+.roleSummary span {
   color: var(--muted-foreground);
-  font-size: 0.72rem;
 }
 
-.actions {
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-}
-
-.main {
+.navigationGroup {
   min-width: 0;
 }
 
-.mobileSubmissionsLabel {
-  display: none;
+.navigationLabel {
+  margin: 0 0 var(--space-2) var(--space-2);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-@media (max-width: 40rem) {
-  .topbarInner {
-    width: min(calc(100% - 1rem), 76rem);
-  }
-
-  .brandCopy span {
-    display: none;
-  }
-
-  .submissionsLabel {
-    display: none;
-  }
-
-  .mobileSubmissionsLabel {
-    display: inline;
-  }
+.roleSummary {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2) 0;
+  border-top: 1px solid var(--border);
 }
 
-@media (max-width: 24rem) {
-  .brandCopy {
-    display: none;
+.accountActions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+@media (max-width: 48rem) {
+  .actionLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
   }
 }

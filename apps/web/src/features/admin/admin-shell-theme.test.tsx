@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const shellSource = readFileSync(new URL("./admin-shell.tsx", import.meta.url), "utf8");
+const shellSource = ["./admin-shell.tsx", "./admin-shell-view.tsx"]
+  .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
+  .join("\n");
 const shellStyles = readFileSync(new URL("./admin-shell.module.css", import.meta.url), "utf8");
 
 describe("organizer workspace theme", () => {

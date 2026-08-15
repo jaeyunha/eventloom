@@ -45,6 +45,24 @@ test.beforeEach(async ({ context }) => {
   ]);
 });
 
+test("People tab strip owns only intentional horizontal scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${organizationBase}/members`);
+
+  const tabList = page.getByRole("tablist", { name: "People workspace sections" });
+  await expect(tabList).toBeVisible();
+
+  const overflow = await tabList.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      x: style.overflowX,
+      y: style.overflowY,
+    };
+  });
+  expect(overflow.x).toBe("auto");
+  expect(overflow.y).toBe("hidden");
+});
+
 test("organizer uses the redesigned content workflow on desktop", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
 

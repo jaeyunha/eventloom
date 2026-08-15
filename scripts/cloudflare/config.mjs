@@ -286,6 +286,21 @@ function parseEnvironmentFile(path) {
   return configuration;
 }
 
+export function cloudflareEnvironmentPath(environment) {
+  if (!environments.includes(environment)) {
+    throw new Error(`Unsupported Cloudflare environment: ${environment}`);
+  }
+  return join(repositoryRoot, `.env.cloudflare-${environment}`);
+}
+
+export function readCloudflareEnvironmentFile(environment) {
+  const path = cloudflareEnvironmentPath(environment);
+  if (!existsSync(path)) {
+    throw new Error(`Missing ${path}`);
+  }
+  return parseEnvironmentFile(path);
+}
+
 export function mergeCloudflareEnvironment(root, target, shell) {
   const merged = { ...root, ...target };
   for (const [key, value] of Object.entries(shell)) {
@@ -299,7 +314,7 @@ export function rootEnvironmentForDeployment(environment, root) {
 }
 
 export function loadCloudflareEnvironment(environment) {
-  const environmentPath = join(repositoryRoot, `.env.cloudflare-${environment}`);
+  const environmentPath = cloudflareEnvironmentPath(environment);
   const rootPath = join(repositoryRoot, ".env");
   const shell = { ...process.env };
   const merged = mergeCloudflareEnvironment(

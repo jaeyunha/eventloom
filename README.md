@@ -127,6 +127,13 @@ make dev
 
 The web app runs at `http://127.0.0.1:3015`, the API at `http://127.0.0.1:8787`, and the Mailpit inbox at `http://127.0.0.1:8025`. Use `RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev` only for deterministic fixture work; Playwright selects both variables explicitly.
 
+The integrated runtime has no universal committed login. Create accounts
+through the real signup and access-grant workflows, and keep operator-specific
+passwords outside the repository. The deterministic persona credentials in
+[`docs/setup.md`](docs/setup.md#fixture-only-deterministic-accounts) work only
+with the fixture runtime and must not be used as normal local-development
+credentials.
+
 For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` creates a sanitized local `.env` by default and never copies provider credentials. Use `--env-mode copy` only for guarded integration/release work. Local, staging, and production resources and credentials must remain separate. See [`docs/setup.md`](docs/setup.md).
 
 ## Eventloom CLI and agent skill

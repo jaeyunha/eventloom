@@ -10,6 +10,9 @@ import {
   canResumeCfpSubmission,
   cfpConfirmationEmailMessage,
   cfpReviewAudienceLevel,
+  cfpSubmissionErrorKey,
+  cfpSubmissionFieldValue,
+  cfpSubmissionPayload,
   getCfpCompletionHandoffStorageKey,
   getCfpPortalHandoffHref,
   rotateCfpCompletionIdentity,
@@ -29,6 +32,21 @@ import {
 } from "./types";
 
 describe("CFP flow", () => {
+  it("keeps published abstract and description controls independent", () => {
+    const draft = createEmptyDraft("future-conf");
+    draft.submission.description = "Legacy summary";
+    const answers = {
+      abstract: "Short program summary",
+      description: "Detailed objectives and audience takeaways",
+    };
+
+    expect(cfpSubmissionErrorKey("abstract")).toBe("submission.abstract");
+    expect(cfpSubmissionErrorKey("description")).toBe("submission.description");
+    expect(cfpSubmissionFieldValue(draft, answers, "abstract")).toBe(answers.abstract);
+    expect(cfpSubmissionFieldValue(draft, answers, "description")).toBe(answers.description);
+    expect(cfpSubmissionPayload(draft, answers, {}).answers).toMatchObject(answers);
+  });
+
   it("deduplicates published form and session reads across step remounts", async () => {
     const store = createCfpStartupStore();
     const published = { form: { id: "form-1" } } as unknown as PublishedCfp;

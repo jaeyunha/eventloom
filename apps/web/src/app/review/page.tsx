@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { ReviewWorkspace } from "@/features/reviews/review-workspace";
-import { ReviewerShell } from "@/features/reviews/reviewer-shell";
 
 export const dynamic = "force-dynamic";
 
@@ -10,9 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function ReviewerPage() {
-  return (
-    <ReviewerShell>
-      <ReviewWorkspace mode="evaluator" />
-    </ReviewerShell>
-  );
+  return <ReviewWorkspace mode="evaluator" />;
 }

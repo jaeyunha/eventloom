@@ -37,15 +37,17 @@ const pages: readonly AdminCommandPage[] = [
 const eventPayload = {
   data: [
     {
-      id: "annual/summit",
+      id: "event-annual-summit",
       name: "Annual Program Summit",
+      slug: "annual/summit",
       status: "active",
       startsAt: "2026-09-17T16:00:00.000Z",
       endsAt: "2026-09-18T00:00:00.000Z",
     },
     {
-      id: "design-week",
+      id: "event-design-week",
       name: "Design Systems Week",
+      slug: "design-week",
       status: "draft",
       startsAt: "2026-10-08T16:00:00.000Z",
       endsAt: "2026-10-10T00:00:00.000Z",
@@ -116,6 +118,7 @@ describe("admin command palette model", () => {
           endsAt: "2026-09-18T00:00:00.000Z",
           id: "event-live",
           name: "Live program",
+          slug: "live-program",
           status: "active",
         },
       ],

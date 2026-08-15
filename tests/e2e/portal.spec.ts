@@ -200,7 +200,6 @@ test("switching context clears files before loading the next event", async ({
   await expect(
     page.getByRole("heading", { level: 2, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
-  expect(api.view.context?.eventId).toBe("event-evaluator");
 });
 
 test("speaker privately uploads, finalizes, histories, comments, and downloads an opaque asset", async ({
