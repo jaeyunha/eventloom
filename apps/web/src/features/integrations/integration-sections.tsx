@@ -6,6 +6,7 @@ import {
   type WebhookEventType,
   webhookEventTypes,
 } from "@eventloom/contracts";
+import Link from "next/link";
 import { type FormEvent, useState } from "react";
 import {
   Badge,
@@ -135,7 +136,7 @@ export function OverviewSection({
   return (
     <div className={styles.sectionStack}>
       <div className={styles.statusGrid}>
-        <a className={styles.statusCardLink} href={`${base}/delivery`}>
+        <Link className={styles.statusCardLink} href={`${base}/delivery`}>
           <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
@@ -153,8 +154,8 @@ export function OverviewSection({
               <p className={styles.muted}>in the last 24 hours</p>
             </CardContent>
           </Card>
-        </a>
-        <a className={styles.statusCardLink} href={`${base}/api-keys`}>
+        </Link>
+        <Link className={styles.statusCardLink} href={`${base}/api-keys`}>
           <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
@@ -172,8 +173,8 @@ export function OverviewSection({
               <p className={styles.muted}>active key{activeKeys === 1 ? "" : "s"}</p>
             </CardContent>
           </Card>
-        </a>
-        <a className={styles.statusCardLink} href={`${base}/webhooks`}>
+        </Link>
+        <Link className={styles.statusCardLink} href={`${base}/webhooks`}>
           <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
@@ -189,7 +190,7 @@ export function OverviewSection({
               <p className={styles.muted}>active endpoint{activeWebhooks === 1 ? "" : "s"}</p>
             </CardContent>
           </Card>
-        </a>
+        </Link>
       </div>
       <Card>
         <CardHeader>

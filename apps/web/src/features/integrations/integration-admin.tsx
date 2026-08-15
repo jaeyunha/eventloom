@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SettingsShell } from "@/components/workspace/settings-ui";
 import {
   WorkspaceBreadcrumb,
@@ -25,7 +26,7 @@ import {
 import styles from "./integrations.module.css";
 import type { IntegrationAdminSnapshot, OneTimeSecret } from "./types";
 
-type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
+export type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
 
 export interface IntegrationAdminProps {
   readonly eventId: string;
@@ -75,6 +76,10 @@ export function IntegrationAdmin({
 }: IntegrationAdminProps) {
   const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(() => injectedApi ?? createIntegrationAdminApi(""), [injectedApi]);
+  const initialRequestRef = useRef<{
+    readonly key: string;
+    readonly request: Promise<IntegrationAdminSnapshot>;
+  } | null>(null);
   const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
     initialSnapshot ?? null,
   );
@@ -88,29 +93,52 @@ export function IntegrationAdmin({
     readonly label: string;
   } | null>(null);
 
-  const loadSnapshot = useCallback(
-    async (signal?: AbortSignal) => {
-      setLoadError(null);
-      try {
-        setSnapshot(await api.getSnapshot(organizationId, eventId, signal));
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setLoadError(messageFrom(error));
-        }
-      } finally {
-        if (!signal?.aborted) {
-          setLoading(false);
-        }
-      }
-    },
-    [api, eventId, organizationId],
-  );
+  const loadSnapshot = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setSnapshot(await api.getSnapshot(organizationId, eventId));
+    } catch (error) {
+      setLoadError(messageFrom(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [api, eventId, organizationId]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void loadSnapshot(controller.signal);
-    return () => controller.abort();
-  }, [loadSnapshot]);
+    const requestKey = `${organizationId}\u0000${eventId}`;
+    const cachedRequest = initialRequestRef.current;
+    const request =
+      cachedRequest?.key === requestKey
+        ? cachedRequest.request
+        : api.getSnapshot(organizationId, eventId);
+    initialRequestRef.current = { key: requestKey, request };
+    let active = true;
+
+    setLoadError(null);
+    void request
+      .then((value) => {
+        if (active) setSnapshot(value);
+      })
+      .catch((error: unknown) => {
+        if (active) setLoadError(messageFrom(error));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [api, eventId, organizationId]);
+
+  const refreshAfter = useCallback(async () => {
+    try {
+      setSnapshot(await api.getSnapshot(organizationId, eventId));
+    } catch (error) {
+      setMutationError(`The change was saved, but status could not refresh: ${messageFrom(error)}`);
+    }
+  }, [api, eventId, organizationId]);
 
   const mutate = useCallback(
     async <T,>(operation: () => Promise<T>, successMessage: string): Promise<T | null> => {
@@ -130,14 +158,6 @@ export function IntegrationAdmin({
     },
     [],
   );
-
-  const refreshAfter = useCallback(async () => {
-    try {
-      setSnapshot(await api.getSnapshot(organizationId, eventId));
-    } catch (error) {
-      setMutationError(`The change was saved, but status could not refresh: ${messageFrom(error)}`);
-    }
-  }, [api, eventId, organizationId]);
 
   const actions = {
     busy,
@@ -265,7 +285,7 @@ export function IntegrationAdmin({
       <WorkspaceHeader
         breadcrumb={
           <WorkspaceBreadcrumb>
-            <a href={eventBase}>{snapshot?.event.name ?? "Event"}</a>
+            <Link href={eventBase}>{snapshot?.event.name ?? "Event"}</Link>
             <span aria-hidden="true">/</span>
             <span>Integrations</span>
           </WorkspaceBreadcrumb>
@@ -285,13 +305,13 @@ export function IntegrationAdmin({
         navigation={
           <nav className={styles.settingsNavigation} aria-label="Integration settings">
             {tabs.map((tab) => (
-              <a
+              <Link
                 key={tab.section}
                 href={tab.href}
                 aria-current={tab.section === section ? "page" : undefined}
               >
                 {tab.label}
-              </a>
+              </Link>
             ))}
           </nav>
         }
