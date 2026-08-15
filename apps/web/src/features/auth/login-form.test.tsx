@@ -167,6 +167,22 @@ describe("organizer login", () => {
     });
   });
 
+  it("rejects a weak signup password before sending the request", async () => {
+    const fetcher = vi.fn(async () =>
+      response(200, { user: { id: "user-1", email: "host@example.com" } }),
+    );
+    const api = createLoginApi(API_ORIGIN, fetcher);
+
+    await expect(
+      api.signUpWithEmail({
+        name: "Host",
+        email: "host@example.com",
+        password: "lowercase-only!",
+      }),
+    ).rejects.toMatchObject({ kind: "invalid-password" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("allows any valid work email while leaving organization access to memberships", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_ENV", "staging");
     try {
@@ -305,18 +321,15 @@ describe("organizer login", () => {
     expect(markup).not.toContain("sign-in/social");
     expect(markup).not.toContain("sign-up/email");
   });
-  it("renders the explicit organizer signup mode and segmented sign-in tab", () => {
+  it("renders role-neutral signup with accessible password requirements", () => {
     const markup = renderToStaticMarkup(
       createElement(LoginForm, { apiBaseUrl: API_ORIGIN, initialMode: "sign-up" }),
     );
 
-    expect(markup).toContain("Create organizer account");
     expect(markup).toContain('for="login-name"');
     expect(markup).toContain('autoComplete="new-password"');
-    expect(markup).toContain("Sign in");
-    expect(markup).toContain(
-      "Use your work email. Organization access is granted by an owner or administrator.",
-    );
+    expect(markup).toContain('aria-describedby="login-password-requirements"');
+    expect(markup).toContain('id="login-password-requirements"');
     expect(markup).not.toContain("Google");
     expect(markup).not.toContain("Email me a magic link");
   });

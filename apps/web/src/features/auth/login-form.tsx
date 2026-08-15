@@ -22,6 +22,8 @@ const SERVER_ERROR_MESSAGE = "We couldn't sign you in right now. Try again in a 
 const MAGIC_LINK_ERROR_MESSAGE =
   "We couldn't send a sign-in link right now. Try again in a moment.";
 const ORGANIZER_DOMAIN_ERROR_MESSAGE = "Enter a valid email address.";
+const SIGNUP_PASSWORD_POLICY_MESSAGE =
+  "Use 8–128 characters with an uppercase letter, a number, and a symbol.";
 const SIGNUP_VERIFICATION_MESSAGE = "Account created. Check your email for a verification link.";
 const MAGIC_LINK_SUCCESS_MESSAGE = "Magic link sent. Check your email for a link to sign in.";
 const NETWORK_ERROR_MESSAGE =
@@ -39,6 +41,7 @@ export type LoginErrorKind =
   | "server"
   | "network"
   | "organization-domain"
+  | "invalid-password"
   | "authentication";
 
 export interface LoginEnvironment {
@@ -271,6 +274,17 @@ function normalizedOrganizerEmail(value: string): string | null {
   return normalized;
 }
 
+function signupPasswordError(value: string): string | null {
+  if (!value) return "Enter a password.";
+  const valid =
+    value.length >= 8 &&
+    value.length <= 128 &&
+    /[^A-Za-z0-9]/u.test(value) &&
+    /[0-9]/u.test(value) &&
+    /[A-Z]/u.test(value);
+  return valid ? null : SIGNUP_PASSWORD_POLICY_MESSAGE;
+}
+
 export function resolveLoginConfig(environment: LoginEnvironment = {}): LoginConfig {
   return { apiBaseUrl: normalizeEnvironment(environment) };
 }
@@ -441,6 +455,10 @@ export function createLoginApi(
       if (email === null) {
         throw new LoginRequestError("organization-domain", ORGANIZER_DOMAIN_ERROR_MESSAGE);
       }
+      const passwordError = signupPasswordError(input.password);
+      if (passwordError !== null) {
+        throw new LoginRequestError("invalid-password", passwordError);
+      }
 
       let response: Response;
       try {
@@ -575,7 +593,8 @@ export function LoginForm({
     const nextErrors: { name?: string; email?: string; password?: string } = {};
     if (!name.trim()) nextErrors.name = "Enter your name.";
     if (!normalizedEmail) nextErrors.email = ORGANIZER_DOMAIN_ERROR_MESSAGE;
-    if (!password) nextErrors.password = "Enter a password.";
+    const passwordError = signupPasswordError(password);
+    if (passwordError !== null) nextErrors.password = passwordError;
     if (nextErrors.name || nextErrors.email || nextErrors.password) {
       setFieldErrors(nextErrors);
       setError(null);
@@ -607,7 +626,12 @@ export function LoginForm({
       }
     } catch (failure) {
       const requestError = failureFromUnknown(failure, "server");
-      setError({ kind: requestError.kind, message: requestError.message });
+      if (requestError.kind === "invalid-password") {
+        setFieldErrors({ password: requestError.message });
+        passwordInput.current?.focus();
+      } else {
+        setError({ kind: requestError.kind, message: requestError.message });
+      }
     }
     setSubmitting(false);
   }
@@ -727,15 +751,11 @@ export function LoginForm({
         <Card className={styles.card} aria-labelledby="login-form-title">
           <CardHeader className={styles.cardHeader}>
             <CardTitle id="login-form-title">
-              {isSignup
-                ? "Create organizer account"
-                : isPortalLogin
-                  ? "Sign in to your portal"
-                  : "Sign in"}
+              {isSignup ? "Create account" : isPortalLogin ? "Sign in to your portal" : "Sign in"}
             </CardTitle>
             <CardDescription>
               {isSignup
-                ? "Use your work email. Organization access is granted by an owner or administrator."
+                ? "Use the email tied to your event work. Memberships and invitations determine what you can access."
                 : isPortalLogin
                   ? "Use the same email address you used for your proposal."
                   : "Your memberships and speaker access determine where you land."}
@@ -837,7 +857,13 @@ export function LoginForm({
                         autoComplete={isSignup ? "new-password" : "current-password"}
                         required
                         aria-invalid={fieldErrors.password ? true : undefined}
-                        aria-describedby={fieldErrors.password ? "login-password-error" : undefined}
+                        aria-describedby={
+                          fieldErrors.password
+                            ? "login-password-error"
+                            : isSignup
+                              ? "login-password-requirements"
+                              : undefined
+                        }
                         onChange={(event) => {
                           setPassword(event.currentTarget.value);
                           if (fieldErrors.password || error) clearErrors();
@@ -846,6 +872,10 @@ export function LoginForm({
                       {fieldErrors.password ? (
                         <p className={styles.fieldError} id="login-password-error" role="alert">
                           {fieldErrors.password}
+                        </p>
+                      ) : isSignup ? (
+                        <p className={styles.fieldHint} id="login-password-requirements">
+                          {SIGNUP_PASSWORD_POLICY_MESSAGE}
                         </p>
                       ) : null}
                     </div>
