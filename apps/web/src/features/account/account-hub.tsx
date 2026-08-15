@@ -26,6 +26,11 @@ async function jsonOrNull(response: Response): Promise<unknown> {
     : null;
 }
 
+function apiData(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  return "data" in value ? value.data : value;
+}
+
 export async function loadAccountAccess(
   fetcher: Fetcher = globalThis.fetch,
   signal?: AbortSignal,
@@ -45,11 +50,11 @@ export async function loadAccountAccess(
     fetcher("/api/speaker/portal/contexts", init).catch(() => null),
     fetcher("/api/admin/evaluations/reviewer/workspace", init).catch(() => null),
   ]);
-  const portalPayload = portalResponse?.ok ? await jsonOrNull(portalResponse) : [];
+  const portalPayload = apiData(portalResponse?.ok ? await jsonOrNull(portalResponse) : []);
   const portalContexts = Array.isArray(portalPayload)
     ? (portalPayload as readonly PortalContext[])
     : [];
-  const reviewerPayload = reviewerResponse?.ok ? await jsonOrNull(reviewerResponse) : null;
+  const reviewerPayload = apiData(reviewerResponse?.ok ? await jsonOrNull(reviewerResponse) : null);
   const reviewerRecord =
     typeof reviewerPayload === "object" && reviewerPayload !== null
       ? (reviewerPayload as Record<string, unknown>)
