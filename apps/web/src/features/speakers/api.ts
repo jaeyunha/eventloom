@@ -219,6 +219,13 @@ export interface SpeakerImportCommitInput {
   readonly idempotencyKey: string;
 }
 
+type SpeakerImportCommitRequest =
+  | SpeakerImportCommitInput
+  | {
+      readonly rows: SpeakerImportPreview["validRows"];
+      readonly idempotencyKey: string;
+    };
+
 export interface SpeakerInvitationPreview {
   readonly participantId: string;
   readonly recipientEmail: string;
@@ -574,7 +581,7 @@ export interface SpeakerApi {
   replaceHeadshot(input: SpeakerHeadshotReplacementInput): Promise<SpeakerHeadshotReplacement>;
   previewImport(file: File, signal?: AbortSignal): Promise<SpeakerImportPreview>;
   commitImport(
-    input: SpeakerImportCommitInput,
+    input: SpeakerImportCommitRequest,
     signal?: AbortSignal,
   ): Promise<SpeakerRosterEnvelope>;
   listTasks(signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
@@ -636,6 +643,7 @@ export function createSpeakerApi(
   const normalizedBaseUrl = baseWithoutTrailingSlash(baseUrl.trim());
   const normalizedOrganizationId = organizationId.trim();
   const normalizedEventId = eventId.trim();
+  let latestImportPreview: SpeakerImportPreview | null = null;
   if (normalizedOrganizationId.length === 0) {
     throw new TypeError("An organization ID is required for speaker requests.");
   }
@@ -802,11 +810,28 @@ export function createSpeakerApi(
         method: "POST",
         body,
         ...(signal === undefined ? {} : { signal }),
-      }).then(parseSpeakerImportPreview);
+      }).then((value) => {
+        const preview = parseSpeakerImportPreview(value);
+        latestImportPreview = preview;
+        return preview;
+      });
     },
     commitImport(input, signal) {
-      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal).then((value) =>
-        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      const canonicalInput =
+        "previewId" in input
+          ? input
+          : latestImportPreview === null
+            ? null
+            : {
+                previewId: latestImportPreview.previewId,
+                sourceDigest: latestImportPreview.sourceDigest,
+                idempotencyKey: input.idempotencyKey,
+              };
+      if (canonicalInput === null) {
+        throw new TypeError("A durable speaker import preview is required before commit.");
+      }
+      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", canonicalInput, signal).then(
+        (value) => assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
     listTasks(signal) {

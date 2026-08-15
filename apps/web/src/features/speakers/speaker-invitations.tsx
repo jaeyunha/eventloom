@@ -1,4 +1,5 @@
 import { AlertCircle, Eye, Send } from "lucide-react";
+import type { Ref } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import type { SpeakerMutationStatus } from "./api";
@@ -64,6 +65,23 @@ export function FormMessage({
     </Alert>
   );
 }
+
+export function SpeakerMutationFailure({
+  message,
+  alertRef,
+}: Readonly<{
+  message: string;
+  alertRef?: Ref<HTMLDivElement>;
+}>) {
+  return (
+    <Alert ref={alertRef} variant="destructive" role="alert" aria-live="assertive" tabIndex={-1}>
+      <AlertCircle />
+      <AlertTitle>Action needs attention</AlertTitle>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
+}
+
 export function MutationStatusMessage({
   label,
   status,

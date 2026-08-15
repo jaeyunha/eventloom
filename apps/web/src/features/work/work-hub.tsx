@@ -18,8 +18,6 @@ import {
   type WorkOrganizationSummary,
 } from "./work-hub-model";
 
-const ORGANIZER_ORGANIZATION_STORAGE_KEY = "eventloom.organizer-organization";
-
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 async function jsonOrNull(response: Response): Promise<unknown> {
