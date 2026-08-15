@@ -11,34 +11,44 @@ test("authenticated speaker completes dependent action and upload tasks", async 
   const api = await installPortalApi(page, authSession);
 
   await page.goto("/portal?event=event-evaluator");
-  await expect(page.getByRole("heading", { level: 1, name: "Welcome, Ada" })).toBeVisible();
-  await expect(page.getByText("1 accepted", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "My events" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { level: 2, name: "Prepare for the event" }),
+    page.getByText("1 accepted proposal and your assigned speaker tasks are ready to review."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 3, name: "Prepare for your event" }),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "Open all tasks" }).click();
+  await page.getByRole("link", { name: "Prepare for event", exact: true }).click();
   await expect(page).toHaveURL(/\/portal\/tasks\?event=event-evaluator$/);
-  await expect(page.getByText("3 tasks still need your attention.")).toBeVisible();
-  const agreement = page.getByRole("article", { name: "Confirm speaker agreement" });
+  await expect(page.getByRole("heading", { level: 1, name: "Requests & tasks" })).toBeVisible();
+  await expect(page.getByText("0 of 3 finished · 3 still open", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /Upload a headshot/ }).click();
   const headshot = page.getByRole("article", { name: "Upload a headshot" });
-  await expect(headshot.getByText("Complete a prerequisite first")).toBeVisible();
+  await expect(headshot.getByText("Blocked by prerequisites", { exact: true })).toBeVisible();
 
-  await agreement.getByLabel("Completion note (optional)").fill("Agreement reviewed and accepted.");
-  await agreement.getByRole("button", { name: "Mark complete" }).click();
+  await page.getByRole("button", { name: /Confirm speaker agreement/ }).click();
+  const agreement = page.getByRole("article", { name: "Confirm speaker agreement" });
+  await agreement
+    .getByLabel("Note to organizer (optional)")
+    .fill("Agreement reviewed and accepted.");
+  await agreement.getByRole("button", { name: "Confirm completion" }).click();
   await expect(agreement.getByText("Completed", { exact: true })).toBeVisible();
-  await expect(page.getByText("2 tasks still need your attention.")).toBeVisible();
+  await expect(page.getByText("1 of 3 finished · 2 still open", { exact: true })).toBeVisible();
 
-  await expect(headshot.getByText("Complete a prerequisite first")).toHaveCount(0);
-  await headshot.getByRole("button", { name: "Start task" }).click();
-  await expect(headshot.getByText("In progress", { exact: true })).toBeVisible();
-  await headshot.getByLabel(/Choose headshot/).setInputFiles({
+  await page.getByRole("button", { name: /Upload a headshot/ }).click();
+  await expect(headshot.getByText("Blocked by prerequisites", { exact: true })).toHaveCount(0);
+  await expect(headshot.getByRole("heading", { level: 2, name: "Upload lifecycle" })).toBeVisible();
+  await headshot.getByLabel("Choose headshot").setInputFiles({
     name: "ada-speaker.png",
     mimeType: "image/png",
     buffer: Buffer.from("deterministic-e2e-image"),
   });
+  await headshot.getByRole("button", { name: "Upload and submit" }).click();
   await expect(headshot.getByText("Submitted", { exact: true })).toBeVisible();
-  await expect(page.getByText("2 tasks still need your attention.")).toBeVisible();
+  await expect(headshot.getByText("Submitted for organizer review", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 of 3 finished · 2 still open", { exact: true })).toBeVisible();
 
   expect(api.view.tasks.find((task) => task.id === "task-agreement")?.status).toBe("completed");
   expect(api.view.tasks.find((task) => task.id === "task-headshot")?.status).toBe("submitted");
@@ -64,7 +74,7 @@ test("speaker edits the published biography through the authenticated portal", a
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal/profile?event=event-evaluator");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Speaker profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Your event profile" })).toBeVisible();
   const biography = page.getByLabel("Biography");
   await biography.fill(
     "Staff engineer, resilient-systems educator, and facilitator of calm incident response.",
@@ -81,12 +91,12 @@ test("speaker portal skip link supports a keyboard-only path to main content", a
 }) => {
   await installPortalApi(page, authSession);
   await page.goto("/portal?event=event-evaluator");
-  await expect(page.getByRole("heading", { level: 1, name: "Welcome, Ada" })).toBeVisible();
-  const skipLink = page.getByRole("link", { name: "Skip to portal content" });
+  await expect(page.getByRole("heading", { level: 1, name: "My events" })).toBeVisible();
+  const skipLink = page.getByRole("link", { name: "Skip to workspace content" });
   await skipLink.focus();
   await expect(skipLink).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.locator("#portal-content")).toBeFocused();
+  await expect(page.locator("#workspace-main")).toBeFocused();
 });
 
 test("server-authorized context switching ignores event query guesses and is keyboard reachable", async ({
@@ -95,31 +105,21 @@ test("server-authorized context switching ignores event query guesses and is key
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?event=event-not-authorized");
-  await expect(page.getByRole("heading", { level: 1, name: "Welcome, Ada" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "My events" })).toBeVisible();
   expect(api.view.context?.eventId).toBe("event-evaluator");
   expect(api.requests.some((request) => request.url().includes("event-not-authorized"))).toBe(
     false,
   );
 
-  const accountMenu = page.getByRole("button", { name: "Switch event or participant" });
-  await accountMenu.focus();
-  await page.keyboard.press("Enter");
-  const menu = page.getByRole("menu", { name: "Switch event or participant" });
-  await expect(menu).toBeVisible();
-  const eventOptions = menu.getByRole("menuitemradio", { name: /Summit$/ });
-  await expect(eventOptions).toHaveCount(2);
-  await page.keyboard.press("Tab");
-  await expect(eventOptions.first()).toBeFocused();
+  const eventContext = page.getByRole("combobox", { name: "Event context" });
+  await eventContext.focus();
+  await expect(eventContext).toBeFocused();
+  await expect(eventContext.getByRole("option")).toHaveCount(2);
+  await eventContext.selectOption({ label: "Collaborative Systems Summit" });
 
-  const collaboration = menu.getByRole("menuitemradio", {
-    name: "Collaborative Systems Summit",
-  });
-  await collaboration.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("heading", { level: 1, name: "Welcome, Bea" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
-    "Collaborative Systems Summit",
-  );
+  await expect(page.getByRole("heading", { level: 1, name: "My events" })).toBeVisible();
+  await expect(page.getByText("Bea Speaker", { exact: true })).toBeVisible();
+  await expect(eventContext).toHaveValue("portal:ai-engineer:event-collaboration");
   expect(api.view.context?.eventId).toBe("event-collaboration");
   expect(api.view.context?.id).toBe("portal:ai-engineer:event-collaboration");
 });
@@ -130,7 +130,7 @@ test("co-speaker roster exposes only server-authorized permissions and clears st
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?workspace=co-speakers");
-  await expect(page.getByRole("heading", { level: 2, name: "Co-speakers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
   const roster = page.getByRole("list", { name: "Co-speaker roster" });
   const primary = roster.getByRole("listitem").filter({ hasText: "Ada Speaker" });
   const existingCoSpeaker = roster.getByRole("listitem").filter({ hasText: "Grace Co-speaker" });
@@ -139,7 +139,7 @@ test("co-speaker roster exposes only server-authorized permissions and clears st
   await expect(existingCoSpeaker.getByRole("button", { name: "Edit" })).toBeVisible();
   await expect(existingCoSpeaker.getByRole("button", { name: "Remove" })).toBeVisible();
 
-  await page.getByLabel("Name").last().fill("Jordan Co-speaker");
+  await page.getByLabel("Name").fill("Jordan Co-speaker");
   await page.getByLabel("Email").fill("jordan@example.test");
   await page.getByRole("button", { name: "Add co-speaker" }).click();
   const invited = roster.getByRole("listitem").filter({ hasText: "Jordan Co-speaker" });
@@ -162,8 +162,9 @@ test("co-speaker roster exposes only server-authorized permissions and clears st
   expect(api.view.roster?.organizationId).toBe("ai-engineer");
   expect(api.view.roster?.members.some((member) => member.status === "revoked")).toBe(true);
 
-  await page.getByRole("button", { name: "Switch event or participant" }).click();
-  await page.getByRole("menuitemradio", { name: "Collaborative Systems Summit" }).click();
+  await page
+    .getByRole("combobox", { name: "Event context" })
+    .selectOption({ label: "Collaborative Systems Summit" });
   await expect(
     page.getByRole("heading", { level: 1, name: "This workspace is not available" }),
   ).toBeVisible();
@@ -178,26 +179,26 @@ test("switching context clears files before loading the next event", async ({
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?workspace=files");
-  await expect(page.getByRole("heading", { level: 2, name: "Uploaded files" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Files" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
+    page.getByRole("heading", { level: 2, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Switch event or participant" }).click();
-  await page.getByRole("menuitemradio", { name: "Collaborative Systems Summit" }).click();
+  await page
+    .getByRole("combobox", { name: "Event context" })
+    .selectOption({ label: "Collaborative Systems Summit" });
+  await expect(page.getByRole("heading", { level: 1, name: "Files" })).toBeVisible();
+  await expect(page.getByText("No files yet", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { level: 1, name: "Collaborative Systems Summit" }),
-  ).toBeVisible();
-  await expect(page.getByRole("heading", { level: 1, name: "No files yet" })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
+    page.getByRole("heading", { level: 2, name: "calm-incident-response.pdf" }),
   ).toHaveCount(0);
   expect(api.view.assets).toEqual([]);
 
-  await page.getByRole("button", { name: "Switch event or participant" }).click();
-  await page.getByRole("menuitemradio", { name: "Evaluator Summit" }).click();
+  await page
+    .getByRole("combobox", { name: "Event context" })
+    .selectOption({ label: "Evaluator Summit" });
   await expect(
-    page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
+    page.getByRole("heading", { level: 2, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
   expect(api.view.context?.eventId).toBe("event-evaluator");
 });
@@ -208,7 +209,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?workspace=files");
-  await expect(page.getByRole("heading", { level: 2, name: "Uploaded files" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Files" })).toBeVisible();
 
   await page.getByLabel("File type").selectOption("supporting_file");
   await page.getByLabel("Choose file").setInputFiles({
@@ -216,11 +217,11 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
     mimeType: "text/plain",
     buffer: Buffer.from("private runbook bytes"),
   });
-  await page.getByRole("button", { name: "Upload privately" }).click();
-  const uploaded = page.getByRole("article", { name: "runbook.txt" });
-  await expect(uploaded).toBeVisible();
-  await expect(uploaded.getByText("Current v1", { exact: true })).toBeVisible();
-  await expect(uploaded.getByText("Uploaded", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Upload private file" }).click();
+  await page.getByRole("button", { name: /runbook\.txt/ }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "runbook.txt" })).toBeVisible();
+  await expect(page.getByText("Immutable versions", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Version 1 · runbook\.txt/u)).toBeVisible();
   expect(api.view.assets?.find((asset) => asset.fileName === "runbook.txt")?.state).toBe("ready");
   expect(
     api.requests.some(
@@ -233,25 +234,53 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
         request.method() === "PUT" && request.url().includes("/assets/capabilities/upload/"),
     ),
   ).toBe(true);
-  expect(JSON.stringify(api.payloads)).not.toContain("objectKey");
-  expect(JSON.stringify(api.payloads)).not.toContain("privateNote");
-
-  await uploaded.getByText("Version history and comments", { exact: true }).click();
-  await expect(uploaded.getByText(/Version 1 · runbook\.txt · Uploaded/u)).toBeVisible();
-
-  await uploaded.getByLabel("Add a comment").fill("Use this runbook in the speaker briefing.");
-  await uploaded.getByRole("button", { name: "Post comment" }).click();
-  await expect(
-    uploaded.getByText("Use this runbook in the speaker briefing.", { exact: true }),
-  ).toBeVisible();
+  expect(
+    api.requests.some(
+      (request) =>
+        request.method() === "POST" &&
+        request.url().includes("/assets/") &&
+        request.url().endsWith("/finalize"),
+    ),
+  ).toBe(true);
 
   const downloadRequest = page.waitForRequest(
     (request) =>
       request.method() === "GET" && request.url().includes("/assets/capabilities/download/"),
   );
-  await uploaded.getByRole("button", { name: "Download current version" }).click();
+  await page.getByRole("button", { name: "Download current version" }).click();
   expect((await downloadRequest).url()).toContain("opaque-download-token");
-  expect(api.view.assets?.find((asset) => asset.fileName === "runbook.txt")?.state).toBe("ready");
+
+  await page.goto("/portal/tasks?event=event-evaluator");
+  await page.getByRole("button", { name: /Confirm speaker agreement/ }).click();
+  const agreement = page.getByRole("article", { name: "Confirm speaker agreement" });
+  await agreement.getByRole("button", { name: "Confirm completion" }).click();
+  await expect(agreement.getByText("Completed", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /Upload a headshot/ }).click();
+  const headshot = page.getByRole("article", { name: "Upload a headshot" });
+  await headshot.getByLabel("Choose headshot").setInputFiles({
+    name: "ada-speaker.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("task-asset-for-commenting"),
+  });
+  await headshot.getByRole("button", { name: "Upload and submit" }).click();
+  await expect(
+    headshot.getByRole("heading", { level: 3, name: "Comments on version 1" }),
+  ).toBeVisible();
+  await headshot
+    .getByLabel("Reply on this version")
+    .fill("Use this headshot in the speaker briefing.");
+  await headshot.getByRole("button", { name: "Post reply" }).click();
+  await expect(
+    headshot.getByText("Use this headshot in the speaker briefing.", { exact: true }),
+  ).toBeVisible();
+  expect(
+    api.requests.some(
+      (request) => request.method() === "POST" && request.url().endsWith("/comments"),
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(api.payloads)).not.toContain("objectKey");
+  expect(JSON.stringify(api.payloads)).not.toContain("privateNote");
 });
 
 test("expired secure download links surface an accessible failure state", async ({
@@ -262,36 +291,48 @@ test("expired secure download links surface an accessible failure state", async 
     expiredDownloadAssetId: "asset-slides-v1",
   });
   await page.goto("/portal?workspace=files");
-  const asset = page.getByRole("article", { name: "calm-incident-response.pdf" });
-  await asset.getByRole("button", { name: "Download current" }).click();
-  const alert = page.getByRole("alert", { name: "Portal workspace error" });
+  await expect(
+    page.getByRole("heading", { level: 2, name: "calm-incident-response.pdf" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Download current version" }).click();
+  const alert = page.getByRole("alert").filter({ hasText: "Workspace action failed" });
   await expect(alert).toBeVisible();
+  await expect(alert).toContainText("Workspace action failed");
   await expect(alert).toContainText("secure download link has expired");
   expect(
     api.requests.some((request) => request.url().endsWith("/assets/asset-slides-v1/download")),
   ).toBe(true);
 });
 
-test("task forms validate required answers and retain immutable response history", async ({
+test("task forms validate required answers, preserve focus, and retain immutable response history", async ({
   authSession,
   page,
 }) => {
   const api = await installPortalApi(page, authSession);
-  await page.goto("/portal?workspace=tasks");
-  const form = page.getByRole("article", { name: "Speaker details" });
-  await expect(form).toBeVisible();
+  await page.goto("/portal/tasks?event=event-evaluator");
+  await expect(page.getByRole("heading", { level: 1, name: "Requests & tasks" })).toBeVisible();
+  await page.getByRole("button", { name: /Share speaker details/ }).click();
+  const task = page.getByRole("article", { name: "Share speaker details" });
+  const form = task.getByRole("region", { name: "Speaker details" });
+  await expect(form.getByRole("button", { name: "Submit response" })).toBeVisible();
 
-  await form.getByRole("button", { name: "Save response" }).click();
-  await expect(form.getByRole("alert")).toHaveText("Biography is required.");
-  await form.getByLabel("Biography *").fill("A calm systems educator.");
-  await form.getByLabel("Track *").selectOption("web");
-  await form.getByRole("button", { name: "Save response" }).click();
-  await expect(form.getByRole("status")).toHaveText("Your response was saved.");
+  const biography = form.getByLabel(/Biography/);
+  await form.getByRole("button", { name: "Submit response" }).click();
+  await expect(form.getByText("Biography is required.", { exact: true })).toBeVisible();
+  await expect(form.getByText("Track is required.", { exact: true })).toBeVisible();
+  await expect(biography).toBeFocused();
+
+  await biography.fill("A calm systems educator.");
+  await form.getByLabel(/Track/).selectOption("web");
+  await form.getByRole("button", { name: "Save draft" }).click();
+  await expect(
+    form.getByText("Draft saved. It has not been submitted to organizers.", { exact: true }),
+  ).toBeVisible();
   await form.getByText("Response history", { exact: true }).click();
   await expect(form.locator("details ol li")).toHaveCount(1);
 
-  await form.getByLabel("Biography *").fill("A calmer systems educator and facilitator.");
-  await form.getByRole("button", { name: "Save response" }).click();
+  await biography.fill("A calmer systems educator and facilitator.");
+  await form.getByRole("button", { name: "Save draft" }).click();
   await expect(form.locator("details ol li")).toHaveCount(2);
   expect(
     api.payloads.filter((payload) => JSON.stringify(payload).includes("response-e2e-")).length,
@@ -306,19 +347,16 @@ test("published resources and wiki stay event-scoped and cross-event portal acce
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?workspace=resources");
-  await expect(page.getByRole("heading", { level: 2, name: "Resources" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Event guide" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Speaker guide" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open published resource" })).toHaveAttribute(
     "href",
     "https://sessionboard.namuh.co/speakers/guide",
   );
-  await expect(page.getByRole("heading", { level: 2, name: "Production checklist" })).toBeVisible();
 
-  await page
-    .getByRole("navigation", { name: "Speaker portal" })
-    .getByRole("link", { name: "Wiki" })
-    .click();
-  await expect(page.getByRole("heading", { level: 2, name: "Wiki" })).toBeVisible();
+  await page.getByRole("button", { name: /Production checklist/ }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Production checklist" })).toBeVisible();
+  await page.getByRole("button", { name: /Welcome to Evaluator Summit/ }).click();
   await expect(
     page.getByRole("heading", { level: 2, name: "Welcome to Evaluator Summit" }),
   ).toBeVisible();
