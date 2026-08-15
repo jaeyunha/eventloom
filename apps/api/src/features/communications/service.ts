@@ -2476,12 +2476,7 @@ export class InMemoryCommunicationRepository implements CommunicationRepository 
     if (configured !== undefined) {
       return configured.has(audience);
     }
-    return [...this.recipients.values()].some(
-      (recipient) =>
-        recipient.tenantId === tenantId &&
-        recipient.eventId === eventId &&
-        (recipient.audiences.length === 0 || recipient.audiences.includes(audience)),
-    );
+    return true;
   }
 
   authorizeAudience(tenantId: string, eventId: string, audience: CommunicationAudience): void {

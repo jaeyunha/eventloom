@@ -161,6 +161,78 @@ function queueMessage(body: CloudflareOutboxMessage): OutboxQueueMessage & { ack
 }
 
 describe("D1 communication delivery", () => {
+  it("previews an authorized empty audience without manufacturing recipients", async () => {
+    const database = new SqliteD1();
+    database.execute(`
+      INSERT INTO communication_templates
+        (id, organization_id, event_id, version, name, purpose, status, sender,
+         subject, html, text, variables_json, created_by, created_at, updated_at,
+         approved_by, approved_at)
+      VALUES
+        ('template-1', 'org-1', 'event-1', 1, 'Decision',
+         'organizer_group_email', 'approved', 'program@conference.example',
+         'Hello {{display_name}}', '<p>Hello {{display_name}}</p>',
+         'Hello {{display_name}}', '["display_name"]', 'organizer-1',
+         '${SNAPSHOT_TIME}', '${SNAPSHOT_TIME}', 'organizer-1', '${SNAPSHOT_TIME}');
+    `);
+    const service = new CommunicationService(
+      new D1CommunicationRepository(database as unknown as D1Database),
+      undefined,
+      {
+        clock: () => new Date(SNAPSHOT_TIME),
+        senderIdentities: {
+          auth: "login@conference.example",
+          speakers: "program@conference.example",
+          calendar: "schedule@conference.example",
+        },
+      },
+    );
+    const actor: CommunicationActor = {
+      tenantId: "org-1",
+      userId: "organizer-1",
+      kind: "human",
+      grants: [{ eventId: "event-1", role: "organizer" }],
+    };
+    const preview = await service.previewGroupSend(actor, {
+      eventId: "event-1",
+      purpose: "organizer_group_email",
+      templateId: "template-1",
+      audience: "accepted_participants",
+    });
+
+    expect(preview).toMatchObject({
+      recipientCount: 0,
+      recipientIds: [],
+      recipients: [],
+      recipientPreviews: [],
+    });
+    expect(
+      database.query<{ count: number }>(
+        "SELECT count(*) AS count FROM communication_preview_recipients WHERE preview_id = '" +
+          preview.id +
+          "'",
+      )[0]?.count,
+    ).toBe(0);
+    await expect(
+      service.sendGroup(actor, {
+        eventId: "event-1",
+        previewId: preview.id,
+        idempotencyKey: "empty-audience-send",
+      }),
+    ).rejects.toMatchObject({ code: "COMMUNICATION_INVALID_INPUT" });
+    await expect(
+      service.previewGroupSend(
+        { ...actor, grants: [{ eventId: "other-event", role: "organizer" }] },
+        {
+          eventId: "event-1",
+          purpose: "organizer_group_email",
+          templateId: "template-1",
+          audience: "accepted_participants",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "COMMUNICATION_FORBIDDEN" });
+  });
+
   it("reconstructs immutable snapshots and histories while listing event sends newest first", async () => {
     const database = new SqliteD1();
     database.execute(`

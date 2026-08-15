@@ -241,17 +241,6 @@ export class D1CommunicationRepository implements CommunicationRepository {
     return ordered;
   }
 
-  async isAudienceAuthorized(tenantId: string, eventId: string, audience: CommunicationAudience) {
-    const row = await statement(
-      this.database,
-      `SELECT 1 ok FROM communication_recipients r WHERE r.organization_id=? AND r.event_id=? AND
-      (NOT EXISTS (SELECT 1 FROM communication_recipient_audiences a WHERE a.organization_id=r.organization_id AND a.event_id=r.event_id AND a.recipient_id=r.id)
-       OR EXISTS (SELECT 1 FROM communication_recipient_audiences a WHERE a.organization_id=r.organization_id AND a.event_id=r.event_id AND a.recipient_id=r.id AND a.audience=?)) LIMIT 1`,
-      [tenantId, eventId, audience],
-    ).first<Row>();
-    return row !== null;
-  }
-
   async getPreview(tenantId: string, eventId: string, previewId: string) {
     const root = await statement(
       this.database,
