@@ -177,9 +177,9 @@ Forge and GitHub are intentional dual mirrors:
 - Forge: `https://forge.smol.ai/jaeyunha/open-sessionboard`
 - GitHub: `https://github.com/jaeyunha/eventloom`
 
-Visibility is an operator-controlled release action governed by
-[`docs/public-release.md`](docs/public-release.md). Neither mirror is the sole
-repository, and public visibility does not establish release verification.
+Visibility is an operator-controlled publication action governed by
+[`docs/public-release.md`](docs/public-release.md) and is independent from
+deployed product release verification. Neither mirror is the sole repository.
 
 ## Invariants
 
@@ -201,8 +201,9 @@ repository, and public visibility does not establish release verification.
   [`docs/calendar-semantics.md`](docs/calendar-semantics.md)
 - Configuration preflight: [`docs/deployment-readiness.md`](docs/deployment-readiness.md)
 - Browser and accessibility acceptance: [`docs/qa-runbook.md`](docs/qa-runbook.md)
-- Release, visibility, and submission gates:
-  [`docs/release-runbook.md`](docs/release-runbook.md) and
+- Product release and competition submission gates:
+  [`docs/release-runbook.md`](docs/release-runbook.md)
+- Source-repository publication gate:
   [`docs/public-release.md`](docs/public-release.md)
 - Evaluator history and limitations:
   [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md)
