@@ -46,9 +46,14 @@ export function useOrganizerSession(
       signal: controller.signal,
     })
       .then(async (response) => {
+        if (controller.signal.aborted) return;
+        if (!response.ok) {
+          window.location.replace("/login");
+          return;
+        }
         const session = await response.json().catch(() => null);
         if (controller.signal.aborted) return;
-        if (!response.ok || !sessionAllowsOrganizerAccess(session)) {
+        if (!sessionAllowsOrganizerAccess(session)) {
           window.location.replace("/login");
           return;
         }
