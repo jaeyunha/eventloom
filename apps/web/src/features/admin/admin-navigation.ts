@@ -93,13 +93,16 @@ function navigationItem(
   label: string,
   icon: OrganizerNavigationIconName,
   matchesChildren = false,
+  activeAliases: readonly string[] = [],
 ): OrganizerNavigationItem {
   return {
     href,
     label,
     icon,
     match: (pathname: string) =>
-      pathname === href || (matchesChildren && pathname.startsWith(`${href}/`)),
+      pathname === href ||
+      (matchesChildren && pathname.startsWith(`${href}/`)) ||
+      activeAliases.some((alias) => pathname === alias || pathname.startsWith(`${alias}/`)),
   };
 }
 
@@ -142,8 +145,9 @@ export function eventNavigationFor(
     navigationItem(`${eventBasePath}/agenda`, "Agenda", "agenda", true),
     navigationItem(`${eventBasePath}/settings`, "Program settings", "settings", true),
     navigationItem(`${eventBasePath}/speakers`, "Speakers", "speakers", true),
-    navigationItem(`${eventBasePath}/deliverables`, "Content requests", "deliverables", true),
-    navigationItem(`${eventBasePath}/files`, "Files", "files", true),
+    navigationItem(`${eventBasePath}/deliverables`, "Content collection", "deliverables", true, [
+      `${eventBasePath}/files`,
+    ]),
     navigationItem(`${eventBasePath}/communications`, "Communications", "communications", true),
     navigationItem(`${eventBasePath}/remix`, "Content remix", "remix", true),
     navigationItem(`${eventBasePath}/embeds`, "Embeds", "embeds", true),
@@ -166,9 +170,9 @@ export function organizerNavigationGroupsFor(
   if (eventItems.length === 0) return [];
   return [
     { label: "Program", items: eventItems.slice(0, 6) },
-    { label: "People", items: eventItems.slice(6, 9) },
-    { label: "Content operations", items: eventItems.slice(9, 11) },
-    { label: "Publish", items: eventItems.slice(11) },
+    { label: "People", items: eventItems.slice(6, 8) },
+    { label: "Content operations", items: eventItems.slice(8, 10) },
+    { label: "Publish", items: eventItems.slice(10) },
   ];
 }
 

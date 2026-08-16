@@ -1037,7 +1037,7 @@ describe("deliverables workspace", () => {
     expect(filesMarkup).toContain("Select approved files from a session");
     expect(filesMarkup).toContain("Download selected files ZIP");
     expect(filesMarkup).not.toContain("New file request");
-    expect(filesMarkup).toContain("Uploaded files");
+    expect(filesMarkup).toContain('data-workspace-mode="files"');
     const deliverablesMarkup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
         organizationId: "org-1",
@@ -1223,7 +1223,7 @@ describe("deliverables workspace", () => {
       }),
     );
     expect((deliverablesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
-    expect(deliverablesMarkup).toContain("Collect speaker files");
+    expect(deliverablesMarkup).toContain('data-workspace-mode="deliverables"');
     expect(deliverablesMarkup).toContain("Select outstanding assignment");
     expect(deliverablesMarkup).toContain("Canonical content and profiles stay");
     expect(deliverablesMarkup).toContain("Canonical content and profiles stay");

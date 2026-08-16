@@ -1,6 +1,6 @@
 "use client";
 
-import { standardFileRequestMimeTypes } from "@eventloom/contracts";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -25,7 +25,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -80,6 +79,10 @@ import {
   type DeliverableTaskMatrix,
   deliverableAssetKinds,
 } from "./api";
+import {
+  type ContentCollectionNavigationCacheScope,
+  createContentCollectionNavigationCache,
+} from "./content-collection-cache";
 import styles from "./deliverables-workspace.module.css";
 import {
   type FileFamilyProjection,
@@ -88,6 +91,11 @@ import {
 } from "./file-family-model";
 import { FileLibrary } from "./file-library";
 import { FileReviewDrawer } from "./file-review-drawer";
+import {
+  type RequestFileFormat,
+  requestFilePolicyFor,
+  requestFilePolicyMimeTypes,
+} from "./request-file-policy";
 
 const pageClass = styles.workspace;
 const sectionClass = styles.section;
@@ -99,6 +107,7 @@ const gridClass = styles.grid;
 const dangerClass = styles.danger;
 const tableWrapClass = styles.tableWrap;
 const statusClass = styles.status;
+const bytesPerMegabyte = 1024 * 1024;
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
 
@@ -167,6 +176,9 @@ export interface DeliverablesSnapshot {
   readonly matrix?: DeliverableTaskMatrix;
   readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
 }
+
+const contentCollectionNavigationCache =
+  createContentCollectionNavigationCache<DeliverablesSnapshot>();
 
 export interface DeliverablesWorkspaceProps {
   readonly eventId: string;
@@ -707,11 +719,13 @@ function TaskComposer({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueAt, setDueAt] = useState("");
-  const [mimeTypes, setMimeTypes] = useState(standardFileRequestMimeTypes.join(", "));
-  const [maxSizeMb, setMaxSizeMb] = useState("100");
-  const [acceptedAssetKinds, setAcceptedAssetKinds] = useState<readonly DeliverableAssetKind[]>([
-    "slides",
-  ]);
+  const [acceptedAssetKind, setAcceptedAssetKind] = useState<DeliverableAssetKind>("slides");
+  const [allowedMimeTypes, setAllowedMimeTypes] = useState<readonly string[]>(() =>
+    requestFilePolicyMimeTypes(requestFilePolicyFor("slides")),
+  );
+  const [maxSizeMb, setMaxSizeMb] = useState(() =>
+    String(requestFilePolicyFor("slides").maxBytes / bytesPerMegabyte),
+  );
   const [subjectType, setSubjectType] = useState<"participant" | "session">("session");
   const [assigneeIds, setAssigneeIds] = useState<readonly string[]>([]);
   const [sessionByParticipant, setSessionByParticipant] = useState<
@@ -719,6 +733,7 @@ function TaskComposer({
   >({});
   const [formError, setFormError] = useState<string | null>(null);
   const assignmentCount = assigneeIds.length;
+  const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
 
   function toggleAssignee(id: string): void {
     setAssigneeIds((current) =>
@@ -726,12 +741,33 @@ function TaskComposer({
     );
   }
 
-  function toggleAssetKind(kind: DeliverableAssetKind): void {
-    setAcceptedAssetKinds((current) =>
-      current.includes(kind)
-        ? current.filter((candidate) => candidate !== kind)
-        : [...current, kind],
-    );
+  function selectAssetKind(kind: DeliverableAssetKind): void {
+    const policy = requestFilePolicyFor(kind);
+    setAcceptedAssetKind(kind);
+    setAllowedMimeTypes(requestFilePolicyMimeTypes(policy));
+    setMaxSizeMb(String(policy.maxBytes / bytesPerMegabyte));
+  }
+
+  function updateSelectedAssetKind(value: string): void {
+    const kind = deliverableAssetKinds.find((candidate) => candidate === value);
+    if (kind !== undefined) selectAssetKind(kind);
+  }
+
+  function fileFormatIsSelected(format: RequestFileFormat): boolean {
+    return format.mimeTypes.every((mimeType) => allowedMimeTypes.includes(mimeType));
+  }
+
+  function toggleFileFormat(format: RequestFileFormat, checked: boolean): void {
+    setAllowedMimeTypes((current) => {
+      const selected = new Set(current);
+      for (const mimeType of format.mimeTypes) {
+        if (checked) selected.add(mimeType);
+        else selected.delete(mimeType);
+      }
+      return requestFilePolicyMimeTypes(selectedFilePolicy).filter((mimeType) =>
+        selected.has(mimeType),
+      );
+    });
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -739,10 +775,6 @@ function TaskComposer({
     const normalizedTitle = title.trim();
     const normalizedDescription = description.trim();
     const normalizedDueAt = dueAt.trim();
-    const normalizedMimeTypes = mimeTypes
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean);
     const maxSize = Number(maxSizeMb);
     if (
       normalizedTitle.length === 0 ||
@@ -752,12 +784,8 @@ function TaskComposer({
       setFormError("Task name, instructions, and due date are required.");
       return;
     }
-    if (normalizedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
-      setFormError("Provide at least one MIME type and a positive maximum size in MB.");
-      return;
-    }
-    if (acceptedAssetKinds.length === 0) {
-      setFormError("Choose at least one accepted asset kind.");
+    if (allowedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
+      setFormError("Choose at least one file format and a positive maximum size in MB.");
       return;
     }
     if (assigneeIds.length === 0) {
@@ -783,14 +811,14 @@ function TaskComposer({
         title: normalizedTitle,
         description: normalizedDescription,
         dueAt: normalizedDueAt,
-        allowedMimeTypes: normalizedMimeTypes,
-        maxSizeBytes: maxSize * 1024 * 1024,
+        allowedMimeTypes,
+        maxSizeBytes: maxSize * bytesPerMegabyte,
         assignments: assigneeIds.map((participantId) => ({
           participantId,
           submissionId:
             subjectType === "participant" ? null : (sessionByParticipant[participantId] ?? null),
         })),
-        acceptedAssetKinds,
+        acceptedAssetKinds: [acceptedAssetKind],
       });
     } catch (reason) {
       setFormError(messageFromError(reason));
@@ -799,9 +827,10 @@ function TaskComposer({
     setTitle("");
     setDescription("");
     setDueAt("");
-    setMimeTypes(standardFileRequestMimeTypes.join(", "));
-    setMaxSizeMb("100");
-    setAcceptedAssetKinds(["slides"]);
+    const defaultFilePolicy = requestFilePolicyFor("slides");
+    setAcceptedAssetKind(defaultFilePolicy.kind);
+    setAllowedMimeTypes(requestFilePolicyMimeTypes(defaultFilePolicy));
+    setMaxSizeMb(String(defaultFilePolicy.maxBytes / bytesPerMegabyte));
     setSubjectType("session");
     setAssigneeIds([]);
     setSessionByParticipant({});
@@ -811,11 +840,14 @@ function TaskComposer({
   return (
     <div className={styles.createTaskAction}>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger asChild>
-          <Button type="button" disabled={onCreateTask === undefined}>
-            {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
-          </Button>
-        </DialogTrigger>
+        <Button
+          type="button"
+          aria-haspopup="dialog"
+          disabled={onCreateTask === undefined}
+          onClick={() => setOpen(true)}
+        >
+          {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
+        </Button>
         <DialogContent className={styles.composerDialog}>
           <DialogHeader>
             <DialogTitle>New content request</DialogTitle>
@@ -872,55 +904,67 @@ function TaskComposer({
                 <span>2</span>
                 <div>
                   <h3 id="files-section-heading">Files</h3>
-                  <p>Set the accepted asset kinds, types, and size limit.</p>
+                  <p>Choose one deliverable type, then set its formats and size limit.</p>
                 </div>
               </div>
-              <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
-                <legend>Accepted asset kinds (required)</legend>
-                <div className={styles.optionGrid}>
-                  {deliverableAssetKinds.map((kind) => (
-                    <div key={kind} className={styles.optionRow}>
-                      <Checkbox
-                        id={`task-asset-kind-${kind}`}
-                        checked={acceptedAssetKinds.includes(kind)}
-                        onCheckedChange={() => toggleAssetKind(kind)}
-                      />
-                      <Label htmlFor={`task-asset-kind-${kind}`}>{formatStatus(kind)}</Label>
-                    </div>
-                  ))}
-                </div>
-                <small id="asset-kind-help" className={mutedClass}>
-                  Selected:{" "}
-                  {acceptedAssetKinds.length === 0
-                    ? "None"
-                    : acceptedAssetKinds.map(formatStatus).join(", ")}
-                  .
+              <div className={fieldClass}>
+                <Label htmlFor="task-asset-kind">File type</Label>
+                <Select value={acceptedAssetKind} onValueChange={updateSelectedAssetKind}>
+                  <SelectTrigger id="task-asset-kind">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {deliverableAssetKinds.map((kind) => {
+                      const policy = requestFilePolicyFor(kind);
+                      return (
+                        <SelectItem key={kind} value={kind}>
+                          {policy.label}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                <small className={mutedClass}>
+                  {selectedFilePolicy.description} Create a separate request when you need a
+                  different file type or due date.
                 </small>
-              </fieldset>
+              </div>
               <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-mime-types">Allowed MIME types</Label>
-                  <Textarea
-                    id="task-mime-types"
-                    rows={3}
-                    value={mimeTypes}
-                    onChange={(event) => setMimeTypes(event.currentTarget.value)}
-                    aria-describedby="mime-help"
-                  />
-                  <small id="mime-help" className={mutedClass}>
-                    Defaults to PDF, Word, PowerPoint, JPG, PNG, WebP, and plain text.
+                <fieldset className={styles.fieldset} aria-describedby="file-format-help">
+                  <legend>File formats (required)</legend>
+                  <div className={styles.optionGrid}>
+                    {selectedFilePolicy.formats.map((format) => (
+                      <div key={format.id} className={styles.optionRow}>
+                        <Checkbox
+                          id={`task-file-format-${acceptedAssetKind}-${format.id}`}
+                          checked={fileFormatIsSelected(format)}
+                          onCheckedChange={(checked) => toggleFileFormat(format, checked === true)}
+                        />
+                        <Label htmlFor={`task-file-format-${acceptedAssetKind}-${format.id}`}>
+                          {format.label}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                  <small id="file-format-help" className={mutedClass}>
+                    Speakers will only be able to upload the selected formats.
                   </small>
-                </div>
+                </fieldset>
                 <div className={fieldClass}>
                   <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
                   <Input
                     id="task-max-size-mb"
                     type="number"
                     min={1}
+                    max={selectedFilePolicy.maxBytes / bytesPerMegabyte}
                     step={1}
                     value={maxSizeMb}
                     onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
                   />
+                  <small className={mutedClass}>
+                    Platform limit for {selectedFilePolicy.label.toLowerCase()}:{" "}
+                    {selectedFilePolicy.maxBytes / bytesPerMegabyte} MB.
+                  </small>
                 </div>
               </div>
             </section>
@@ -2195,13 +2239,13 @@ export function DeliverablesWorkspaceView({
           <CardHeader className={clusterClass}>
             <div>
               <p className={styles.eyebrow}>
-                {filesMode ? "Speaker materials" : "Speaker operations"}
+                Speaker operations · {filesMode ? "Files library" : "Requests"}
               </p>
-              <h1>{filesMode ? "Uploaded files" : "Content requests"}</h1>
+              <h1>Content collection</h1>
               <p className={styles.lede}>
                 {filesMode
-                  ? "Review files submitted by speakers, request changes, and download final versions."
-                  : "Collect speaker files, track every assignment, and follow up on outstanding requests."}
+                  ? "Review submitted files, manage versions, and download approved material."
+                  : "Define what speakers owe, assign recipients, and follow up."}
               </p>
             </div>
             <Badge variant="outline">
@@ -2216,18 +2260,18 @@ export function DeliverablesWorkspaceView({
               aria-label="Content requests and uploaded files"
               data-mode-switcher
             >
-              <a href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
+              <Link href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
                 Requests <span>Assign &amp; track</span>
-              </a>
-              <a href={filesHref} aria-current={filesMode ? "page" : undefined}>
-                Uploaded files <span>Review &amp; download</span>
-              </a>
+              </Link>
+              <Link href={filesHref} aria-current={filesMode ? "page" : undefined}>
+                Files <span>Review &amp; download</span>
+              </Link>
             </nav>
             <details className={styles.mobileSwitcher}>
-              <summary>Switch section: {filesMode ? "Uploaded files" : "Requests"}</summary>
+              <summary>Switch section: {filesMode ? "Files" : "Requests"}</summary>
               <nav aria-label="Mobile section switcher">
-                <a href={deliverablesHref}>Requests — Assign &amp; track</a>
-                <a href={filesHref}>Uploaded files — Review &amp; download</a>
+                <Link href={deliverablesHref}>Requests — Assign &amp; track</Link>
+                <Link href={filesHref}>Files — Review &amp; download</Link>
               </nav>
             </details>
           </CardContent>
@@ -2850,31 +2894,43 @@ export function DeliverablesWorkspace({
     };
   }
   const currentScope = scopeRef.current;
-  const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
-    initialData?.sessions ?? [],
+  const navigationCacheScope = useMemo<ContentCollectionNavigationCacheScope>(
+    () => ({ organizationId, eventId, view: mode }),
+    [eventId, mode, organizationId],
   );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(initialData?.tasks ?? []);
-  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(initialData?.assets ?? []);
+  const effectiveInitialData = useMemo(
+    () => initialData ?? contentCollectionNavigationCache.get(navigationCacheScope),
+    [initialData, navigationCacheScope],
+  );
+  const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
+    effectiveInitialData?.sessions ?? [],
+  );
+  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(effectiveInitialData?.tasks ?? []);
+  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(
+    effectiveInitialData?.assets ?? [],
+  );
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
-    initialData?.profiles ?? [],
+    effectiveInitialData?.profiles ?? [],
   );
   const [speakerContentHistory, setSpeakerContentHistory] = useState<
     Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
   >(() =>
     speakerContentHistoryStatesForProfiles(
-      initialData?.profiles ?? [],
-      initialData?.speakerContentHistory,
+      effectiveInitialData?.profiles ?? [],
+      effectiveInitialData?.speakerContentHistory,
     ),
   );
-  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(initialData?.matrix);
-  const [loading, setLoading] = useState(initialData === undefined);
+  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(
+    effectiveInitialData?.matrix,
+  );
+  const [loading, setLoading] = useState(effectiveInitialData === undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-    initialData?.sessions[0]?.id ?? null,
+    effectiveInitialData?.sessions[0]?.id ?? null,
   );
   const [sessionHistory, setSessionHistory] = useState<
     readonly DeliverableContentHistoryEntry[] | undefined
@@ -2898,18 +2954,18 @@ export function DeliverablesWorkspace({
   useEffect(() => {
     if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
     stateScopeRef.current = currentScope;
-    setSessions(initialData?.sessions ?? []);
-    setTasks(initialData?.tasks ?? []);
-    setAssets(initialData?.assets ?? []);
-    setProfiles(initialData?.profiles ?? []);
+    setSessions(effectiveInitialData?.sessions ?? []);
+    setTasks(effectiveInitialData?.tasks ?? []);
+    setAssets(effectiveInitialData?.assets ?? []);
+    setProfiles(effectiveInitialData?.profiles ?? []);
     setSpeakerContentHistory(
       speakerContentHistoryStatesForProfiles(
-        initialData?.profiles ?? [],
-        initialData?.speakerContentHistory,
+        effectiveInitialData?.profiles ?? [],
+        effectiveInitialData?.speakerContentHistory,
       ),
     );
-    setMatrix(initialData?.matrix);
-    setLoading(initialData === undefined);
+    setMatrix(effectiveInitialData?.matrix);
+    setLoading(effectiveInitialData === undefined);
     setError(null);
     setCapabilityMessages([]);
     sessionHistoryCacheRef.current.clear();
@@ -2927,7 +2983,7 @@ export function DeliverablesWorkspace({
     setBusy(false);
     setStatusMessage(null);
     setOperationStates({});
-  }, [currentScope, initialData]);
+  }, [currentScope, effectiveInitialData]);
 
   function recordOperation(
     key: DeliverablesOperationKey,
@@ -3011,7 +3067,7 @@ export function DeliverablesWorkspace({
         !signal?.aborted &&
         loadGenerationRef.current === generation &&
         isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
-      if (initialData !== undefined) {
+      if (effectiveInitialData !== undefined) {
         if (isCurrent()) setLoading(false);
         return;
       }
@@ -3187,15 +3243,37 @@ export function DeliverablesWorkspace({
         if (isCurrent()) setLoading(false);
       }
     },
-    [api, eventId, initialData, mode, organizationId, refreshSpeakerContentHistory],
+    [api, effectiveInitialData, eventId, mode, organizationId, refreshSpeakerContentHistory],
   );
 
   useEffect(() => {
-    if (initialData !== undefined) return;
+    if (effectiveInitialData !== undefined) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [initialData, load]);
+  }, [effectiveInitialData, load]);
+
+  useEffect(() => {
+    if (loading || error !== null) return;
+    contentCollectionNavigationCache.set(navigationCacheScope, {
+      sessions,
+      tasks,
+      assets,
+      profiles,
+      ...(matrix === undefined ? {} : { matrix }),
+      speakerContentHistory,
+    });
+  }, [
+    assets,
+    error,
+    loading,
+    matrix,
+    navigationCacheScope,
+    profiles,
+    sessions,
+    speakerContentHistory,
+    tasks,
+  ]);
 
   const effectiveSelectedSessionId =
     selectedSessionId ?? sessions.find((session) => session.eventId === eventId)?.id ?? null;
