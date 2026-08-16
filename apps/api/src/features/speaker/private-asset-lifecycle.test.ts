@@ -881,6 +881,47 @@ describe("private speaker asset lifecycle", () => {
     expect(firstDownload.url).not.toBe(secondDownload.url);
     expect(gateway.downloadBindings).toHaveLength(2);
   });
+  it("submits a newly assigned upload task after its first file is finalized", async () => {
+    const repository = new LifecycleRepository();
+    const uploadTask = repository.tasks.find((task) => task.id === "upload-task");
+    if (uploadTask === undefined) throw new Error("Expected the upload task fixture.");
+    uploadTask.status = "not_started";
+    const gateway = new CapabilityGateway();
+    const ids = ["first-upload", "first-transition"];
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+      speakerSender,
+      now: () => new Date(now),
+      generateId: () => ids.shift() ?? "generated-id",
+    });
+    const authorization = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: uploadTask.id,
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    gateway.uploaded.add(authorization.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: authorization.asset.id,
+      state: "ready",
+    });
+
+    await expect(
+      service.transitionTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: uploadTask.id,
+        toStatus: "submitted",
+        expectedVersion: 1,
+      }),
+    ).resolves.toMatchObject({ task: { status: "submitted", version: 2 } });
+  });
+
   it("derives immutable task re-uploads and keeps the submitted status authoritative", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
@@ -1305,6 +1346,15 @@ describe("speaker participant workspace authorization and projections", () => {
       participantIds: ["participant-1"],
       role: "owner",
     });
+    repository.profiles.push({
+      id: "profile-participant-1",
+      eventId: "event-1",
+      participantId: "participant-1",
+      displayName: "Priya Raman",
+      biography: "",
+      version: 1,
+      updatedAt: now,
+    });
     const ids = ["asset-history-1", "asset-history-2", "comment-1"];
     const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
@@ -1367,7 +1417,7 @@ describe("speaker participant workspace authorization and projections", () => {
       service.listAssetComments("event-1", "account-1", first.asset.id),
     ).resolves.toEqual([
       expect.objectContaining({
-        authorLabel: "You",
+        authorLabel: "Priya Raman",
         body: "Please use this version.",
         createdAt: now,
       }),
@@ -1379,6 +1429,14 @@ describe("speaker participant workspace authorization and projections", () => {
         authorLabel: "Organizer",
         body: "Priya, the updated deck is ready for review.",
         createdAt: now,
+      }),
+    ]);
+    await expect(
+      service.listOrganizerAssetComments("event-1", "organizer", first.asset.id),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        authorLabel: "Priya Raman",
+        body: "Please use this version.",
       }),
     ]);
     const { submissionId: _submissionId, ...unboundAsset } = first.asset;
@@ -1552,9 +1610,37 @@ describe("organizer content-management contracts", () => {
     repository.organizerScopes.set("event-1:organizer", {
       tenantId: "tenant-1",
       eventId: "event-1",
-      submissionIds: ["submission-1"],
-      participantIds: ["participant-1"],
+      submissionIds: ["submission-1", "submission-2"],
+      participantIds: ["participant-1", "participant-2"],
       role: "owner",
+    });
+    repository.submissions.push({
+      id: "submission-2",
+      eventId: "event-1",
+      title: "Second session",
+      status: "accepted",
+      participantIds: ["participant-2"],
+      updatedAt: now,
+    });
+    repository.tasks.push({
+      id: "participant-2-upload-task",
+      eventId: "event-1",
+      submissionId: "submission-2",
+      participantId: "participant-2",
+      subject: {
+        type: "session",
+        participantId: "participant-2",
+        submissionId: "submission-2",
+      },
+      type: "upload",
+      owner: "speaker",
+      title: "Upload second deck",
+      status: "not_started",
+      dependencyIds: [],
+      reminderOffsetsMinutes: [],
+      acceptedAssetKinds: ["slides"],
+      version: 1,
+      updatedAt: now,
     });
     const tasks = repository.tasks;
     const audits: unknown[] = [];
@@ -1628,16 +1714,28 @@ describe("organizer content-management contracts", () => {
       repository.profiles[0] = updated;
       return { ok: true, value: updated };
     };
-    repository.profiles.push({
-      id: "profile-1",
-      eventId: "event-1",
-      participantId: "participant-1",
-      displayName: "Priya Raman",
-      email: "priya@example.test",
-      biography: "Original",
-      version: 1,
-      updatedAt: now,
-    });
+    repository.profiles.push(
+      {
+        id: "profile-1",
+        eventId: "event-1",
+        participantId: "participant-1",
+        displayName: "Priya Raman",
+        email: "priya@example.test",
+        biography: "Original",
+        version: 1,
+        updatedAt: now,
+      },
+      {
+        id: "profile-2",
+        eventId: "event-1",
+        participantId: "participant-2",
+        displayName: "Marcus Okafor",
+        email: "marcus@example.test",
+        biography: "Original",
+        version: 1,
+        updatedAt: now,
+      },
+    );
     repository.assets.push({
       id: "asset-ready",
       tenantId: "tenant-1",
@@ -1728,7 +1826,14 @@ describe("organizer content-management contracts", () => {
       eventId: "event-1",
       accountId: "organizer",
     });
-    expect(preview.recipientIds).toEqual(["participant-1"]);
+    expect(preview.recipientIds).toEqual(["participant-1", "participant-2"]);
+    const singleReminder = await service.queueReminders({
+      eventId: "event-1",
+      accountId: "organizer",
+      recipientIds: ["participant-1"],
+      idempotencyKey: "single-reminder",
+    });
+    expect(singleReminder.recipientIds).toEqual(["participant-1"]);
     const firstReminder = await service.queueReminders({
       eventId: "event-1",
       accountId: "organizer",
@@ -1739,9 +1844,14 @@ describe("organizer content-management contracts", () => {
       accountId: "organizer",
       idempotencyKey: "reminder-1",
     });
-    expect(firstReminder).toMatchObject({ queued: true, duplicate: false, sentCount: 1 });
+    expect(firstReminder).toMatchObject({ queued: true, duplicate: false, sentCount: 2 });
+    expect(firstReminder.recipientIds).toEqual(preview.recipientIds);
     expect(secondReminder).toMatchObject({ queued: false, duplicate: true });
-    expect(deliveryCalls).toEqual(["reminder-1"]);
+    expect(deliveryCalls).toEqual([
+      "single-reminder:participant-1",
+      "reminder-1:participant-1",
+      "reminder-1:participant-2",
+    ]);
     const reviewed = await service.reviewAsset({
       eventId: "event-1",
       accountId: "organizer",
@@ -2070,14 +2180,21 @@ describe("organizer deliverables exports", () => {
       id: "upload-task-2",
       title: "Upload slides",
     });
-    repository.profiles.push({
-      id: "profile-export",
+    repository.roster.push({
+      id: "roster-export",
       eventId: "event-1",
+      submissionId: "submission-1",
       participantId: "participant-1",
       displayName: "A/B",
-      biography: "Biography",
+      role: "primary",
+      status: "active",
       version: 1,
+      createdAt: now,
       updatedAt: now,
+    });
+    Object.assign(repository, {
+      listRosterForEvent: (eventId: string) =>
+        Promise.resolve(repository.roster.filter((entry) => entry.eventId === eventId)),
     });
     repository.assets.push(
       {

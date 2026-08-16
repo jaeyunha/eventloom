@@ -431,7 +431,7 @@ function isSpeakerTransitionAllowed(task: SpeakerTask, toStatus: SpeakerTaskStat
   if (toStatus === "submitted") {
     return (
       task.type !== "action" &&
-      ["in_progress", "needs_changes", "overdue", "reopened"].includes(task.status)
+      ["not_started", "in_progress", "needs_changes", "overdue", "reopened"].includes(task.status)
     );
   }
   if (toStatus === "completed") {
@@ -2805,17 +2805,24 @@ export class SpeakerService {
         submission,
       ]),
     );
-    const participantNames = await this.acceptedOrganizerParticipantNames(
+    const roster =
+      this.repository.listRosterForEvent === undefined
+        ? []
+        : await this.repository.listRosterForEvent(input.eventId);
+    const initialRosterView = this.organizerRosterVisibility(
       input.eventId,
+      scope,
       acceptedSubmissions,
+      [],
+      roster,
     );
-    const allowedParticipantIds = new Set(
-      acceptedSubmissions.flatMap((submission) =>
-        submission.participantIds.filter((participantId) =>
-          scope.participantIds.includes(participantId),
-        ),
-      ),
+    const profiles = await this.repository.listProfiles(
+      input.eventId,
+      initialRosterView.participantIds,
     );
+    const { participantIds: visibleParticipantIds, participantNames } =
+      this.organizerRosterVisibility(input.eventId, scope, acceptedSubmissions, profiles, roster);
+    const allowedParticipantIds = new Set(visibleParticipantIds);
     if (participantIds?.some((participantId) => !allowedParticipantIds.has(participantId))) {
       throw notFound();
     }
@@ -3010,18 +3017,12 @@ export class SpeakerService {
 
     for (const candidate of candidates) {
       const { asset, task } = candidate;
-      const sessionId =
-        candidate.sessionId ??
-        acceptedSubmissions.find((submission) =>
-          submission.participantIds.includes(asset.participantId),
-        )?.id ??
-        null;
-      if (sessionId === null) continue;
+      const sessionId = candidate.sessionId;
       const binding: PrivateAssetCapabilityBinding = {
         capabilityId: asset.id,
         tenantId: asset.tenantId ?? scope.tenantId,
         eventId: input.eventId,
-        submissionId: sessionId,
+        ...(asset.submissionId === undefined ? {} : { submissionId: asset.submissionId }),
         participantId: asset.participantId,
         ...(asset.taskId === undefined ? {} : { taskId: asset.taskId }),
         objectKey: asset.objectKey,
@@ -3137,8 +3138,9 @@ export class SpeakerService {
         scope,
         model.submissions,
       );
-      const participantNames = this.acceptedOrganizerParticipantNamesFrom(
+      const { participantIds, participantNames } = this.organizerRosterVisibility(
         eventId,
+        scope,
         acceptedSubmissions,
         model.profiles,
         model.roster,
@@ -3148,6 +3150,7 @@ export class SpeakerService {
         scope,
         acceptedSubmissions,
         model.assets,
+        participantIds,
         participantNames,
         participantId,
         versionFamilyId,
@@ -3156,21 +3159,35 @@ export class SpeakerService {
 
     const scope = await this.requireOrganizerScope(eventId, accountId);
     const acceptedSubmissions = await this.acceptedOrganizerSubmissions(eventId, scope);
-    const participantIds = unique(
-      acceptedSubmissions.flatMap((submission) =>
-        submission.participantIds.filter((candidate) => scope.participantIds.includes(candidate)),
-      ),
+    const roster =
+      this.repository.listRosterForEvent === undefined
+        ? []
+        : await this.repository.listRosterForEvent(eventId);
+    const initialRosterView = this.organizerRosterVisibility(
+      eventId,
+      scope,
+      acceptedSubmissions,
+      [],
+      roster,
     );
-    if (participantIds.length === 0) return [];
-    const [assets, participantNames] = await Promise.all([
-      this.assetsForParticipants(eventId, participantIds),
-      this.acceptedOrganizerParticipantNames(eventId, acceptedSubmissions),
+    if (initialRosterView.participantIds.length === 0) return [];
+    const [assets, profiles] = await Promise.all([
+      this.assetsForParticipants(eventId, initialRosterView.participantIds),
+      this.repository.listProfiles(eventId, initialRosterView.participantIds),
     ]);
+    const { participantIds, participantNames } = this.organizerRosterVisibility(
+      eventId,
+      scope,
+      acceptedSubmissions,
+      profiles,
+      roster,
+    );
     return this.organizerAssetsFromSources(
       eventId,
       scope,
       acceptedSubmissions,
       assets,
+      participantIds,
       participantNames,
       participantId,
       versionFamilyId,
@@ -3182,6 +3199,7 @@ export class SpeakerService {
     scope: SpeakerAccessScope,
     acceptedSubmissions: readonly SpeakerSubmission[],
     assets: readonly SpeakerAsset[],
+    visibleParticipantIds: readonly string[],
     participantNames: ReadonlyMap<string, string>,
     participantId: string | undefined,
     versionFamilyId: string | undefined,
@@ -3192,23 +3210,18 @@ export class SpeakerService {
         submission,
       ]),
     );
-    const acceptedParticipantIds = new Set(
-      acceptedSubmissions.flatMap((submission) =>
-        submission.participantIds.filter((candidate) => scope.participantIds.includes(candidate)),
-      ),
-    );
-    if (participantId !== undefined && !acceptedParticipantIds.has(participantId)) {
+    const visibleParticipantIdSet = new Set(visibleParticipantIds);
+    if (participantId !== undefined && !visibleParticipantIdSet.has(participantId)) {
       throw notFound();
     }
-    if (acceptedParticipantIds.size === 0) return [];
-    const participantIds =
-      participantId === undefined ? [...acceptedParticipantIds] : [participantId];
+    if (visibleParticipantIdSet.size === 0) return [];
+    const participantIds = participantId === undefined ? visibleParticipantIds : [participantId];
     return assets
       .filter((asset) => {
         if (
           asset.eventId !== eventId ||
           !participantIds.includes(asset.participantId) ||
-          !acceptedParticipantIds.has(asset.participantId) ||
+          !visibleParticipantIdSet.has(asset.participantId) ||
           (versionFamilyId !== undefined &&
             (asset.versionFamilyId ?? asset.id) !== versionFamilyId) ||
           (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId)
@@ -3570,54 +3583,61 @@ export class SpeakerService {
     }
     return [...byCanonicalId.values()];
   }
-  private async acceptedOrganizerParticipantNames(
-    eventId: string,
-    submissions: readonly SpeakerSubmission[],
-  ): Promise<ReadonlyMap<string, string>> {
-    const participantIds = unique(
-      submissions.flatMap((submission) => [...submission.participantIds]),
-    );
-    const listRosterForEvent = this.repository.listRosterForEvent;
-    const [profiles, roster] = await Promise.all([
-      this.repository.listProfiles(eventId, participantIds),
-      listRosterForEvent === undefined
-        ? Promise.resolve([])
-        : listRosterForEvent.call(this.repository, eventId),
-    ]);
-    return this.acceptedOrganizerParticipantNamesFrom(eventId, submissions, profiles, roster);
-  }
 
-  private acceptedOrganizerParticipantNamesFrom(
+  private organizerRosterVisibility(
     eventId: string,
+    scope: SpeakerAccessScope & { tenantId: string },
     submissions: readonly SpeakerSubmission[],
     profiles: readonly SpeakerProfile[],
     roster: readonly SpeakerRosterEntry[],
-  ): ReadonlyMap<string, string> {
-    const participantIds = unique(
-      submissions.flatMap((submission) => [...submission.participantIds]),
+  ): {
+    participantIds: string[];
+    participantNames: ReadonlyMap<string, string>;
+  } {
+    const acceptedParticipantIds = submissions.flatMap((submission) =>
+      submission.eventId === eventId
+        ? submission.participantIds.filter((participantId) =>
+            scope.participantIds.includes(participantId),
+          )
+        : [],
     );
-    const names = new Map<string, string>();
+    const scopedRoster = roster
+      .filter(
+        (entry) =>
+          entry.eventId === eventId &&
+          entry.status !== "revoked" &&
+          organizerRecordTenantMatches(entry, scope.tenantId),
+      )
+      .sort(
+        (left, right) =>
+          right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id),
+      );
+    const participantIds = unique([
+      ...acceptedParticipantIds,
+      ...scopedRoster.filter(isOrganizerManagedRosterEntry).map((entry) => entry.participantId),
+    ]);
+    const visible = new Set(participantIds);
+    const participantNames = new Map<string, string>();
     for (const profile of profiles) {
       if (
         profile.eventId === eventId &&
-        participantIds.includes(profile.participantId) &&
+        organizerRecordTenantMatches(profile, scope.tenantId) &&
+        visible.has(profile.participantId) &&
         profile.displayName.trim().length > 0
       ) {
-        names.set(profile.participantId, profile.displayName);
+        participantNames.set(profile.participantId, profile.displayName);
       }
     }
-    for (const entry of roster) {
+    for (const entry of scopedRoster) {
       if (
-        entry.eventId === eventId &&
-        entry.status !== "revoked" &&
-        participantIds.includes(entry.participantId) &&
-        !names.has(entry.participantId) &&
+        visible.has(entry.participantId) &&
+        !participantNames.has(entry.participantId) &&
         entry.displayName.trim().length > 0
       ) {
-        names.set(entry.participantId, entry.displayName);
+        participantNames.set(entry.participantId, entry.displayName);
       }
     }
-    return names;
+    return { participantIds, participantNames };
   }
 
   private async acceptedOrganizerParticipantIds(
@@ -4404,7 +4424,7 @@ export class SpeakerService {
           organizationId: preview.organizationId,
           eventId,
           recipient,
-          idempotencyKey,
+          idempotencyKey: `${idempotencyKey}:${recipient.participantId}`,
           actorAccountId,
         };
         try {
@@ -5726,6 +5746,13 @@ export class SpeakerService {
         "The comment thread changed. Reload it before posting.",
       );
     }
+    const profile = await this.repository.getProfile(input.eventId, asset.participantId);
+    const authorLabel =
+      profile?.eventId === input.eventId &&
+      profile.participantId === asset.participantId &&
+      profile.displayName.trim().length > 0
+        ? profile.displayName
+        : "Speaker";
     const now = this.now().toISOString();
     const comment: SpeakerAssetComment = {
       id: this.generateId(),
@@ -5733,7 +5760,7 @@ export class SpeakerService {
       assetId: input.assetId,
       versionId: input.assetId,
       body: normalizeUserText(input.body, "The asset comment", 10_000, true),
-      authorLabel: "You",
+      authorLabel,
       createdAt: now,
       updatedAt: now,
       version: latestVersion + 1,

@@ -1094,6 +1094,7 @@ describe("SpeakerService organizer aggregate reads", () => {
     ]);
     await expect(service.listOrganizerAssets("event-1", "account-1")).resolves.toEqual([
       expect.objectContaining({ id: "accepted-asset" }),
+      expect.objectContaining({ id: "manual-asset", participantName: "Manual Speaker" }),
     ]);
     expect(repository.readModelResources).toEqual([
       { profiles: true, tasks: true, assets: true },
@@ -1404,6 +1405,116 @@ describe("SpeakerService organizer roster read model", () => {
   });
 });
 describe("SpeakerService organizer asset reads", () => {
+  it("derives the same event-scoped organizer-managed visibility and roster-fallback names for read-model and fallback paths", async () => {
+    const configure = (repository: OrganizerSpeakerRepository): void => {
+      repository.organizerScopes.set("event-1:account-1", {
+        tenantId: "org-1",
+        eventId: "event-1",
+        role: "owner",
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+      });
+      repository.submissions.push(submission("submission-1", "participant-1"));
+      repository.profiles.push(profile("participant-1"));
+      repository.roster.push(
+        {
+          id: "manual-event-1",
+          eventId: "event-1",
+          participantId: "participant-manual",
+          displayName: "Roster Fallback Name",
+          sourceType: "manual",
+          sourceId: "manual-event-1",
+          organizerStatus: "pending",
+          role: "primary",
+          status: "pending",
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "manual-event-2",
+          eventId: "event-2",
+          participantId: "participant-cross-event",
+          displayName: "Cross Event Speaker",
+          sourceType: "manual",
+          sourceId: "manual-event-2",
+          organizerStatus: "pending",
+          role: "primary",
+          status: "pending",
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+      );
+      repository.assets.push(
+        {
+          id: "asset-manual",
+          tenantId: "org-1",
+          eventId: "event-1",
+          participantId: "participant-manual",
+          kind: "slides",
+          objectKey: "events/event-1/manual",
+          fileName: "manual.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 10,
+          state: "ready",
+          createdAt: now,
+        },
+        {
+          id: "asset-cross-event-roster",
+          tenantId: "org-1",
+          eventId: "event-1",
+          participantId: "participant-cross-event",
+          kind: "slides",
+          objectKey: "events/event-1/cross-event",
+          fileName: "cross-event.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 10,
+          state: "ready",
+          createdAt: now,
+        },
+      );
+    };
+    const readModelRepository = new CountingOrganizerReadModelRepository();
+    configure(readModelRepository);
+    readModelRepository.getOrganizerReadModel = async (eventId, accountId, resources) => ({
+      scope: readModelRepository.organizerScopes.get(
+        `${eventId}:${accountId}`,
+      ) as SpeakerOrganizerAccessScope,
+      submissions: readModelRepository.submissions,
+      roster: readModelRepository.roster,
+      profiles: resources.profiles === true ? readModelRepository.profiles : [],
+      tasks: [],
+      assets: resources.assets === true ? readModelRepository.assets : [],
+    });
+    const fallbackRepository = new OrganizerSpeakerRepository();
+    configure(fallbackRepository);
+    fallbackRepository.listRosterForEvent = () => Promise.resolve(fallbackRepository.roster);
+    const readModelService = new SpeakerService(
+      readModelRepository,
+      new FakePrivateAssetGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+      },
+    );
+    const fallbackService = new SpeakerService(fallbackRepository, new FakePrivateAssetGateway(), {
+      speakerSender,
+      now: () => new Date(now),
+    });
+
+    const readModelAssets = await readModelService.listOrganizerAssets("event-1", "account-1");
+    const fallbackAssets = await fallbackService.listOrganizerAssets("event-1", "account-1");
+
+    expect(readModelAssets).toEqual(fallbackAssets);
+    expect(readModelAssets).toEqual([
+      expect.objectContaining({
+        id: "asset-manual",
+        participantName: "Roster Fallback Name",
+      }),
+    ]);
+  });
+
   it("keeps organizer assets bounded to accepted submissions and the authorized tenant", async () => {
     const { repository, service } = createConcurrentOrganizerFixture();
     repository.assets.push(
@@ -4615,7 +4726,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
   expect(deliveries).toEqual([
     {
       actorAccountId: "system:speaker-reminder-scheduler",
-      idempotencyKey: first.idempotencyKey,
+      idempotencyKey: `${first.idempotencyKey}:participant-1`,
       participantId: "participant-1",
       taskIds: ["scheduled-due"],
     },
