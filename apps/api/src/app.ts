@@ -29,6 +29,10 @@ import {
 } from "./features/evaluations/routes";
 import type { EvaluationService } from "./features/evaluations/service";
 import type { EvaluationActor } from "./features/evaluations/types";
+import {
+  createEventInvitationRoutes,
+  type EventInvitationRouteDependencies,
+} from "./features/event-invitations/routes";
 import { createEventAdminRoutes, type EventRouteDependencies } from "./features/events/routes";
 import { createMemberAdminRoutes, type MemberRouteDependencies } from "./features/members/routes";
 import { createPublicApiV1Routes, type PublicApiRoutesOptions } from "./features/public-api/routes";
@@ -164,6 +168,7 @@ export interface ApiDependencies<
   readonly cfp?: CfpRouteDependencies;
   readonly organizerOverview?: OrganizerOverviewRouteDependencies;
   readonly events?: EventRouteDependencies;
+  readonly eventInvitations?: EventInvitationRouteDependencies;
   readonly sessions?: SessionRouteDependencies;
   readonly communications?: CommunicationRouteDependencies;
   readonly reports?: ReportRouteDependencies;
@@ -425,6 +430,7 @@ function assertAuthenticationConfigured(
       dependencies.agenda !== undefined ||
       dependencies.cfp !== undefined ||
       dependencies.events !== undefined ||
+      dependencies.eventInvitations !== undefined ||
       dependencies.organizerOverview !== undefined ||
       dependencies.sessions !== undefined ||
       dependencies.speaker !== undefined ||
@@ -522,6 +528,7 @@ export function createApp<
         JSON.stringify({
           ...payload,
           memberships: principal.memberships,
+          reviewerGrants: principal.reviewerGrants,
           speakerGrants: principal.speakerGrants,
         }),
         { status: response.status, headers },
@@ -549,6 +556,12 @@ export function createApp<
   }
   if (dependencies.access !== undefined) {
     app.route("/api/account", createAccessRoutes(dependencies.access));
+  }
+  if (dependencies.eventInvitations !== undefined) {
+    app.route(
+      "/api/account/event-invitations",
+      createEventInvitationRoutes(dependencies.eventInvitations),
+    );
   }
 
   if (dependencies.webhooks !== undefined) {

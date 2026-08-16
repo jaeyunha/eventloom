@@ -15,6 +15,7 @@ const principal: UserPrincipal = {
   email: "owner@example.test",
   memberships: [{ organizationId: "organization-1", role: "owner" }],
   speakerGrants: [],
+  reviewerGrants: [],
 };
 
 function attempt(): AirtableOAuthAttempt {

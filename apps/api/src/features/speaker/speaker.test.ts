@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { CommunicationService, InMemoryCommunicationRepository } from "../communications/service";
 import type { CommunicationDeliveryAdapter } from "../communications/types";
+import { InMemoryEventRoleInvitationRepository } from "../event-invitations/memory";
 import { CommunicationSpeakerCommunications } from "./communications";
 import {
   createSpeakerAdminRoutes,
@@ -230,6 +231,19 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     accountId: string,
   ): Promise<SpeakerOrganizerAccessScope | null> {
     return Promise.resolve(this.organizerScopes.get(`${eventId}:${accountId}`) ?? null);
+  }
+
+  resolveVerifiedInvitationRecipient(email: string): Promise<{
+    userId: string;
+    normalizedEmail: string;
+  } | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const participantId = [...this.verifiedEmails.entries()].find(
+      ([, verifiedEmail]) => verifiedEmail.trim().toLowerCase() === normalizedEmail,
+    )?.[0];
+    return Promise.resolve(
+      participantId === undefined ? null : { userId: `account:${participantId}`, normalizedEmail },
+    );
   }
 
   resolveEventParticipant(
@@ -4550,6 +4564,96 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(deliveries).toHaveLength(2);
 });
 
+it("does not send invitation email when pending persistence fails for a verified account", async () => {
+  const { repository } = createOrganizerFixture();
+  const deliveries: Array<{ participantId: string; text: string }> = [];
+  const communicationFixture = testSpeakerCommunications({
+    send(input) {
+      deliveries.push({ participantId: input.recipientId, text: input.text });
+      return Promise.resolve({ status: "queued", providerMessageId: "unexpected-delivery" });
+    },
+  });
+  const sendInvitations = vi.spyOn(communicationFixture.communications, "sendInvitations");
+  const persistenceError = new Error("pending invitation persistence failed");
+  const invitationCreator = {
+    create: vi.fn().mockRejectedValue(persistenceError),
+  };
+  const invitationService = new SpeakerService(
+    withTestSpeakerOrganizerLifecycle(repository),
+    new FakePrivateAssetGateway(),
+    {
+      speakerSender,
+      now: () => new Date(now),
+      communications: communicationFixture.communications,
+      invitationCreator,
+    },
+  );
+
+  await expect(
+    invitationService.sendOrganizerSpeakerInvitations({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      participantIds: ["participant-1"],
+      templateId: "client-template-is-not-authoritative",
+      idempotencyKey: "invite-persistence-failure",
+    }),
+  ).rejects.toBe(persistenceError);
+  expect(invitationCreator.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      recipientUserId: "account:participant-1",
+      normalizedEmail: "priya@example.test",
+      participantId: "participant-1",
+      creationIdempotencyKey: "invite-persistence-failure:participant-1",
+    }),
+  );
+  expect(sendInvitations).not.toHaveBeenCalled();
+  expect(deliveries).toEqual([]);
+});
+
+it("still sends a non-authoritative work-hub invitation when no verified account exists", async () => {
+  const { repository } = createOrganizerFixture();
+  repository.verifiedEmails.delete("participant-1");
+  const deliveries: Array<{ participantId: string; text: string }> = [];
+  const communicationFixture = testSpeakerCommunications({
+    send(input) {
+      deliveries.push({ participantId: input.recipientId, text: input.text });
+      return Promise.resolve({ status: "queued", providerMessageId: "invite-receipt" });
+    },
+  });
+  const invitationCreator = { create: vi.fn().mockResolvedValue(undefined) };
+  const invitationService = new SpeakerService(
+    withTestSpeakerOrganizerLifecycle(repository),
+    new FakePrivateAssetGateway(),
+    {
+      speakerSender,
+      now: () => new Date(now),
+      communications: communicationFixture.communications,
+      invitationCreator,
+    },
+  );
+
+  await expect(
+    invitationService.sendOrganizerSpeakerInvitations({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      participantIds: ["participant-1"],
+      templateId: "client-template-is-not-authoritative",
+      idempotencyKey: "invite-before-account",
+    }),
+  ).resolves.toMatchObject({ status: "queued", duplicate: false });
+  expect(invitationCreator.create).not.toHaveBeenCalled();
+  expect(deliveries).toEqual([
+    {
+      participantId: "participant-1",
+      text: expect.stringContaining("review and accept your speaker invitation"),
+    },
+  ]);
+  expect(deliveries[0]?.text).toContain("/login?next=/work");
+  expect(JSON.stringify(deliveries)).not.toMatch(/grant|token|secret/iu);
+});
+
 it("uses the approved welcome template and reports durable invitation replays", async () => {
   const { repository } = createOrganizerFixture();
   const deliveries: Array<{ participantId: string; text: string }> = [];
@@ -4567,6 +4671,7 @@ it("uses the approved welcome template and reports durable invitation replays", 
       );
     },
   });
+  const invitationRepository = new InMemoryEventRoleInvitationRepository();
   const invitationService = new SpeakerService(
     withTestSpeakerOrganizerLifecycle(repository),
     new FakePrivateAssetGateway(),
@@ -4574,6 +4679,7 @@ it("uses the approved welcome template and reports durable invitation replays", 
       speakerSender,
       now: () => new Date(now),
       communications: communicationFixture.communications,
+      invitationCreator: invitationRepository,
     },
   );
 
@@ -4607,8 +4713,20 @@ it("uses the approved welcome template and reports durable invitation replays", 
     ],
   });
   expect(deliveries).toHaveLength(2);
-  expect(deliveries.every((delivery) => delivery.text.includes("/login?next=/portal"))).toBe(true);
+  expect(
+    deliveries.every(
+      (delivery) =>
+        delivery.text.includes("review and accept your speaker invitation") &&
+        delivery.text.includes("/login?next=/work"),
+    ),
+  ).toBe(true);
   expect(JSON.stringify(deliveries)).not.toMatch(/grant|token|secret/iu);
+  await expect(
+    invitationRepository.listForVerifiedAccount("account:participant-1", "priya@example.test"),
+  ).resolves.toHaveLength(1);
+  await expect(
+    invitationRepository.listForVerifiedAccount("account:participant-2", "marcus@example.test"),
+  ).resolves.toHaveLength(1);
 
   const replay = await invitationService.sendOrganizerSpeakerInvitations({
     organizationId: "org-1",
@@ -4627,6 +4745,12 @@ it("uses the approved welcome template and reports durable invitation replays", 
     ],
   });
   expect(deliveries).toHaveLength(2);
+  await expect(
+    invitationRepository.listForVerifiedAccount("account:participant-1", "priya@example.test"),
+  ).resolves.toHaveLength(1);
+  await expect(
+    invitationRepository.listForVerifiedAccount("account:participant-2", "marcus@example.test"),
+  ).resolves.toHaveLength(1);
 });
 it("queues due scheduled reminders idempotently without sending ineligible tasks", async () => {
   const { repository } = createOrganizerFixture();

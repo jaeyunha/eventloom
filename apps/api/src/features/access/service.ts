@@ -137,6 +137,7 @@ export class AccessContextService {
     );
     const accessibleOrganizationIds = new Set([
       ...memberships.keys(),
+      ...principal.reviewerGrants.map((grant) => grant.organizationId),
       ...principal.speakerGrants.map((grant) => grant.organizationId),
     ]);
     const organizations = await this.dependencies.listOrganizationsForUser(principal);
@@ -222,18 +223,24 @@ export class AccessContextService {
           eventContext.capabilities.add("organizer.overview.read");
         }
       }
+      for (const grant of principal.reviewerGrants) {
+        if (grant.organizationId !== organizationId) continue;
+        const event = eventById.get(grant.eventId);
+        if (event === undefined) {
+          throw new AccessContextDependencyError(
+            "The event access dependency omitted a current reviewer scope.",
+          );
+        }
+        const eventContext = addEvent(organization, event);
+        eventContext.roles.add("reviewer");
+        eventContext.capabilities.add("reviewer.workspace.read");
+      }
       for (const plan of plans) {
         validatePlan(plan, organizationId);
-        const event = eventById.get(plan.eventId);
-        if (event === undefined) {
+        if (!eventById.has(plan.eventId)) {
           throw new AccessContextDependencyError(
             "The evaluation plan dependency returned another event.",
           );
-        }
-        if (membership?.role === "reviewer") {
-          const eventContext = addEvent(organization, event);
-          eventContext.roles.add("reviewer");
-          eventContext.capabilities.add("reviewer.workspace.read");
         }
       }
     }

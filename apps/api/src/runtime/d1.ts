@@ -1,4 +1,11 @@
 import type { AgendaRepository, AgendaState } from "../features/agenda/types";
+import { EventRoleInvitationService } from "../features/event-invitations/service";
+import type {
+  EventRoleInvitationRepository,
+  EventRoleInvitationServiceOptions,
+} from "../features/event-invitations/types";
+import type { ReviewerEventInvitationLifecycle } from "../features/members/types";
+import type { SpeakerEventInvitationCreator } from "../features/speaker/service";
 import type {
   CloudflareBindings,
   CloudflareOutboxMessage,
@@ -13,6 +20,7 @@ import { D1CfpRepository } from "../infrastructure/cloudflare/repositories/cfp";
 import { D1CommunicationRepository } from "../infrastructure/cloudflare/repositories/communications";
 import { D1CrmRepository } from "../infrastructure/cloudflare/repositories/crm";
 import { D1EvaluationRepository } from "../infrastructure/cloudflare/repositories/evaluations";
+import { D1EventRoleInvitationRepository } from "../infrastructure/cloudflare/repositories/event-role-invitations";
 import { D1EventRepository } from "../infrastructure/cloudflare/repositories/events";
 import { D1ProgramPublicationRepository } from "../infrastructure/cloudflare/repositories/publication";
 import { D1RemixRepository } from "../infrastructure/cloudflare/repositories/remix";
@@ -20,6 +28,110 @@ import { D1ReportRepository } from "../infrastructure/cloudflare/repositories/re
 import { D1ReviewerPoolRepository } from "../infrastructure/cloudflare/repositories/reviewer-pool";
 import { D1SessionRepository } from "../infrastructure/cloudflare/repositories/sessions";
 import { D1SpeakerRepository } from "../infrastructure/cloudflare/repositories/speaker";
+
+type RuntimeEventRoleInvitationRepository = Required<
+  Pick<
+    EventRoleInvitationRepository,
+    | "create"
+    | "reconcileForVerifiedAccount"
+    | "listForVerifiedAccount"
+    | "findForVerifiedAccount"
+    | "accept"
+    | "decline"
+    | "listAcceptedReviewerEventIds"
+    | "revokeReviewerInvitationsForOrganizationUser"
+    | "revokeEventReviewerInvitationIfNoPoolGrantsRemain"
+  >
+>;
+
+export interface RuntimeEventRoleInvitationAdapters {
+  readonly repository: RuntimeEventRoleInvitationRepository;
+  readonly service: EventRoleInvitationService;
+  readonly reviewerLifecycle: ReviewerEventInvitationLifecycle;
+  readonly speakerCreator: SpeakerEventInvitationCreator;
+}
+
+/**
+ * Narrows optional invitation repository capabilities at the composition boundary. A runtime must
+ * never expose acceptance routes unless its adapter can durably list, find, and transition records.
+ */
+export function createRuntimeEventRoleInvitationAdapters(
+  repository: EventRoleInvitationRepository,
+  options: EventRoleInvitationServiceOptions = {},
+): RuntimeEventRoleInvitationAdapters {
+  const requiredMethods = [
+    "create",
+    "reconcileForVerifiedAccount",
+    "listForVerifiedAccount",
+    "findForVerifiedAccount",
+    "accept",
+    "decline",
+    "listAcceptedReviewerEventIds",
+    "revokeReviewerInvitationsForOrganizationUser",
+    "revokeEventReviewerInvitationIfNoPoolGrantsRemain",
+  ] as const;
+  for (const method of requiredMethods) {
+    if (typeof repository[method] !== "function") {
+      throw new TypeError(`The event invitation repository is missing ${method}.`);
+    }
+  }
+  const complete = repository as RuntimeEventRoleInvitationRepository;
+  const adapter: RuntimeEventRoleInvitationRepository = {
+    create: complete.create.bind(repository),
+    reconcileForVerifiedAccount: complete.reconcileForVerifiedAccount.bind(repository),
+    listForVerifiedAccount: complete.listForVerifiedAccount.bind(repository),
+    findForVerifiedAccount: complete.findForVerifiedAccount.bind(repository),
+    accept: complete.accept.bind(repository),
+    decline: complete.decline.bind(repository),
+    listAcceptedReviewerEventIds: complete.listAcceptedReviewerEventIds.bind(repository),
+    revokeReviewerInvitationsForOrganizationUser:
+      complete.revokeReviewerInvitationsForOrganizationUser.bind(repository),
+    revokeEventReviewerInvitationIfNoPoolGrantsRemain:
+      complete.revokeEventReviewerInvitationIfNoPoolGrantsRemain.bind(repository),
+  };
+  return {
+    repository: adapter,
+    service: new EventRoleInvitationService(adapter, options),
+    reviewerLifecycle: {
+      async createReviewerInvitation(input) {
+        await adapter.create({
+          id: `event-role-invitation:${crypto.randomUUID()}`,
+          organizationId: input.organizationId,
+          eventId: input.eventId,
+          role: "reviewer",
+          recipientUserId: input.recipientUserId,
+          normalizedEmail: input.normalizedEmail,
+          participantId: null,
+          creationIdempotencyKey: input.idempotencyKey,
+          invitedByActorType: "user",
+          invitedByActorId: input.invitedByUserId,
+          invitedAt: input.invitedAt,
+        });
+      },
+      async revokeReviewerInvitationIfUnpooled(input) {
+        await adapter.revokeEventReviewerInvitationIfNoPoolGrantsRemain({
+          organizationId: input.organizationId,
+          eventId: input.eventId,
+          excludedRoundId: input.excludedRoundId,
+          recipientUserId: input.recipientUserId,
+          revokedByActorType: "user",
+          revokedByActorId: input.revokedByUserId,
+          occurredAt: input.revokedAt,
+        });
+      },
+      async revokeReviewerInvitationsForMember(input) {
+        await adapter.revokeReviewerInvitationsForOrganizationUser({
+          organizationId: input.organizationId,
+          recipientUserId: input.recipientUserId,
+          revokedByActorType: "user",
+          revokedByActorId: input.revokedByUserId,
+          occurredAt: input.revokedAt,
+        });
+      },
+    },
+    speakerCreator: { create: adapter.create },
+  };
+}
 
 export interface D1BusinessRepositoryBundle {
   events: D1EventRepository;
@@ -40,6 +152,7 @@ export interface D1BusinessRepositoryBundle {
   remix: D1RemixRepository;
   publication: D1ProgramPublicationRepository;
   reviewerPool: D1ReviewerPoolRepository;
+  eventRoleInvitations: D1EventRoleInvitationRepository;
   webhooks: D1WebhookRepository;
 }
 
@@ -69,6 +182,7 @@ export function createD1BusinessRepositories(input: {
     remix: new D1RemixRepository(database),
     publication: new D1ProgramPublicationRepository(database),
     reviewerPool: new D1ReviewerPoolRepository(database),
+    eventRoleInvitations: new D1EventRoleInvitationRepository(database),
     webhooks: new D1WebhookRepository(database, {
       secretCipher: input.webhookSecretCipher,
     }),
@@ -88,6 +202,7 @@ export interface D1RuntimeDependencies {
   remix: D1RemixRepository;
   programPublication: D1ProgramPublicationRepository;
   reviewerPool: D1ReviewerPoolRepository;
+  eventRoleInvitations: D1EventRoleInvitationRepository;
   webhooks: D1WebhookRepository;
 }
 
@@ -166,6 +281,7 @@ export function createD1RuntimeComposition(options: D1RuntimeCompositionOptions)
       crm: repositories.crm,
       publication: repositories.programPublication,
       reviewerPools: repositories.reviewerPool,
+      eventRoleInvitations: repositories.eventRoleInvitations,
     },
     dependencies: {
       webhooks: repositories.webhooks,
@@ -207,6 +323,7 @@ export function createD1RuntimeDependencies(
     remix: repositories.remix,
     programPublication: repositories.publication,
     reviewerPool: repositories.reviewerPool,
+    eventRoleInvitations: repositories.eventRoleInvitations,
     webhooks: repositories.webhooks,
   };
 }

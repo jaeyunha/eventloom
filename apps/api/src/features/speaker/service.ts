@@ -5,6 +5,7 @@ import {
   standardUploadMaximumBytes,
 } from "@eventloom/contracts";
 import { CommunicationError } from "../communications/service";
+import type { CreateEventRoleInvitationInput } from "../event-invitations/types";
 import { allSpeakerPortalCapabilities, capabilityAllows } from "./capabilities";
 import type { SpeakerCommunications } from "./communications";
 import type {
@@ -241,6 +242,10 @@ export interface SpeakerReminderEligibility {
     | "no_reminder_offset";
 }
 
+export interface SpeakerEventInvitationCreator {
+  create(input: CreateEventRoleInvitationInput): Promise<unknown>;
+}
+
 export interface SpeakerServiceOptions {
   speakerSender: string;
   now?: () => Date;
@@ -252,6 +257,8 @@ export interface SpeakerServiceOptions {
   /** Test-only compatibility; production speaker email uses communications. */
   emailDelivery?: SpeakerEmailDelivery;
   communications?: SpeakerCommunications;
+  /** Creates account-bound authorization records; invitation email remains notification-only. */
+  invitationCreator?: SpeakerEventInvitationCreator;
 }
 
 type EditableSpeakerProfileInput = SpeakerOrganizerProfileInput & {
@@ -1484,6 +1491,7 @@ export class SpeakerService {
   private readonly delivery: SpeakerReminderDelivery | undefined;
   private readonly speakerSender: string;
   private readonly communications: SpeakerCommunications | undefined;
+  private readonly invitationCreator: SpeakerEventInvitationCreator | undefined;
   private readonly reminderCache = new Map<string, SpeakerReminderQueueResult>();
 
   constructor(
@@ -1496,6 +1504,7 @@ export class SpeakerService {
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.delivery = options.delivery ?? options.invitationDelivery ?? options.reminderDelivery;
     this.communications = options.communications;
+    this.invitationCreator = options.invitationCreator;
   }
   async resolveEventParticipant(
     input: Omit<ResolveEventParticipantInput, "createParticipantId">,
@@ -7025,15 +7034,65 @@ export class SpeakerService {
       input.accountId,
     );
     try {
-      return await this.requireCommunications().sendInvitations({
+      const communications = this.requireCommunications();
+      const participantIds = unique(input.participantIds);
+      const idempotencyKey = importText(
+        input.idempotencyKey,
+        "The invitation idempotency key",
+        300,
+      );
+      const recipients = await communications.previewInvitations({
         organizationId: input.organizationId,
         eventId: input.eventId,
         accountId: input.accountId,
-        participantIds: unique(input.participantIds),
-        idempotencyKey: importText(input.idempotencyKey, "The invitation idempotency key", 300),
+        participantIds,
+      });
+      await this.createPendingSpeakerInvitations({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        accountId: input.accountId,
+        idempotencyKey,
+        recipients,
+      });
+      return await communications.sendInvitations({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        accountId: input.accountId,
+        participantIds,
+        idempotencyKey,
       });
     } catch (error) {
       return this.communicationFailure(error, "VERSION_CONFLICT");
+    }
+  }
+
+  private async createPendingSpeakerInvitations(input: {
+    organizationId: string;
+    eventId: string;
+    accountId: string;
+    idempotencyKey: string;
+    recipients: readonly SpeakerInvitationPreview[];
+  }): Promise<void> {
+    const creator = this.invitationCreator;
+    const resolveRecipient = this.repository.resolveVerifiedInvitationRecipient;
+    if (creator === undefined || resolveRecipient === undefined) return;
+    const invitedAt = this.now().toISOString();
+    for (const recipient of input.recipients) {
+      const account = await resolveRecipient.call(this.repository, recipient.recipientEmail);
+      if (account === null) continue;
+      await creator.create({
+        id: `event-role-invitation:${this.generateId()}`,
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        role: "speaker",
+        recipientUserId: account.userId,
+        normalizedEmail: account.normalizedEmail,
+        participantId: recipient.participantId,
+        creationIdempotencyKey: `${input.idempotencyKey}:${recipient.participantId}`,
+        invitedByActorType: "user",
+        invitedByActorId: input.accountId,
+        invitedAt,
+      });
     }
   }
 
