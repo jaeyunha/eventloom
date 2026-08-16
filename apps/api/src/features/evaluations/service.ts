@@ -1800,10 +1800,15 @@ export class EvaluationService {
   async listReviewerWorkspace(
     actor: EvaluationActor,
     eventId?: string,
+    organizationId?: string,
   ): Promise<EvaluationReviewerWorkspace> {
     if (actor.kind !== "human") throw forbidden();
     const normalizedEventId =
       eventId === undefined ? undefined : requireText(eventId, "Event id", 100);
+    const normalizedOrganizationId =
+      organizationId === undefined
+        ? undefined
+        : requireText(organizationId, "Organization id", 100);
     const grantsByTenant = new Map<string, EvaluationGrant[]>();
     for (const grant of actor.grants) {
       if (
@@ -1813,6 +1818,9 @@ export class EvaluationService {
         continue;
       }
       const tenantId = grant.tenantId ?? actor.tenantId;
+      if (normalizedOrganizationId !== undefined && tenantId !== normalizedOrganizationId) {
+        continue;
+      }
       const grants = grantsByTenant.get(tenantId) ?? [];
       grants.push(grant);
       grantsByTenant.set(tenantId, grants);

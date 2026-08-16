@@ -7,8 +7,9 @@ import { loadReviewerWorkspace } from "./workspace-load-reviewer-workspace";
 export async function loadEvaluatorQueue(
   eventId: string | undefined,
   baseUrl: string,
+  organizationId?: string | undefined,
 ): Promise<readonly ReviewerQueueEntry[]> {
-  const entries = await loadReviewerWorkspace(eventId, baseUrl);
+  const entries = await loadReviewerWorkspace(eventId, baseUrl, organizationId);
   return entries
     .map((entry) => ({
       assignment: mapEvaluatorAssignment(entry.plan, entry),

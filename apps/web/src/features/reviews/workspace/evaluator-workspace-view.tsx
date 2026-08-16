@@ -1,4 +1,7 @@
 "use client";
+import { ArrowLeft } from "lucide-react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import styles from "../review-workspace.module.css";
 import { EvaluatorAssignmentStatusBadge } from "./assignment-evaluator-assignment-status-badge";
 import { EvaluatorAbstainedView } from "./evaluator-abstained-view";
@@ -14,13 +17,18 @@ import { AuthorityNotice } from "./workspace-authority-notice";
 export function EvaluatorWorkspaceView({
   controller,
 }: Readonly<{ controller: EvaluatorController }>) {
-  const { assignment, embedded, submitted, queuePosition, abstained } = controller;
+  const { assignment, embedded, submitted, queuePosition, abstained, returnHref } = controller;
   if (abstained) return <EvaluatorAbstainedView controller={controller} />;
+  const fullPage = returnHref !== undefined;
   const reviewSections = (
     <>
       <EvaluatorPrivacyNotice controller={controller} />
       <EvaluatorRoundAvailabilityNotice round={assignment.round} />
-      <EvaluatorSubmissionPanel controller={controller} showReference={!embedded} />
+      <EvaluatorSubmissionPanel
+        controller={controller}
+        pageHeading={fullPage}
+        showReference={!embedded}
+      />
       <EvaluatorScorecardView controller={controller} />
     </>
   );
@@ -39,36 +47,52 @@ export function EvaluatorWorkspaceView({
   }
 
   return (
-    <div className={`${styles.workspace} ${styles.evaluatorMode}`} id="review-workspace">
+    <div
+      className={`${styles.workspace} ${styles.evaluatorMode} ${
+        fullPage ? styles.fullPageEvaluator : ""
+      }`}
+      id="review-workspace"
+    >
       <a className={styles.skipLink} href="#review-content">
         Skip to review workspace content
       </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <p className={styles.eyebrow}>
-            Assigned review · {assignment.eventName} · {assignment.planName}
-          </p>
-          <h1>{assignment.title}</h1>
-          <p className={styles.headerDescription}>
-            Evaluate this submission in <strong>{assignment.round.name}</strong>. Only your assigned
-            submission is available in this workspace; your draft stays available while you move
-            through the reviewer queue.
-          </p>
+      {fullPage ? (
+        <div className={styles.fullPageReviewToolbar}>
+          <Button asChild size="sm" variant="ghost">
+            <Link href={returnHref}>
+              <ArrowLeft data-icon="inline-start" aria-hidden="true" />
+              Back to queue
+            </Link>
+          </Button>
         </div>
-        <div className={styles.headerSide}>
-          <ReviewNavigation mode="evaluator" />
-          <section className={styles.reviewState} aria-label="Review state">
-            <EvaluatorAssignmentStatusBadge
-              status={submitted ? "submitted" : assignment.assignmentStatus}
-            />
-            <span className={styles.queuePosition}>
-              {queuePosition
-                ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
-                : "Assigned submission"}
-            </span>
-          </section>
-        </div>
-      </header>
+      ) : (
+        <header className={styles.workspaceHeader}>
+          <div>
+            <p className={styles.eyebrow}>
+              Assigned review · {assignment.eventName} · {assignment.planName}
+            </p>
+            <h1>{assignment.title}</h1>
+            <p className={styles.headerDescription}>
+              Evaluate this submission in <strong>{assignment.round.name}</strong>. Only your
+              assigned submission is available in this workspace; your draft stays available while
+              you move through the reviewer queue.
+            </p>
+          </div>
+          <div className={styles.headerSide}>
+            <ReviewNavigation mode="evaluator" />
+            <section className={styles.reviewState} aria-label="Review state">
+              <EvaluatorAssignmentStatusBadge
+                status={submitted ? "submitted" : assignment.assignmentStatus}
+              />
+              <span className={styles.queuePosition}>
+                {queuePosition
+                  ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
+                  : "Assigned submission"}
+              </span>
+            </section>
+          </div>
+        </header>
+      )}
       <div id="review-content" tabIndex={-1}>
         <AuthorityNotice />
         {reviewSections}

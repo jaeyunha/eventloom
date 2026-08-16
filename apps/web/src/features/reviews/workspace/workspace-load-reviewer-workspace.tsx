@@ -8,11 +8,13 @@ import { evaluationRequest } from "./model-evaluation-request";
 export async function loadReviewerWorkspace(
   eventId: string | undefined,
   baseUrl: string,
+  organizationId?: string | undefined,
 ): Promise<readonly ApiReviewerWorkspaceAssignment[]> {
-  const path =
-    eventId === undefined
-      ? "/reviewer/workspace"
-      : `/reviewer/workspace?eventId=${encodeURIComponent(eventId)}`;
+  const searchParams = new URLSearchParams();
+  if (organizationId !== undefined) searchParams.set("organizationId", organizationId);
+  if (eventId !== undefined) searchParams.set("eventId", eventId);
+  const query = searchParams.toString();
+  const path = query.length === 0 ? "/reviewer/workspace" : `/reviewer/workspace?${query}`;
   try {
     const result = await evaluationRequest<ApiReviewerWorkspaceResponse>(baseUrl, path);
     return result.assignments

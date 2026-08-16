@@ -6,6 +6,7 @@ import { criterionNumericValue } from "./model-criterion-numeric-value";
 import { criterionOptionValue } from "./model-criterion-option-value";
 import { criterionType } from "./model-criterion-type";
 import { evaluationRequest } from "./model-evaluation-request";
+import { reviewerAssignmentRequestPath } from "./model-reviewer-assignment-request-path";
 import { isHumanConfirmedReviewScore } from "./scorecard-is-human-confirmed-review-score";
 import { parseScorecardResponses } from "./scorecard-parse-scorecard-responses";
 import { withScorecardResponses } from "./scorecard-with-scorecard-responses";
@@ -149,7 +150,7 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     }
     const review = await evaluationRequest<NonNullable<ApiReviewContext["review"]>>(
       baseUrl,
-      `/assignments/${encodeURIComponent(assignment.id)}/review`,
+      reviewerAssignmentRequestPath(assignment, { kind: "review" }),
       {
         method: "PUT",
         body: JSON.stringify({

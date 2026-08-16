@@ -2,6 +2,7 @@
 import type { ApiReviewContext } from "./api-api-review-context";
 import type { EvaluatorScoreController } from "./evaluator-score-actions";
 import { evaluationRequest } from "./model-evaluation-request";
+import { reviewerAssignmentRequestPath } from "./model-reviewer-assignment-request-path";
 export function useEvaluatorSubmissionActions(scope: EvaluatorScoreController) {
   const {
     assignment,
@@ -51,7 +52,7 @@ export function useEvaluatorSubmissionActions(scope: EvaluatorScoreController) {
       const review = await persistReview();
       const submittedReview = await evaluationRequest<NonNullable<ApiReviewContext["review"]>>(
         baseUrl,
-        `/assignments/${encodeURIComponent(assignment.id)}/review/submit`,
+        reviewerAssignmentRequestPath(assignment, { kind: "submit" }),
         {
           method: "POST",
           body: JSON.stringify({ expectedVersion: review.version }),
@@ -85,7 +86,7 @@ export function useEvaluatorSubmissionActions(scope: EvaluatorScoreController) {
         id: string;
         reason: string;
         declaredAt: string;
-      }>(baseUrl, `/assignments/${encodeURIComponent(assignment.id)}/conflict`, {
+      }>(baseUrl, reviewerAssignmentRequestPath(assignment, { kind: "conflict" }), {
         method: "POST",
         body: JSON.stringify({ reason: abstentionReason.trim() }),
       });
