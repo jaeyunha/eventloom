@@ -179,13 +179,13 @@
 .monthControls {
   display: grid;
   flex: none;
-  grid-template-columns: repeat(2, 2.75rem);
+  grid-template-columns: repeat(2, 44px);
   gap: 0.25rem;
 }
 
 .monthControls button {
-  width: 2.75rem;
-  height: 2.75rem;
+  width: 44px;
+  height: 44px;
   color: var(--muted-foreground);
 }
 
@@ -209,7 +209,8 @@
 
 .day {
   position: relative;
-  min-height: 2.75rem;
+  min-width: 44px;
+  min-height: 44px;
   border: 0;
   border-radius: 0;
   background: transparent;

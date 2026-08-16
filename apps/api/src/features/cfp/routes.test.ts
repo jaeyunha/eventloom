@@ -187,6 +187,7 @@ const principals = {
     email: "organizer@example.com",
     memberships: [{ organizationId: "org_1", role: "admin" }],
     speakerGrants: [],
+    reviewerGrants: [],
   },
   applicant: {
     kind: "user",
@@ -195,6 +196,7 @@ const principals = {
     email: "applicant@example.com",
     memberships: [],
     speakerGrants: [],
+    reviewerGrants: [],
   },
   apiKey: {
     kind: "apiKey",

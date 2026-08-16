@@ -1,6 +1,6 @@
 .dashboard {
   min-width: 0;
-  background: var(--background);
+  background: var(--workspace-pane);
 }
 
 .eventList {
@@ -13,8 +13,8 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--card);
-  box-shadow: var(--shadow-card);
+  background: var(--workspace-surface);
+  box-shadow: none;
   animation: eventReveal 240ms ease both;
 }
 
@@ -26,8 +26,9 @@
 }
 
 .eventCard[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
-  box-shadow: var(--shadow-surface);
+  border-color: color-mix(in srgb, var(--workspace-accent) 38%, var(--border));
+  background: var(--workspace-subtle);
+  box-shadow: inset 3px 0 0 var(--workspace-accent);
 }
 
 .eventSummary {
@@ -164,7 +165,7 @@
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--background);
+  background: var(--workspace-surface);
 }
 
 .sectionHeading {

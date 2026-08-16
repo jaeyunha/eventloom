@@ -34,16 +34,22 @@ export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueuePr
   );
   const [statusView, setStatusView] = useState<ReviewerInboxStatusView>("all");
   const [filters, setFilters] = useState<ReviewerInboxFilters>(emptyReviewerInboxFilters);
-  const [groupBy, setGroupBy] = useState<ReviewerInboxGroupBy>("event");
+  const [groupBy, setGroupBy] = useState<ReviewerInboxGroupBy>("none");
   const queueActionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const detailHeadingRef = useRef<HTMLElement | null>(null);
   const restoreQueueFocusIdRef = useRef<string | null>(null);
   const normalizedAssignments = entries.map(({ assignment }) => ({
     ...assignment,
     organizationId: assignment.organizationId ?? assignment.eventId,
     organizationName:
-      assignment.organizationName ?? assignment.organizationId ?? assignment.eventName,
-    eventName: assignment.eventName || assignment.eventId,
+      assignment.organizationName?.trim() &&
+      assignment.organizationName !== assignment.organizationId &&
+      assignment.organizationName !== assignment.eventId
+        ? assignment.organizationName
+        : "Organization",
+    eventName:
+      assignment.eventName.trim() && assignment.eventName !== assignment.eventId
+        ? assignment.eventName
+        : "Assigned event",
     roundId: assignment.round.id,
     roundName: assignment.round.name,
     track: assignment.track ?? null,
@@ -63,7 +69,7 @@ export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueuePr
       assignment,
       groupLabel: group.label,
       groupCount: group.items.length,
-      groupStart: index === 0,
+      groupStart: groupBy !== "none" && index === 0,
     })),
   );
   const selectedVisible = visibleEntries.some((entry) => entry.assignment.id === selectedId);
@@ -139,11 +145,7 @@ export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueuePr
     filters.track !== "all";
 
   useEffect(() => {
-    if (selectedId !== null) {
-      detailHeadingRef.current?.focus();
-      detailHeadingRef.current?.scrollIntoView({ block: "start" });
-      return;
-    }
+    if (selectedId !== null) return;
     const restoreId = restoreQueueFocusIdRef.current;
     if (restoreId === null) return;
     queueActionRefs.current[restoreId]?.focus();
@@ -193,7 +195,6 @@ export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueuePr
     groupBy,
     setGroupBy,
     queueActionRefs,
-    detailHeadingRef,
     restoreQueueFocusIdRef,
     inboxItems,
     filteredItems,

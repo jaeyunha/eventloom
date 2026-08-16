@@ -1,7 +1,7 @@
 export type ReviewerInboxStatus = "assigned" | "in_progress" | "submitted";
 export type ReviewerInboxStatusView = "all" | "needs-review" | "in-progress" | "submitted";
 export type ReviewerDueFilter = "all" | "overdue" | "today" | "next-7-days" | "later" | "none";
-export type ReviewerInboxGroupBy = "organization" | "event" | "round" | "due";
+export type ReviewerInboxGroupBy = "none" | "organization" | "event" | "round" | "due";
 
 export interface ReviewerInboxAssignment {
   readonly id: string;
@@ -161,6 +161,10 @@ export function groupReviewerInbox<TAssignment extends ReviewerInboxAssignment>(
   items: readonly ReviewerInboxItem<TAssignment>[],
   groupBy: ReviewerInboxGroupBy,
 ): readonly ReviewerInboxGroup<TAssignment>[] {
+  if (groupBy === "none") {
+    return [{ id: "all", label: "", items: sortReviewerInbox(items) }];
+  }
+
   const groups = new Map<string, { label: string; items: ReviewerInboxItem<TAssignment>[] }>();
   for (const item of sortReviewerInbox(items)) {
     const { assignment } = item;

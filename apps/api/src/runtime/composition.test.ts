@@ -9,6 +9,10 @@ import {
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
 import { EvaluationService } from "../features/evaluations/service";
+import type {
+  EventRoleInvitation,
+  EventRoleInvitationRepository,
+} from "../features/event-invitations/types";
 
 import {
   type AirtableRequest,
@@ -30,6 +34,7 @@ import {
   CloudflareCfpEffects,
   EVALUATION_REMINDER_ATTEMPTS_SQL,
   evaluationReminderAttemptKey,
+  listProductionOrganizationsForUser,
 } from "./airtable";
 import { createLocalCfpService, seedLocalCfpForm } from "./cfp";
 import {
@@ -40,12 +45,14 @@ import {
   runtimeBindingsForEnvironment,
 } from "./cloudflare";
 import { createRuntimeApp, createRuntimeWorker, runScheduledReminders } from "./composition";
+import { createRuntimeEventRoleInvitationAdapters } from "./d1";
 import {
   createLocalDependencies,
   LOCAL_API_KEY,
   LOCAL_ORGANIZATION_ID,
   LOCAL_ORGANIZER_ACCOUNT_ID,
   LOCAL_ORGANIZER_EMAIL,
+  LOCAL_REVIEWER_EMAIL,
   LOCAL_SESSION_TOKEN,
   LOCAL_SPEAKER_EMAIL,
   LOCAL_SPEAKER_SESSION_TOKEN,
@@ -253,6 +260,10 @@ interface AutojoinDatabaseState {
     organization_id: string;
     speaker_profile_id: string;
   }>;
+  readonly reviewerGrants: Array<{
+    organization_id: string;
+    event_id: string;
+  }>;
   readonly inserts: Array<{
     organization_id: string;
     user_id: string;
@@ -260,6 +271,7 @@ interface AutojoinDatabaseState {
     created_at: string;
     updated_at: string;
   }>;
+  readonly queries: string[];
   operationCount: number;
 }
 
@@ -272,6 +284,10 @@ function autojoinDatabase(input: {
     organization_id: string;
     speaker_profile_id: string;
   }[];
+  readonly reviewerGrants?: readonly {
+    organization_id: string;
+    event_id: string;
+  }[];
   readonly delayMs?: number;
 }): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
@@ -282,7 +298,9 @@ function autojoinDatabase(input: {
     emailVerified: input.emailVerified,
     memberships: [...(input.memberships ?? [])],
     speakerGrants: [...(input.speakerGrants ?? [])],
+    reviewerGrants: [...(input.reviewerGrants ?? [])],
     inserts: [],
+    queries: [],
     operationCount: 0,
   };
   const delayMs = input.delayMs ?? 0;
@@ -294,6 +312,7 @@ function autojoinDatabase(input: {
   }
   const database = {
     prepare(query: string) {
+      state.queries.push(query);
       return {
         async all<T>() {
           return this.bind().all<T>();
@@ -350,6 +369,21 @@ function autojoinDatabase(input: {
                       role: membership.role,
                       speaker_profile_id: null,
                     })),
+                    ...(state.emailVerified
+                      ? state.reviewerGrants.map((reviewerGrant) => ({
+                          session_id: "session-autojoin",
+                          user_id: "user-autojoin",
+                          email: state.email,
+                          email_verified: 1,
+                          expires_at: "2099-01-01T00:00:00.000Z",
+                          scope_type: "reviewer_grant",
+                          scope_order: 2,
+                          organization_id: reviewerGrant.organization_id,
+                          event_id: reviewerGrant.event_id,
+                          role: null,
+                          speaker_profile_id: null,
+                        }))
+                      : []),
                     ...state.speakerGrants.map((speakerGrant) => ({
                       session_id: "session-autojoin",
                       user_id: "user-autojoin",
@@ -357,8 +391,9 @@ function autojoinDatabase(input: {
                       email_verified: state.emailVerified ? 1 : 0,
                       expires_at: "2099-01-01T00:00:00.000Z",
                       scope_type: "speaker_grant",
-                      scope_order: 2,
+                      scope_order: 3,
                       organization_id: speakerGrant.organization_id,
+                      event_id: null,
                       role: null,
                       speaker_profile_id: speakerGrant.speaker_profile_id,
                     })),
@@ -636,6 +671,7 @@ describe("production authenticated tenant scope", () => {
       emailVerified: true,
       memberships: [{ organization_id: "org-membership", role: "reviewer" }],
       speakerGrants: [{ organization_id: "org-speaker", speaker_profile_id: "speaker-1" }],
+      reviewerGrants: [],
       delayMs: 300,
     });
     const gateway = new D1BetterAuthGateway(database);
@@ -653,7 +689,16 @@ describe("production authenticated tenant scope", () => {
       expiresAt: new Date("2099-01-01T00:00:00.000Z"),
       memberships: [{ organizationId: "org-membership", role: "reviewer" }],
       speakerGrants: [{ organizationId: "org-speaker", speakerProfileId: "speaker-1" }],
+      reviewerGrants: [],
     });
+    const scopeQuery = state.queries.find(
+      (query) => query.includes("FROM auth_sessions") && query.includes("'speaker_grant'"),
+    );
+    expect(scopeQuery).toContain("invitations.recipient_user_id = grants.user_id");
+    expect(scopeQuery).toContain("invitations.participant_id = grants.participant_id");
+    expect(scopeQuery).toContain("invitations.status = 'accepted'");
+    expect(scopeQuery).toContain("profiles.status <> 'revoked'");
+    expect(scopeQuery).toContain("base.email_verified = 1");
   });
   async function resolveSession(input: {
     readonly email: string;
@@ -664,6 +709,10 @@ describe("production authenticated tenant scope", () => {
       organization_id: string;
       speaker_profile_id: string;
     }[];
+    readonly reviewerGrants?: readonly {
+      organization_id: string;
+      event_id: string;
+    }[];
   }) {
     const { database, state } = autojoinDatabase(input);
     const gateway = new D1BetterAuthGateway(database);
@@ -671,11 +720,47 @@ describe("production authenticated tenant scope", () => {
     return { session, state };
   }
 
+  it("retains accepted reviewer access after a verified account email change", async () => {
+    const { database, state } = autojoinDatabase({
+      email: "reviewer-new@example.test",
+      emailVerified: true,
+      reviewerGrants: [{ organization_id: "org-reviewer", event_id: "event-reviewer" }],
+    });
+    const gateway = new D1BetterAuthGateway(database);
+
+    await expect(gateway.resolveSession("session-token")).resolves.toMatchObject({
+      email: "reviewer-new@example.test",
+      reviewerGrants: [{ organizationId: "org-reviewer", eventId: "event-reviewer" }],
+    });
+    const scopeQuery = state.queries.find(
+      (query) => query.includes("FROM auth_sessions") && query.includes("'reviewer_grant'"),
+    );
+    expect(scopeQuery).toContain("invitations.recipient_user_id = base.user_id");
+    expect(scopeQuery).toContain("invitations.status = 'accepted'");
+    expect(scopeQuery).toContain("base.email_verified = 1");
+    expect(scopeQuery).not.toContain("invitations.normalized_email = base.email");
+  });
+
+  it("does not grant accepted reviewer access to a currently unverified account", async () => {
+    const { database } = autojoinDatabase({
+      email: "reviewer-new@example.test",
+      emailVerified: false,
+      reviewerGrants: [{ organization_id: "org-reviewer", event_id: "event-reviewer" }],
+    });
+
+    await expect(
+      new D1BetterAuthGateway(database).resolveSession("session-token"),
+    ).resolves.toMatchObject({
+      reviewerGrants: [],
+    });
+  });
+
   it("does not derive an organization membership from the user's email domain", async () => {
     const input = {
       email: " Host@SWYX.IO ",
       emailVerified: true,
       speakerGrants: [{ organization_id: "ai-engineer", speaker_profile_id: "speaker-1" }],
+      reviewerGrants: [],
     } as const;
     const { database, state } = autojoinDatabase(input);
     const gateway = new D1BetterAuthGateway(database);
@@ -685,6 +770,7 @@ describe("production authenticated tenant scope", () => {
       emailVerified: true,
       memberships: [],
       speakerGrants: [{ organizationId: "ai-engineer", speakerProfileId: "speaker-1" }],
+      reviewerGrants: [],
     });
     expect(state.inserts).toHaveLength(0);
   });
@@ -821,6 +907,239 @@ describe("integrated local runtime composition", () => {
       "AIRTABLE_BASE_DEV_ID is required for integrated local development",
     );
     expect(() => createRuntimeApp(withoutDevelopmentBase)).not.toThrow();
+  });
+});
+
+describe("event invitation runtime composition", () => {
+  it("persists pending reviewer invitations when a reviewer pool is saved", async () => {
+    const dependencies = createLocalDependencies();
+    const members = dependencies.members?.service;
+    const invitations = dependencies.eventInvitations?.service;
+    expect(members).toBeDefined();
+    expect(invitations).toBeDefined();
+    if (members === undefined || invitations === undefined) return;
+
+    await members.setReviewerPool(
+      {
+        kind: "user",
+        organizationId: LOCAL_ORGANIZATION_ID,
+        userId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        role: "owner",
+      },
+      {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "open-sessionboard-conf",
+        roundId: "runtime-composition-round",
+        reviewerIds: ["local-reviewer"],
+        maxAssignmentsPerReviewer: 2,
+      },
+    );
+
+    await expect(
+      invitations.list({
+        kind: "user",
+        userId: "local-reviewer",
+        email: LOCAL_REVIEWER_EMAIL,
+        emailVerified: true,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          organizationId: LOCAL_ORGANIZATION_ID,
+          eventId: "open-sessionboard-conf",
+          role: "reviewer",
+          status: "pending",
+        }),
+      ]),
+    );
+  });
+
+  it("persists a pending invitation before sending a speaker welcome message", async () => {
+    const dependencies = createLocalDependencies();
+    const speakers = dependencies.speaker?.service;
+    const invitations = dependencies.eventInvitations?.service;
+    expect(speakers).toBeDefined();
+    expect(invitations).toBeDefined();
+    if (speakers === undefined || invitations === undefined) return;
+
+    await speakers.createOrganizerSpeaker({
+      organizationId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      accountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      displayName: "Review Speaker",
+      email: LOCAL_REVIEWER_EMAIL,
+      jobTitle: "Reviewer",
+      company: "Runtime Test",
+      biography: "Validates runtime invitation composition.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "runtime-composition-speaker",
+      sourceType: "manual",
+      sourceId: "runtime-composition-speaker",
+      explicitParticipantId: "local-invitation-participant",
+    });
+    await speakers.sendOrganizerSpeakerInvitations({
+      organizationId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      accountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      participantIds: ["local-invitation-participant"],
+      templateId: "speaker-approved-welcome",
+      idempotencyKey: "runtime-composition-speaker-send",
+    });
+
+    await expect(
+      invitations.list({
+        kind: "user",
+        userId: "local-reviewer",
+        email: LOCAL_REVIEWER_EMAIL,
+        emailVerified: true,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventId: "demo-event",
+          role: "speaker",
+          status: "pending",
+        }),
+      ]),
+    );
+  });
+
+  it("reconciles late verification before listing through the runtime adapter", async () => {
+    let reconciled = false;
+    const invitation: EventRoleInvitation = {
+      id: "late-verification-invitation",
+      organizationId: "org-late",
+      organizationName: "Late Organization",
+      eventId: "event-late",
+      eventName: "Late Event",
+      role: "reviewer",
+      recipientUserId: "late-user",
+      recipientEmail: "verified-late@example.test",
+      normalizedEmail: "verified-late@example.test",
+      participantId: null,
+      status: "pending",
+      version: 1,
+      createdBy: null,
+      createdAt: "2026-08-16T00:00:00.000Z",
+      updatedAt: "2026-08-16T00:00:00.000Z",
+      acceptedAt: null,
+      declinedAt: null,
+      revokedAt: null,
+    };
+    const repository = {
+      async create() {
+        return invitation;
+      },
+      async reconcileForVerifiedAccount(input) {
+        expect(input).toMatchObject({
+          recipientUserId: "late-user",
+          normalizedEmail: "verified-late@example.test",
+        });
+        reconciled = true;
+      },
+      async listForVerifiedAccount() {
+        return reconciled ? [invitation] : [];
+      },
+      async findForVerifiedAccount() {
+        return null;
+      },
+      async accept() {
+        return null;
+      },
+      async decline() {
+        return null;
+      },
+      async listAcceptedReviewerEventIds() {
+        return [];
+      },
+      async revokeReviewerInvitationsForOrganizationUser() {
+        return 0;
+      },
+      async revokeEventReviewerInvitationIfNoPoolGrantsRemain() {
+        return false;
+      },
+    } satisfies EventRoleInvitationRepository;
+    const adapters = createRuntimeEventRoleInvitationAdapters(repository, {
+      clock: () => new Date("2026-08-16T01:00:00.000Z"),
+    });
+
+    await expect(
+      adapters.service.list({
+        kind: "user",
+        userId: "late-user",
+        email: "verified-late@example.test",
+        emailVerified: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        invitationId: "late-verification-invitation",
+        role: "reviewer",
+        status: "pending",
+      }),
+    ]);
+    expect(reconciled).toBe(true);
+  });
+
+  it("resolves accepted reviewer organizations after a verified email change", async () => {
+    let query = "";
+    let values: readonly unknown[] = [];
+    const database = {
+      prepare(statement: string) {
+        query = statement;
+        return {
+          bind(...bound: unknown[]) {
+            values = bound;
+            return {
+              async all<T>() {
+                return {
+                  results: [
+                    { organization_id: "org-accepted", name: "Accepted Organization" },
+                  ] as T[],
+                };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+
+    await expect(listProductionOrganizationsForUser(database, "reviewer-user")).resolves.toEqual([
+      { organizationId: "org-accepted", name: "Accepted Organization" },
+    ]);
+    expect(values).toEqual(["reviewer-user", "reviewer-user", "reviewer-user"]);
+    expect(query).toContain("invitation.recipient_user_id = ?");
+    expect(query).toContain("invitation.role = 'reviewer'");
+    expect(query).toContain("invitation.status = 'accepted'");
+    expect(query).toContain("account.email_verified = 1");
+    expect(query).not.toContain("account.email = invitation.normalized_email");
+  });
+
+  it("refuses to expose acceptance when the repository lacks an accept adapter", () => {
+    const incomplete = {
+      create: async () => {
+        throw new Error("unused");
+      },
+      reconcileForVerifiedAccount: async () => undefined,
+      listForVerifiedAccount: async () => [],
+      findForVerifiedAccount: async () => null,
+      decline: async () => null,
+      listAcceptedReviewerEventIds: async () => [],
+      revokeReviewerInvitationsForOrganizationUser: async () => 0,
+      revokeEventReviewerInvitationIfNoPoolGrantsRemain: async () => false,
+    } satisfies EventRoleInvitationRepository;
+
+    expect(() => createRuntimeEventRoleInvitationAdapters(incomplete)).toThrow(
+      "The event invitation repository is missing accept.",
+    );
+    const { reconcileForVerifiedAccount: _reconcileForVerifiedAccount, ...withoutReconciliation } =
+      {
+        ...incomplete,
+        accept: async () => null,
+      };
+    expect(() => createRuntimeEventRoleInvitationAdapters(withoutReconciliation)).toThrow(
+      "The event invitation repository is missing reconcileForVerifiedAccount.",
+    );
   });
 });
 
@@ -1333,6 +1652,7 @@ describe("fixture local runtime composition", () => {
             },
           ],
           speakerGrants: [],
+          reviewerGrants: [],
         }),
       },
       organizerOverview: {
@@ -1376,6 +1696,7 @@ describe("fixture local runtime composition", () => {
           email: "owner@example.test",
           memberships: [{ organizationId: "organization-1", role: "owner" as const }],
           speakerGrants: [],
+          reviewerGrants: [],
         }),
       },
       organizerOverview: {
@@ -1432,6 +1753,7 @@ describe("fixture local runtime composition", () => {
           email: "owner@example.test",
           memberships: [{ organizationId: "empty-organization", role: "owner" as const }],
           speakerGrants: [],
+          reviewerGrants: [],
         }),
       },
       organizerOverview: {

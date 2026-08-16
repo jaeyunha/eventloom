@@ -248,6 +248,48 @@ export interface ReviewerPoolRepository {
     roundId: string,
   ): Promise<ReviewerPool | null>;
   saveReviewerPool(pool: ReviewerPool, expectedVersion: number | null): Promise<void>;
+  saveReviewerPoolAndRevokeInvitations?(input: {
+    readonly pool: ReviewerPool;
+    readonly expectedVersion: number | null;
+    readonly removedReviewerIds: readonly string[];
+    readonly addedReviewerInvitations: readonly {
+      readonly id: string;
+      readonly recipientUserId: string;
+      readonly normalizedEmail: string;
+      readonly creationIdempotencyKey: string;
+      readonly invitedByUserId: string;
+      readonly invitedAt: string;
+    }[];
+    readonly revokedByUserId: string;
+    readonly revokedAt: string;
+  }): Promise<void>;
+}
+
+/** Event-scoped reviewer invitation lifecycle; it must never mutate review assignments. */
+export interface ReviewerEventInvitationLifecycle {
+  createReviewerInvitation(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly recipientUserId: string;
+    readonly normalizedEmail: string;
+    readonly invitedByUserId: string;
+    readonly idempotencyKey: string;
+    readonly invitedAt: string;
+  }): Promise<void>;
+  revokeReviewerInvitationIfUnpooled(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly excludedRoundId: string;
+    readonly recipientUserId: string;
+    readonly revokedByUserId: string;
+    readonly revokedAt: string;
+  }): Promise<void>;
+  revokeReviewerInvitationsForMember(input: {
+    readonly organizationId: string;
+    readonly recipientUserId: string;
+    readonly revokedByUserId: string;
+    readonly revokedAt: string;
+  }): Promise<void>;
 }
 
 export interface MemberRepositorySeed {

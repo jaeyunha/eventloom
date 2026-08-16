@@ -57,7 +57,9 @@ social proof, and automation-as-authority framing.
 The product uses four recurring surface levels:
 
 - **Workspace shell:** global navigation, organization/event switcher, command
-  palette, and account controls.
+  palette, and account controls on the outer chrome, with one rounded document
+  pane layered above it. The outer chrome, document pane, and nested operational
+  surfaces are three reusable levels rather than route-specific colors.
 - **Collection view:** filterable table, list, board, or timeline with saved
   views, counts, bulk selection, and one clear creation action.
 - **Object detail:** persistent object identity, metadata, status, activity,
@@ -106,6 +108,15 @@ levels rather than inventing a new visual grammar per feature.
 - Success surface/text: `#e9f7f1` / `#17835c`
 - Warning surface/text: `#fff5df` / `#a66811`
 - Failure surface/text: `#fff0ee` / `#c44138`
+- Authenticated workspace layers, light: outer chrome `#f3f3f5`, document pane
+  `#f7f7f8`, operational surface `#ffffff`, subdued surface `#f4f4f6`.
+- Authenticated workspace layers, dark: outer chrome `#0b0b0d`, document pane
+  `#151517`, operational surface `#1c1c1f`, subdued surface `#232327`.
+- Workspace pane edges: use the standard cool border in light mode and a
+  near-transparent edge in dark mode. Tonal separation must carry the dark
+  hierarchy; never draw a conspicuous gray ring between sidebar and pane.
+- Workspace accent/progress colors are shared semantic tokens. Feature CSS must
+  not invent raw active, completed, or idle colors for individual routes.
 - Radius: 6px controls, 9px panels, full-pill status only
 - Spacing rhythm: 4px base; primary increments 8, 12, 16, 24, 32px
 - Marketing atmosphere: cool white-to-indigo wash, subtle 24px grid, one
@@ -139,6 +150,19 @@ levels rather than inventing a new visual grammar per feature.
 ## 4. Layout and responsive behavior
 
 - Desktop uses a fixed shadcn sidebar and a single main document scroll.
+- Authenticated desktop workspaces place that document in one inset rounded
+  pane over the outer navigation chrome. Organizer, reviewer, participant,
+  speaker, applicant, and account-level work surfaces use the same geometry;
+  theme changes alter tokens, not layout.
+- The desktop document pane keeps an 8px inset from the outer chrome in both
+  themes. Light mode uses the off-white canvas token for the pane so that this
+  spacing and the white operational surfaces remain visibly distinct.
+- Organizer, reviewer, applicant, accepted-speaker, and CFP shells use one
+  shared rounded-square `EL` brand mark. Workspace labels identify the current
+  role; color, shape, size, and theme behavior do not vary by route.
+- The dark sidebar is always the deepest layer. The document pane is slightly
+  lighter, and cards or operational panels are lighter again. Sidebar-to-pane
+  separation must remain quiet and borderless in appearance.
 - Main content is capped at 1180px with 24px desktop gutters.
 - Collection-heavy workspaces may use the full available content width when
   columns, timelines, or split panes benefit from it; text-heavy detail content
@@ -163,7 +187,13 @@ levels rather than inventing a new visual grammar per feature.
 
 ## 5. Reusable primitives and states
 
-- `AdminShell`: cool canvas, grouped sidebar, sticky context bar.
+- `WorkspaceShell`: shared outer chrome, inset document pane, quiet edge,
+  single document scroll, sticky context region, and mobile full-viewport
+  fallback.
+- `RoleWorkspaceShell`: the same layer contract composed with the shadcn
+  sidebar for reviewer and participant role navigation.
+- `AdminShell`: grouped organizer navigation and event context composed inside
+  `WorkspaceShell`; it does not define a separate color system.
 - `WorkspaceHeader`: breadcrumb or scope switcher, object identity, status,
   supporting metadata, and ordered primary/secondary actions.
 - `CollectionToolbar`: view switcher, query, filters, sort, grouping, saved
@@ -252,6 +282,19 @@ surfaces:
 CFP and reviewer flows inherit the focused-flow, object-detail, status, and
 progress patterns established by this wave.
 
+### Public CFP submission window
+
+- The progress rail contains event identity and application progress only.
+  Submission availability, deadlines, and account limits belong in the main
+  application flow where applicants make decisions.
+- Render one submission-window notice across all viewport sizes. Do not keep
+  separate desktop-rail and mobile-form copies in the DOM.
+- The notice is a quiet contextual status strip, not a sidebar card. Keep the
+  current status and concise guidance first, then present opening and closing
+  timestamps as two compact date facts.
+- A formatted timestamp is one semantic value. Date, time, and meridiem must
+  stay together; never leave `AM` or `PM` stranded on a separate line.
+
 ## 6. Motion and interaction
 
 - Motion only communicates navigation, drawer, dialog, hover, focus, or state
@@ -288,3 +331,70 @@ progress patterns established by this wave.
 - The initial marketing product proof uses representative static DOM data rather
   than an authenticated live dashboard embed, so the landing page remains
   fast, privacy-safe, and deterministic.
+
+## 9. Reviewer collection and scorecard drawer
+
+### 9.1 Reviewer queue
+
+- The reviewer queue is a collection surface, not a permanent list-detail
+  split. It uses the full available content canvas so submission titles,
+  assignment context, filters, due dates, and status remain readable.
+- The page header is a compact title, not a dashboard hero. A single icon-only
+  filter trigger sits at the collection edge. Status filtering belongs inside
+  the same compact menu as organization, event, round, track, due, and grouping;
+  never render a permanent row of status tabs.
+- Assigned submissions use one Linear-like collection grammar: no bordered
+  table and no row-by-row card chrome. Desktop uses a concise labeled grid for
+  Title, Event / round, Due, and Status, plus an unlabeled open action.
+  Labels are muted, regular-weight, and aligned to the exact row columns rather
+  than styled as small bold admin-table headings. Phones wrap the same
+  information into a compact summary with status and action paired beneath it.
+- Rows float on the collection surface without permanent separators. Hover,
+  focus, selected, overdue, and completion states use restrained token-based
+  background or inset emphasis.
+- The title is the primary row label and remains one line. Long titles use
+  ellipsis while preserving the complete accessible name and native hover
+  disclosure. Event, round, track, and due date are muted aligned context;
+  status and the open action stay visually paired.
+- The default queue is ungrouped. Reviewers may opt into organization, event,
+  round, or due-date grouping from the filter menu. The menu is a narrow,
+  borderless stack of labeled value rows rather than a grid of boxed form
+  fields.
+- Raw UUIDs, database keys, provider identifiers, and submission references
+  never appear in the reviewer queue. The title and review-round context are the
+  reviewer-facing identity; the focused drawer may retain its short reference
+  only where direct support disambiguation is useful.
+
+### 9.2 Review drawer
+
+- Opening an assignment slides a focused scorecard sheet from the right while
+  retaining the queue as spatial context. The sheet is the only detail surface;
+  do not keep a second permanent detail column behind it.
+- On wide screens the sheet is between 38rem and 56rem wide and never exceeds
+  roughly two-thirds of the workspace. Below the tablet breakpoint it becomes a
+  full-screen sheet.
+- The sheet has a compact sticky toolbar with close, previous/next assignment,
+  and the short submission reference. Focus moves into the sheet on open,
+  Escape closes it when autosave permits, and focus returns to the originating
+  queue row.
+- Submission context is presented as concise metadata followed by the abstract
+  and reviewer-visible fields. The rubric remains one contiguous form with
+  criterion-local advisory AI help, a single conflict path, autosave status,
+  and one primary submit/progression action.
+- The scorecard body scrolls independently. Its action bar stays visible without
+  covering fields, works with the software keyboard, and respects safe-area
+  insets.
+
+### 9.3 Responsive and accessibility behavior
+
+- Desktop rows preserve a stable identity/status/action rhythm beneath one quiet
+  Linear-like label row. The labels and values share one grid definition;
+  supporting metadata collapses before the title does.
+- Phone rows become touch-safe stacked summaries with title, event/round,
+  due/status, and one clear open action. No reviewer workflow requires
+  horizontal scrolling.
+- The drawer remains usable at 200% text zoom. Score choices wrap without
+  clipping, focus remains visible, and sticky regions never obscure the active
+  field.
+- Motion communicates the drawer transition only, uses transform and opacity,
+  and is removed under `prefers-reduced-motion`.

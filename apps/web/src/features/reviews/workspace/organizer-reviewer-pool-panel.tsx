@@ -66,6 +66,7 @@ export function OrganizerReviewerPoolView({
           <CardTitle>Review team for {roundName}</CardTitle>
           <CardDescription>
             Organization reviewers become eligible for this round only after you add them here.
+            Pending reviewers can be prepared now; access waits for invitation acceptance.
             Assignments are created separately below.
           </CardDescription>
         </div>
@@ -95,10 +96,8 @@ export function OrganizerReviewerPoolView({
         {!loading && !error && reviewers.length === 0 ? (
           <Empty className={styles.reviewTeamEmpty}>
             <EmptyHeader>
-              <EmptyTitle>No active reviewers</EmptyTitle>
-              <EmptyDescription>
-                Invite a reviewer and wait for account setup before adding them to this round.
-              </EmptyDescription>
+              <EmptyTitle>No reviewer candidates</EmptyTitle>
+              <EmptyDescription>Invite a reviewer to prepare them for this round.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button asChild>
@@ -128,7 +127,10 @@ export function OrganizerReviewerPoolView({
                       <FieldLabel htmlFor={`round-reviewer-${reviewer.userId}`}>
                         {reviewer.name ?? reviewer.email}
                       </FieldLabel>
-                      <FieldDescription>{reviewer.email}</FieldDescription>
+                      <FieldDescription>
+                        {reviewer.email}
+                        {reviewer.status === "pending" ? " · Pending setup" : ""}
+                      </FieldDescription>
                     </FieldContent>
                   </Field>
                   <div className={styles.reviewTeamCap}>
@@ -165,7 +167,7 @@ export function OrganizerReviewerPoolView({
       </CardContent>
       <CardFooter className={styles.reviewTeamFooter}>
         <span>
-          {selectedCount} of {reviewers.length} active reviewers eligible
+          {selectedCount} of {reviewers.length} reviewer candidates eligible
         </span>
         <Button
           type="button"

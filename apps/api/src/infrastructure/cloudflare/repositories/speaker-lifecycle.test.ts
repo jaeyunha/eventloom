@@ -12,6 +12,7 @@ import {
   speakerLifecycleIds,
 } from "../../../test-support/speaker-lifecycle";
 import { D1CfpRepository } from "./cfp";
+import { D1EventRoleInvitationRepository } from "./event-role-invitations";
 import { D1SpeakerRepository } from "./speaker";
 
 const fixtures: SpeakerLifecycleFixture[] = [];
@@ -34,6 +35,46 @@ const {
   otherEventId,
   otherOrganizerAccountId,
 } = speakerLifecycleIds;
+
+async function createAndAcceptSpeakerInvitation(input: {
+  database: D1Database;
+  invitationId: string;
+  creationIdempotencyKey: string;
+  participantId: string;
+  accountId: string;
+  email: string;
+  invitedAt: string;
+  acceptedAt: string;
+}): Promise<void> {
+  const invitations = new D1EventRoleInvitationRepository(input.database);
+  const invitation = await invitations.create({
+    id: input.invitationId,
+    organizationId,
+    eventId,
+    role: "speaker",
+    recipientUserId: input.accountId,
+    normalizedEmail: input.email,
+    participantId: input.participantId,
+    creationIdempotencyKey: input.creationIdempotencyKey,
+    invitedByActorType: "user",
+    invitedByActorId: organizerAccountId,
+    invitedAt: input.invitedAt,
+  });
+  const accepted = await invitations.accept({
+    invitationId: invitation.id,
+    recipientUserId: input.accountId,
+    normalizedEmail: input.email,
+    expectedVersion: invitation.version,
+    occurredAt: input.acceptedAt,
+  });
+  expect(accepted).toMatchObject({
+    id: input.invitationId,
+    participantId: input.participantId,
+    recipientUserId: input.accountId,
+    status: "accepted",
+    version: invitation.version + 1,
+  });
+}
 
 afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.dispose();
@@ -181,6 +222,23 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         imported.speakers.find((speaker) => speaker.email === "marcus@example.test")
           ?.participantId ?? "";
       expect(marcusParticipantId).not.toBe("");
+    }
+
+    for (const [participantId, accountId, email] of [
+      [acceptedParticipantId, acceptedAccountId, "accepted@example.test"],
+      [priyaParticipantId, priyaAccountId, "priya@example.test"],
+      [marcusParticipantId, marcusAccountId, "marcus@example.test"],
+    ] as const) {
+      await createAndAcceptSpeakerInvitation({
+        database: fixture.database as unknown as D1Database,
+        invitationId: `event-invitation:lifecycle:${participantId}`,
+        creationIdempotencyKey: `event-invitation:lifecycle:${participantId}`,
+        participantId,
+        accountId,
+        email,
+        invitedAt: "2099-08-15T04:01:00.000Z",
+        acceptedAt: "2099-08-15T04:02:00.000Z",
+      });
     }
 
     {
@@ -592,6 +650,16 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
       (speaker) => speaker.email === "priya@example.test",
     )?.participantId;
     if (participantId === undefined) throw new Error("Expected the admitted participant.");
+    await createAndAcceptSpeakerInvitation({
+      database: fixture.database as unknown as D1Database,
+      invitationId: "event-invitation:content-roundtrip-priya",
+      creationIdempotencyKey: "event-invitation:content-roundtrip-priya",
+      participantId,
+      accountId: priyaAccountId,
+      email: "priya@example.test",
+      invitedAt: "2099-08-15T04:01:00.000Z",
+      acceptedAt: "2099-08-15T04:02:00.000Z",
+    });
     const assigned = await fixture.createPhase().service.createOrganizerTask({
       eventId,
       accountId: organizerAccountId,
@@ -890,6 +958,23 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
           WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
             AND participant_id = '${acceptedParticipantId}' AND revoked_at IS NULL`,
       ),
+    ).toEqual([]);
+    await createAndAcceptSpeakerInvitation({
+      database,
+      invitationId: `event-role-invitation:speaker:${eventId}:${acceptedParticipantId}`,
+      creationIdempotencyKey: `evaluation-acceptance:${acceptedSubmissionId}:${acceptedParticipantId}`,
+      participantId: acceptedParticipantId,
+      accountId: acceptedAccountId,
+      email: "accepted@example.com",
+      invitedAt: "2099-08-15T04:00:00.000Z",
+      acceptedAt: "2099-08-15T04:01:00.000Z",
+    });
+    expect(
+      fixture.database.query<{ participant_id: string; user_id: string }>(
+        `SELECT participant_id, user_id FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${acceptedParticipantId}' AND revoked_at IS NULL`,
+      ),
     ).toEqual([{ participant_id: acceptedParticipantId, user_id: acceptedAccountId }]);
     expect(
       fixture.database.query(
@@ -1007,51 +1092,146 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     );
   });
 
-  it("provisions portal access when an invited speaker verifies after admission", async () => {
+  it("grants an invited verified speaker portal access only after event invitation acceptance", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);
     const { service } = fixture.createPhase();
-    const email = "later-verification@example.test";
-    const accountId = "later-verification-account";
+    const invitations = new D1EventRoleInvitationRepository(
+      fixture.database as unknown as D1Database,
+    );
+    const email = "event-invitation@example.test";
+    const accountId = "event-invitation-account";
+    const participantRecordCounts = (participantId: string) => ({
+      participants: fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM participants
+            WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+              AND id = '${participantId}'`,
+      )[0]?.count,
+      profiles: fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM speaker_profiles
+            WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+              AND participant_id = '${participantId}'`,
+      )[0]?.count,
+      sessions: fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM sessions AS sessions
+             JOIN session_speakers AS speakers
+               ON speakers.organization_id = sessions.organization_id
+              AND speakers.event_id = sessions.event_id
+              AND speakers.session_id = sessions.id
+            WHERE sessions.organization_id = '${organizationId}' AND sessions.event_id = '${eventId}'
+              AND speakers.speaker_id = '${participantId}'`,
+      )[0]?.count,
+      tasks: fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM speaker_tasks
+            WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+              AND participant_id = '${participantId}'`,
+      )[0]?.count,
+    });
+
+    fixture.database.executeScript(`
+      INSERT INTO auth_users (id, email, email_verified, name, created_at, updated_at)
+      VALUES (
+        '${accountId}', '${email}', 1, 'Event Invitation',
+        '2099-08-15T06:00:00.000Z', '2099-08-15T06:00:00.000Z'
+      );
+    `);
     const created = await service.createOrganizerSpeaker({
       organizationId,
       eventId,
       accountId: organizerAccountId,
-      displayName: "Later Verification",
+      displayName: "Event Invitation",
       email,
       jobTitle: "",
       company: "",
       biography: "",
       socialLinks: {},
       status: "confirmed",
-      idempotencyKey: "later-verification-speaker",
+      idempotencyKey: "event-invitation-speaker",
       sourceType: "manual",
-      sourceId: "later-verification-source",
+      sourceId: "event-invitation-source",
     });
     const participantId = created.speakers[0]?.participantId;
     if (participantId === undefined) throw new Error("Expected the manual speaker participant.");
 
+    await service.assignOrganizerSpeakerTask({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      title: "Confirm invitation details",
+      description: "Review the speaker portal invitation.",
+      dueAt: "2100-01-01T00:00:00.000Z",
+      assignments: [{ participantId, submissionId: null }],
+    });
     fixture.database.executeScript(`
-      INSERT INTO auth_users (id, email, email_verified, name, created_at, updated_at)
-      VALUES (
-        '${accountId}', '${email}', 0, 'Later Verification',
-        '2099-08-15T06:00:00.000Z', '2099-08-15T06:00:00.000Z'
-      );
+      INSERT INTO session_statuses
+        (id, organization_id, event_id, value, name, description, agenda_eligible, sort_order,
+         active, version, created_at, updated_at)
+      VALUES
+        ('event-invitation-session-status', '${organizationId}', '${eventId}', 'confirmed',
+         'Confirmed', '', 1, 0, 1, 1,
+         '2099-08-15T06:00:00.000Z', '2099-08-15T06:00:00.000Z');
+      INSERT INTO sessions
+        (id, organization_id, event_id, title, description, status, content_status,
+         duration_minutes, capacity_required, room_id, format_id, level_id, version, created_at,
+         updated_at, created_by, updated_by, deleted_at)
+      VALUES
+        ('event-invitation-session', '${organizationId}', '${eventId}', 'Event invitation session',
+         '', 'confirmed', NULL, 30, 0, NULL, NULL, NULL, 1,
+         '2099-08-15T06:00:00.000Z', '2099-08-15T06:00:00.000Z', '${organizerAccountId}',
+         '${organizerAccountId}', NULL);
+      INSERT INTO session_speakers
+        (organization_id, event_id, session_id, speaker_id, display_name, role, ordinal)
+      VALUES
+        ('${organizationId}', '${eventId}', 'event-invitation-session', '${participantId}',
+         'Event Invitation', 'speaker', 0);
     `);
+    const beforeAcceptance = participantRecordCounts(participantId);
+    expect(beforeAcceptance).toEqual({ participants: 1, profiles: 1, sessions: 1, tasks: 1 });
+
     expect(
-      fixture.database.query<{ count: number }>(
-        `SELECT count(*) AS count FROM participant_grants
+      fixture.database.query<{ participant_id: string; user_id: string }>(
+        `SELECT participant_id, user_id FROM participant_grants
           WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
             AND participant_id = '${participantId}' AND user_id = '${accountId}'
             AND revoked_at IS NULL`,
-      )[0]?.count,
-    ).toBe(0);
+      ),
+    ).toEqual([]);
+    expect(
+      fixture.database.query<{ claimed_user_id: string | null }>(
+        `SELECT claimed_user_id FROM participants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND id = '${participantId}'`,
+      )[0]?.claimed_user_id,
+    ).toBeNull();
 
-    fixture.database.executeScript(`
-      UPDATE auth_users
-         SET email_verified = 1, updated_at = '2099-08-15T06:05:00.000Z'
-       WHERE id = '${accountId}';
-    `);
+    const invitation = await invitations.create({
+      id: "event-invitation",
+      organizationId,
+      eventId,
+      role: "speaker",
+      recipientUserId: accountId,
+      normalizedEmail: email,
+      participantId,
+      creationIdempotencyKey: "event-invitation-speaker",
+      invitedByActorType: "user",
+      invitedByActorId: organizerAccountId,
+      invitedAt: "2099-08-15T06:01:00.000Z",
+    });
+    await expect(
+      invitations.accept({
+        invitationId: invitation.id,
+        recipientUserId: accountId,
+        normalizedEmail: email,
+        expectedVersion: invitation.version,
+        occurredAt: "2099-08-15T06:02:00.000Z",
+      }),
+    ).resolves.toMatchObject({
+      id: invitation.id,
+      participantId,
+      recipientUserId: accountId,
+      status: "accepted",
+      version: invitation.version + 1,
+    });
 
     expect(
       fixture.database.query<{ claimed_user_id: string | null }>(
@@ -1061,12 +1241,13 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
       )[0]?.claimed_user_id,
     ).toBe(accountId);
     expect(
-      fixture.database.query<{ count: number }>(
-        `SELECT count(*) AS count FROM participant_grants
+      fixture.database.query<{ participant_id: string; user_id: string }>(
+        `SELECT participant_id, user_id FROM participant_grants
           WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
             AND participant_id = '${participantId}' AND user_id = '${accountId}'
             AND revoked_at IS NULL`,
-      )[0]?.count,
-    ).toBe(1);
+      ),
+    ).toEqual([{ participant_id: participantId, user_id: accountId }]);
+    expect(participantRecordCounts(participantId)).toEqual(beforeAcceptance);
   });
 });

@@ -21,6 +21,7 @@ const principal: UserPrincipal = {
   email: "organizer@example.test",
   memberships: [{ organizationId: "org-a", role: "admin" }],
   speakerGrants: [],
+  reviewerGrants: [],
 };
 
 function dependencies(): AirtableIntegrationRouteDependencies {

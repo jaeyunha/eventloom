@@ -18,6 +18,7 @@ const user: UserPrincipal = {
     { organizationId: "org-empty", role: "reviewer" },
   ],
   speakerGrants: [],
+  reviewerGrants: [],
 };
 
 const apiKey: AuthPrincipal = {

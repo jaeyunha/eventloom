@@ -19,6 +19,7 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
+import { WorkspaceBrandMark } from "../../components/workspace/workspace-brand-mark";
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
@@ -416,11 +417,9 @@ function PublicCfpShell({
       mainClassName={styles.publicMain ?? ""}
       mainId="cfp-main"
       navigation={
-        <div className={styles.contextRail}>
+        <div className={styles.contextRail} data-cfp-context-rail>
           <div className={styles.publicBrand}>
-            <span aria-hidden="true" className={styles.brandMark}>
-              E
-            </span>
+            <WorkspaceBrandMark />
             <span className={styles.publicBrandCopy}>
               <strong>{resolvedOrganizationName}</strong>
               <span>Applicant workspace</span>
@@ -432,32 +431,15 @@ function PublicCfpShell({
             <p className={styles.railEventName}>{resolvedEventName}</p>
             <p className={styles.railFormName}>{resolvedFormName}</p>
           </div>
-          {step ? (
-            <CfpProgress step={step} />
-          ) : (
-            <p className={styles.railComplete}>Submission complete</p>
-          )}
-          {event ? (
-            <>
-              <Separator className={styles.railSeparator} />
-              <CfpSubmissionWindow
-                opensAt={event.opensAt}
-                opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
-                closesAt={event.closesAt}
-                closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
-                {...(form ? { limit: formSubmissionLimit(form) } : {})}
-                status={windowStatus}
-              />
-            </>
-          ) : null}
+          {step ? <CfpProgress step={step} /> : <CfpProgress complete />}
         </div>
       }
     >
       <div className={styles.viewport}>
         <Card className={`${styles.card} ${className ?? ""}`}>
-          <div className={styles.formColumn}>
+          <div className={styles.formColumn} data-cfp-main-flow>
             {event ? (
-              <div className={styles.mobileSubmissionWindow}>
+              <div className={styles.submissionWindow}>
                 <CfpSubmissionWindow
                   opensAt={event.opensAt}
                   opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
@@ -468,7 +450,7 @@ function PublicCfpShell({
                 />
               </div>
             ) : null}
-            {step ? <CfpProgress mobile step={step} /> : null}
+            {step ? <CfpProgress mobile step={step} /> : <CfpProgress complete mobile />}
             {children}
           </div>
         </Card>
@@ -3500,7 +3482,9 @@ export function CfpComplete({
     submissionId: string;
     canEdit: boolean;
   } | null>(null);
+  const [publishedCfp, setPublishedCfp] = useState<PublishedCfp | null>(null);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
+  const startupStore = useCfpStartupStore();
 
   useEffect(() => {
     let active = true;
@@ -3518,11 +3502,9 @@ export function CfpComplete({
     }
     void (async () => {
       try {
-        const published = await api.getPublished({
-          organizationId: identity.organizationId,
-          eventId: identity.eventId,
-          ...(identity.formId === undefined ? {} : { formId: identity.formId }),
-        });
+        const published = await startupStore.load(api, identity).published;
+        if (!active) return;
+        setPublishedCfp(published);
         const canonicalEventId = published.event.id;
         const activeFormId = published.form.id;
         const handoff = window.sessionStorage.getItem(
@@ -3594,7 +3576,7 @@ export function CfpComplete({
     return () => {
       active = false;
     };
-  }, [api, eventSlug, formId, organizationId, router]);
+  }, [api, eventSlug, formId, organizationId, router, startupStore]);
   function editSubmission(): void {
     if (completionIdentity === null || !completionIdentity.canEdit) return;
     window.localStorage.setItem(
@@ -3622,7 +3604,11 @@ export function CfpComplete({
 
   if (!confirmed) {
     return (
-      <PublicCfpShell>
+      <PublicCfpShell
+        event={publishedCfp?.event}
+        form={publishedCfp?.form}
+        organization={publishedCfp?.organization}
+      >
         <div aria-busy="true" aria-live="polite" className={styles.loading}>
           Confirming your submission…
         </div>
@@ -3633,8 +3619,9 @@ export function CfpComplete({
   return (
     <PublicCfpShell
       className={styles.completeCard}
-      eventName={confirmationDetails?.eventName}
-      formName="Call for Speakers"
+      event={publishedCfp?.event}
+      form={publishedCfp?.form}
+      organization={publishedCfp?.organization}
     >
       <div className={styles.completeContent}>
         <div aria-hidden="true" className={styles.successMarker}>

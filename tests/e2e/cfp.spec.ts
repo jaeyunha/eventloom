@@ -428,11 +428,30 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   await page.goto("/cfp/organizations/evaluator-org/events/mobile-progress");
 
   const progressNavigations = page.getByRole("navigation", { name: "Submission progress" });
+  const submissionWindow = page.locator('[data-cfp-submission-window="true"]');
   await expect(progressNavigations).toHaveCount(1);
   await expect(progressNavigations).toBeVisible();
+  await expect(submissionWindow).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(1);
   await expect(progressNavigations.getByText("Get started", { exact: true })).toBeVisible();
   await expect(progressNavigations.getByText("Review", { exact: true })).toBeVisible();
   await expect(progressNavigations.locator('[aria-current="step"]')).toHaveCount(1);
+  const formWhitespace = await page.locator("form").evaluate((form) => {
+    const parent = form.parentElement;
+    if (parent === null) throw new Error("The CFP form column is unavailable.");
+    const formRect = form.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    return {
+      left: formRect.left - parentRect.left,
+      right: parentRect.right - formRect.right,
+    };
+  });
+  expect(Math.abs(formWhitespace.left - formWhitespace.right)).toBeLessThanOrEqual(1);
   expect(
     await page.evaluate(
       () =>
@@ -452,6 +471,9 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   const currentCompactStep = compactProgress.locator('[aria-current="step"]');
   await expect(currentCompactStep).toHaveCount(1);
   await expect(currentCompactStep).toContainText("Get started");
+  for (const value of await submissionWindow.locator("time").all()) {
+    await expect(value).toHaveCSS("white-space", "nowrap");
+  }
 
   const fitsViewport = await page.evaluate(
     () =>
@@ -1119,7 +1141,7 @@ function cfpMutationBody(request: import("@playwright/test").Request): Record<st
 test("published dynamic CFP keeps conditional sections, custom answers, and schema references through submission", async ({
   authSession,
   page,
-}) => {
+}, testInfo) => {
   const harness = await installDynamicCfpApi(page, authSession);
   await page.goto(CFP_PATH);
 
@@ -1205,6 +1227,44 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await expect(
     page.getByRole("button", { name: "View submission status dashboard" }),
   ).toBeVisible();
+  const completedProgress = page
+    .getByRole("navigation", { name: "Submission progress" })
+    .filter({ visible: true });
+  await expect(completedProgress).toBeVisible();
+  await expect(completedProgress.locator('[data-state="complete"]')).toHaveCount(5);
+  await expect(completedProgress.locator('[aria-current="step"]')).toHaveCount(0);
+  await expect(
+    page.getByText(CFP_ORGANIZATION.name, { exact: true }).filter({ visible: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText(CFP_FORM.name, { exact: true }).filter({ visible: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-complete-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ height: 844, width: 390 });
+  await expect(completedProgress).toBeVisible();
+  await expect(completedProgress.getByText("Submission complete", { exact: true })).toBeVisible();
+  await expect(
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]').filter({
+      visible: true,
+    }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+        document.body.scrollWidth <= document.body.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-complete-mobile.png"),
+    fullPage: true,
+  });
 
   expect(harness.publishedResponses.length).toBeGreaterThan(0);
   expect(harness.submission.formVersion).toBe(CFP_FORM_VERSION);

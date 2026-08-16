@@ -140,7 +140,8 @@ export function localSubmissionScenario(index: number): LocalSubmissionScenario 
   const firstName = FIRST_NAMES[index % FIRST_NAMES.length] ?? FIRST_NAMES[0];
   const lastName = LAST_NAMES[(index * 7) % LAST_NAMES.length] ?? LAST_NAMES[0];
   const outcome =
-    TITLE_OUTCOMES[Math.floor(index / TOPICS.length) % TITLE_OUTCOMES.length] ?? TITLE_OUTCOMES[0];
+    TITLE_OUTCOMES[(index + Math.floor(index / TOPICS.length)) % TITLE_OUTCOMES.length] ??
+    TITLE_OUTCOMES[0];
   const qualifier =
     TITLE_QUALIFIERS[
       Math.floor(index / (TOPICS.length * TITLE_OUTCOMES.length)) % TITLE_QUALIFIERS.length

@@ -256,6 +256,7 @@ async function fixture(
     repository?: InMemoryEvaluationRepository;
     submissions?: InMemorySubmissionReviewSource;
     reviewRound?: ReviewRound;
+    reviewRounds?: readonly ReviewRound[];
   } = {},
 ) {
   let currentTime = new Date(nowIso);
@@ -292,7 +293,7 @@ async function fixture(
       reviewsPerSubmission: options.reviewsPerSubmission ?? 2,
       maxAssignmentsPerReviewer: options.maxAssignmentsPerReviewer ?? 1,
     },
-    rounds: [options.reviewRound ?? round],
+    rounds: options.reviewRounds ?? [options.reviewRound ?? round],
     ...(options.reviewerProjection === undefined
       ? {}
       : { reviewerProjection: options.reviewerProjection }),
@@ -462,6 +463,75 @@ describe("evaluation plans and assignments", () => {
       }),
     ).resolves.toHaveLength(1);
   });
+
+  it("reuses one active assignment for the same reviewer, plan, round, and submission", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 1 });
+    const original = await assignOne(service, "reviewer-1");
+
+    const repeated = await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: round.id,
+      submissionId: submission.id,
+      reviewerIds: ["reviewer-1"],
+    });
+
+    expect(repeated).toEqual([original]);
+    const matchingAssignments = (await repository.listAssignments(tenantId, "plan-1")).filter(
+      (assignment) =>
+        assignment.tenantId === tenantId &&
+        assignment.eventId === eventId &&
+        assignment.planId === "plan-1" &&
+        assignment.roundId === round.id &&
+        assignment.submissionId === submission.id &&
+        assignment.reviewerId === "reviewer-1" &&
+        assignment.status !== "superseded",
+    );
+    expect(matchingAssignments).toEqual([original]);
+    expect(original).not.toHaveProperty("predecessorAssignmentId");
+  });
+
+  it("creates separate active root assignments for the same reviewer and submission in different rounds", async () => {
+    const finalRound: ReviewRound = {
+      ...round,
+      id: "round-2",
+      name: "Final review",
+      sequence: 2,
+    };
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 2,
+      reviewRounds: [round, finalRound],
+    });
+    const committeeAssignment = await assignOne(service, "reviewer-1");
+
+    const finalAssignments = await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: finalRound.id,
+      submissionId: submission.id,
+      reviewerIds: ["reviewer-1"],
+    });
+    const finalAssignment = finalAssignments[0];
+    if (finalAssignment === undefined)
+      throw new Error("Expected a final-round assignment fixture.");
+
+    expect(finalAssignment).toMatchObject({
+      id: `plan-1:${finalRound.id}:${submission.id}:reviewer-1`,
+      roundId: finalRound.id,
+      submissionId: submission.id,
+      reviewerId: "reviewer-1",
+      status: "assigned",
+    });
+    expect(finalAssignment.id).not.toBe(committeeAssignment.id);
+    expect(committeeAssignment).not.toHaveProperty("predecessorAssignmentId");
+    expect(finalAssignment).not.toHaveProperty("predecessorAssignmentId");
+    await expect(
+      service.listReviewerAssignments(reviewer("reviewer-1"), "plan-1"),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: committeeAssignment.id, roundId: round.id }),
+      expect.objectContaining({ id: finalAssignment.id, roundId: finalRound.id }),
+    ]);
+  });
+
   it("excludes terminal submissions from active queues and progress while retaining history", async () => {
     const submissions = new WorkspaceBatchSource([
       submission,

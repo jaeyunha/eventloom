@@ -219,14 +219,19 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
       },
     });
   });
-  await page.route("**/api/admin/evaluations/reviewer/workspace", async (route) => {
+  await page.route("**/api/account/reviewer-workspace", async (route) => {
     await route.fulfill({
       json: {
         data: {
-          assignments: [
+          organizations: [
             {
-              assignment: { status: "assigned" },
-              plan: { eventName: "Research Exchange 2027" },
+              organization: { id: "org-b", name: "Open Research Network" },
+              assignments: [
+                {
+                  assignment: { status: "assigned" },
+                  plan: { eventName: "Research Exchange 2027" },
+                },
+              ],
             },
           ],
         },
@@ -726,7 +731,7 @@ test("speaker workspace reflows at 320px with 200% text zoom", async ({ page }) 
   expect(layout.mainCount).toBe(1);
 });
 
-test("reviewer queue opens one focused scorecard without hiding assigned work", async ({
+test("reviewer queue opens one focused scorecard drawer without resizing assigned work", async ({
   context,
   page,
 }, testInfo) => {
@@ -747,16 +752,110 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
   ] as const) {
     await page.setViewportSize(viewport);
     await page.goto(reviewerUrl);
+    await page.evaluate(() => window.scrollTo(0, 0));
 
-    const queue = page.locator('section[aria-labelledby="review-queue-heading"]');
-    const firstAction = queue
-      .locator('[aria-label^="Open scorecard for"]')
-      .filter({ hasText: "Start review" })
-      .first();
+    const queue = page.locator('nav[aria-label="Assigned reviews"]');
+    const firstAction = queue.getByRole("button", { name: /Open scorecard/u }).first();
+    const firstRow = queue.locator("li").first();
+    const firstTitle = queue.getByRole("heading", { level: 3 }).first();
+    const filterButton = queue.getByRole("button", { name: "Filter assigned reviews" });
 
     await expect(queue).toBeVisible();
     await expect(firstAction).toBeVisible();
     await expect(firstAction).toHaveText("Start review");
+    await expect(filterButton).toBeVisible();
+    await expect(queue.getByRole("group", { name: "Review status views" })).toHaveCount(0);
+    await expect(queue).not.toContainText(/\bSUB(?:MISSION)?[-_]/iu);
+    const columnHeadings = queue.locator('[data-reviewer-column-headings="true"]');
+    await expect(columnHeadings).toHaveCount(1);
+    if (viewport.name === "desktop") {
+      await expect(columnHeadings).toBeVisible();
+      await expect(columnHeadings.locator(":scope > span")).toHaveText([
+        "Title",
+        "Event / round",
+        "Due",
+        "Status",
+        "",
+      ]);
+      const columnAlignment = await page.evaluate(() => {
+        const headings = document.querySelector<HTMLElement>(
+          '[data-reviewer-column-headings="true"]',
+        );
+        const row = document.querySelector<HTMLElement>('[data-reviewer-row-layout="summary"]');
+        if (headings === null || row === null) return null;
+        const names = ["title", "context", "due", "status"] as const;
+        return {
+          headingGrid: getComputedStyle(headings).gridTemplateColumns,
+          rowGrid: getComputedStyle(row).gridTemplateColumns,
+          offsets: names.map((name) => {
+            const heading = headings.querySelector<HTMLElement>(`[data-reviewer-column="${name}"]`);
+            const value = row.querySelector<HTMLElement>(`[data-reviewer-column="${name}"]`);
+            if (heading === null || value === null) return Number.POSITIVE_INFINITY;
+            return Math.abs(
+              heading.getBoundingClientRect().left - value.getBoundingClientRect().left,
+            );
+          }),
+        };
+      });
+      expect(columnAlignment).not.toBeNull();
+      expect(columnAlignment?.headingGrid).toBe(columnAlignment?.rowGrid);
+      expect(columnAlignment?.offsets.every((offset) => offset <= 1)).toBe(true);
+    } else {
+      await expect(columnHeadings).toBeHidden();
+      const mobileAlignment = await firstRow.evaluate((row) => {
+        const title = row.querySelector<HTMLElement>('[data-reviewer-column="title"]');
+        const context = row.querySelector<HTMLElement>('[data-reviewer-column="context"]');
+        if (title === null || context === null) return Number.POSITIVE_INFINITY;
+        return Math.abs(title.getBoundingClientRect().left - context.getBoundingClientRect().left);
+      });
+      expect(mobileAlignment).toBeLessThanOrEqual(1);
+    }
+    const titleText = await firstTitle.textContent();
+    const titleMetrics = await firstTitle.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        overflow: style.overflow,
+        textOverflow: style.textOverflow,
+        title: element.getAttribute("title"),
+        whiteSpace: style.whiteSpace,
+      };
+    });
+    expect(titleMetrics.title).toBe(titleText);
+    expect(titleMetrics.overflow).toBe("hidden");
+    expect(titleMetrics.textOverflow).toBe("ellipsis");
+    expect(titleMetrics.whiteSpace).toBe("nowrap");
+    const firstRowBox = await firstRow.boundingBox();
+    expect(firstRowBox).not.toBeNull();
+    expect(firstRowBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      viewport.name === "desktop" ? 48 : 116,
+    );
+
+    await page.screenshot({
+      path: testInfo.outputPath(`reviewer-queue-${viewport.name}.png`),
+      fullPage: false,
+    });
+
+    await filterButton.click();
+    const filterMenu = page.getByLabel("Reviewer filters");
+    await expect(filterMenu).toBeVisible();
+    await expect(filterMenu.getByLabel("Status")).toBeVisible();
+    await filterMenu.getByLabel("Status").selectOption("needs-review");
+    await expect(filterMenu.getByLabel("Status")).toHaveValue("needs-review");
+    await expect(filterButton).toHaveAccessibleName("Filter assigned reviews, 1 active");
+    const filterMenuBox = await filterMenu.boundingBox();
+    expect(filterMenuBox).not.toBeNull();
+    expect(filterMenuBox?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(320);
+    await page.screenshot({
+      path: testInfo.outputPath(`reviewer-filters-${viewport.name}.png`),
+      fullPage: false,
+    });
+    await filterMenu.getByLabel("Status").selectOption("all");
+    await page.keyboard.press("Escape");
+    await expect(filterMenu).toBeHidden();
+
+    await firstAction.focus();
+    await expect(firstAction).toBeFocused();
+    const queueBeforeOpen = await queue.boundingBox();
 
     const actionMetrics = await firstAction.evaluate((element) => {
       const range = document.createRange();
@@ -771,11 +870,39 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     expect(actionMetrics.lineCount).toBe(1);
     expect(actionMetrics.whiteSpace).toBe("nowrap");
 
+    const drawerSettled = page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            observer.disconnect();
+            reject(new Error("Reviewer drawer transition did not finish."));
+          }, 1_000);
+          const finish = () => {
+            window.clearTimeout(timeout);
+            observer.disconnect();
+            requestAnimationFrame(() => resolve());
+          };
+          const observer = new MutationObserver(() => {
+            const drawer = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
+            if (drawer === null) return;
+            const style = getComputedStyle(drawer);
+            if (style.transitionDuration === "0s" && style.animationDuration === "0s") {
+              finish();
+              return;
+            }
+            drawer.addEventListener("transitionend", finish, { once: true });
+            drawer.addEventListener("animationend", finish, { once: true });
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+        }),
+    );
     await firstAction.click();
 
-    const scorecard = page.locator('section[id^="scorecard-"]');
+    const scorecard = page.getByRole("dialog");
+    const closeReview = scorecard.getByRole("button", { name: "Close review" });
     await expect(scorecard).toBeVisible();
-    await expect(scorecard).toBeFocused();
+    await drawerSettled;
+    await expect(closeReview).toBeFocused();
     await expect(page.locator("#review-workspace")).toHaveCount(1);
     await expect(page.locator("#review-content")).toHaveCount(1);
     await expect(scorecard.getByRole("button", { name: "Submit review" })).toHaveCount(1);
@@ -783,12 +910,23 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     await expect(scorecard.getByRole("button", { name: "Save draft" })).toHaveCount(0);
     await expect(scorecard.getByRole("button", { name: "Declare conflict" })).toBeVisible();
     await expect(scorecard.getByRole("spinbutton", { name: /Human score/u })).toHaveCount(0);
+    const scorecardScroll = scorecard.locator('[data-reviewer-scorecard-scroll="true"]');
+    const scorecardFooter = scorecard.locator('[data-reviewer-scorecard-footer="true"]');
+    await expect(scorecardScroll).toBeVisible();
+    await expect(scorecardFooter).toBeVisible();
+    const scorecardRegions = await Promise.all([
+      scorecardScroll.boundingBox(),
+      scorecardFooter.boundingBox(),
+    ]);
+    expect(scorecardRegions[0]).not.toBeNull();
+    expect(scorecardRegions[1]).not.toBeNull();
+    expect(scorecardRegions[0]?.y + (scorecardRegions[0]?.height ?? 0)).toBeLessThanOrEqual(
+      (scorecardRegions[1]?.y ?? 0) + 1,
+    );
 
-    if (viewport.name === "mobile") {
-      await expect(queue).toBeHidden();
-    } else {
-      await expect(queue).toBeVisible();
-    }
+    await expect(queue).toBeVisible();
+    const queueAfterOpen = await queue.boundingBox();
+    expect(queueAfterOpen?.width).toBe(queueBeforeOpen?.width);
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
@@ -796,14 +934,30 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     }));
     expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
 
-    await page.getByRole("button", { name: "Back to reviewer queue" }).click();
-    await expect(firstAction).toBeFocused();
-    await page.evaluate(() => window.scrollTo(0, 0));
+    const scorecardBox = await scorecard.boundingBox();
+    expect(scorecardBox).not.toBeNull();
+    expect(scorecardBox?.width ?? 0).toBeLessThanOrEqual(viewport.width);
+    if (viewport.name === "desktop") {
+      expect(scorecardBox?.width ?? 0).toBeGreaterThanOrEqual(608);
+      expect(scorecardBox?.width ?? 0).toBeLessThanOrEqual(896);
+    } else {
+      expect(scorecardBox?.width ?? 0).toBeGreaterThanOrEqual(viewport.width - 1);
+    }
 
     await page.screenshot({
-      path: testInfo.outputPath(`reviewer-workbench-${viewport.name}.png`),
-      fullPage: true,
+      path: testInfo.outputPath(`reviewer-drawer-${viewport.name}.png`),
+      fullPage: false,
     });
+
+    await closeReview.click();
+    await expect(scorecard).toBeHidden();
+    await expect(firstAction).toBeFocused();
+
+    await firstAction.click();
+    await expect(scorecard).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(scorecard).toBeHidden();
+    await expect(firstAction).toBeFocused();
   }
 });
 
@@ -833,6 +987,50 @@ test("plan and rubric renders an open plan as a focused read-only workbench", as
       page.getByRole("button", { name: "Create editable draft revision" }),
     ).toBeVisible();
     await expect(page.getByLabel("Overall review deadline")).toBeEnabled();
+
+    const authoringSection = page.locator('section[aria-labelledby="authoring-heading"]');
+    const authoringGutter = await authoringSection.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        left: Number.parseFloat(style.paddingLeft),
+        right: Number.parseFloat(style.paddingRight),
+      };
+    });
+    const expectedAuthoringGutter = viewport.name === "desktop" ? 24 : 16;
+    expect(authoringGutter.left).toBeCloseTo(expectedAuthoringGutter, 1);
+    expect(authoringGutter.right).toBeCloseTo(expectedAuthoringGutter, 1);
+
+    if (viewport.name === "desktop") {
+      const layers = await page.evaluate(() => {
+        const shell = document.querySelector<HTMLElement>('[data-role-workspace-shell="true"]');
+        const navigation = shell?.children.item(1) as HTMLElement | null;
+        const inset = shell?.children.item(2) as HTMLElement | null;
+        const shellStyle = shell ? getComputedStyle(shell) : null;
+        const insetStyle = inset ? getComputedStyle(inset) : null;
+        const navigationRect = navigation?.getBoundingClientRect();
+        const insetRect = inset?.getBoundingClientRect();
+
+        return {
+          outer: shellStyle?.getPropertyValue("--workspace-outer").trim(),
+          pane: shellStyle?.getPropertyValue("--workspace-pane").trim(),
+          surface: shellStyle?.getPropertyValue("--workspace-surface").trim(),
+          insetBackground: insetStyle?.backgroundColor,
+          insetTop: insetRect?.top,
+          insetRight: insetRect ? window.innerWidth - insetRect.right : undefined,
+          insetBottom: insetRect ? window.innerHeight - insetRect.bottom : undefined,
+          navigationGap:
+            insetRect && navigationRect ? insetRect.left - navigationRect.right : undefined,
+        };
+      });
+
+      expect(layers.outer).not.toBe(layers.pane);
+      expect(layers.pane).not.toBe(layers.surface);
+      expect(layers.insetBackground).toBe("rgb(247, 247, 248)");
+      expect(layers.insetTop).toBeCloseTo(8, 1);
+      expect(layers.insetRight).toBeCloseTo(8, 1);
+      expect(layers.insetBottom).toBeCloseTo(8, 1);
+      expect(layers.navigationGap).toBeCloseTo(8, 1);
+    }
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,

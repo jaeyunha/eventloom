@@ -31,7 +31,9 @@ export function mapEvaluatorAssignment(
             ? "scheduled"
             : "open",
     opensAt: dateLabel(context.round.opensAt ?? plan.createdAt),
+    opensAtIso: context.round.opensAt ?? undefined,
     closesAt: dateLabel(context.round.closesAt ?? plan.closesAt),
+    closesAtIso: context.round.closesAt ?? plan.closesAt ?? undefined,
     completionPercent: 0,
     roundRevision: context.round.revision,
     rubricRevision: context.round.rubricRevision ?? context.rubricRevision,
@@ -104,9 +106,9 @@ export function mapEvaluatorAssignment(
   const resolvedEventId = context.assignment.eventId || plan.eventId;
   return {
     organizationId: plan.organizationId ?? resolvedEventId,
-    organizationName: plan.organizationName ?? plan.organizationId ?? resolvedEventId,
+    organizationName: plan.organizationName ?? "Organization",
     eventId: resolvedEventId,
-    eventName: plan.eventName ?? resolvedEventId,
+    eventName: plan.eventName ?? "Assigned event",
     dueAt: round.closesAt ?? plan.closesAt,
     planId: context.assignment.planId || plan.id,
     planName: plan.name,

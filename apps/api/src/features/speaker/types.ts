@@ -1036,6 +1036,11 @@ export interface OrganizationQualifiedSpeakerTask extends SpeakerTask {
 
 export interface SpeakerRepository {
   getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope>;
+  /** Resolves one verified account for an account-bound event invitation. */
+  resolveVerifiedInvitationRecipient?(email: string): Promise<{
+    userId: string;
+    normalizedEmail: string;
+  } | null>;
   /** Organizer authority is event-qualified and must never be inferred from a participant grant. */
   getOrganizerAccessScope?(
     eventId: string,

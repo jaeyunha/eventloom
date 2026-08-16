@@ -2445,6 +2445,19 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --workspace-outer: #f3f3f5;
+  --workspace-pane: #f7f7f8;
+  --workspace-surface: #ffffff;
+  --workspace-subtle: #f4f4f6;
+  --workspace-divider: #e4e4e7;
+  --workspace-divider-strong: #d2d2d6;
+  --workspace-pane-edge: var(--workspace-divider);
+  --workspace-pane-shadow: var(--shadow-card);
+  --workspace-sticky-shadow: 0 -0.75rem 1.5rem rgb(23 23 23 / 6%);
+  --workspace-sidebar-active: #e7e7ea;
+  --workspace-accent: #5b5bd6;
+  --workspace-accent-soft: #eef2ff;
+  --workspace-progress-idle: #a4a9b4;
 }
 
 .dark {
@@ -2485,6 +2498,51 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --workspace-outer: #0b0b0d;
+  --workspace-pane: #151517;
+  --workspace-surface: #1c1c1f;
+  --workspace-subtle: #232327;
+  --workspace-divider: rgb(255 255 255 / 8%);
+  --workspace-divider-strong: rgb(255 255 255 / 14%);
+  --workspace-pane-edge: transparent;
+  --workspace-pane-shadow: 0 18px 48px rgb(0 0 0 / 18%);
+  --workspace-sticky-shadow: 0 -0.75rem 1.5rem rgb(0 0 0 / 18%);
+  --workspace-sidebar-active: #242428;
+  --workspace-accent: #7777e8;
+  --workspace-accent-soft: #282842;
+  --workspace-progress-idle: #6f7078;
+}
+
+[data-role-workspace-shell="true"] {
+  --color-ink: var(--foreground);
+  --color-muted: var(--muted-foreground);
+  --color-subtle: var(--muted-foreground);
+  --color-brand: var(--foreground);
+  --color-brand-strong: var(--foreground);
+  --color-brand-soft: var(--workspace-subtle);
+  --color-canvas: var(--workspace-pane);
+  --color-surface: var(--workspace-surface);
+  --color-border: var(--workspace-divider);
+  --color-border-strong: var(--workspace-divider-strong);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-surface);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-surface);
+  --color-accent: var(--workspace-accent);
+  --color-accent-strong: var(--workspace-accent);
+  --color-accent-soft: var(--workspace-accent-soft);
+  --color-accent-mist: var(--workspace-accent-soft);
+  --background: var(--workspace-pane);
+  --card: var(--workspace-surface);
+  --popover: var(--workspace-surface);
+  --secondary: var(--workspace-subtle);
+  --muted: var(--workspace-subtle);
+  --accent: var(--workspace-subtle);
+  --border: var(--workspace-divider);
+  --input: var(--workspace-divider-strong);
+  --sidebar: var(--workspace-outer);
+  --sidebar-accent: var(--workspace-sidebar-active);
+  --sidebar-border: var(--workspace-divider);
 }
 
 @media (max-width: 42rem) {

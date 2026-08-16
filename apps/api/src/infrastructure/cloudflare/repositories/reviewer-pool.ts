@@ -111,6 +111,34 @@ export class D1ReviewerPoolRepository implements ReviewerPoolRepository {
   }
 
   async saveReviewerPool(pool: ReviewerPool, expectedVersion: number | null): Promise<void> {
+    await this.save(pool, expectedVersion);
+  }
+
+  async saveReviewerPoolAndRevokeInvitations(
+    input: Parameters<
+      NonNullable<ReviewerPoolRepository["saveReviewerPoolAndRevokeInvitations"]>
+    >[0],
+  ): Promise<void> {
+    await this.save(input.pool, input.expectedVersion, input);
+  }
+
+  private async save(
+    pool: ReviewerPool,
+    expectedVersion: number | null,
+    invitationRevocations?: {
+      readonly removedReviewerIds: readonly string[];
+      readonly addedReviewerInvitations: readonly {
+        readonly id: string;
+        readonly recipientUserId: string;
+        readonly normalizedEmail: string;
+        readonly creationIdempotencyKey: string;
+        readonly invitedByUserId: string;
+        readonly invitedAt: string;
+      }[];
+      readonly revokedByUserId: string;
+      readonly revokedAt: string;
+    },
+  ): Promise<void> {
     if (pool.version !== (expectedVersion ?? 0) + 1) {
       throw new MemberRepositoryConflictError("The reviewer pool version is invalid.");
     }
@@ -183,6 +211,40 @@ export class D1ReviewerPoolRepository implements ReviewerPoolRepository {
             "organization_id = ? AND event_id = ? AND round_id = ? AND version = ?",
             [pool.organizationId, pool.eventId, pool.roundId, expectedVersion],
           );
+    const invitationRevocationStatements =
+      invitationRevocations === undefined
+        ? []
+        : invitationRevocations.removedReviewerIds.map((recipientUserId) =>
+            statement(
+              this.database,
+              `UPDATE event_role_invitations
+                  SET status = 'revoked', revoked_by_actor_type = 'user',
+                      revoked_by_actor_id = ?, revoked_at = ?, version = version + 1, updated_at = ?
+                WHERE organization_id = ? AND event_id = ? AND recipient_user_id = ?
+                  AND role = 'reviewer' AND status IN ('pending', 'accepted')
+                  AND NOT EXISTS (
+                    SELECT 1
+                      FROM reviewer_pool_members member
+                      JOIN reviewer_pools other_pool
+                        ON other_pool.organization_id = member.organization_id
+                       AND other_pool.event_id = member.event_id
+                       AND other_pool.id = member.pool_id
+                     WHERE member.organization_id = event_role_invitations.organization_id
+                       AND member.event_id = event_role_invitations.event_id
+                       AND member.reviewer_id = event_role_invitations.recipient_user_id
+                       AND other_pool.round_id <> ?
+                  )`,
+              [
+                invitationRevocations.revokedByUserId,
+                invitationRevocations.revokedAt,
+                invitationRevocations.revokedAt,
+                pool.organizationId,
+                pool.eventId,
+                recipientUserId,
+                pool.roundId,
+              ],
+            ),
+          );
     const statements = [
       guard(
         this.database,
@@ -191,20 +253,76 @@ export class D1ReviewerPoolRepository implements ReviewerPoolRepository {
       ),
       cas,
       primary,
-      statement(
-        this.database,
-        "DELETE FROM reviewer_pool_members WHERE organization_id = ? AND event_id = ? AND pool_id = ?",
-        [pool.organizationId, pool.eventId, id],
-      ),
+      ...invitationRevocationStatements,
+      normalizedGrants.length === 0
+        ? statement(
+            this.database,
+            "DELETE FROM reviewer_pool_members WHERE organization_id = ? AND event_id = ? AND pool_id = ?",
+            [pool.organizationId, pool.eventId, id],
+          )
+        : statement(
+            this.database,
+            `DELETE FROM reviewer_pool_members
+              WHERE organization_id = ? AND event_id = ? AND pool_id = ?
+                AND reviewer_id NOT IN (${normalizedGrants.map(() => "?").join(", ")})`,
+            [
+              pool.organizationId,
+              pool.eventId,
+              id,
+              ...normalizedGrants.map((grant) => grant.reviewerId),
+            ],
+          ),
       ...normalizedGrants.map((grant) =>
         statement(
           this.database,
           `INSERT INTO reviewer_pool_members
-             (organization_id, event_id, pool_id, reviewer_id)
-           VALUES (?, ?, ?, ?)`,
-          [pool.organizationId, pool.eventId, id, grant.reviewerId],
+             (organization_id, event_id, pool_id, reviewer_id, granted_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (organization_id, event_id, pool_id, reviewer_id) DO UPDATE
+             SET granted_at = coalesce(reviewer_pool_members.granted_at, excluded.granted_at)`,
+          [pool.organizationId, pool.eventId, id, grant.reviewerId, pool.updatedAt],
         ),
       ),
+      ...(invitationRevocations?.addedReviewerInvitations ?? []).flatMap((invitation) => [
+        guard(
+          this.database,
+          `NOT EXISTS (
+             SELECT 1 FROM event_role_invitations
+              WHERE organization_id = ? AND event_id = ? AND role = 'reviewer'
+                AND recipient_user_id = ? AND status = 'pending' AND normalized_email <> ?
+           )`,
+          [
+            pool.organizationId,
+            pool.eventId,
+            invitation.recipientUserId,
+            invitation.normalizedEmail.trim().toLowerCase(),
+          ],
+        ),
+        statement(
+          this.database,
+          `INSERT OR IGNORE INTO event_role_invitations (
+             id, organization_id, event_id, role, recipient_user_id, normalized_email,
+             participant_id, status, creation_idempotency_key, invited_by_actor_type,
+             invited_by_actor_id, invited_at, accepted_by_user_id, accepted_at,
+             declined_by_user_id, declined_at, revoked_by_actor_type, revoked_by_actor_id,
+             revoked_at, version, updated_at
+           ) VALUES (
+             ?, ?, ?, 'reviewer', ?, ?, NULL, 'pending', ?, 'user', ?, ?,
+             NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, ?
+           )`,
+          [
+            invitation.id,
+            pool.organizationId,
+            pool.eventId,
+            invitation.recipientUserId,
+            invitation.normalizedEmail.trim().toLowerCase(),
+            invitation.creationIdempotencyKey,
+            invitation.invitedByUserId,
+            invitation.invitedAt,
+            invitation.invitedAt,
+          ],
+        ),
+      ]),
       guard(
         this.database,
         `NOT EXISTS (

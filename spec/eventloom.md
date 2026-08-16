@@ -117,6 +117,8 @@ adapter code or references do not change that classification.
 4. Secrets, magic links, API-key material, provider responses, and internal storage details never appear in public projections or ordinary API errors. Webhook signatures are checked and delivery retries are observable without exposing signing secrets.
 5. Human decisions and published revisions are authoritative. AI suggestions are advisory and auditable. Concurrent writes use version checks, tenant/event locks where needed, and idempotency keys; retries do not duplicate decisions, messages, calendar events, exports, or webhooks.
 6. Environment boundaries are enforced with separate resources and credentials; staging data and side effects cannot reach production.
+7. Reviewer and speaker invitations are account-bound and event-scoped. `/work` lists pending invitations only for the authenticated verified recipient; pending acceptance requires the current verified email to match the invitation, while accepted authority remains attached to the stable account ID across later verified email changes. Acceptance activates the exact event reviewer or participant grant; decline is terminal, and revocation removes active access without deleting assignment or speaker history.
+8. Reviewer assignments and accepted-speaker participant, profile, session, and task records may be prepared before invitation acceptance. Acceptance links those existing records idempotently and never duplicates or resets them. If the account did not exist or was unverified when the organizer acted, the first verified `/work` invitation listing reconciles eligible reviewer-pool and speaker-profile records into pending account invitations.
 
 ## Acceptance rules
 

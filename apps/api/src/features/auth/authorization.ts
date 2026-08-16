@@ -31,10 +31,13 @@ export function requireTenantScope(
   const hasMembership = principal.memberships.some(
     (membership) => membership.organizationId === organizationId,
   );
+  const hasReviewerGrant = principal.reviewerGrants.some(
+    (grant) => grant.organizationId === organizationId,
+  );
   const hasSpeakerGrant = principal.speakerGrants.some(
     (grant) => grant.organizationId === organizationId,
   );
-  if (!hasMembership && !hasSpeakerGrant) {
+  if (!hasMembership && !hasReviewerGrant && !hasSpeakerGrant) {
     forbidden();
   }
   return principal;
@@ -53,6 +56,27 @@ export function requireOrganizationRole(
     (candidate) => candidate.organizationId === organizationId,
   );
   if (!membership || !allowedRoles.includes(membership.role)) {
+    forbidden();
+  }
+  return principal;
+}
+
+export function hasReviewerGrant(
+  principal: UserPrincipal,
+  organizationId: string,
+  eventId: string,
+): boolean {
+  return principal.reviewerGrants.some(
+    (grant) => grant.organizationId === organizationId && grant.eventId === eventId,
+  );
+}
+
+export function requireReviewerGrant(
+  principal: AuthPrincipal,
+  organizationId: string,
+  eventId: string,
+): UserPrincipal {
+  if (principal.kind !== "user" || !hasReviewerGrant(principal, organizationId, eventId)) {
     forbidden();
   }
   return principal;

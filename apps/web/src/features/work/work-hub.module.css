@@ -1,13 +1,16 @@
 .shell {
   min-height: 100dvh;
-  background:
-    radial-gradient(
-      circle at top left,
-      color-mix(in srgb, var(--primary) 8%, transparent),
-      transparent 34%
-    ),
-    var(--background);
+  padding: var(--space-2);
+  background: var(--workspace-outer);
   color: var(--foreground);
+}
+.frame {
+  min-height: calc(100dvh - (2 * var(--space-2)));
+  overflow: clip;
+  border: 1px solid var(--workspace-pane-edge);
+  border-radius: var(--radius-lg);
+  background: var(--workspace-pane);
+  box-shadow: var(--workspace-pane-shadow);
 }
 .skipLink {
   position: fixed;
@@ -29,8 +32,8 @@
   position: sticky;
   z-index: 30;
   top: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--background) 88%, transparent);
+  border-bottom: 1px solid var(--workspace-divider);
+  background: var(--workspace-pane);
   backdrop-filter: blur(var(--space-4));
 }
 .topbarInner,
@@ -115,6 +118,147 @@
   color: var(--muted-foreground);
   line-height: 1.65;
 }
+.invitationSections {
+  display: grid;
+  gap: var(--space-6);
+  margin-top: var(--space-7);
+}
+.pendingInvitations,
+.acceptedInvitations {
+  display: grid;
+  gap: var(--space-4);
+}
+.pendingInvitations {
+  padding: var(--space-5);
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: var(--radius-lg);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--card) 88%, var(--primary)),
+    color-mix(in srgb, var(--card) 97%, transparent)
+  );
+  box-shadow: var(--shadow-card);
+}
+.sectionHeading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+.sectionHeading > div,
+.acceptedInvitations > div:first-child {
+  display: grid;
+  gap: var(--space-2);
+}
+.sectionHeading p:last-child {
+  color: var(--muted-foreground);
+}
+.sectionIcon,
+.invitationIcon,
+.acceptedIcon {
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--foreground);
+}
+.sectionIcon {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+.sectionIcon svg,
+.invitationIcon svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+.invitationGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.invitationCard {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+.invitationHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.invitationHeader > div {
+  display: grid;
+  gap: var(--space-2);
+}
+.invitationIcon {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+.invitationMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.invitationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.invitationActions [data-slot="button"],
+.acceptedInvitation [data-slot="button"] {
+  min-height: calc(var(--space-5) + var(--space-5));
+}
+.invitationError {
+  flex-basis: 100%;
+  color: var(--destructive);
+  font-size: 0.875rem;
+}
+.acceptedInvitations {
+  grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr);
+  align-items: start;
+}
+.acceptedList {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.acceptedInvitation {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+}
+.acceptedIcon {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+.acceptedIcon svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+.acceptedCopy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.35;
+}
+.acceptedCopy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acceptedCopy small {
+  color: var(--muted-foreground);
+}
 .workspaceGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(19rem, 0.85fr);
@@ -195,6 +339,8 @@
   padding-block: var(--space-7);
 }
 @media (max-width: 64rem) {
+  .invitationGrid,
+  .acceptedInvitations,
   .workspaceGrid {
     grid-template-columns: 1fr;
   }
@@ -205,6 +351,15 @@
   }
 }
 @media (max-width: 40rem) {
+  .shell {
+    padding: 0;
+  }
+  .frame {
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .topbarInner,
   .main,
   .state {
@@ -222,6 +377,23 @@
   }
   .heading h1 {
     font-size: 2rem;
+  }
+  .invitationSections {
+    gap: var(--space-5);
+    margin-top: var(--space-6);
+  }
+  .pendingInvitations {
+    padding: var(--space-3);
+  }
+  .sectionHeading {
+    grid-template-columns: 1fr;
+  }
+  .acceptedInvitation {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .acceptedInvitation [data-slot="button"],
+  .acceptedInvitation [data-slot="badge"] {
+    grid-column: 1 / -1;
   }
   .workspaceGrid {
     gap: var(--space-3);

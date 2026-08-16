@@ -69,7 +69,10 @@ import type {
   CrmRepositoryFilter,
   CrmSegment,
 } from "../features/crm/types";
-import { evaluationRolesForOrganizationMembership } from "../features/evaluations/access";
+import {
+  evaluationRolesForOrganizationMembership,
+  evaluationRolesForPrincipal,
+} from "../features/evaluations/access";
 import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationRepository,
@@ -192,6 +195,7 @@ import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindi
 import { R2PrivateAssetGateway } from "../infrastructure/cloudflare/private-assets";
 import { D1CalendarInvitationRepository } from "../infrastructure/cloudflare/repositories/calendar-invitations";
 import { D1CfpFileAssetGateway } from "../infrastructure/cloudflare/repositories/cfp-file-assets";
+import { D1EventRoleInvitationRepository } from "../infrastructure/cloudflare/repositories/event-role-invitations";
 import {
   D1OrganizerOverviewReadModel,
   D1PublishedProgramReadModel,
@@ -231,7 +235,11 @@ import {
   invalidatePublishedSpeakerCache,
   publishedSpeakerPhotoPath,
 } from "../routes/public-speakers";
-import type { D1RuntimeDependencies } from "./d1";
+import {
+  createRuntimeEventRoleInvitationAdapters,
+  type D1RuntimeDependencies,
+  type RuntimeEventRoleInvitationAdapters,
+} from "./d1";
 import { resolvedOrganizationId, resolveOrganizationScope } from "./organization-scope";
 
 const APPLICATION_ID = "Application ID";
@@ -2903,13 +2911,6 @@ interface EvaluationAcceptanceSpeakerRepository extends SpeakerRepository {
     readonly participantId: string;
     readonly updatedAt: string;
   }): Promise<SpeakerTask>;
-  ensureVerifiedParticipantGrant(input: {
-    readonly organizationId: string;
-    readonly eventId: string;
-    readonly participantId: string;
-    readonly email: string;
-    readonly createdAt: string;
-  }): Promise<boolean>;
 }
 
 export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptanceHandoff {
@@ -2920,6 +2921,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   readonly #sessionService: SessionService | undefined;
   readonly #queue: Queue<CloudflareOutboxMessage>;
   readonly #senderAddresses: OpenSendSenderAddresses;
+  readonly #invitationCreator: RuntimeEventRoleInvitationAdapters["speakerCreator"];
 
   constructor(options: {
     readonly cfp: CfpRepository;
@@ -2929,6 +2931,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     readonly sessionService?: SessionService;
     readonly queue: Queue<CloudflareOutboxMessage>;
     readonly senderAddresses: OpenSendSenderAddresses;
+    readonly invitationCreator?: RuntimeEventRoleInvitationAdapters["speakerCreator"];
   }) {
     this.#cfp = options.cfp;
     this.#speakers = options.speakers;
@@ -2937,6 +2940,11 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     this.#sessions = options.sessions;
     this.#sessionService = options.sessionService;
     this.#senderAddresses = options.senderAddresses;
+    this.#invitationCreator =
+      options.invitationCreator ??
+      createRuntimeEventRoleInvitationAdapters(
+        new D1EventRoleInvitationRepository(options.database),
+      ).speakerCreator;
   }
 
   async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {
@@ -3028,7 +3036,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const submission =
       acceptedSubmission ?? (await this.#cfp.getSubmission(input.tenantId, input.submissionId));
     if (submission === null || submission.eventId !== input.eventId) return;
-    await this.#ensureSpeakerGrants(input, submission);
+    await this.#ensureSpeakerInvitations(input, submission);
   }
 
   async #ensureProfile(
@@ -3267,46 +3275,40 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     return updated;
   }
 
-  async #ensureSpeakerGrants(
+  async #ensureSpeakerInvitations(
     input: EvaluationAcceptanceHandoffInput,
     submission: Submission,
   ): Promise<void> {
     await Promise.all(
       submission.participants.map(async (participant) => {
-        const email = participant.email.trim();
-        const provisioned = await this.#speakers.ensureVerifiedParticipantGrant({
+        const email = participant.email.trim().toLowerCase();
+        if (email.length === 0) return;
+        const users = await this.#database
+          .prepare(
+            `SELECT id
+               FROM auth_users
+              WHERE email = ? COLLATE NOCASE AND email_verified = 1
+              ORDER BY id
+              LIMIT 2`,
+          )
+          .bind(email)
+          .all<{ id: string }>();
+        if ((users.results ?? []).length !== 1) return;
+        const user = users.results[0];
+        if (user === undefined) return;
+        await this.#invitationCreator.create({
+          id: `event-role-invitation:speaker:${input.eventId}:${participant.id}`,
           organizationId: input.tenantId,
           eventId: input.eventId,
+          role: "speaker",
+          recipientUserId: user.id,
+          normalizedEmail: email,
           participantId: participant.id,
-          email,
-          createdAt: input.decidedAt,
+          creationIdempotencyKey: `evaluation-acceptance:${input.submissionId}:${participant.id}`,
+          invitedByActorType: "user",
+          invitedByActorId: input.decidedBy,
+          invitedAt: input.decidedAt,
         });
-        if (!provisioned) {
-          throw new Error(`Speaker grant provisioning failed for participant ${participant.id}.`);
-        }
-        await this.#database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
-                trace_id, details_json, occurred_at)
-             VALUES (?, ?, 'user', ?, 'speaker_access_provisioned', 'speaker_profile', ?, NULL, ?, ?)
-             ON CONFLICT (id) DO NOTHING`,
-          )
-          .bind(
-            `speaker-access-provisioned:${input.eventId}:${input.submissionId}:${participant.id}:${input.idempotencyKey.trim()}`,
-            input.tenantId,
-            input.decidedBy,
-            `speaker-profile:${input.eventId}:${participant.id}`,
-            JSON.stringify({
-              eventId: input.eventId,
-              submissionId: input.submissionId,
-              participantId: participant.id,
-              decisionId: input.decisionId,
-              idempotencyKey: input.idempotencyKey,
-            }),
-            input.decidedAt,
-          )
-          .run();
       }),
     );
   }
@@ -7366,6 +7368,7 @@ export interface D1ApplicationRuntimeOptions {
   readonly webOrigin: string;
   readonly aiProviders?: CloudflareAiProviders;
   readonly businessRepositories: D1RuntimeDependencies;
+  readonly eventRoleInvitationAdapters: RuntimeEventRoleInvitationAdapters;
   readonly senderAddresses: OpenSendSenderAddresses;
   readonly calendarIntegrationOptions: CalendarIntegrationOptions;
 }
@@ -7823,6 +7826,57 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
     };
   }
 }
+export async function listProductionOrganizationsForUser(
+  database: D1Database,
+  userId: string,
+): Promise<readonly { organizationId: string; name: string }[]> {
+  const rows = await database
+    .prepare(
+      `SELECT organizations.organization_id, organizations.name
+         FROM organizations
+        WHERE organizations.organization_id IN (
+          SELECT organization_id
+            FROM organization_memberships
+           WHERE user_id = ?
+          UNION
+          SELECT grant.organization_id
+            FROM participant_grants grant
+            JOIN event_role_invitations invitation
+              ON invitation.organization_id = grant.organization_id
+             AND invitation.event_id = grant.event_id
+             AND invitation.role = 'speaker'
+             AND invitation.recipient_user_id = grant.user_id
+             AND invitation.participant_id = grant.participant_id
+             AND invitation.status = 'accepted'
+            JOIN speaker_profiles profile
+              ON profile.organization_id = grant.organization_id
+             AND profile.event_id = grant.event_id
+             AND profile.participant_id = grant.participant_id
+             AND profile.status <> 'revoked'
+           WHERE grant.user_id = ? AND grant.revoked_at IS NULL
+          UNION
+          SELECT invitation.organization_id
+            FROM event_role_invitations AS invitation
+            JOIN auth_users AS account ON account.id = invitation.recipient_user_id
+           WHERE invitation.recipient_user_id = ?
+             AND invitation.role = 'reviewer'
+             AND invitation.status = 'accepted'
+             AND account.email_verified = 1
+        )
+        ORDER BY organizations.name, organizations.organization_id`,
+    )
+    .bind(userId, userId, userId)
+    .all<{ organization_id?: unknown; name?: unknown }>();
+  return rows.results.flatMap((row) =>
+    typeof row.organization_id === "string" &&
+    row.organization_id.trim().length > 0 &&
+    typeof row.name === "string" &&
+    row.name.trim().length > 0
+      ? [{ organizationId: row.organization_id, name: row.name }]
+      : [],
+  );
+}
+
 export function createD1ApplicationDependencies(
   options: D1ApplicationRuntimeOptions,
 ): ApiDependencies {
@@ -7918,6 +7972,7 @@ export function createD1ApplicationDependencies(
   const speakerService = new SpeakerService(speakerRepository, privateAssets, {
     delivery: speakerDelivery,
     communications: new CommunicationSpeakerCommunications(communicationService, options.webOrigin),
+    invitationCreator: options.eventRoleInvitationAdapters.speakerCreator,
     speakerSender: options.senderAddresses.speakers,
     eventTemporalSource: {
       async getEventTemporalContext(organizationId, eventId) {
@@ -8059,6 +8114,7 @@ export function createD1ApplicationDependencies(
     database: options.database,
     queue: options.outboxQueue,
     senderAddresses: options.senderAddresses,
+    invitationCreator: options.eventRoleInvitationAdapters.speakerCreator,
   });
   const evaluationService = new EvaluationService(
     evaluationRepository,
@@ -8078,6 +8134,7 @@ export function createD1ApplicationDependencies(
       },
     },
     {
+      eventSource: eventRepository,
       acceptanceHandoff,
       decisionProjection: new AirtableEvaluationDecisionProjection(
         cfpRepository,
@@ -8102,20 +8159,24 @@ export function createD1ApplicationDependencies(
     reviewerIdentity: new D1EvaluationReviewerIdentityBoundary(options.database),
     async actorFor(principal: AuthPrincipal, request: Request): Promise<EvaluationActor | null> {
       if (principal.kind !== "user") return null;
+      const organizationIds = [
+        ...new Set([
+          ...principal.memberships.map(({ organizationId }) => organizationId),
+          ...principal.reviewerGrants.map(({ organizationId }) => organizationId),
+        ]),
+      ];
       const body = await request
         .clone()
         .json<unknown>()
         .catch(() => undefined);
       let eventId = isRecord(body) && typeof body.eventId === "string" ? body.eventId : undefined;
-      if (eventId === undefined) {
-        eventId = eventIdFromRequest(request);
-      }
+      eventId ??= eventIdFromRequest(request);
       if (eventId === undefined) {
         const planId = /\/plans\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
         if (planId !== undefined) {
-          for (const membership of principal.memberships) {
+          for (const organizationId of organizationIds) {
             const plan = await evaluationRepository.getPlan(
-              membership.organizationId,
+              organizationId,
               decodeURIComponent(planId),
             );
             if (plan !== null) {
@@ -8128,9 +8189,9 @@ export function createD1ApplicationDependencies(
       if (eventId === undefined) {
         const assignmentId = /\/assignments\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
         if (assignmentId !== undefined) {
-          for (const membership of principal.memberships) {
+          for (const organizationId of organizationIds) {
             const assignment = await evaluationRepository.getAssignment(
-              membership.organizationId,
+              organizationId,
               decodeURIComponent(assignmentId),
             );
             if (assignment !== null) {
@@ -8142,56 +8203,67 @@ export function createD1ApplicationDependencies(
       }
 
       if (eventId === undefined || eventId.trim().length === 0) {
-        const memberships = principal.memberships.filter((candidate) =>
-          ["owner", "admin", "reviewer"].includes(candidate.role),
-        );
-        if (memberships.length === 0) return null;
-        const grants = (
+        const organizerGrants = (
           await Promise.all(
-            memberships.map(async (membership) => {
+            principal.memberships.map(async (membership) => {
+              const roles = evaluationRolesForOrganizationMembership(membership.role);
+              if (!roles.includes("organizer")) return [];
               const plans = await evaluationRepository.listPlans(membership.organizationId);
-              return plans.flatMap((plan) =>
-                evaluationRolesForOrganizationMembership(membership.role).map((role) => ({
-                  tenantId: membership.organizationId,
-                  eventId: plan.eventId,
-                  role,
-                })),
-              );
+              return plans.map((plan) => ({
+                tenantId: membership.organizationId,
+                eventId: plan.eventId,
+                role: "organizer" as const,
+              }));
             }),
           )
         ).flat();
-        if (grants.length === 0) return null;
-        const [membership] = memberships;
-        if (membership === undefined) return null;
+        const reviewerGrants = principal.reviewerGrants.map((grant) => ({
+          tenantId: grant.organizationId,
+          eventId: grant.eventId,
+          role: "reviewer" as const,
+        }));
+        const grants = [...organizerGrants, ...reviewerGrants].filter(
+          (grant, index, all) =>
+            all.findIndex(
+              (candidate) =>
+                candidate.tenantId === grant.tenantId &&
+                candidate.eventId === grant.eventId &&
+                candidate.role === grant.role,
+            ) === index,
+        );
+        const tenantIds = [...new Set(grants.map(({ tenantId }) => tenantId))];
+        if (tenantIds.length !== 1) return null;
+        const tenantId = tenantIds[0];
+        if (tenantId === undefined) return null;
         return {
-          tenantId: membership.organizationId,
+          tenantId,
           userId: principal.userId,
           kind: "human",
-          grants,
+          grants: grants.map(({ eventId: grantedEventId, role }) => ({
+            eventId: grantedEventId,
+            role,
+          })),
         };
       }
 
-      const eventMemberships = (
+      const matchingOrganizations = (
         await Promise.all(
-          principal.memberships.map(async (membership) => ({
-            membership,
-            event: await cfpRepository.getEvent(membership.organizationId, eventId),
+          organizationIds.map(async (organizationId) => ({
+            organizationId,
+            event: await cfpRepository.getEvent(organizationId, eventId),
           })),
         )
       ).filter(({ event }) => event !== null);
-      if (eventMemberships.length !== 1) return null;
-      const [eventMembership] = eventMemberships;
-      if (eventMembership === undefined) return null;
-      const { membership } = eventMembership;
+      if (matchingOrganizations.length !== 1) return null;
+      const organizationId = matchingOrganizations[0]?.organizationId;
+      if (organizationId === undefined) return null;
+      const roles = evaluationRolesForPrincipal(principal, organizationId, eventId);
+      if (roles.length === 0) return null;
       return {
-        tenantId: membership.organizationId,
+        tenantId: organizationId,
         userId: principal.userId,
         kind: "human",
-        grants: evaluationRolesForOrganizationMembership(membership.role).map((role) => ({
-          tenantId: membership.organizationId,
-          eventId,
-          role,
-        })),
+        grants: roles.map((role) => ({ eventId, role })),
       };
     },
   };
@@ -8275,31 +8347,7 @@ export function createD1ApplicationDependencies(
   return {
     access: {
       async listOrganizationsForUser(principal) {
-        const rows = await options.database
-          .prepare(
-            `SELECT organizations.organization_id, organizations.name
-               FROM organizations
-              WHERE organizations.organization_id IN (
-                SELECT organization_id
-                  FROM organization_memberships
-                 WHERE user_id = ?
-                UNION
-                SELECT organization_id
-                  FROM participant_grants
-                 WHERE user_id = ? AND revoked_at IS NULL
-              )
-              ORDER BY organizations.name, organizations.organization_id`,
-          )
-          .bind(principal.userId, principal.userId)
-          .all<{ organization_id?: unknown; name?: unknown }>();
-        return rows.results.flatMap((row) =>
-          typeof row.organization_id === "string" &&
-          row.organization_id.trim().length > 0 &&
-          typeof row.name === "string" &&
-          row.name.trim().length > 0
-            ? [{ organizationId: row.organization_id, name: row.name }]
-            : [],
-        );
+        return listProductionOrganizationsForUser(options.database, principal.userId);
       },
       async listEvents(organizationId) {
         return (await eventRepository.listEvents(organizationId)).map((event) => ({
@@ -8391,6 +8439,7 @@ export function createD1ApplicationDependencies(
       },
     },
     events: { service: eventService, publication: publicationService },
+    eventInvitations: { service: options.eventRoleInvitationAdapters.service },
     authenticator,
     speaker: {
       service: speakerService,
