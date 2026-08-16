@@ -216,20 +216,26 @@ function mergeFieldHasConflict(
   contacts: readonly CrmContact[],
   field: CrmMergeScalarField,
 ): boolean {
-  const values = new Set(
-    contacts.map((contact) => mergeFieldValue(contact, field)).filter(mergeValuePresent),
-  );
+  const values = contacts.reduce<Set<string>>((values, contact) => {
+    const value = mergeFieldValue(contact, field);
+    if (mergeValuePresent(value)) {
+      values.add(value);
+    }
+    return values;
+  }, new Set<string>());
   return values.size > 1;
 }
 
 function mergeCustomFieldHasConflict(contacts: readonly CrmContact[], key: string): boolean {
-  const values = new Set(
-    contacts
-      .map((contact) =>
-        Object.hasOwn(contact.customFields, key) ? mergeValueText(contact.customFields[key]) : "",
-      )
-      .filter(mergeValuePresent),
-  );
+  const values = contacts.reduce<Set<string>>((values, contact) => {
+    const value = Object.hasOwn(contact.customFields, key)
+      ? mergeValueText(contact.customFields[key])
+      : "";
+    if (mergeValuePresent(value)) {
+      values.add(value);
+    }
+    return values;
+  }, new Set<string>());
   return values.size > 1;
 }
 
@@ -256,9 +262,9 @@ function contactDraft(contact: CrmContact | undefined): ContactDraft {
     headshotUrl: contactHeadshotUrl(contact),
     tags: contact?.tags.join(", ") ?? "",
     customFields: Object.entries(contact?.customFields ?? {})
-      .filter(
-        ([key]) =>
-          ![
+      .reduce<string[]>((lines, [key, value]) => {
+        if (
+          [
             "bio",
             "biography",
             "profileBio",
@@ -266,9 +272,13 @@ function contactDraft(contact: CrmContact | undefined): ContactDraft {
             "headshot",
             "headshotAssetId",
             "profileImage",
-          ].includes(key),
-      )
-      .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+          ].includes(key)
+        ) {
+          return lines;
+        }
+        lines.push(`${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+        return lines;
+      }, [])
       .join("\n"),
     notes: contact?.notes ?? "",
   };
@@ -2463,11 +2473,11 @@ export function CrmWorkspaceView({
                           {conflictingScalarFields.map(({ key: field, label }) => (
                             <fieldset className={styles.mergeConflict} key={field}>
                               <legend>{label} winner</legend>
-                              {mergeReviewContacts
-                                .filter((candidate) =>
-                                  mergeValuePresent(mergeFieldValue(candidate, field)),
-                                )
-                                .map((candidate) => (
+                              {mergeReviewContacts.reduce<ReactNode[]>((options, candidate) => {
+                                if (!mergeValuePresent(mergeFieldValue(candidate, field))) {
+                                  return options;
+                                }
+                                options.push(
                                   <label className={styles.mergeOption} key={candidate.id}>
                                     <input
                                       type="radio"
@@ -2497,18 +2507,20 @@ export function CrmWorkspaceView({
                                       · {displayName(candidate)}:{" "}
                                       {mergeFieldValue(candidate, field)}
                                     </span>
-                                  </label>
-                                ))}
+                                  </label>,
+                                );
+                                return options;
+                              }, [])}
                             </fieldset>
                           ))}
                           {conflictingCustomKeys.map((key) => (
                             <fieldset className={styles.mergeConflict} key={`custom-${key}`}>
                               <legend>Custom field “{key}” winner</legend>
-                              {mergeReviewContacts
-                                .filter((candidate) =>
-                                  mergeValuePresent(candidate.customFields[key]),
-                                )
-                                .map((candidate) => (
+                              {mergeReviewContacts.reduce<ReactNode[]>((options, candidate) => {
+                                if (!mergeValuePresent(candidate.customFields[key])) {
+                                  return options;
+                                }
+                                options.push(
                                   <label className={styles.mergeOption} key={candidate.id}>
                                     <input
                                       type="radio"
@@ -2538,8 +2550,10 @@ export function CrmWorkspaceView({
                                       · {displayName(candidate)}:{" "}
                                       {mergeValueText(candidate.customFields[key])}
                                     </span>
-                                  </label>
-                                ))}
+                                  </label>,
+                                );
+                                return options;
+                              }, [])}
                             </fieldset>
                           ))}
                         </div>

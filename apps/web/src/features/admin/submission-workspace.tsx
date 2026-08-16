@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -1442,13 +1442,16 @@ export function SubmissionDetailWorkspace({
                 the submission out of that reviewer&apos;s queue.
               </p>
               <ul className={styles.conflictList}>
-                {submission.reviewAssignments
-                  .filter((assignment) => assignment.conflict)
-                  .map((assignment) => (
-                    <li key={assignment.reviewer}>
-                      <strong>{assignment.reviewer}</strong> — {assignment.conflict}
-                    </li>
-                  ))}
+                {submission.reviewAssignments.reduce<ReactNode[]>((conflictItems, assignment) => {
+                  if (assignment.conflict) {
+                    conflictItems.push(
+                      <li key={assignment.reviewer}>
+                        <strong>{assignment.reviewer}</strong> — {assignment.conflict}
+                      </li>,
+                    );
+                  }
+                  return conflictItems;
+                }, [])}
               </ul>
               {submission.reviewAssignments.every((assignment) => !assignment.conflict) ? (
                 <p className={styles.noConflict}>No conflicts recorded for this submission.</p>

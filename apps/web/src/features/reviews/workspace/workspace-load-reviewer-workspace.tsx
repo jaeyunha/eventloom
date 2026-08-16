@@ -15,18 +15,20 @@ export async function loadReviewerWorkspace(
       : `/reviewer/workspace?eventId=${encodeURIComponent(eventId)}`;
   try {
     const result = await evaluationRequest<ApiReviewerWorkspaceResponse>(baseUrl, path);
-    return result.assignments
-      .filter(
-        (entry) =>
-          entry.assignment.status !== "abstained" && entry.assignment.status !== "superseded",
-      )
-      .map((entry) => ({
-        ...entry,
-        plan: {
-          ...entry.plan,
-          ...((entry.plan.status as string) === "active" ? { status: "open" as const } : {}),
+    return result.assignments.flatMap((entry) => {
+      if (entry.assignment.status === "abstained" || entry.assignment.status === "superseded") {
+        return [];
+      }
+      return [
+        {
+          ...entry,
+          plan: {
+            ...entry.plan,
+            ...((entry.plan.status as string) === "active" ? { status: "open" as const } : {}),
+          },
         },
-      }));
+      ];
+    });
   } catch (reason: unknown) {
     if (
       reason instanceof EvaluationRequestError &&

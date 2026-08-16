@@ -26,11 +26,13 @@ function uniqueOptions(
   key: "participantId" | "sessionId",
   label: "speakerLabel" | "sessionLabel",
 ): readonly (readonly [string, string])[] {
-  return [
-    ...new Map(
-      rows.filter((row) => row[key].length > 0).map((row) => [row[key], row[label]] as const),
-    ).entries(),
-  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const optionsByValue = new Map<string, string>();
+  for (const row of rows) {
+    if (row[key].length > 0) {
+      optionsByValue.set(row[key], row[label]);
+    }
+  }
+  return [...optionsByValue.entries()].sort((left, right) => left[1].localeCompare(right[1]));
 }
 
 export function FileLibraryFilters({ rows, filters, onChange }: FileLibraryFiltersProps) {

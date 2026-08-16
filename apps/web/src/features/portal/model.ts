@@ -204,7 +204,15 @@ export function findSubmissionForTask(task: PortalTask, submissions: readonly Po
 }
 
 function normalizedIds(values: readonly string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+  const seen = new Set<string>();
+  return values.reduce<string[]>((normalized, value) => {
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      normalized.push(trimmed);
+    }
+    return normalized;
+  }, []);
 }
 
 function authorizedSubmissionIds(
@@ -335,14 +343,18 @@ export function scopePortalViewToAuthorizedParticipants(
   const authorizedIds = scopedContext.submissionIds;
   const submissionMatches = (submissionId: string): boolean =>
     authorizedIds.some((authorizedId) => portalSubmissionIdsMatch(authorizedId, submissionId));
-  const submissions = view.submissions
-    .filter((submission) => submission.eventId === eventId && submissionMatches(submission.id))
-    .map((submission) => ({
+  const submissions = view.submissions.reduce<PortalSubmission[]>((filtered, submission) => {
+    if (submission.eventId !== eventId || !submissionMatches(submission.id)) {
+      return filtered;
+    }
+    filtered.push({
       ...submission,
       participantIds: submission.participantIds.filter((participantId) =>
         scopedContext.participantIds.includes(participantId),
       ),
-    }));
+    });
+    return filtered;
+  }, []);
   const tasks =
     selectedParticipant === null
       ? []

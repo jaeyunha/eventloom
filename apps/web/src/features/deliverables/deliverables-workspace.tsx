@@ -1214,12 +1214,14 @@ function DeliverablesTable({
     (left, right) => left[1].localeCompare(right[1]),
   );
   const visibleRows = filterContentRequestRows(rows, filters);
-  const visibleOutstandingIds = visibleRows
-    .filter((row) => isOutstanding(row.status))
-    .map((row) => row.task.id);
-  const allOutstandingIds = rows
-    .filter((row) => isOutstanding(row.status))
-    .map((row) => row.task.id);
+  const visibleOutstandingIds: string[] = [];
+  for (const row of visibleRows) {
+    if (isOutstanding(row.status)) visibleOutstandingIds.push(row.task.id);
+  }
+  const allOutstandingIds: string[] = [];
+  for (const row of rows) {
+    if (isOutstanding(row.status)) allOutstandingIds.push(row.task.id);
+  }
   const selectedOutstandingIds = selectedTaskIds.filter((taskId) =>
     allOutstandingIds.includes(taskId),
   );
@@ -2209,15 +2211,19 @@ export function DeliverablesWorkspaceView({
       .map(([id, label]) => ({
         id,
         label,
-        sessions: sessions
-          .filter(
-            (session) =>
+        sessions: (() => {
+          const eligibleSessions: { readonly id: string; readonly label: string }[] = [];
+          for (const session of sessions) {
+            if (
               session.status.toLocaleLowerCase() === "accepted" &&
               (session.speakerIds.includes(id) ||
-                session.speakerRoster.some((member) => member.id === id)),
-          )
-          .map((session) => ({ id: session.id, label: session.title }))
-          .sort((left, right) => left.label.localeCompare(right.label)),
+                session.speakerRoster.some((member) => member.id === id))
+            ) {
+              eligibleSessions.push({ id: session.id, label: session.title });
+            }
+          }
+          return eligibleSessions.sort((left, right) => left.label.localeCompare(right.label));
+        })(),
       }))
       .sort((left, right) => left.label.localeCompare(right.label));
   }, [profiles, rows, sessions]);
@@ -2257,11 +2263,10 @@ export function DeliverablesWorkspaceView({
     ) {
       setFilters(nextFilters);
     }
-    const visibleOutstandingIds = new Set(
-      filterContentRequestRows(rows, nextFilters)
-        .filter((row) => isOutstanding(row.status))
-        .map((row) => row.task.id),
-    );
+    const visibleOutstandingIds = new Set<string>();
+    for (const row of filterContentRequestRows(rows, nextFilters)) {
+      if (isOutstanding(row.status)) visibleOutstandingIds.add(row.task.id);
+    }
     setSelectedTaskIds((current) => current.filter((taskId) => visibleOutstandingIds.has(taskId)));
     setSelectedAssignmentId((current) =>
       current !== null && rows.some((row) => row.task.id === current) ? current : null,
@@ -2292,14 +2297,20 @@ export function DeliverablesWorkspaceView({
       : fileFamilies.find((family) =>
           family.versions.some((version) => version.id === selectedAsset.id),
         );
-  const authoritativeCurrentAsset =
-    selectedAsset === undefined
-      ? undefined
-      : matrixItems
-          ?.filter((item) =>
-            item.assets.some((candidate) => assetFamily(candidate) === assetFamily(selectedAsset)),
-          )
-          .flatMap((item) => (item.currentAsset === undefined ? [] : [item.currentAsset]))[0];
+  let authoritativeCurrentAsset: DeliverableAsset | undefined;
+  if (selectedAsset !== undefined && matrixItems !== undefined) {
+    let hasAuthoritativeCurrentAsset = false;
+    for (const item of matrixItems) {
+      if (item.assets.some((candidate) => assetFamily(candidate) === assetFamily(selectedAsset))) {
+        if (item.currentAsset === undefined) continue;
+        const currentAsset = item.currentAsset;
+        if (!hasAuthoritativeCurrentAsset) {
+          authoritativeCurrentAsset = currentAsset;
+          hasAuthoritativeCurrentAsset = true;
+        }
+      }
+    }
+  }
   const selectedAssetVersions =
     selectedAsset === undefined
       ? []

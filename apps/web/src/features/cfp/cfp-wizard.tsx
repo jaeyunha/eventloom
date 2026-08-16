@@ -707,6 +707,7 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
   );
 }
 
+
 function participantValue(
   participant: CfpParticipant,
   answers: DynamicAnswers,

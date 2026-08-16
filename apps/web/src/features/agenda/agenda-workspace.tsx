@@ -1421,9 +1421,12 @@ export function AgendaSuggestionPanel({
   const blockers = run?.candidateDiagnostics?.conflicts ?? [];
   const stale = run !== null && run.baseDraftVersion !== currentDraftVersion;
   const selectedAvailableChangeIds =
-    run?.diff.changes
-      .filter((change) => selectedChangeIds.includes(change.id))
-      .map((change) => change.id) ?? [];
+    run?.diff.changes.reduce<string[]>((availableIds, change) => {
+      if (selectedChangeIds.includes(change.id)) {
+        availableIds.push(change.id);
+      }
+      return availableIds;
+    }, []) ?? [];
   const canApply =
     run?.status === "pending" &&
     !busy &&

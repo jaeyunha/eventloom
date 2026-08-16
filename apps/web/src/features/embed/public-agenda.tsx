@@ -1,6 +1,6 @@
 "use client";
 
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { publishedProjectionsMatch } from "./api";
 import styles from "./embed.module.css";
@@ -24,6 +24,14 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
     left.localeCompare(right),
   );
+}
+function trackNameLabels(trackNames: readonly string[]): readonly ReactNode[] {
+  const labels: ReactNode[] = [];
+  for (const trackName of trackNames) {
+    if (trackName.trim().length === 0) continue;
+    labels.push(<span key={trackName}>Track: {trackName}</span>);
+  }
+  return labels;
 }
 
 function speakerRole(speaker: PublishedSpeaker): string {
@@ -125,11 +133,7 @@ export function PublicAgendaSessionDetail({
           <div className={styles.publicSessionCopy}>
             <div className={styles.publicSessionMeta}>
               {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-              {entry.trackNames
-                .filter((trackName) => trackName.trim().length > 0)
-                .map((trackName) => (
-                  <span key={trackName}>Track: {trackName}</span>
-                ))}
+              {trackNameLabels(entry.trackNames)}
             </div>
             <h3>Session details</h3>
             {hasDescription ? (
@@ -529,13 +533,7 @@ export function PublicAgendaView({
                                 {showField("format") && entry.format.trim() ? (
                                   <span>Format: {entry.format}</span>
                                 ) : null}
-                                {showField("track")
-                                  ? entry.trackNames
-                                      .filter((trackName) => trackName.trim().length > 0)
-                                      .map((trackName) => (
-                                        <span key={trackName}>Track: {trackName}</span>
-                                      ))
-                                  : null}
+                                {showField("track") ? trackNameLabels(entry.trackNames) : null}
                               </div>
                               <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
                               {showField("speakers") && presenters.length > 0 ? (

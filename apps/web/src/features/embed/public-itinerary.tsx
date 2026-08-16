@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./embed.module.css";
 import {
@@ -39,6 +40,14 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
     left.localeCompare(right),
   );
+}
+function trackNameLabels(trackNames: readonly string[]): readonly ReactNode[] {
+  const labels: ReactNode[] = [];
+  for (const trackName of trackNames) {
+    if (trackName.trim().length === 0) continue;
+    labels.push(<span key={trackName}>Track: {trackName}</span>);
+  }
+  return labels;
 }
 
 function truncateDescription(value: string): string {
@@ -566,11 +575,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                           </div>
                           <div className={styles.publicSessionCopy}>
                             <div className={styles.publicSessionMeta}>
-                              {entry.trackNames
-                                .filter((trackName) => trackName.trim().length > 0)
-                                .map((trackName) => (
-                                  <span key={trackName}>Track: {trackName}</span>
-                                ))}
+                              {trackNameLabels(entry.trackNames)}
                               {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
                             </div>
                             <h4>{entry.title}</h4>

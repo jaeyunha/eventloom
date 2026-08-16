@@ -355,9 +355,13 @@ function optionValue(value: unknown): string | null {
 
 function fieldAnswer(value: unknown, definition: SubmissionFieldDefinition | undefined): string {
   if (Array.isArray(value)) {
-    const values = value
-      .map((candidate) => fieldAnswer(candidate, definition))
-      .filter((candidate) => candidate !== "—");
+    const values: string[] = [];
+    const itemCount = value.length;
+    for (let index = 0; index < itemCount; index += 1) {
+      if (!(index in value)) continue;
+      const candidate = fieldAnswer(value[index], definition);
+      if (candidate !== "—") values.push(candidate);
+    }
     return values.length === 0 ? "—" : values.join(", ");
   }
   const raw = answerText(value);
@@ -655,11 +659,16 @@ export function mergeCanonicalSubmissionEvaluation(
   const assignments = index.assignmentsBySubmissionId.get(submission.id) ?? [];
   const decision = index.decisions[submission.id] ?? null;
   const aggregate = index.aggregateBySubmissionId.get(submission.id) ?? null;
-  const submittedReviewByAssignment = new Map(
-    submittedReviewResult.reviews
-      .filter((review) => review.submissionId === submission.id)
-      .map((review) => [review.assignmentId, review] as const),
-  );
+  const submittedReviewByAssignment = new Map<string, SubmittedReview>();
+  const reviewCount = submittedReviewResult.reviews.length;
+  for (let index = 0; index < reviewCount; index += 1) {
+    if (!(index in submittedReviewResult.reviews)) continue;
+    const review = submittedReviewResult.reviews[index];
+    if (review === undefined) continue;
+    if (review.submissionId === submission.id) {
+      submittedReviewByAssignment.set(review.assignmentId, review);
+    }
+  }
   const reviewerDisplayLabel = (reviewerId: string): string => {
     const member = reviewerMembers.find((candidate) => candidate.userId === reviewerId);
     return member?.name?.trim() || member?.email || reviewerId;

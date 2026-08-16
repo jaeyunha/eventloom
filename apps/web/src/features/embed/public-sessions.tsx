@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
 import type { EmbedDisplayField, EmbedLayout } from "./model";
@@ -12,6 +13,14 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
     left.localeCompare(right),
   );
+}
+function trackNameLabels(trackNames: readonly string[]): readonly ReactNode[] {
+  const labels: ReactNode[] = [];
+  for (const trackName of trackNames) {
+    if (trackName.trim().length === 0) continue;
+    labels.push(<span key={trackName}>Track: {trackName}</span>);
+  }
+  return labels;
 }
 
 function truncateDescription(value: string): string {
@@ -264,11 +273,7 @@ export function PublicSessionsView({
                       {entry.format.trim() && showField("format") ? (
                         <span>Format: {entry.format}</span>
                       ) : null}
-                      {showField("track")
-                        ? entry.trackNames
-                            .filter((trackName) => trackName.trim().length > 0)
-                            .map((trackName) => <span key={trackName}>Track: {trackName}</span>)
-                        : null}
+                      {showField("track") ? trackNameLabels(entry.trackNames) : null}
                     </div>
                     <h3>{entry.title}</h3>
                     {showField("speakers") ? (

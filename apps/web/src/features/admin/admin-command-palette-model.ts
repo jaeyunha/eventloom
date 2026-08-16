@@ -142,24 +142,29 @@ export function buildAdminCommandResults({
   pages: readonly AdminCommandPage[];
   query: string;
 }>): readonly AdminCommandResult[] {
-  const eventResults: readonly AdminCommandEventResult[] =
-    organizationId === null
-      ? []
-      : events
-          .filter((event) =>
-            matchesQuery(`${event.name} ${event.status} ${event.startsAt} ${event.endsAt}`, query),
-          )
-          .map((event) => ({
-            current: event.id === currentEventId,
-            endsAt: event.endsAt,
-            group: "Events",
-            href: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(event.id)}`,
-            key: `event:${event.id}`,
-            kind: "event",
-            label: event.name,
-            startsAt: event.startsAt,
-            status: event.status,
-          }));
+  const eventResults: AdminCommandEventResult[] = [];
+  if (organizationId !== null) {
+    const eventCount = events.length;
+    for (let index = 0; index < eventCount; index += 1) {
+      if (!(index in events)) continue;
+      const event = events[index];
+      if (event === undefined) continue;
+      if (!matchesQuery(`${event.name} ${event.status} ${event.startsAt} ${event.endsAt}`, query)) {
+        continue;
+      }
+      eventResults.push({
+        current: event.id === currentEventId,
+        endsAt: event.endsAt,
+        group: "Events",
+        href: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(event.id)}`,
+        key: `event:${event.id}`,
+        kind: "event",
+        label: event.name,
+        startsAt: event.startsAt,
+        status: event.status,
+      });
+    }
+  }
 
   const seenPageHrefs = new Set<string>();
   const pageResults = pages.flatMap((page): readonly AdminCommandPageResult[] => {

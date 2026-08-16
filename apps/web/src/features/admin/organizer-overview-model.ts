@@ -535,11 +535,19 @@ function parseOrganizerEventEmbedConfiguration(
     if (!Array.isArray(listValue) || !listValue.every((item) => typeof item === "string")) {
       throw eventRecordError(`${listField} must be an array of strings.`);
     }
-    return listValue
-      .map((item) => item.trim())
-      .filter((item, index, list) => {
-        return item.length > 0 && list.indexOf(item) === index;
-      });
+    const values: string[] = [];
+    const seen = new Set<string>();
+    const itemCount = listValue.length;
+    for (let index = 0; index < itemCount; index += 1) {
+      if (!(index in listValue)) continue;
+      const itemValue = listValue[index];
+      if (typeof itemValue !== "string") continue;
+      const item = itemValue.trim();
+      if (item.length === 0 || seen.has(item)) continue;
+      seen.add(item);
+      values.push(item);
+    }
+    return values;
   };
 
   return {
@@ -903,12 +911,12 @@ function localDateTimeToIso(value: string, timeZone: string): string | null {
     hourCycle: "h23",
   });
   for (let iteration = 0; iteration < 3; iteration += 1) {
-    const parts = Object.fromEntries(
-      formatter
-        .formatToParts(new Date(candidate))
-        .filter((part) => part.type !== "literal")
-        .map((part) => [part.type, part.value]),
-    );
+    const parts: Record<string, string> = {};
+    for (const part of formatter.formatToParts(new Date(candidate))) {
+      if (part.type !== "literal") {
+        parts[part.type] = part.value;
+      }
+    }
     const wallMilliseconds = Date.UTC(
       Number(parts.year),
       Number(parts.month) - 1,
@@ -926,20 +934,20 @@ function localDateTimeToIso(value: string, timeZone: string): string | null {
 function isoToLocalDateTime(value: string, timeZone: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf()) || !validEventTimeZone(timeZone)) return "";
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
+  const parts: Record<string, string> = {};
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)) {
+    if (part.type !== "literal") {
+      parts[part.type] = part.value;
+    }
+  }
   if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) return "";
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }

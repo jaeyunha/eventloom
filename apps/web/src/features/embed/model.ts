@@ -14,20 +14,22 @@ export function publishedSpeakerSessions(
   entries: readonly PublishedAgendaEntry[],
 ): readonly PublishedSpeakerSession[] {
   const sessionIds = new Set(speaker.sessionIds);
-  return entries
-    .filter((entry) => sessionIds.has(entry.sessionId))
-    .map((entry) => ({
+  const sessions: PublishedSpeakerSession[] = [];
+  for (const entry of entries) {
+    if (!sessionIds.has(entry.sessionId)) continue;
+    sessions.push({
       id: entry.sessionId,
       title: entry.title,
       startsAt: entry.startsAt,
       endsAt: entry.endsAt,
       roomName: entry.roomName,
       trackNames: entry.trackNames,
-    }))
-    .sort((left, right) => {
-      const startComparison = left.startsAt.localeCompare(right.startsAt);
-      return startComparison !== 0 ? startComparison : left.id.localeCompare(right.id);
     });
+  }
+  return sessions.sort((left, right) => {
+    const startComparison = left.startsAt.localeCompare(right.startsAt);
+    return startComparison !== 0 ? startComparison : left.id.localeCompare(right.id);
+  });
 }
 
 export function publishedEntrySpeakers(

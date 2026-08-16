@@ -397,9 +397,12 @@ export function createAgendaApi(
         updateDraft(
           input.eventId,
           input.expectedVersion,
-          workspace.draft.entries
-            .filter((entry) => entry.id !== input.entryId)
-            .map(draftEntryPayload),
+          workspace.draft.entries.reduce<AgendaDraftEntryPayload[]>((entries, entry) => {
+            if (entry.id !== input.entryId) {
+              entries.push(draftEntryPayload(entry));
+            }
+            return entries;
+          }, []),
         ),
       );
     },
