@@ -34,6 +34,7 @@ import {
 import styles from "./agenda-workspace.module.css";
 import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
 import {
+  acceptedSessionCount,
   agendaDays,
   conflictsForEntry,
   eventDates,
@@ -644,6 +645,7 @@ export function AgendaBoard({
     busy && (busyOperation === undefined || busyOperation === null || busyOperation === operation);
   const settingsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/settings`;
   const hasRooms = data.rooms.length > 0;
+  const acceptedCount = acceptedSessionCount(data);
 
   useEffect(() => {
     const suggestionId = suggestionRun?.id;
@@ -1314,12 +1316,19 @@ export function AgendaBoard({
                 <h2 id="schedule-heading">Build the event day</h2>
                 <p>Choose a day, then place accepted sessions into the schedule.</p>
               </div>
-              {data.unscheduledSessions.length === 0 ? (
+              {data.unscheduledSessions.length === 0 && acceptedCount > 0 ? (
                 <div className={styles.placementComplete} role="status">
                   <CheckCircle2 aria-hidden="true" />
                   <span>
                     <strong>Schedule complete</strong>
                     All accepted sessions placed
+                  </span>
+                </div>
+              ) : data.unscheduledSessions.length === 0 ? (
+                <div className={styles.placementEmpty} role="status">
+                  <span>
+                    <strong>No accepted sessions yet</strong>
+                    Accept submissions to start building the schedule.
                   </span>
                 </div>
               ) : (
@@ -1415,10 +1424,15 @@ export function AgendaBoard({
                     setShowAddForm(true);
                   }}
                 />
-              ) : (
+              ) : acceptedCount > 0 ? (
                 <div className={styles.placementDockEmpty} role="status">
                   <strong>All accepted sessions are placed</strong>
                   <span>Drag a scheduled session here to return it to the queue.</span>
+                </div>
+              ) : (
+                <div className={styles.placementDockEmpty} role="status">
+                  <strong>No accepted sessions yet</strong>
+                  <span>Accepted sessions will appear here once they are ready to place.</span>
                 </div>
               )}
             </section>

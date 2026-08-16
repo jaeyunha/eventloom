@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agendaDays, eventDates, publicationReadiness } from "./model";
+import { acceptedSessionCount, agendaDays, eventDates, publicationReadiness } from "./model";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const data: AgendaWorkspaceData = {
@@ -45,6 +45,7 @@ const data: AgendaWorkspaceData = {
   },
   rooms: [],
   tracks: [],
+  acceptedSessionIds: ["session_early", "session_later"],
   unscheduledSessions: [],
   revisions: [],
   currentPublishedRevision: null,
@@ -63,6 +64,28 @@ function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
 }
 
 describe("agenda workspace model", () => {
+  it("counts unique authoritative accepted session IDs", () => {
+    expect(acceptedSessionCount(data)).toBe(2);
+    expect(
+      acceptedSessionCount({
+        acceptedSessionIds: ["session_early", "session_early"],
+      }),
+    ).toBe(1);
+  });
+
+  it("reports zero accepted sessions when nothing is scheduled or queued", () => {
+    expect(acceptedSessionCount({ acceptedSessionIds: [] })).toBe(0);
+  });
+
+  it("does not count retained scheduled entries that are no longer accepted", () => {
+    const staleSchedule = {
+      ...data,
+      acceptedSessionIds: [],
+    };
+
+    expect(acceptedSessionCount(staleSchedule)).toBe(0);
+  });
+
   it("groups and orders draft entries by local event day", () => {
     const days = agendaDays(data.draft.entries);
 
