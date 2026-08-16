@@ -105,6 +105,7 @@ export class RequestAuthenticator {
       kind: "user",
       sessionId: session.sessionId,
       userId: session.userId,
+      displayName: session.displayName ?? session.email,
       email: session.email,
       memberships: session.memberships,
       reviewerGrants: session.reviewerGrants,

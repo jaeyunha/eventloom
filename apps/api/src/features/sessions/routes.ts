@@ -201,6 +201,7 @@ function organizer(context: SessionContext, organizationId: string): SessionActo
   return {
     tenantId: organizationId,
     userId: principal.userId,
+    displayName: principal.displayName ?? principal.email,
     role: role === "owner" ? "owner" : role === "organizer" ? "organizer" : "admin",
     kind: "user",
   };

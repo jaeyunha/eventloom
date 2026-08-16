@@ -56,6 +56,7 @@ describe("OrganizerReviewOverview", () => {
     expect(markup).toContain("Page 1 of 3");
     expect(markup).toContain("Submission 10");
     expect(markup).not.toContain("Submission 11");
+    expect(markup).not.toContain("SUB-001");
     expect(markup).toContain("Previous");
     expect(markup).toContain("Next");
   });

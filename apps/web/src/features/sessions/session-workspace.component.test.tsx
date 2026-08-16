@@ -138,8 +138,10 @@ describe("sessions workspace presentation", () => {
     expect(markup).toContain('role="checkbox"');
     expect(markup).toContain("Change history");
     expect(markup).toContain("Avery Kim");
-    expect(markup).toContain("Version 1 - Created");
-    expect(markup).toContain("Restore version 1");
+    expect(markup).toContain("<strong>Created</strong>");
+    expect(markup).not.toContain("Version 1");
+    expect(markup).toContain("Restore this revision");
+    expect(markup).not.toContain("Restore version");
     expect(markup).toContain("Current");
   });
 

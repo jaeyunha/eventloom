@@ -342,6 +342,7 @@ function localAuthenticator(
       return {
         sessionId: persona.sessionId,
         userId: persona.userId,
+        displayName: persona.name,
         email: persona.email,
         emailVerified: true,
         expiresAt: FAR_FUTURE,

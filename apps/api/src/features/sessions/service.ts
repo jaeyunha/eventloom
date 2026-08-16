@@ -357,11 +357,9 @@ function sessionIsPubliclyApproved(session: Session): boolean {
 }
 
 function actorLabel(actor: SessionActor): string {
-  const record = actor as unknown as Record<string, unknown>;
-  const displayName = record.displayName ?? record.name;
-  return typeof displayName === "string" && displayName.trim().length > 0
-    ? displayName.trim()
-    : actor.userId;
+  const displayName = actor.displayName?.trim();
+  if (displayName && displayName !== actor.userId) return displayName;
+  return actor.kind === "automation" ? "Eventloom automation" : "Authorized organizer";
 }
 
 function historyEntry(

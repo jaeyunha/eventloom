@@ -472,11 +472,9 @@ function SessionHistory({
             <li className={styles.historyItem} key={entry.id}>
               <div className={styles.historyHeader}>
                 <div className={styles.historyCopy}>
-                  <strong>
-                    Version {entry.version} - {formatAction(entry.action)}
-                  </strong>
+                  <strong>{formatAction(entry.action)}</strong>
                   <span className={styles.muted}>
-                    {entry.actorLabel ?? entry.actorId} -{" "}
+                    {entry.actorLabel ?? "Authorized organizer"} -{" "}
                     <SessionHistoryTimestamp value={entry.occurredAt} />
                   </span>
                 </div>
@@ -495,7 +493,7 @@ function SessionHistory({
                       })
                     }
                   >
-                    Restore version {entry.version}
+                    Restore this revision
                   </Button>
                 )}
               </div>

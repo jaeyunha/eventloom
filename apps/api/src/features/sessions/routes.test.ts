@@ -9,7 +9,13 @@ import { InMemorySessionRepository, SessionService } from "./service";
 const now = new Date("2026-08-09T12:00:00.000Z");
 
 function actor(tenantId = "tenant-a") {
-  return { tenantId, userId: "organizer-1", role: "organizer" as const, kind: "user" as const };
+  return {
+    tenantId,
+    userId: "organizer-1",
+    displayName: "Olivia Organizer",
+    role: "organizer" as const,
+    kind: "user" as const,
+  };
 }
 
 function principal(organizationId = "tenant-a"): AuthPrincipal {
@@ -17,6 +23,7 @@ function principal(organizationId = "tenant-a"): AuthPrincipal {
     kind: "user",
     sessionId: "auth-session",
     userId: "organizer-1",
+    displayName: "Olivia Organizer",
     email: "organizer@example.com",
     memberships: [{ organizationId, role: "admin" }],
     speakerGrants: [],
@@ -556,7 +563,7 @@ describe("organizer session settings domain", () => {
           version: 2,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Olivia Organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract",
@@ -566,7 +573,7 @@ describe("organizer session settings domain", () => {
           version: 3,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Olivia Organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract with appended detail",
@@ -597,7 +604,7 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Olivia Organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract",
@@ -608,7 +615,7 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "organizer-1",
+          actorLabel: "Olivia Organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract with appended detail",
@@ -657,7 +664,7 @@ describe("organizer session settings domain", () => {
       action: "restored",
       version: 4,
       actorId: "organizer-1",
-      actorLabel: "organizer-1",
+      actorLabel: "Olivia Organizer",
       occurredAt: now.toISOString(),
     });
     expect((await readPublishedContent()).sessions).toEqual([]);
@@ -692,7 +699,7 @@ describe("organizer session settings domain", () => {
       action: "approved",
       version: 5,
       actorId: "organizer-1",
-      actorLabel: "organizer-1",
+      actorLabel: "Olivia Organizer",
       occurredAt: now.toISOString(),
     });
     expect(await readPublishedContent()).toEqual({

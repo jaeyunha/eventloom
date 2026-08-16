@@ -499,7 +499,7 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
   return {
     eventId: submission.eventId,
     id: submission.id,
-    title: title === "—" ? "Untitled submission" : title,
+    title: title === "—" ? "No title" : title,
     status: submission.status,
     track: answer("track"),
     format: answer("format"),
