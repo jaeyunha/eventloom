@@ -17,6 +17,8 @@ import {
   CommunicationsWorkspaceView,
   communicationNavigationCacheKey,
   communicationNavigationCacheTags,
+} from "./communications-workspace";
+import {
   communicationTemplateSelectionFromKey,
   communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,
@@ -24,7 +26,7 @@ import {
   invalidateCommunicationPreviewState,
   loadCommunicationTemplates,
   previewAudienceForTemplate,
-} from "./communications-workspace";
+} from "./communications-workspace-model";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

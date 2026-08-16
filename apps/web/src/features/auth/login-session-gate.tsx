@@ -1,8 +1,8 @@
 "use client";
 
 import { type ReactNode, useEffect, useState } from "react";
-import { loadAuthenticatedLoginDestination } from "./login-session-loader";
 import styles from "./login-form.module.css";
+import { loadAuthenticatedLoginDestination } from "./login-session-loader";
 
 export function LoginSessionGate({
   children,

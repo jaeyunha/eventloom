@@ -1,4 +1,4 @@
-import type { CfpConfiguration } from "./cfp-editor";
+import type { CfpConfiguration } from "./cfp-editor-model";
 
 export function createTestCfpConfiguration(eventId = "summit-2026"): CfpConfiguration {
   return {

@@ -2,8 +2,8 @@ import { Fragment, type ReactNode } from "react";
 import {
   formatPublishedContentDate,
   parseSafeMarkup,
-  safePublishedUrl,
   type SafeMarkupNode,
+  safePublishedUrl,
 } from "./portal-published-content-model";
 import styles from "./portal-workspace.module.css";
 import type { PortalResource, PortalWikiPage } from "./types";

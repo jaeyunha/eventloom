@@ -114,10 +114,14 @@ describe("navigation data cache", () => {
       return revision;
     };
 
-    await expect(cache.read({ key: "overview", tags: ["event:event-1"], load })).resolves.toBe(1);
-    await expect(cache.read({ key: "overview", tags: ["event:event-1"], load })).resolves.toBe(1);
     await expect(
-      cache.read({ key: "overview", tags: ["event:event-1"], load, fresh: true }),
+      cache.read<number>({ key: "overview", tags: ["event:event-1"], load }),
+    ).resolves.toBe(1);
+    await expect(
+      cache.read<number>({ key: "overview", tags: ["event:event-1"], load }),
+    ).resolves.toBe(1);
+    await expect(
+      cache.read<number>({ key: "overview", tags: ["event:event-1"], load, fresh: true }),
     ).resolves.toBe(2);
     expect(cache.peek<number>("overview")).toBe(2);
   });
@@ -172,7 +176,7 @@ describe("navigation data cache", () => {
   it("keeps authoritative writes ahead of older pending reads", async () => {
     const cache = createNavigationDataCache();
     const pendingResult = deferred<string>();
-    const pendingRead = cache.read({
+    const pendingRead = cache.read<string>({
       key: "event",
       tags: ["event:event-1"],
       load: () => pendingResult.promise,

@@ -27,7 +27,7 @@ describe("ReviewerShell", () => {
     expect(markup).toContain("Reviewer");
     expect(markup).toContain("All assigned events");
     expect(markup).toContain('aria-current="page"');
-    expect(markup).toContain('aria-label="Toggle color theme"');
+    expect(markup).toContain('aria-label="Choose color theme"');
     expect(markup).toContain('data-reviewer-sign-out="true"');
     expect((markup.match(/<main\b/gu) ?? []).length).toBe(1);
   });

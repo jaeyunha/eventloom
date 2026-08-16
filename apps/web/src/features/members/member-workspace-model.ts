@@ -1,4 +1,4 @@
-import { memberRoles, type MemberRole } from "./api";
+import { type MemberRole, memberRoles } from "./api";
 
 const reviewerOnlyInviteRoles = ["reviewer"] as const;
 

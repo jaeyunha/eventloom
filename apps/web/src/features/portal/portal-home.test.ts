@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { portalHomeReadinessPresentation, selectNextOutstandingPortalTask } from "./portal-home-model";
+import {
+  portalHomeReadinessPresentation,
+  selectNextOutstandingPortalTask,
+} from "./portal-home-model";
 import type { PortalTask } from "./types";
 
 function task(overrides: Partial<PortalTask> = {}): PortalTask {

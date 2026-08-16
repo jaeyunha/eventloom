@@ -2,8 +2,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CfpApi } from "../cfp/api";
+import { CfpEditor } from "./cfp-editor";
+import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 import {
-  CfpEditor,
   cfpActiveSectionThreshold,
   cfpContainerScrollTop,
   cfpMinimumDate,
@@ -22,8 +23,7 @@ import {
   updateCfpEditorField,
   updateCfpShowWhenCondition,
   validateCfpDateRange,
-} from "./cfp-editor";
-import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
+} from "./cfp-editor-model";
 
 describe("CFP editor", () => {
   it("defaults new CFPs to twenty proposals per account", () => {

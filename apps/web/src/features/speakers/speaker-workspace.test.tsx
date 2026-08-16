@@ -12,36 +12,40 @@ import {
   type SpeakerRosterEnvelope,
   type SpeakerTask,
 } from "./api";
+import { SpeakerAssetDownload, SpeakerAssetMetadata, SpeakerHeadshot } from "./speaker-assets";
+import {
+  duplicateEmailConflicts,
+  speakerErrorDiagnostic,
+  speakerMutationOutcomeUnknown,
+  speakerProgressFor,
+  speakerSecondaryLoadKey,
+} from "./speaker-data-logic";
 import {
   acceptedSpeakerSessions,
-  createSpeakerTaskAssignment,
-  duplicateEmailConflicts,
-  filterSpeakerRoster,
-  filterSpeakersByAttention,
   organizerHeadshotPreviewKey,
   organizerHeadshotPreviewPath,
   organizerHeadshotPreviewRequestKey,
   organizerHeadshotSubmissionId,
-  retainInvitationHistory,
-  SPEAKER_WELCOME_EMAIL_STARTER,
-  SpeakerAssetDownload,
-  SpeakerAssetMetadata,
+  validateOrganizerHeadshotFile,
+} from "./speaker-headshot-logic";
+import { SpeakerInvitationControls } from "./speaker-invitations";
+import {
+  filterSpeakerRoster,
+  filterSpeakersByAttention,
   type SpeakerAttentionFilter,
-  SpeakerHeadshot,
-  SpeakerInvitationControls,
-  SpeakerWorkspace,
-  speakerErrorDiagnostic,
-  speakerInvitationReady,
-  speakerMutationOutcomeUnknown,
-  speakerOnboardingTaskDefinitions,
-  speakerProgressFor,
   speakerProgressMatches,
-  speakerSecondaryLoadKey,
+} from "./speaker-roster-logic";
+import {
+  createSpeakerTaskAssignment,
+  retainInvitationHistory,
+  speakerInvitationReady,
+  speakerOnboardingTaskDefinitions,
   taskStatusTone,
   travelLogisticsFor,
-  validateOrganizerHeadshotFile,
   validateSpeakerTaskAssignment,
-} from "./speaker-workspace";
+} from "./speaker-task-model";
+import { SpeakerWorkspace } from "./speaker-workspace";
+import { SPEAKER_WELCOME_EMAIL_STARTER } from "./speaker-workspace-types";
 
 const speaker: SpeakerRecord = {
   eventId: "event-1",

@@ -24,7 +24,6 @@ type LoadState =
   | { readonly status: "ready"; readonly data: EventOverviewData }
   | { readonly status: "error"; readonly message: string };
 
-
 export function EventOverviewWorkspace({
   organizationId,
   eventId: fallbackEventId,

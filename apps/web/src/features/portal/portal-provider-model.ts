@@ -1,8 +1,5 @@
 import { createPortalApi, type PortalApi, PortalApiError } from "./api";
-import {
-  portalSubmissionIdsMatch,
-  scopePortalContextToAuthorizedParticipants,
-} from "./model";
+import { portalSubmissionIdsMatch, scopePortalContextToAuthorizedParticipants } from "./model";
 import type {
   PortalAsset,
   PortalCapability,
@@ -92,7 +89,9 @@ export function portalViewAfterLoadFailure(
   return preserveCurrentView ? previousView : null;
 }
 
-export function normalizeCapabilities(value: readonly PortalCapability[] | undefined): PortalCapability[] {
+export function normalizeCapabilities(
+  value: readonly PortalCapability[] | undefined,
+): PortalCapability[] {
   if (!value) {
     return [];
   }
@@ -309,7 +308,11 @@ export function assetIdAuthorized(
     view?.assets?.find((candidate) => candidate.id === assetId);
   return asset !== undefined && assetBelongsToPortalContext(asset, target, view?.tasks ?? []);
 }
-export function taskIdAuthorized(taskId: string, target: PortalContext, view: PortalView | null): boolean {
+export function taskIdAuthorized(
+  taskId: string,
+  target: PortalContext,
+  view: PortalView | null,
+): boolean {
   const task = view?.tasks.find((candidate) => candidate.id === taskId);
   return task !== undefined && taskBelongsToPortalContext(task, target);
 }
@@ -325,7 +328,7 @@ export async function loadPortalRosters(
   signal?: AbortSignal,
 ): Promise<PortalRosterLoadResult> {
   const failures: unknown[] = [];
-  const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
+  const safely = async <T>(operation: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await operation();
     } catch (operationError) {

@@ -3,9 +3,9 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
-import { portalContentAvailability } from "./portal-ui-model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
+import { portalContentAvailability } from "./portal-ui-model";
 import type { PortalSubmissionStatus, PortalTaskStatus } from "./types";
 
 export { PortalFrame } from "./portal-shell";

@@ -19,26 +19,28 @@ import {
 import {
   authorizeContentCollectionNavigationSnapshot,
   ContentRequestInspector,
-  contentRequestMetrics,
-  type DeliverableRow,
   DeliverablesWorkspaceView,
   deliverablesCoreCacheInvalidationTags,
   deliverablesCoreCacheKey,
   deliverablesCoreCacheTags,
+  loadDeliverablesCoreSnapshot,
+  ReminderPreview,
+} from "./deliverables-workspace";
+import {
+  contentRequestMetrics,
+  type DeliverableRow,
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
   deliverablesSessionHistoryKey,
   eligibleSpeakerHeadshotSessions,
   filterContentRequestRows,
   isDeliverablesWorkspaceScopeCurrent,
-  loadDeliverablesCoreSnapshot,
   loadDeliverablesSessionHistory,
-  ReminderPreview,
   resolveSpeakerHeadshotSubmissionId,
   settleDeliverablesAssetDetailRequests,
   startDeliverablesCoreRequests,
   triggerDeliverablesDownload,
-} from "./deliverables-workspace";
+} from "./deliverables-workspace-model";
 import { projectFileFamilies } from "./file-family-model";
 import { FileReviewDrawerBody } from "./file-review-drawer";
 
@@ -1036,6 +1038,26 @@ describe("deliverables core navigation cache", () => {
     expect(cache.peek(key)).toBeUndefined();
     expect(deliverablesCoreCacheKey("org-1", "event-2", "files")).not.toBe(key);
   });
+
+  it("loads task fallback data before caching a Files snapshot", async () => {
+    const api = {
+      listSessions: vi.fn().mockResolvedValue([session]),
+      listTasks: vi.fn().mockResolvedValue([task]),
+      listAssets: vi.fn().mockResolvedValue([assetV2]),
+      listProfiles: vi.fn().mockResolvedValue([profile]),
+    } as unknown as DeliverablesApi;
+
+    await expect(loadDeliverablesCoreSnapshot(api, "files")).resolves.toEqual({
+      sessions: [session],
+      tasks: [task],
+      assets: [assetV2],
+      profiles: [profile],
+    });
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
+    expect(api.listTasks).toHaveBeenCalledTimes(1);
+    expect(api.listAssets).toHaveBeenCalledTimes(1);
+    expect(api.listProfiles).toHaveBeenCalledTimes(1);
+  });
 });
 describe("deliverables workspace", () => {
   it("routes session content work to the canonical Sessions workspace", () => {
@@ -1055,6 +1077,25 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Open Sessions");
     expect(markup).not.toContain("Session title and abstract");
     expect(markup).not.toContain("Loading session change history");
+  });
+  it("uses Next Link for private organizer destinations while retaining skip anchors", () => {
+    expect(deliverablesWorkspaceSource).toContain('import Link from "next/link";');
+    expect(deliverablesWorkspaceSource).toContain("<Link href={href}>Open Sessions</Link>");
+    expect(deliverablesWorkspaceSource).toContain("<Link href={href}>Open Speakers</Link>");
+    expect(deliverablesWorkspaceSource).not.toContain("<a href={href}>");
+    expect(deliverablesWorkspaceSource).toContain(
+      '<a href={filesMode ? "#files-content" : "#deliverables-content"} className={styles.skipLink}>',
+    );
+
+    expect(fileLibrarySource).toContain('import Link from "next/link";');
+    expect(fileLibrarySource).toContain(
+      "<Link\n                href={`/admin/organizations/" +
+        "$" +
+        "{encodeURIComponent(\n                  organizationId,\n                )}/events/" +
+        "$" +
+        "{encodeURIComponent(eventId)}/deliverables`}\n              >",
+    );
+    expect(fileLibrarySource).not.toContain("<a");
   });
   it("shows a detail-resource error without replacing a successful sibling", () => {
     const markup = renderToStaticMarkup(

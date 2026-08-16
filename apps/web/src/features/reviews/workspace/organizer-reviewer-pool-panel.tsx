@@ -23,8 +23,8 @@ import {
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
 import type { OrganizationMember, ReviewerPool } from "../../members/api";
-import type { ReviewerPoolDraft } from "./organizer-reviewer-pool-model";
 import styles from "../review-workspace.module.css";
+import type { ReviewerPoolDraft } from "./organizer-reviewer-pool-model";
 
 interface OrganizerReviewerPoolViewProps {
   readonly roundName: string;

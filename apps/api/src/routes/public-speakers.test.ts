@@ -44,7 +44,16 @@ const projection: PublishedSpeakerProjection = {
   ],
   sourceHash: "speaker-hash-1",
 };
-const publishedSpeaker = projection.speakers[0]!;
+
+function firstPublishedSpeaker(value: PublishedSpeakerProjection) {
+  const speaker = value.speakers[0];
+  if (speaker === undefined) {
+    throw new Error("Expected the public speaker fixture to contain one speaker.");
+  }
+  return speaker;
+}
+
+const publishedSpeaker = firstPublishedSpeaker(projection);
 
 const manifest: ProgramPublicationManifest = {
   id: "program-release-1",

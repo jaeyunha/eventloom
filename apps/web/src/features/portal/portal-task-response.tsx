@@ -6,13 +6,13 @@ import { WorkspaceActionBar, WorkspaceFormSection } from "../../components/works
 import { usePortal } from "./portal-provider";
 import styles from "./portal-task-form.module.css";
 import { PortalTaskResponseField } from "./portal-task-response-field";
+import type { ResponseFieldErrors } from "./portal-task-response-model";
 import {
   firstInvalidFieldId,
   initialAnswers,
   responseFieldErrors,
   returnedOrganizerFeedback,
 } from "./portal-task-response-model";
-import type { ResponseFieldErrors } from "./portal-task-response-model";
 import type { PortalFormAnswer, PortalTask } from "./types";
 
 export function PortalTaskResponseEditor({ task }: Readonly<{ task: PortalTask }>) {

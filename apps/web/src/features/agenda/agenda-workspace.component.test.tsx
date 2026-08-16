@@ -5,11 +5,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createNavigationDataCache } from "@/lib/navigation-data-cache";
 import {
-  AGENDA_VIEW_MODES,
   AgendaBoard,
   type AgendaBusyOperation,
   AgendaSuggestionPanel,
   type AgendaSuggestionRunView,
+} from "./agenda-workspace";
+import {
+  AGENDA_VIEW_MODES,
   type AgendaViewMode,
   agendaWorkspaceCacheKey,
   agendaWorkspaceCacheTags,
@@ -22,7 +24,7 @@ import {
   loadCanonicalAgendaWorkspace,
   loadCanonicalAgendaWorkspaceWithCache,
   serializeAgendaSuggestionOptions,
-} from "./agenda-workspace";
+} from "./agenda-workspace-model";
 import { createAgendaApi } from "./api";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
@@ -711,7 +713,7 @@ describe("agenda organizer workspace", () => {
   });
 
   it("does not expose raw audit actor identifiers in organizer-facing markup", () => {
-    const rawActorId = "00000000-0000-4000-8000-000000000001";
+    const rawActorId = "internal-actor-id-should-not-render";
     const rawTimestampToken = "2099-12-31T23:59:59.000Z";
     const markup = renderBoard({
       ...data,

@@ -199,15 +199,15 @@
   box-shadow: var(--shadow-card);
 }
 
-.accountArea [role="menu"] > p {
+:where(.accountArea) [role="menu"] > p {
   margin: 0;
   padding: 0.55rem 0.65rem;
   color: var(--muted-foreground);
   font-size: 0.72rem;
 }
 
-.accountArea [role="menu"] a,
-.accountArea [role="menu"] button {
+:where(.accountArea) [role="menu"] a,
+:where(.accountArea) [role="menu"] button {
   display: flex;
   width: 100%;
   gap: 0.55rem;
@@ -224,8 +224,8 @@
   cursor: pointer;
 }
 
-.accountArea [role="menu"] a:hover,
-.accountArea [role="menu"] button:hover {
+:where(.accountArea) [role="menu"] a:hover,
+:where(.accountArea) [role="menu"] button:hover {
   background: var(--muted);
 }
 

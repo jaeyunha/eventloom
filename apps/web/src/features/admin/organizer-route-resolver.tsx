@@ -4,8 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useOrganizerOrganizationId } from "./admin-shell";
 import {
-  organizerRouteResolverHref,
   type OrganizerRouteResolverDestination,
+  organizerRouteResolverHref,
 } from "./organizer-route-resolver-model";
 
 export function OrganizerRouteResolver({

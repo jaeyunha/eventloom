@@ -44,7 +44,7 @@ describe("organizer shared workspace shell", () => {
     );
 
     expect(markup).toContain('aria-label="Sign out"');
-    expect(markup).toContain('aria-label="Toggle color theme"');
+    expect(markup).toContain('aria-label="Choose color theme"');
     expect(markup).toContain('aria-keyshortcuts="Meta+K Control+K"');
     expect(markup).toContain("Organization workspace");
     expect(markup).toContain("All work");
