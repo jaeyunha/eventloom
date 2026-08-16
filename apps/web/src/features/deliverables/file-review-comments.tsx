@@ -68,18 +68,20 @@ export function FileReviewComments({
       <div>
         <h3>Comments for version {context.asset.version ?? 1}</h3>
         <p className={styles.muted}>
-          This thread belongs only to immutable asset {context.asset.id}.
+          This thread is limited to file version v{context.asset.version ?? 1}.
         </p>
       </div>
 
       {error !== null ? (
         <Alert variant="destructive">
           <AlertTitle>Comments unavailable</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>
+            Comments for this file version could not be loaded. Try again.
+          </AlertDescription>
         </Alert>
       ) : thread.length === 0 ? (
         <p className={styles.muted}>
-          {loading ? "Loading comments…" : "No comments have been returned for this asset version."}
+          {loading ? "Loading comments…" : "No comments yet for this file version."}
         </p>
       ) : (
         <ol className={styles.commentList}>
@@ -97,7 +99,7 @@ export function FileReviewComments({
 
       <form className={styles.commentForm} onSubmit={(event) => void submit(event)}>
         <div className={styles.field}>
-          <Label htmlFor="file-comment-body">Reply to asset v{context.asset.version ?? 1}</Label>
+          <Label htmlFor="file-comment-body">Reply to file v{context.asset.version ?? 1}</Label>
           <Textarea
             id="file-comment-body"
             rows={4}

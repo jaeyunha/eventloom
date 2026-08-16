@@ -2,6 +2,17 @@
 
 import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -130,17 +141,50 @@ export function FileReviewOverview({
               Decisions apply to exact immutable asset v{asset.version ?? 1}.
             </p>
             <div className={styles.reviewActions}>
-              <Button type="button" disabled={busy} onClick={() => reviewAsset("approved", false)}>
-                Approve
-              </Button>
-              <Button
-                variant="outline"
-                type="button"
-                disabled={busy}
-                onClick={() => reviewAsset("approved", true)}
-              >
-                Approve and release
-              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" disabled={busy}>
+                    Approve
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Confirm file approval</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Approve this exact file version? This records the review decision and does not
+                      publish the file immediately.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => reviewAsset("approved", false)}>
+                      Confirm approval
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" type="button" disabled={busy}>
+                    Approve and release
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Confirm file release</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Approve and release this exact file version? This changes the authoritative
+                      approved and released versions.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => reviewAsset("approved", true)}>
+                      Confirm release
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               <Button
                 variant="outline"
                 type="button"
