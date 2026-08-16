@@ -3,15 +3,14 @@ import { describe, expect, it } from "vitest";
 import { CfpSubmissionWindow } from "./cfp-submission-window";
 
 describe("CFP submission window", () => {
-  it("groups status, dates, and account limit in one labelled region", () => {
+  it("formats authoritative instants into non-breaking date and clock groups", () => {
     const markup = renderToStaticMarkup(
       <CfpSubmissionWindow
         opensAt="2026-08-15T23:00:00.000Z"
-        opensLabel="Aug 15, 2026, 11:00 PM"
         closesAt="2026-08-18T00:00:00.000Z"
-        closesLabel="Aug 18, 2026, 12:00 AM"
         limit={3}
         status="open"
+        timeZone="America/Los_Angeles"
       />,
     );
 
@@ -19,23 +18,49 @@ describe("CFP submission window", () => {
     expect(markup).toContain("<dt>Opens</dt>");
     expect(markup).toContain("<dt>Closes</dt>");
     expect(markup).toContain("Up to 3 proposals per account");
+    expect(markup).toContain("America/Los_Angeles");
+    expect(markup).toContain('dateTime="2026-08-15T23:00:00.000Z"');
     expect(markup).toContain('dateTime="2026-08-18T00:00:00.000Z"');
     expect(markup).toContain('data-cfp-submission-window="true"');
     expect(markup.match(/data-cfp-window-value="true"/gu)).toHaveLength(2);
+    expect(markup.match(/data-cfp-window-date-group="true"/gu)).toHaveLength(2);
+    expect(markup.match(/data-cfp-window-clock-group="true"/gu)).toHaveLength(2);
+    expect(markup).toMatch(/data-cfp-window-date-group="true"[^>]*>Aug 15, 2026<\/span>/u);
+    expect(markup).toMatch(/data-cfp-window-clock-group="true"[^>]*>4:00 PM PDT<\/span>/u);
   });
 
-  it("uses explicit closed language without relying only on color", () => {
+  it.each([
+    ["upcoming", "Submissions open soon"],
+    ["closed", "Submissions closed"],
+  ] as const)("renders %s guidance with a long IANA timezone", (status, heading) => {
     const markup = renderToStaticMarkup(
       <CfpSubmissionWindow
         opensAt="2026-08-10T00:00:00.000Z"
-        opensLabel="Aug 10, 2026"
         closesAt="2026-08-11T00:00:00.000Z"
-        closesLabel="Aug 11, 2026"
-        status="closed"
+        limit={1}
+        status={status}
+        timeZone="America/Argentina/Buenos_Aires"
       />,
     );
 
-    expect(markup).toContain("Submissions closed");
-    expect(markup).toContain("New drafts and proposal edits are no longer accepted.");
+    expect(markup).toContain(heading);
+    expect(markup).toContain("America/Argentina/Buenos_Aires");
+    expect(markup).toContain("Up to 1 proposal per account");
+  });
+
+  it("contains malformed public event dates and time zones without crashing", () => {
+    const markup = renderToStaticMarkup(
+      <CfpSubmissionWindow
+        opensAt="not-an-instant"
+        closesAt="2026-08-18T00:00:00.000Z"
+        limit={2}
+        status="open"
+        timeZone="not/a-real-timezone"
+      />,
+    );
+
+    expect(markup).toContain("Date unavailable");
+    expect(markup).toContain("Event time zone unavailable");
+    expect(markup).not.toContain("not/a-real-timezone");
   });
 });
