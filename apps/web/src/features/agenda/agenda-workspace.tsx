@@ -1890,9 +1890,7 @@ function ScopedAgendaWorkspace({
           setError(messageFrom(loadError));
         }
       } finally {
-        if (loadIsCurrent()) {
-          setLoading(false);
-        }
+        setLoading((current) => (loadIsCurrent() ? false : current));
       }
     },
     [eventId, readWorkspace, scopeKey],

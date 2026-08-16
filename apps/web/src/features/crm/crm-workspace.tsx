@@ -3044,6 +3044,8 @@ export function CrmWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const selectionGeneration = useRef(0);
+  const busyLeaseRef = useRef(0);
+
   const initialContactsRead = useRef<{ api: CrmApi; filterKey: string } | null>(
     initialContacts === undefined
       ? null
@@ -3063,7 +3065,9 @@ export function CrmWorkspace({
   const initialAnalyticsRead = useRef<CrmApi | null>(initialAnalytics === undefined ? null : api);
   const importIdentityRef = useRef<{ csv: string; key: string } | null>(null);
   const importPreviewRequestRef = useRef<string | null>(null);
+  const importPreviewLeaseRef = useRef(0);
   const mergePreviewRequestRef = useRef<string | null>(null);
+  const mergePreviewLeaseRef = useRef(0);
   const eventIdentityRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const contactFilter = useMemo<CrmWorkspaceContactFilter>(
@@ -3146,6 +3150,9 @@ export function CrmWorkspace({
   useEffect(() => {
     return () => {
       selectionGeneration.current += 1;
+      busyLeaseRef.current += 1;
+      importPreviewLeaseRef.current += 1;
+      mergePreviewLeaseRef.current += 1;
     };
   }, []);
 
@@ -3156,7 +3163,9 @@ export function CrmWorkspace({
   const selectContact = useCallback(
     async (contactId: string, manageBusy = true) => {
       const generation = ++selectionGeneration.current;
+      let busyLease: number | null = null;
       if (manageBusy) {
+        busyLease = ++busyLeaseRef.current;
         setBusy(true);
         setError(null);
         setStatusMessage(null);
@@ -3184,7 +3193,9 @@ export function CrmWorkspace({
       } catch (reason) {
         if (generation === selectionGeneration.current) setError(messageFromError(reason));
       } finally {
-        if (manageBusy && generation === selectionGeneration.current) setBusy(false);
+        setBusy((current) =>
+          manageBusy && busyLease !== null && busyLease === busyLeaseRef.current ? false : current,
+        );
       }
     },
     [api],
@@ -3192,6 +3203,7 @@ export function CrmWorkspace({
 
   async function saveContact(draft: ContactDraft): Promise<void> {
     const existingContact = selectedContact;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -3224,26 +3236,29 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
   async function previewImport(csv: string): Promise<void> {
+    const requestLease = ++importPreviewLeaseRef.current;
     importPreviewRequestRef.current = csv;
+    const requestIsCurrent = () =>
+      importPreviewRequestRef.current === csv && importPreviewLeaseRef.current === requestLease;
     setImportPreviewResult(null);
     setImportPreviewSource(null);
     setImportPreviewError(null);
     setImportPreviewLoading(true);
     try {
       const result = await api.previewImport(csv);
-      if (importPreviewRequestRef.current !== csv) return;
+      if (!requestIsCurrent()) return;
       setImportPreviewResult(result);
       setImportPreviewSource(csv);
     } catch (reason) {
-      if (importPreviewRequestRef.current === csv) {
+      if (requestIsCurrent()) {
         setImportPreviewError(messageFromError(reason));
       }
     } finally {
-      if (importPreviewRequestRef.current === csv) setImportPreviewLoading(false);
+      setImportPreviewLoading((current) => (requestIsCurrent() ? false : current));
     }
   }
 
@@ -3262,6 +3277,7 @@ export function CrmWorkspace({
       setError("Import commit is blocked because the authoritative preview contains row errors.");
       return;
     }
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     const existingIdentity = importIdentityRef.current;
@@ -3277,14 +3293,17 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
   async function previewMerge(plan: CrmMergePlan): Promise<void> {
     if (!selectedContact || plan.duplicateContactIds.length === 0) return;
     const key = mergePlanKey(plan);
+    const requestLease = ++mergePreviewLeaseRef.current;
     mergePreviewRequestRef.current = key;
+    const requestIsCurrent = () =>
+      mergePreviewRequestRef.current === key && mergePreviewLeaseRef.current === requestLease;
     setMergePreview(null);
     setMergePreviewPlanKey(null);
     setMergePreviewError(null);
@@ -3294,13 +3313,13 @@ export function CrmWorkspace({
         fieldWinners: plan.fieldWinners,
         customFieldWinners: plan.customFieldWinners,
       });
-      if (mergePreviewRequestRef.current !== key) return;
+      if (!requestIsCurrent()) return;
       setMergePreview(result);
       setMergePreviewPlanKey(key);
     } catch (reason) {
-      if (mergePreviewRequestRef.current === key) setMergePreviewError(messageFromError(reason));
+      if (requestIsCurrent()) setMergePreviewError(messageFromError(reason));
     } finally {
-      if (mergePreviewRequestRef.current === key) setMergePreviewLoading(false);
+      setMergePreviewLoading((current) => (requestIsCurrent() ? false : current));
     }
   }
 
@@ -3309,6 +3328,7 @@ export function CrmWorkspace({
     description: string;
     rules: readonly CrmSegmentRule[];
   }): Promise<void> {
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     try {
@@ -3318,11 +3338,12 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
   async function selectSegment(segmentId: string): Promise<void> {
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     try {
@@ -3335,19 +3356,20 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
   async function findDuplicates(): Promise<void> {
     if (!selectedContact) return;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     try {
       setDuplicates(await api.findDuplicates(selectedContact.id));
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
@@ -3392,6 +3414,7 @@ export function CrmWorkspace({
     }
     const primaryContactId = selectedContact.id;
     const selectionIntent = selectionGeneration.current;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     try {
@@ -3419,13 +3442,14 @@ export function CrmWorkspace({
       setError(messageFromError(reason));
       throw reason;
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
   async function movePipeline(contactId: string, stage: CrmPipelineStage): Promise<void> {
     const contact = contacts.find((candidate) => candidate.id === contactId);
     if (!contact || contact.pipelineStage === stage) return;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     try {
       const next = await api.updatePipeline(contactId, stage);
@@ -3442,7 +3466,7 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
   async function enrollPipeline(input: {
@@ -3453,6 +3477,7 @@ export function CrmWorkspace({
   }): Promise<void> {
     const contact = contacts.find((candidate) => candidate.id === input.contactId);
     if (!contact) return;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     const enrollmentNote = [
@@ -3487,12 +3512,13 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
   async function savePipeline(stage: CrmPipelineStage, note: string): Promise<void> {
     if (!selectedContact) return;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     try {
@@ -3510,12 +3536,13 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
   async function addNote(body: string): Promise<void> {
     if (!selectedContact) return;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     try {
@@ -3525,7 +3552,7 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
@@ -3535,6 +3562,7 @@ export function CrmWorkspace({
     note: string;
   }): Promise<void> {
     if (!selectedContact) return;
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     const fingerprint = JSON.stringify({ contactId: selectedContact.id, ...input });
@@ -3561,7 +3589,7 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 
@@ -3636,6 +3664,7 @@ export function CrmWorkspace({
     ) {
       return;
     }
+    const busyLease = ++busyLeaseRef.current;
     setBusy(true);
     setError(null);
     try {
@@ -3683,7 +3712,7 @@ export function CrmWorkspace({
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      setBusy((current) => (busyLease === busyLeaseRef.current ? false : current));
     }
   }
 

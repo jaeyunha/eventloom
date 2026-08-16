@@ -825,10 +825,12 @@ function ScopedSessionsWorkspace({
           setSpeakerError(message);
         }
       } finally {
-        if (isCurrent()) {
-          setLoading(false);
-          setLoadingSpeakers(false);
-        }
+        setLoading((current) =>
+          generation === loadGeneration.current && !signal?.aborted ? false : current,
+        );
+        setLoadingSpeakers((current) =>
+          generation === loadGeneration.current && !signal?.aborted ? false : current,
+        );
       }
     },
     [api, cache, workspaceCacheKey, workspaceCacheTags],
@@ -864,7 +866,6 @@ function ScopedSessionsWorkspace({
           if (cached !== undefined) {
             if (isCurrent()) {
               setHistory(cached);
-              setLoadingHistory(false);
             }
             return;
           }
@@ -885,7 +886,9 @@ function ScopedSessionsWorkspace({
           setHistoryError(messageFrom(loadError));
         }
       } finally {
-        if (isCurrent()) setLoadingHistory(false);
+        setLoadingHistory((current) =>
+          generation === historyGeneration.current ? false : current,
+        );
       }
     },
     [api, cache, normalizedEventId, normalizedOrganizationId, workspaceCacheTags],
@@ -902,10 +905,16 @@ function ScopedSessionsWorkspace({
 
   useEffect(() => {
     if (selectedSession === null) {
-      historyGeneration.current += 1;
-      setHistory([]);
-      setHistoryError(null);
-      setLoadingHistory(false);
+      const generation = historyGeneration.current + 1;
+      historyGeneration.current = generation;
+      try {
+        setHistory([]);
+        setHistoryError(null);
+      } finally {
+        setLoadingHistory((current) =>
+          historyGeneration.current === generation ? false : current,
+        );
+      }
       return;
     }
     const controller = new AbortController();
@@ -980,7 +989,7 @@ function ScopedSessionsWorkspace({
         mutate(input.sessionId, () => api.updateSpeakers(input), "Speaker assignments saved.")
       }
       onSelectSession={(sessionId) => {
-        historyGeneration.current += 1;
+        if (sessionId !== selectedSessionId) historyGeneration.current += 1;
         setSelectedSessionId(sessionId);
       }}
       onSetContentStatus={(session, contentStatus) =>

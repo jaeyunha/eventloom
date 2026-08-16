@@ -151,7 +151,8 @@ export function MemberSetup({
         setError(setupError(reason));
         queueMicrotask(() => errorRef.current?.focus());
       }
-      setBusy(false);
+    } finally {
+      setBusy((current) => (submissionId === submissionIdRef.current ? false : current));
     }
   }
 

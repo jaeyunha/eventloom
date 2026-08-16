@@ -29,10 +29,14 @@ export function OrganizerWorkspace({
   const refreshSequenceRef = useRef(0);
 
   useEffect(() => {
-    refreshSequenceRef.current += 1;
-    setAuthoritativeSeed(seed);
-    setDetailLoading(false);
-    setDetailError(null);
+    const sequence = refreshSequenceRef.current + 1;
+    refreshSequenceRef.current = sequence;
+    try {
+      setAuthoritativeSeed(seed);
+      setDetailError(null);
+    } finally {
+      setDetailLoading((current) => (refreshSequenceRef.current === sequence ? false : current));
+    }
   }, [seed]);
 
   async function refreshAuthoritativeSeed(): Promise<void> {
@@ -52,7 +56,7 @@ export function OrganizerWorkspace({
         );
       }
     } finally {
-      if (refreshSequenceRef.current === sequence) setDetailLoading(false);
+      setDetailLoading((current) => (refreshSequenceRef.current === sequence ? false : current));
     }
   }
 

@@ -29,6 +29,7 @@ export function PortalTaskAssetView({
   const [commentPending, setCommentPending] = useState(false);
   const [downloadPending, setDownloadPending] = useState(false);
   const loaded = useRef<string | null>(null);
+  const commentSubmissionIdRef = useRef(0);
   const asset =
     resolution.assets.find((candidate) => candidate.id === selectedId) ?? resolution.latest;
 
@@ -69,18 +70,25 @@ export function PortalTaskAssetView({
   async function postComment(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!asset || !comment.trim()) return;
+    const submissionId = commentSubmissionIdRef.current + 1;
+    commentSubmissionIdRef.current = submissionId;
     setCommentPending(true);
     const expectedVersion = comments.reduce(
       (latest, entry) => Math.max(latest, entry.version ?? 0),
       0,
     );
-    const succeeded = await addAssetComment({
-      assetId: asset.id,
-      body: comment.trim(),
-      expectedVersion,
-    });
-    if (succeeded) setComment("");
-    setCommentPending(false);
+    try {
+      const succeeded = await addAssetComment({
+        assetId: asset.id,
+        body: comment.trim(),
+        expectedVersion,
+      });
+      if (succeeded) setComment("");
+    } finally {
+      setCommentPending((current) =>
+        submissionId === commentSubmissionIdRef.current ? false : current,
+      );
+    }
   }
 
   return (

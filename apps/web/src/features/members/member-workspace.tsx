@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -327,6 +327,8 @@ export function MemberWorkspace({
     config: "{}",
   });
   const [organizationBusy, setOrganizationBusy] = useState(false);
+  const organizationsLoadIdRef = useRef(0);
+  const membersLoadIdRef = useRef(0);
   const currentOrganization = useMemo(
     () =>
       organizations.find((organization) => organization.organizationId === organizationId.trim()),
@@ -343,6 +345,8 @@ export function MemberWorkspace({
 
   const loadOrganizations = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
+      const loadId = organizationsLoadIdRef.current + 1;
+      organizationsLoadIdRef.current = loadId;
       setOrganizationsLoading(true);
       setOrganizationsError(null);
       try {
@@ -367,7 +371,9 @@ export function MemberWorkspace({
       } catch (reason: unknown) {
         if (!signal?.aborted) setOrganizationsError(errorMessage(reason));
       } finally {
-        if (!signal?.aborted) setOrganizationsLoading(false);
+        setOrganizationsLoading((current) =>
+          loadId === organizationsLoadIdRef.current ? false : current,
+        );
       }
     },
     [baseUrl, organizationId],
@@ -381,14 +387,15 @@ export function MemberWorkspace({
 
   const loadMembers = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (api === null) {
-        setLoading(false);
-        setError("The people service is unavailable. Refresh the page and try again.");
-        return;
-      }
+      const loadId = membersLoadIdRef.current + 1;
+      membersLoadIdRef.current = loadId;
       setLoading(true);
       setError(null);
       try {
+        if (api === null) {
+          setError("The people service is unavailable. Refresh the page and try again.");
+          return;
+        }
         const nextMembers = await api.listMembers(signal);
         if (nextMembers.some((member) => member.organizationId !== organizationId.trim())) {
           throw new TypeError("The member response belongs to another organization.");
@@ -397,7 +404,7 @@ export function MemberWorkspace({
       } catch (reason: unknown) {
         if (!signal?.aborted) setError(errorMessage(reason));
       } finally {
-        if (!signal?.aborted) setLoading(false);
+        setLoading((current) => (loadId === membersLoadIdRef.current ? false : current));
       }
     },
     [api, organizationId],

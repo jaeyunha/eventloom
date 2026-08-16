@@ -217,6 +217,7 @@ export function PortalProvider({
     useState<PortalProfileMutationPhase>("idle");
   const [profileRevision, setProfileRevision] = useState<number | null>(null);
   const loadGeneration = useRef(0);
+  const profileMutationIdRef = useRef(0);
 
   const eventId = context?.eventId ?? "";
   const eventQuery = eventId ? `?event=${encodeURIComponent(eventId)}` : "";
@@ -240,61 +241,42 @@ export function PortalProvider({
       setWorkspaceLoading(true);
       setWorkspaceError(null);
       setWorkspace(emptyWorkspace);
+      try {
+        const nextWorkspace: PortalWorkspaceState = {
+          rosters: {},
+          assets: [],
+          assetHistories: {},
+          assetComments: {},
+          taskForms: {},
+          taskResponses: {},
+          taskResponseHistories: {},
+          resources: [],
+          wiki: [],
+        };
+        const failures: unknown[] = [];
+        const formTasks = nextView.tasks.filter(
+          (task) => task.type === "form" && taskBelongsToPortalContext(task, target),
+        );
 
-      const nextWorkspace: PortalWorkspaceState = {
-        rosters: {},
-        assets: [],
-        assetHistories: {},
-        assetComments: {},
-        taskForms: {},
-        taskResponses: {},
-        taskResponseHistories: {},
-        resources: [],
-        wiki: [],
-      };
-      const failures: unknown[] = [];
-      const formTasks = nextView.tasks.filter(
-        (task) => task.type === "form" && taskBelongsToPortalContext(task, target),
-      );
-
-      const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
-        try {
-          return await operation();
-        } catch (operationError) {
-          if (!isAbort(operationError)) {
-            failures.push(operationError);
+        const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
+          try {
+            return await operation();
+          } catch (operationError) {
+            if (!isAbort(operationError)) {
+              failures.push(operationError);
+            }
+            return fallback;
           }
-          return fallback;
-        }
-      };
+        };
 
-      const rosterLoad = loadPortalRosters(api, target, nextView, signal);
-      const includedAssets = nextView.assets;
-      const listAssets = api.listAssets;
-      const assetsLoad =
-        includedAssets !== undefined
-          ? safely(async () => {
-              if (
-                includedAssets.some(
-                  (asset) => !assetBelongsToPortalContext(asset, target, nextView.tasks),
-                )
-              ) {
-                throw new PortalApiError(
-                  "CONTEXT_MISMATCH",
-                  "The file response belongs to a different event, speaker, or session.",
-                  409,
-                );
-              }
-              return [...includedAssets];
-            }, [] as PortalAsset[])
-          : listAssets !== undefined && hasPortalCapability(target.capabilities, "asset-read")
+        const rosterLoad = loadPortalRosters(api, target, nextView, signal);
+        const includedAssets = nextView.assets;
+        const listAssets = api.listAssets;
+        const assetsLoad =
+          includedAssets !== undefined
             ? safely(async () => {
-                const assets = await listAssets(
-                  target.eventId,
-                  signal === undefined ? undefined : { signal },
-                );
                 if (
-                  assets.some(
+                  includedAssets.some(
                     (asset) => !assetBelongsToPortalContext(asset, target, nextView.tasks),
                   )
                 ) {
@@ -304,120 +286,141 @@ export function PortalProvider({
                     409,
                   );
                 }
-                return assets;
+                return [...includedAssets];
               }, [] as PortalAsset[])
-            : Promise.resolve([] as PortalAsset[]);
+            : listAssets !== undefined && hasPortalCapability(target.capabilities, "asset-read")
+              ? safely(async () => {
+                  const assets = await listAssets(
+                    target.eventId,
+                    signal === undefined ? undefined : { signal },
+                  );
+                  if (
+                    assets.some(
+                      (asset) => !assetBelongsToPortalContext(asset, target, nextView.tasks),
+                    )
+                  ) {
+                    throw new PortalApiError(
+                      "CONTEXT_MISMATCH",
+                      "The file response belongs to a different event, speaker, or session.",
+                      409,
+                    );
+                  }
+                  return assets;
+                }, [] as PortalAsset[])
+              : Promise.resolve([] as PortalAsset[]);
 
-      const listResources = api.listResources;
-      const resourcesLoad =
-        nextView.resources !== undefined
-          ? Promise.resolve([...nextView.resources])
-          : listResources !== undefined && hasPortalCapability(target.capabilities, "resource-read")
-            ? safely(() => listResources(target.eventId, signal), [] as PortalResource[])
-            : Promise.resolve([] as PortalResource[]);
+        const listResources = api.listResources;
+        const resourcesLoad =
+          nextView.resources !== undefined
+            ? Promise.resolve([...nextView.resources])
+            : listResources !== undefined &&
+                hasPortalCapability(target.capabilities, "resource-read")
+              ? safely(() => listResources(target.eventId, signal), [] as PortalResource[])
+              : Promise.resolve([] as PortalResource[]);
 
-      const listWiki = api.listWiki;
-      const wikiLoad =
-        nextView.wiki !== undefined
-          ? Promise.resolve([...nextView.wiki])
-          : listWiki !== undefined && hasPortalCapability(target.capabilities, "resource-read")
-            ? safely(() => listWiki(target.eventId, signal), [] as PortalWikiPage[])
-            : Promise.resolve([] as PortalWikiPage[]);
+        const listWiki = api.listWiki;
+        const wikiLoad =
+          nextView.wiki !== undefined
+            ? Promise.resolve([...nextView.wiki])
+            : listWiki !== undefined && hasPortalCapability(target.capabilities, "resource-read")
+              ? safely(() => listWiki(target.eventId, signal), [] as PortalWikiPage[])
+              : Promise.resolve([] as PortalWikiPage[]);
 
-      const taskLoad =
-        hasPortalCapability(target.capabilities, "task-response") &&
-        (api.getTaskForm !== undefined || api.getTaskResponse !== undefined)
-          ? Promise.all(
-              formTasks.map(async (task) => {
-                const taskInput =
-                  signal === undefined
-                    ? { eventId: target.eventId, taskId: task.id }
-                    : { eventId: target.eventId, taskId: task.id, signal };
-                const [form, response] = await Promise.all([
-                  api.getTaskForm
-                    ? safely(
-                        async () => {
-                          const result = await api.getTaskForm?.(taskInput);
-                          if (result === undefined || result.taskId !== task.id) {
-                            throw new PortalApiError(
-                              "CONTEXT_MISMATCH",
-                              "The task form belongs to a different task.",
-                              409,
-                            );
-                          }
-                          return result;
-                        },
-                        undefined as PortalTaskForm | undefined,
-                      )
-                    : Promise.resolve(undefined as PortalTaskForm | undefined),
-                  api.getTaskResponse
-                    ? safely(
-                        async () => {
-                          const result = await api.getTaskResponse?.(taskInput);
-                          if (
-                            result === undefined ||
-                            result.eventId !== target.eventId ||
-                            result.taskId !== task.id ||
-                            result.participantId !== target.primaryParticipantId
-                          ) {
-                            throw new PortalApiError(
-                              "CONTEXT_MISMATCH",
-                              "The task response belongs to a different event or task.",
-                              409,
-                            );
-                          }
-                          return result;
-                        },
-                        null as PortalTaskResponseEnvelope | null,
-                      )
-                    : Promise.resolve(null as PortalTaskResponseEnvelope | null),
-                ]);
-                return { taskId: task.id, form, response };
-              }),
-            )
-          : Promise.resolve(
-              [] as readonly {
-                taskId: string;
-                form: PortalTaskForm | undefined;
-                response: PortalTaskResponseEnvelope | null;
-              }[],
-            );
+        const taskLoad =
+          hasPortalCapability(target.capabilities, "task-response") &&
+          (api.getTaskForm !== undefined || api.getTaskResponse !== undefined)
+            ? Promise.all(
+                formTasks.map(async (task) => {
+                  const taskInput =
+                    signal === undefined
+                      ? { eventId: target.eventId, taskId: task.id }
+                      : { eventId: target.eventId, taskId: task.id, signal };
+                  const [form, response] = await Promise.all([
+                    api.getTaskForm
+                      ? safely(
+                          async () => {
+                            const result = await api.getTaskForm?.(taskInput);
+                            if (result === undefined || result.taskId !== task.id) {
+                              throw new PortalApiError(
+                                "CONTEXT_MISMATCH",
+                                "The task form belongs to a different task.",
+                                409,
+                              );
+                            }
+                            return result;
+                          },
+                          undefined as PortalTaskForm | undefined,
+                        )
+                      : Promise.resolve(undefined as PortalTaskForm | undefined),
+                    api.getTaskResponse
+                      ? safely(
+                          async () => {
+                            const result = await api.getTaskResponse?.(taskInput);
+                            if (
+                              result === undefined ||
+                              result.eventId !== target.eventId ||
+                              result.taskId !== task.id ||
+                              result.participantId !== target.primaryParticipantId
+                            ) {
+                              throw new PortalApiError(
+                                "CONTEXT_MISMATCH",
+                                "The task response belongs to a different event or task.",
+                                409,
+                              );
+                            }
+                            return result;
+                          },
+                          null as PortalTaskResponseEnvelope | null,
+                        )
+                      : Promise.resolve(null as PortalTaskResponseEnvelope | null),
+                  ]);
+                  return { taskId: task.id, form, response };
+                }),
+              )
+            : Promise.resolve(
+                [] as readonly {
+                  taskId: string;
+                  form: PortalTaskForm | undefined;
+                  response: PortalTaskResponseEnvelope | null;
+                }[],
+              );
 
-      const [rosterLoadResult, assets, resources, wiki, taskResults] = await Promise.all([
-        rosterLoad,
-        assetsLoad,
-        resourcesLoad,
-        wikiLoad,
-        taskLoad,
-      ]);
-      failures.push(...rosterLoadResult.failures);
-      for (const [submissionId, roster] of rosterLoadResult.entries) {
-        nextWorkspace.rosters[submissionId] = roster;
-      }
-      nextWorkspace.assets = assets;
-      nextWorkspace.resources = resources;
-      nextWorkspace.wiki = wiki;
-      for (const { taskId, form, response } of taskResults) {
-        if (form !== undefined) {
-          nextWorkspace.taskForms[taskId] = form;
+        const [rosterLoadResult, assets, resources, wiki, taskResults] = await Promise.all([
+          rosterLoad,
+          assetsLoad,
+          resourcesLoad,
+          wikiLoad,
+          taskLoad,
+        ]);
+        failures.push(...rosterLoadResult.failures);
+        for (const [submissionId, roster] of rosterLoadResult.entries) {
+          nextWorkspace.rosters[submissionId] = roster;
         }
-        if (response !== null) {
-          nextWorkspace.taskResponses[taskId] = response;
-          nextWorkspace.taskResponseHistories[taskId] = [...response.history];
+        nextWorkspace.assets = assets;
+        nextWorkspace.resources = resources;
+        nextWorkspace.wiki = wiki;
+        for (const { taskId, form, response } of taskResults) {
+          if (form !== undefined) {
+            nextWorkspace.taskForms[taskId] = form;
+          }
+          if (response !== null) {
+            nextWorkspace.taskResponses[taskId] = response;
+            nextWorkspace.taskResponseHistories[taskId] = [...response.history];
+          }
         }
-      }
 
-      if (signal?.aborted || generation !== loadGeneration.current) {
-        if (signal?.aborted && generation === loadGeneration.current) {
-          setWorkspaceLoading(false);
+        if (signal?.aborted || generation !== loadGeneration.current) {
+          return;
         }
-        return;
+        setWorkspace(nextWorkspace);
+        if (failures.length > 0) {
+          setWorkspaceError(messageFrom(failures[0]));
+        }
+      } finally {
+        setWorkspaceLoading((current) =>
+          isPortalGenerationCurrent(generation, loadGeneration.current) ? false : current,
+        );
       }
-      setWorkspace(nextWorkspace);
-      if (failures.length > 0) {
-        setWorkspaceError(messageFrom(failures[0]));
-      }
-      setWorkspaceLoading(false);
     },
     [api],
   );
@@ -493,8 +496,6 @@ export function PortalProvider({
           )?.version ?? null,
         );
         setWorkspace({ ...emptyWorkspace, assets: [...(scopedView.assets ?? [])] });
-        setWorkspaceLoading(false);
-        setLoading(false);
         return true;
       } catch (loadError) {
         if (isAbort(loadError)) {
@@ -510,10 +511,15 @@ export function PortalProvider({
             preserveCurrentView,
           );
           setError(messageFrom(loadError));
-          setLoading(false);
-          setWorkspaceLoading(false);
         }
         return false;
+      } finally {
+        setLoading((current) =>
+          isPortalGenerationCurrent(generation, loadGeneration.current) ? false : current,
+        );
+        setWorkspaceLoading((current) =>
+          isPortalGenerationCurrent(generation, loadGeneration.current) ? false : current,
+        );
       }
     },
     [api, clearWorkspace],
@@ -521,7 +527,7 @@ export function PortalProvider({
 
   const loadInitial = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      const generation = loadGeneration.current;
+      const generation = ++loadGeneration.current;
       setLoading(true);
       setError(null);
       try {
@@ -542,7 +548,6 @@ export function PortalProvider({
           clearWorkspace();
           setMutationError(null);
           setError(null);
-          setLoading(false);
           return;
         }
         const preferred = startup.preferredContext;
@@ -560,8 +565,11 @@ export function PortalProvider({
           setView(null);
           clearWorkspace();
           setError(messageFrom(loadError));
-          setLoading(false);
         }
+      } finally {
+        setLoading((current) =>
+          isPortalGenerationCurrent(generation, loadGeneration.current) ? false : current,
+        );
       }
     },
     [api, clearWorkspace, configuredEventId, hydrate],
@@ -702,6 +710,8 @@ export function PortalProvider({
 
       const targetContext = context;
       const generation = loadGeneration.current;
+      const mutationId = profileMutationIdRef.current + 1;
+      profileMutationIdRef.current = mutationId;
       setSavingProfile(true);
       setProfileMutationState("saving");
       setMutationError(null);
@@ -814,7 +824,6 @@ export function PortalProvider({
         const conflict =
           saveError instanceof PortalApiError && saveError.code === "VERSION_CONFLICT";
         if (conflict && isPortalGenerationCurrent(generation, loadGeneration.current)) {
-          setSavingProfile(false);
           setProfileMutationState("conflict");
           setMutationError(messageFrom(saveError));
           const refreshTarget =
@@ -832,9 +841,9 @@ export function PortalProvider({
         }
         return false;
       } finally {
-        if (isPortalGenerationCurrent(generation, loadGeneration.current)) {
-          setSavingProfile(false);
-        }
+        setSavingProfile((current) =>
+          mutationId === profileMutationIdRef.current ? false : current,
+        );
       }
     },
     [api, can, context, contexts, hydrate, selectedParticipantId],

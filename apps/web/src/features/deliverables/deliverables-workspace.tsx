@@ -3162,11 +3162,24 @@ export function DeliverablesWorkspace({
   const [operationStates, setOperationStates] = useState<
     Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>
   >({});
+  const busyLeaseRef = useRef(0);
+  const sessionHistoryLeaseRef = useRef(0);
+  const assetDetailsLeaseRef = useRef(0);
   const loadGenerationRef = useRef(0);
   const stateScopeRef = useRef(currentScope);
+  function beginBusy(): number {
+    const lease = busyLeaseRef.current + 1;
+    busyLeaseRef.current = lease;
+    setBusy(true);
+    return lease;
+  }
   useEffect(() => {
     if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
     stateScopeRef.current = currentScope;
+    busyLeaseRef.current += 1;
+    sessionHistoryLeaseRef.current += 1;
+    assetDetailsLeaseRef.current += 1;
+    loadGenerationRef.current += 1;
     setSessions(seededCoreData?.sessions ?? []);
     setTasks(seededCoreData?.tasks ?? []);
     setAssets(seededCoreData?.assets ?? []);
@@ -3375,6 +3388,11 @@ export function DeliverablesWorkspace({
         }
       }
       try {
+        if (initialData !== undefined) return;
+        if (!isCurrent()) return;
+        setLoading(true);
+        setError(null);
+        const messages: string[] = [];
         const requests = startDeliverablesCoreRequests(api, mode, signal);
         const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
           await Promise.all([
@@ -3536,9 +3554,14 @@ export function DeliverablesWorkspace({
             `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
           );
         setCapabilityMessages(messages);
-        setLoading(false);
       } finally {
-        if (isCurrent()) setLoading(false);
+        setLoading((current) =>
+          !signal?.aborted &&
+          loadGenerationRef.current === generation &&
+          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+            ? false
+            : current,
+        );
       }
     },
     [
@@ -3579,121 +3602,128 @@ export function DeliverablesWorkspace({
   }, [eventId, mode, sessions]);
 
   useEffect(() => {
-    if (mode === "files") {
-      setLoadingSessionHistories(false);
-      return;
-    }
-    const selected =
-      sessions.find(
-        (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
-      ) ?? sessions.find((session) => session.eventId === eventId);
-    if (selected === undefined) {
-      setSessionHistory(undefined);
-      setSessionHistoryError(null);
-      setSessionHistoryKey(null);
-      setLoadingSessionHistories(false);
-      return;
-    }
-    const key = deliverablesSessionHistoryKey(selected.id, selected.version);
-    setSessionHistoryKey(key);
+    const lease = sessionHistoryLeaseRef.current + 1;
+    sessionHistoryLeaseRef.current = lease;
     const scope = scopeRef.current;
     const controller = new AbortController();
-    setSessionHistoryError(null);
-    if (selected.contentHistory !== undefined) {
-      sessionHistoryCacheRef.current.set(key, {
-        status: "fulfilled",
-        value: selected.contentHistory,
-      });
-      setSessionHistory(selected.contentHistory);
-      setLoadingSessionHistories(false);
-      return;
+    let key: string | null = null;
+    const isCurrent = (): boolean =>
+      !controller.signal.aborted &&
+      sessionHistoryLeaseRef.current === lease &&
+      isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
+    let historyRequest: Promise<readonly DeliverableContentHistoryEntry[]> | undefined;
+    if (mode !== "files") {
+      const selected =
+        sessions.find(
+          (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
+        ) ?? sessions.find((session) => session.eventId === eventId);
+      if (selected === undefined) {
+        setSessionHistory(undefined);
+        setSessionHistoryError(null);
+        setSessionHistoryKey(null);
+      } else {
+        key = deliverablesSessionHistoryKey(selected.id, selected.version);
+        setSessionHistoryKey(key);
+        setSessionHistoryError(null);
+        if (selected.contentHistory !== undefined) {
+          sessionHistoryCacheRef.current.set(key, {
+            status: "fulfilled",
+            value: selected.contentHistory,
+          });
+          setSessionHistory(selected.contentHistory);
+        } else {
+          setSessionHistory(undefined);
+          setLoadingSessionHistories(true);
+          historyRequest = startDeliverablesRequest(() =>
+            loadDeliverablesSessionHistory(
+              api,
+              selected,
+              sessionHistoryCacheRef.current,
+              controller.signal,
+            ),
+          );
+        }
+      }
     }
-    setSessionHistory(undefined);
-    setLoadingSessionHistories(true);
-    void loadDeliverablesSessionHistory(
-      api,
-      selected,
-      sessionHistoryCacheRef.current,
-      controller.signal,
-    )
-      .then((history) => {
-        if (
-          controller.signal.aborted ||
-          !isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
-        )
-          return;
-        setSessionHistory(history);
-      })
-      .catch((reason: unknown) => {
-        if (
-          controller.signal.aborted ||
-          !isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
-        )
-          return;
-        setSessionHistoryError(messageFromError(reason));
-      })
-      .finally(() => {
-        if (
-          !controller.signal.aborted &&
-          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
-        )
-          setLoadingSessionHistories(false);
-      });
+    let completion: Promise<unknown> = Promise.resolve();
+    if (historyRequest !== undefined) {
+      completion = historyRequest
+        .then((history) => {
+          if (!isCurrent()) return;
+          setSessionHistory(history);
+        })
+        .catch((reason: unknown) => {
+          if (!isCurrent()) return;
+          setSessionHistoryError(messageFromError(reason));
+        });
+    }
+    void completion.finally(() =>
+      setLoadingSessionHistories((current) =>
+        !controller.signal.aborted &&
+        sessionHistoryLeaseRef.current === lease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+          ? false
+          : current,
+      ),
+    );
     return () => {
       controller.abort();
-      const cached = sessionHistoryCacheRef.current.get(key);
-      if (cached?.status === "pending") sessionHistoryCacheRef.current.delete(key);
+      if (key !== null) {
+        const cached = sessionHistoryCacheRef.current.get(key);
+        if (cached?.status === "pending") sessionHistoryCacheRef.current.delete(key);
+      }
     };
   }, [api, eventId, mode, effectiveSelectedSessionId, sessions]);
   useEffect(() => {
-    if (selectedAssetId === null) {
-      setLoadingAssetDetails(false);
-      return;
-    }
-    const selected = assets.find((asset) => asset.id === selectedAssetId);
-    if (selected === undefined) {
-      setLoadingAssetDetails(false);
-      return;
-    }
-    if (selected.eventId !== eventId) {
-      setLoadingAssetDetails(false);
-      return;
-    }
+    const lease = assetDetailsLeaseRef.current + 1;
+    assetDetailsLeaseRef.current = lease;
+    const scope = scopeRef.current;
     const controller = new AbortController();
-    setLoadingAssetDetails(true);
-    setAssetHistory([]);
-    setComments([]);
-    setAssetHistoryError(null);
-    setCommentsError(null);
-    const getAssetHistory = api.getAssetHistory;
-    const listAssetComments = api.listAssetComments;
-    const historyPromise =
-      getAssetHistory === undefined
-        ? Promise.resolve<readonly DeliverableAssetHistoryEntry[]>([])
-        : startDeliverablesRequest(() => getAssetHistory(selected.id, controller.signal));
-    const commentsPromise =
-      listAssetComments === undefined
-        ? Promise.resolve<readonly DeliverableComment[]>([])
-        : startDeliverablesRequest(() => listAssetComments(selected.id, controller.signal));
-    let settledCount = 0;
-    const markSettled = (): void => {
-      settledCount += 1;
-      if (settledCount === 2 && !controller.signal.aborted) setLoadingAssetDetails(false);
-    };
-    void settleDeliverablesRequest(historyPromise)
-      .then((result) => {
-        if (controller.signal.aborted || result === undefined) return;
-        if (result.ok) setAssetHistory(result.value);
-        else setAssetHistoryError(messageFromError(result.reason));
-      })
-      .finally(markSettled);
-    void settleDeliverablesRequest(commentsPromise)
-      .then((result) => {
-        if (controller.signal.aborted || result === undefined) return;
-        if (result.ok) setComments(result.value);
-        else setCommentsError(messageFromError(result.reason));
-      })
-      .finally(markSettled);
+    const isCurrent = (): boolean =>
+      !controller.signal.aborted &&
+      assetDetailsLeaseRef.current === lease &&
+      isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
+    let completion: Promise<unknown> = Promise.resolve();
+    if (selectedAssetId !== null) {
+      const selected = assets.find((asset) => asset.id === selectedAssetId);
+      if (selected !== undefined && selected.eventId === eventId) {
+        setLoadingAssetDetails(true);
+        setAssetHistory([]);
+        setComments([]);
+        setAssetHistoryError(null);
+        setCommentsError(null);
+        const getAssetHistory = api.getAssetHistory;
+        const listAssetComments = api.listAssetComments;
+        const historyPromise =
+          getAssetHistory === undefined
+            ? Promise.resolve<readonly DeliverableAssetHistoryEntry[]>([])
+            : startDeliverablesRequest(() => getAssetHistory(selected.id, controller.signal));
+        const commentsPromise =
+          listAssetComments === undefined
+            ? Promise.resolve<readonly DeliverableComment[]>([])
+            : startDeliverablesRequest(() => listAssetComments(selected.id, controller.signal));
+        const historySettled = settleDeliverablesRequest(historyPromise).then((result) => {
+          if (!isCurrent() || result === undefined) return;
+          if (result.ok) setAssetHistory(result.value);
+          else setAssetHistoryError(messageFromError(result.reason));
+        });
+        const commentsSettled = settleDeliverablesRequest(commentsPromise).then((result) => {
+          if (!isCurrent() || result === undefined) return;
+          if (result.ok) setComments(result.value);
+          else setCommentsError(messageFromError(result.reason));
+        });
+        completion = Promise.all([historySettled, commentsSettled]);
+      }
+    }
+    void completion.finally(() =>
+      setLoadingAssetDetails((current) =>
+        !controller.signal.aborted &&
+        assetDetailsLeaseRef.current === lease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+          ? false
+          : current,
+      ),
+    );
     return () => controller.abort();
   }, [api, assets, eventId, selectedAssetId]);
 
@@ -3703,7 +3733,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation("task-create", "Create file-request task", "pending", "Request in progress.");
@@ -3730,7 +3760,11 @@ export function DeliverablesWorkspace({
       recordOperation("task-create", "Create file-request task", "failed", message);
       throw reason;
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -3746,7 +3780,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     recordOperation("asset-comment", "Reply to asset version", "pending", "Reply in progress.");
     try {
@@ -3769,7 +3803,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("asset-comment", "Reply to asset version", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -3781,7 +3819,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     recordOperation(
       "asset-download",
@@ -3821,7 +3859,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("asset-download", "Download asset version", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
   async function requestExport(input: DeliverableExportInput): Promise<DeliverableExportDownload> {
@@ -3837,7 +3879,7 @@ export function DeliverablesWorkspace({
 
   async function exportDeliverables(input: DeliverableExportInput): Promise<void> {
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation(
@@ -3863,7 +3905,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("deliverables-export", "Export deliverables ZIP", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -3871,7 +3917,7 @@ export function DeliverablesWorkspace({
     input: DeliverableExportInput,
   ): Promise<DeliverableExportDownload | undefined> {
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation("files-export", "Export files ZIP", "pending", "ZIP request in progress.");
@@ -3893,7 +3939,11 @@ export function DeliverablesWorkspace({
       recordOperation("files-export", "Export files ZIP", "failed", message);
       throw reason;
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -3904,7 +3954,7 @@ export function DeliverablesWorkspace({
     readonly description: string;
   }): Promise<void> {
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     try {
@@ -3917,7 +3967,11 @@ export function DeliverablesWorkspace({
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -3926,7 +3980,7 @@ export function DeliverablesWorkspace({
     contentStatus: "Approved" | "Needs changes",
   ): Promise<void> {
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     try {
@@ -3945,7 +3999,11 @@ export function DeliverablesWorkspace({
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -3961,7 +4019,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation(
@@ -3991,7 +4049,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("biography-save", "Save speaker biography", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
   async function replaceHeadshot(input: {
@@ -4023,7 +4085,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation(
@@ -4064,7 +4126,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("headshot-replace", "Replace speaker headshot", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -4079,7 +4145,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation(
@@ -4107,7 +4173,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -4121,7 +4191,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     try {
@@ -4134,7 +4204,11 @@ export function DeliverablesWorkspace({
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
   async function restoreSpeakerContentVersion(input: {
@@ -4150,7 +4224,7 @@ export function DeliverablesWorkspace({
       return;
     }
     const scope = scopeRef.current;
-    setBusy(true);
+    const busyLease = beginBusy();
     setError(null);
     setStatusMessage(null);
     recordOperation(
@@ -4184,7 +4258,11 @@ export function DeliverablesWorkspace({
       setError(message);
       recordOperation("speaker-content-restore", "Restore speaker content", "failed", message);
     } finally {
-      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+      if (
+        busyLeaseRef.current === busyLease &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+      )
+        setBusy(false);
     }
   }
 
@@ -4194,7 +4272,7 @@ export function DeliverablesWorkspace({
       ? undefined
       : async (input: DeliverableReviewInput): Promise<void> => {
           const scope = scopeRef.current;
-          setBusy(true);
+          const busyLease = beginBusy();
           setError(null);
           recordOperation(
             "asset-review",
@@ -4222,7 +4300,11 @@ export function DeliverablesWorkspace({
             setError(message);
             recordOperation("asset-review", "Review current asset", "failed", message);
           } finally {
-            if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+            if (
+              busyLeaseRef.current === busyLease &&
+              isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+            )
+              setBusy(false);
           }
         };
   const renderedStateIsCurrent = isDeliverablesWorkspaceScopeCurrent(

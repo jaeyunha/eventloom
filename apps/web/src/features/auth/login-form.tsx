@@ -74,6 +74,7 @@ export function LoginForm({
   const [error, setError] = useState<{ kind: LoginErrorKind; message: string } | null>(null);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const submissionGenerationRef = useRef(0);
 
   useEffect(() => {
     if (error !== null) errorSummary.current?.focus();
@@ -148,6 +149,7 @@ export function LoginForm({
     if (credentials === null) return;
 
     clearErrors();
+    const submissionGeneration = ++submissionGenerationRef.current;
     setSubmitting(true);
     try {
       const signup = await api.signUpWithEmail(credentials);
@@ -167,8 +169,9 @@ export function LoginForm({
       } else {
         setError({ kind: requestError.kind, message: requestError.message });
       }
+    } finally {
+      if (submissionGeneration === submissionGenerationRef.current) setSubmitting(false);
     }
-    setSubmitting(false);
   }
 
   async function submitCredentials(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -177,6 +180,7 @@ export function LoginForm({
     if (credentials === null) return;
 
     clearErrors();
+    const submissionGeneration = ++submissionGenerationRef.current;
     setSubmitting(true);
     try {
       await signInAndRedirect({
@@ -188,10 +192,10 @@ export function LoginForm({
     } catch (failure) {
       const requestError = failureFromUnknown(failure, "server");
       setError({ kind: requestError.kind, message: requestError.message });
-      setSubmitting(false);
       return;
+    } finally {
+      if (submissionGeneration === submissionGenerationRef.current) setSubmitting(false);
     }
-    setSubmitting(false);
   }
 
   async function submitMagicLink(): Promise<void> {
@@ -199,6 +203,7 @@ export function LoginForm({
     if (normalizedEmail === null) return;
 
     clearErrors();
+    const submissionGeneration = ++submissionGenerationRef.current;
     setSubmitting(true);
     try {
       await api.requestMagicLink({
@@ -209,10 +214,10 @@ export function LoginForm({
     } catch (failure) {
       const requestError = failureFromUnknown(failure, "server");
       setError({ kind: requestError.kind, message: requestError.message });
-      setSubmitting(false);
       return;
+    } finally {
+      if (submissionGeneration === submissionGenerationRef.current) setSubmitting(false);
     }
-    setSubmitting(false);
   }
   const isSignup = mode === "sign-up";
   const isPortalLogin = resolveLoginWorkspace(returnTo) === "portal";
