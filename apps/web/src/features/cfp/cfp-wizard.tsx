@@ -1947,7 +1947,7 @@ function useCfpWizardController({
     password,
     requiresApplicantContextConfirmation,
     verificationState,
-    setAccountMode,
+    setAccountMode: changeAccountMode,
     setPassword,
     updateDraft,
     setConfirmedApplicantContext,
