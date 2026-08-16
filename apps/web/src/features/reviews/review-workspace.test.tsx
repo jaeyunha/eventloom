@@ -1213,7 +1213,7 @@ describe("review workspace", () => {
     );
 
     expect(markup).toContain('id="review-content"');
-    expect(markup).toContain('aria-labelledby="blind-review-heading"');
+    expect(markup).toContain('aria-labelledby="assigned-submission-heading"');
     expect(markup.match(/data-score-anchor=/gu)).toHaveLength(testCriteria.length);
     expect(markup).not.toContain("Riley");
     expect(markup).not.toContain("Create evaluation plan");
@@ -1732,6 +1732,7 @@ describe("review workspace", () => {
       expect(requests).toEqual(["/api/admin/evaluations/reviewer/workspace?eventId=summit-2026"]);
       expect(requests.some((request) => request.includes("/assignments/"))).toBe(false);
       expect(markup).toContain("Canonical submission title");
+      expect(markup).toContain('data-reviewer-collection="true"');
       expect(markup).toContain('data-reviewer-assignment-id="assignment-canonical"');
       expect(markup).toContain('data-assignment-status="submitted"');
     } finally {
@@ -1749,6 +1750,7 @@ describe("review workspace", () => {
 
     expect(markup).toContain('data-reviewer-collection="true"');
     expect(markup).toContain('data-reviewer-column-headings="true"');
+    expect(markup).toContain('aria-label="Assigned reviews"');
     expect(markup).toContain('data-reviewer-assignment-id="assignment-test"');
     expect(markup).not.toContain("Create evaluation plan");
     expect(markup).not.toContain("/admin/");
