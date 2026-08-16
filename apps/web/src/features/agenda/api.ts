@@ -267,6 +267,30 @@ export function createAgendaApi(
     return snapshot.delivery.calendar;
   }
 
+  async function loadCreatedRoom(
+    eventId: string,
+    roomId: string,
+  ): Promise<{ resource: AgendaRoom; workspace: AgendaWorkspaceData }> {
+    const workspace = await loadWorkspace(eventId);
+    const resource = workspace.rooms.find((room) => room.id === roomId);
+    if (!resource) {
+      throw new Error("The created room was not present in the authoritative agenda workspace.");
+    }
+    return { resource, workspace };
+  }
+
+  async function loadCreatedTrack(
+    eventId: string,
+    trackId: string,
+  ): Promise<{ resource: AgendaTrack; workspace: AgendaWorkspaceData }> {
+    const workspace = await loadWorkspace(eventId);
+    const resource = workspace.tracks.find((track) => track.id === trackId);
+    if (!resource) {
+      throw new Error("The created track was not present in the authoritative agenda workspace.");
+    }
+    return { resource, workspace };
+  }
+
   async function createRoom(input: {
     eventId: string;
     name: string;
@@ -277,12 +301,7 @@ export function createAgendaApi(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: input.name, capacity: input.capacity }),
     });
-    const workspace = await loadWorkspace(input.eventId);
-    const resource = workspace.rooms.find((room) => room.id === created.id);
-    if (!resource) {
-      throw new Error("The created room was not present in the authoritative agenda workspace.");
-    }
-    return { resource, workspace };
+    return loadCreatedRoom(input.eventId, created.id);
   }
 
   async function createTrack(input: {
@@ -294,12 +313,7 @@ export function createAgendaApi(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: input.name }),
     });
-    const workspace = await loadWorkspace(input.eventId);
-    const resource = workspace.tracks.find((track) => track.id === created.id);
-    if (!resource) {
-      throw new Error("The created track was not present in the authoritative agenda workspace.");
-    }
-    return { resource, workspace };
+    return loadCreatedTrack(input.eventId, created.id);
   }
 
   type AgendaDraftResponse = {
