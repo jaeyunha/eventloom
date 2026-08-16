@@ -11,6 +11,30 @@ const speakersUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/
 const organizerReviewsUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/reviews`;
 const reviewerUrl = "/review";
 
+function speakerDrawerTransition(page: Page): Promise<void> {
+  return page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          document.removeEventListener("animationend", handleAnimation, true);
+          reject(new Error("Speaker drawer animation did not finish"));
+        }, 2_000);
+        const handleAnimation = (event: AnimationEvent) => {
+          if (
+            !(event.target instanceof HTMLElement) ||
+            event.target.dataset.slot !== "sheet-content"
+          ) {
+            return;
+          }
+          window.clearTimeout(timeout);
+          document.removeEventListener("animationend", handleAnimation, true);
+          resolve();
+        };
+        document.addEventListener("animationend", handleAnimation, true);
+      }),
+  );
+}
+
 const organizerSessionFixture = {
   session: {
     id: "organizer-session-e2e",
@@ -456,7 +480,7 @@ test("submission queue keeps the dense table visible beside the selected review"
   }
 });
 
-test("speaker workspace presents the roster as a compact master-detail table", async ({
+test("speaker workspace presents a full-width roster with a focused detail drawer", async ({
   page,
 }, testInfo) => {
   await installSpeakerWorkspaceFixture(page);
@@ -470,22 +494,22 @@ test("speaker workspace presents the roster as a compact master-detail table", a
 
     const roster = page.getByRole("table", { name: "Event speaker roster" });
     await expect(roster).toBeVisible();
-    await expect(roster.getByRole("columnheader", { name: "Speaker" })).toBeVisible();
-    await expect(roster.getByRole("columnheader", { name: "Status" })).toBeVisible();
-    if (viewport.name === "desktop") {
-      await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeVisible();
-      await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeVisible();
-      await expect(roster.getByRole("columnheader", { name: "Action" })).toBeVisible();
-    } else if (viewport.name === "tablet") {
-      await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeVisible();
-      await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeHidden();
-      await expect(roster.getByRole("columnheader", { name: "Action" })).toBeHidden();
-    } else {
+    if (viewport.name !== "desktop") {
+      await expect(roster.getByRole("columnheader", { name: "Speaker" })).toBeHidden();
+      await expect(roster.getByRole("columnheader", { name: "Status" })).toBeHidden();
       await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeHidden();
       await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeHidden();
       await expect(roster.getByRole("columnheader", { name: "Action" })).toBeHidden();
+      await expect(roster.getByText("1 session")).toBeVisible();
+      await expect(roster.getByText("0 / 1 tasks")).toBeVisible();
+    } else {
+      await expect(roster.getByRole("columnheader", { name: "Speaker" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Status" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Action" })).toBeVisible();
     }
-    await expect(page.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
 
     if (viewport.name === "tablet") {
       const titleBounds = await page
@@ -499,7 +523,9 @@ test("speaker workspace presents the roster as a compact master-detail table", a
       const searchBounds = await page
         .getByRole("textbox", { name: "Search speakers" })
         .boundingBox();
-      const filterBounds = await page.getByRole("button", { name: "Filters" }).boundingBox();
+      const filterBounds = await page
+        .getByRole("button", { name: "Filter speakers" })
+        .boundingBox();
 
       expect(searchBounds).not.toBeNull();
       expect(filterBounds).not.toBeNull();
@@ -508,15 +534,63 @@ test("speaker workspace presents the roster as a compact master-detail table", a
       ).toBeLessThanOrEqual(24);
     }
 
-    const layout = await page.evaluate(() => ({
+    const queueLayout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
       viewportWidth: document.documentElement.clientWidth,
     }));
-    expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(queueLayout.bodyWidth).toBeLessThanOrEqual(queueLayout.viewportWidth);
 
     await page.screenshot({
-      path: testInfo.outputPath(`speakers-master-detail-${viewport.name}.png`),
+      path: testInfo.outputPath(`speakers-queue-${viewport.name}.png`),
     });
+
+    const openButton = roster.getByRole("button", { name: "Open" }).first();
+    if (viewport.name === "mobile") {
+      const openBox = await openButton.boundingBox();
+      expect(openBox).not.toBeNull();
+      expect((openBox?.y ?? 0) + (openBox?.height ?? 0)).toBeLessThanOrEqual(viewport.height - 64);
+      for (const name of ["Refresh roster", "Add speaker", "Filter speakers"]) {
+        const box = await page.getByRole("button", { name }).boundingBox();
+        expect(box).not.toBeNull();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      }
+    }
+    const drawerSettled = speakerDrawerTransition(page);
+    await openButton.click();
+    await drawerSettled;
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
+    const overlayBackdrop = await page
+      .locator('[data-slot="sheet-overlay"]')
+      .evaluate((element) => getComputedStyle(element).backdropFilter);
+    expect(overlayBackdrop).toBe("none");
+    if (viewport.name === "mobile") {
+      for (const name of [
+        "Close",
+        "Refresh details",
+        "Preview portal invite",
+        "Send portal invite",
+      ]) {
+        const box = await dialog.getByRole("button", { name }).boundingBox();
+        expect(box).not.toBeNull();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      }
+    }
+
+    const detailLayout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    }));
+    expect(detailLayout.bodyWidth).toBeLessThanOrEqual(detailLayout.viewportWidth);
+
+    await page.screenshot({
+      path: testInfo.outputPath(`speakers-detail-${viewport.name}.png`),
+    });
+
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(openButton).toBeFocused();
   }
 });
 
@@ -532,8 +606,8 @@ test("speaker workspace replaces empty controls with guided next steps", async (
   const workspaceWidth = await heading.evaluate(
     (element) => element.closest("header")?.parentElement?.getBoundingClientRect().width ?? 0,
   );
-  expect(workspaceWidth).toBeGreaterThan(0);
-  expect(workspaceWidth).toBeLessThanOrEqual(1216);
+  expect(workspaceWidth).toBeGreaterThan(1216);
+  expect(workspaceWidth).toBeLessThanOrEqual(1728);
 
   const rosterView = page.locator("#roster-view");
   await expect(rosterView.locator('[data-slot="empty"]')).toHaveCount(1);
@@ -576,6 +650,10 @@ test("speaker workspace reflows at 320px with 200% text zoom", async ({ page }) 
   await installSpeakerWorkspaceFixture(page);
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto(speakersUrl);
+  const drawerSettled = speakerDrawerTransition(page);
+  await page.getByRole("button", { name: "Open" }).first().click();
+  await drawerSettled;
+  await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
 
   await page.locator("html").evaluate(async (element) => {

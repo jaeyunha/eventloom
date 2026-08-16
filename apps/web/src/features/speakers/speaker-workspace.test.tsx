@@ -1323,9 +1323,9 @@ describe("speaker workspace", () => {
     );
 
     expect(markup).toContain("Speaker operations");
-    expect(markup).toContain("All speakers");
-    expect(markup).toContain("Overdue tasks");
     expect(markup).toContain("Search speakers");
+    expect(markup).toContain('aria-controls="speaker-roster-filters"');
+    expect(markup).toContain('data-speaker-collection="true"');
     expect(markup).toContain("Add speaker");
     expect(markup).toContain("Import CSV");
     expect(markup).toContain('id="tasks-tab"');
