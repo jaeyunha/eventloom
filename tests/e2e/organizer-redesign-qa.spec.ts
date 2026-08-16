@@ -91,26 +91,16 @@ test("organizer content requests default to standard upload formats", async ({
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${eventBase}/deliverables`);
-  await expect(page.getByRole("heading", { level: 1, name: "Content requests" })).toBeVisible({
+  await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible({
     timeout: 30_000,
   });
 
   await page.getByRole("button", { name: "New content request" }).click();
-  const mimeTypes = page.getByLabel("Allowed MIME types");
-  await expect(mimeTypes).toHaveJSProperty("tagName", "TEXTAREA");
-  await expect(mimeTypes).toHaveValue(
-    [
-      "application/pdf",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.ms-powerpoint",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-      "text/plain",
-    ].join(", "),
-  );
+  await expect(page.getByLabel("File type")).toContainText("Slides");
+  const fileFormats = page.getByRole("group", { name: "File formats (required)" });
+  await expect(fileFormats.getByLabel("PDF")).toBeChecked();
+  await expect(fileFormats.getByLabel("PowerPoint")).toBeChecked();
+  await expect(page.getByLabel("Maximum file size (MB)")).toHaveValue("100");
   await page.screenshot({
     path: testInfo.outputPath("new-content-request-formats.png"),
     fullPage: true,
@@ -121,7 +111,7 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
   await page.setViewportSize({ width: 1440, height: 1000 });
 
   await page.goto(`${eventBase}/deliverables`);
-  await expect(page.getByRole("heading", { level: 1, name: "Content requests" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Content requests and uploaded files" }),
   ).toBeVisible();
@@ -142,7 +132,7 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
   await expectNoPageOverflow(page);
 
   await page.goto(`${eventBase}/files`);
-  await expect(page.getByRole("heading", { level: 1, name: "Uploaded files" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
   await expect(page.getByText("No files have been submitted yet")).toBeVisible();
   await expect(page.getByRole("link", { name: "Create a content request" })).toBeVisible();
   await expect(page.locator("[data-file-family-row]")).toHaveCount(0);
@@ -179,7 +169,7 @@ test("organizer keeps content operations bounded on mobile", async ({ page }, te
   await expectNoPageOverflow(page);
 
   await page.goto(`${eventBase}/files`);
-  await expect(page.getByRole("heading", { level: 1, name: "Uploaded files" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
   await expect(page.getByText("No files have been submitted yet")).toBeVisible();
   await expect(page.locator("[data-file-family-row]")).toHaveCount(0);
   await expect(page.getByText("Loading Files library")).toHaveCount(0);

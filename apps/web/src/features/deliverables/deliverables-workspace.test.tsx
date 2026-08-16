@@ -14,6 +14,7 @@ import {
   deliverableAssetKinds,
 } from "./api";
 import {
+  authorizeContentCollectionNavigationSnapshot,
   ContentRequestInspector,
   contentRequestMetrics,
   type DeliverableRow,
@@ -534,6 +535,42 @@ function deferred<T>(): {
 }
 
 describe("deliverables core request starter", () => {
+  it("revalidates cached snapshots through the event-scoped sessions endpoint", async () => {
+    const authorizedSessions = [{ ...session, title: "Freshly authorized session" }];
+    const listSessions = vi.fn().mockResolvedValue(authorizedSessions);
+    const cachedSnapshot = {
+      sessions: [session],
+      tasks: [task],
+      assets: [],
+      profiles: [],
+    };
+
+    await expect(
+      authorizeContentCollectionNavigationSnapshot({ listSessions }, cachedSnapshot),
+    ).resolves.toEqual({
+      ...cachedSnapshot,
+      sessions: authorizedSessions,
+    });
+    expect(listSessions).toHaveBeenCalledOnce();
+  });
+
+  it("rejects cached snapshots when the authorization probe fails", async () => {
+    const authorizationError = new Error("Organizer access was revoked.");
+    const listSessions = vi.fn().mockRejectedValue(authorizationError);
+
+    await expect(
+      authorizeContentCollectionNavigationSnapshot(
+        { listSessions },
+        {
+          sessions: [session],
+          tasks: [task],
+          assets: [],
+          profiles: [],
+        },
+      ),
+    ).rejects.toBe(authorizationError);
+  });
+
   it("starts the sessions and matrix requests before either deferred response settles", async () => {
     const signal = new AbortController().signal;
     const calls: string[] = [];
@@ -847,7 +884,8 @@ describe("deliverables core request starter", () => {
     );
     expect(markup).toContain("Waiting for upload");
     expect(markup).toContain("The speaker has not submitted a current file for this assignment.");
-    expect(markup).toContain("application/pdf");
+    expect(markup).toContain("PDF");
+    expect(markup).not.toContain("application/pdf");
     expect(markup).toContain("Maximum 5 MB");
   });
 
@@ -969,6 +1007,7 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Session content");
     expect(markup).toContain("Speaker profiles");
     expect(markup).toContain("New content request");
+    expect(markup).toContain('data-slot="dialog-trigger"');
     expect(markup).not.toContain('data-slot="dialog-content"');
     expect(deliverableAssetKinds).toContain("slides");
     expect(markup).not.toContain("The replacement is staged through a");

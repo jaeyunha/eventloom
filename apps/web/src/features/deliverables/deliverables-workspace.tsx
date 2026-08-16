@@ -1,5 +1,6 @@
 "use client";
 
+import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -25,6 +26,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -179,6 +181,17 @@ export interface DeliverablesSnapshot {
 
 const contentCollectionNavigationCache =
   createContentCollectionNavigationCache<DeliverablesSnapshot>();
+
+export async function authorizeContentCollectionNavigationSnapshot(
+  api: Pick<DeliverablesApi, "listSessions">,
+  snapshot: DeliverablesSnapshot,
+  signal?: AbortSignal,
+): Promise<DeliverablesSnapshot> {
+  return {
+    ...snapshot,
+    sessions: await api.listSessions(signal),
+  };
+}
 
 export interface DeliverablesWorkspaceProps {
   readonly eventId: string;
@@ -840,14 +853,11 @@ function TaskComposer({
   return (
     <div className={styles.createTaskAction}>
       <Dialog open={open} onOpenChange={setOpen}>
-        <Button
-          type="button"
-          aria-haspopup="dialog"
-          disabled={onCreateTask === undefined}
-          onClick={() => setOpen(true)}
-        >
-          {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
-        </Button>
+        <DialogTrigger asChild>
+          <Button type="button" disabled={onCreateTask === undefined}>
+            {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
+          </Button>
+        </DialogTrigger>
         <DialogContent className={styles.composerDialog}>
           <DialogHeader>
             <DialogTitle>New content request</DialogTitle>
@@ -1427,7 +1437,7 @@ export function ContentRequestInspector({
   const task = row.task;
   const policy = [
     ...(task.acceptedAssetKinds ?? []).map(formatStatus),
-    ...(task.allowedMimeTypes ?? []),
+    ...uploadMimeTypeLabels(task.allowedMimeTypes ?? []),
     ...(task.maxBytes === undefined
       ? []
       : [`Maximum ${Math.ceil(task.maxBytes / 1024 / 1024)} MB`]),
@@ -2898,39 +2908,39 @@ export function DeliverablesWorkspace({
     () => ({ organizationId, eventId, view: mode }),
     [eventId, mode, organizationId],
   );
-  const effectiveInitialData = useMemo(
-    () => initialData ?? contentCollectionNavigationCache.get(navigationCacheScope),
+  const cachedInitialData = useMemo(
+    () =>
+      initialData === undefined
+        ? contentCollectionNavigationCache.get(navigationCacheScope)
+        : undefined,
     [initialData, navigationCacheScope],
   );
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
-    effectiveInitialData?.sessions ?? [],
+    initialData?.sessions ?? [],
   );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(effectiveInitialData?.tasks ?? []);
-  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(
-    effectiveInitialData?.assets ?? [],
-  );
+  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(initialData?.tasks ?? []);
+  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(initialData?.assets ?? []);
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
-    effectiveInitialData?.profiles ?? [],
+    initialData?.profiles ?? [],
   );
   const [speakerContentHistory, setSpeakerContentHistory] = useState<
     Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
   >(() =>
     speakerContentHistoryStatesForProfiles(
-      effectiveInitialData?.profiles ?? [],
-      effectiveInitialData?.speakerContentHistory,
+      initialData?.profiles ?? [],
+      initialData?.speakerContentHistory,
     ),
   );
-  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(
-    effectiveInitialData?.matrix,
-  );
-  const [loading, setLoading] = useState(effectiveInitialData === undefined);
+  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(initialData?.matrix);
+  const [loading, setLoading] = useState(initialData === undefined);
+  const [cacheWriteEnabled, setCacheWriteEnabled] = useState(initialData !== undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-    effectiveInitialData?.sessions[0]?.id ?? null,
+    initialData?.sessions[0]?.id ?? null,
   );
   const [sessionHistory, setSessionHistory] = useState<
     readonly DeliverableContentHistoryEntry[] | undefined
@@ -2954,18 +2964,19 @@ export function DeliverablesWorkspace({
   useEffect(() => {
     if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
     stateScopeRef.current = currentScope;
-    setSessions(effectiveInitialData?.sessions ?? []);
-    setTasks(effectiveInitialData?.tasks ?? []);
-    setAssets(effectiveInitialData?.assets ?? []);
-    setProfiles(effectiveInitialData?.profiles ?? []);
+    setSessions(initialData?.sessions ?? []);
+    setTasks(initialData?.tasks ?? []);
+    setAssets(initialData?.assets ?? []);
+    setProfiles(initialData?.profiles ?? []);
     setSpeakerContentHistory(
       speakerContentHistoryStatesForProfiles(
-        effectiveInitialData?.profiles ?? [],
-        effectiveInitialData?.speakerContentHistory,
+        initialData?.profiles ?? [],
+        initialData?.speakerContentHistory,
       ),
     );
-    setMatrix(effectiveInitialData?.matrix);
-    setLoading(effectiveInitialData === undefined);
+    setMatrix(initialData?.matrix);
+    setLoading(initialData === undefined);
+    setCacheWriteEnabled(initialData !== undefined);
     setError(null);
     setCapabilityMessages([]);
     sessionHistoryCacheRef.current.clear();
@@ -2983,7 +2994,7 @@ export function DeliverablesWorkspace({
     setBusy(false);
     setStatusMessage(null);
     setOperationStates({});
-  }, [currentScope, effectiveInitialData]);
+  }, [currentScope, initialData]);
 
   function recordOperation(
     key: DeliverablesOperationKey,
@@ -2996,6 +3007,12 @@ export function DeliverablesWorkspace({
       [key]: { key, label, phase, message },
     }));
   }
+
+  function invalidateCachedEventViews(): void {
+    contentCollectionNavigationCache.invalidateEvent({ organizationId, eventId });
+    setCacheWriteEnabled(true);
+  }
+
   const refreshSpeakerContentHistory = useCallback(
     async (participantId: string, signal?: AbortSignal): Promise<void> => {
       const scope = scopeRef.current;
@@ -3040,6 +3057,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.listDeliverableMatrix();
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
+      invalidateCachedEventViews();
       setMatrix(next);
       setTasks(next.items.map((item) => item.task));
       if (mode === "deliverables") setAssets(matrixAssets(next));
@@ -3067,16 +3085,45 @@ export function DeliverablesWorkspace({
         !signal?.aborted &&
         loadGenerationRef.current === generation &&
         isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
-      if (effectiveInitialData !== undefined) {
+      if (initialData !== undefined) {
         if (isCurrent()) setLoading(false);
         return;
       }
       if (!isCurrent()) return;
       setLoading(true);
+      setCacheWriteEnabled(false);
       setError(null);
       setLoadingSessionHistories(false);
       const messages: string[] = [];
       try {
+        if (cachedInitialData !== undefined) {
+          try {
+            const authorizedSnapshot = await authorizeContentCollectionNavigationSnapshot(
+              api,
+              cachedInitialData,
+              signal,
+            );
+            if (!isCurrent()) return;
+            setSessions(authorizedSnapshot.sessions);
+            setTasks(authorizedSnapshot.tasks);
+            setAssets(authorizedSnapshot.assets);
+            setProfiles(authorizedSnapshot.profiles);
+            setSpeakerContentHistory(
+              speakerContentHistoryStatesForProfiles(
+                authorizedSnapshot.profiles,
+                authorizedSnapshot.speakerContentHistory,
+              ),
+            );
+            setMatrix(authorizedSnapshot.matrix);
+            setCapabilityMessages([]);
+            return;
+          } catch (reason) {
+            contentCollectionNavigationCache.invalidate(navigationCacheScope);
+            if (isCurrent()) setError(messageFromError(reason));
+            return;
+          }
+        }
+        let projectionLoadSucceeded = true;
         const requests = startDeliverablesCoreRequests(api, mode, signal);
         const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
           await Promise.all([
@@ -3092,10 +3139,12 @@ export function DeliverablesWorkspace({
           const coreSessions = sessionsResult.value;
           setSessions(coreSessions);
         } else if (sessionsResult !== undefined) {
+          projectionLoadSucceeded = false;
           setError(messageFromError(sessionsResult.reason));
         }
 
         if (requests.matrix === undefined) {
+          projectionLoadSucceeded = false;
           messages.push(
             "Exact task status and current-version tracking are unavailable: the organizer deliverables matrix endpoint is not provisioned.",
           );
@@ -3114,6 +3163,7 @@ export function DeliverablesWorkspace({
           setTasks(nextMatrix.items.map((item) => item.task));
           if (mode === "deliverables") setAssets(matrixAssets(nextMatrix));
         } else if (matrixResult !== undefined) {
+          projectionLoadSucceeded = false;
           messages.push(
             `Exact deliverables matrix unavailable: ${messageFromError(matrixResult.reason)}`,
           );
@@ -3123,11 +3173,13 @@ export function DeliverablesWorkspace({
           if (assetsResult?.ok === true) {
             setAssets(assetsResult.value);
           } else if (assetsResult !== undefined) {
+            projectionLoadSucceeded = false;
             messages.push(
               `Private asset library unavailable: ${messageFromError(assetsResult.reason)}`,
             );
           }
         } else if (mode === "files" || requests.matrix === undefined) {
+          projectionLoadSucceeded = false;
           messages.push(
             "Private asset library unavailable: no asset projection endpoint is provisioned.",
           );
@@ -3156,6 +3208,7 @@ export function DeliverablesWorkspace({
               );
             }
           } else if (profilesResult !== undefined) {
+            projectionLoadSucceeded = false;
             setSpeakerContentHistory({});
             messages.push(
               mode === "files"
@@ -3164,6 +3217,7 @@ export function DeliverablesWorkspace({
             );
           }
         } else if (mode === "files" || requests.matrix === undefined) {
+          projectionLoadSucceeded = false;
           setSpeakerContentHistory({});
           messages.push(
             mode === "files"
@@ -3195,12 +3249,14 @@ export function DeliverablesWorkspace({
               ),
             );
           } else {
+            projectionLoadSucceeded = false;
             setSpeakerContentHistory({});
             messages.push(
               `Speaker profile editing unavailable: ${messageFromError(result.reason)}`,
             );
           }
         } else {
+          projectionLoadSucceeded = false;
           setSpeakerContentHistory({});
           messages.push(
             "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
@@ -3238,23 +3294,34 @@ export function DeliverablesWorkspace({
             `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
           );
         setCapabilityMessages(messages);
+        setCacheWriteEnabled(projectionLoadSucceeded);
         setLoading(false);
       } finally {
         if (isCurrent()) setLoading(false);
       }
     },
-    [api, effectiveInitialData, eventId, mode, organizationId, refreshSpeakerContentHistory],
+    [
+      api,
+      cachedInitialData,
+      eventId,
+      initialData,
+      mode,
+      navigationCacheScope,
+      organizationId,
+      refreshSpeakerContentHistory,
+    ],
   );
 
   useEffect(() => {
-    if (effectiveInitialData !== undefined) return;
+    if (initialData !== undefined) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [effectiveInitialData, load]);
+  }, [initialData, load]);
 
   useEffect(() => {
-    if (loading || error !== null) return;
+    if (!cacheWriteEnabled || loading || error !== null) return;
+    if (!isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
     contentCollectionNavigationCache.set(navigationCacheScope, {
       sessions,
       tasks,
@@ -3265,6 +3332,8 @@ export function DeliverablesWorkspace({
     });
   }, [
     assets,
+    cacheWriteEnabled,
+    currentScope,
     error,
     loading,
     matrix,
@@ -3620,6 +3689,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.updateSession(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content saved at version ${next.version}.`);
     } catch (reason) {
@@ -3645,6 +3715,7 @@ export function DeliverablesWorkspace({
         contentStatus,
       });
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setSessions((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
@@ -3681,6 +3752,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.updateBiography(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setProfiles((current) =>
         current.map((profile) => (profile.participantId === next.participantId ? next : profile)),
       );
@@ -3745,6 +3817,7 @@ export function DeliverablesWorkspace({
         expectedVersion: currentProfile.version,
       });
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setProfiles((current) =>
         current.map((profile) =>
           profile.participantId === next.profile.participantId ? next.profile : profile,
@@ -3797,6 +3870,7 @@ export function DeliverablesWorkspace({
     try {
       const result = await api.sendBulkReminder(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setStatusMessage(
         `Reminder send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
       );
@@ -3832,6 +3906,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.restoreSessionVersion(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content restored to version ${input.version}.`);
     } catch (reason) {
@@ -3866,6 +3941,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.restoreSpeakerContentVersion(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setProfiles((current) =>
         current.map((profile) =>
           profile.participantId === input.participantId
