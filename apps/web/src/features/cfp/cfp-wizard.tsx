@@ -2,6 +2,7 @@
 
 import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   type ChangeEvent,
@@ -2339,7 +2340,7 @@ function AccountStep({
               Continue as applicant
             </Button>
             <Button asChild type="button" variant="outline">
-              <a href="/admin">Return to organizer workspace</a>
+              <Link href="/admin">Return to organizer workspace</Link>
             </Button>
             <Button asChild type="button" variant="ghost">
               <a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>
