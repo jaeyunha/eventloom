@@ -22,7 +22,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogClose,
@@ -43,6 +42,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { createScopedReadFlightCoordinator } from "@/lib/scoped-read-flight";
@@ -104,6 +104,8 @@ export interface CommunicationTemplateSelection {
   readonly templateVersion: number;
 }
 
+export type CommunicationsWorkspaceSection = "broadcasts" | "templates" | "reminders";
+
 export interface CommunicationsWorkspaceViewProps {
   readonly eventId: string;
   readonly organizationId: string;
@@ -142,6 +144,7 @@ export interface CommunicationsWorkspaceViewProps {
   /** Exposed for deterministic component tests; production uses the local dialog state. */
   readonly approvalDialogOpen?: boolean;
   readonly onApprovalDialogOpenChange?: (open: boolean) => void;
+  readonly view?: CommunicationsWorkspaceSection;
 }
 
 export interface TemplateDraft {
@@ -453,7 +456,7 @@ function TemplateEditor({
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (draft.name.trim().length === 0 || draft.subject.trim().length === 0) {
-      setFormError("Template name and subject are required.");
+      setFormError("Internal name and subject are required.");
       return;
     }
     if (draft.html.trim().length === 0 || draft.text.trim().length === 0) {
@@ -485,17 +488,16 @@ function TemplateEditor({
   return (
     <Card id="draft-template" className={styles.workflowCard}>
       <CardHeader>
-        <div className={styles.cardEyebrow}>Step 1 · Draft template</div>
+        <div className={styles.cardEyebrow}>Step 1 · Write email</div>
         <div className={styles.cardHeadingRow}>
           <div>
             <CardTitle>
-              {selected === undefined
-                ? "Create an email template"
-                : "Create a new template version"}
+              {selected === undefined ? "Compose email" : "Create a new email version"}
             </CardTitle>
             <CardDescription>
-              Event-scoped content is versioned. The editor keeps HTML and plain text separate; HTML
-              is shown as escaped source and is never executed here.
+              Write the subject and email content for this event. Saved emails are versioned so an
+              approved version cannot change underneath a send. HTML and plain text are kept
+              separate; HTML is shown as escaped source and is never executed here.
             </CardDescription>
           </div>
           {selected !== undefined ? (
@@ -513,20 +515,20 @@ function TemplateEditor({
             aria-hidden="true"
           />
           <strong>
-            {dirty ? "Unsaved changes" : selected === undefined ? "New draft" : "Persisted version"}
+            {dirty ? "Unsaved changes" : selected === undefined ? "New draft" : "Saved version"}
           </strong>
           <span className={styles.mutedText}>
             {dirty
               ? "Save a new version before review."
               : selected === undefined
                 ? "Nothing has been saved yet."
-                : `Saved event version ${selected.version} on ${formatTime(selected.updatedAt)}.`}
+                : `Saved version ${selected.version} on ${formatTime(selected.updatedAt)}.`}
           </span>
         </div>
         <form onSubmit={(event) => void submit(event)} className={styles.formStack}>
           <div className={styles.formGrid}>
             <div className={styles.field}>
-              <Label htmlFor="communication-template-name">Template name</Label>
+              <Label htmlFor="communication-template-name">Internal name</Label>
               <Input
                 id="communication-template-name"
                 value={draft.name}
@@ -535,7 +537,7 @@ function TemplateEditor({
               />
             </div>
             <div className={styles.field}>
-              <Label htmlFor="communication-template-purpose">Purpose</Label>
+              <Label htmlFor="communication-template-purpose">Email type</Label>
               <select
                 id="communication-template-purpose"
                 className={styles.select}
@@ -554,12 +556,17 @@ function TemplateEditor({
             </div>
           </div>
           <p className={styles.mutedText}>
+            For a one-off send from this page, use Organizer Group Email. Decision emails target
+            accepted, waitlisted, or rejected participants; other email types belong to their
+            automated workflows.
+          </p>
+          <p className={styles.mutedText}>
             {selected === undefined ? (
-              "The server assigns the sender identity when this draft is saved."
+              "The sender address is assigned when you save this draft; you cannot change it here."
             ) : (
               <>
-                Server-assigned sender identity: <strong>{senderLabel(selected)}</strong>. Sender
-                identities are controlled by purpose and cannot be entered manually.
+                Sender address: <strong>{senderLabel(selected)}</strong>. It is set by email type
+                and cannot be changed here.
               </>
             )}
           </p>
@@ -574,7 +581,7 @@ function TemplateEditor({
           </div>
           <div className={styles.formGrid}>
             <div className={styles.field}>
-              <Label htmlFor="communication-template-html">HTML body</Label>
+              <Label htmlFor="communication-template-html">Email body (HTML)</Label>
               <Textarea
                 id="communication-template-html"
                 rows={8}
@@ -584,7 +591,7 @@ function TemplateEditor({
               />
             </div>
             <div className={styles.field}>
-              <Label htmlFor="communication-template-text">Plain-text body</Label>
+              <Label htmlFor="communication-template-text">Plain-text email body</Label>
               <Textarea
                 id="communication-template-text"
                 rows={8}
@@ -595,7 +602,7 @@ function TemplateEditor({
             </div>
           </div>
           <div className={styles.field}>
-            <Label htmlFor="communication-template-variables">Required variables</Label>
+            <Label htmlFor="communication-template-variables">Personalization fields</Label>
             <Input
               id="communication-template-variables"
               value={draft.variables.join(", ")}
@@ -618,11 +625,7 @@ function TemplateEditor({
           ) : null}
           <div className={styles.actionRow}>
             <Button type="submit" disabled={busy}>
-              {busy
-                ? "Saving…"
-                : selected === undefined
-                  ? "Save draft template"
-                  : "Save new version"}
+              {busy ? "Saving…" : selected === undefined ? "Save email draft" : "Save new version"}
             </Button>
             {selected !== undefined ? (
               <span className={styles.mutedText}>
@@ -641,10 +644,10 @@ function TemplateEditor({
       {selected !== undefined ? (
         <CardFooter className={styles.reviewFooter}>
           <div>
-            <div className={styles.cardEyebrow}>Step 2 · Review and approve exact version</div>
+            <div className={styles.cardEyebrow}>Step 2 · Review and approve</div>
             <p className={styles.footerDescription}>
-              Approval is a human gate. Review sender, purpose, subject, required variables,
-              rendered sample, and effect before approving this exact version.
+              Approval is a human gate. Review the sender, email type, subject, personalization
+              fields, rendered sample, and what sending will do before approving this exact version.
             </p>
           </div>
           <Button
@@ -674,18 +677,16 @@ function TemplateEditor({
             data-approval-dialog="exact-version"
           >
             <DialogHeader>
-              <DialogTitle>
-                Review and approve exact template version {selected.version}
-              </DialogTitle>
+              <DialogTitle>Review and approve exact email version {selected.version}</DialogTitle>
               <DialogDescription id="template-approval-description">
-                Approval applies only to template <strong>{selected.id}</strong> version{" "}
-                <strong>{selected.version}</strong>. The server will require this exact version for
-                preview and send.
+                Approval applies only to saved email <strong>{selected.id}</strong> version{" "}
+                <strong>{selected.version}</strong>. The server requires this exact version for
+                recipient preview and send.
               </DialogDescription>
             </DialogHeader>
             <dl className={styles.detailGrid}>
               <div>
-                <dt>Template</dt>
+                <dt>Saved email</dt>
                 <dd>{selected.name}</dd>
               </div>
               <div>
@@ -695,11 +696,11 @@ function TemplateEditor({
                 </dd>
               </div>
               <div>
-                <dt>Sender</dt>
+                <dt>Sender address</dt>
                 <dd>{senderLabel(selected)}</dd>
               </div>
               <div>
-                <dt>Purpose</dt>
+                <dt>Email type</dt>
                 <dd>{formatCommunicationPurpose(selected.purpose)}</dd>
               </div>
               <div>
@@ -707,7 +708,7 @@ function TemplateEditor({
                 <dd>{selected.subject}</dd>
               </div>
               <div>
-                <dt>Required variables</dt>
+                <dt>Personalization fields</dt>
                 <dd>{selected.variables.length === 0 ? "None" : selected.variables.join(", ")}</dd>
               </div>
             </dl>
@@ -724,8 +725,8 @@ function TemplateEditor({
             <Alert>
               <AlertTitle>Effect of approval</AlertTitle>
               <AlertDescription>
-                Approving v{selected.version} makes this exact sender, purpose, subject, and body
-                eligible for a server-generated recipient preview. It does not send email.
+                Approving v{selected.version} makes this exact sender address, email type, subject,
+                and body eligible for a server-generated recipient preview. It does not send email.
               </AlertDescription>
             </Alert>
             {approvalError !== null ? (
@@ -755,22 +756,22 @@ function RecipientPreview({ preview }: Readonly<{ preview: CommunicationPreview 
     <div className={styles.previewBody}>
       <div className={styles.detailGrid}>
         <div>
-          <span className={styles.detailLabel}>Audience</span>
+          <span className={styles.detailLabel}>Recipient group</span>
           <strong>{formatCommunicationAudience(preview.audience)}</strong>
         </div>
         <div>
-          <span className={styles.detailLabel}>Exact approved template</span>
+          <span className={styles.detailLabel}>Approved email version</span>
           <strong>
             {preview.template.name} · v{preview.templateVersion}
           </strong>
           <span className={styles.mutedText}>{preview.templateId}</span>
         </div>
         <div>
-          <span className={styles.detailLabel}>Sender</span>
+          <span className={styles.detailLabel}>Sender address</span>
           <strong>{senderLabel(preview.template)}</strong>
         </div>
         <div>
-          <span className={styles.detailLabel}>Immutable recipient snapshot</span>
+          <span className={styles.detailLabel}>Recipient snapshot (fixed)</span>
           <strong>
             {preview.recipientCount} recipient{preview.recipientCount === 1 ? "" : "s"}
           </strong>
@@ -789,11 +790,11 @@ function RecipientPreview({ preview }: Readonly<{ preview: CommunicationPreview 
         </div>
       </div>
       <Alert>
-        <AlertTitle>Server-authoritative preview</AlertTitle>
+        <AlertTitle>Server-generated preview</AlertTitle>
         <AlertDescription>
-          Sender, recipients, and rendered output below came from the server for exact version{" "}
-          {preview.templateId} v{preview.templateVersion}. Sending uses this immutable snapshot, not
-          a live audience query.
+          The sender, recipient list, and rendered email below came from the server for exact
+          version {preview.templateId} v{preview.templateVersion}. Sending uses this fixed snapshot,
+          not a live audience query.
         </AlertDescription>
       </Alert>
       {preview.recipientCount === 0 ? (
@@ -878,12 +879,13 @@ function DeliveryHistory({
   return (
     <Card className={styles.workflowCard}>
       <CardHeader>
-        <div className={styles.cardEyebrow}>Step 5 · Delivery history</div>
+        <div className={styles.cardEyebrow}>Step 4 · Track delivery</div>
         <div className={styles.cardHeadingRow}>
           <div>
-            <CardTitle>Per-recipient status and audit history</CardTitle>
+            <CardTitle>Delivery status and send history</CardTitle>
             <CardDescription>
-              Completed sends remain visible when a new template or audience invalidates an
+              See whether each recipient's email was accepted, delivered, failed, or bounced.
+              Completed sends remain visible when a new email or recipient group invalidates an
               actionable preview.
             </CardDescription>
           </div>
@@ -893,9 +895,9 @@ function DeliveryHistory({
       <CardContent className={styles.formStack}>
         <p>
           Send <code>{send.id}</code> · {send.recipientCount} recipient
-          {send.recipientCount === 1 ? "" : "s"} · exact template {send.templateId} v
-          {send.templateVersion} · preview artifact {send.previewId ?? "not recorded"} · sender{" "}
-          <strong>{senderLabel(send.template)}</strong>
+          {send.recipientCount === 1 ? "" : "s"} · exact email {send.templateId} v
+          {send.templateVersion} · preview artifact {send.previewId ?? "not recorded"} · sender
+          address <strong>{senderLabel(send.template)}</strong>
         </p>
         <div className={styles.metricRow} role="status">
           <span>{send.terminal ? "Terminal" : "In progress"}</span>
@@ -1066,13 +1068,15 @@ function ReminderTruth({
       aria-labelledby="reminder-truth-heading"
     >
       <CardHeader>
-        <div className={styles.cardEyebrow}>Reminder and delivery truth</div>
+        <div className={styles.cardEyebrow}>Reminders and delivery status</div>
         <div className={styles.cardHeadingRow}>
           <div>
             <CardTitle id="reminder-truth-heading">Automatic and manual reminders</CardTitle>
             <CardDescription>
-              Queue insertion is not delivery success. Provider-accepted, delivered, failed, and
-              bounced states come only from the reminder delivery ledger.
+              Automated operational workflows for event tasks and review assignments—not general
+              marketing automations—report their provider delivery facts here. A queued reminder is
+              not proof of delivery. Provider-accepted, delivered, failed, and bounced states come
+              only from the reminder delivery record.
             </CardDescription>
           </div>
           <Badge
@@ -1087,7 +1091,7 @@ function ReminderTruth({
             {effectiveState === "idle"
               ? "Not loaded"
               : effectiveState === "ready"
-                ? "Truth current"
+                ? "Status current"
                 : effectiveState.charAt(0).toUpperCase() + effectiveState.slice(1)}
           </Badge>
         </div>
@@ -1095,7 +1099,7 @@ function ReminderTruth({
       <CardContent className={styles.formStack}>
         {effectiveState === "pending" ? (
           <Alert role="status">
-            <AlertTitle>Reminder truth pending</AlertTitle>
+            <AlertTitle>Reminder status is loading</AlertTitle>
             <AlertDescription>
               Loading event-scoped runs and dispatches. No provider outcome is assumed while this
               read is pending.
@@ -1114,9 +1118,9 @@ function ReminderTruth({
         ) : null}
         {effectiveState === "stale" ? (
           <Alert>
-            <AlertTitle>Reminder truth is stale</AlertTitle>
+            <AlertTitle>Reminder status is stale</AlertTitle>
             <AlertDescription>
-              These facts may have changed in the provider or outbox. Refresh delivery truth before
+              These facts may have changed in the provider or outbox. Refresh reminder status before
               treating a queued or provider-accepted state as terminal.
               {error === null ? null : ` ${error}`}
             </AlertDescription>
@@ -1124,7 +1128,7 @@ function ReminderTruth({
         ) : null}
         {effectiveState === "unavailable" ? (
           <Alert variant="destructive">
-            <AlertTitle>Reminder delivery truth unavailable</AlertTitle>
+            <AlertTitle>Reminder delivery status unavailable</AlertTitle>
             <AlertDescription>
               The reminder repository or delivery provider did not return authoritative facts. No
               delivery success is shown.
@@ -1143,7 +1147,7 @@ function ReminderTruth({
               disabled={busy}
               onClick={() => void onRefreshDeliveryTruth()}
             >
-              Refresh delivery truth
+              Refresh reminder status
             </Button>
           </div>
         ) : null}
@@ -1161,7 +1165,7 @@ function ReminderTruth({
                   onRefreshDeliveryTruth === undefined ? undefined : void onRefreshDeliveryTruth()
                 }
               >
-                {loading ? "Refreshing delivery truth…" : "Refresh delivery truth"}
+                {loading ? "Refreshing reminder status…" : "Refresh reminder status"}
               </Button>
               <Button
                 type="button"
@@ -1331,75 +1335,108 @@ function ReminderTruth({
   );
 }
 
-const workflowSteps = [
-  ["draft-template", "Draft template"],
-  ["review-approve", "Review and approve"],
-  ["preview-snapshot", "Preview snapshot"],
-  ["confirm-send", "Confirm send"],
-  ["delivery-history", "Delivery history"],
-  ["reminder-truth", "Reminder truth"],
-] as const;
-
-function WorkflowNavigation({
-  hasPreview,
-  hasSend,
-}: Readonly<{ hasPreview: boolean; hasSend: boolean }>) {
-  const [mobileOpen, setMobileOpen] = useState(false);
+function ReadinessItem({
+  label,
+  detail,
+  ready,
+}: Readonly<{ label: string; detail: string; ready: boolean }>) {
   return (
-    <div className={styles.workflowNavigation}>
-      <nav className={styles.desktopWorkflow} aria-label="Communications workflow">
-        <p className={styles.navEyebrow}>Workflow</p>
-        <ol>
-          {workflowSteps.map(([id, label], index) => (
-            <li key={id}>
-              <a href={`#${id}`}>
-                <span>{index + 1}</span>
-                {label}
-              </a>
-              {id === "preview-snapshot" && hasPreview ? (
-                <Badge variant="secondary">Ready</Badge>
-              ) : null}
-              {id === "delivery-history" && hasSend ? (
-                <Badge variant="secondary">Recorded</Badge>
-              ) : null}
-            </li>
-          ))}
-        </ol>
-      </nav>
-      <Collapsible open={mobileOpen} onOpenChange={setMobileOpen} className={styles.mobileWorkflow}>
-        <CollapsibleTrigger asChild>
-          <Button
-            variant="outline"
-            type="button"
-            className={styles.mobileWorkflowTrigger}
-            aria-label="Choose communications workflow section"
-          >
-            <span>Communications workflow</span>
-            <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
+    <li className={styles.readinessItem}>
+      <span
+        className={ready ? styles.readinessIndicatorReady : styles.readinessIndicatorPending}
+        aria-hidden="true"
+      />
+      <span>
+        <strong>{label}</strong>
+        <span className={styles.readinessDetail}>{detail}</span>
+      </span>
+      <Badge variant={ready ? "secondary" : "outline"}>{ready ? "Ready" : "Needed"}</Badge>
+    </li>
+  );
+}
+
+function BroadcastReadiness({
+  approvedTemplateCount,
+  selectedPreviewKey,
+  preview,
+  send,
+  onCreateTemplate,
+}: Readonly<{
+  approvedTemplateCount: number;
+  selectedPreviewKey: string;
+  preview: CommunicationPreview | null;
+  send: CommunicationSend | null;
+  onCreateTemplate: () => void;
+}>) {
+  const approvedEmailReady = approvedTemplateCount > 0;
+  const selectedEmailReady = selectedPreviewKey.length > 0;
+  const previewReady = preview !== null;
+  const deliveryRecorded = send !== null;
+  const confirmationDetail =
+    send !== null
+      ? `Recorded · ${statusLabel(send.status)}`
+      : previewReady
+        ? "Outstanding · explicit confirmation is required"
+        : "Outstanding · create a fixed preview first";
+
+  return (
+    <section className={styles.readiness} aria-labelledby="broadcast-readiness-heading">
+      <div className={styles.readinessHeading}>
+        <div>
+          <div className={styles.cardEyebrow}>Send readiness</div>
+          <h3 id="broadcast-readiness-heading">Ready to send?</h3>
+          <p className={styles.mutedText}>
+            Check the approved email, fixed recipient snapshot, and human confirmation before the
+            irreversible send.
+          </p>
+        </div>
+        {!approvedEmailReady ? (
+          <Button type="button" onClick={onCreateTemplate}>
+            Create email template
           </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <nav aria-label="Mobile communications workflow">
-            <ol className={styles.mobileWorkflowList}>
-              {workflowSteps.map(([id, label], index) => (
-                <li key={id}>
-                  <a href={`#${id}`} onClick={() => setMobileOpen(false)}>
-                    <span>{index + 1}</span>
-                    {label}
-                  </a>
-                </li>
-              ))}
-            </ol>
-          </nav>
-        </CollapsibleContent>
-      </Collapsible>
-    </div>
+        ) : null}
+      </div>
+      <ul className={styles.readinessList}>
+        <ReadinessItem
+          label="Approved email"
+          detail={
+            approvedEmailReady
+              ? `${approvedTemplateCount} approved version${approvedTemplateCount === 1 ? "" : "s"} available`
+              : "No approved event email exists yet"
+          }
+          ready={approvedEmailReady}
+        />
+        <ReadinessItem
+          label="Exact email selected"
+          detail={
+            selectedEmailReady
+              ? "An approved version is selected for this send"
+              : "Choose one approved version below"
+          }
+          ready={selectedEmailReady}
+        />
+        <ReadinessItem
+          label="Fixed recipient preview"
+          detail={
+            previewReady
+              ? `${preview.recipientCount} recipient${preview.recipientCount === 1 ? "" : "s"} captured by the server`
+              : "Not generated yet"
+          }
+          ready={previewReady}
+        />
+        <ReadinessItem
+          label="Send confirmation / delivery"
+          detail={confirmationDetail}
+          ready={deliveryRecorded}
+        />
+      </ul>
+    </section>
   );
 }
 
 export function CommunicationsWorkspaceView({
   eventId,
-  organizationId,
+  view,
   templates,
   preview = null,
   send = null,
@@ -1436,6 +1473,9 @@ export function CommunicationsWorkspaceView({
   onApprovalDialogOpenChange,
 }: CommunicationsWorkspaceViewProps) {
   const sendConfirmationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [activeView, setActiveView] = useState<CommunicationsWorkspaceSection>(
+    view ?? "broadcasts",
+  );
   const selected = creatingTemplate
     ? undefined
     : resolveEditorTemplate(templates, selectedTemplateId, selectedTemplateVersion);
@@ -1457,23 +1497,27 @@ export function CommunicationsWorkspaceView({
     selected?.purpose === "decision"
       ? (["accepted_participants", "waitlisted_participants", "rejected_participants"] as const)
       : COMMUNICATION_AUDIENCES;
+  const handleViewChange = (value: string): void => {
+    if (value === "broadcasts" || value === "templates" || value === "reminders") {
+      setActiveView(value);
+    }
+  };
 
   return (
     <div className={styles.page}>
       <a href="#communications-content" className={styles.skipLink}>
-        Skip to communications workspace
+        Skip to event email workspace
       </a>
       <div className={styles.content}>
         <header className={styles.header}>
           <div className={styles.headerMain}>
-            <p className={styles.eyebrow}>
-              Organizer · {organizationId} · event {eventId}
-            </p>
-            <h1>Operational communications</h1>
+            <p className={styles.eyebrow}>Communications</p>
+            <h1>Event communications</h1>
             <p className={styles.lede}>
-              One explicit workflow for versioned email: draft, review and approve, preview the
-              immutable recipient snapshot, confirm the send, and inspect delivery history. This
-              workspace does not send SMS, CRM, marketing campaigns, or analytics.
+              Send one-off event broadcasts, manage reusable approved templates, and monitor
+              automated task/review reminders. Each job has its own workspace. Every broadcast uses
+              an approved email, a fixed server-generated recipient preview, and explicit human
+              confirmation.
             </p>
           </div>
           <details className={styles.providerDetails}>
@@ -1495,7 +1539,6 @@ export function CommunicationsWorkspaceView({
             <p>{providerDescription(providerState)}</p>
           </details>
         </header>
-        <WorkflowNavigation hasPreview={preview !== null} hasSend={send !== null} />
         <main id="communications-content" tabIndex={-1} className={styles.main}>
           {error !== null ? (
             <Alert variant="destructive">
@@ -1511,253 +1554,322 @@ export function CommunicationsWorkspaceView({
           {loading ? (
             <Card>
               <CardHeader>
-                <CardTitle>Loading communication templates</CardTitle>
-                <CardDescription>
-                  Retrieving event-scoped approved and draft versions.
-                </CardDescription>
+                <CardTitle>Loading saved emails</CardTitle>
+                <CardDescription>Loading saved emails for this event.</CardDescription>
               </CardHeader>
             </Card>
           ) : null}
-          {!loading ? (
-            <Card
-              className={styles.workflowCard}
-              role="region"
-              aria-labelledby="template-library-heading"
-            >
-              <CardHeader>
-                <div className={styles.cardHeadingRow}>
-                  <div>
-                    <div className={styles.cardEyebrow}>Event-scoped content</div>
-                    <CardTitle id="template-library-heading">Template versions</CardTitle>
-                    <CardDescription>
-                      Select a specific id and version. No control resolves a template id to latest
-                      implicitly.
-                    </CardDescription>
-                  </div>
-                  <Button
-                    variant="outline"
-                    type="button"
-                    onClick={onStartNewTemplate}
-                    disabled={busy}
-                  >
-                    New template
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {templates.length === 0 ? (
-                  <p>No communication templates exist for this event. Create a draft to begin.</p>
-                ) : (
-                  <div className={styles.tableWrap}>
-                    <Table>
-                      <TableCaption>Event email template versions</TableCaption>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead scope="col">Template</TableHead>
-                          <TableHead scope="col">Purpose</TableHead>
-                          <TableHead scope="col">Exact version</TableHead>
-                          <TableHead scope="col">Status</TableHead>
-                          <TableHead scope="col">Approved sender</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {templates.map((template) => {
-                          const key = communicationTemplateSelectionKey(
-                            template.id,
-                            template.version,
-                          );
-                          const selectedKey = communicationTemplateSelectionKey(
-                            selectedTemplateId,
-                            selectedTemplateVersion ?? 0,
-                          );
-                          return (
-                            <TableRow
-                              key={key}
-                              data-template-selection={key}
-                              data-selected={selectedKey === key ? "true" : "false"}
-                            >
-                              <TableHead scope="row">
-                                <Button
-                                  variant="link"
-                                  size="sm"
-                                  type="button"
-                                  onClick={() => onSelectTemplate?.(template.id, template.version)}
-                                  aria-label={`Select ${template.name} version ${template.version}`}
-                                >
-                                  {template.name}
-                                </Button>
-                              </TableHead>
-                              <TableCell>{formatCommunicationPurpose(template.purpose)}</TableCell>
-                              <TableCell>v{template.version}</TableCell>
-                              <TableCell>
-                                <StatusBadge status={template.status} />
-                              </TableCell>
-                              <TableCell>{senderLabel(template)}</TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ) : null}
-          {!loading ? (
-            <TemplateEditor
-              selected={selectedForEditor}
-              busy={busy}
-              {...(onCreateTemplate === undefined ? {} : { onCreateTemplate })}
-              {...(onCreateVersion === undefined ? {} : { onCreateVersion })}
-              {...(onApproveTemplate === undefined ? {} : { onApproveTemplate })}
-              {...(approvalDialogOpen === undefined ? {} : { approvalDialogOpen })}
-              {...(onApprovalDialogOpenChange === undefined ? {} : { onApprovalDialogOpenChange })}
-            />
-          ) : null}
-          <Card
-            id="preview-snapshot"
-            className={styles.workflowCard}
-            role="region"
-            aria-labelledby="preview-heading"
-          >
-            <CardHeader>
-              <div className={styles.cardEyebrow}>
-                Step 3 · Preview immutable recipient snapshot
-              </div>
-              <div className={styles.cardHeadingRow}>
-                <div>
-                  <CardTitle id="preview-heading">Preview before send</CardTitle>
-                  <CardDescription>
-                    Only an approved organizer group email can use this audience workflow. The
-                    server snapshots authorized recipients and renders variables with escaping.
-                  </CardDescription>
-                </div>
-                <Badge variant={preview === null ? "outline" : "secondary"}>
-                  {preview === null ? "Not generated" : "Snapshot ready"}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className={styles.formStack}>
-              <div className={styles.formGrid}>
-                <div className={styles.field}>
-                  <Label htmlFor="approved-group-template">
-                    Approved group template · exact version
-                  </Label>
-                  <select
-                    id="approved-group-template"
-                    className={styles.select}
-                    value={selectedPreviewKey}
-                    onChange={(event) => {
-                      const selection = communicationTemplateSelectionFromKey(
-                        event.currentTarget.value,
-                      );
-                      if (selection !== undefined)
-                        onSelectTemplate?.(selection.templateId, selection.templateVersion);
+          <Tabs value={activeView} onValueChange={handleViewChange} className={styles.tabs}>
+            <TabsList className={styles.tabList} aria-label="Communications views">
+              <TabsTrigger value="broadcasts" className={styles.tabTrigger}>
+                <span className={styles.tabTriggerLabel}>Broadcasts</span>
+                <span className={styles.tabTriggerDescription}>Send one-off event email</span>
+              </TabsTrigger>
+              <TabsTrigger value="templates" className={styles.tabTrigger}>
+                <span className={styles.tabTriggerLabel}>Templates</span>
+                <span className={styles.tabTriggerDescription}>
+                  Manage approved reusable content
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="reminders" className={styles.tabTrigger}>
+                <span className={styles.tabTriggerLabel}>Reminders</span>
+                <span className={styles.tabTriggerDescription}>
+                  Monitor task and review notices
+                </span>
+              </TabsTrigger>
+            </TabsList>
+            {!loading ? (
+              <>
+                <TabsContent value="broadcasts" className={styles.tabContent}>
+                  <BroadcastReadiness
+                    approvedTemplateCount={approvedGroupTemplates.length}
+                    selectedPreviewKey={selectedPreviewKey}
+                    preview={preview}
+                    send={send}
+                    onCreateTemplate={() => {
+                      setActiveView("templates");
+                      onStartNewTemplate?.();
                     }}
-                    disabled={approvedGroupTemplates.length === 0 || busy}
+                  />
+                  <Card
+                    id="preview-snapshot"
+                    className={styles.workflowCard}
+                    role="region"
+                    aria-labelledby="broadcast-heading"
                   >
-                    <option value="">
-                      {approvedGroupTemplates.length === 0
-                        ? "No approved group template"
-                        : "Select exact approved version"}
-                    </option>
-                    {approvedGroupTemplates.map((template) => (
-                      <option
-                        key={communicationTemplateSelectionKey(template.id, template.version)}
-                        value={communicationTemplateSelectionKey(template.id, template.version)}
-                      >
-                        {template.name} · v{template.version}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className={styles.field}>
-                  <Label htmlFor="authorized-recipient-group">Authorized recipient group</Label>
-                  <select
-                    id="authorized-recipient-group"
-                    className={styles.select}
-                    value={selectedAudience}
-                    onChange={(event) =>
-                      onSelectAudience?.(event.currentTarget.value as CommunicationAudience)
-                    }
-                    disabled={busy}
+                    <CardHeader>
+                      <div className={styles.cardEyebrow}>Step 1 · Choose email and recipients</div>
+                      <div className={styles.cardHeadingRow}>
+                        <div>
+                          <CardTitle id="broadcast-heading">Send a broadcast</CardTitle>
+                          <CardDescription>
+                            Select an approved email and authorized participant group. The server
+                            fixes the recipient list and renders each email before send.
+                          </CardDescription>
+                        </div>
+                        <Badge variant={preview === null ? "outline" : "secondary"}>
+                          {preview === null ? "Not generated" : "Snapshot ready"}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className={styles.formStack}>
+                      <div className={styles.formGrid}>
+                        <div className={styles.field}>
+                          <Label htmlFor="approved-group-template">
+                            Approved email · exact version
+                          </Label>
+                          <select
+                            id="approved-group-template"
+                            className={styles.select}
+                            value={selectedPreviewKey}
+                            onChange={(event) => {
+                              const selection = communicationTemplateSelectionFromKey(
+                                event.currentTarget.value,
+                              );
+                              if (selection !== undefined)
+                                onSelectTemplate?.(selection.templateId, selection.templateVersion);
+                            }}
+                            disabled={approvedGroupTemplates.length === 0 || busy}
+                          >
+                            <option value="">
+                              {approvedGroupTemplates.length === 0
+                                ? "No approved email available"
+                                : "Select exact approved email version"}
+                            </option>
+                            {approvedGroupTemplates.map((template) => (
+                              <option
+                                key={communicationTemplateSelectionKey(
+                                  template.id,
+                                  template.version,
+                                )}
+                                value={communicationTemplateSelectionKey(
+                                  template.id,
+                                  template.version,
+                                )}
+                              >
+                                {template.name} · v{template.version}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className={styles.field}>
+                          <Label htmlFor="authorized-recipient-group">Recipient group</Label>
+                          <select
+                            id="authorized-recipient-group"
+                            className={styles.select}
+                            value={selectedAudience}
+                            onChange={(event) =>
+                              onSelectAudience?.(event.currentTarget.value as CommunicationAudience)
+                            }
+                            disabled={busy}
+                          >
+                            {previewAudienceOptions.map((audience) => (
+                              <option key={audience} value={audience}>
+                                {formatCommunicationAudience(audience)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className={styles.actionRow}>
+                        <Button
+                          type="button"
+                          disabled={
+                            busy || onPreview === undefined || selectedPreviewKey.length === 0
+                          }
+                          onClick={() => (onPreview === undefined ? undefined : void onPreview())}
+                        >
+                          {busy ? "Preparing preview…" : "Preview recipients and email"}
+                        </Button>
+                        {approvedGroupTemplates.length === 0 ? (
+                          <span className={styles.mutedText}>
+                            Create and approve an event email before choosing recipients and
+                            previewing.
+                          </span>
+                        ) : selectedPreviewKey.length === 0 ? (
+                          <span className={styles.mutedText}>
+                            Select one exact approved email version before previewing.
+                          </span>
+                        ) : null}
+                      </div>
+                      <span id="confirm-send" className={styles.anchorTarget} aria-hidden="true" />
+                      {preview !== null ? (
+                        <div className={styles.previewStack}>
+                          <div>
+                            <div className={styles.cardEyebrow}>Step 2 · Preview and review</div>
+                            <h3>Review the fixed recipient preview</h3>
+                            <p className={styles.mutedText}>
+                              Confirm the approved email, recipient count, and rendered output
+                              before opening the send confirmation.
+                            </p>
+                          </div>
+                          <RecipientPreview preview={preview} />
+                          <div
+                            className={styles.confirmPanel}
+                            data-confirmation-open={sendConfirmationOpen ? "true" : "false"}
+                          >
+                            <div>
+                              <div className={styles.cardEyebrow}>Step 3 · Confirm send</div>
+                              <p>
+                                Sending is blocked until you explicitly confirm this exact recipient
+                                snapshot.
+                              </p>
+                            </div>
+                            <Button
+                              ref={sendConfirmationTriggerRef}
+                              type="button"
+                              disabled={
+                                busy ||
+                                preview.recipientCount === 0 ||
+                                onOpenSendConfirmation === undefined
+                              }
+                              onClick={onOpenSendConfirmation}
+                            >
+                              Send to {preview.recipientCount} recipient
+                              {preview.recipientCount === 1 ? "" : "s"}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className={styles.mutedText}>
+                          Choose an approved email and recipient group, then preview it before
+                          sending.
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                  <span id="delivery-history" className={styles.anchorTarget} aria-hidden="true" />
+                  {send !== null ? (
+                    <DeliveryHistory
+                      send={send}
+                      busy={busy}
+                      {...(onRetryFailed === undefined ? {} : { onRetryFailed })}
+                    />
+                  ) : null}
+                </TabsContent>
+                <TabsContent value="templates" className={styles.tabContent}>
+                  <Card
+                    className={styles.workflowCard}
+                    role="region"
+                    aria-labelledby="template-library-heading"
                   >
-                    {previewAudienceOptions.map((audience) => (
-                      <option key={audience} value={audience}>
-                        {formatCommunicationAudience(audience)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className={styles.actionRow}>
-                <Button
-                  type="button"
-                  disabled={busy || onPreview === undefined || selectedPreviewKey.length === 0}
-                  onClick={() => (onPreview === undefined ? undefined : void onPreview())}
-                >
-                  {busy ? "Preparing preview…" : "Preview recipients and email"}
-                </Button>
-                {approvedGroupTemplates.length === 0 ? (
-                  <span className={styles.mutedText}>
-                    Create and approve a group or decision template before previewing.
-                  </span>
-                ) : selectedPreviewKey.length === 0 ? (
-                  <span className={styles.mutedText}>
-                    Select one exact approved template version before previewing.
-                  </span>
-                ) : null}
-              </div>
-              <span id="confirm-send" className={styles.anchorTarget} aria-hidden="true" />
-              {preview !== null ? (
-                <div className={styles.previewStack}>
-                  <RecipientPreview preview={preview} />
-                  <div
-                    className={styles.confirmPanel}
-                    data-confirmation-open={sendConfirmationOpen ? "true" : "false"}
-                  >
-                    <div>
-                      <div className={styles.cardEyebrow}>Step 4 · Confirm send</div>
-                      <p>Sending is blocked until you explicitly confirm this exact snapshot.</p>
-                    </div>
-                    <Button
-                      ref={sendConfirmationTriggerRef}
-                      type="button"
-                      disabled={
-                        busy || preview.recipientCount === 0 || onOpenSendConfirmation === undefined
-                      }
-                      onClick={onOpenSendConfirmation}
-                    >
-                      Send to {preview.recipientCount} recipient
-                      {preview.recipientCount === 1 ? "" : "s"}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <p className={styles.mutedText}>No preview has been created for this event.</p>
-              )}
-            </CardContent>
-          </Card>
-          <span id="delivery-history" className={styles.anchorTarget} aria-hidden="true" />
-          {send !== null ? (
-            <DeliveryHistory
-              send={send}
-              busy={busy}
-              {...(onRetryFailed === undefined ? {} : { onRetryFailed })}
-            />
-          ) : null}
-          <ReminderTruth
-            eventId={eventId}
-            runs={reminderRuns}
-            dispatches={reminderDispatches}
-            facts={reminderFacts}
-            state={reminderState}
-            error={reminderError}
-            loading={reminderLoading}
-            busy={busy}
-            {...(onRunManualReminders === undefined ? {} : { onRunManualReminders })}
-            {...(onRefreshDeliveryTruth === undefined ? {} : { onRefreshDeliveryTruth })}
-          />
+                    <CardHeader>
+                      <div className={styles.cardHeadingRow}>
+                        <div>
+                          <div className={styles.cardEyebrow}>Email library</div>
+                          <CardTitle id="template-library-heading">Saved emails</CardTitle>
+                          <CardDescription>
+                            Select the exact saved email version to edit or review. This workspace
+                            never chooses the latest version automatically.
+                          </CardDescription>
+                        </div>
+                        {templates.length > 0 ? (
+                          <Button
+                            variant="outline"
+                            type="button"
+                            onClick={onStartNewTemplate}
+                            disabled={busy}
+                          >
+                            Write a new email
+                          </Button>
+                        ) : null}
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {templates.length === 0 ? (
+                        <p>
+                          No saved emails yet. Compose your first email below. Saving creates a
+                          draft only; after review and approval, Broadcasts lets you choose
+                          recipients, preview the exact email, confirm the send, and track delivery.
+                        </p>
+                      ) : (
+                        <div className={styles.tableWrap}>
+                          <Table>
+                            <TableCaption>Saved event email versions</TableCaption>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead scope="col">Saved email</TableHead>
+                                <TableHead scope="col">Email type</TableHead>
+                                <TableHead scope="col">Exact version</TableHead>
+                                <TableHead scope="col">Status</TableHead>
+                                <TableHead scope="col">Approved sender address</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {templates.map((template) => {
+                                const key = communicationTemplateSelectionKey(
+                                  template.id,
+                                  template.version,
+                                );
+                                const selectedKey = communicationTemplateSelectionKey(
+                                  selectedTemplateId,
+                                  selectedTemplateVersion ?? 0,
+                                );
+                                return (
+                                  <TableRow
+                                    key={key}
+                                    data-template-selection={key}
+                                    data-selected={selectedKey === key ? "true" : "false"}
+                                  >
+                                    <TableHead scope="row">
+                                      <Button
+                                        variant="link"
+                                        size="sm"
+                                        type="button"
+                                        onClick={() =>
+                                          onSelectTemplate?.(template.id, template.version)
+                                        }
+                                        aria-label={`Select saved email ${template.name}, version ${template.version}`}
+                                      >
+                                        {template.name}
+                                      </Button>
+                                    </TableHead>
+                                    <TableCell>
+                                      {formatCommunicationPurpose(template.purpose)}
+                                    </TableCell>
+                                    <TableCell>v{template.version}</TableCell>
+                                    <TableCell>
+                                      <StatusBadge status={template.status} />
+                                    </TableCell>
+                                    <TableCell>{senderLabel(template)}</TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                  <TemplateEditor
+                    selected={selectedForEditor}
+                    busy={busy}
+                    {...(onCreateTemplate === undefined ? {} : { onCreateTemplate })}
+                    {...(onCreateVersion === undefined ? {} : { onCreateVersion })}
+                    {...(onApproveTemplate === undefined ? {} : { onApproveTemplate })}
+                    {...(approvalDialogOpen === undefined ? {} : { approvalDialogOpen })}
+                    {...(onApprovalDialogOpenChange === undefined
+                      ? {}
+                      : { onApprovalDialogOpenChange })}
+                  />
+                </TabsContent>
+                <TabsContent value="reminders" className={styles.tabContent}>
+                  <ReminderTruth
+                    eventId={eventId}
+                    runs={reminderRuns}
+                    dispatches={reminderDispatches}
+                    facts={reminderFacts}
+                    state={reminderState}
+                    error={reminderError}
+                    loading={reminderLoading}
+                    busy={busy}
+                    {...(onRunManualReminders === undefined ? {} : { onRunManualReminders })}
+                    {...(onRefreshDeliveryTruth === undefined ? {} : { onRefreshDeliveryTruth })}
+                  />
+                </TabsContent>
+              </>
+            ) : null}
+          </Tabs>
         </main>
         <AlertDialog
           open={sendConfirmationOpen && preview !== null}
@@ -1775,11 +1887,11 @@ export function CommunicationsWorkspaceView({
               }}
             >
               <AlertDialogHeader>
-                <AlertDialogTitle>Confirm operational email send</AlertDialogTitle>
+                <AlertDialogTitle>Confirm event email send</AlertDialogTitle>
                 <AlertDialogDescription>
-                  You are about to send the server-rendered subject{" "}
-                  <strong>{preview.subject}</strong> to the immutable{" "}
-                  {formatCommunicationAudience(preview.audience)} snapshot of{" "}
+                  You are about to send the server-rendered email subject{" "}
+                  <strong>{preview.subject}</strong> to the fixed{" "}
+                  {formatCommunicationAudience(preview.audience)} recipient group snapshot of{" "}
                   <strong>{preview.recipientCount}</strong> recipient
                   {preview.recipientCount === 1 ? "" : "s"}.
                 </AlertDialogDescription>
@@ -1792,13 +1904,13 @@ export function CommunicationsWorkspaceView({
               ) : null}
               <dl className={styles.detailGrid}>
                 <div>
-                  <dt>Exact template</dt>
+                  <dt>Exact email version</dt>
                   <dd>
                     {preview.templateId} · v{preview.templateVersion}
                   </dd>
                 </div>
                 <div>
-                  <dt>Approved sender</dt>
+                  <dt>Approved sender address</dt>
                   <dd>{senderLabel(preview.template)}</dd>
                 </div>
                 <div>
@@ -1859,7 +1971,7 @@ export function CommunicationsWorkspace({
   const [reminderDispatches, setReminderDispatches] = useState<readonly ReminderDispatch[]>(
     initialReminderDispatches ?? [],
   );
-  const [reminderFacts, setReminderFacts] = useState<ReminderFacts | null>(initialReminderFacts);
+  const [reminderFacts] = useState<ReminderFacts | null>(initialReminderFacts);
   const [reminderState, setReminderState] = useState<ReminderTruthState>(
     initialReminderRuns !== undefined || initialReminderDispatches !== undefined ? "ready" : "idle",
   );
@@ -1958,7 +2070,7 @@ export function CommunicationsWorkspace({
       typeof api.listReminderDispatches !== "function"
     ) {
       setReminderState("unavailable");
-      setReminderError("Reminder delivery truth is not exposed by this API surface.");
+      setReminderError("Reminder delivery status is not exposed by this API surface.");
       return;
     }
     setReminderState("pending");
@@ -2033,7 +2145,9 @@ export function CommunicationsWorkspace({
         variables: draft.variables,
       });
       replaceTemplate(next);
-      setStatusMessage(`Draft template ${next.name} v${next.version} saved.`);
+      setStatusMessage(
+        `Draft email ${next.name} v${next.version} saved. Saving a draft does not send an email.`,
+      );
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -2057,7 +2171,7 @@ export function CommunicationsWorkspace({
       });
       replaceTemplate(next);
       setStatusMessage(
-        `Template ${next.name} v${next.version} saved as a draft. Approve it before previewing.`,
+        `Email ${next.name} v${next.version} saved as a draft. Approve it before choosing recipients and previewing.`,
       );
     } catch (reason) {
       setError(messageFromError(reason));
@@ -2077,7 +2191,7 @@ export function CommunicationsWorkspace({
         version: template.version,
       });
       replaceTemplate(next);
-      setStatusMessage(`Template ${next.name} v${next.version} approved for event use.`);
+      setStatusMessage(`Email ${next.name} v${next.version} approved for event use.`);
     } catch (reason) {
       setError(messageFromError(reason));
       throw reason;
@@ -2094,7 +2208,7 @@ export function CommunicationsWorkspace({
       template.status !== "approved"
     ) {
       setError(
-        "Select one exact approved group or decision template version before creating a recipient preview.",
+        "Select one exact approved event email version before creating a recipient preview.",
       );
       return;
     }
@@ -2120,7 +2234,7 @@ export function CommunicationsWorkspace({
       });
       setPreview(next);
       setStatusMessage(
-        `Preview created with ${next.recipientCount} authorized recipient snapshot${next.recipientCount === 1 ? "" : "s"}.`,
+        `Preview ready with ${next.recipientCount} fixed recipient snapshot${next.recipientCount === 1 ? "" : "s"}.`,
       );
     } catch (reason) {
       setError(messageFromError(reason));
