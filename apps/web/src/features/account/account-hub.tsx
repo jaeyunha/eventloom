@@ -10,8 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AccountAccess, AccountCapability } from "./account-access";
 import { signOutAccount } from "./account-actions";
-import { loadAccountAccess } from "./account-hub-loader";
 import styles from "./account-hub.module.css";
+import { loadAccountAccess } from "./account-hub-loader";
 
 const workspaceCards: readonly {
   capability: AccountCapability;

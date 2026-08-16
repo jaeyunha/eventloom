@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -102,13 +103,13 @@ export function FileLibrary({
               Files appear here after speakers complete upload requests.
             </p>
             <Button asChild variant="outline">
-              <a
+              <Link
                 href={`/admin/organizations/${encodeURIComponent(
                   organizationId,
                 )}/events/${encodeURIComponent(eventId)}/deliverables`}
               >
                 Create a content request
-              </a>
+              </Link>
             </Button>
           </div>
         ) : (

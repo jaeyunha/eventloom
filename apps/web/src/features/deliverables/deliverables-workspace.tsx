@@ -1,7 +1,15 @@
 "use client";
 
-import { standardFileRequestMimeTypes } from "@eventloom/contracts";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -25,7 +33,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -80,7 +87,31 @@ import {
   type DeliverableTaskMatrix,
   deliverableAssetKinds,
 } from "./api";
+import {
+  type ContentCollectionNavigationCacheScope,
+  createContentCollectionNavigationCache,
+} from "./content-collection-cache";
 import styles from "./deliverables-workspace.module.css";
+import {
+  type ContentRequestFilters,
+  type ContentRequestStatusFilter,
+  commitDeliverablesWorkspaceScope,
+  contentRequestMetrics,
+  type DeliverableRow,
+  type DeliverablesSessionHistoryCache,
+  type DeliverablesWorkspaceMode,
+  type DeliverablesWorkspaceScope,
+  deliverablesSessionHistoryKey,
+  eligibleSpeakerHeadshotSessions,
+  filterContentRequestRows,
+  isDeliverablesWorkspaceScopeCurrent,
+  isOutstanding,
+  loadDeliverablesSessionHistory,
+  settleDeliverablesRequest,
+  startDeliverablesCoreRequests,
+  startDeliverablesRequest,
+  triggerDeliverablesDownload,
+} from "./deliverables-workspace-model";
 import {
   type FileFamilyProjection,
   fileFamilyPointers,
@@ -88,10 +119,16 @@ import {
 } from "./file-family-model";
 import { FileLibrary } from "./file-library";
 import { FileReviewDrawer } from "./file-review-drawer";
+import {
+  type RequestFileFormat,
+  requestFilePolicyFor,
+  requestFilePolicyMimeTypes,
+} from "./request-file-policy";
 
 const pageClass = styles.workspace;
 const sectionClass = styles.section;
 const fieldClass = styles.field;
+const bytesPerMegabyte = 1024 * 1024;
 const mutedClass = styles.muted;
 const stackClass = styles.stack;
 const clusterClass = styles.cluster;
@@ -99,38 +136,6 @@ const gridClass = styles.grid;
 const dangerClass = styles.danger;
 const tableWrapClass = styles.tableWrap;
 const statusClass = styles.status;
-
-export type DeliverablesWorkspaceMode = "deliverables" | "files";
-
-export type DeliverablesExportUiStatus =
-  | "idle"
-  | "queued"
-  | "preparing"
-  | "generating"
-  | "ready"
-  | "download-started"
-  | "failure";
-export const deliverablesExportStatusLabels: Readonly<Record<DeliverablesExportUiStatus, string>> =
-  {
-    idle: "",
-    queued: "The browser queued the authorized ZIP request.",
-    preparing: "The browser is preparing the scoped export request.",
-    generating:
-      "The export request is generating no fabricated progress; the API exposes no server job ID.",
-    ready: "The server returned a ZIP with a validated authoritative manifest.",
-    "download-started": "The browser download has started.",
-    failure: "The authorized ZIP request failed.",
-  };
-export const deliverablesExportActionLabels: Readonly<Record<DeliverablesExportUiStatus, string>> =
-  {
-    idle: "Download selected files ZIP",
-    queued: "ZIP export queued",
-    preparing: "Preparing ZIP…",
-    generating: "Generating ZIP…",
-    ready: "Inspect authoritative manifest",
-    "download-started": "Download started",
-    failure: "Retry ZIP export",
-  };
 
 export type DeliverablesOperationKey =
   | "task-create"
@@ -168,6 +173,9 @@ export interface DeliverablesSnapshot {
   readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
 }
 
+const contentCollectionNavigationCache =
+  createContentCollectionNavigationCache<DeliverablesSnapshot>();
+
 export interface DeliverablesWorkspaceProps {
   readonly eventId: string;
   readonly organizationId: string;
@@ -175,18 +183,6 @@ export interface DeliverablesWorkspaceProps {
   readonly api?: DeliverablesApi;
   readonly initialData?: DeliverablesSnapshot;
 }
-
-export interface DeliverableRow {
-  readonly task: DeliverableTask;
-  readonly session: DeliverableSession | undefined;
-  readonly sessionLabel: string;
-  readonly speaker: DeliverableSpeakerProfile | undefined;
-  readonly speakerLabel: string;
-  readonly assets: readonly DeliverableAsset[];
-  readonly currentAsset: DeliverableAsset | undefined;
-  readonly status: DeliverableMatrixStatus;
-}
-
 export interface DeliverablesWorkspaceViewProps {
   readonly eventId: string;
   readonly organizationId: string;
@@ -370,86 +366,6 @@ function statusForTask(
   return task.status;
 }
 
-function isOutstanding(status: DeliverableMatrixStatus): boolean {
-  return !["completed", "waived", "uploaded"].includes(status);
-}
-
-export type ContentRequestStatusFilter =
-  | "all"
-  | "outstanding"
-  | "attention"
-  | "review"
-  | "complete"
-  | DeliverableMatrixStatus;
-
-export interface ContentRequestFilters {
-  readonly query: string;
-  readonly speakerId: string;
-  readonly sessionId: string;
-  readonly taskId: string;
-  readonly status: ContentRequestStatusFilter;
-}
-
-export interface ContentRequestMetrics {
-  readonly all: number;
-  readonly outstanding: number;
-  readonly attention: number;
-  readonly review: number;
-  readonly complete: number;
-}
-
-function statusMatches(status: DeliverableMatrixStatus, filter: string): boolean {
-  if (filter === "all") return true;
-  if (filter === "pending" || filter === "incomplete" || filter === "outstanding") {
-    return isOutstanding(status);
-  }
-  if (filter === "attention") return status === "overdue" || status === "needs_changes";
-  if (filter === "review") return status === "submitted" || status === "uploaded";
-  if (filter === "complete") return status === "completed" || status === "waived";
-  if (filter === "uploaded") return ["uploaded", "completed", "waived"].includes(status);
-  return status === filter;
-}
-
-export function contentRequestMetrics(rows: readonly DeliverableRow[]): ContentRequestMetrics {
-  return rows.reduce<ContentRequestMetrics>(
-    (metrics, row) => ({
-      all: metrics.all + 1,
-      outstanding: metrics.outstanding + (isOutstanding(row.status) ? 1 : 0),
-      attention:
-        metrics.attention + (row.status === "overdue" || row.status === "needs_changes" ? 1 : 0),
-      review: metrics.review + (row.status === "submitted" || row.status === "uploaded" ? 1 : 0),
-      complete: metrics.complete + (row.status === "completed" || row.status === "waived" ? 1 : 0),
-    }),
-    { all: 0, outstanding: 0, attention: 0, review: 0, complete: 0 },
-  );
-}
-
-export function filterContentRequestRows(
-  rows: readonly DeliverableRow[],
-  filters: ContentRequestFilters,
-): readonly DeliverableRow[] {
-  const query = filters.query.trim().toLocaleLowerCase();
-  return rows.filter((row) => {
-    const searchable = [
-      row.task.title,
-      row.task.description ?? row.task.instructions ?? "",
-      row.speakerLabel,
-      row.sessionLabel,
-      row.currentAsset?.fileName ?? "",
-    ]
-      .join(" ")
-      .toLocaleLowerCase();
-    return (
-      (query.length === 0 || searchable.includes(query)) &&
-      (filters.speakerId === "all" || row.task.participantId === filters.speakerId) &&
-      (filters.sessionId === "all" ||
-        (row.task.submissionId ?? "participant") === filters.sessionId) &&
-      (filters.taskId === "all" || row.task.id === filters.taskId) &&
-      statusMatches(row.status, filters.status)
-    );
-  });
-}
-
 function assetFamily(asset: DeliverableAsset): string {
   return `${asset.participantId}\u0000${asset.taskId ?? ""}\u0000${asset.versionFamilyId ?? asset.id}`;
 }
@@ -485,34 +401,6 @@ function authoritativeAssetBadges(
     ...(pointers.approved === asset.id ? ["Approved"] : []),
     ...(pointers.released === asset.id ? ["Released"] : []),
   ];
-}
-
-export function eligibleSpeakerHeadshotSessions(
-  sessions: readonly DeliverableSession[],
-  eventId: string,
-  participantId: string,
-): readonly DeliverableSession[] {
-  return sessions.filter(
-    (session) =>
-      session.eventId === eventId &&
-      session.status.trim().toLowerCase() === "accepted" &&
-      session.speakerIds.includes(participantId),
-  );
-}
-
-export function resolveSpeakerHeadshotSubmissionId(
-  sessions: readonly DeliverableSession[],
-  eventId: string,
-  participantId: string,
-  requestedSubmissionId: string | null | undefined,
-): string | null {
-  const eligibleSessions = eligibleSpeakerHeadshotSessions(sessions, eventId, participantId);
-  if (eligibleSessions.length === 1) return eligibleSessions.at(0)?.id ?? null;
-  return requestedSubmissionId !== null &&
-    requestedSubmissionId !== undefined &&
-    eligibleSessions.some((session) => session.id === requestedSubmissionId)
-    ? requestedSubmissionId
-    : null;
 }
 
 function isCurrentAsset(asset: DeliverableAsset, assets: readonly DeliverableAsset[]): boolean {
@@ -606,31 +494,6 @@ function safeDownloadUrl(value: string): string | null {
     return null;
   }
 }
-export function triggerDeliverablesDownload(download: DeliverableExportDownload): void {
-  if (
-    typeof document === "undefined" ||
-    typeof URL.createObjectURL !== "function" ||
-    typeof URL.revokeObjectURL !== "function"
-  ) {
-    throw new Error("Deliverables downloads are unavailable in this environment.");
-  }
-  const objectUrl = URL.createObjectURL(new Blob([download.body], { type: download.contentType }));
-  try {
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = download.fileName;
-    link.rel = "noreferrer";
-    link.style.display = "none";
-    document.body?.appendChild(link);
-    try {
-      link.click();
-    } finally {
-      link.remove();
-    }
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
 
 interface DeliverableSubjectParticipant {
   readonly id: string;
@@ -707,11 +570,13 @@ function TaskComposer({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueAt, setDueAt] = useState("");
-  const [mimeTypes, setMimeTypes] = useState(standardFileRequestMimeTypes.join(", "));
-  const [maxSizeMb, setMaxSizeMb] = useState("100");
-  const [acceptedAssetKinds, setAcceptedAssetKinds] = useState<readonly DeliverableAssetKind[]>([
-    "slides",
-  ]);
+  const [acceptedAssetKind, setAcceptedAssetKind] = useState<DeliverableAssetKind>("slides");
+  const [allowedMimeTypes, setAllowedMimeTypes] = useState<readonly string[]>(() =>
+    requestFilePolicyMimeTypes(requestFilePolicyFor("slides")),
+  );
+  const [maxSizeMb, setMaxSizeMb] = useState(() =>
+    String(requestFilePolicyFor("slides").maxBytes / bytesPerMegabyte),
+  );
   const [subjectType, setSubjectType] = useState<"participant" | "session">("session");
   const [assigneeIds, setAssigneeIds] = useState<readonly string[]>([]);
   const [sessionByParticipant, setSessionByParticipant] = useState<
@@ -719,6 +584,7 @@ function TaskComposer({
   >({});
   const [formError, setFormError] = useState<string | null>(null);
   const assignmentCount = assigneeIds.length;
+  const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
 
   function toggleAssignee(id: string): void {
     setAssigneeIds((current) =>
@@ -726,12 +592,33 @@ function TaskComposer({
     );
   }
 
-  function toggleAssetKind(kind: DeliverableAssetKind): void {
-    setAcceptedAssetKinds((current) =>
-      current.includes(kind)
-        ? current.filter((candidate) => candidate !== kind)
-        : [...current, kind],
-    );
+  function selectAssetKind(kind: DeliverableAssetKind): void {
+    const policy = requestFilePolicyFor(kind);
+    setAcceptedAssetKind(kind);
+    setAllowedMimeTypes(requestFilePolicyMimeTypes(policy));
+    setMaxSizeMb(String(policy.maxBytes / bytesPerMegabyte));
+  }
+
+  function updateSelectedAssetKind(value: string): void {
+    const kind = deliverableAssetKinds.find((candidate) => candidate === value);
+    if (kind !== undefined) selectAssetKind(kind);
+  }
+
+  function fileFormatIsSelected(format: RequestFileFormat): boolean {
+    return format.mimeTypes.every((mimeType) => allowedMimeTypes.includes(mimeType));
+  }
+
+  function toggleFileFormat(format: RequestFileFormat, checked: boolean): void {
+    setAllowedMimeTypes((current) => {
+      const selected = new Set(current);
+      for (const mimeType of format.mimeTypes) {
+        if (checked) selected.add(mimeType);
+        else selected.delete(mimeType);
+      }
+      return requestFilePolicyMimeTypes(selectedFilePolicy).filter((mimeType) =>
+        selected.has(mimeType),
+      );
+    });
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -739,10 +626,6 @@ function TaskComposer({
     const normalizedTitle = title.trim();
     const normalizedDescription = description.trim();
     const normalizedDueAt = dueAt.trim();
-    const normalizedMimeTypes = mimeTypes
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean);
     const maxSize = Number(maxSizeMb);
     if (
       normalizedTitle.length === 0 ||
@@ -752,12 +635,8 @@ function TaskComposer({
       setFormError("Task name, instructions, and due date are required.");
       return;
     }
-    if (normalizedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
-      setFormError("Provide at least one MIME type and a positive maximum size in MB.");
-      return;
-    }
-    if (acceptedAssetKinds.length === 0) {
-      setFormError("Choose at least one accepted asset kind.");
+    if (allowedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
+      setFormError("Choose at least one file format and a positive maximum size in MB.");
       return;
     }
     if (assigneeIds.length === 0) {
@@ -783,14 +662,14 @@ function TaskComposer({
         title: normalizedTitle,
         description: normalizedDescription,
         dueAt: normalizedDueAt,
-        allowedMimeTypes: normalizedMimeTypes,
-        maxSizeBytes: maxSize * 1024 * 1024,
+        allowedMimeTypes,
+        maxSizeBytes: maxSize * bytesPerMegabyte,
         assignments: assigneeIds.map((participantId) => ({
           participantId,
           submissionId:
             subjectType === "participant" ? null : (sessionByParticipant[participantId] ?? null),
         })),
-        acceptedAssetKinds,
+        acceptedAssetKinds: [acceptedAssetKind],
       });
     } catch (reason) {
       setFormError(messageFromError(reason));
@@ -799,9 +678,10 @@ function TaskComposer({
     setTitle("");
     setDescription("");
     setDueAt("");
-    setMimeTypes(standardFileRequestMimeTypes.join(", "));
-    setMaxSizeMb("100");
-    setAcceptedAssetKinds(["slides"]);
+    const defaultFilePolicy = requestFilePolicyFor("slides");
+    setAcceptedAssetKind(defaultFilePolicy.kind);
+    setAllowedMimeTypes(requestFilePolicyMimeTypes(defaultFilePolicy));
+    setMaxSizeMb(String(defaultFilePolicy.maxBytes / bytesPerMegabyte));
     setSubjectType("session");
     setAssigneeIds([]);
     setSessionByParticipant({});
@@ -809,250 +689,260 @@ function TaskComposer({
   }
 
   return (
-    <div className={styles.createTaskAction}>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger asChild>
-          <Button type="button" disabled={onCreateTask === undefined}>
-            {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
-          </Button>
-        </DialogTrigger>
-        <DialogContent className={styles.composerDialog}>
-          <DialogHeader>
-            <DialogTitle>New content request</DialogTitle>
-            <DialogDescription>
-              Define the request, file policy, and exact speaker assignments.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={(event) => void submit(event)} className={styles.composerForm}>
-            <section className={styles.composerSection} aria-labelledby="request-section-heading">
-              <div className={styles.composerSectionHeading}>
-                <span>1</span>
-                <div>
-                  <h3 id="request-section-heading">Request</h3>
-                  <p>Give speakers clear instructions and a deadline.</p>
-                </div>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button
+        type="button"
+        aria-haspopup="dialog"
+        disabled={onCreateTask === undefined}
+        onClick={() => setOpen(true)}
+      >
+        {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
+      </Button>
+      <DialogContent className={styles.composerDialog}>
+        <DialogHeader>
+          <DialogTitle>New content request</DialogTitle>
+          <DialogDescription>
+            Define the request, file policy, and exact speaker assignments.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(event) => void submit(event)} className={styles.composerForm}>
+          <section className={styles.composerSection} aria-labelledby="request-section-heading">
+            <div className={styles.composerSectionHeading}>
+              <span>1</span>
+              <div>
+                <h3 id="request-section-heading">Request</h3>
+                <p>Give speakers clear instructions and a deadline.</p>
               </div>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-name">Task name</Label>
-                  <Input
-                    id="task-name"
-                    value={title}
-                    onChange={(event) => setTitle(event.currentTarget.value)}
-                    placeholder="Upload Session Presentation"
-                    required
-                  />
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-due-date">Due date</Label>
-                  <Input
-                    id="task-due-date"
-                    type="date"
-                    value={dueAt}
-                    onChange={(event) => setDueAt(event.currentTarget.value)}
-                    required
-                  />
-                </div>
-              </div>
+            </div>
+            <div className={gridClass}>
               <div className={fieldClass}>
-                <Label htmlFor="task-instructions">Instructions</Label>
-                <Textarea
-                  id="task-instructions"
-                  rows={3}
-                  value={description}
-                  onChange={(event) => setDescription(event.currentTarget.value)}
-                  placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
+                <Label htmlFor="task-name">Task name</Label>
+                <Input
+                  id="task-name"
+                  value={title}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                  placeholder="Upload Session Presentation"
                   required
                 />
               </div>
-            </section>
-
-            <section className={styles.composerSection} aria-labelledby="files-section-heading">
-              <div className={styles.composerSectionHeading}>
-                <span>2</span>
-                <div>
-                  <h3 id="files-section-heading">Files</h3>
-                  <p>Set the accepted asset kinds, types, and size limit.</p>
-                </div>
+              <div className={fieldClass}>
+                <Label htmlFor="task-due-date">Due date</Label>
+                <Input
+                  id="task-due-date"
+                  type="date"
+                  value={dueAt}
+                  onChange={(event) => setDueAt(event.currentTarget.value)}
+                  required
+                />
               </div>
-              <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
-                <legend>Accepted asset kinds (required)</legend>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-instructions">Instructions</Label>
+              <Textarea
+                id="task-instructions"
+                rows={3}
+                value={description}
+                onChange={(event) => setDescription(event.currentTarget.value)}
+                placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
+                required
+              />
+            </div>
+          </section>
+
+          <section className={styles.composerSection} aria-labelledby="files-section-heading">
+            <div className={styles.composerSectionHeading}>
+              <span>2</span>
+              <div>
+                <h3 id="files-section-heading">Files</h3>
+                <p>Choose one deliverable type, then set its formats and size limit.</p>
+              </div>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-asset-kind">File type</Label>
+              <Select value={acceptedAssetKind} onValueChange={updateSelectedAssetKind}>
+                <SelectTrigger id="task-asset-kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {deliverableAssetKinds.map((kind) => {
+                    const policy = requestFilePolicyFor(kind);
+                    return (
+                      <SelectItem key={kind} value={kind}>
+                        {policy.label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <small className={mutedClass}>
+                {selectedFilePolicy.description} Create a separate request when you need a different
+                file type or due date.
+              </small>
+            </div>
+            <div className={gridClass}>
+              <fieldset className={styles.fieldset} aria-describedby="file-format-help">
+                <legend>File formats (required)</legend>
                 <div className={styles.optionGrid}>
-                  {deliverableAssetKinds.map((kind) => (
-                    <div key={kind} className={styles.optionRow}>
+                  {selectedFilePolicy.formats.map((format) => (
+                    <div key={format.id} className={styles.optionRow}>
                       <Checkbox
-                        id={`task-asset-kind-${kind}`}
-                        checked={acceptedAssetKinds.includes(kind)}
-                        onCheckedChange={() => toggleAssetKind(kind)}
+                        id={`task-file-format-${acceptedAssetKind}-${format.id}`}
+                        checked={fileFormatIsSelected(format)}
+                        onCheckedChange={(checked) => toggleFileFormat(format, checked === true)}
                       />
-                      <Label htmlFor={`task-asset-kind-${kind}`}>{formatStatus(kind)}</Label>
+                      <Label htmlFor={`task-file-format-${acceptedAssetKind}-${format.id}`}>
+                        {format.label}
+                      </Label>
                     </div>
                   ))}
                 </div>
-                <small id="asset-kind-help" className={mutedClass}>
-                  Selected:{" "}
-                  {acceptedAssetKinds.length === 0
-                    ? "None"
-                    : acceptedAssetKinds.map(formatStatus).join(", ")}
-                  .
+                <small id="file-format-help" className={mutedClass}>
+                  Speakers will only be able to upload the selected formats.
                 </small>
               </fieldset>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-mime-types">Allowed MIME types</Label>
-                  <Textarea
-                    id="task-mime-types"
-                    rows={3}
-                    value={mimeTypes}
-                    onChange={(event) => setMimeTypes(event.currentTarget.value)}
-                    aria-describedby="mime-help"
-                  />
-                  <small id="mime-help" className={mutedClass}>
-                    Defaults to PDF, Word, PowerPoint, JPG, PNG, WebP, and plain text.
-                  </small>
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
-                  <Input
-                    id="task-max-size-mb"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={maxSizeMb}
-                    onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
-                  />
-                </div>
-              </div>
-            </section>
-
-            <section
-              className={styles.composerSection}
-              aria-labelledby="assignments-section-heading"
-            >
-              <div className={styles.composerSectionHeading}>
-                <span>3</span>
-                <div>
-                  <h3 id="assignments-section-heading">Assignments</h3>
-                  <p>Choose the speakers and the exact subject for each request.</p>
-                </div>
-              </div>
               <div className={fieldClass}>
-                <Label htmlFor="task-subject-type">Request subject</Label>
-                <Select
-                  value={subjectType}
-                  onValueChange={(value) => setSubjectType(value as "participant" | "session")}
-                >
-                  <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="session">One accepted session per speaker</SelectItem>
-                    <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <small id="task-subject-help" className={mutedClass}>
-                  Session requests require an explicit accepted session for every assignee.
+                <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
+                <Input
+                  id="task-max-size-mb"
+                  type="number"
+                  min={1}
+                  max={selectedFilePolicy.maxBytes / bytesPerMegabyte}
+                  step={1}
+                  value={maxSizeMb}
+                  onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
+                />
+                <small className={mutedClass}>
+                  Platform limit for {selectedFilePolicy.label.toLowerCase()}:{" "}
+                  {selectedFilePolicy.maxBytes / bytesPerMegabyte} MB.
                 </small>
               </div>
-              <fieldset className={styles.fieldset}>
-                <legend>Assignees and subjects</legend>
-                {participants.length === 0 ? (
-                  <p className={mutedClass}>
-                    No authorized speaker records were returned. Task creation cannot be assigned
-                    safely.
-                  </p>
-                ) : (
-                  <div className={styles.assigneeList}>
-                    {participants.map((participant) => {
-                      const selected = assigneeIds.includes(participant.id);
-                      return (
-                        <div key={participant.id} className={styles.assigneeRow}>
-                          <div className={styles.optionRow}>
-                            <Checkbox
-                              id={`task-assignee-${participant.id}`}
-                              checked={selected}
-                              onCheckedChange={() => toggleAssignee(participant.id)}
-                            />
-                            <Label htmlFor={`task-assignee-${participant.id}`}>
-                              {participant.label}
-                            </Label>
-                            {participant.sessions.length > 1 ? (
-                              <Badge variant="outline">
-                                {participant.sessions.length} accepted sessions
-                              </Badge>
-                            ) : null}
-                          </div>
-                          {selected && subjectType === "session" ? (
-                            participant.sessions.length === 0 ? (
-                              <Alert variant="destructive">
-                                <AlertDescription>
-                                  No accepted session is available for this participant.
-                                </AlertDescription>
-                              </Alert>
-                            ) : (
-                              <div className={fieldClass}>
-                                <Label htmlFor={`task-session-${participant.id}`}>
-                                  Accepted session for {participant.label}
-                                </Label>
-                                <Select
-                                  {...(sessionByParticipant[participant.id] === undefined
-                                    ? {}
-                                    : { value: sessionByParticipant[participant.id] })}
-                                  onValueChange={(submissionId) =>
-                                    setSessionByParticipant((current) => ({
-                                      ...current,
-                                      [participant.id]: submissionId,
-                                    }))
-                                  }
-                                >
-                                  <SelectTrigger id={`task-session-${participant.id}`}>
-                                    <SelectValue placeholder="Choose an accepted session" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {participant.sessions.map((session) => (
-                                      <SelectItem key={session.id} value={session.id}>
-                                        {session.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            )
+            </div>
+          </section>
+
+          <section className={styles.composerSection} aria-labelledby="assignments-section-heading">
+            <div className={styles.composerSectionHeading}>
+              <span>3</span>
+              <div>
+                <h3 id="assignments-section-heading">Assignments</h3>
+                <p>Choose the speakers and the exact subject for each request.</p>
+              </div>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-subject-type">Request subject</Label>
+              <Select
+                value={subjectType}
+                onValueChange={(value) => setSubjectType(value as "participant" | "session")}
+              >
+                <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session">One accepted session per speaker</SelectItem>
+                  <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
+                </SelectContent>
+              </Select>
+              <small id="task-subject-help" className={mutedClass}>
+                Session requests require an explicit accepted session for every assignee.
+              </small>
+            </div>
+            <fieldset className={styles.fieldset}>
+              <legend>Assignees and subjects</legend>
+              {participants.length === 0 ? (
+                <p className={mutedClass}>
+                  No authorized speaker records were returned. Task creation cannot be assigned
+                  safely.
+                </p>
+              ) : (
+                <div className={styles.assigneeList}>
+                  {participants.map((participant) => {
+                    const selected = assigneeIds.includes(participant.id);
+                    return (
+                      <div key={participant.id} className={styles.assigneeRow}>
+                        <div className={styles.optionRow}>
+                          <Checkbox
+                            id={`task-assignee-${participant.id}`}
+                            checked={selected}
+                            onCheckedChange={() => toggleAssignee(participant.id)}
+                          />
+                          <Label htmlFor={`task-assignee-${participant.id}`}>
+                            {participant.label}
+                          </Label>
+                          {participant.sessions.length > 1 ? (
+                            <Badge variant="outline">
+                              {participant.sessions.length} accepted sessions
+                            </Badge>
                           ) : null}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </fieldset>
-              <div className={styles.assignmentCount} role="status" aria-live="polite">
-                <strong>{assignmentCount}</strong> assignment{assignmentCount === 1 ? "" : "s"} will
-                be created.
-              </div>
-            </section>
+                        {selected && subjectType === "session" ? (
+                          participant.sessions.length === 0 ? (
+                            <Alert variant="destructive">
+                              <AlertDescription>
+                                No accepted session is available for this participant.
+                              </AlertDescription>
+                            </Alert>
+                          ) : (
+                            <div className={fieldClass}>
+                              <Label htmlFor={`task-session-${participant.id}`}>
+                                Accepted session for {participant.label}
+                              </Label>
+                              <Select
+                                {...(sessionByParticipant[participant.id] === undefined
+                                  ? {}
+                                  : { value: sessionByParticipant[participant.id] })}
+                                onValueChange={(submissionId) =>
+                                  setSessionByParticipant((current) => ({
+                                    ...current,
+                                    [participant.id]: submissionId,
+                                  }))
+                                }
+                              >
+                                <SelectTrigger id={`task-session-${participant.id}`}>
+                                  <SelectValue placeholder="Choose an accepted session" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {participant.sessions.map((session) => (
+                                    <SelectItem key={session.id} value={session.id}>
+                                      {session.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+            <div className={styles.assignmentCount} role="status" aria-live="polite">
+              <strong>{assignmentCount}</strong> assignment{assignmentCount === 1 ? "" : "s"} will
+              be created.
+            </div>
+          </section>
 
-            {formError !== null ? (
-              <Alert variant="destructive">
-                <AlertTitle>Request not saved</AlertTitle>
-                <AlertDescription>{formError}</AlertDescription>
-              </Alert>
-            ) : null}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={busy || onCreateTask === undefined}>
-                {busy
-                  ? "Saving request…"
-                  : onCreateTask === undefined
-                    ? "Task creation unavailable"
-                    : `Create ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </div>
+          {formError !== null ? (
+            <Alert variant="destructive">
+              <AlertTitle>Request not saved</AlertTitle>
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy || onCreateTask === undefined}>
+              {busy
+                ? "Saving request…"
+                : onCreateTask === undefined
+                  ? "Task creation unavailable"
+                  : `Create ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1953,7 +1843,7 @@ function SessionEditor(
       </CardHeader>
       <CardContent>
         <Button asChild>
-          <a href={href}>Open Sessions</a>
+          <Link href={href}>Open Sessions</Link>
         </Button>
       </CardContent>
     </Card>
@@ -2004,7 +1894,7 @@ function SpeakerEditor(
       </CardHeader>
       <CardContent>
         <Button asChild>
-          <a href={href}>Open Speakers</a>
+          <Link href={href}>Open Speakers</Link>
         </Button>
       </CardContent>
     </Card>
@@ -2195,13 +2085,13 @@ export function DeliverablesWorkspaceView({
           <CardHeader className={clusterClass}>
             <div>
               <p className={styles.eyebrow}>
-                {filesMode ? "Speaker materials" : "Speaker operations"}
+                Speaker operations · {filesMode ? "Files library" : "Requests"}
               </p>
-              <h1>{filesMode ? "Uploaded files" : "Content requests"}</h1>
+              <h1>Content collection</h1>
               <p className={styles.lede}>
                 {filesMode
-                  ? "Review files submitted by speakers, request changes, and download final versions."
-                  : "Collect speaker files, track every assignment, and follow up on outstanding requests."}
+                  ? "Review submitted files, manage versions, and download approved material."
+                  : "Define what speakers owe, assign recipients, and follow up."}
               </p>
             </div>
             <Badge variant="outline">
@@ -2216,18 +2106,18 @@ export function DeliverablesWorkspaceView({
               aria-label="Content requests and uploaded files"
               data-mode-switcher
             >
-              <a href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
+              <Link href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
                 Requests <span>Assign &amp; track</span>
-              </a>
-              <a href={filesHref} aria-current={filesMode ? "page" : undefined}>
-                Uploaded files <span>Review &amp; download</span>
-              </a>
+              </Link>
+              <Link href={filesHref} aria-current={filesMode ? "page" : undefined}>
+                Files <span>Review &amp; download</span>
+              </Link>
             </nav>
             <details className={styles.mobileSwitcher}>
-              <summary>Switch section: {filesMode ? "Uploaded files" : "Requests"}</summary>
+              <summary>Switch section: {filesMode ? "Files" : "Requests"}</summary>
               <nav aria-label="Mobile section switcher">
-                <a href={deliverablesHref}>Requests — Assign &amp; track</a>
-                <a href={filesHref}>Uploaded files — Review &amp; download</a>
+                <Link href={deliverablesHref}>Requests — Assign &amp; track</Link>
+                <Link href={filesHref}>Files — Review &amp; download</Link>
               </nav>
             </details>
           </CardContent>
@@ -2630,179 +2520,6 @@ export function DeliverablesWorkspaceView({
     </div>
   );
 }
-export interface DeliverablesCoreRequestHandles {
-  readonly sessions: Promise<readonly DeliverableSession[]>;
-  readonly matrix?: Promise<DeliverableTaskMatrix>;
-  readonly tasks?: Promise<readonly DeliverableTask[]>;
-  readonly assets?: Promise<readonly DeliverableAsset[]>;
-  readonly profiles?: Promise<readonly DeliverableSpeakerProfile[]>;
-}
-type MutableDeliverablesCoreRequestHandles = {
-  -readonly [Key in keyof DeliverablesCoreRequestHandles]: DeliverablesCoreRequestHandles[Key];
-};
-
-function startDeliverablesRequest<T>(request: () => Promise<T>): Promise<T> {
-  try {
-    return Promise.resolve(request());
-  } catch (reason) {
-    return Promise.reject(reason);
-  }
-}
-
-/**
- * Start every independent core request synchronously. The workspace attaches
- * settlement handlers after this function returns so one rejection cannot
- * prevent the other resources from starting.
- */
-export function startDeliverablesCoreRequests(
-  api: DeliverablesApi,
-  mode: DeliverablesWorkspaceMode,
-  signal?: AbortSignal,
-): DeliverablesCoreRequestHandles {
-  const requests: MutableDeliverablesCoreRequestHandles = {
-    sessions: startDeliverablesRequest(() => api.listSessions(signal)),
-  };
-  const listDeliverableMatrix = api.listDeliverableMatrix;
-  if (listDeliverableMatrix !== undefined) {
-    requests.matrix = startDeliverablesRequest(() =>
-      listDeliverableMatrix(signal === undefined ? undefined : { signal }),
-    );
-  }
-
-  const needsProjectionFallback = mode === "deliverables" && listDeliverableMatrix === undefined;
-  if (needsProjectionFallback) {
-    const listTasks = api.listTasks;
-    if (listTasks !== undefined) {
-      requests.tasks = startDeliverablesRequest(() => listTasks(signal));
-    }
-  }
-
-  if (mode === "files" || needsProjectionFallback) {
-    const listAssets = api.listAssets;
-    if (listAssets !== undefined) {
-      requests.assets = startDeliverablesRequest(() =>
-        signal === undefined ? listAssets() : listAssets({ signal }),
-      );
-    }
-    const listProfiles = api.listProfiles;
-    if (listProfiles !== undefined) {
-      requests.profiles = startDeliverablesRequest(() => listProfiles(signal));
-    }
-  }
-  return requests;
-}
-
-type DeliverablesSettledResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: unknown };
-
-function settleDeliverablesRequest<T>(
-  request: Promise<T> | undefined,
-): Promise<DeliverablesSettledResult<T> | undefined> {
-  return request === undefined
-    ? Promise.resolve(undefined)
-    : request.then(
-        (value) => ({ ok: true as const, value }),
-        (reason: unknown) => ({ ok: false as const, reason }),
-      );
-}
-export interface DeliverablesWorkspaceScope {
-  readonly api: DeliverablesApi;
-  readonly eventId: string;
-  readonly organizationId: string;
-  readonly epoch: number;
-}
-
-export function isDeliverablesWorkspaceScopeCurrent(
-  expected: DeliverablesWorkspaceScope,
-  current: DeliverablesWorkspaceScope,
-): boolean {
-  return (
-    expected.epoch === current.epoch &&
-    expected.api === current.api &&
-    expected.eventId === current.eventId &&
-    expected.organizationId === current.organizationId
-  );
-}
-
-export function deliverablesSessionHistoryKey(sessionId: string, sessionVersion: number): string {
-  return `${sessionId}\u0000${sessionVersion}`;
-}
-
-export type DeliverablesSessionHistoryCacheEntry =
-  | {
-      readonly status: "pending";
-      readonly promise: Promise<readonly DeliverableContentHistoryEntry[]>;
-    }
-  | {
-      readonly status: "fulfilled";
-      readonly value: readonly DeliverableContentHistoryEntry[];
-    };
-
-export type DeliverablesSessionHistoryCache = Map<string, DeliverablesSessionHistoryCacheEntry>;
-
-export function loadDeliverablesSessionHistory(
-  api: DeliverablesApi,
-  session: DeliverableSession,
-  cache: DeliverablesSessionHistoryCache,
-  signal?: AbortSignal,
-): Promise<readonly DeliverableContentHistoryEntry[]> {
-  const key = deliverablesSessionHistoryKey(session.id, session.version);
-  if (session.contentHistory !== undefined) {
-    cache.set(key, { status: "fulfilled", value: session.contentHistory });
-    return Promise.resolve(session.contentHistory);
-  }
-
-  const cached = cache.get(key);
-  if (cached?.status === "fulfilled") return Promise.resolve(cached.value);
-  if (cached?.status === "pending") return cached.promise;
-
-  const request = startDeliverablesRequest(() => {
-    if (api.listSessionContentHistory === undefined) {
-      throw new Error("The session content history endpoint is not provisioned.");
-    }
-    return signal === undefined
-      ? api.listSessionContentHistory(session.id)
-      : api.listSessionContentHistory(session.id, signal);
-  });
-  let tracked!: Promise<readonly DeliverableContentHistoryEntry[]>;
-  tracked = request.then(
-    (value) => {
-      const current = cache.get(key);
-      if (current?.status === "pending" && current.promise === tracked) {
-        cache.set(key, { status: "fulfilled", value });
-      }
-      return value;
-    },
-    (reason: unknown) => {
-      const current = cache.get(key);
-      if (current?.status === "pending" && current.promise === tracked) {
-        cache.delete(key);
-      }
-      throw reason;
-    },
-  );
-  cache.set(key, { status: "pending", promise: tracked });
-  return tracked;
-}
-
-export interface DeliverablesAssetDetailSettled {
-  readonly history: DeliverablesSettledResult<readonly DeliverableAssetHistoryEntry[]>;
-  readonly comments: DeliverablesSettledResult<readonly DeliverableComment[]>;
-}
-
-export function settleDeliverablesAssetDetailRequests(
-  historyRequest: Promise<readonly DeliverableAssetHistoryEntry[]>,
-  commentsRequest: Promise<readonly DeliverableComment[]>,
-): Promise<DeliverablesAssetDetailSettled> {
-  return Promise.all([
-    settleDeliverablesRequest(historyRequest),
-    settleDeliverablesRequest(commentsRequest),
-  ]).then(([history, comments]) => ({
-    history: history as DeliverablesSettledResult<readonly DeliverableAssetHistoryEntry[]>,
-    comments: comments as DeliverablesSettledResult<readonly DeliverableComment[]>,
-  }));
-}
 
 function matrixAssetsFromItems(
   items: readonly DeliverableMatrixItem[],
@@ -2831,50 +2548,57 @@ export function DeliverablesWorkspace({
     () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
     [eventId, organizationId, providedApi],
   );
-  const scopeRef = useRef<DeliverablesWorkspaceScope>({
-    api,
-    eventId,
-    organizationId,
-    epoch: 0,
-  });
-  if (
-    scopeRef.current.api !== api ||
-    scopeRef.current.eventId !== eventId ||
-    scopeRef.current.organizationId !== organizationId
-  ) {
-    scopeRef.current = {
+  const currentScope = useMemo<DeliverablesWorkspaceScope>(
+    () => ({
       api,
       eventId,
       organizationId,
-      epoch: scopeRef.current.epoch + 1,
-    };
-  }
-  const currentScope = scopeRef.current;
-  const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
-    initialData?.sessions ?? [],
+      epoch: 0,
+    }),
+    [api, eventId, organizationId],
   );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(initialData?.tasks ?? []);
-  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(initialData?.assets ?? []);
+  const scopeRef = useRef<DeliverablesWorkspaceScope>(currentScope);
+  useLayoutEffect(() => {
+    commitDeliverablesWorkspaceScope(currentScope);
+    scopeRef.current = currentScope;
+  }, [currentScope]);
+  const navigationCacheScope = useMemo<ContentCollectionNavigationCacheScope>(
+    () => ({ organizationId, eventId, view: mode }),
+    [eventId, mode, organizationId],
+  );
+  const effectiveInitialData = useMemo(
+    () => initialData ?? contentCollectionNavigationCache.get(navigationCacheScope),
+    [initialData, navigationCacheScope],
+  );
+  const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
+    effectiveInitialData?.sessions ?? [],
+  );
+  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(effectiveInitialData?.tasks ?? []);
+  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(
+    effectiveInitialData?.assets ?? [],
+  );
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
-    initialData?.profiles ?? [],
+    effectiveInitialData?.profiles ?? [],
   );
   const [speakerContentHistory, setSpeakerContentHistory] = useState<
     Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
   >(() =>
     speakerContentHistoryStatesForProfiles(
-      initialData?.profiles ?? [],
-      initialData?.speakerContentHistory,
+      effectiveInitialData?.profiles ?? [],
+      effectiveInitialData?.speakerContentHistory,
     ),
   );
-  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(initialData?.matrix);
-  const [loading, setLoading] = useState(initialData === undefined);
+  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(
+    effectiveInitialData?.matrix,
+  );
+  const [loading, setLoading] = useState(effectiveInitialData === undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-    initialData?.sessions[0]?.id ?? null,
+    effectiveInitialData?.sessions[0]?.id ?? null,
   );
   const [sessionHistory, setSessionHistory] = useState<
     readonly DeliverableContentHistoryEntry[] | undefined
@@ -2883,7 +2607,9 @@ export function DeliverablesWorkspace({
   const [sessionHistoryKey, setSessionHistoryKey] = useState<string | null>(null);
   const sessionHistoryCacheRef = useRef<DeliverablesSessionHistoryCache>(new Map());
   const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
-  selectedAssetIdRef.current = selectedAssetId;
+  useLayoutEffect(() => {
+    selectedAssetIdRef.current = selectedAssetId;
+  }, [selectedAssetId]);
   const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
   const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
   const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
@@ -2898,18 +2624,18 @@ export function DeliverablesWorkspace({
   useEffect(() => {
     if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
     stateScopeRef.current = currentScope;
-    setSessions(initialData?.sessions ?? []);
-    setTasks(initialData?.tasks ?? []);
-    setAssets(initialData?.assets ?? []);
-    setProfiles(initialData?.profiles ?? []);
+    setSessions(effectiveInitialData?.sessions ?? []);
+    setTasks(effectiveInitialData?.tasks ?? []);
+    setAssets(effectiveInitialData?.assets ?? []);
+    setProfiles(effectiveInitialData?.profiles ?? []);
     setSpeakerContentHistory(
       speakerContentHistoryStatesForProfiles(
-        initialData?.profiles ?? [],
-        initialData?.speakerContentHistory,
+        effectiveInitialData?.profiles ?? [],
+        effectiveInitialData?.speakerContentHistory,
       ),
     );
-    setMatrix(initialData?.matrix);
-    setLoading(initialData === undefined);
+    setMatrix(effectiveInitialData?.matrix);
+    setLoading(effectiveInitialData === undefined);
     setError(null);
     setCapabilityMessages([]);
     sessionHistoryCacheRef.current.clear();
@@ -2927,7 +2653,7 @@ export function DeliverablesWorkspace({
     setBusy(false);
     setStatusMessage(null);
     setOperationStates({});
-  }, [currentScope, initialData]);
+  }, [currentScope, effectiveInitialData]);
 
   function recordOperation(
     key: DeliverablesOperationKey,
@@ -2999,19 +2725,14 @@ export function DeliverablesWorkspace({
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
-      const scope: DeliverablesWorkspaceScope = {
-        api,
-        eventId,
-        organizationId,
-        epoch: scopeRef.current.epoch,
-      };
+      const scope: DeliverablesWorkspaceScope = currentScope;
       const generation = loadGenerationRef.current + 1;
       loadGenerationRef.current = generation;
       const isCurrent = (): boolean =>
         !signal?.aborted &&
         loadGenerationRef.current === generation &&
         isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
-      if (initialData !== undefined) {
+      if (effectiveInitialData !== undefined) {
         if (isCurrent()) setLoading(false);
         return;
       }
@@ -3187,15 +2908,37 @@ export function DeliverablesWorkspace({
         if (isCurrent()) setLoading(false);
       }
     },
-    [api, eventId, initialData, mode, organizationId, refreshSpeakerContentHistory],
+    [api, currentScope, effectiveInitialData, mode, refreshSpeakerContentHistory],
   );
 
   useEffect(() => {
-    if (initialData !== undefined) return;
+    if (effectiveInitialData !== undefined) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [initialData, load]);
+  }, [effectiveInitialData, load]);
+
+  useEffect(() => {
+    if (loading || error !== null) return;
+    contentCollectionNavigationCache.set(navigationCacheScope, {
+      sessions,
+      tasks,
+      assets,
+      profiles,
+      ...(matrix === undefined ? {} : { matrix }),
+      speakerContentHistory,
+    });
+  }, [
+    assets,
+    error,
+    loading,
+    matrix,
+    navigationCacheScope,
+    profiles,
+    sessions,
+    speakerContentHistory,
+    tasks,
+  ]);
 
   const effectiveSelectedSessionId =
     selectedSessionId ?? sessions.find((session) => session.eventId === eventId)?.id ?? null;
@@ -3853,17 +3596,21 @@ export function DeliverablesWorkspace({
     stateScopeRef.current,
     currentScope,
   );
-  const renderedSessions = renderedStateIsCurrent ? sessions : (initialData?.sessions ?? []);
-  const renderedTasks = renderedStateIsCurrent ? tasks : (initialData?.tasks ?? []);
-  const renderedAssets = renderedStateIsCurrent ? assets : (initialData?.assets ?? []);
-  const renderedProfiles = renderedStateIsCurrent ? profiles : (initialData?.profiles ?? []);
+  const renderedSessions = renderedStateIsCurrent
+    ? sessions
+    : (effectiveInitialData?.sessions ?? []);
+  const renderedTasks = renderedStateIsCurrent ? tasks : (effectiveInitialData?.tasks ?? []);
+  const renderedAssets = renderedStateIsCurrent ? assets : (effectiveInitialData?.assets ?? []);
+  const renderedProfiles = renderedStateIsCurrent
+    ? profiles
+    : (effectiveInitialData?.profiles ?? []);
   const renderedSpeakerContentHistory = renderedStateIsCurrent
     ? speakerContentHistory
     : speakerContentHistoryStatesForProfiles(
-        initialData?.profiles ?? [],
-        initialData?.speakerContentHistory,
+        effectiveInitialData?.profiles ?? [],
+        effectiveInitialData?.speakerContentHistory,
       );
-  const renderedMatrix = renderedStateIsCurrent ? matrix : initialData?.matrix;
+  const renderedMatrix = renderedStateIsCurrent ? matrix : effectiveInitialData?.matrix;
   const selectedSessionForHistory =
     renderedSessions.find(
       (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
@@ -3893,7 +3640,7 @@ export function DeliverablesWorkspace({
       assets={renderedAssets}
       profiles={renderedProfiles}
       {...(renderedMatrix === undefined ? {} : { matrixItems: renderedMatrix.items })}
-      loading={renderedStateIsCurrent ? loading : initialData === undefined}
+      loading={renderedStateIsCurrent ? loading : effectiveInitialData === undefined}
       loadingSessionHistories={renderedStateIsCurrent && loadingSessionHistories}
       busy={renderedStateIsCurrent && busy}
       error={renderedStateIsCurrent ? error : null}

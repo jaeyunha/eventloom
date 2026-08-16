@@ -7,6 +7,20 @@
   gap: var(--admin-space-4);
 }
 
+.workspace .contentCenteredShell {
+  grid-template-columns:
+    minmax(0, var(--admin-settings-navigation-width))
+    minmax(0, var(--admin-settings-content-width))
+    minmax(0, var(--admin-settings-navigation-width));
+  max-width: calc(
+    var(--admin-settings-navigation-width) +
+    var(--admin-space-6) +
+    var(--admin-settings-content-width) +
+    var(--admin-space-6) +
+    var(--admin-settings-navigation-width)
+  );
+}
+
 .destinationHeader,
 .stateHeader {
   min-height: auto;
@@ -788,6 +802,32 @@
 @media (min-width: 64.01rem) {
   .mobileNavigation {
     display: none;
+  }
+}
+
+@media (min-width: 64.01rem) and (max-width: 94rem) {
+  .workspace .contentCenteredShell {
+    display: block;
+    max-width: var(--admin-settings-content-width);
+  }
+
+  .navigationWrapper {
+    position: static;
+  }
+
+  .desktopNavigation {
+    display: none;
+  }
+
+  .mobileNavigation {
+    display: block;
+    position: static;
+    margin-bottom: 1rem;
+  }
+
+  .mobileNavigationContent {
+    max-height: min(28rem, calc(100dvh - 9rem));
+    overflow-y: auto;
   }
 }
 

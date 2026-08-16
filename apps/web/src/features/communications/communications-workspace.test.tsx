@@ -12,8 +12,8 @@ import {
   type ReminderFacts,
   type ReminderRun,
 } from "./api";
+import { CommunicationsWorkspaceView } from "./communications-workspace";
 import {
-  CommunicationsWorkspaceView,
   communicationTemplateSelectionFromKey,
   communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,
@@ -21,7 +21,7 @@ import {
   invalidateCommunicationPreviewState,
   loadCommunicationTemplates,
   previewAudienceForTemplate,
-} from "./communications-workspace";
+} from "./communications-workspace-model";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

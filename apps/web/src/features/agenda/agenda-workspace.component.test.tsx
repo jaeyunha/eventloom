@@ -4,11 +4,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AGENDA_VIEW_MODES,
   AgendaBoard,
   type AgendaBusyOperation,
   AgendaSuggestionPanel,
   type AgendaSuggestionRunView,
+} from "./agenda-workspace";
+import {
+  AGENDA_VIEW_MODES,
   type AgendaViewMode,
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
@@ -18,7 +20,7 @@ import {
   isAgendaAsyncScopeTokenCurrent,
   loadCanonicalAgendaWorkspace,
   serializeAgendaSuggestionOptions,
-} from "./agenda-workspace";
+} from "./agenda-workspace-model";
 import { createAgendaApi } from "./api";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
@@ -366,6 +368,24 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain('href="/admin/organizations/organization-1/events/evt_open"');
     expect(markup).not.toContain('href="/admin/events/evt_open"');
   });
+  it("uses Next Link for private organizer destinations while retaining the skip anchor", () => {
+    expect(workspaceSource).toContain('import Link from "next/link";');
+    expect(workspaceSource).toContain(
+      "<Link\n                href={`/admin/organizations/" +
+        "$" +
+        "{encodeURIComponent(organizationId)}/events/" +
+        "$" +
+        "{encodeURIComponent(data.event.id)}`}\n              >",
+    );
+    expect(workspaceSource).toContain("<Link href={settingsHref}>Rooms and tracks</Link>");
+    expect(workspaceSource).toContain(
+      "<Link href={settingsHref}>Create a room in Rooms and tracks settings</Link>",
+    );
+    expect(workspaceSource).toContain("<Link href={sessionsHref}>Open sessions</Link>");
+    expect(workspaceSource).not.toContain("<a href={settingsHref}>");
+    expect(workspaceSource).not.toContain("<a href={sessionsHref}>");
+    expect(workspaceSource).toContain('<a className={styles.skipLink} href="#agenda-content">');
+  });
 
   it("exposes accessible scheduling and disabled publication controls", () => {
     const markup = renderToStaticMarkup(
@@ -695,7 +715,7 @@ describe("agenda organizer workspace", () => {
   });
 
   it("does not expose raw audit actor identifiers in organizer-facing markup", () => {
-    const rawActorId = "00000000-0000-4000-8000-000000000001";
+    const rawActorId = "internal-actor-id-should-not-render";
     const rawTimestampToken = "2099-12-31T23:59:59.000Z";
     const markup = renderBoard({
       ...data,

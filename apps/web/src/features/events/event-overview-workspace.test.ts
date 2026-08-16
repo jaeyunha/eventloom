@@ -1,9 +1,44 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
+import { EventOverviewContent } from "./event-overview-content";
+import {
+  type EventOverviewData,
+  loadEventOverviewData,
+  loadEventOverviewName,
+} from "./event-overview-data";
 import { EventOverviewWorkspace } from "./event-overview-workspace";
-import { loadEventOverviewData, loadEventOverviewName } from "./event-overview-data";
 
+const overviewData: EventOverviewData = {
+  event: {
+    cfpSettings: {
+      closesAt: "2028-06-01T03:59:59.000Z",
+      enabled: true,
+      opensAt: "2028-04-01T13:00:00.000Z",
+    },
+    endsAt: "2028-09-11T22:00:00.000Z",
+    id: "event-canonical-id",
+    name: "Distinct Event",
+    organizationId: "organization-1",
+    startsAt: "2028-09-10T13:00:00.000Z",
+    status: "active",
+    timeZone: "America/New_York",
+    venue: "Pier 42",
+  },
+  submissions: {
+    accepted: 1,
+    awaitingDecision: 1,
+    status: "ready",
+    total: 3,
+  },
+  agenda: {
+    conflicts: 1,
+    publishedSessions: 0,
+    scheduledSessions: 2,
+    status: "ready",
+  },
+};
 describe("EventOverviewWorkspace", () => {
   it("does not render fabricated operational metrics before data loads", () => {
     const markup = renderToStaticMarkup(
@@ -160,5 +195,35 @@ describe("EventOverviewWorkspace", () => {
       message: "Submission intake is not configured for this event.",
     });
     expect(result.agenda).toMatchObject({ status: "ready", scheduledSessions: 0, conflicts: 0 });
+  });
+  it("keeps private overview links on the canonical event ID and scopes the breadcrumb", () => {
+    const eventId = "event-canonical-id";
+    const eventSlug = "public-event-slug";
+    const base = `/admin/organizations/organization-1/events/${eventId}`;
+    const markup = renderToStaticMarkup(
+      createElement(
+        OrganizerEventWorkspaceProvider,
+        {
+          event: {
+            id: eventId,
+            name: overviewData.event.name,
+            slug: eventSlug,
+          },
+          organizationId: "organization-1",
+        },
+        createElement(EventOverviewContent, {
+          data: overviewData,
+          eventId,
+          organizationId: "organization-1",
+        }),
+      ),
+    );
+
+    expect(markup).toContain(`href="${base}/submissions"`);
+    expect(markup).toContain(`href="${base}/agenda"`);
+    expect(markup).toContain(`href="${base}/cfp"`);
+    expect(markup).toContain('href="/admin/organizations/organization-1/events"');
+    expect(markup).not.toContain(eventSlug);
+    expect(markup).not.toContain('href="/admin/events"');
   });
 });

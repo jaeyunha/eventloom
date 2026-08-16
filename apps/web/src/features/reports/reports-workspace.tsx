@@ -67,12 +67,12 @@ import {
 } from "./api";
 import styles from "./reports-workspace.module.css";
 import {
+  type FieldOption,
+  fieldsForRelationships,
+  normalizeDraft,
   REPORT_DIALOG_COPY,
   REPORT_FIELD_ALLOWLIST,
   SOURCE_ORDER,
-  fieldsForRelationships,
-  normalizeDraft,
-  type FieldOption,
 } from "./reports-workspace-model";
 
 export interface ReportsWorkspaceProps {
@@ -324,7 +324,6 @@ function carryRowKey<T extends object>(state: RowKeyState<T>, previous: T, next:
   const existing = state.map.get(previous);
   if (existing !== undefined) state.map.set(next, existing);
 }
-
 
 function equalDraft(left: ReportDefinitionInput, right: ReportDefinitionInput): boolean {
   return JSON.stringify(normalizeDraft(left)) === JSON.stringify(normalizeDraft(right));

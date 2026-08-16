@@ -1,13 +1,12 @@
+export { AirtableIntegration, type AirtableIntegrationProps } from "./airtable-integration";
 export {
   type AirtableBaseMapping,
   type AirtableConflict,
   type AirtableConflictResolution,
   type AirtableConflictResolutionInput,
   type AirtableConnectionState,
-  AirtableIntegration,
   type AirtableIntegrationApi,
   AirtableIntegrationApiError,
-  type AirtableIntegrationProps,
   type AirtableIntegrationSnapshot,
   type AirtableProjectionFailure,
   type AirtableProjectionHealth,
@@ -15,4 +14,4 @@ export {
   type AirtableSyncDirection,
   type AirtableTableMapping,
   createAirtableIntegrationApi,
-} from "./airtable-integration";
+} from "./api";

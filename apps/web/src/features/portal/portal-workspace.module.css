@@ -52,10 +52,10 @@
   list-style: none;
 }
 
-.list > li + li,
-.compactList > li + li,
-.versionList > li + li,
-.guideList > li + li {
+:where(.list) > li + li,
+:where(.compactList) > li + li,
+:where(.versionList) > li + li,
+:where(.guideList) > li + li {
   border-top: 1px solid var(--border);
 }
 

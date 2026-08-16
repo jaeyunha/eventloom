@@ -18,7 +18,6 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
-
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
@@ -40,6 +39,20 @@ import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
 import { useCfpStartupStore } from "./cfp-startup-provider";
 import { CfpSubmissionWindow } from "./cfp-submission-window";
 import styles from "./cfp-wizard.module.css";
+import {
+  canSaveCfpDraftAtStep,
+  cfpConfirmationEmailMessage,
+  cfpHttpUrlIsValid,
+  cfpPublishedFieldIsVisible,
+  cfpReviewSubmissionDetails,
+  cfpSubmissionErrorKey,
+  cfpSubmissionFieldValue,
+  cfpSubmissionPayload,
+  shouldAuthenticateCfpAccount,
+} from "./cfp-wizard-model";
+
+export { cfpHttpUrlIsValid, cfpPublishedFieldIsVisible };
+
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import {
   cfpStepRequiresAuthentication,
@@ -304,14 +317,6 @@ function evaluatePublishedFields(
   return { fields, sections };
 }
 
-export function cfpPublishedFieldIsVisible(
-  form: CfpPublishedForm,
-  answers: Record<string, unknown>,
-  fieldKey: string,
-): boolean {
-  return evaluatePublishedFields(form, answers).fields.get(fieldKey)?.visible ?? false;
-}
-
 function fileStateKey(fieldKey: string, participantIndex?: number): string {
   return participantIndex === undefined ? fieldKey : `participants.${participantIndex}.${fieldKey}`;
 }
@@ -571,18 +576,7 @@ function mergeSecondaryContact(
   };
 }
 
-export function shouldAuthenticateCfpAccount(
-  step: CfpStep,
-  session: CfpAuthenticatedSession | null,
-): boolean {
-  return step === "account" && session === null;
-}
-
 type CfpAccountMode = "sign_in" | "sign_up";
-
-export function canSaveCfpDraftAtStep(step: CfpStep | "complete"): boolean {
-  return step === "submission" || step === "participants" || step === "review";
-}
 
 function configuredCfpIdentity(
   eventSlug: string,
@@ -699,166 +693,6 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
   );
 }
 
-export function cfpSubmissionPayload(
-  draft: CfpDraft,
-  dynamicAnswers: DynamicAnswers,
-  participantAnswers: ParticipantAnswers,
-): {
-  answers: Record<string, unknown>;
-  participants: CfpServerSubmission["participants"];
-  secondaryContacts: CfpServerSubmission["secondaryContacts"];
-} {
-  const answers = { ...dynamicAnswers };
-  return {
-    answers: {
-      ...answers,
-      title: draft.submission.title,
-      abstract: dynamicAnswers.abstract ?? draft.submission.description,
-      description:
-        dynamicAnswers.description ??
-        (dynamicAnswers.abstract === undefined ? draft.submission.description : ""),
-      format: draft.submission.format,
-      tags: draft.submission.tags,
-      track: draft.submission.track,
-      level: draft.submission.level,
-      language: draft.submission.language,
-      accountEmail: draft.account.email,
-      accountFirstName: draft.account.firstName,
-      accountLastName: draft.account.lastName,
-      accountAcceptedTerms: draft.account.acceptedTerms,
-    },
-    participants: draft.participants.map((participant) => {
-      const customAnswers = participantAnswers[participant.id] ?? {};
-      return {
-        id: participant.id,
-        firstName: participant.firstName,
-        lastName: participant.lastName,
-        email: participant.email,
-        role: participant.role === "Speaker" ? "primary" : "co_speaker",
-        biography: participant.biography,
-        answers: { ...customAnswers },
-      };
-    }),
-    secondaryContacts: draft.secondaryContacts.map((contact) => ({
-      id: contact.id,
-      name: `${contact.firstName} ${contact.lastName}`.trim(),
-      email: contact.email,
-    })),
-  };
-}
-
-function reviewValueString(value: unknown): string {
-  if (Array.isArray(value)) {
-    const items = value
-      .map((item) => reviewValueString(item))
-      .filter((item) => item !== "Not specified");
-    return items.length > 0 ? items.join(", ") : "Not specified";
-  }
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "string" && value.trim().length > 0) return value;
-  return "Not specified";
-}
-
-export function cfpReviewAudienceLevel(
-  form: CfpPublishedForm | undefined,
-  answers: DynamicAnswers,
-  legacyLevel: string,
-): { label: string; value: string } {
-  const customField = form?.submissionFields.find((field) => field.id === "field-audience-level");
-  if (customField !== undefined) {
-    return {
-      label: customField.label,
-      value: reviewValueString(answers[customField.key]),
-    };
-  }
-  return { label: "Level", value: reviewValueString(legacyLevel) };
-}
-
-export function cfpReviewSubmissionDetails(
-  form: CfpPublishedForm | undefined,
-  draft: CfpDraft,
-  answers: DynamicAnswers,
-): readonly { key: string; label: string; value: string }[] {
-  if (form && form.submissionFields.length > 0) {
-    const resolvedAnswers = Object.fromEntries(
-      form.submissionFields.map((field) => [
-        field.key,
-        cfpSubmissionFieldValue(draft, answers, field.key),
-      ]),
-    );
-    const evaluated = evaluatePublishedFields(form, {
-      ...answers,
-      ...resolvedAnswers,
-      accountEmail: draft.account.email,
-      accountFirstName: draft.account.firstName,
-      accountLastName: draft.account.lastName,
-    });
-    return form.submissionFields.flatMap((field) => {
-      if (isFileField(field) || evaluated.fields.get(field.key)?.visible === false) return [];
-      const value = reviewValueString(cfpSubmissionFieldValue(draft, answers, field.key));
-      return value === "Not specified" ? [] : [{ key: field.key, label: field.label, value }];
-    });
-  }
-
-  return [
-    { key: "title", label: "Title", value: reviewValueString(draft.submission.title) },
-    {
-      key: "description",
-      label: "Description",
-      value: reviewValueString(draft.submission.description),
-    },
-    { key: "format", label: "Format", value: reviewValueString(draft.submission.format) },
-    { key: "tags", label: "Tags", value: reviewValueString(draft.submission.tags) },
-    { key: "track", label: "Track", value: reviewValueString(draft.submission.track) },
-    { key: "level", label: "Level", value: reviewValueString(draft.submission.level) },
-    { key: "language", label: "Language", value: reviewValueString(draft.submission.language) },
-  ].filter((item) => item.value !== "Not specified");
-}
-
-export function cfpConfirmationEmailMessage(recipient: string): string {
-  const delivery =
-    recipient.trim().length > 0 ? ` is queued for ${recipient.trim()}` : " is queued";
-  return `A confirmation email${delivery} and will include the event name and talk title.`;
-}
-
-export function cfpSubmissionFieldValue(
-  draft: CfpDraft,
-  answers: DynamicAnswers,
-  key: string,
-): unknown {
-  switch (key) {
-    case "title":
-      return draft.submission.title;
-    case "abstract":
-      return answers.abstract ?? draft.submission.description;
-    case "description":
-      return (
-        answers.description ?? (answers.abstract === undefined ? draft.submission.description : "")
-      );
-    case "format":
-      return draft.submission.format;
-    case "tags":
-      return draft.submission.tags;
-    case "track":
-      return draft.submission.track;
-    case "level":
-      return draft.submission.level;
-    case "language":
-      return draft.submission.language;
-    case "accountEmail":
-      return draft.account.email;
-    case "accountFirstName":
-      return draft.account.firstName;
-    case "accountLastName":
-      return draft.account.lastName;
-    case "accountAcceptedTerms":
-      return draft.account.acceptedTerms;
-    default:
-      return answers[key];
-  }
-}
-
 function participantValue(
   participant: CfpParticipant,
   answers: DynamicAnswers,
@@ -879,12 +713,6 @@ function participantValue(
       return answers[key];
   }
 }
-export function cfpSubmissionErrorKey(key: string): string {
-  if (key === "title") return "submission.title";
-  if (key === "abstract") return "submission.abstract";
-  if (key === "description") return "submission.description";
-  return `submission.${key}`;
-}
 
 function fieldIsEmpty(value: unknown): boolean {
   if (typeof value === "boolean") return value === false;
@@ -897,15 +725,6 @@ function fieldIsEmpty(value: unknown): boolean {
 function fieldValueForValidation(field: CfpFormField, value: unknown): unknown {
   if (isFileField(field)) return value;
   return value;
-}
-
-export function cfpHttpUrlIsValid(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function dynamicFormErrors(

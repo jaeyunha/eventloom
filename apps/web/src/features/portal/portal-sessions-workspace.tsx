@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   MetadataList,
   MetadataRow,
@@ -160,7 +161,7 @@ export function SessionsWorkspaceView({
                         ))}
                       </ul>
                     )}
-                    <a href="/portal/tasks">Open Requests & tasks</a>
+                    <Link href="/portal/tasks">Open Requests & tasks</Link>
                   </div>
                 </WorkspaceSurface>
 
@@ -178,7 +179,7 @@ export function SessionsWorkspaceView({
                         ))}
                       </ul>
                     )}
-                    <a href="/portal?workspace=files">Manage session files</a>
+                    <Link href="/portal?workspace=files">Manage session files</Link>
                   </div>
                 </WorkspaceSurface>
               </div>

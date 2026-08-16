@@ -1,9 +1,5 @@
 import type { PortalContext } from "../portal/types";
-import {
-  type AccountAccess,
-  deriveAccountAccess,
-  parseAccountSession,
-} from "./account-access";
+import { type AccountAccess, deriveAccountAccess, parseAccountSession } from "./account-access";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 

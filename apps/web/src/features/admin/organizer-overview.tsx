@@ -26,29 +26,19 @@ import {
 } from "@/lib/scoped-read-flight";
 import { useOrganizerOrganizationId } from "./admin-shell";
 import styles from "./admin-shell.module.css";
-import {
-  EventDatePicker,
-  type EventDateSelectionValue,
-} from "./event-date-picker";
+import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import {
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
-  eventStatusClass as organizerEventStatusClass,
   getCalendarMonthCells,
   initialCalendarMonth,
   normalizeOrganizerEventSlug,
-  organizerEventEditorFormValues,
-  organizerEventIntersectsCalendarDate,
-  organizerEventMinimumDateTimeLocal,
-  parseCalendarInstant,
-  OrganizerEventsApiError,
-  resolveOrganizerOverviewConfig,
-  validateOrganizerEventForm,
   type OrganizerEventCreateInput,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
   type OrganizerEventStatus,
   type OrganizerEventsApi,
+  OrganizerEventsApiError,
   type OrganizerOverviewActionType,
   type OrganizerOverviewActivityData,
   type OrganizerOverviewActivityMetrics,
@@ -56,8 +46,14 @@ import {
   type OrganizerOverviewConfigResult,
   type OrganizerOverviewCoreData,
   type OrganizerOverviewEvent,
+  organizerEventEditorFormValues,
+  organizerEventIntersectsCalendarDate,
+  organizerEventMinimumDateTimeLocal,
+  eventStatusClass as organizerEventStatusClass,
+  parseCalendarInstant,
+  resolveOrganizerOverviewConfig,
+  validateOrganizerEventForm,
 } from "./organizer-overview-model";
-
 
 export type OrganizerOverviewRequestState<T> =
   | { readonly status: "loading"; readonly data: T | null }
@@ -89,7 +85,6 @@ export type OrganizerOverviewViewState =
       readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
       readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
     };
-
 
 const actionTypeLabels: Record<OrganizerOverviewActionType, string> = {
   reviews: "Reviews",

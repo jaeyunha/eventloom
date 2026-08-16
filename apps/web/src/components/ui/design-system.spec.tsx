@@ -7,10 +7,10 @@ import { DataTable } from "./data-table";
 import { Field, FieldDescription, FieldError, FieldLabel } from "./field";
 import { Input } from "./input";
 import { applyRichTextCommand } from "./rich-text-logic";
-import { filterOptions } from "./searchable-select-logic";
 import { SearchableSelect } from "./searchable-select";
-import { getStepState } from "./stepper-logic";
+import { filterOptions } from "./searchable-select-logic";
 import { Stepper } from "./stepper";
+import { getStepState } from "./stepper-logic";
 
 describe("design system accessibility", () => {
   it("restricts Tailwind source scanning to runtime web source", () => {

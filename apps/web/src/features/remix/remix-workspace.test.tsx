@@ -222,14 +222,9 @@ describe("remix workspace", () => {
       createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1" }),
     );
 
-    expect(markup).toContain("Content remix is unavailable");
-    expect(markup).toContain("private draft suggestions");
-    expect(markup).toContain("never publishes automatically");
-    expect(markup).toContain("organizer reviews, edits, and applies an auditable revision");
-    expect(markup).toContain("Open Content remix directly");
-    expect(markup).toContain("No local candidate was created");
+    expect(markup).toContain('data-state="remix-unavailable"');
+    expect(markup).not.toContain('data-workflow="remix-composer"');
     expect(markup).not.toContain("candidate-local");
-    expect(markup).not.toContain("Generate private candidates");
   });
 
   it("keeps an injected API workspace available without using local demo state", () => {
@@ -259,16 +254,12 @@ describe("remix workspace", () => {
       createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1", api }),
     );
 
-    expect(markup).toContain("Choose content");
-    expect(markup).toContain("Instructions");
-    expect(markup).toContain("Review");
-    expect(markup).toContain("Audit");
-    expect(markup).toMatch(/<h2[^>]*>Choose content<\/h2>/);
-    expect(markup).toMatch(/<h2[^>]*>Instructions<\/h2>/);
-    expect(markup).toMatch(/<h2[^>]*>Review<\/h2>/);
-    expect(markup).toMatch(/<h2[^>]*>Audit<\/h2>/);
-    expect(markup).toContain("Candidates are private until a human applies them");
-    expect(markup).not.toContain("Content remix is unavailable");
+    expect(markup).toContain('data-workflow="remix-composer"');
+    expect(markup).toContain('data-section="remix-review"');
+    expect(markup).toContain('data-section="remix-activity"');
+    expect(markup).not.toContain('data-state="remix-unavailable"');
+    expect(markup).not.toContain("org-1");
+    expect(markup).not.toContain("event-1");
   });
 
   it("does not infer stale state from a source hidden by browse filters", () => {

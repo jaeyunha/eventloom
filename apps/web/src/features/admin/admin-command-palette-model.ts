@@ -153,7 +153,7 @@ export function buildAdminCommandResults({
             current: event.id === currentEventId,
             endsAt: event.endsAt,
             group: "Events",
-            href: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(event.slug)}`,
+            href: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(event.id)}`,
             key: `event:${event.id}`,
             kind: "event",
             label: event.name,

@@ -216,16 +216,6 @@ export function parseDuration(format) {
   return match === null ? 30 : Number(match[1]);
 }
 
-function firstSubmission(fixture, titlePrefix) {
-  const match = fixture.submissions.find((submission) => submission.title.startsWith(titlePrefix));
-  if (match !== undefined) return match;
-  const fallback = fixture.submissions[0];
-  if (fallback === undefined) {
-    throw new DevflowSeedError("FIXTURE_INVALID", "The official fixture contains no submissions.");
-  }
-  return fallback;
-}
-
 export function sourceIdentity(fixture, key) {
   const identity = fixture.identities?.[key];
   if (!isObject(identity)) {

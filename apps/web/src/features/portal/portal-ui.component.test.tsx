@@ -4,8 +4,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, type PortalApi, validatePortalSocialUrl } from "./api";
-import { isPortalGenerationCurrent, loadPortalStartup } from "./portal-provider-model";
+import { groupPortalAssetVersions } from "./portal-assets";
 import { PortalProvider } from "./portal-provider";
+import { isPortalGenerationCurrent, loadPortalStartup } from "./portal-provider-model";
+import { portalContentMode, portalRouteAuthorized, signOutAndRedirect } from "./portal-shell-model";
 import {
   NoParticipantWorkspaceState,
   PageHeading,
@@ -16,7 +18,6 @@ import {
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
-import { portalContentMode, portalRouteAuthorized, signOutAndRedirect } from "./portal-shell-model";
 import {
   formatPortalFileSize,
   portalAssetStateLabel,
@@ -24,7 +25,6 @@ import {
   portalNavigation,
   portalNavigationItemActive,
 } from "./portal-ui-model";
-import { groupPortalAssetVersions } from "./portal-assets";
 import { AssetDetails } from "./portal-workspace";
 import { SubmissionAnswers, SubmissionParticipants } from "./submission-detail";
 import type { PortalAsset, PortalContext, PortalProfile, PortalView } from "./types";

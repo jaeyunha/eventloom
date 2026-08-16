@@ -19,17 +19,17 @@ import {
   createEventSettingsNavigationCache,
   EVENT_SETTINGS_NAVIGATION_CACHE_TTL_MS,
   isCompleteEventSettingsNavigationCacheSnapshot,
-} from "./event-settings-navigation-cache";
+} from "./event-settings-navigation-cache-model";
 import { eventSettingsSectionHref } from "./event-settings-sections";
+import { EventSettingsWorkspaceView } from "./event-settings-workspace";
 import {
   canCommitEventSettingsAsyncCompletion,
-  EventSettingsWorkspaceView,
   eventSettingsSectionNavigation,
   eventSettingsWorkspaceScopeKey,
   loadEventSettingsProgressively,
   persistEventSettingsMutation,
   validateRoomForm,
-} from "./event-settings-workspace";
+} from "./event-settings-workspace-model";
 
 const settings: SessionSettingsRecord = {
   id: "settings_event-a",

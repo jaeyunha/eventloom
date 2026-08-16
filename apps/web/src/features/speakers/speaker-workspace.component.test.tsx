@@ -2,12 +2,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SpeakerApi, SpeakerAsset } from "./api";
-import {
-  SPEAKER_ROSTER_COLUMNS,
-  SpeakerHeadshot,
-  SpeakerMutationFailure,
-  SpeakerWorkspace,
-} from "./speaker-workspace";
+import { SpeakerHeadshot } from "./speaker-assets";
+import { SpeakerMutationFailure } from "./speaker-invitations";
+import { SpeakerWorkspace } from "./speaker-workspace";
+import { SPEAKER_ROSTER_COLUMNS } from "./speaker-workspace-types";
 
 describe("speaker workspace presentation", () => {
   it("defines the compact roster table columns", () => {

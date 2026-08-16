@@ -9,20 +9,20 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import styles from "./login-form.module.css";
+import type { LoginErrorKind, LoginFetcher } from "./login-form-model";
 import {
-  ORGANIZER_DOMAIN_ERROR_MESSAGE,
-  SIGNUP_PASSWORD_POLICY_MESSAGE,
   createLoginApi,
   failureFromUnknown,
   getLoginCallbackUrl,
   normalizedOrganizerEmail,
+  ORGANIZER_DOMAIN_ERROR_MESSAGE,
   resolveLoginConfig,
   resolveLoginLandingRoute,
   resolveLoginWorkspace,
+  SIGNUP_PASSWORD_POLICY_MESSAGE,
   signInAndRedirect,
   signupPasswordError,
 } from "./login-form-model";
-import type { LoginErrorKind, LoginFetcher } from "./login-form-model";
 
 const SIGNUP_VERIFICATION_MESSAGE = "Account created. Check your email for a verification link.";
 const MAGIC_LINK_SUCCESS_MESSAGE = "Magic link sent. Check your email for a link to sign in.";
@@ -54,10 +54,7 @@ export function LoginForm({
     () => (apiBaseUrl === undefined ? resolveLoginConfig() : resolveLoginConfig({ apiBaseUrl })),
     [apiBaseUrl],
   );
-  const api = useMemo(
-    () => createLoginApi(config.apiBaseUrl, fetcher),
-    [config, fetcher],
-  );
+  const api = useMemo(() => createLoginApi(config.apiBaseUrl, fetcher), [config, fetcher]);
   const redirect = navigate ?? defaultNavigate;
   const [mode, setMode] = useState<"sign-in" | "sign-up">(initialMode ?? "sign-in");
   const [name, setName] = useState("");

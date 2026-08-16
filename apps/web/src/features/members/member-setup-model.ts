@@ -1,8 +1,5 @@
-import {
-  resolveLoginLandingRoute,
-  type LoginApi,
-} from "@/features/auth/login-form-model";
-import { MemberApiError, type MemberApi } from "./api";
+import { type LoginApi, resolveLoginLandingRoute } from "@/features/auth/login-form-model";
+import { type MemberApi, MemberApiError } from "./api";
 
 export const PASSWORD_REQUIREMENTS =
   "Use 8–128 characters with uppercase, lowercase, a number, and a special character.";

@@ -8,10 +8,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ORGANIZER_ORGANIZATION_STORAGE_KEY } from "@/lib/organizer-workspace-preference";
 import { signOutAccount } from "../account/account-actions";
-import { loadWorkHubModel } from "./work-hub-loader";
-import type { WorkHubModel } from "./work-hub-model";
 import styles from "./work-hub.module.css";
 import { WorkHubCards } from "./work-hub-cards";
+import { loadWorkHubModel } from "./work-hub-loader";
+import type { WorkHubModel } from "./work-hub-model";
 
 export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
   const availableCount = [model.organizer, model.reviewer, model.participant].filter(

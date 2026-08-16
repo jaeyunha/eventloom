@@ -1,18 +1,17 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { AirtableIntegration, type AirtableIntegrationProps } from "./airtable-integration";
 import {
   type AirtableConflictResolution,
   type AirtableConnectionState,
-  AirtableIntegration,
   type AirtableIntegrationApi,
-  type AirtableIntegrationProps,
   type AirtableIntegrationSnapshot,
   type AirtableProjectionHealth,
   type AirtableProjectionStatus,
   type AirtableSyncDirection,
   createAirtableIntegrationApi,
-} from "./airtable-integration";
+} from "./api";
 
 const baseProjection: AirtableProjectionStatus = {
   health: "healthy",
