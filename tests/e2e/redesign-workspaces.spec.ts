@@ -219,14 +219,19 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
       },
     });
   });
-  await page.route("**/api/admin/evaluations/reviewer/workspace", async (route) => {
+  await page.route("**/api/account/reviewer-workspace", async (route) => {
     await route.fulfill({
       json: {
         data: {
-          assignments: [
+          organizations: [
             {
-              assignment: { status: "assigned" },
-              plan: { eventName: "Research Exchange 2027" },
+              organization: { id: "org-b", name: "Open Research Network" },
+              assignments: [
+                {
+                  assignment: { status: "assigned" },
+                  plan: { eventName: "Research Exchange 2027" },
+                },
+              ],
             },
           ],
         },
