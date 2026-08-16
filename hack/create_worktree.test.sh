@@ -185,7 +185,7 @@ chmod +x "$FAKE_BIN/cmux"
 )
 grep -Fx new-workspace "$CMUX_LOG" >/dev/null || fail 'cmux launcher was not invoked'
 grep -Fx -- --name "$CMUX_LOG" >/dev/null || fail 'cmux name flag is missing'
-grep -Fx open-sessionboard/cmux-lane "$CMUX_LOG" >/dev/null || fail 'cmux workspace name is wrong'
+grep -Fx eventloom/cmux-lane "$CMUX_LOG" >/dev/null || fail 'cmux workspace name is wrong'
 grep -Fx -- --focus "$CMUX_LOG" >/dev/null || fail 'cmux focus flag is missing'
 grep -Fx true "$CMUX_LOG" >/dev/null || fail 'cmux focus value is wrong'
 grep -F 'gjc --tmux' "$CMUX_LOG" >/dev/null || fail 'GJC tmux command is missing'
