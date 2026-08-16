@@ -125,6 +125,43 @@ const activityMetricDefinitions: readonly {
     detail: "Included in published agendas",
   },
 ] as const;
+const ORGANIZER_OVERVIEW_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const ORGANIZER_OVERVIEW_MONTH_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const ORGANIZER_OVERVIEW_CALENDAR_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function canonicalCalendarDate(date: Date): Date {
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 12));
+}
+
+const EVENT_MANAGEMENT_DATE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+
+function eventManagementDateFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EVENT_MANAGEMENT_DATE_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone,
+  });
+  EVENT_MANAGEMENT_DATE_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
 function formatDate(value: string | null): string | null {
   if (!value) {
     return null;
@@ -133,12 +170,7 @@ function formatDate(value: string | null): string | null {
   if (Number.isNaN(date.valueOf())) {
     return value;
   }
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(date);
+  return ORGANIZER_OVERVIEW_DATE_FORMATTER.format(date);
 }
 
 function formatEventDates(event: OrganizerOverviewEvent): string {
@@ -1297,11 +1329,7 @@ function formatEventManagementDate(value: string, timeZone: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
   try {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone,
-    }).format(date);
+    return eventManagementDateFormatter(timeZone).format(date);
   } catch {
     return value;
   }
@@ -1442,10 +1470,7 @@ function OrganizerEventsLoaded({
       ? data.events.find((event) => event.id === editor)
       : undefined;
   const calendarCells = getCalendarMonthCells(visibleMonth);
-  const monthLabel = new Intl.DateTimeFormat(undefined, {
-    month: "long",
-    year: "numeric",
-  }).format(visibleMonth);
+  const monthLabel = ORGANIZER_OVERVIEW_MONTH_FORMATTER.format(canonicalCalendarDate(visibleMonth));
   const upcomingEvents = [...data.events]
     .filter((event) => {
       const startsAt = parseCalendarInstant(event.startsAt);
@@ -1670,11 +1695,9 @@ function OrganizerEventsLoaded({
                               >
                                 <time dateTime={cell.dateKey} className={styles.calendarDate}>
                                   <span className={styles.srOnly}>
-                                    {cell.date.toLocaleDateString(undefined, {
-                                      month: "long",
-                                      day: "numeric",
-                                      year: "numeric",
-                                    })}
+                                    {ORGANIZER_OVERVIEW_CALENDAR_DATE_FORMATTER.format(
+                                      canonicalCalendarDate(cell.date),
+                                    )}
                                   </span>
                                   <span aria-hidden="true">{cell.date.getDate()}</span>
                                 </time>

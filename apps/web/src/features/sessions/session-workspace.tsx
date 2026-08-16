@@ -1,7 +1,15 @@
 "use client";
 
 import { CalendarDays } from "lucide-react";
-import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -160,9 +168,21 @@ function formatAction(action: SessionHistoryEntry["action"]): string {
   return action.replace(/_/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
-function formatTimestamp(value: string): string {
+function subscribeToSessionTimestamp(): () => void {
+  return () => undefined;
+}
+
+function browserSessionTimestamp(value: string): string {
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) ? timestamp.toLocaleString() : value;
+}
+
+function SessionHistoryTimestamp({ value }: Readonly<{ value: string }>) {
+  return useSyncExternalStore(
+    subscribeToSessionTimestamp,
+    () => browserSessionTimestamp(value),
+    () => value,
+  );
 }
 
 function formatSpeakerRole(role: string | undefined): string {
@@ -492,7 +512,8 @@ function SessionHistory({
                     Version {entry.version} - {formatAction(entry.action)}
                   </strong>
                   <span className={styles.muted}>
-                    {entry.actorLabel ?? entry.actorId} - {formatTimestamp(entry.occurredAt)}
+                    {entry.actorLabel ?? entry.actorId} -{" "}
+                    <SessionHistoryTimestamp value={entry.occurredAt} />
                   </span>
                 </div>
                 {current ? <StatusBadge tone="info">Current</StatusBadge> : null}

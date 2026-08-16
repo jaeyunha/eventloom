@@ -10,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -329,16 +330,44 @@ export interface DeliverablesWorkspaceViewProps {
   readonly onRetry?: () => void;
 }
 
-function formatTime(value: string | undefined): string {
+function subscribeToDeliverableTime(): () => void {
+  return () => undefined;
+}
+
+function browserDeliverableTime(value: string | undefined): string {
   if (value === undefined || value.trim().length === 0) return "Not recorded";
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : value;
 }
 
-function formatDate(value: string | undefined): string {
+function deliverableTimeFallback(value: string | undefined): string {
+  return value === undefined || value.trim().length === 0 ? "Not recorded" : value;
+}
+
+function ClientFormattedTime({ value }: Readonly<{ value: string | undefined }>) {
+  return useSyncExternalStore(
+    subscribeToDeliverableTime,
+    () => browserDeliverableTime(value),
+    () => deliverableTimeFallback(value),
+  );
+}
+
+function browserDeliverableDate(value: string | undefined): string {
   if (value === undefined || value.trim().length === 0) return "No due date";
   const parsed = new Date(value.includes("T") ? value : `${value}T00:00:00`);
   return Number.isFinite(parsed.getTime()) ? parsed.toLocaleDateString() : value;
+}
+
+function deliverableDateFallback(value: string | undefined): string {
+  return value === undefined || value.trim().length === 0 ? "No due date" : value;
+}
+
+function ClientFormattedDate({ value }: Readonly<{ value: string | undefined }>) {
+  return useSyncExternalStore(
+    subscribeToDeliverableTime,
+    () => browserDeliverableDate(value),
+    () => deliverableDateFallback(value),
+  );
 }
 
 function formatStatus(status: string): string {
@@ -1424,7 +1453,9 @@ function DeliverablesTable({
                       </TableHead>
                       <TableCell>{row.speakerLabel}</TableCell>
                       <TableCell>{row.sessionLabel}</TableCell>
-                      <TableCell>{formatDate(row.task.dueAt)}</TableCell>
+                      <TableCell>
+                        <ClientFormattedDate value={row.task.dueAt} />
+                      </TableCell>
                       <TableCell>
                         <Badge variant={outstanding ? "secondary" : "outline"}>
                           {formatStatus(row.status)}
@@ -1503,7 +1534,9 @@ export function ContentRequestInspector({
           </div>
           <div>
             <dt>Due</dt>
-            <dd>{formatDate(task.dueAt)}</dd>
+            <dd>
+              <ClientFormattedDate value={task.dueAt} />
+            </dd>
           </div>
           <div>
             <dt>Scope</dt>
@@ -1544,7 +1577,8 @@ export function ContentRequestInspector({
               <strong>{row.currentAsset.fileName}</strong>
               <p>
                 Version {row.currentAsset.version ?? 1} · uploaded{" "}
-                {formatTime(row.currentAsset.createdAt)} · {reviewStateForAsset(row.currentAsset)}
+                <ClientFormattedTime value={row.currentAsset.createdAt} /> ·{" "}
+                {reviewStateForAsset(row.currentAsset)}
               </p>
             </div>
             <Button
@@ -1624,7 +1658,9 @@ export function ReminderPreview({
                   <TableRow key={`preview-${row.task.id}`}>
                     <TableHead scope="row">{row.speakerLabel}</TableHead>
                     <TableCell>{row.task.title}</TableCell>
-                    <TableCell>{formatDate(row.task.dueAt)}</TableCell>
+                    <TableCell>
+                      <ClientFormattedDate value={row.task.dueAt} />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -1810,7 +1846,9 @@ function AssetDetail({
                   return (
                     <TableRow key={version.id}>
                       <TableHead scope="row">v{version.version ?? 1}</TableHead>
-                      <TableCell>{formatTime(version.createdAt)}</TableCell>
+                      <TableCell>
+                        <ClientFormattedTime value={version.createdAt} />
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline">{formatStatus(version.state)}</Badge>
                       </TableCell>
@@ -1877,7 +1915,9 @@ function AssetDetail({
             {thread.map((comment) => (
               <li key={comment.id}>
                 <strong>{comment.authorLabel}</strong> ·{" "}
-                <time dateTime={comment.createdAt}>{formatTime(comment.createdAt)}</time>
+                <time dateTime={comment.createdAt}>
+                  <ClientFormattedTime value={comment.createdAt} />
+                </time>
                 <p>{comment.body}</p>
               </li>
             ))}

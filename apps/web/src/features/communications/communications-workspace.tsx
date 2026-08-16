@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -243,9 +244,21 @@ function providerDescription(state: CommunicationProviderState): string {
   return "This workspace does not assume provider availability. A send can proceed only after an approved preview, and any provider failure is shown honestly.";
 }
 
-function formatTime(value: string): string {
+function subscribeToCommunicationTime(): () => void {
+  return () => undefined;
+}
+
+function browserCommunicationTime(value: string): string {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
+}
+
+function ClientFormattedTime({ value }: Readonly<{ value: string }>) {
+  return useSyncExternalStore(
+    subscribeToCommunicationTime,
+    () => browserCommunicationTime(value),
+    () => value,
+  );
 }
 
 function templateDraftFrom(template: CommunicationTemplate | undefined): TemplateDraft {
@@ -403,11 +416,16 @@ function TemplateEditor({
             {dirty ? "Unsaved changes" : selected === undefined ? "New draft" : "Saved version"}
           </strong>
           <span className={styles.mutedText}>
-            {dirty
-              ? "Save a new version before review."
-              : selected === undefined
-                ? "Nothing has been saved yet."
-                : `Saved version ${selected.version} on ${formatTime(selected.updatedAt)}.`}
+            {dirty ? (
+              "Save a new version before review."
+            ) : selected === undefined ? (
+              "Nothing has been saved yet."
+            ) : (
+              <>
+                Saved version {selected.version} on{" "}
+                <ClientFormattedTime value={selected.updatedAt} />.
+              </>
+            )}
           </span>
         </div>
         <form onSubmit={(event) => void submit(event)} className={styles.formStack}>
@@ -667,11 +685,15 @@ function RecipientPreview({ preview }: Readonly<{ preview: CommunicationPreview 
         </div>
         <div>
           <span className={styles.detailLabel}>Generated</span>
-          <strong>{formatTime(preview.createdAt)}</strong>
+          <strong>
+            <ClientFormattedTime value={preview.createdAt} />
+          </strong>
         </div>
         <div>
           <span className={styles.detailLabel}>Preview expires</span>
-          <strong>{formatTime(preview.expiresAt)}</strong>
+          <strong>
+            <ClientFormattedTime value={preview.expiresAt} />
+          </strong>
         </div>
       </div>
       <Alert>
@@ -852,7 +874,7 @@ function DeliveryHistory({
                 return (
                   <li key={entry.id} id={auditAnchor}>
                     <a href={`#${auditAnchor}`}>Audit {entry.id}</a> ·{" "}
-                    {formatTime(entry.occurredAt)} · {entry.action}
+                    <ClientFormattedTime value={entry.occurredAt} /> · {entry.action}
                     {entry.recipientId === null ? "" : ` · ${entry.recipientId}`}
                   </li>
                 );
@@ -871,7 +893,7 @@ function DeliveryHistory({
                 <ul>
                   {delivery.history.map((entry) => (
                     <li key={entry.id}>
-                      {formatTime(entry.occurredAt)} · {statusLabel(entry.status)}
+                      <ClientFormattedTime value={entry.occurredAt} /> · {statusLabel(entry.status)}
                       {entry.reason === null ? "" : ` · ${entry.reason}`}
                     </li>
                   ))}
@@ -1087,7 +1109,7 @@ function ReminderTruth({
                   </strong>
                   {facts.lastAutomatic !== null ? (
                     <span className={styles.mutedText}>
-                      {formatTime(facts.lastAutomatic.updatedAt)}
+                      <ClientFormattedTime value={facts.lastAutomatic.updatedAt} />
                     </span>
                   ) : null}
                 </div>
@@ -1100,16 +1122,18 @@ function ReminderTruth({
                   </strong>
                   {facts.lastManual !== null ? (
                     <span className={styles.mutedText}>
-                      {formatTime(facts.lastManual.updatedAt)}
+                      <ClientFormattedTime value={facts.lastManual.updatedAt} />
                     </span>
                   ) : null}
                 </div>
                 <div>
                   <span className={styles.detailLabel}>Next eligible time</span>
                   <strong>
-                    {facts.nextEligibleAt === null
-                      ? "No next eligible time returned"
-                      : formatTime(facts.nextEligibleAt)}
+                    {facts.nextEligibleAt === null ? (
+                      "No next eligible time returned"
+                    ) : (
+                      <ClientFormattedTime value={facts.nextEligibleAt} />
+                    )}
                   </strong>
                 </div>
                 <div>
@@ -1800,7 +1824,9 @@ export function CommunicationsWorkspaceView({
                 </div>
                 <div>
                   <dt>Preview expiry</dt>
-                  <dd>{formatTime(preview.expiresAt)}</dd>
+                  <dd>
+                    <ClientFormattedTime value={preview.expiresAt} />
+                  </dd>
                 </div>
               </dl>
               <p className={styles.mutedText}>

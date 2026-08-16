@@ -7,7 +7,7 @@ import {
   webhookEventTypes,
 } from "@eventloom/contracts";
 import Link from "next/link";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useState, useSyncExternalStore } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -57,23 +57,38 @@ const statusPresentation: Record<
   not_configured: { label: "Not configured", variant: "outline" },
 };
 
+const INTEGRATION_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function subscribeToIntegrationDate(): () => void {
+  return () => undefined;
+}
+
+function browserIntegrationDate(value: string | null): string {
+  if (!value) return "Not yet";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) return "Unknown";
+  return INTEGRATION_DATE_TIME_FORMATTER.format(parsed);
+}
+
+function integrationDateFallback(value: string | null): string {
+  if (!value) return "Not yet";
+  return Number.isNaN(new Date(value).valueOf()) ? "Unknown" : value;
+}
+
+function ClientFormattedDate({ value }: Readonly<{ value: string | null }>) {
+  return useSyncExternalStore(
+    subscribeToIntegrationDate,
+    () => browserIntegrationDate(value),
+    () => integrationDateFallback(value),
+  );
+}
+
 function StatusBadge({ state }: Readonly<{ state: ConnectionState }>) {
   const presentation = statusPresentation[state];
   return <Badge variant={presentation.variant}>{presentation.label}</Badge>;
-}
-
-function formatDate(value: string | null): string {
-  if (!value) {
-    return "Not yet";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.valueOf())) {
-    return "Unknown";
-  }
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(parsed);
 }
 
 export function OneTimeSecretPanel({
@@ -315,7 +330,9 @@ export function ApiKeysSection({
                         </small>
                       </td>
                       <td>{key.scopes.join(", ")}</td>
-                      <td>{formatDate(key.lastUsedAt)}</td>
+                      <td>
+                        <ClientFormattedDate value={key.lastUsedAt} />
+                      </td>
                       <td>
                         <Badge variant={key.revokedAt ? "outline" : "default"}>
                           {key.revokedAt ? "Revoked" : "Active"}
@@ -477,7 +494,9 @@ export function WebhooksSection({
                     </div>
                     <div>
                       <dt>Last attempt</dt>
-                      <dd>{formatDate(webhook.lastDelivery?.attemptedAt ?? null)}</dd>
+                      <dd>
+                        <ClientFormattedDate value={webhook.lastDelivery?.attemptedAt ?? null} />
+                      </dd>
                     </div>
                     <div>
                       <dt>Delivery</dt>
@@ -604,7 +623,9 @@ export function DeliverySection({
               </div>
               <div>
                 <dt>Last invitation</dt>
-                <dd>{formatDate(calendar.lastInvitationAt)}</dd>
+                <dd>
+                  <ClientFormattedDate value={calendar.lastInvitationAt} />
+                </dd>
               </div>
             </dl>
           </CardContent>
@@ -648,7 +669,8 @@ export function DeliverySection({
         <div className={styles.errorPanel} role="alert">
           <h2>Calendar delivery failed</h2>
           <p>
-            {calendar.lastFailure.summary} · {formatDate(calendar.lastFailure.occurredAt)}
+            {calendar.lastFailure.summary} ·{" "}
+            <ClientFormattedDate value={calendar.lastFailure.occurredAt} />
           </p>
           {calendar.lastFailure.retryable ? (
             <Button

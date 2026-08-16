@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -71,10 +72,26 @@ function outreachNameParts(contact: Pick<CrmContact, "firstName" | "lastName" | 
   };
 }
 
-function formatDate(value: string | undefined): string {
+function subscribeToCrmDate(): () => void {
+  return () => undefined;
+}
+
+function browserCrmDate(value: string | undefined): string {
   if (value === undefined || value.length === 0) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function crmDateFallback(value: string | undefined): string {
+  return value === undefined || value.length === 0 ? "—" : value;
+}
+
+function ClientFormattedDate({ value }: Readonly<{ value: string | undefined }>) {
+  return useSyncExternalStore(
+    subscribeToCrmDate,
+    () => browserCrmDate(value),
+    () => crmDateFallback(value),
+  );
 }
 function focusAndScroll(target: HTMLElement | null): void {
   if (target === null) return;
@@ -1013,7 +1030,11 @@ function AnalyticsPanel({
     <Card
       title="CRM analytics"
       eyebrow="Organization insights"
-      actions={<span className={styles.muted}>Updated {formatDate(analytics.generatedAt)}</span>}
+      actions={
+        <span className={styles.muted}>
+          Updated <ClientFormattedDate value={analytics.generatedAt} />
+        </span>
+      }
     >
       <div className={styles.kpiGrid}>
         <div className={styles.kpi}>
@@ -1927,7 +1948,8 @@ export function CrmWorkspaceView({
                         {importPreviewResult.planFingerprint
                           ? ` · plan ${importPreviewResult.planFingerprint}`
                           : ""}
-                        {` · generated ${formatDate(importPreviewResult.createdAt)}`} ·{" "}
+                        {" · generated "}
+                        <ClientFormattedDate value={importPreviewResult.createdAt} /> ·{" "}
                         {importPreviewResult.contacts.length} authoritative contact
                         {importPreviewResult.contacts.length === 1 ? "" : "s"} ·{" "}
                         {importPreviewResult.mapping.length} mapped column
@@ -1981,7 +2003,7 @@ export function CrmWorkspaceView({
               </p>
               <p className={styles.muted}>
                 Receipt {importResult.id} · organization {importResult.organizationId} · generated{" "}
-                {formatDate(importResult.createdAt)}
+                <ClientFormattedDate value={importResult.createdAt} />
                 {importResult.planFingerprint ? ` · plan ${importResult.planFingerprint}` : ""} ·{" "}
                 {importResult.contacts.length} authoritative contact
                 {importResult.contacts.length === 1 ? "" : "s"}
@@ -2104,7 +2126,9 @@ export function CrmWorkspaceView({
                   </div>
                   <div>
                     <dt>Updated</dt>
-                    <dd>{formatDate(selectedContact.updatedAt)}</dd>
+                    <dd>
+                      <ClientFormattedDate value={selectedContact.updatedAt} />
+                    </dd>
                   </div>
                 </dl>
                 <div className={styles.profilePanel}>
@@ -2630,7 +2654,7 @@ export function CrmWorkspaceView({
                         {entry.fromStage ?? "—"} → {entry.toStage}
                       </strong>
                       <small>
-                        {formatDate(entry.createdAt)}
+                        <ClientFormattedDate value={entry.createdAt} />
                         {entry.note ? ` · ${entry.note}` : ""}
                       </small>
                     </li>
@@ -2724,7 +2748,9 @@ export function CrmWorkspaceView({
                   <article key={note.id}>
                     <strong>Note</strong>
                     <p>{note.body}</p>
-                    <small>{formatDate(note.createdAt)}</small>
+                    <small>
+                      <ClientFormattedDate value={note.createdAt} />
+                    </small>
                   </article>
                 ))}
                 {timelineHistory.map((entry) => (
@@ -2734,7 +2760,9 @@ export function CrmWorkspaceView({
                       {entry.detail ?? entry.kind}
                       {entry.eventId ? ` · event ${entry.eventId}` : ""}
                     </p>
-                    <small>{formatDate(entry.occurredAt)}</small>
+                    <small>
+                      <ClientFormattedDate value={entry.occurredAt} />
+                    </small>
                   </article>
                 ))}
                 {notes.length === 0 && timelineHistory.length === 0 ? (

@@ -46,6 +46,33 @@ interface MonthCell {
 }
 
 const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
+const CONCISE_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+const CONCISE_DATE_WITH_YEAR_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const LONG_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const MONTH_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function canonicalCalendarDate(date: Date): Date {
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 12));
+}
 
 function monthCells(month: Date): readonly MonthCell[] {
   const monthStart = new Date(month.getFullYear(), month.getMonth(), 1, 12);
@@ -87,22 +114,17 @@ function selectionDateTime(date: string, time: string, dateOnly: boolean): strin
 function conciseDate(value: string): string {
   const date = parseDateOnly(value);
   if (date === null) return "Choose date";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
-  }).format(date);
+  return (
+    date.getFullYear() === new Date().getFullYear()
+      ? CONCISE_DATE_FORMATTER
+      : CONCISE_DATE_WITH_YEAR_FORMATTER
+  ).format(canonicalCalendarDate(date));
 }
 
 function longDate(value: string): string {
   const date = parseDateOnly(value);
   if (date === null) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
+  return LONG_DATE_FORMATTER.format(canonicalCalendarDate(date));
 }
 
 export function EventDatePicker({
@@ -286,12 +308,7 @@ export function EventDatePicker({
       <div className={styles.pickerLayout} data-details-hidden={!showDetails}>
         <div className={styles.calendar}>
           <div className={styles.calendarHeader}>
-            <strong>
-              {new Intl.DateTimeFormat("en-US", {
-                month: "long",
-                year: "numeric",
-              }).format(visibleMonth)}
-            </strong>
+            <strong>{MONTH_LABEL_FORMATTER.format(canonicalCalendarDate(visibleMonth))}</strong>
             <div className={styles.monthControls}>
               <Button
                 aria-label="Previous month"

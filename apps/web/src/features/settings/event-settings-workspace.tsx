@@ -2,7 +2,15 @@
 
 import { ChevronRight, MoreHorizontal, Pencil, Search, Trash2, Undo2 } from "lucide-react";
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1179,15 +1187,28 @@ function actorLabel(actorId: string): string {
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
 }
+const AUDIT_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
 
-function auditTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
+function subscribeToAuditTimestamp(): () => void {
+  return () => undefined;
+}
+
+function browserAuditTimestamp(value: string): string {
+  return AUDIT_TIMESTAMP_FORMATTER.format(new Date(value));
+}
+
+function AuditTimestamp({ value }: Readonly<{ value: string }>) {
+  return useSyncExternalStore(
+    subscribeToAuditTimestamp,
+    () => browserAuditTimestamp(value),
+    () => value,
+  );
 }
 
 function auditChangeLabel(
@@ -1304,7 +1325,7 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
                   <span className={styles.auditEntryMeta}>
                     <span className={styles.auditEntryActor}>{actorLabel(entry.actorId)}</span>
                     <time className={styles.auditEntryTime} dateTime={entry.occurredAt}>
-                      {auditTimestamp(entry.occurredAt)}
+                      <AuditTimestamp value={entry.occurredAt} />
                     </time>
                     <span className={styles.auditEntryVersion}>{presentation.versionLabel}</span>
                     <ChevronRight aria-hidden />
@@ -1331,7 +1352,7 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
                 </SheetTitle>
                 <SheetDescription>
                   {selectedPresentation.domain} · {actorLabel(selectedEntry.actorId)} ·{" "}
-                  {auditTimestamp(selectedEntry.occurredAt)}
+                  <AuditTimestamp value={selectedEntry.occurredAt} />
                 </SheetDescription>
               </SheetHeader>
               <div
