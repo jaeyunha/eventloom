@@ -176,19 +176,35 @@ function assignmentReferences(session: SessionRecord): readonly SessionSpeakerRe
   return session.speakerIds.map((id) => references.get(id) ?? { id });
 }
 
+interface SessionEditorDraft {
+  readonly ownerKey: string;
+  readonly title?: string;
+  readonly description?: string;
+}
+
+interface SpeakerAssignmentsDraft {
+  readonly ownerKey: string;
+  readonly speakerIds: readonly string[];
+}
+
 function SessionEditor({
+  eventId,
   session,
   busy,
   onSave,
   onSetContentStatus,
 }: Readonly<{
+  eventId: string;
   session: SessionRecord;
   busy: boolean;
   onSave?: SessionsWorkspaceViewProps["onSave"];
   onSetContentStatus?: SessionsWorkspaceViewProps["onSetContentStatus"];
 }>) {
-  const [title, setTitle] = useState(session.title);
-  const [description, setDescription] = useState(session.description);
+  const ownerKey = `${eventId}\u0000${session.id}`;
+  const [draft, setDraft] = useState<SessionEditorDraft | null>(null);
+  const ownedDraft = draft?.ownerKey === ownerKey ? draft : null;
+  const title = ownedDraft?.title ?? session.title;
+  const description = ownedDraft?.description ?? session.description;
   const changed = title !== session.title || description !== session.description;
   const currentStatus = displayStatus(session.contentStatus);
 
@@ -220,7 +236,13 @@ function SessionEditor({
               id={`session-title-${session.id}`}
               required
               value={title}
-              onChange={(event) => setTitle(event.currentTarget.value)}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setDraft((current) => {
+                  const base = current?.ownerKey === ownerKey ? current : { ownerKey };
+                  return { ...base, title: value };
+                });
+              }}
             />
           </label>
           <label className={styles.field} htmlFor={`session-description-${session.id}`}>
@@ -230,7 +252,13 @@ function SessionEditor({
               id={`session-description-${session.id}`}
               rows={8}
               value={description}
-              onChange={(event) => setDescription(event.currentTarget.value)}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setDraft((current) => {
+                  const base = current?.ownerKey === ownerKey ? current : { ownerKey };
+                  return { ...base, description: value };
+                });
+              }}
             />
           </label>
           <Button disabled={busy || !changed || title.trim().length === 0 || !onSave} type="submit">
@@ -270,6 +298,7 @@ function SessionEditor({
 }
 
 function SpeakerAssignments({
+  eventId,
   session,
   speakers,
   loading,
@@ -278,6 +307,7 @@ function SpeakerAssignments({
   onSave,
   onRetry,
 }: Readonly<{
+  eventId: string;
   session: SessionRecord;
   speakers: readonly SessionSpeakerCandidate[] | null;
   loading: boolean;
@@ -286,6 +316,7 @@ function SpeakerAssignments({
   onSave?: SessionsWorkspaceViewProps["onSaveSpeakers"];
   onRetry?: SessionsWorkspaceViewProps["onRetrySpeakers"];
 }>) {
+  const ownerKey = `${eventId}\u0000${session.id}`;
   const currentReferences = assignmentReferences(session);
   const candidatesById = new Map((speakers ?? []).map((speaker) => [speaker.id, speaker]));
   const options = [
@@ -302,20 +333,24 @@ function SpeakerAssignments({
     })),
     ...(speakers ?? []).filter((speaker) => !session.speakerIds.includes(speaker.id)),
   ];
-  const [selectedIds, setSelectedIds] = useState<readonly string[]>(session.speakerIds);
+  const [draft, setDraft] = useState<SpeakerAssignmentsDraft | null>(null);
+  const selectedIds = draft?.ownerKey === ownerKey ? draft.speakerIds : session.speakerIds;
   const selected = new Set(selectedIds);
   const changed =
     selectedIds.length !== session.speakerIds.length ||
     selectedIds.some((id) => !session.speakerIds.includes(id));
 
   function toggle(speakerId: string, checked: boolean) {
-    setSelectedIds((current) =>
-      checked
-        ? current.includes(speakerId)
-          ? current
-          : [...current, speakerId]
-        : current.filter((id) => id !== speakerId),
-    );
+    setDraft((current) => {
+      const base =
+        current?.ownerKey === ownerKey ? current : { ownerKey, speakerIds: session.speakerIds };
+      const speakerIds = checked
+        ? base.speakerIds.includes(speakerId)
+          ? base.speakerIds
+          : [...base.speakerIds, speakerId]
+        : base.speakerIds.filter((id) => id !== speakerId);
+      return { ...base, speakerIds };
+    });
   }
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
@@ -634,16 +669,18 @@ export function SessionsWorkspaceView({
               ) : (
                 <>
                   <SessionEditor
+                    eventId={eventId}
                     busy={busy}
-                    key={`${selected.id}:${selected.version}`}
+                    key={`${eventId}\u0000${selected.id}`}
                     session={selected}
                     onSave={onSave}
                     onSetContentStatus={onSetContentStatus}
                   />
                   <SpeakerAssignments
+                    eventId={eventId}
                     busy={busy}
                     error={speakerError}
-                    key={selected.id}
+                    key={`${eventId}\u0000${selected.id}`}
                     loading={loadingSpeakers}
                     session={selected}
                     speakers={speakers}
