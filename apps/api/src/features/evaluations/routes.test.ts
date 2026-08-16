@@ -622,6 +622,41 @@ describe("evaluation HTTP routes", () => {
     expect(emptyBatch.status).toBe(200);
     await expect(emptyBatch.json()).resolves.toEqual({ data: { assignments: [] } });
   });
+  it("forwards reviewer organization scope to the workspace service", async () => {
+    const repository = new InMemoryEvaluationRepository();
+    const service = new EvaluationService(
+      repository,
+      new InMemorySubmissionReviewSource(),
+      {
+        async getEventMetadata(_tenantId, requestedEventId) {
+          return {
+            id: requestedEventId,
+            name: "Review event",
+            timeZone: "America/Los_Angeles",
+            startsAt: "2026-08-09T16:00:00.000Z",
+            endsAt: "2099-12-31T23:59:00.000Z",
+          };
+        },
+      },
+      { clock: () => new Date("2026-08-08T12:00:00.000Z") },
+    );
+    const listReviewerWorkspace = vi
+      .spyOn(service, "listReviewerWorkspace")
+      .mockResolvedValue({ assignments: [] });
+    const app = new Hono<EvaluationRouteEnvironment>();
+    app.use("*", async (context, next) => {
+      context.set("evaluationActor", reviewer);
+      await next();
+    });
+    app.route("/evaluations", createEvaluationRoutes(service));
+
+    const response = await app.request(
+      "/evaluations/reviewer/workspace?organizationId=tenant-1&eventId=event-1",
+    );
+
+    expect(response.status).toBe(200);
+    expect(listReviewerWorkspace).toHaveBeenCalledWith(reviewer, "event-1", "tenant-1");
+  });
   it("returns the organizer workspace snapshot and validates event scope", async () => {
     const app = createTestApp();
     const missingEvent = await app.request("/evaluations/organizer/workspace");

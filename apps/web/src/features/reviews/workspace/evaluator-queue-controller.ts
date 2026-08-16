@@ -15,14 +15,23 @@ import {
 import type { EvaluatorDraftSnapshot } from "./evaluator-evaluator-draft-snapshot";
 import type { ReviewerQueueEntry } from "./evaluator-queue-reviewer-queue-entry";
 import { reviewerSelectionBlocked } from "./evaluator-queue-reviewer-selection-blocked";
+import {
+  syncReviewerQueueRouteSelection,
+  useReviewerQueueRouteHistory,
+} from "./evaluator-review-route-history";
 
 export interface ReviewerQueueProps {
   entries: readonly ReviewerQueueEntry[];
   baseUrl: string;
+  initialSelectedAssignmentId?: string | undefined;
 }
 
-export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueueProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export function useReviewerQueueController({
+  entries,
+  baseUrl,
+  initialSelectedAssignmentId,
+}: ReviewerQueueProps) {
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedAssignmentId ?? null);
   const pendingAutosaveAssignmentRef = useRef<string | null>(null);
   const [pendingAutosaveAssignmentId, setPendingAutosaveAssignmentId] = useState<string | null>(
     null,
@@ -144,6 +153,14 @@ export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueuePr
     filters.due !== "all" ||
     filters.track !== "all";
 
+  useReviewerQueueRouteHistory({
+    entries,
+    pendingAutosaveAssignmentRef,
+    restoreQueueFocusIdRef,
+    selectedId,
+    setSelectedId,
+  });
+
   useEffect(() => {
     if (selectedId !== null) return;
     const restoreId = restoreQueueFocusIdRef.current;
@@ -170,6 +187,7 @@ export function useReviewerQueueController({ entries, baseUrl }: ReviewerQueuePr
       return false;
     }
     setSelectedId(nextAssignmentId);
+    syncReviewerQueueRouteSelection(selectedId, nextAssignmentId);
     return true;
   }
   function clearFilters(): void {

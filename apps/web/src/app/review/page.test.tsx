@@ -12,11 +12,16 @@ vi.mock("@/features/auth/authenticated-route-guard", () => ({
 describe("ReviewerPage", () => {
   it("routes an invitation to the exact event and organization", async () => {
     const element = await ReviewerPage({
-      searchParams: Promise.resolve({ eventId: " event-1 ", organizationId: "org-1" }),
+      searchParams: Promise.resolve({
+        assignmentId: " assignment-1 ",
+        eventId: " event-1 ",
+        organizationId: "org-1",
+      }),
     });
 
     expect(element.props).toMatchObject({
       mode: "evaluator",
+      initialSelectedAssignmentId: "assignment-1",
       eventId: "event-1",
       organizationId: "org-1",
     });

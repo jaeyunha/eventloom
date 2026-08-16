@@ -1111,7 +1111,7 @@ export function OrganizerEventEditor({
           Add the public identity, schedule, and location. New events start as drafts.
         </p>
       </div>
-      <div className={styles.eventTwoColumn}>
+      <div className={`${styles.eventTwoColumn} ${styles.eventIdentityFields}`}>
         <label className={styles.eventField} htmlFor="organizer-event-name">
           <span className={styles.eventFieldLabel}>Event name</span>
           <Input
@@ -1536,7 +1536,7 @@ function OrganizerEventsLoaded({
 
   return (
     <>
-      <header className={styles.pageHeader}>
+      <header className={`${styles.pageHeader} ${editor === null ? "" : styles.eventEditorHeader}`}>
         <div className={styles.pageHeaderCopy}>
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Event management</h1>

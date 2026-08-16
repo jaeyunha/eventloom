@@ -31,3 +31,19 @@ edccaa919ea19332af5fd86d57548aeb36327607:apps/web/src/features/integrations/api.
 4fe15279e1f91483f361fe008035e113357d009e:apps/api/src/integrations/accelevents/accelevents.test.ts:generic-api-key:208
 4fe15279e1f91483f361fe008035e113357d009e:apps/api/src/integrations/accelevents/accelevents.test.ts:generic-api-key:243
 299d9198edefef5837810d3a9dd9435ce6570671:apps/api/src/infrastructure/airtable/retry.ts:airtable-api-key:1
+# Current-tree fingerprints for the same reviewed source identifiers and fixtures.
+apps/api/src/infrastructure/airtable/retry.ts:airtable-api-key:1
+apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:301
+apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:324
+apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:192
+apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:196
+apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:198
+apps/api/src/integrations/airtable/projection/worker.test.ts:generic-api-key:25
+apps/api/src/integrations/airtable/oauth/runtime/base-selection.ts:airtable-api-key:115
+apps/api/src/features/crm/service.test.ts:generic-api-key:930
+apps/api/src/runtime/d1-composition.test.ts:generic-api-key:82
+apps/api/src/test-support/speaker-lifecycle.ts:generic-api-key:31
+apps/api/src/infrastructure/cloudflare/repositories/event-role-invitations.test.ts:generic-api-key:20
+apps/api/src/runtime/composition.test.ts:generic-api-key:243
+scripts/release/migrate-organization-id.mjs:airtable-api-key:545
+scripts/release/migrate-organization-id.mjs:airtable-api-key:575

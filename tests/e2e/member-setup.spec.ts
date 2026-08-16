@@ -125,10 +125,59 @@ test("an invited evaluator sets a password, reaches the work hub, and opens the 
       status: 200,
       contentType: "application/json",
       headers: corsHeaders,
-      body: JSON.stringify({ data: { assignments: [] } }),
+      body: JSON.stringify({
+        data: {
+          assignments: [
+            {
+              plan: {
+                id: "evaluation-plan",
+                eventId: "evaluation-event",
+                name: "Program review",
+                status: "open",
+                blindReview: true,
+                createdAt: "2026-08-10T00:00:00.000Z",
+                updatedAt: "2026-08-10T01:00:00.000Z",
+              },
+              assignment: {
+                id: "evaluation-assignment",
+                eventId: "evaluation-event",
+                planId: "evaluation-plan",
+                submissionId: "evaluation-submission",
+                roundId: "evaluation-round",
+                reviewerId: reviewerMember.userId,
+                status: "assigned",
+                version: 1,
+              },
+              round: {
+                id: "evaluation-round",
+                name: "Committee review",
+                sequence: 1,
+                opensAt: null,
+                closesAt: "2026-08-18T00:00:00.000Z",
+                rubric: {
+                  id: "evaluation-rubric",
+                  name: "Program rubric",
+                  criteria: [],
+                },
+              },
+              submission: {
+                id: "evaluation-submission",
+                title: "Reliable event systems",
+                abstract: "A practical session about reliable event systems.",
+              },
+              review: null,
+              rubricRevision: 1,
+              submissionRevision: 1,
+              suggestions: [],
+            },
+          ],
+        },
+      }),
     });
   });
 
+  const warmedReviewRoute = await page.request.get("/review");
+  expect(warmedReviewRoute.ok()).toBe(true);
   await page.goto(
     `/admin/organizations/${ORGANIZATION_ID}/members/setup?token=${encodeURIComponent(SETUP_TOKEN)}`,
   );
@@ -146,11 +195,11 @@ test("an invited evaluator sets a password, reaches the work hub, and opens the 
   await expect(reviewerWorkspace).toBeVisible();
   await expect(reviewerWorkspace).toContainText("Reviewer workspace");
   const reviewAssignments = reviewerWorkspace.getByRole("link", { name: "Review assignments" });
+  await expect(reviewAssignments).toBeVisible();
   await expect(reviewAssignments).toHaveAttribute("href", "/review");
   expect(requests.slice(0, 3)).toEqual(["activate", "sign-in", "session"]);
 
-  await reviewAssignments.click();
-  await expect(page).toHaveURL("/review");
+  await Promise.all([page.waitForURL("/review"), reviewAssignments.click()]);
   await expect(page.getByRole("heading", { name: "Reviewer queue" })).toBeVisible();
 });
 

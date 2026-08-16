@@ -11,6 +11,30 @@ const speakersUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/
 const organizerReviewsUrl = `/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/reviews`;
 const reviewerUrl = "/review";
 
+function speakerDrawerTransition(page: Page): Promise<void> {
+  return page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          document.removeEventListener("animationend", handleAnimation, true);
+          reject(new Error("Speaker drawer animation did not finish"));
+        }, 2_000);
+        const handleAnimation = (event: AnimationEvent) => {
+          if (
+            !(event.target instanceof HTMLElement) ||
+            event.target.dataset.slot !== "sheet-content"
+          ) {
+            return;
+          }
+          window.clearTimeout(timeout);
+          document.removeEventListener("animationend", handleAnimation, true);
+          resolve();
+        };
+        document.addEventListener("animationend", handleAnimation, true);
+      }),
+  );
+}
+
 const organizerSessionFixture = {
   session: {
     id: "organizer-session-e2e",
@@ -166,6 +190,35 @@ function textContrastRatio(element: HTMLElement): number {
   );
 }
 
+function waitForReviewerDrawerTransition(page: Page): Promise<void> {
+  return page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          observer.disconnect();
+          reject(new Error("Reviewer drawer transition did not finish."));
+        }, 1_000);
+        const finish = () => {
+          window.clearTimeout(timeout);
+          observer.disconnect();
+          requestAnimationFrame(() => resolve());
+        };
+        const observer = new MutationObserver(() => {
+          const drawer = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
+          if (drawer === null) return;
+          const style = getComputedStyle(drawer);
+          if (style.transitionDuration === "0s" && style.animationDuration === "0s") {
+            finish();
+            return;
+          }
+          drawer.addEventListener("transitionend", finish, { once: true });
+          drawer.addEventListener("animationend", finish, { once: true });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }),
+  );
+}
+
 test.beforeEach(async ({ context }) => {
   await context.addCookies([
     {
@@ -185,7 +238,7 @@ test.beforeEach(async ({ context }) => {
         session: { id: SESSION_TOKEN, userId: "user-organizer-e2e" },
         user: {
           id: "user-organizer-e2e",
-          email: "jaeyunha0317@gmail.com",
+          email: "organizer@example.test",
           name: "Olivia Organizer",
         },
         memberships: [{ organizationId: ORGANIZATION_ID, role: "owner" }],
@@ -322,10 +375,10 @@ test("keeps submission content legible in dark mode", async ({ page }, testInfo)
   });
 });
 
-test("submission queue keeps the dense table visible beside the selected review", async ({
+test("submission detail opens in a non-reflowing reviewer-style drawer", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   const warmedDetailRoute = await page.request.get(submissionDetailUrl);
   expect(warmedDetailRoute.ok()).toBe(true);
 
@@ -334,6 +387,7 @@ test("submission queue keeps the dense table visible beside the selected review"
     { name: "boundary", width: 1240, height: 1000 },
     { name: "tablet", width: 820, height: 1180 },
     { name: "mobile", width: 390, height: 844 },
+    { name: "compact", width: 320, height: 800 },
   ] as const) {
     await page.setViewportSize(viewport);
     await page.goto(submissionsUrl);
@@ -344,113 +398,100 @@ test("submission queue keeps the dense table visible beside the selected review"
     const queue = page.getByRole("table", {
       name: /Submissions for /,
     });
-    await expect(
-      page.getByRole("navigation", { name: "Filter submissions by status" }),
-    ).toHaveCount(0);
-    await expect(page.getByRole("combobox", { name: "Filter by status" })).toBeVisible();
-    await expect(queue).toBeVisible();
+    await expect(queue).toBeVisible({ timeout: 30_000 });
+    const filterTrigger = page.getByRole("button", { name: "Filter submissions" });
+    await expect(filterTrigger).toBeVisible();
+    await filterTrigger.click();
+    await expect(page.getByLabel("Submission filters")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByLabel("Submission filters")).toBeHidden();
+
+    const queueBoundsBefore = await queue.boundingBox();
+    expect(queueBoundsBefore).not.toBeNull();
 
     const firstSubmission = queue.getByRole("link").first();
     await expect(firstSubmission).toBeVisible();
     await expect(firstSubmission).toHaveAttribute("href", submissionDetailUrl);
+    const firstSubmissionTitle = (await firstSubmission.textContent())?.trim() ?? "";
+    expect(firstSubmissionTitle).not.toBe("");
     await Promise.all([page.waitForURL(submissionDetailUrl), firstSubmission.click()]);
 
     await expect(page.locator('[data-layout="submission-review-desk"]')).toBeVisible();
-    await expect(page.getByLabel("Submission review panel")).toBeVisible();
+    const drawer = page.locator('[data-slot="sheet-content"]');
+    const overlay = page.locator('[data-slot="sheet-overlay"]');
+    const detail = page.getByLabel("Submission review panel");
+    await expect(drawer).toBeVisible();
+    await expect(overlay).toBeVisible();
+    await expect(detail).toBeVisible();
+    await expect(detail.getByRole("heading", { level: 1, name: firstSubmissionTitle })).toBeVisible(
+      { timeout: 30_000 },
+    );
+    const closeLink = page.getByRole("link", { name: "Close submission details" });
+    await expect(closeLink).toBeVisible();
     await expect(queue.locator('tr[aria-current="page"]')).toHaveCount(1);
 
+    if (viewport.width <= 768) {
+      const closeBounds = await closeLink.boundingBox();
+      expect(closeBounds).not.toBeNull();
+      expect(closeBounds?.width ?? 0).toBeGreaterThanOrEqual(44);
+      expect(closeBounds?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
+
+    const queueBoundsAfter = await queue.boundingBox();
+    const drawerBounds = await drawer.boundingBox();
+    expect(queueBoundsAfter).not.toBeNull();
+    expect(drawerBounds).not.toBeNull();
+    expect(Math.abs((queueBoundsAfter?.width ?? 0) - (queueBoundsBefore?.width ?? 0))).toBeLessThan(
+      2,
+    );
+    expect(await drawer.evaluate((element) => getComputedStyle(element).position)).toBe("fixed");
+    expect(
+      Math.abs((drawerBounds?.x ?? 0) + (drawerBounds?.width ?? 0) - viewport.width),
+    ).toBeLessThan(2);
+
+    if (viewport.width >= 1024) {
+      expect(drawerBounds?.width ?? 0).toBeGreaterThanOrEqual(608);
+      expect(drawerBounds?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+        Math.min(896, viewport.width * 0.67),
+      );
+    } else if (viewport.width > 768) {
+      expect(drawerBounds?.width ?? 0).toBeGreaterThanOrEqual(608);
+      expect(drawerBounds?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(736);
+    } else {
+      expect(drawerBounds?.x ?? Number.POSITIVE_INFINITY).toBeLessThan(2);
+      expect(Math.abs((drawerBounds?.width ?? 0) - viewport.width)).toBeLessThan(2);
+    }
+
+    const detailScrollRegion = page.locator('[data-scroll-region="submission-detail"]');
+    const detailScrollState = await detailScrollRegion.evaluate((element) => {
+      const initial = element.scrollTop;
+      element.scrollTop = element.scrollHeight;
+      return {
+        clientHeight: element.clientHeight,
+        initial,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+        scrolled: element.scrollTop,
+      };
+    });
+    expect(detailScrollState.overflowY).toBe("auto");
+    expect(detailScrollState.scrollHeight).toBeGreaterThan(detailScrollState.clientHeight);
+    expect(detailScrollState.scrolled).toBeGreaterThan(detailScrollState.initial);
+
     if (viewport.name === "desktop") {
-      const queueScrollRegion = page.locator('[data-scroll-region="submission-queue"]');
-      const detailScrollRegion = page.locator('[data-scroll-region="submission-detail"]');
-      await expect(queueScrollRegion).toBeVisible();
-      await expect(detailScrollRegion).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.waitForURL(submissionsUrl);
+      await expect(drawer).toBeHidden();
+      await page.goBack();
+      await page.waitForURL(submissionDetailUrl);
+      await expect(drawer).toBeVisible();
 
-      const pageScrollBefore = await page.evaluate(() => window.scrollY);
-      const scrollState = await Promise.all(
-        [queueScrollRegion, detailScrollRegion].map((region) =>
-          region.evaluate((element) => {
-            const initial = element.scrollTop;
-            element.scrollTop = element.scrollHeight;
-            return {
-              clientHeight: element.clientHeight,
-              initial,
-              overflowY: getComputedStyle(element).overflowY,
-              scrollHeight: element.scrollHeight,
-              scrolled: element.scrollTop,
-            };
-          }),
-        ),
-      );
-
-      for (const region of scrollState) {
-        expect(region.overflowY).toBe("auto");
-        expect(region.scrollHeight).toBeGreaterThan(region.clientHeight);
-        expect(region.scrolled).toBeGreaterThan(region.initial);
-      }
-      expect(await page.evaluate(() => window.scrollY)).toBe(pageScrollBefore);
-      await Promise.all(
-        [queueScrollRegion, detailScrollRegion].map((region) =>
-          region.evaluate((element) => {
-            element.scrollTop = 0;
-          }),
-        ),
-      );
-    }
-
-    const filterOverflow = await page
-      .getByRole("group", { name: "Submission filters" })
-      .evaluate((element) => ({
-        clientWidth: element.clientWidth,
-        scrollWidth: element.scrollWidth,
-      }));
-    expect(filterOverflow.scrollWidth).toBeLessThanOrEqual(filterOverflow.clientWidth);
-
-    if (viewport.name === "desktop") {
-      const filterBounds = await page
-        .getByRole("group", { name: "Submission filters" })
-        .boundingBox();
-      const formatBounds = await page
-        .getByRole("combobox", { name: "Filter by format" })
-        .boundingBox();
-
-      expect(filterBounds).not.toBeNull();
-      expect(formatBounds).not.toBeNull();
-      const filterRight = (filterBounds?.x ?? 0) + (filterBounds?.width ?? 0);
-      expect((formatBounds?.x ?? 0) + (formatBounds?.width ?? 0)).toBeLessThanOrEqual(
-        filterRight + 1,
-      );
-    }
-
-    await expect(page.getByRole("button", { name: "Clear" })).toHaveCount(0);
-    await page.getByRole("combobox", { name: "Filter by status" }).click();
-    await page.getByRole("option", { name: "Submitted" }).click();
-    await expect(page.getByRole("button", { name: "Clear" })).toBeVisible();
-    await page.getByRole("button", { name: "Clear" }).click();
-
-    if (viewport.name !== "desktop") {
-      const queueBounds = await queue.boundingBox();
-      const reviewBounds = await page.getByLabel("Submission review panel").boundingBox();
-
-      expect(queueBounds).not.toBeNull();
-      expect(reviewBounds).not.toBeNull();
-      expect(reviewBounds?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(queueBounds?.y ?? 0);
-    }
-
-    if (viewport.name === "mobile") {
-      const listCard = page.locator("#submission-list-card");
-      const summaryBounds = await listCard
-        .locator("p")
-        .filter({ hasText: /\d+ of \d+/ })
-        .first()
-        .boundingBox();
-      const searchBounds = await page.getByRole("searchbox", { name: "Search" }).boundingBox();
-
-      expect(summaryBounds).not.toBeNull();
-      expect(searchBounds).not.toBeNull();
-      expect(
-        (searchBounds?.y ?? Number.POSITIVE_INFINITY) -
-          ((summaryBounds?.y ?? 0) + (summaryBounds?.height ?? 0)),
-      ).toBeLessThanOrEqual(48);
+      await overlay.click({ position: { x: 100, y: 100 } });
+      await page.waitForURL(submissionsUrl);
+      await expect(drawer).toBeHidden();
+      await page.goBack();
+      await page.waitForURL(submissionDetailUrl);
+      await expect(drawer).toBeVisible();
     }
 
     const layout = await page.evaluate(() => ({
@@ -466,7 +507,7 @@ test("submission queue keeps the dense table visible beside the selected review"
   }
 });
 
-test("speaker workspace presents the roster as a compact master-detail table", async ({
+test("speaker workspace presents a full-width roster with a focused detail drawer", async ({
   page,
 }, testInfo) => {
   await installSpeakerWorkspaceFixture(page);
@@ -480,22 +521,22 @@ test("speaker workspace presents the roster as a compact master-detail table", a
 
     const roster = page.getByRole("table", { name: "Event speaker roster" });
     await expect(roster).toBeVisible();
-    await expect(roster.getByRole("columnheader", { name: "Speaker" })).toBeVisible();
-    await expect(roster.getByRole("columnheader", { name: "Status" })).toBeVisible();
-    if (viewport.name === "desktop") {
-      await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeVisible();
-      await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeVisible();
-      await expect(roster.getByRole("columnheader", { name: "Action" })).toBeVisible();
-    } else if (viewport.name === "tablet") {
-      await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeVisible();
-      await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeHidden();
-      await expect(roster.getByRole("columnheader", { name: "Action" })).toBeHidden();
-    } else {
+    if (viewport.name !== "desktop") {
+      await expect(roster.getByRole("columnheader", { name: "Speaker" })).toBeHidden();
+      await expect(roster.getByRole("columnheader", { name: "Status" })).toBeHidden();
       await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeHidden();
       await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeHidden();
       await expect(roster.getByRole("columnheader", { name: "Action" })).toBeHidden();
+      await expect(roster.getByText("1 session")).toBeVisible();
+      await expect(roster.getByText("0 / 1 tasks")).toBeVisible();
+    } else {
+      await expect(roster.getByRole("columnheader", { name: "Speaker" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Status" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Sessions" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Tasks" })).toBeVisible();
+      await expect(roster.getByRole("columnheader", { name: "Action" })).toBeVisible();
     }
-    await expect(page.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
 
     if (viewport.name === "tablet") {
       const titleBounds = await page
@@ -509,7 +550,9 @@ test("speaker workspace presents the roster as a compact master-detail table", a
       const searchBounds = await page
         .getByRole("textbox", { name: "Search speakers" })
         .boundingBox();
-      const filterBounds = await page.getByRole("button", { name: "Filters" }).boundingBox();
+      const filterBounds = await page
+        .getByRole("button", { name: "Filter speakers" })
+        .boundingBox();
 
       expect(searchBounds).not.toBeNull();
       expect(filterBounds).not.toBeNull();
@@ -518,15 +561,63 @@ test("speaker workspace presents the roster as a compact master-detail table", a
       ).toBeLessThanOrEqual(24);
     }
 
-    const layout = await page.evaluate(() => ({
+    const queueLayout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
       viewportWidth: document.documentElement.clientWidth,
     }));
-    expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(queueLayout.bodyWidth).toBeLessThanOrEqual(queueLayout.viewportWidth);
 
     await page.screenshot({
-      path: testInfo.outputPath(`speakers-master-detail-${viewport.name}.png`),
+      path: testInfo.outputPath(`speakers-queue-${viewport.name}.png`),
     });
+
+    const openButton = roster.getByRole("button", { name: "Open" }).first();
+    if (viewport.name === "mobile") {
+      const openBox = await openButton.boundingBox();
+      expect(openBox).not.toBeNull();
+      expect((openBox?.y ?? 0) + (openBox?.height ?? 0)).toBeLessThanOrEqual(viewport.height - 64);
+      for (const name of ["Refresh roster", "Add speaker", "Filter speakers"]) {
+        const box = await page.getByRole("button", { name }).boundingBox();
+        expect(box).not.toBeNull();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      }
+    }
+    const drawerSettled = speakerDrawerTransition(page);
+    await openButton.click();
+    await drawerSettled;
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
+    const overlayBackdrop = await page
+      .locator('[data-slot="sheet-overlay"]')
+      .evaluate((element) => getComputedStyle(element).backdropFilter);
+    expect(overlayBackdrop).toBe("none");
+    if (viewport.name === "mobile") {
+      for (const name of [
+        "Close",
+        "Refresh details",
+        "Preview portal invite",
+        "Send portal invite",
+      ]) {
+        const box = await dialog.getByRole("button", { name }).boundingBox();
+        expect(box).not.toBeNull();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      }
+    }
+
+    const detailLayout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    }));
+    expect(detailLayout.bodyWidth).toBeLessThanOrEqual(detailLayout.viewportWidth);
+
+    await page.screenshot({
+      path: testInfo.outputPath(`speakers-detail-${viewport.name}.png`),
+    });
+
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(openButton).toBeFocused();
   }
 });
 
@@ -565,7 +656,13 @@ test("speaker asset download requests a fresh capability and starts from one cli
   });
 
   await page.goto(speakersUrl);
-  const downloadButton = page.getByRole("button", {
+  const roster = page.getByRole("table", { name: "Event speaker roster" });
+  const drawerSettled = speakerDrawerTransition(page);
+  await roster.getByRole("button", { name: "Open" }).first().click();
+  await drawerSettled;
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const downloadButton = dialog.getByRole("button", {
     name: "Download reliable-community-systems.pdf",
   });
   await expect(downloadButton).toBeVisible();
@@ -596,8 +693,8 @@ test("speaker workspace replaces empty controls with guided next steps", async (
   const workspaceWidth = await heading.evaluate(
     (element) => element.closest("header")?.parentElement?.getBoundingClientRect().width ?? 0,
   );
-  expect(workspaceWidth).toBeGreaterThan(0);
-  expect(workspaceWidth).toBeLessThanOrEqual(1216);
+  expect(workspaceWidth).toBeGreaterThan(1216);
+  expect(workspaceWidth).toBeLessThanOrEqual(1728);
 
   const rosterView = page.locator("#roster-view");
   await expect(rosterView.locator('[data-slot="empty"]')).toHaveCount(1);
@@ -640,6 +737,10 @@ test("speaker workspace reflows at 320px with 200% text zoom", async ({ page }) 
   await installSpeakerWorkspaceFixture(page);
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto(speakersUrl);
+  const drawerSettled = speakerDrawerTransition(page);
+  await page.getByRole("button", { name: "Open" }).first().click();
+  await drawerSettled;
+  await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.locator('[aria-labelledby="speaker-detail-heading"]')).toBeVisible();
 
   await page.locator("html").evaluate(async (element) => {
@@ -799,6 +900,7 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
   context,
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
   await context.addCookies([
     {
       name: SESSION_COOKIE,
@@ -919,6 +1021,8 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
 
     await firstAction.focus();
     await expect(firstAction).toBeFocused();
+    const assignmentId = await firstAction.getAttribute("data-reviewer-assignment-id");
+    expect(assignmentId).not.toBeNull();
     const queueBeforeOpen = await queue.boundingBox();
 
     const actionMetrics = await firstAction.evaluate((element) => {
@@ -934,37 +1038,15 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
     expect(actionMetrics.lineCount).toBe(1);
     expect(actionMetrics.whiteSpace).toBe("nowrap");
 
-    const drawerSettled = page.evaluate(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => {
-            observer.disconnect();
-            reject(new Error("Reviewer drawer transition did not finish."));
-          }, 1_000);
-          const finish = () => {
-            window.clearTimeout(timeout);
-            observer.disconnect();
-            requestAnimationFrame(() => resolve());
-          };
-          const observer = new MutationObserver(() => {
-            const drawer = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
-            if (drawer === null) return;
-            const style = getComputedStyle(drawer);
-            if (style.transitionDuration === "0s" && style.animationDuration === "0s") {
-              finish();
-              return;
-            }
-            drawer.addEventListener("transitionend", finish, { once: true });
-            drawer.addEventListener("animationend", finish, { once: true });
-          });
-          observer.observe(document.body, { childList: true, subtree: true });
-        }),
-    );
+    const drawerSettled = waitForReviewerDrawerTransition(page);
     await firstAction.click();
 
     const scorecard = page.getByRole("dialog");
     const closeReview = scorecard.getByRole("button", { name: "Close review" });
     await expect(scorecard).toBeVisible();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("assignmentId"))
+      .toBe(assignmentId);
     await drawerSettled;
     await expect(closeReview).toBeFocused();
     await expect(page.locator("#review-workspace")).toHaveCount(1);
@@ -1013,21 +1095,91 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
       fullPage: false,
     });
 
+    const openFullPage = scorecard.getByRole("link", { name: "Open review as full page" });
+    const encodedAssignmentId = encodeURIComponent(assignmentId ?? "");
+    await expect(openFullPage).toHaveAttribute(
+      "href",
+      `/review/${encodedAssignmentId}?organizationId=${ORGANIZATION_ID}&eventId=${EVENT_ID}`,
+    );
+    await openFullPage.click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/review/${encodedAssignmentId}\\?organizationId=${ORGANIZATION_ID}&eventId=${EVENT_ID}$`,
+        "u",
+      ),
+    );
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Back to queue" })).toBeVisible();
+    const fullPageTitle = await page.locator("#assigned-submission-heading").innerText();
+    await expect(page.getByRole("heading", { name: fullPageTitle })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: fullPageTitle, level: 1 })).toBeVisible();
+    await expect(page.locator('[data-reviewer-scorecard-footer="true"]')).toHaveCSS(
+      "position",
+      "static",
+    );
+    await page.screenshot({
+      path: testInfo.outputPath(`reviewer-full-page-${viewport.name}.png`),
+      fullPage: false,
+    });
+
+    await page.goBack();
+    await expect(scorecard).toBeVisible();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("assignmentId"))
+      .toBe(assignmentId);
+
     await closeReview.click();
     await expect(scorecard).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assignmentId")).toBeNull();
     await expect(firstAction).toBeFocused();
 
     await firstAction.click();
     await expect(scorecard).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(scorecard).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assignmentId")).toBeNull();
     await expect(firstAction).toBeFocused();
+
+    await firstAction.click();
+    await expect(scorecard).toBeVisible();
+    await page.goBack();
+    await expect(scorecard).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assignmentId")).toBeNull();
+    await expect(firstAction).toBeFocused();
+
+    await page.goForward();
+    await expect(scorecard).toBeVisible();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("assignmentId"))
+      .toBe(assignmentId);
+    if (viewport.name === "mobile") {
+      const autosaveCompleted = page.waitForResponse((response) => {
+        const request = response.request();
+        const url = new URL(request.url());
+        return (
+          request.method() === "PUT" &&
+          /\/api\/admin\/evaluations\/assignments\/[^/]+\/review$/u.test(url.pathname)
+        );
+      });
+      await scorecard.getByRole("radio").last().check();
+      const autosaveResponse = await autosaveCompleted;
+      const autosaveUrl = new URL(autosaveResponse.url());
+      expect(autosaveResponse.ok()).toBe(true);
+      expect(autosaveUrl.searchParams.get("organizationId")).toBe(ORGANIZATION_ID);
+      expect(autosaveUrl.searchParams.get("eventId")).toBe(EVENT_ID);
+      await expect(scorecard.getByText("Saved on server", { exact: true })).toBeVisible();
+    } else {
+      await closeReview.click();
+      await expect(scorecard).toBeHidden();
+      await expect(firstAction).toBeFocused();
+    }
   }
 });
 
 test("plan and rubric renders an open plan as a focused read-only workbench", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
   for (const viewport of [
     { name: "desktop", width: 1440, height: 1000 },
     { name: "mobile", width: 390, height: 844 },

@@ -357,6 +357,33 @@ describe("evaluation plans and assignments", () => {
     ]);
   });
 
+  it("scopes duplicate event identifiers to one requested organization", async () => {
+    const repository = new MultiTenantWorkspaceRepository();
+    const service = new EvaluationService(
+      repository,
+      new InMemorySubmissionReviewSource(),
+      evaluationEventSource(),
+    );
+
+    await expect(
+      service.listReviewerWorkspace(
+        {
+          tenantId: "org-a",
+          userId: "reviewer-multi-org",
+          kind: "human",
+          grants: [
+            { tenantId: "org-a", eventId: "shared-event", role: "reviewer" },
+            { tenantId: "org-b", eventId: "shared-event", role: "reviewer" },
+          ],
+        },
+        "shared-event",
+        "org-b",
+      ),
+    ).resolves.toEqual({ assignments: [] });
+
+    expect(repository.workspaceScopes).toEqual([{ tenantId: "org-b", eventIds: ["shared-event"] }]);
+  });
+
   it("accepts zero-weight dropdowns and neutral free-text bounds", async () => {
     const service = new EvaluationService(
       new InMemoryEvaluationRepository(),

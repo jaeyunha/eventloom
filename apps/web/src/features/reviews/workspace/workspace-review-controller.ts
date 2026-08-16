@@ -20,8 +20,10 @@ export function useReviewWorkspaceController(
   eventId: string | undefined,
 ) {
   const {
+    assignmentId,
     mode = "organizer",
     initialState,
+    initialSelectedAssignmentId,
     organizationId: explicitOrganizationId,
     memberApi: providedMemberApi,
   } = props;
@@ -30,6 +32,7 @@ export function useReviewWorkspaceController(
   const initialStateProvided = initialState !== undefined;
   const reviewerQueueMode =
     mode === "evaluator" &&
+    assignmentId === undefined &&
     (eventId === undefined || initialState?.queue !== undefined || !initialStateProvided);
   const [seed, setSeed] = useState<ReviewPlanSeed | null>(() =>
     mode === "organizer" ? (initialState?.organizer ?? null) : null,
@@ -158,12 +161,22 @@ export function useReviewWorkspaceController(
         ? eventId === undefined
           ? Promise.reject(new Error("An event is required for organizer review plans."))
           : loadOrganizerData(eventId, baseUrl)
-        : loadEvaluatorQueue(eventId, baseUrl);
+        : loadEvaluatorQueue(eventId, baseUrl, explicitOrganizationId);
     void load
       .then((value) => {
         if (!active) return;
         if (mode === "organizer") setSeed(value as ReviewPlanSeed);
-        else setQueue(value as readonly ReviewerQueueEntry[]);
+        else {
+          const evaluatorQueue = value as readonly ReviewerQueueEntry[];
+          if (assignmentId === undefined) {
+            setQueue(evaluatorQueue);
+          } else {
+            setAssignment(
+              evaluatorQueue.find((entry) => entry.assignment.id === assignmentId)?.assignment ??
+                null,
+            );
+          }
+        }
       })
       .catch((reason: unknown) => {
         if (!active) return;
@@ -179,12 +192,14 @@ export function useReviewWorkspaceController(
     return () => {
       active = false;
     };
-  }, [baseUrl, eventId, mode, initialStateProvided]);
+  }, [assignmentId, baseUrl, eventId, explicitOrganizationId, mode, initialStateProvided]);
 
   return {
+    assignmentId,
     mode,
     explicitOrganizationId,
     eventId,
+    initialSelectedAssignmentId,
     baseUrl,
     reviewerQueueMode,
     seed,
