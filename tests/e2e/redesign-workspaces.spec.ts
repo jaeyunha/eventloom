@@ -312,10 +312,10 @@ test("keeps submission content legible in dark mode", async ({ page }, testInfo)
   });
 });
 
-test("submission queue keeps the dense table visible beside the selected review", async ({
+test("submission detail opens in a non-reflowing reviewer-style drawer", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   const warmedDetailRoute = await page.request.get(submissionDetailUrl);
   expect(warmedDetailRoute.ok()).toBe(true);
 
@@ -324,6 +324,7 @@ test("submission queue keeps the dense table visible beside the selected review"
     { name: "boundary", width: 1240, height: 1000 },
     { name: "tablet", width: 820, height: 1180 },
     { name: "mobile", width: 390, height: 844 },
+    { name: "compact", width: 320, height: 800 },
   ] as const) {
     await page.setViewportSize(viewport);
     await page.goto(submissionsUrl);
@@ -334,113 +335,100 @@ test("submission queue keeps the dense table visible beside the selected review"
     const queue = page.getByRole("table", {
       name: /Submissions for /,
     });
-    await expect(
-      page.getByRole("navigation", { name: "Filter submissions by status" }),
-    ).toHaveCount(0);
-    await expect(page.getByRole("combobox", { name: "Filter by status" })).toBeVisible();
-    await expect(queue).toBeVisible();
+    await expect(queue).toBeVisible({ timeout: 30_000 });
+    const filterTrigger = page.getByRole("button", { name: "Filter submissions" });
+    await expect(filterTrigger).toBeVisible();
+    await filterTrigger.click();
+    await expect(page.getByLabel("Submission filters")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByLabel("Submission filters")).toBeHidden();
+
+    const queueBoundsBefore = await queue.boundingBox();
+    expect(queueBoundsBefore).not.toBeNull();
 
     const firstSubmission = queue.getByRole("link").first();
     await expect(firstSubmission).toBeVisible();
     await expect(firstSubmission).toHaveAttribute("href", submissionDetailUrl);
+    const firstSubmissionTitle = (await firstSubmission.textContent())?.trim() ?? "";
+    expect(firstSubmissionTitle).not.toBe("");
     await Promise.all([page.waitForURL(submissionDetailUrl), firstSubmission.click()]);
 
     await expect(page.locator('[data-layout="submission-review-desk"]')).toBeVisible();
-    await expect(page.getByLabel("Submission review panel")).toBeVisible();
+    const drawer = page.locator('[data-slot="sheet-content"]');
+    const overlay = page.locator('[data-slot="sheet-overlay"]');
+    const detail = page.getByLabel("Submission review panel");
+    await expect(drawer).toBeVisible();
+    await expect(overlay).toBeVisible();
+    await expect(detail).toBeVisible();
+    await expect(detail.getByRole("heading", { level: 1, name: firstSubmissionTitle })).toBeVisible(
+      { timeout: 30_000 },
+    );
+    const closeLink = page.getByRole("link", { name: "Close submission details" });
+    await expect(closeLink).toBeVisible();
     await expect(queue.locator('tr[aria-current="page"]')).toHaveCount(1);
 
+    if (viewport.width <= 768) {
+      const closeBounds = await closeLink.boundingBox();
+      expect(closeBounds).not.toBeNull();
+      expect(closeBounds?.width ?? 0).toBeGreaterThanOrEqual(44);
+      expect(closeBounds?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
+
+    const queueBoundsAfter = await queue.boundingBox();
+    const drawerBounds = await drawer.boundingBox();
+    expect(queueBoundsAfter).not.toBeNull();
+    expect(drawerBounds).not.toBeNull();
+    expect(Math.abs((queueBoundsAfter?.width ?? 0) - (queueBoundsBefore?.width ?? 0))).toBeLessThan(
+      2,
+    );
+    expect(await drawer.evaluate((element) => getComputedStyle(element).position)).toBe("fixed");
+    expect(
+      Math.abs((drawerBounds?.x ?? 0) + (drawerBounds?.width ?? 0) - viewport.width),
+    ).toBeLessThan(2);
+
+    if (viewport.width >= 1024) {
+      expect(drawerBounds?.width ?? 0).toBeGreaterThanOrEqual(608);
+      expect(drawerBounds?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+        Math.min(896, viewport.width * 0.67),
+      );
+    } else if (viewport.width > 768) {
+      expect(drawerBounds?.width ?? 0).toBeGreaterThanOrEqual(608);
+      expect(drawerBounds?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(736);
+    } else {
+      expect(drawerBounds?.x ?? Number.POSITIVE_INFINITY).toBeLessThan(2);
+      expect(Math.abs((drawerBounds?.width ?? 0) - viewport.width)).toBeLessThan(2);
+    }
+
+    const detailScrollRegion = page.locator('[data-scroll-region="submission-detail"]');
+    const detailScrollState = await detailScrollRegion.evaluate((element) => {
+      const initial = element.scrollTop;
+      element.scrollTop = element.scrollHeight;
+      return {
+        clientHeight: element.clientHeight,
+        initial,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+        scrolled: element.scrollTop,
+      };
+    });
+    expect(detailScrollState.overflowY).toBe("auto");
+    expect(detailScrollState.scrollHeight).toBeGreaterThan(detailScrollState.clientHeight);
+    expect(detailScrollState.scrolled).toBeGreaterThan(detailScrollState.initial);
+
     if (viewport.name === "desktop") {
-      const queueScrollRegion = page.locator('[data-scroll-region="submission-queue"]');
-      const detailScrollRegion = page.locator('[data-scroll-region="submission-detail"]');
-      await expect(queueScrollRegion).toBeVisible();
-      await expect(detailScrollRegion).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.waitForURL(submissionsUrl);
+      await expect(drawer).toBeHidden();
+      await page.goBack();
+      await page.waitForURL(submissionDetailUrl);
+      await expect(drawer).toBeVisible();
 
-      const pageScrollBefore = await page.evaluate(() => window.scrollY);
-      const scrollState = await Promise.all(
-        [queueScrollRegion, detailScrollRegion].map((region) =>
-          region.evaluate((element) => {
-            const initial = element.scrollTop;
-            element.scrollTop = element.scrollHeight;
-            return {
-              clientHeight: element.clientHeight,
-              initial,
-              overflowY: getComputedStyle(element).overflowY,
-              scrollHeight: element.scrollHeight,
-              scrolled: element.scrollTop,
-            };
-          }),
-        ),
-      );
-
-      for (const region of scrollState) {
-        expect(region.overflowY).toBe("auto");
-        expect(region.scrollHeight).toBeGreaterThan(region.clientHeight);
-        expect(region.scrolled).toBeGreaterThan(region.initial);
-      }
-      expect(await page.evaluate(() => window.scrollY)).toBe(pageScrollBefore);
-      await Promise.all(
-        [queueScrollRegion, detailScrollRegion].map((region) =>
-          region.evaluate((element) => {
-            element.scrollTop = 0;
-          }),
-        ),
-      );
-    }
-
-    const filterOverflow = await page
-      .getByRole("group", { name: "Submission filters" })
-      .evaluate((element) => ({
-        clientWidth: element.clientWidth,
-        scrollWidth: element.scrollWidth,
-      }));
-    expect(filterOverflow.scrollWidth).toBeLessThanOrEqual(filterOverflow.clientWidth);
-
-    if (viewport.name === "desktop") {
-      const filterBounds = await page
-        .getByRole("group", { name: "Submission filters" })
-        .boundingBox();
-      const formatBounds = await page
-        .getByRole("combobox", { name: "Filter by format" })
-        .boundingBox();
-
-      expect(filterBounds).not.toBeNull();
-      expect(formatBounds).not.toBeNull();
-      const filterRight = (filterBounds?.x ?? 0) + (filterBounds?.width ?? 0);
-      expect((formatBounds?.x ?? 0) + (formatBounds?.width ?? 0)).toBeLessThanOrEqual(
-        filterRight + 1,
-      );
-    }
-
-    await expect(page.getByRole("button", { name: "Clear" })).toHaveCount(0);
-    await page.getByRole("combobox", { name: "Filter by status" }).click();
-    await page.getByRole("option", { name: "Submitted" }).click();
-    await expect(page.getByRole("button", { name: "Clear" })).toBeVisible();
-    await page.getByRole("button", { name: "Clear" }).click();
-
-    if (viewport.name !== "desktop") {
-      const queueBounds = await queue.boundingBox();
-      const reviewBounds = await page.getByLabel("Submission review panel").boundingBox();
-
-      expect(queueBounds).not.toBeNull();
-      expect(reviewBounds).not.toBeNull();
-      expect(reviewBounds?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(queueBounds?.y ?? 0);
-    }
-
-    if (viewport.name === "mobile") {
-      const listCard = page.locator("#submission-list-card");
-      const summaryBounds = await listCard
-        .locator("p")
-        .filter({ hasText: /\d+ of \d+/ })
-        .first()
-        .boundingBox();
-      const searchBounds = await page.getByRole("searchbox", { name: "Search" }).boundingBox();
-
-      expect(summaryBounds).not.toBeNull();
-      expect(searchBounds).not.toBeNull();
-      expect(
-        (searchBounds?.y ?? Number.POSITIVE_INFINITY) -
-          ((summaryBounds?.y ?? 0) + (summaryBounds?.height ?? 0)),
-      ).toBeLessThanOrEqual(48);
+      await overlay.click({ position: { x: 100, y: 100 } });
+      await page.waitForURL(submissionsUrl);
+      await expect(drawer).toBeHidden();
+      await page.goBack();
+      await page.waitForURL(submissionDetailUrl);
+      await expect(drawer).toBeVisible();
     }
 
     const layout = await page.evaluate(() => ({

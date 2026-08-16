@@ -31,6 +31,7 @@ import {
   StatusBadge as WorkspaceStatusBadge,
 } from "@/components/workspace/workspace-ui";
 import { useOrganizerEventId } from "./organizer-event-workspace";
+import { SubmissionDetailDrawer } from "./submission-detail-drawer";
 import styles from "./submission-workspace.module.css";
 import {
   ApiRequestError,
@@ -367,6 +368,10 @@ export function SubmissionListWorkspace({
         return sortDirection === "asc" ? result : -result;
       });
   }, [format, search, sortDirection, sortKey, status, submissions, track]);
+  const selectedSubmission =
+    selectedSubmissionId === undefined
+      ? undefined
+      : submissions.find((submission) => submission.id === selectedSubmissionId);
 
   const selectedVisibleCount = filteredSubmissions.filter((submission) =>
     selected.has(submission.id),
@@ -480,10 +485,7 @@ export function SubmissionListWorkspace({
         data-layout="submission-review-desk"
         tabIndex={-1}
       >
-        <div
-          className={styles.reviewDesk}
-          data-detail-open={selectedSubmissionId === undefined ? "false" : "true"}
-        >
+        <div className={styles.reviewDesk}>
           <div className={styles.submissionMaster}>
             <section
               id="submission-list-card"
@@ -887,15 +889,20 @@ export function SubmissionListWorkspace({
               )}
             </section>
           </div>
-          {selectedSubmissionId === undefined ? null : (
+        </div>
+        {selectedSubmissionId === undefined ? null : (
+          <SubmissionDetailDrawer
+            closeHref={submissionListHref(eventId, organizationId)}
+            title={selectedSubmission?.title ?? "Submission details"}
+          >
             <SubmissionDetailWorkspace
               organizationId={organizationId}
               eventId={eventId}
               submissionId={selectedSubmissionId}
               displayMode="panel"
             />
-          )}
-        </div>
+          </SubmissionDetailDrawer>
+        )}
       </div>
     </div>
   );
@@ -1319,50 +1326,95 @@ export function SubmissionDetailWorkspace({
             }
           />
         </>
-      ) : (
-        <div className={styles.reviewPanelBar}>
-          <div>
-            <strong className={styles.reviewPanelTitle} title={submission.title}>
-              {submission.title}
-            </strong>
-            <StatusBadge status={submission.status} />
-          </div>
-          <Button asChild size="sm" variant="ghost">
-            <Link href={submissionListHref(eventId, organizationId)}>Close</Link>
-          </Button>
-        </div>
-      )}
+      ) : null}
 
       <div
         id="submission-detail-content"
         className={displayMode === "panel" ? styles.reviewPanelBody : styles.workspaceMain}
-        data-scroll-region={displayMode === "panel" ? "submission-detail" : undefined}
         tabIndex={-1}
       >
+        {displayMode === "panel" ? (
+          <div className={styles.drawerIntro}>
+            <strong>Organizer review.</strong>
+            <span>
+              Review the submission content, participant context, committee activity, and final
+              decision.
+            </span>
+          </div>
+        ) : null}
         <div className={styles.detailGrid}>
           <div className={styles.detailPrimary}>
-            <section className={styles.detailPanel} aria-labelledby="abstract-heading">
-              <div className={styles.panelHeading}>
-                <div>
-                  <p className={styles.eyebrow}>Submission content</p>
-                  <h2 id="abstract-heading">Abstract</h2>
-                </div>
-              </div>
-              <p className={styles.abstract}>{submission.abstract}</p>
-            </section>
-
-            <section className={styles.detailPanel} aria-labelledby="answers-heading">
-              <p className={styles.eyebrow}>Form responses</p>
-              <h2 id="answers-heading">Structured answers</h2>
-              <dl className={styles.answerList}>
-                {submission.answers.map((answer) => (
-                  <div key={answer.question}>
-                    <dt>{answer.question}</dt>
-                    <dd>{answer.answer}</dd>
+            {displayMode === "panel" ? (
+              <section
+                className={`${styles.detailPanel} ${styles.submissionOverviewPanel}`}
+                aria-labelledby="submission-overview-heading"
+              >
+                <div className={styles.submissionOverviewHeader}>
+                  <div>
+                    <p className={styles.eyebrow}>{eventName} · Submission</p>
+                    <h1 id="submission-overview-heading">{submission.title}</h1>
                   </div>
-                ))}
-              </dl>
-            </section>
+                  <StatusBadge status={submission.status} />
+                </div>
+                <dl className={styles.submissionOverviewMeta}>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{statusLabels[submission.status]}</dd>
+                  </div>
+                  <div>
+                    <dt>Track / format</dt>
+                    <dd>
+                      {submission.track} · {submission.format}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatDateTime(submission.updatedAt)}</dd>
+                  </div>
+                </dl>
+                <div className={styles.submissionOverviewCopy}>
+                  <h2>Submission overview</h2>
+                  <p>{submission.abstract}</p>
+                </div>
+                <div className={styles.submissionOverviewAnswers}>
+                  <p className={styles.eyebrow}>Form responses</p>
+                  <h2>Structured answers</h2>
+                  <dl className={styles.answerList}>
+                    {submission.answers.map((answer) => (
+                      <div key={answer.question}>
+                        <dt>{answer.question}</dt>
+                        <dd>{answer.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              </section>
+            ) : (
+              <>
+                <section className={styles.detailPanel} aria-labelledby="abstract-heading">
+                  <div className={styles.panelHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>Submission content</p>
+                      <h2 id="abstract-heading">Abstract</h2>
+                    </div>
+                  </div>
+                  <p className={styles.abstract}>{submission.abstract}</p>
+                </section>
+
+                <section className={styles.detailPanel} aria-labelledby="answers-heading">
+                  <p className={styles.eyebrow}>Form responses</p>
+                  <h2 id="answers-heading">Structured answers</h2>
+                  <dl className={styles.answerList}>
+                    {submission.answers.map((answer) => (
+                      <div key={answer.question}>
+                        <dt>{answer.question}</dt>
+                        <dd>{answer.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              </>
+            )}
 
             <section className={styles.detailPanel} aria-labelledby="timeline-heading">
               <p className={styles.eyebrow}>Audit history</p>
