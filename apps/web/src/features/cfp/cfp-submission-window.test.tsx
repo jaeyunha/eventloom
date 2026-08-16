@@ -47,4 +47,20 @@ describe("CFP submission window", () => {
     expect(markup).toContain("America/Argentina/Buenos_Aires");
     expect(markup).toContain("Up to 1 proposal per account");
   });
+
+  it("contains malformed public event dates and time zones without crashing", () => {
+    const markup = renderToStaticMarkup(
+      <CfpSubmissionWindow
+        opensAt="not-an-instant"
+        closesAt="2026-08-18T00:00:00.000Z"
+        limit={2}
+        status="open"
+        timeZone="not/a-real-timezone"
+      />,
+    );
+
+    expect(markup).toContain("Date unavailable");
+    expect(markup).toContain("Event time zone unavailable");
+    expect(markup).not.toContain("not/a-real-timezone");
+  });
 });

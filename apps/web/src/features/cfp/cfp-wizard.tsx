@@ -1889,6 +1889,7 @@ export function CfpWizard({
             onAccountModeChange={changeAccountMode}
             onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
             password={password}
+            pending={mutationPending}
             requiresApplicantContextConfirmation={requiresApplicantContextConfirmation}
             setPassword={setPassword}
             updateDraft={updateDraft}
@@ -2007,7 +2008,7 @@ export function CfpWizard({
               ? `Email verified for ${verificationState.email}. Continuing to your proposal…`
               : authenticatedSession
                 ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
-                : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
+                : null}
         </div>
       ) : null}
       <p
@@ -2081,6 +2082,7 @@ function AccountStep({
   onAccountModeChange,
   onConfirmApplicantContext,
   password,
+  pending,
   requiresApplicantContextConfirmation,
   setPassword,
   updateDraft,
@@ -2093,6 +2095,7 @@ function AccountStep({
   onAccountModeChange: (mode: CfpAccountMode) => void;
   onConfirmApplicantContext: () => void;
   password: string;
+  pending: boolean;
   requiresApplicantContextConfirmation: boolean;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
@@ -2190,9 +2193,11 @@ function AccountStep({
           <legend className="sr-only">Account access</legend>
           <ToggleGroup
             className={styles.accountModeSwitch}
+            disabled={pending}
             onValueChange={(value) => {
               if (value === "sign_in" || value === "sign_up") onAccountModeChange(value);
             }}
+            orientation="horizontal"
             spacing={0}
             type="single"
             value={accountMode}
@@ -2221,6 +2226,7 @@ function AccountStep({
             <Input
               {...controlProps}
               autoComplete="email"
+              disabled={pending}
               readOnly={authenticatedSession !== null}
               onChange={(event) =>
                 updateDraft((current) => ({
@@ -2247,6 +2253,7 @@ function AccountStep({
                 <Input
                   {...controlProps}
                   autoComplete={accountMode === "sign_up" ? "new-password" : "current-password"}
+                  disabled={pending}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
                   value={password}
@@ -2284,6 +2291,7 @@ function AccountStep({
                   <>
                     <Input
                       {...controlProps}
+                      disabled={pending}
                       maxLength={255}
                       onChange={(event) =>
                         updateDraft((current) => ({
@@ -2307,6 +2315,7 @@ function AccountStep({
                   <>
                     <Input
                       {...controlProps}
+                      disabled={pending}
                       maxLength={255}
                       onChange={(event) =>
                         updateDraft((current) => ({
@@ -2325,6 +2334,7 @@ function AccountStep({
               <input
                 aria-invalid={Boolean(errors["account.acceptedTerms"])}
                 checked={draft.account.acceptedTerms}
+                disabled={pending}
                 id="account.acceptedTerms"
                 onChange={(event) =>
                   updateDraft((current) => ({

@@ -1,3 +1,4 @@
+import type { Request } from "@playwright/test";
 import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixtures/auth";
 import { installCfpApi } from "./fixtures/cfp-api";
 
@@ -165,6 +166,40 @@ async function installCfpPortalHandoffApi(
   return { selectedEventIds };
 }
 
+test("account access mode stays locked while authentication is pending", async ({
+  page,
+  authSession,
+}) => {
+  let releaseAuthentication!: () => void;
+  const authenticationGate = new Promise<void>((resolve) => {
+    releaseAuthentication = resolve;
+  });
+  await installCfpApi(page, authSession, {
+    eventId: "evt_evaluator_2026",
+    eventSlug: "evaluator-2026",
+    formId: "evaluator-2026-cfp",
+  });
+  await page.route("**/api/auth/sign-in/email", async (route) => {
+    await authenticationGate;
+    await route.fallback();
+  });
+
+  await page.goto(`${EVALUATOR_CFP_PATH}/account`);
+  await page.getByLabel("Email address").fill("pending@example.test");
+  await page.getByLabel("Password").fill("StrongPass1!");
+  const requestStarted = page.waitForRequest("**/api/auth/sign-in/email");
+  const submit = page.getByRole("button", { name: "Sign in and continue" }).click();
+  await requestStarted;
+
+  await expect(page.locator('[data-cfp-account-mode="sign_in"]')).toBeDisabled();
+  await expect(page.locator('[data-cfp-account-mode="sign_up"]')).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Signing in…" })).toBeDisabled();
+
+  releaseAuthentication();
+  await submit;
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
+});
+
 test("submitter completes the account-first CFP with two participants", async ({
   page,
   authSession,
@@ -243,11 +278,31 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(existingAccount).toHaveAttribute("data-state", "on");
   await accountEmail.fill("ada@example.test");
   await accountPassword.fill("CalmSystems!26");
-  await createAccount.click();
+  await existingAccount.focus();
+  await existingAccount.press("ArrowRight");
+  await expect(createAccount).toBeFocused();
+  await createAccount.press("Space");
   await expect(createAccount).toHaveAttribute("data-state", "on");
   await expect(accountEmail).toHaveValue("ada@example.test");
   await expect(accountPassword).toHaveValue("CalmSystems!26");
   await expect(accountPassword).toHaveAttribute("autocomplete", "new-password");
+  await page.getByRole("button", { name: "Create account and continue" }).click();
+  await expect(page.getByLabel("First name")).toBeFocused();
+  await expect(page.getByLabel("First name")).toHaveAttribute("aria-invalid", "true");
+
+  await existingAccount.focus();
+  await existingAccount.press("Space");
+  await expect(existingAccount).toHaveAttribute("data-state", "on");
+  await expect(page.getByLabel("First name")).toHaveCount(0);
+  await expect(page.getByText("First name is required.", { exact: true })).toHaveCount(0);
+  await expect(accountEmail).toHaveValue("ada@example.test");
+  await expect(accountPassword).toHaveValue("CalmSystems!26");
+
+  await existingAccount.press("ArrowRight");
+  await expect(createAccount).toBeFocused();
+  await createAccount.press("Space");
+  await expect(createAccount).toHaveAttribute("data-state", "on");
+  await expect(page.getByLabel("First name")).not.toHaveAttribute("aria-invalid", "true");
   await page.getByLabel("First name").fill("Ada");
   await page.getByLabel("Last name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
@@ -534,39 +589,6 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   });
 
   await page.setViewportSize({ height: 844, width: 390 });
-  await page.addStyleTag({
-    content:
-      "@media (max-width: 48rem) { html, body, #cfp-main { height: auto !important; max-height: none !important; overflow: visible !important; } }",
-  });
-  const expandWorkspaceForScreenshot = async () => {
-    await page.locator("#cfp-main").evaluate((main) => {
-      main.style.height = `${main.scrollHeight}px`;
-      let ancestor = main.parentElement;
-      while (ancestor && ancestor !== document.body) {
-        ancestor.style.height = "auto";
-        ancestor.style.maxHeight = "none";
-        ancestor.style.overflow = "visible";
-        ancestor = ancestor.parentElement;
-      }
-      document.documentElement.style.height = "auto";
-      document.body.style.height = "auto";
-    });
-  };
-  const resetWorkspaceAfterScreenshot = async () => {
-    await page.locator("#cfp-main").evaluate((main) => {
-      main.style.removeProperty("height");
-      let ancestor = main.parentElement;
-      while (ancestor && ancestor !== document.body) {
-        ancestor.style.removeProperty("height");
-        ancestor.style.removeProperty("max-height");
-        ancestor.style.removeProperty("overflow");
-        ancestor = ancestor.parentElement;
-      }
-      document.documentElement.style.removeProperty("height");
-      document.body.style.removeProperty("height");
-    });
-  };
-  await expandWorkspaceForScreenshot();
   const compactProgress = page.getByRole("navigation", { name: "Submission progress" });
   await expect(compactProgress).toBeVisible();
   await expect(compactProgress.getByText("Step 1 of 5", { exact: true })).toBeVisible();
@@ -585,10 +607,6 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
       document.body.scrollWidth <= document.body.clientWidth,
   );
   expect(fitsViewport).toBe(true);
-  await page.screenshot({
-    path: testInfo.outputPath("applicant-cfp-shell-mobile.png"),
-    fullPage: true,
-  });
 
   const continueButton = page.getByRole("button", { name: "Continue →" });
   await Promise.all([
@@ -608,27 +626,86 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   expect(mobileOrder.every((box) => box !== null)).toBe(true);
   expect(mobileOrder[1]?.y).toBeGreaterThan(mobileOrder[0]?.y ?? 0);
   expect(mobileOrder[3]?.y).toBeGreaterThan(mobileOrder[2]?.y ?? 0);
-  await expandWorkspaceForScreenshot();
-  await page.screenshot({
-    path: testInfo.outputPath("applicant-cfp-account-mobile.png"),
-    fullPage: true,
-  });
 
-  await resetWorkspaceAfterScreenshot();
   await page.setViewportSize({ height: 1000, width: 1280 });
   await page.screenshot({
     path: testInfo.outputPath("applicant-cfp-account-desktop.png"),
     fullPage: true,
   });
+  await page.getByRole("button", { name: "Choose color theme" }).click();
+  await page.getByRole("menuitemradio", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/u);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-account-desktop-dark.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Choose color theme" }).click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  await expect(page.locator("html")).not.toHaveClass(/dark/u);
 
   await page.setViewportSize({ height: 720, width: 320 });
-  await page.addStyleTag({ content: "html { font-size: 200% !important; }" });
+  const textZoomStyle = await page.addStyleTag({
+    content: "html { font-size: 200% !important; }",
+  });
   const zoomedPageFits = await page.evaluate(
     () =>
       document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
       document.body.scrollWidth <= document.body.clientWidth,
   );
   expect(zoomedPageFits).toBe(true);
+  await textZoomStyle.evaluate((element) => element.remove());
+
+  await page.setViewportSize({ height: 844, width: 390 });
+  const mutatingRequests: string[] = [];
+  const recordMutatingRequest = (request: Request) => {
+    const url = new URL(request.url());
+    if (
+      request.method() !== "GET" &&
+      (url.pathname.startsWith("/api/auth/") || url.pathname.includes("/submissions"))
+    ) {
+      mutatingRequests.push(`${request.method()} ${url.pathname}`);
+    }
+  };
+  page.on("request", recordMutatingRequest);
+  await Promise.all([
+    page.waitForURL(/\/cfp\/organizations\/evaluator-org\/events\/mobile-progress$/),
+    backButton.click(),
+  ]);
+  page.off("request", recordMutatingRequest);
+  expect(mutatingRequests).toEqual([]);
+
+  await page.addStyleTag({
+    content:
+      "@media (max-width: 48rem) { html, body, #cfp-main { height: auto !important; max-height: none !important; overflow: visible !important; } }",
+  });
+  const expandWorkspaceForScreenshot = async () => {
+    await page.locator("#cfp-main").evaluate((main) => {
+      main.style.height = `${main.scrollHeight}px`;
+      let ancestor = main.parentElement;
+      while (ancestor && ancestor !== document.body) {
+        ancestor.style.height = "auto";
+        ancestor.style.maxHeight = "none";
+        ancestor.style.overflow = "visible";
+        ancestor = ancestor.parentElement;
+      }
+      document.documentElement.style.height = "auto";
+      document.body.style.height = "auto";
+    });
+  };
+  await expandWorkspaceForScreenshot();
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-shell-mobile.png"),
+    fullPage: true,
+  });
+  await Promise.all([
+    page.waitForURL(/\/cfp\/organizations\/evaluator-org\/events\/mobile-progress\/account$/),
+    continueButton.click(),
+  ]);
+  await expandWorkspaceForScreenshot();
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-account-mobile.png"),
+    fullPage: true,
+  });
 });
 
 test("required CFP validation announces errors and focuses the first invalid field", async ({

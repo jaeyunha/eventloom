@@ -27,21 +27,37 @@ const STATUS_COPY: Record<WindowStatus, { label: string; description: string }> 
 };
 
 function formatInstant(value: string, timeZone: string): { date: string; clock: string } {
-  const instant = new Date(value);
-  return {
-    date: new Intl.DateTimeFormat("en-US", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-      timeZone,
-    }).format(instant),
-    clock: new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      timeZoneName: "short",
-      timeZone,
-    }).format(instant),
-  };
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return { date: "Date unavailable", clock: "" };
+
+  try {
+    const instant = new Date(timestamp);
+    return {
+      date: new Intl.DateTimeFormat("en-US", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone,
+      }).format(instant),
+      clock: new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+        timeZone,
+      }).format(instant),
+    };
+  } catch {
+    return { date: "Date unavailable", clock: "" };
+  }
+}
+
+function supportsTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function WindowInstant({
@@ -56,10 +72,15 @@ function WindowInstant({
     <time data-cfp-window-value="true" dateTime={dateTime}>
       <span className={styles.dateGroup} data-cfp-window-date-group="true">
         {formatted.date}
-      </span>{" "}
-      <span className={styles.clockGroup} data-cfp-window-clock-group="true">
-        {formatted.clock}
       </span>
+      {formatted.clock ? (
+        <>
+          {" "}
+          <span className={styles.clockGroup} data-cfp-window-clock-group="true">
+            {formatted.clock}
+          </span>
+        </>
+      ) : null}
     </time>
   );
 }
@@ -72,6 +93,7 @@ export function CfpSubmissionWindow({
   timeZone,
 }: CfpSubmissionWindowProps) {
   const copy = STATUS_COPY[status];
+  const timeZoneAvailable = supportsTimeZone(timeZone);
 
   return (
     <section
@@ -91,7 +113,9 @@ export function CfpSubmissionWindow({
           </div>
           <p className={styles.description}>{copy.description}</p>
           <div className={styles.metadata}>
-            <p className={styles.timeZone}>Times shown in {timeZone}</p>
+            <p className={styles.timeZone}>
+              {timeZoneAvailable ? `Times shown in ${timeZone}` : "Event time zone unavailable"}
+            </p>
             {limit !== undefined ? (
               <p className={styles.limit}>
                 Up to {limit} proposal{limit === 1 ? "" : "s"} per account
