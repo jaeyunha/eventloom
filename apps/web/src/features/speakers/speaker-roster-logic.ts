@@ -5,6 +5,7 @@ import {
   type SpeakerTask,
 } from "./api";
 import { duplicateEmailConflicts } from "./speaker-data-logic";
+import { normalizeEventDateValue } from "./speaker-temporal-policy";
 import {
   ASYNC_ACTION_TIMEOUT_MS,
   type CreateDraft,
@@ -67,7 +68,7 @@ export function emptyCreateDraft(): CreateDraft {
   };
 }
 
-export function editDraftFor(speaker: SpeakerRecord): EditDraft {
+export function editDraftFor(speaker: SpeakerRecord, eventTimeZone = "UTC"): EditDraft {
   return {
     displayName: speaker.displayName,
     email: speaker.email,
@@ -79,8 +80,8 @@ export function editDraftFor(speaker: SpeakerRecord): EditDraft {
     website: speaker.socialLinks.website ?? "",
     status: speaker.status,
     travelRequired: speaker.travelLogistics?.travelRequired ?? false,
-    arrivalAt: speaker.travelLogistics?.arrivalAt?.slice(0, 10) ?? "",
-    departureAt: speaker.travelLogistics?.departureAt?.slice(0, 10) ?? "",
+    arrivalAt: normalizeEventDateValue(speaker.travelLogistics?.arrivalAt, eventTimeZone),
+    departureAt: normalizeEventDateValue(speaker.travelLogistics?.departureAt, eventTimeZone),
     accommodation: speaker.travelLogistics?.accommodation ?? "",
     dietaryRequirements: speaker.travelLogistics?.dietaryRequirements ?? "",
     accessibilityNeeds: speaker.travelLogistics?.accessibilityNeeds ?? "",

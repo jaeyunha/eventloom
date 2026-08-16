@@ -87,8 +87,11 @@ export interface CfpConfiguration {
   eventName: string;
   slug: string;
   timezone: string;
+  eventStartsAt?: string;
   opensAt: string;
   closesAt: string;
+  persistedOpensAt?: string;
+  persistedClosesAt?: string;
   participantLimit: number;
   proposalLimit: number;
   reminderEmails: boolean;
@@ -387,17 +390,36 @@ function instantFromDate(value: string, timeZone = "UTC"): string {
   return localCfpDateToIso(value, timeZone) ?? `${value}T00:00:00.000Z`;
 }
 
-export function dateFromInstant(value: string): string {
-  return value.length >= 10 ? value.slice(0, 10) : value;
+function instantFromEditedDate(
+  value: string,
+  persistedInstant: string | undefined,
+  timeZone: string,
+): string {
+  if (
+    !value.includes("T") &&
+    persistedInstant !== undefined &&
+    dateFromInstant(persistedInstant, timeZone) === value
+  ) {
+    return persistedInstant;
+  }
+  return instantFromDate(value, timeZone);
+}
+
+export function dateFromInstant(value: string, timeZone = "UTC"): string {
+  return (
+    cfpMinimumDate(new Date(value), timeZone) || (value.length >= 10 ? value.slice(0, 10) : value)
+  );
 }
 
 export function validateCfpDateRange(
   opensAt: string,
   closesAt: string,
   timeZone = "UTC",
+  persistedOpensAt?: string,
+  persistedClosesAt?: string,
 ): string | null {
-  const openTime = Date.parse(instantFromDate(opensAt, timeZone));
-  const closeTime = Date.parse(instantFromDate(closesAt, timeZone));
+  const openTime = Date.parse(instantFromEditedDate(opensAt, persistedOpensAt, timeZone));
+  const closeTime = Date.parse(instantFromEditedDate(closesAt, persistedClosesAt, timeZone));
   if (!Number.isFinite(openTime) || !Number.isFinite(closeTime)) {
     return "Enter valid open and close dates.";
   }
@@ -407,16 +429,22 @@ export function validateCfpDateRange(
   return null;
 }
 
-export function isCfpCloseDatePast(value: string, now = new Date(), timeZone = "UTC"): boolean {
-  const closeTime = Date.parse(instantFromDate(value, timeZone));
+export function isCfpCloseDatePast(
+  value: string,
+  now = new Date(),
+  timeZone = "UTC",
+  persistedInstant?: string,
+): boolean {
+  const closeTime = Date.parse(instantFromEditedDate(value, persistedInstant, timeZone));
   return Number.isFinite(closeTime) && closeTime < now.getTime();
 }
 export function closeCfpNowInstant(
   opensAt: string,
   now = new Date(),
   timeZone = "UTC",
+  persistedOpensAt?: string,
 ): string | null {
-  const openTime = Date.parse(instantFromDate(opensAt, timeZone));
+  const openTime = Date.parse(instantFromEditedDate(opensAt, persistedOpensAt, timeZone));
   const nowTime = now.getTime();
   if (!Number.isFinite(openTime) || !Number.isFinite(nowTime)) return null;
 
@@ -429,7 +457,12 @@ export function closeCfpNowConfiguration(
   configuration: CfpConfiguration,
   now = new Date(),
 ): CfpConfiguration {
-  const closesAt = closeCfpNowInstant(configuration.opensAt, now, configuration.timezone);
+  const closesAt = closeCfpNowInstant(
+    configuration.opensAt,
+    now,
+    configuration.timezone,
+    configuration.persistedOpensAt,
+  );
   if (closesAt === null) {
     throw new Error("The CFP cannot be closed because its opening instant is invalid.");
   }
@@ -614,8 +647,16 @@ function toEventConfiguration(
     slug: configuration.slug,
     name: configuration.eventName,
     timezone: configuration.timezone,
-    opensAt: instantFromDate(configuration.opensAt, configuration.timezone),
-    closesAt: instantFromDate(configuration.closesAt, configuration.timezone),
+    opensAt: instantFromEditedDate(
+      configuration.opensAt,
+      configuration.persistedOpensAt,
+      configuration.timezone,
+    ),
+    closesAt: instantFromEditedDate(
+      configuration.closesAt,
+      configuration.persistedClosesAt,
+      configuration.timezone,
+    ),
   };
 }
 
@@ -812,6 +853,8 @@ export async function persistCfpConfiguration(
     input.configuration.opensAt,
     input.configuration.closesAt,
     input.configuration.timezone,
+    input.configuration.persistedOpensAt,
+    input.configuration.persistedClosesAt,
   );
   if (dateError !== null) throw new Error(dateError);
 
@@ -932,8 +975,11 @@ export function configurationFromServer(
     eventName: event.name,
     slug: event.slug,
     timezone: event.timezone,
-    opensAt: dateFromInstant(event.opensAt),
-    closesAt: dateFromInstant(event.closesAt),
+    ...(event.eventStartsAt === undefined ? {} : { eventStartsAt: event.eventStartsAt }),
+    opensAt: dateFromInstant(event.opensAt, event.timezone),
+    closesAt: dateFromInstant(event.closesAt, event.timezone),
+    persistedOpensAt: event.opensAt,
+    persistedClosesAt: event.closesAt,
     participantLimit: readNumber("speakerLimit", current.participantLimit),
     proposalLimit: readNumber("maxSubmissionsPerAccount", current.proposalLimit),
     tracks: optionsFor("track", current.tracks),

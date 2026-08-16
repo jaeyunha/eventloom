@@ -38,6 +38,7 @@ describe("agenda API adapter", () => {
       trackNames: ["Existing track"],
       startsAtLocal: "2026-09-18T09:00",
       endsAtLocal: "2026-09-18T10:00",
+      startDisambiguation: "later" as const,
     };
     const workspaceWithEntry = {
       ...workspace,
@@ -85,6 +86,8 @@ describe("agenda API adapter", () => {
           trackIds: readonly string[];
           startsAtLocal: string;
           endsAtLocal: string;
+          startDisambiguation?: "earlier" | "later";
+          endDisambiguation?: "earlier" | "later";
         }[];
       };
       const entries = payload.entries.map((entry) => {
@@ -140,6 +143,7 @@ describe("agenda API adapter", () => {
         trackIds: ["track_1"],
         startsAtLocal: "2026-09-18T11:00",
         endsAtLocal: "2026-09-18T12:00",
+        endDisambiguation: "earlier",
       },
     });
 
@@ -185,6 +189,7 @@ describe("agenda API adapter", () => {
           trackIds: ["track_existing"],
           startsAtLocal: "2026-09-18T09:00",
           endsAtLocal: "2026-09-18T10:00",
+          startDisambiguation: "later",
         },
         {
           id: "entry_session_1",
@@ -193,6 +198,7 @@ describe("agenda API adapter", () => {
           trackIds: ["track_1"],
           startsAtLocal: "2026-09-18T11:00",
           endsAtLocal: "2026-09-18T12:00",
+          endDisambiguation: "earlier",
         },
       ],
     });
@@ -228,6 +234,7 @@ describe("agenda API adapter", () => {
           trackIds: ["track_1"],
           startsAtLocal: "2026-09-18T11:00",
           endsAtLocal: "2026-09-18T12:00",
+          endDisambiguation: "earlier",
         },
       ],
     });
@@ -249,6 +256,7 @@ describe("agenda API adapter", () => {
           trackIds: ["track_1"],
           startsAtLocal: "2026-09-18T11:00",
           endsAtLocal: "2026-09-18T12:00",
+          endDisambiguation: "earlier",
         },
       ],
     });

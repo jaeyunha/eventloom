@@ -125,6 +125,9 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Create a scoped API key");
     expect(markup).toContain("Agenda export");
     expect(markup).toContain("events:read");
+    expect(markup).toContain("Expiration date and time");
+    expect(markup).toContain("Time");
+    expect(markup).not.toContain('type="date"');
     expect(markup).toContain("Revoke");
   });
 

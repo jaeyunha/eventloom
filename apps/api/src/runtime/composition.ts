@@ -207,11 +207,11 @@ function escapeReminderHtml(value: string): string {
 }
 
 function taskCadence(
-  dueAt: string | null,
+  deadlineAt: string | null,
   offsets: readonly number[],
   scheduledAt: Date,
 ): { cadenceWindow: string; nextEligibleAt: string | null } {
-  const dueTime = dueAt === null ? Number.NaN : Date.parse(dueAt);
+  const dueTime = deadlineAt === null ? Number.NaN : new Date(deadlineAt).getTime();
   if (!Number.isFinite(dueTime)) {
     return { cadenceWindow: "unscheduled", nextEligibleAt: null };
   }
@@ -225,8 +225,12 @@ function taskCadence(
   ].sort((left, right) => left - right);
   const active = thresholds.filter((threshold) => threshold <= scheduledAt.getTime()).at(-1);
   const next = thresholds.find((threshold) => threshold > scheduledAt.getTime());
+  const firstThreshold = thresholds[0] ?? dueTime;
   return {
-    cadenceWindow: new Date(active ?? thresholds[0] ?? dueTime).toISOString(),
+    cadenceWindow:
+      active === undefined
+        ? `before:${new Date(firstThreshold).toISOString()}`
+        : new Date(active).toISOString(),
     nextEligibleAt: next === undefined ? null : new Date(next).toISOString(),
   };
 }
@@ -363,7 +367,7 @@ export class RuntimeReminderCandidateSource implements ReminderCandidateSource {
       const recipient = recipientById.get(item.participantId);
       if (recipient === undefined) continue;
       const verifiedEmail = await this.verifiedEmailByAddress(recipient.email);
-      const cadence = taskCadence(item.dueAt, item.reminderOffsetsMinutes, scheduledAt);
+      const cadence = taskCadence(item.deadlineAt, item.reminderOffsetsMinutes, scheduledAt);
       const summary = item.dueAt === null ? item.title : `${item.title} (due ${item.dueAt})`;
       candidates.push({
         id: `task:${item.taskId}:${item.participantId}`,

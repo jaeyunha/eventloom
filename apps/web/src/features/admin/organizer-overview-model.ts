@@ -1,3 +1,10 @@
+import {
+  analyzeLocalDateTime,
+  disambiguationForInstant,
+  resolveLocalDateTime,
+  type TimeDisambiguation,
+} from "@eventloom/contracts";
+
 export interface OrganizerOverviewCoreMetrics {
   readonly eventCount: number;
 }
@@ -852,15 +859,26 @@ export interface OrganizerEventFormValues {
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
+  readonly startDisambiguation?: TimeDisambiguation | undefined;
+  readonly endDisambiguation?: TimeDisambiguation | undefined;
   readonly dateMode: OrganizerEventDateMode;
   readonly scheduleDates: readonly string[];
   readonly venue: string;
   readonly cfpEnabled: boolean;
   readonly cfpOpensAt: string;
   readonly cfpClosesAt: string;
+  readonly cfpOpenDisambiguation?: TimeDisambiguation | undefined;
+  readonly cfpCloseDisambiguation?: TimeDisambiguation | undefined;
   readonly defaultCalendarDurationMinutes: string;
   readonly defaultCalendarTimeZone: string;
   readonly defaultCalendarLocation: string;
+}
+
+export interface OrganizerEventTemporalBaseline {
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly cfpOpensAt: string | null;
+  readonly cfpClosesAt: string | null;
 }
 
 function browserEventTimeZone(): string {
@@ -891,60 +909,29 @@ export function normalizeOrganizerEventSlug(value: string): string {
   return normalized;
 }
 
-function localDateTimeToIso(value: string, timeZone: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6] ?? "0");
-  if (
-    year < 1000 ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59 ||
-    !validEventTimeZone(timeZone)
-  ) {
+function localDateTimeToIso(
+  value: string,
+  timeZone: string,
+  disambiguation?: TimeDisambiguation,
+): string | null {
+  try {
+    return resolveLocalDateTime(value.trim(), timeZone, disambiguation).instant;
+  } catch {
     return null;
   }
-  const localMilliseconds = Date.UTC(year, month - 1, day, hour, minute, second);
-  if (!Number.isFinite(localMilliseconds)) return null;
-  let candidate = localMilliseconds;
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  for (let iteration = 0; iteration < 3; iteration += 1) {
-    const parts: Record<string, string> = {};
-    for (const part of formatter.formatToParts(new Date(candidate))) {
-      if (part.type !== "literal") {
-        parts[part.type] = part.value;
-      }
-    }
-    const wallMilliseconds = Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second),
-    );
-    candidate = localMilliseconds - (wallMilliseconds - candidate);
+}
+function localDateTimeIssue(
+  value: string,
+  timeZone: string,
+  disambiguation?: TimeDisambiguation,
+): string | null {
+  const analysis = analyzeLocalDateTime(value.trim(), timeZone);
+  if (analysis.state === "nonexistent") return "does not exist in the event time zone.";
+  if (analysis.state === "ambiguous" && disambiguation === undefined) {
+    return "occurs twice in the event time zone; choose the first or second occurrence.";
   }
-  const result = new Date(candidate);
-  return Number.isFinite(result.getTime()) ? result.toISOString() : null;
+  if (analysis.state === "invalid") return "is not a valid local date and time.";
+  return null;
 }
 
 function isoToLocalDateTime(value: string, timeZone: string): string {
@@ -979,6 +966,16 @@ export function organizerEventEditorFormValues(
     timeZone,
     startsAt: event ? isoToLocalDateTime(event.startsAt, timeZone) : "",
     endsAt: event ? isoToLocalDateTime(event.endsAt, timeZone) : "",
+    startDisambiguation: event
+      ? disambiguationForInstant(
+          isoToLocalDateTime(event.startsAt, timeZone),
+          timeZone,
+          event.startsAt,
+        )
+      : undefined,
+    endDisambiguation: event
+      ? disambiguationForInstant(isoToLocalDateTime(event.endsAt, timeZone), timeZone, event.endsAt)
+      : undefined,
     dateMode: event?.scheduleDates?.length ? "individual" : "range",
     scheduleDates: event?.scheduleDates ?? [],
     venue: event?.venue ?? "",
@@ -989,6 +986,20 @@ export function organizerEventEditorFormValues(
     cfpClosesAt: event?.cfpSettings.closesAt
       ? isoToLocalDateTime(event.cfpSettings.closesAt, timeZone)
       : "",
+    cfpOpenDisambiguation: event?.cfpSettings.opensAt
+      ? disambiguationForInstant(
+          isoToLocalDateTime(event.cfpSettings.opensAt, timeZone),
+          timeZone,
+          event.cfpSettings.opensAt,
+        )
+      : undefined,
+    cfpCloseDisambiguation: event?.cfpSettings.closesAt
+      ? disambiguationForInstant(
+          isoToLocalDateTime(event.cfpSettings.closesAt, timeZone),
+          timeZone,
+          event.cfpSettings.closesAt,
+        )
+      : undefined,
     defaultCalendarDurationMinutes: String(event?.defaultCalendarSettings.durationMinutes ?? 30),
     defaultCalendarTimeZone: event?.defaultCalendarSettings.timeZone ?? timeZone,
     defaultCalendarLocation: event?.defaultCalendarSettings.location ?? "",
@@ -1021,7 +1032,11 @@ export function organizerEventMinimumDateTimeLocal(
 
 export function validateOrganizerEventForm(
   values: OrganizerEventFormValues,
-  options: Readonly<{ now?: Date; allowPastDates?: boolean }> = {},
+  options: Readonly<{
+    now?: Date;
+    allowPastDates?: boolean;
+    currentEvent?: OrganizerEventTemporalBaseline;
+  }> = {},
 ): {
   readonly input?: OrganizerEventCreateInput;
   readonly error?: string;
@@ -1030,6 +1045,40 @@ export function validateOrganizerEventForm(
   if (!name) return { error: "Event name is required." };
   const timeZone = values.timeZone.trim();
   if (!validEventTimeZone(timeZone)) return { error: "Enter a valid IANA time zone." };
+  const temporalInputs = [
+    {
+      label: "Event start",
+      value: values.startsAt,
+      disambiguation: values.startDisambiguation,
+    },
+    {
+      label: "Event end",
+      value: values.endsAt,
+      disambiguation: values.endDisambiguation,
+    },
+    ...(values.cfpEnabled && values.cfpOpensAt.trim() !== ""
+      ? [
+          {
+            label: "CFP opening",
+            value: values.cfpOpensAt,
+            disambiguation: values.cfpOpenDisambiguation,
+          },
+        ]
+      : []),
+    ...(values.cfpEnabled && values.cfpClosesAt.trim() !== ""
+      ? [
+          {
+            label: "CFP closing",
+            value: values.cfpClosesAt,
+            disambiguation: values.cfpCloseDisambiguation,
+          },
+        ]
+      : []),
+  ] as const;
+  for (const temporalInput of temporalInputs) {
+    const issue = localDateTimeIssue(temporalInput.value, timeZone, temporalInput.disambiguation);
+    if (issue !== null) return { error: `${temporalInput.label} ${issue}` };
+  }
   const scheduleDates =
     values.dateMode === "individual"
       ? [...new Set(values.scheduleDates)].sort((left, right) => left.localeCompare(right))
@@ -1043,7 +1092,7 @@ export function validateOrganizerEventForm(
   ) {
     return { error: "Selected event days must be valid and unique." };
   }
-  const startsAt = localDateTimeToIso(values.startsAt, timeZone);
+  const startsAt = localDateTimeToIso(values.startsAt, timeZone, values.startDisambiguation);
   if (!startsAt) return { error: "Enter a valid event start date and time." };
   const minimumStartsAt = localDateTimeToIso(
     organizerEventMinimumDateTimeLocal(timeZone, options.now ?? new Date()),
@@ -1052,12 +1101,21 @@ export function validateOrganizerEventForm(
   if (
     options.allowPastDates !== true &&
     minimumStartsAt !== null &&
-    Date.parse(startsAt) < Date.parse(minimumStartsAt)
+    Date.parse(startsAt) < Date.parse(minimumStartsAt) &&
+    startsAt !== options.currentEvent?.startsAt
   ) {
     return { error: "Event start cannot be before today." };
   }
-  const endsAt = localDateTimeToIso(values.endsAt, timeZone);
+  const endsAt = localDateTimeToIso(values.endsAt, timeZone, values.endDisambiguation);
   if (!endsAt) return { error: "Enter a valid event end date and time." };
+  if (
+    options.allowPastDates !== true &&
+    minimumStartsAt !== null &&
+    Date.parse(endsAt) < Date.parse(minimumStartsAt) &&
+    endsAt !== options.currentEvent?.endsAt
+  ) {
+    return { error: "Event end cannot be before today." };
+  }
   if (Date.parse(startsAt) >= Date.parse(endsAt)) {
     return { error: "Event end must be after event start." };
   }
@@ -1085,7 +1143,7 @@ export function validateOrganizerEventForm(
   }
 
   const cfpOpensAt = values.cfpOpensAt.trim()
-    ? localDateTimeToIso(values.cfpOpensAt, timeZone)
+    ? localDateTimeToIso(values.cfpOpensAt, timeZone, values.cfpOpenDisambiguation)
     : null;
   if (values.cfpOpensAt.trim() && !cfpOpensAt) {
     return { error: "Enter a valid CFP opening date and time." };
@@ -1094,12 +1152,13 @@ export function validateOrganizerEventForm(
     options.allowPastDates !== true &&
     minimumStartsAt !== null &&
     cfpOpensAt !== null &&
-    Date.parse(cfpOpensAt) < Date.parse(minimumStartsAt)
+    Date.parse(cfpOpensAt) < Date.parse(minimumStartsAt) &&
+    cfpOpensAt !== options.currentEvent?.cfpOpensAt
   ) {
     return { error: "CFP opening cannot be before today." };
   }
   const cfpClosesAt = values.cfpClosesAt.trim()
-    ? localDateTimeToIso(values.cfpClosesAt, timeZone)
+    ? localDateTimeToIso(values.cfpClosesAt, timeZone, values.cfpCloseDisambiguation)
     : null;
   if (values.cfpClosesAt.trim() && !cfpClosesAt) {
     return { error: "Enter a valid CFP closing date and time." };
@@ -1108,7 +1167,8 @@ export function validateOrganizerEventForm(
     options.allowPastDates !== true &&
     minimumStartsAt !== null &&
     cfpClosesAt !== null &&
-    Date.parse(cfpClosesAt) < Date.parse(minimumStartsAt)
+    Date.parse(cfpClosesAt) < Date.parse(minimumStartsAt) &&
+    cfpClosesAt !== options.currentEvent?.cfpClosesAt
   ) {
     return { error: "CFP closing cannot be before today." };
   }
@@ -1118,6 +1178,12 @@ export function validateOrganizerEventForm(
     Date.parse(cfpOpensAt) >= Date.parse(cfpClosesAt)
   ) {
     return { error: "CFP closing must be after CFP opening." };
+  }
+  if (
+    (cfpOpensAt !== null && Date.parse(cfpOpensAt) > Date.parse(startsAt)) ||
+    (cfpClosesAt !== null && Date.parse(cfpClosesAt) > Date.parse(startsAt))
+  ) {
+    return { error: "The CFP window must finish before the event begins." };
   }
 
   const input: OrganizerEventCreateInput = {

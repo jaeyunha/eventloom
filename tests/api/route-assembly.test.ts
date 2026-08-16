@@ -29,10 +29,24 @@ const apiKey: AuthPrincipal = {
   scopes: ["events:read"],
 };
 
+const evaluationEvents = {
+  async getEventMetadata(tenantId: string, eventId: string) {
+    if (tenantId !== "org-1" || eventId !== "event-1") return null;
+    return {
+      id: eventId,
+      name: "Program event",
+      timeZone: "UTC",
+      startsAt: "2026-08-09T00:00:00.000Z",
+      endsAt: "2026-09-01T00:00:00.000Z",
+    };
+  },
+};
+
 function fixture() {
   const service = new EvaluationService(
     new InMemoryEvaluationRepository(),
     new InMemorySubmissionReviewSource(),
+    evaluationEvents,
     { clock: () => new Date("2026-08-08T12:00:00.000Z") },
   );
   return createApp({
@@ -103,6 +117,7 @@ describe("domain route assembly", () => {
     const service = new EvaluationService(
       new InMemoryEvaluationRepository(),
       new InMemorySubmissionReviewSource(),
+      evaluationEvents,
     );
     expect(() =>
       createApp({

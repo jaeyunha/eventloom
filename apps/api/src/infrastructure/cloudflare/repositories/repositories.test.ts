@@ -121,6 +121,12 @@ describe("D1 event repository commands", () => {
     const queries = db.statements.map((item) => item.bound.query).join("\n");
     expect(queries).toContain("WHERE organization_id = ? AND id = ? AND version = ?");
     expect(queries).toContain("schedule_dates_json = ?");
+    expect(queries).toContain("FROM review_plans p");
+    expect(queries).toContain("FROM review_rounds r");
+    expect(queries).toContain("FROM agenda_states s");
+    expect(queries).toContain("s.time_zone <> ?");
+    expect(queries).toContain("FROM agenda_entries e");
+    expect(queries).toContain("FROM json_each(?)");
     expect(db.statements[0]?.bound.values[6]).toBe('["2026-08-13","2026-08-14"]');
     expect(queries).toContain("INSERT INTO audit_events");
     expect(queries).toContain("INSERT INTO airtable_sync_jobs");
@@ -129,6 +135,48 @@ describe("D1 event repository commands", () => {
     expect(queries).toContain("connection.status = 'connected'");
     expect(queries).not.toContain("attempts");
     expect(queries).not.toContain("c.state");
+  });
+
+  it("guards event shortening against evaluation boundaries in the same atomic batch", async () => {
+    const db = database();
+    const shortened = { ...event, endsAt: "2026-08-14T08:00:00.000Z", version: 3 };
+
+    await new D1EventRepository(db).commitEvent({ event: shortened, expectedVersion: 2 });
+
+    const evaluationGuard = db.statements.find(
+      (item) =>
+        item.bound.query.includes("FROM review_plans p") &&
+        item.bound.query.includes("FROM review_rounds r"),
+    );
+    expect(evaluationGuard?.bound.query).toContain("p.closes_at > ?");
+    expect(evaluationGuard?.bound.query).toContain("r.opens_at > ?");
+    expect(evaluationGuard?.bound.query).toContain("r.closes_at > ?");
+    expect(evaluationGuard?.bound.values.slice(0, 7)).toEqual([
+      "org-1",
+      "event-1",
+      shortened.endsAt,
+      "org-1",
+      "event-1",
+      shortened.endsAt,
+      shortened.endsAt,
+    ]);
+  });
+
+  it("guards event timezone changes against agenda state in the same atomic batch", async () => {
+    const db = database();
+    const updated = { ...event, timeZone: "America/Los_Angeles", version: 3 };
+
+    await new D1EventRepository(db).commitEvent({ event: updated, expectedVersion: 2 });
+
+    const temporalGuard = db.statements.find((item) =>
+      item.bound.query.includes("FROM agenda_states s"),
+    );
+    expect(temporalGuard?.bound.query).toContain("s.time_zone <> ?");
+    expect(temporalGuard?.bound.values.slice(7, 10)).toEqual([
+      "org-1",
+      "event-1",
+      updated.timeZone,
+    ]);
   });
 
   it("initializes one empty agenda in the event creation batch", async () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { type SyntheticEvent, useEffect, useReducer, useRef } from "react";
+import type { SpeakerEventTemporalContext } from "../speakers/speaker-temporal-policy";
 import { portalProfileHeadshot } from "./model";
 import styles from "./portal-profile.module.css";
 import { ProfileActions } from "./portal-profile-actions";
@@ -46,10 +47,17 @@ type PortalProfileAction =
   | { type: "headshot-loading" }
   | { type: "headshot-resolved"; grant: PortalDownloadGrant | null }
   | { type: "headshot-failed"; message: string };
+type PortalProfileInitialState = {
+  readonly profile: PortalProfile | undefined;
+  readonly temporalContext?: SpeakerEventTemporalContext;
+};
 
-function initialPortalProfileState(profile: PortalProfile | undefined): PortalProfileState {
+function initialPortalProfileState({
+  profile,
+  temporalContext,
+}: PortalProfileInitialState): PortalProfileState {
   return {
-    draft: profile ? profileDraftFor(profile) : null,
+    draft: profile ? profileDraftFor(profile, temporalContext) : null,
     selectedHeadshot: null,
     errors: {},
     saveError: null,
@@ -145,9 +153,10 @@ function PortalProfileContent() {
     (candidate) => candidate.participantId === context?.primaryParticipantId,
   );
   const headshot = profile ? portalProfileHeadshot(profile, view?.assets ?? []) : undefined;
+  const temporalContext = context?.temporalContext;
   const [profileState, dispatch] = useReducer(
     portalProfileReducer,
-    profile,
+    { profile, ...(temporalContext === undefined ? {} : { temporalContext }) },
     initialPortalProfileState,
   );
   const {
@@ -165,10 +174,10 @@ function PortalProfileContent() {
 
   useEffect(() => {
     if (!profile) return;
-    dispatch({ type: "profile-loaded", draft: profileDraftFor(profile) });
+    dispatch({ type: "profile-loaded", draft: profileDraftFor(profile, temporalContext) });
     const fileInput = fieldElements.current.headshot as HTMLInputElement | undefined;
     if (fileInput) fileInput.value = "";
-  }, [profile]);
+  }, [profile, temporalContext]);
 
   useEffect(() => {
     if (selectedContextId !== undefined) dispatch({ type: "context-changed" });
@@ -204,7 +213,7 @@ function PortalProfileContent() {
     context?.eventId === loadedProfile.eventId &&
     context.primaryParticipantId === loadedProfile.participantId;
   const canEditProfile = can("profile-self") && profileContextIsValid;
-  const initialDraft = profileDraftFor(loadedProfile);
+  const initialDraft = profileDraftFor(loadedProfile, temporalContext);
   const hasChanges = profileDraftIsDirty(loadedDraft, initialDraft) || selectedHeadshot !== null;
   const headshotTask = view.tasks.find(
     (task) =>
@@ -229,7 +238,7 @@ function PortalProfileContent() {
   }
 
   function resetDraft() {
-    dispatch({ type: "draft-reset", draft: profileDraftFor(loadedProfile) });
+    dispatch({ type: "draft-reset", draft: profileDraftFor(loadedProfile, temporalContext) });
     const fileInput = fieldElements.current.headshot as HTMLInputElement | undefined;
     if (fileInput) fileInput.value = "";
   }
@@ -312,6 +321,7 @@ function PortalProfileContent() {
               errors={errors}
               disabled={disabled}
               fieldRefs={fieldRefs}
+              {...(temporalContext === undefined ? {} : { temporalContext })}
               onChange={updateDraft}
             />
           </div>

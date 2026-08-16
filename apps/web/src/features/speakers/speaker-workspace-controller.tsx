@@ -766,7 +766,7 @@ type ProfileHeadshotDetailsAction =
   | { type: "profile-validation-failed"; message: string }
   | { type: "profile-save-started" }
   | { type: "profile-write-accepted" }
-  | { type: "profile-saved"; speaker: SpeakerRecord }
+  | { type: "profile-saved"; speaker: SpeakerRecord; eventTimeZone?: string }
   | { type: "profile-conflict" }
   | { type: "profile-failed"; message: string }
   | { type: "headshot-validation-failed"; message: string }
@@ -774,7 +774,7 @@ type ProfileHeadshotDetailsAction =
   | { type: "headshot-session-required"; message: string }
   | { type: "headshot-upload-started"; fileName: string }
   | { type: "headshot-write-accepted" }
-  | { type: "headshot-upload-succeeded"; speaker: SpeakerRecord }
+  | { type: "headshot-upload-succeeded"; speaker: SpeakerRecord; eventTimeZone?: string }
   | { type: "headshot-conflict" }
   | { type: "headshot-failed"; message: string };
 
@@ -968,7 +968,7 @@ function profileHeadshotDetailsReducer(
     case "profile-saved":
       return {
         ...state,
-        editDraft: editDraftFor(action.speaker),
+        editDraft: editDraftFor(action.speaker, action.eventTimeZone),
         profileMutationStatus: "saved",
         profileMutationMessage: `Saved at revision ${action.speaker.version}.`,
       };
@@ -1014,7 +1014,7 @@ function profileHeadshotDetailsReducer(
     case "headshot-upload-succeeded":
       return {
         ...state,
-        editDraft: editDraftFor(action.speaker),
+        editDraft: editDraftFor(action.speaker, action.eventTimeZone),
         headshotPreviewUrl: null,
         headshotPreviewError: null,
         headshotPreviewRevision: state.headshotPreviewRevision + 1,
@@ -1355,6 +1355,7 @@ function useSpeakerWorkspaceController({
     roster !== null && roster.organizationId === organizationId && roster.eventId === eventId
       ? roster
       : null;
+  const eventTemporalContext = scopedRoster?.temporalContext;
   const scopedProgress =
     progress !== null && progress.organizationId === organizationId && progress.eventId === eventId
       ? progress
@@ -1824,7 +1825,10 @@ function useSpeakerWorkspaceController({
       status: "idle",
       message: null,
     });
-    dispatchProfileHeadshotDetails({ type: "edit-started", draft: editDraftFor(speaker) });
+    dispatchProfileHeadshotDetails({
+      type: "edit-started",
+      draft: editDraftFor(speaker, eventTemporalContext?.timeZone),
+    });
     dispatchImportTaskInvitation({ type: "invitation-cleared" });
     invitationSendIdempotencyKeyRef.current = null;
   }
@@ -1876,7 +1880,13 @@ function useSpeakerWorkspaceController({
         throw new TypeError("The reloaded speaker is missing from the roster.");
       }
       assertAdvancedSpeakerRevision(persisted, participantId, expectedVersion, eventId);
-      dispatchProfileHeadshotDetails({ type: "profile-saved", speaker: persisted });
+      dispatchProfileHeadshotDetails({
+        type: "profile-saved",
+        speaker: persisted,
+        ...(eventTemporalContext === undefined
+          ? {}
+          : { eventTimeZone: eventTemporalContext.timeZone }),
+      });
       dispatchRoster({
         type: "notice-set",
         message: "Speaker profile saved and reloaded from the server.",
@@ -1892,7 +1902,10 @@ function useSpeakerWorkspaceController({
           (speaker) => speaker.participantId === participantId,
         );
         if (current !== undefined) {
-          dispatchProfileHeadshotDetails({ type: "edit-draft-set", draft: editDraftFor(current) });
+          dispatchProfileHeadshotDetails({
+            type: "edit-draft-set",
+            draft: editDraftFor(current, eventTemporalContext?.timeZone),
+          });
         }
         dispatchProfileHeadshotDetails({
           type: "edit-error-set",
@@ -2458,7 +2471,13 @@ function useSpeakerWorkspaceController({
       if (persisted.headshotAssetId !== replacement.asset.id) {
         throw new TypeError("The reloaded speaker does not point to the uploaded headshot.");
       }
-      dispatchProfileHeadshotDetails({ type: "headshot-upload-succeeded", speaker: persisted });
+      dispatchProfileHeadshotDetails({
+        type: "headshot-upload-succeeded",
+        speaker: persisted,
+        ...(eventTemporalContext === undefined
+          ? {}
+          : { eventTimeZone: eventTemporalContext.timeZone }),
+      });
     } catch (reason: unknown) {
       const conflict =
         reason instanceof SpeakerApiError &&
@@ -2517,6 +2536,7 @@ function useSpeakerWorkspaceController({
         statusOptions={statusOptions}
         saveBusy={saveBusy}
         apiAvailable={api !== null}
+        {...(eventTemporalContext === undefined ? {} : { temporalContext: eventTemporalContext })}
         onOpenChange={(open) => dispatchRoster({ type: "add-dialog-changed", open })}
         onSubmit={(event) => void createSpeaker(event)}
         onChange={updateCreate}
@@ -2591,6 +2611,9 @@ function useSpeakerWorkspaceController({
               mutationStatus: headshotMutationStatus,
               mutationMessage: headshotMutationMessage,
             },
+            ...(eventTemporalContext === undefined
+              ? {}
+              : { temporalContext: eventTemporalContext }),
             editDraft,
             statusOptions,
             profileMutationStatus,
@@ -2650,6 +2673,9 @@ function useSpeakerWorkspaceController({
             progressError,
             progressSectionVisible,
             taskDefinitions: onboardingTaskDefinitions,
+            ...(eventTemporalContext === undefined
+              ? {}
+              : { temporalContext: eventTemporalContext }),
             onLoadProgress: () =>
               dispatchRoster({ type: "progress-context-changed", context: secondaryContextKey }),
             onTaskTitleChange: (title) =>

@@ -287,7 +287,11 @@ Use reproducible reports for the governing budgets:
 | Ordinary API writes | ≤ 1 s at p95 |
 | Airtable-backed workflows | ≤ 2 s at p95 |
 
-Two calendar behaviors are known implementation gaps, not delivered features: event-timezone changes do not yet have a complete draft migration/revalidation/new-publication flow, and the API does not yet map DST-specific resolver failures to stable public error codes. Record these as limitations; do not claim them as passing release behavior or hide them behind unit-level resolver tests.
+Event-timezone changes still lack a complete draft
+migration/revalidation/new-publication flow. DST-specific resolver failures do
+have stable API error mapping in source and local tests, but no deployed or
+staging observation has been recorded. Keep the timezone-migration limitation
+visible and do not present local DST checks as release evidence.
 
 ## 6. Production deployment and bounded smoke
 
@@ -407,7 +411,8 @@ Check every item against the same production candidate:
 - [ ] CFP, portal, review, human decision, CRM, agenda/publication, embeds/API, security, accessibility, and performance scenarios passed.
 - [ ] Real-provider staging evidence covers agenda, evaluation, and remix proposals; provenance, human apply/edit/reject, reload/audit, stale handling, unavailable behavior, and no automatic consequential action are proven.
 - [ ] Calendar request/update/cancel evidence shows one stable UID and no duplicate event.
-- [ ] Known timezone-migration and DST-specific API error-mapping gaps are recorded as gaps, not claimed as delivered behavior.
+- [ ] The timezone-migration gap is recorded; DST-specific API error mapping is
+      verified in staging rather than inferred from local tests.
 - [ ] Rollback and monitoring owners are active; secrets and private artifacts are absent.
 - [ ] Demo accounts, license, evaluator walkthrough, screenshots/video, and competition fields are final and redacted.
 
@@ -417,11 +422,20 @@ Any unchecked item is a no-go and the mirrors remain private.
 
 Public visibility is the final release action, never a development step:
 
-1. Re-run the read-only Forge and GitHub visibility observations and attach the private-state output.
-2. Obtain recorded final approval with every release item checked.
-3. Using the supported authenticated provider controls, change visibility only for the intentionally selected public mirror(s). Do not change ownership, default branch, history, or remotes.
-4. Immediately re-read visibility for every mirror changed and record operator, UTC time, command/UI evidence, and public URL.
-5. Confirm unauthenticated readers can see only the intended repository, README, source, and Elastic License 2.0 license, with no secrets or private artifacts.
+1. Re-run the read-only Forge and GitHub visibility observations and attach only
+   sanitized host/owner/repository/state output; never retain credential-bearing
+   remote URLs.
+2. Obtain recorded repository-owner and license/third-party-rights approval bound
+   to the candidate SHA and every mirror that will change visibility.
+3. Using the supported authenticated provider controls, change visibility only
+   for the intentionally selected public mirror(s). Do not change ownership,
+   default branch, history, or remotes.
+4. Immediately re-read visibility for every changed mirror and record operator,
+   UTC time, command/UI evidence, and public URL.
+5. Confirm unauthenticated readers can see the approved candidate tree and
+   selected reachable history, the README, and the Elastic License 2.0 license,
+   with no secrets, private artifacts, unapproved copied material, tags, releases,
+   or provider-hosted artifacts.
 
 If visibility cannot be verified, treat the product as unreleased. If a private artifact or credential is exposed, stop submission, return affected mirrors to private, rotate the credential, remove the exposure at its source, and repeat the gate on a new candidate.
 

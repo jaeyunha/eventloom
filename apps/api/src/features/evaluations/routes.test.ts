@@ -81,10 +81,25 @@ function createTestApp(
 ) {
   const repository = repositoryOverride ?? new InMemoryEvaluationRepository();
   const source = new InMemorySubmissionReviewSource(submissionMaterials);
-  const service = new EvaluationService(repository, source, {
-    clock: () => new Date("2026-08-08T12:00:00.000Z"),
-    ...serviceOptions,
-  });
+  const service = new EvaluationService(
+    repository,
+    source,
+    {
+      async getEventMetadata(_tenantId, eventId) {
+        return {
+          id: eventId,
+          name: "Review event",
+          timeZone: "America/Los_Angeles",
+          startsAt: "2026-08-09T16:00:00.000Z",
+          endsAt: "2099-12-31T23:59:00.000Z",
+        };
+      },
+    },
+    {
+      clock: () => new Date("2026-08-08T12:00:00.000Z"),
+      ...serviceOptions,
+    },
+  );
   const app = new Hono<EvaluationRouteEnvironment>();
   app.use("*", async (context, next) => {
     const actorHeader = context.req.header("x-test-actor");
@@ -1099,7 +1114,7 @@ describe("evaluation HTTP routes", () => {
       rounds: [
         {
           ...firstRound,
-          opensAt: "2026-08-01T12:00:00.000Z",
+          opensAt: "2026-08-08T12:00:00.000Z",
           blindReview: true,
           anonymization: "double",
           reviewerPool: { reviewerIds: ["reviewer-1"], name: "Initial committee" },
@@ -1183,7 +1198,7 @@ describe("evaluation HTTP routes", () => {
     ]);
     expect(plan.rounds[0]?.rubric.criteria[1]?.options).toHaveLength(3);
     expect(plan.rounds.map((round) => [round.opensAt, round.closesAt])).toEqual([
-      ["2026-08-01T12:00:00.000Z", "2026-08-11T12:00:00.000Z"],
+      ["2026-08-08T12:00:00.000Z", "2026-08-11T12:00:00.000Z"],
       ["2026-08-11T12:00:00.000Z", "2026-08-12T12:00:00.000Z"],
     ]);
     expect(plan.rounds.map((round) => round.rubric.id)).toEqual(["rubric-1", "rubric-2"]);

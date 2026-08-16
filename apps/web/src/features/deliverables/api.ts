@@ -125,6 +125,13 @@ export interface DeliverableMatrixItem {
 export interface DeliverableTaskMatrix {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly temporalContext?: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly timeZone: string;
+    readonly startsAt: string;
+    readonly endsAt: string;
+  };
   readonly total: number;
   readonly filters: DeliverableMatrixFilters;
   readonly items: readonly DeliverableMatrixItem[];

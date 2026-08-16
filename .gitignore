@@ -14,6 +14,7 @@ build/
 coverage/
 .turbo/
 *.tsbuildinfo
+next-env.d.ts
 Kill-My-SaaS-Competition-Brief/
 
 # Cloudflare and workflow runtime
@@ -24,14 +25,16 @@ Kill-My-SaaS-Competition-Brief/
 apps/api/wrangler.generated.toml
 apps/web/wrangler.generated.jsonc
 .cloudflare-secret-fingerprints-*.json
+.agents/
+.claude/
+skills-lock.json
 
 # Public-release exclusions
 .env.release-*
 *.session.html
 gjc-session-*.html
-evidence/private/
-evidence/raw/
-evidence/transcripts/
+evidence/*
+!evidence/README.md
 docs/plans/
 
 # Tests and browser artifacts
@@ -45,6 +48,8 @@ blob-report/
 .idea/
 .vscode/
 *.swp
+*.orig
+*.rej
 
 # Logs
 *.log

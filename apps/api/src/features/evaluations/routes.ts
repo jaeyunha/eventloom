@@ -57,6 +57,7 @@ export interface EvaluationRouteOptions {
 
 const criterionInputTypeSchema = z.enum(["numeric", "dropdown", "free_text"]);
 const anonymizationSchema = z.enum(["none", "single", "double"]);
+const evaluationInstantSchema = z.iso.datetime({ offset: true });
 const criterionOptionSchema = z.object({
   id: z.string().optional(),
   label: z.string(),
@@ -86,8 +87,8 @@ const roundSchema = z.object({
   id: z.string(),
   name: z.string(),
   sequence: z.number(),
-  opensAt: z.string().nullable().optional(),
-  closesAt: z.string().nullable().default(null),
+  opensAt: evaluationInstantSchema.nullable().optional(),
+  closesAt: evaluationInstantSchema.nullable().default(null),
   blindReview: z.boolean().optional(),
   anonymization: anonymizationSchema.optional(),
   reviewerPool: reviewerPoolSchema.optional(),
@@ -112,7 +113,7 @@ const createPlanSchema = z.object({
   eventId: z.string(),
   name: z.string(),
   blindReview: z.boolean(),
-  closesAt: z.string().nullable().default(null),
+  closesAt: evaluationInstantSchema.nullable().default(null),
   assignmentRule: assignmentRuleSchema,
   rounds: z.array(roundSchema),
   reviewerProjection: projectionSchema.optional(),
@@ -123,7 +124,7 @@ const updatePlanSchema = z.object({
   expectedVersion: z.number().int().positive(),
   name: z.string().optional(),
   blindReview: z.boolean().optional(),
-  closesAt: z.string().nullable().optional(),
+  closesAt: evaluationInstantSchema.nullable().optional(),
   assignmentRule: assignmentRuleSchema.optional(),
   rounds: z.array(roundSchema).optional(),
   reviewerProjection: projectionSchema.optional(),
@@ -135,7 +136,7 @@ const versionSchema = z.object({ expectedVersion: z.number().int().positive() })
 const updatePlanScheduleSchema = z
   .object({
     expectedVersion: z.number().int().positive(),
-    closesAt: z.string().nullable(),
+    closesAt: evaluationInstantSchema.nullable(),
   })
   .strict();
 const distributionPreviewSchema = z.object({

@@ -85,6 +85,7 @@ import {
   TableRow,
 } from "../../components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { TemporalPicker } from "../../components/ui/temporal-picker";
 import { Textarea } from "../../components/ui/textarea";
 import adminStyles from "../admin/admin-shell.module.css";
 import {
@@ -117,6 +118,12 @@ import {
 } from "./speaker-invitations";
 import { dateLabel, dateTimeLabel, statusLabel, taskComplete } from "./speaker-roster-logic";
 import { taskStatusLabel, taskStatusTone } from "./speaker-task-model";
+import {
+  deadlineAfterEventWarning,
+  deadlineTemporalPolicy,
+  type SpeakerEventTemporalContext,
+  travelDateWarnings,
+} from "./speaker-temporal-policy";
 import styles from "./speaker-workspace.module.css";
 import type {
   CreateDraft,
@@ -138,11 +145,17 @@ function ProfileFields({
   draft,
   onChange,
   disabled,
+  temporalContext,
 }: Readonly<{
   draft: CreateDraft | EditDraft;
   onChange: (field: keyof CreateDraft, value: string | boolean) => void;
   disabled: boolean;
+  temporalContext?: SpeakerEventTemporalContext;
 }>) {
+  const travelWarnings =
+    temporalContext === undefined
+      ? []
+      : travelDateWarnings(draft.arrivalAt, draft.departureAt, temporalContext);
   return (
     <FieldGroup className={styles.actionsStack}>
       <div className={styles.fieldGrid}>
@@ -231,7 +244,7 @@ function ProfileFields({
             id="speaker-website"
             value={draft.website}
             onChange={(event) => onChange("website", event.target.value)}
-            placeholder="https://example.com"
+            placeholder="https://…"
             maxLength={500}
             disabled={disabled}
           />
@@ -251,25 +264,29 @@ function ProfileFields({
           </FieldLabel>
         </Field>
         <div className={styles.fieldGrid}>
-          <Field>
-            <FieldLabel htmlFor="speaker-arrival">Arrival date</FieldLabel>
-            <Input
-              id="speaker-arrival"
-              type="date"
-              value={draft.arrivalAt}
-              onChange={(event) => onChange("arrivalAt", event.target.value)}
+          <Field style={{ gridColumn: "1 / -1" }}>
+            <TemporalPicker
+              id="speaker-travel-window"
+              mode="range"
+              precision="date"
+              startValue={draft.arrivalAt}
+              endValue={draft.departureAt}
+              startLabel="Arrival date"
+              endLabel="Departure date"
+              eyebrow="Travel window"
+              description="Choose the speaker's arrival and departure dates."
+              clearable
               disabled={disabled}
+              onChange={({ start, end }) => {
+                onChange("arrivalAt", start);
+                onChange("departureAt", end);
+              }}
             />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="speaker-departure">Departure date</FieldLabel>
-            <Input
-              id="speaker-departure"
-              type="date"
-              value={draft.departureAt}
-              onChange={(event) => onChange("departureAt", event.target.value)}
-              disabled={disabled}
-            />
+            {travelWarnings.map((warning) => (
+              <p key={warning} className={styles.muted} role="status">
+                {warning}
+              </p>
+            ))}
           </Field>
           <Field>
             <FieldLabel htmlFor="speaker-accommodation">Accommodation</FieldLabel>
@@ -325,6 +342,7 @@ function SpeakerAddDialog({
   statusOptions,
   saveBusy,
   apiAvailable,
+  temporalContext,
   onOpenChange,
   onSubmit,
   onChange,
@@ -334,6 +352,7 @@ function SpeakerAddDialog({
   statusOptions: readonly string[];
   saveBusy: boolean;
   apiAvailable: boolean;
+  temporalContext?: SpeakerEventTemporalContext;
   onOpenChange: (open: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onChange: (field: keyof CreateDraft, value: string | boolean) => void;
@@ -348,7 +367,12 @@ function SpeakerAddDialog({
           </DialogDescription>
         </DialogHeader>
         <form className={styles.actionsStack} onSubmit={onSubmit}>
-          <ProfileFields draft={draft} onChange={onChange} disabled={saveBusy} />
+          <ProfileFields
+            draft={draft}
+            onChange={onChange}
+            disabled={saveBusy}
+            {...(temporalContext === undefined ? {} : { temporalContext })}
+          />
           <Field>
             <FieldLabel htmlFor="create-speaker-status">Workflow status</FieldLabel>
             <Select
@@ -574,6 +598,7 @@ function SpeakerDetailSection({
   onRefreshDetails,
   invitation,
   headshot,
+  temporalContext,
   editDraft,
   statusOptions,
   profileMutationStatus,
@@ -626,6 +651,7 @@ function SpeakerDetailSection({
     mutationStatus: SpeakerMutationStatus;
     mutationMessage: string | null;
   }>;
+  temporalContext?: SpeakerEventTemporalContext;
   editDraft: EditDraft | null;
   statusOptions: readonly string[];
   profileMutationStatus: SpeakerMutationStatus;
@@ -687,7 +713,12 @@ function SpeakerDetailSection({
         />
         {editDraft ? (
           <form className={styles.detailBlock} onSubmit={onSave}>
-            <ProfileFields draft={editDraft} onChange={onEditDraftChange} disabled={saveBusy} />
+            <ProfileFields
+              draft={editDraft}
+              onChange={onEditDraftChange}
+              disabled={saveBusy}
+              {...(temporalContext === undefined ? {} : { temporalContext })}
+            />
             <Field>
               <FieldLabel htmlFor="edit-speaker-status">Workflow status</FieldLabel>
               <Select
@@ -1294,6 +1325,7 @@ function SpeakerTaskAssignmentSection({
   loading,
   rosterLoaded,
   taskDefinitions,
+  temporalContext,
   onLoadProgress,
   onTaskTitleChange,
   onTaskDueChange,
@@ -1315,6 +1347,7 @@ function SpeakerTaskAssignmentSection({
   loading: boolean;
   rosterLoaded: boolean;
   taskDefinitions: readonly SpeakerOnboardingTaskDefinition[];
+  temporalContext?: SpeakerEventTemporalContext;
   onLoadProgress: () => void;
   onTaskTitleChange: (title: string) => void;
   onTaskDueChange: (dueAt: string) => void;
@@ -1323,6 +1356,10 @@ function SpeakerTaskAssignmentSection({
   onAddSpeaker: () => void;
   onImportCsv: () => void;
 }>) {
+  const taskDeadlinePolicy =
+    temporalContext === undefined ? null : deadlineTemporalPolicy(temporalContext);
+  const taskDeadlineWarning =
+    temporalContext === undefined ? null : deadlineAfterEventWarning(taskDueAt, temporalContext);
   return (
     <Card className={styles.panel}>
       <CardHeader className={styles.panelHeader}>
@@ -1388,16 +1425,24 @@ function SpeakerTaskAssignmentSection({
                     disabled={taskBusy}
                   />
                 </Field>
-                <Field>
-                  <FieldLabel htmlFor="task-due-date">Due date</FieldLabel>
-                  <Input
+                <Field style={{ gridColumn: "1 / -1" }}>
+                  <TemporalPicker
                     id="task-due-date"
-                    type="date"
+                    mode="single"
+                    precision="date"
                     value={taskDueAt}
-                    onChange={(event) => onTaskDueChange(event.target.value)}
-                    required
+                    label="Due date"
+                    eyebrow="Task deadline"
+                    description="Choose a deadline on or after today in the event timezone."
+                    minimumDateTime={taskDeadlinePolicy?.minimumDate}
+                    onChange={onTaskDueChange}
                     disabled={taskBusy}
                   />
+                  {taskDeadlineWarning ? (
+                    <p className={styles.muted} role="status">
+                      {taskDeadlineWarning}
+                    </p>
+                  ) : null}
                 </Field>
               </div>
               <FieldSet className={styles.detailBlock}>

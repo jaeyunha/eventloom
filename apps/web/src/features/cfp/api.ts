@@ -312,6 +312,7 @@ const eventSchema = z
     slug: z.string(),
     name: z.string(),
     timezone: z.string(),
+    eventStartsAt: z.string().optional(),
     opensAt: z.string(),
     closesAt: z.string(),
   })

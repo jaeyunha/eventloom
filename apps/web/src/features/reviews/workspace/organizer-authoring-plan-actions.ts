@@ -3,6 +3,7 @@
 import type { ApiPlan } from "./api-api-plan";
 import { evaluationRequest } from "./model-evaluation-request";
 import type { OrganizerRoundActions } from "./organizer-authoring-round-actions";
+import { reviewTemporalDraftError } from "./review-temporal-policy";
 
 export function useOrganizerPlanActions(scope: OrganizerRoundActions) {
   const {
@@ -34,8 +35,17 @@ export function useOrganizerPlanActions(scope: OrganizerRoundActions) {
     setBusy,
     reviewerIdSet,
     reviewerDirectoryReady,
+    unresolvedTemporalFields,
   } = scope;
   async function saveDraft(): Promise<void> {
+    const temporalError = reviewTemporalDraftError(
+      unresolvedTemporalFields,
+      rounds.map((round) => round.id),
+    );
+    if (temporalError !== null) {
+      setMessage(temporalError);
+      return;
+    }
     const poolsConfigured = rounds.some(
       (round) => (round.reviewerPool?.reviewerIds.length ?? 0) > 0,
     );
@@ -109,6 +119,11 @@ export function useOrganizerPlanActions(scope: OrganizerRoundActions) {
 
   async function saveSchedule(): Promise<void> {
     if (status !== "open") return;
+    const temporalError = reviewTemporalDraftError(unresolvedTemporalFields);
+    if (temporalError !== null) {
+      setMessage(temporalError);
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {

@@ -90,9 +90,13 @@ export function formatLocalTime(value: string): string {
 
 export function agendaDays(
   entries: readonly AgendaEntry[],
-  event?: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn">,
+  event?: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn" | "scheduleDates">,
 ): readonly AgendaDay[] {
-  const dates = event ? eventDates(event.startsOn, event.endsOn) : null;
+  const dates = event
+    ? event.scheduleDates?.length
+      ? event.scheduleDates
+      : eventDates(event.startsOn, event.endsOn)
+    : null;
   const eventDateSet = dates === null ? null : new Set(dates);
   const byDate = new Map<string, AgendaEntry[]>();
   for (const entry of [...entries].sort((left, right) => {

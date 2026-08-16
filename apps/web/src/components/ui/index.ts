@@ -44,6 +44,7 @@ export {
 export { getStepState, type StepState } from "./stepper-logic";
 export * from "./table";
 export * from "./tabs";
+export * from "./temporal-picker";
 export * from "./textarea";
 export * from "./toggle";
 export * from "./toggle-group";

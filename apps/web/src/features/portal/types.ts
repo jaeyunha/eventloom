@@ -111,6 +111,14 @@ export interface PortalTask {
   updatedAt: string;
 }
 
+export interface PortalEventTemporalContext {
+  organizationId: string;
+  eventId: string;
+  timeZone: string;
+  startsAt: string;
+  endsAt: string;
+}
+
 export interface PortalContext {
   id: string;
   /** Optional tenant identity projected by newer speaker adapters. */
@@ -128,6 +136,7 @@ export interface PortalContext {
   primaryParticipantId?: string;
   /** Client-only selection; never used as an authority source. */
   selectedParticipantId?: string | null;
+  temporalContext?: PortalEventTemporalContext;
 }
 
 export interface PortalRosterMember {

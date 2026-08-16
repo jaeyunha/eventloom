@@ -328,6 +328,8 @@ export function createAgendaApi(
     trackIds: readonly string[];
     startsAtLocal: string;
     endsAtLocal: string;
+    startDisambiguation?: "earlier" | "later";
+    endDisambiguation?: "earlier" | "later";
   };
 
   function draftEntryPayload(entry: AgendaWorkspaceEntry): AgendaDraftEntryPayload {
@@ -338,6 +340,12 @@ export function createAgendaApi(
       trackIds: entry.trackIds,
       startsAtLocal: entry.startsAtLocal,
       endsAtLocal: entry.endsAtLocal,
+      ...(entry.startDisambiguation === undefined
+        ? {}
+        : { startDisambiguation: entry.startDisambiguation }),
+      ...(entry.endDisambiguation === undefined
+        ? {}
+        : { endDisambiguation: entry.endDisambiguation }),
     };
   }
 
@@ -349,6 +357,12 @@ export function createAgendaApi(
       trackIds: entry.trackIds,
       startsAtLocal: entry.startsAtLocal,
       endsAtLocal: entry.endsAtLocal,
+      ...(entry.startDisambiguation === undefined
+        ? {}
+        : { startDisambiguation: entry.startDisambiguation }),
+      ...(entry.endDisambiguation === undefined
+        ? {}
+        : { endDisambiguation: entry.endDisambiguation }),
     };
   }
 

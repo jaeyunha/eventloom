@@ -11,21 +11,28 @@ build or a passing deployment does not make a repository safe to publish.
 ## Current state
 
 GitHub and Forge remain private until both this checklist and the release gate
-in [`release-runbook.md`](release-runbook.md) pass. No checked item or policy
-approval is inferred from the presence of source or evidence in the current
-tree.
+in [`release-runbook.md`](release-runbook.md) pass. Repository visibility is not
+release verification.
 
-The current tree retains historical source snapshots, extracted reference
-images, provider/cutover observations, and local QA screenshots under
-[`evidence/`](../evidence/README.md). Some source snapshots contain third-party
-names, product imagery, or transcript material. They require an explicit
-rights/privacy decision before publication.
+The prepared current-tree policy excludes screenshots, provider observations,
+source snapshots, transcripts, browser recordings, migration outputs, and
+generated reports from the source repository. See
+[`evidence/README.md`](../evidence/README.md). These artifacts must remain in an
+access-controlled evidence store unless a candidate-specific rights and privacy
+review explicitly approves publication.
 
-Removing a file from the current tree does not remove it from Git history.
-Before changing visibility, scan and review the complete history and decide
-whether the approved public artifact is the current history, a rewritten
-history, or a new sanitized publication repository. Do not state that history
-rewriting is unnecessary until that decision is recorded.
+Those artifacts still exist in reachable Git history. Removing them from the
+current tree does not make the existing history publication-safe. Before
+changing visibility, choose and record whether publication uses the current
+history, rewritten history, or a separate sanitized repository.
+
+A 2026-08-16 preparation scan ran Gitleaks 8.30.1 across both the complete
+reachable history and current tree. Thirty historical findings and fifteen
+current-tree findings were individually reviewed as test fixtures, stable IDs,
+source identifiers, or import paths; their exact fingerprints are recorded in
+`.gitleaksignore`. Repeat scans reported no leaks. This is preparation evidence
+only: rerun both scanners against the final public candidate, and re-review every
+finding if history is rewritten because commit fingerprints will change.
 
 ## Source that can remain public after review
 
@@ -47,10 +54,20 @@ to deploy or mutate remote resources is not itself a reason to hide source
 code; it is a reason to require least-privilege credentials and explicit
 confirmation.
 
+Run the repeatable history, current-tree, and dependency scans from the
+repository root:
+
+```bash
+go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --redact=100
+go run github.com/zricethezav/gitleaks/v8@v8.30.1 dir . --redact=100
+bun audit
+```
+
 ## Before changing GitHub or Forge visibility
 
 - [ ] Run a secret scanner against the complete public history, not only the
       working tree.
+- [ ] Run a secret scanner against the exact current candidate tree.
 - [ ] Record whether publication uses current history, rewritten history, or a
       separate sanitized repository.
 - [ ] Review every tracked source snapshot, transcript, screenshot, and
@@ -72,8 +89,9 @@ confirmation.
    ELv2.
 3. Choose the publication-history policy: current history, rewritten history,
    or a separate sanitized repository.
-4. Approve or remove each retained third-party source snapshot and visual
-   reference before public visibility.
+4. Confirm that the selected public candidate and its reachable history contain
+   no unapproved copied assets, source snapshots, transcripts, screenshots, or
+   private evidence.
 
 ## GitHub visibility command
 
@@ -82,8 +100,8 @@ part of this preparation change. After every item above is complete and the
 chosen public history has been pushed, the repository owner can run:
 
 ```bash
-gh repo edit jaeyunha/open-sessionboard --visibility public --accept-visibility-change-consequences
-gh repo view jaeyunha/open-sessionboard --json visibility,isPrivate,url,licenseInfo
+gh repo edit jaeyunha/eventloom --visibility public --accept-visibility-change-consequences
+gh repo view jaeyunha/eventloom --json visibility,isPrivate,url,licenseInfo
 ```
 
 Run the GitHub command only after the configuration, secret, contributor, and

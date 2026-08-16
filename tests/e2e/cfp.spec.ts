@@ -207,7 +207,11 @@ test("submitter completes the account-first CFP with two participants", async ({
       "A practical, evidence-led approach to building resilient teams before an incident begins.",
     );
   await selectSearchable(page, "Format", "Breakout Session");
-  await page.getByRole("checkbox", { name: "Leadership" }).check();
+  const tagsSearch = page.getByLabel("Search Tags options");
+  await tagsSearch.fill("Leadership");
+  const leadershipTag = page.getByRole("checkbox", { name: "Leadership", exact: true });
+  await leadershipTag.check();
+  await expect(leadershipTag).toBeChecked();
   await selectSearchable(page, "Track", "Track 2");
   await selectSearchable(page, "Level", "Advanced");
   await selectSearchable(page, "Language", "English");

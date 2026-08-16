@@ -34,5 +34,6 @@ export default defineConfig({
     passWithNoTests: false,
     restoreMocks: true,
     testTimeout: 15_000,
+    maxWorkers: 4,
   },
 });

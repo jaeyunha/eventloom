@@ -25,7 +25,6 @@ import {
   closeCfpNowConfiguration,
   configurationFromServer,
   createEmptyCfpConfiguration,
-  dateFromInstant,
   fieldKeyForRuleField,
   fieldKeyFromLabel,
   fieldOptionValues,
@@ -42,9 +41,15 @@ import {
   updateCfpShowWhenCondition,
   validateCfpDateRange,
 } from "./cfp-editor-model";
-import { CfpEditorSections } from "./cfp-editor-sections";
+import {
+  CfpEditorSections,
+  CfpEventIdentityFields,
+  CfpPastCloseConfirmation,
+} from "./cfp-editor-sections";
 import type { EventDateSelectionValue } from "./event-date-picker";
 import { useOrganizerEventId } from "./organizer-event-workspace";
+
+export { CfpEventIdentityFields, CfpPastCloseConfirmation };
 
 type CfpSectionId = (typeof SECTION_LINKS)[number]["id"];
 type CfpSaveState = "idle" | "saving" | "saved" | "error";
@@ -67,17 +72,20 @@ interface CfpEditorController {
   readonly eventId: string;
   readonly configuration: CfpConfiguration;
   readonly activeSection: CfpSectionId;
-  readonly previewResultRef: RefObject<HTMLDivElement | null>;
+  readonly previewResultRef: RefObject<HTMLElement | null>;
   readonly publishDialogOpen: boolean;
   readonly saveState: CfpSaveState;
   readonly saveError: string | null;
   readonly pastCloseAcknowledged: boolean;
   readonly previewResponses: Readonly<Record<string, string>>;
   readonly previewSelections: CfpPreviewSelections;
+  readonly previewView: "application" | "confirmation";
   readonly configurationLoadState: "loading" | "ready" | "error";
   readonly resolvedOrganizationId: string;
   readonly minimumCfpDate: string;
+  readonly maximumCfpDate: string | undefined;
   readonly dateValidationError: string | null;
+  readonly historicalCfpDates: readonly string[];
   readonly closeDatePast: boolean;
   readonly effectiveClosed: boolean;
   readonly publicRoute: string | null;
@@ -123,6 +131,7 @@ interface CfpEditorController {
   readonly onPreviewResponseChange: (fieldId: string, value: string) => void;
   readonly onPreviewSelectionChange: (key: CfpPreviewSelectionKey, value: string) => void;
   readonly onPreviewSubmit: () => void;
+  readonly onPreviewViewChange: (view: "application" | "confirmation") => void;
 }
 
 function useCfpEditorController({
@@ -137,12 +146,13 @@ function useCfpEditorController({
   );
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] = useState<CfpSectionId>("event-details");
-  const previewResultRef = useRef<HTMLDivElement | null>(null);
+  const previewResultRef = useRef<HTMLElement | null>(null);
   const saveInFlightRef = useRef(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const preparedPublishVersionRef = useRef<number | null>(null);
   const [saveState, setSaveState] = useState<CfpSaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [historicalCfpDates, setHistoricalCfpDates] = useState<readonly string[]>([]);
   const [pastCloseAcknowledged, setPastCloseAcknowledged] = useState(false);
   const [previewResponses, setPreviewResponses] = useState<Record<string, string>>({});
   const [previewSelections, setPreviewSelections] = useState<CfpPreviewSelections>({
@@ -151,6 +161,7 @@ function useCfpEditorController({
     level: "Introductory",
   });
   const [previewSubmissionKey, setPreviewSubmissionKey] = useState<string | null>(null);
+  const [previewView, setPreviewView] = useState<"application" | "confirmation">("application");
   const [publicLinkCopied, setPublicLinkCopied] = useState(false);
   const [configurationLoadState, setConfigurationLoadState] = useState<
     "loading" | "ready" | "error"
@@ -161,12 +172,23 @@ function useCfpEditorController({
   const resolvedFormId = requestedFormId ?? configuration.id;
   const cfpNow = new Date();
   const minimumCfpDate = cfpMinimumDate(cfpNow, configuration.timezone);
+  const maximumCfpDate =
+    configuration.eventStartsAt === undefined
+      ? undefined
+      : cfpMinimumDate(new Date(configuration.eventStartsAt), configuration.timezone);
   const dateValidationError = validateCfpDateRange(
     configuration.opensAt,
     configuration.closesAt,
     configuration.timezone,
+    configuration.persistedOpensAt,
+    configuration.persistedClosesAt,
   );
-  const closeDatePast = isCfpCloseDatePast(configuration.closesAt, cfpNow, configuration.timezone);
+  const closeDatePast = isCfpCloseDatePast(
+    configuration.closesAt,
+    cfpNow,
+    configuration.timezone,
+    configuration.persistedClosesAt,
+  );
   const effectiveClosed = configuration.status === "closed" || closeDatePast;
 
   useEffect(() => {
@@ -185,6 +207,15 @@ function useCfpEditorController({
     })
       .then(({ event: eventConfiguration, form: formConfiguration }) => {
         if (!active) return;
+        const loadedOpensAt = cfpMinimumDate(
+          new Date(eventConfiguration.opensAt),
+          eventConfiguration.timezone,
+        );
+        const loadedClosesAt = cfpMinimumDate(
+          new Date(eventConfiguration.closesAt),
+          eventConfiguration.timezone,
+        );
+        setHistoricalCfpDates([loadedOpensAt, loadedClosesAt]);
         if (formConfiguration !== undefined) {
           setConfiguration((current) =>
             configurationFromServer(current, eventConfiguration, formConfiguration),
@@ -201,8 +232,13 @@ function useCfpEditorController({
               eventName: eventConfiguration.name,
               slug: eventConfiguration.slug,
               timezone: eventConfiguration.timezone,
-              opensAt: dateFromInstant(eventConfiguration.opensAt),
-              closesAt: dateFromInstant(eventConfiguration.closesAt),
+              ...(eventConfiguration.eventStartsAt === undefined
+                ? {}
+                : { eventStartsAt: eventConfiguration.eventStartsAt }),
+              opensAt: loadedOpensAt,
+              closesAt: loadedClosesAt,
+              persistedOpensAt: eventConfiguration.opensAt,
+              persistedClosesAt: eventConfiguration.closesAt,
             };
           });
         }
@@ -342,6 +378,10 @@ function useCfpEditorController({
     setPreviewSelections((current) => ({ ...current, [key]: value }));
   }
 
+  function handlePreviewViewChange(view: "application" | "confirmation"): void {
+    setPreviewView(view);
+  }
+
   function focusFirstInvalidControl(): boolean {
     if (typeof document === "undefined") return true;
     const form = document.getElementById("cfp-editor-form");
@@ -398,6 +438,10 @@ function useCfpEditorController({
         formId: resolvedFormId,
       });
       setConfiguration((current) => configurationFromServer(current, saved.event, saved.form));
+      setHistoricalCfpDates([
+        cfpMinimumDate(new Date(saved.event.opensAt), saved.event.timezone),
+        cfpMinimumDate(new Date(saved.event.closesAt), saved.event.timezone),
+      ]);
       setSaveState("saved");
       return saved;
     } catch (error) {
@@ -464,6 +508,10 @@ function useCfpEditorController({
         formId: resolvedFormId,
       });
       setConfiguration((current) => configurationFromServer(current, savedEvent, savedForm));
+      setHistoricalCfpDates([
+        cfpMinimumDate(new Date(savedEvent.opensAt), savedEvent.timezone),
+        cfpMinimumDate(new Date(savedEvent.closesAt), savedEvent.timezone),
+      ]);
       setSaveState("saved");
       setSaveError(null);
     } catch (error) {
@@ -536,6 +584,7 @@ function useCfpEditorController({
 
   function handlePreviewSubmit(): void {
     setPreviewSubmissionKey(previewStateKey);
+    setPreviewView("confirmation");
     window.requestAnimationFrame(() => previewResultRef.current?.focus());
   }
 
@@ -653,10 +702,13 @@ function useCfpEditorController({
     pastCloseAcknowledged,
     previewResponses,
     previewSelections,
+    previewView,
     configurationLoadState,
     resolvedOrganizationId,
     minimumCfpDate,
+    maximumCfpDate,
     dateValidationError,
+    historicalCfpDates,
     closeDatePast,
     effectiveClosed,
     publicRoute,
@@ -694,6 +746,7 @@ function useCfpEditorController({
     onPreviewResponseChange: handlePreviewResponseChange,
     onPreviewSelectionChange: handlePreviewSelectionChange,
     onPreviewSubmit: handlePreviewSubmit,
+    onPreviewViewChange: handlePreviewViewChange,
   };
 }
 
@@ -801,10 +854,13 @@ export function CfpEditor(props: CfpEditorProps) {
         dateValidationError={controller.dateValidationError}
         effectiveClosed={controller.effectiveClosed}
         minimumCfpDate={controller.minimumCfpDate}
+        maximumCfpDate={controller.maximumCfpDate}
         pastCloseAcknowledged={controller.pastCloseAcknowledged}
+        historicalCfpDates={controller.historicalCfpDates}
         previewResponses={controller.previewResponses}
         previewResultRef={controller.previewResultRef}
         previewSelections={controller.previewSelections}
+        previewView={controller.previewView}
         primaryCondition={controller.primaryCondition}
         publicLinkAvailable={controller.publicLinkAvailable}
         publicRoute={controller.publicRoute}
@@ -828,6 +884,7 @@ export function CfpEditor(props: CfpEditorProps) {
         onPreviewResponseChange={controller.onPreviewResponseChange}
         onPreviewSelectionChange={controller.onPreviewSelectionChange}
         onPreviewSubmit={controller.onPreviewSubmit}
+        onPreviewViewChange={controller.onPreviewViewChange}
         onPrimaryConditionChange={controller.onPrimaryConditionChange}
         onRemoveField={controller.onRemoveField}
         onRuleTargetChange={controller.onRuleTargetChange}
@@ -835,6 +892,7 @@ export function CfpEditor(props: CfpEditorProps) {
         onSave={controller.onSave}
         onTaxonomyChange={controller.onTaxonomyChange}
       />
+
       <CfpStepActions
         activeSection={controller.activeSection}
         busy={controller.saveState === "saving"}

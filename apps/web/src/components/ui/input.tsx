@@ -1,8 +1,62 @@
 import type * as React from "react";
 
 import { cn } from "@/lib/utils";
+import { TemporalPicker } from "./temporal-picker";
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+type InputProps = React.ComponentProps<"input">;
+
+function dateInputLabel(id: string, ariaLabel: InputProps["aria-label"]): string {
+  if (typeof ariaLabel === "string" && ariaLabel.trim().length > 0) return ariaLabel;
+  const words = id.replaceAll(/[-_]+/gu, " ").trim();
+  return words.length === 0 ? "Date" : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+function StyledDateInput({
+  id,
+  name,
+  value,
+  defaultValue,
+  onChange,
+  disabled,
+  readOnly,
+  required,
+  min,
+  "aria-label": ariaLabel,
+}: InputProps) {
+  const fieldId = id ?? name ?? "date-input";
+  const currentValue =
+    typeof value === "string" ? value : typeof defaultValue === "string" ? defaultValue : "";
+  return (
+    <TemporalPicker
+      id={fieldId}
+      mode="single"
+      precision="date"
+      value={currentValue}
+      label={dateInputLabel(fieldId, ariaLabel)}
+      clearable={!required}
+      disabled={Boolean(disabled || readOnly)}
+      {...(name === undefined ? {} : { name })}
+      {...(typeof min === "string" ? { minimumDateTime: min } : {})}
+      onChange={(nextValue) => {
+        const target = {
+          id: fieldId,
+          name: name ?? "",
+          type: "date",
+          value: nextValue,
+        } as HTMLInputElement;
+        onChange?.({
+          target,
+          currentTarget: target,
+        } as React.ChangeEvent<HTMLInputElement>);
+      }}
+    />
+  );
+}
+
+function Input({ className, type, ...props }: InputProps) {
+  if (type === "date") {
+    return <StyledDateInput {...props} />;
+  }
   return (
     <input
       type={type}

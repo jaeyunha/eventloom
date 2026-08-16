@@ -25,7 +25,7 @@ export function PortalTasks() {
 }
 
 function PortalTasksContent() {
-  const { view } = usePortal();
+  const { context, view } = usePortal();
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   if (!view) return null;
@@ -78,6 +78,9 @@ function PortalTasksContent() {
               submissions={view.submissions}
               selectedId={selected?.id ?? null}
               filter={filter}
+              {...(context?.temporalContext === undefined
+                ? {}
+                : { temporalContext: context.temporalContext })}
               onFilter={setFilter}
               onSelect={setSelectedId}
             />

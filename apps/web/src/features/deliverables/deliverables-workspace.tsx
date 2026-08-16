@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import type { SpeakerEventTemporalContext } from "@/features/speakers/speaker-temporal-policy";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createDeliverablesApi,
@@ -43,6 +44,7 @@ import {
   startDeliverablesCoreRequests,
   startDeliverablesRequest,
 } from "./deliverables-workspace-model";
+import { DeliverablesTemporalContextProvider } from "./deliverables-workspace-sections";
 import {
   DeliverablesWorkspaceView,
   type DeliverablesWorkspaceViewProps,
@@ -51,6 +53,7 @@ import {
 export {
   ContentRequestInspector,
   DeliverablesSummary,
+  DeliverablesTemporalContextProvider,
   ReminderPreview,
 } from "./deliverables-workspace-sections";
 export { DeliverablesWorkspaceView } from "./deliverables-workspace-views";
@@ -598,13 +601,17 @@ function initialDeliverablesWorkspaceState(
     operationStates: {},
   };
 }
+type DeliverablesControllerViewProps = DeliverablesWorkspaceViewProps & {
+  readonly temporalContext?: SpeakerEventTemporalContext;
+};
+
 function useDeliverablesWorkspaceController({
   eventId: fallbackEventId,
   organizationId,
   mode = "deliverables",
   api: providedApi,
   initialData,
-}: DeliverablesWorkspaceProps): DeliverablesWorkspaceViewProps {
+}: DeliverablesWorkspaceProps): DeliverablesControllerViewProps {
   const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(
     () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
@@ -1897,6 +1904,9 @@ function useDeliverablesWorkspaceController({
     assets: renderedAssets,
     profiles: renderedProfiles,
     ...(renderedMatrix === undefined ? {} : { matrixItems: renderedMatrix.items }),
+    ...(renderedMatrix?.temporalContext === undefined
+      ? {}
+      : { temporalContext: renderedMatrix.temporalContext }),
     loading: renderedStateIsCurrent ? loading : seededCoreData === undefined,
     loadingSessionHistories: renderedStateIsCurrent && loadingSessionHistories,
     busy: renderedStateIsCurrent && busy,
@@ -1952,8 +1962,14 @@ function useDeliverablesWorkspaceController({
 }
 
 export function DeliverablesWorkspace(props: DeliverablesWorkspaceProps) {
-  const viewProps = useDeliverablesWorkspaceController(props);
-  return <DeliverablesWorkspaceView {...viewProps} />;
+  const { temporalContext, ...viewProps } = useDeliverablesWorkspaceController(props);
+  return (
+    <DeliverablesTemporalContextProvider
+      {...(temporalContext === undefined ? {} : { value: temporalContext })}
+    >
+      <DeliverablesWorkspaceView {...viewProps} />
+    </DeliverablesTemporalContextProvider>
+  );
 }
 
 /*

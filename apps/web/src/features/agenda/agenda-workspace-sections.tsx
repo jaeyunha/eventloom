@@ -1,5 +1,6 @@
 "use client";
 
+import { formatInstantInTimeZone, type TimeDisambiguation } from "@eventloom/contracts";
 import { CalendarDays, CheckCircle2, Clock3, Save } from "lucide-react";
 import Link from "next/link";
 import {
@@ -35,6 +36,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import {
   StatusBadge,
   WorkspaceBreadcrumb,
@@ -106,11 +108,24 @@ import type {
   AgendaWorkspaceData,
 } from "./types";
 
+type AgendaEntryFormProps = EntryFormProps & {
+  readonly event: AgendaWorkspaceData["event"];
+};
+function agendaBoundaryLocal(instant: string | undefined, timeZone: string): string | undefined {
+  if (instant === undefined) return undefined;
+  try {
+    return formatInstantInTimeZone(instant, timeZone);
+  } catch {
+    return undefined;
+  }
+}
+
 function EntryForm({
   entry,
   sessions,
   rooms,
   tracks,
+  event,
   eventStart,
   busy,
   initialPlacement,
@@ -119,7 +134,7 @@ function EntryForm({
   onCancel,
   onCreateRoom,
   onCreateTrack,
-}: EntryFormProps) {
+}: AgendaEntryFormProps) {
   const firstSession = entry?.sessionId ?? initialSessionId ?? sessions[0]?.id ?? "";
   const [formState, dispatchForm] = useReducer(entryFormReducer, {
     sessionId: firstSession,
@@ -128,6 +143,12 @@ function EntryForm({
     startsAtLocal: entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
     endsAtLocal: entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
   });
+  const [startDisambiguation, setStartDisambiguation] = useState<TimeDisambiguation | undefined>(
+    entry?.startDisambiguation,
+  );
+  const [endDisambiguation, setEndDisambiguation] = useState<TimeDisambiguation | undefined>(
+    entry?.endDisambiguation,
+  );
   const { sessionId, roomId, trackIds, startsAtLocal, endsAtLocal } = formState;
   const trackIdSet = useMemo(() => new Set(trackIds), [trackIds]);
   const [formError, setFormError] = useState<string | null>(null);
@@ -197,6 +218,8 @@ function EntryForm({
       trackIds,
       startsAtLocal,
       endsAtLocal,
+      ...(startDisambiguation === undefined ? {} : { startDisambiguation }),
+      ...(endDisambiguation === undefined ? {} : { endDisambiguation }),
     });
   }
 
@@ -318,26 +341,34 @@ function EntryForm({
         </div>
       ) : null}
       <div className={styles.timeFields}>
-        <label>
-          <span>Starts</span>
-          <input
-            type="datetime-local"
-            value={startsAtLocal}
-            onChange={(event) =>
-              dispatchForm({ type: "starts-at-changed", startsAtLocal: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          <span>Ends</span>
-          <input
-            type="datetime-local"
-            value={endsAtLocal}
-            onChange={(event) =>
-              dispatchForm({ type: "ends-at-changed", endsAtLocal: event.target.value })
-            }
-          />
-        </label>
+        <TemporalPicker
+          id={`agenda-entry-${entry?.id ?? "new"}-schedule`}
+          mode="range"
+          precision="date-time"
+          startValue={startsAtLocal}
+          endValue={endsAtLocal}
+          startLabel="Starts"
+          endLabel="Ends"
+          eyebrow="Session schedule"
+          description="Choose the session window on the calendar, then confirm the local times."
+          minimumDateTime={agendaBoundaryLocal(event.startsAt, event.timeZone)}
+          maximumDateTime={agendaBoundaryLocal(event.endsAt, event.timeZone)}
+          allowedDates={
+            event.scheduleDates?.length
+              ? event.scheduleDates
+              : eventDates(event.startsOn, event.endsOn)
+          }
+          timeZone={event.timeZone}
+          startDisambiguation={startDisambiguation}
+          endDisambiguation={endDisambiguation}
+          onStartDisambiguationChange={setStartDisambiguation}
+          onEndDisambiguationChange={setEndDisambiguation}
+          clearable
+          onChange={({ start, end }) => {
+            dispatchForm({ type: "starts-at-changed", startsAtLocal: start });
+            dispatchForm({ type: "ends-at-changed", endsAtLocal: end });
+          }}
+        />
       </div>
       {formError ? (
         <p className={styles.formError} role="alert">
@@ -1469,6 +1500,7 @@ function AgendaEditorDialog({
               sessions={data.unscheduledSessions}
               rooms={data.rooms}
               tracks={data.tracks}
+              event={data.event}
               eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
               busy={busy}
               onCancel={onCancelPlacement}
@@ -1488,6 +1520,7 @@ function AgendaEditorDialog({
                 sessions={[]}
                 rooms={data.rooms}
                 tracks={data.tracks}
+                event={data.event}
                 eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
                 busy={busy}
                 onCancel={onCancelEdit}

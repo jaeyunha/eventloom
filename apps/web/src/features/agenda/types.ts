@@ -1,3 +1,5 @@
+import type { TimeDisambiguation } from "@eventloom/contracts";
+
 export type AgendaConflictKind = "participant" | "resource" | "room";
 export type AgendaWarningKind = "capacity" | "custom" | "track" | "travel";
 
@@ -5,8 +7,11 @@ export interface AgendaEventSummary {
   id: string;
   name: string;
   timeZone: string;
+  startsAt?: string;
+  endsAt?: string;
   startsOn: string;
   endsOn: string;
+  scheduleDates?: readonly string[];
 }
 
 export interface AgendaRoom {
@@ -44,6 +49,8 @@ export interface AgendaEntry {
   trackNames: readonly string[];
   startsAtLocal: string;
   endsAtLocal: string;
+  startDisambiguation?: TimeDisambiguation;
+  endDisambiguation?: TimeDisambiguation;
 }
 
 export interface AgendaConflict {
@@ -133,6 +140,8 @@ export interface AgendaEntryInput {
   trackIds: readonly string[];
   startsAtLocal: string;
   endsAtLocal: string;
+  startDisambiguation?: TimeDisambiguation;
+  endDisambiguation?: TimeDisambiguation;
 }
 
 export interface AgendaErrorResponse {

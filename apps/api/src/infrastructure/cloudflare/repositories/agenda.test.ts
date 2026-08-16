@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { AgendaRepositoryConflictError } from "../../../features/agenda/infrastructure";
 import type { AgendaState } from "../../../features/agenda/types";
 import { D1AgendaRepository } from "./agenda";
 
@@ -14,6 +15,14 @@ function statement(query: string) {
       return { results: [] };
     },
     async first() {
+      if (query.includes("SELECT starts_at,ends_at,time_zone,schedule_dates_json FROM events")) {
+        return {
+          starts_at: "2026-08-13T00:00:00.000Z",
+          ends_at: "2026-08-14T23:59:00.000Z",
+          time_zone: "UTC",
+          schedule_dates_json: "[]",
+        };
+      }
       return null;
     },
     async run() {
@@ -95,6 +104,47 @@ describe("D1 agenda repository commands", () => {
     ]);
   });
 
+  it("rejects agenda state whose timezone differs from the authoritative event", async () => {
+    const db = database();
+    const repository = new D1AgendaRepository(db, "org-1");
+    const current = agendaState(1, "2026-08-13T12:00:00.000Z", "user-1");
+    vi.spyOn(repository, "load").mockResolvedValue(current);
+    const next = agendaState(2, "2026-08-13T13:00:00.000Z", "user-2");
+    next.timeZone = "America/Los_Angeles";
+    next.draft.timeZone = "America/Los_Angeles";
+
+    await expect(repository.compareAndSwap("event-1", 1, next)).rejects.toBeInstanceOf(
+      AgendaRepositoryConflictError,
+    );
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an out-of-bounds draft before issuing a D1 write batch", async () => {
+    const db = database();
+    const repository = new D1AgendaRepository(db, "org-1");
+    const current = agendaState(1, "2026-08-13T12:00:00.000Z", "user-1");
+    vi.spyOn(repository, "load").mockResolvedValue(current);
+    const next = agendaState(2, "2026-08-13T13:00:00.000Z", "user-2");
+    next.draft.entries = [
+      {
+        id: "entry-outside",
+        sessionId: "session-1",
+        roomId: "room-1",
+        trackIds: [],
+        startsAt: "2026-08-15T09:00:00.000Z",
+        endsAt: "2026-08-15T10:00:00.000Z",
+        startsAtLocal: "2026-08-15T09:00:00",
+        endsAtLocal: "2026-08-15T10:00:00",
+        timeZone: "UTC",
+      },
+    ];
+
+    await expect(repository.compareAndSwap("event-1", 1, next)).rejects.toBeInstanceOf(
+      AgendaRepositoryConflictError,
+    );
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
   it("persists the draft timestamp supplied by the next agenda state", async () => {
     const db = database();
     const repository = new D1AgendaRepository(db, "org-1");
@@ -111,5 +161,11 @@ describe("D1 agenda repository commands", () => {
       next.draft.updatedAt,
       next.draft.updatedBy,
     ]);
+    const queries = db.statements.map((item) => item.bound.query).join("\n");
+    expect(queries).toContain("starts_at = ?");
+    expect(queries).toContain("time_zone = ?");
+    expect(queries).toContain("schedule_dates_json");
+    const eventGuard = findStatement(db, "SELECT CASE WHEN");
+    expect(eventGuard?.bound.values).toContain(next.timeZone);
   });
 });

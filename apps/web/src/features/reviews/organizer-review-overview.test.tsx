@@ -59,4 +59,39 @@ describe("OrganizerReviewOverview", () => {
     expect(markup).toContain("Previous");
     expect(markup).toContain("Next");
   });
+
+  it("renders a missing title instead of exposing an internal submission id", () => {
+    const [baseRow] = overviewRows(1);
+    if (!baseRow) throw new Error("Expected one review overview row.");
+    const internalId = "submission_27aac547-93f8-44b1-bd07-56d18f17a280";
+    const markup = renderToStaticMarkup(
+      createElement(OrganizerReviewOverview, {
+        planName: "Program review",
+        planStatusLabel: "Open for review",
+        description: "Committee review has one submission in view.",
+        metrics: [{ label: "Reviewer coverage", value: "2/2", detail: "reviewer slots assigned" }],
+        completionPercent: 0,
+        attentionSummary: {
+          count: 1,
+          label: "submission needs attention",
+          description: "Use row actions to continue review operations.",
+        },
+        rows: [
+          {
+            ...baseRow,
+            id: internalId,
+            reference: internalId,
+            title: internalId,
+          },
+        ],
+        onManageReviewers: vi.fn(),
+        onOpenPlan: vi.fn(),
+        onOpenReviewers: vi.fn(),
+        onOpenDecisions: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("<strong>No title</strong>");
+    expect(markup).not.toContain(`<span>${internalId}</span>`);
+  });
 });

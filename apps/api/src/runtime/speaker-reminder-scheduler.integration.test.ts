@@ -20,10 +20,26 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.dispose();
 });
 
-it("runs automatic speaker task reminders through the production D1 scheduler and outbox", async () => {
+it("runs automatic speaker task reminders at Santiago's first real instant after a deadline date", async () => {
   const lifecycle = createSpeakerLifecycleFixture();
   fixtures.push(lifecycle);
-  const phase = lifecycle.createPhase();
+  const phase = lifecycle.createPhase({
+    eventTemporalSource: {
+      getEventTemporalContext(organizationId, eventId) {
+        return Promise.resolve(
+          organizationId === ids.organizationId && eventId === ids.eventId
+            ? {
+                organizationId,
+                eventId,
+                timeZone: "America/Santiago",
+                startsAt: "2100-01-10T17:00:00.000Z",
+                endsAt: "2100-01-11T01:00:00.000Z",
+              }
+            : null,
+        );
+      },
+    },
+  });
   lifecycle.database.executeScript(`
     INSERT INTO participants
       (id,organization_id,event_id,first_name,last_name,display_name,email,normalized_email,
@@ -57,8 +73,8 @@ it("runs automatic speaker task reminders through the production D1 scheduler an
     description: "Upload the final deck.",
     allowedMimeTypes: ["application/pdf"],
     maxBytes: 5_000_000,
-    dueAt: "2099-08-15T05:00:00.000Z",
-    reminderOffsetsMinutes: [60],
+    dueAt: "2099-09-05",
+    reminderOffsetsMinutes: [0],
     assignments: [{ participantId: "participant-priya", submissionId: null }],
   });
 
@@ -94,34 +110,64 @@ it("runs automatic speaker task reminders through the production D1 scheduler an
   await runScheduledReminders(
     dependencies,
     { DB: database } as RuntimeBindings,
-    new Date("2099-08-15T04:00:00.000Z"),
+    new Date("2099-09-06T03:59:59.999Z"),
+  );
+  expect(
+    await new D1ReminderRepository(database).listDispatches(ids.organizationId, ids.eventId),
+  ).toMatchObject([
+    {
+      cadenceWindow: "before:2099-09-06T04:00:00.000Z",
+      eligibilityReason: "outside_window",
+      status: "skipped",
+    },
+  ]);
+
+  await runScheduledReminders(
+    dependencies,
+    { DB: database } as RuntimeBindings,
+    new Date("2099-09-06T04:00:00.000Z"),
   );
 
   const runs = await new D1ReminderRepository(database).listRuns(ids.organizationId, ids.eventId);
-  expect(runs).toMatchObject([
-    {
-      triggerType: "automatic",
-      audienceType: "task",
-      candidateCount: 1,
-      eligibleCount: 1,
-      queuedCount: 1,
-      failedCount: 0,
-      state: "completed",
-      configurationFailure: null,
-    },
-  ]);
+  expect(runs).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        triggerType: "automatic",
+        audienceType: "task",
+        candidateCount: 1,
+        eligibleCount: 0,
+        queuedCount: 0,
+        failedCount: 0,
+        state: "completed",
+        configurationFailure: null,
+      }),
+      expect.objectContaining({
+        triggerType: "automatic",
+        audienceType: "task",
+        candidateCount: 1,
+        eligibleCount: 1,
+        queuedCount: 1,
+        failedCount: 0,
+        state: "completed",
+        configurationFailure: null,
+      }),
+    ]),
+  );
   const dispatches = await new D1ReminderRepository(database).listDispatches(
     ids.organizationId,
     ids.eventId,
   );
-  expect(dispatches).toMatchObject([
-    {
-      recipient: "participant-priya",
-      subject: { type: "task" },
-      status: "queued",
-      outboxJobId: expect.any(String),
-    },
-  ]);
+  expect(dispatches).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        recipient: "participant-priya",
+        subject: expect.objectContaining({ type: "task" }),
+        cadenceWindow: "2099-09-06T04:00:00.000Z",
+        status: "queued",
+        outboxJobId: expect.any(String),
+      }),
+    ]),
+  );
   expect(queued).toHaveLength(1);
   expect(queued[0]).toMatchObject({
     tenantId: ids.organizationId,

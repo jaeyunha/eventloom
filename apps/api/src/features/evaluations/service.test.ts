@@ -9,6 +9,7 @@ import {
 } from "./repository";
 import {
   type EvaluationDecisionProjectionInput,
+  type EvaluationEventMetadataSource,
   EvaluationService,
   type EvaluationServiceOptions,
 } from "./service";
@@ -23,6 +24,27 @@ import type {
 const tenantId = "tenant-1";
 const eventId = "event-1";
 const nowIso = "2026-08-08T12:00:00.000Z";
+
+function evaluationEventSource(
+  overrides: Partial<{
+    startsAt: string;
+    endsAt: string;
+    timeZone: string;
+  }> = {},
+): EvaluationEventMetadataSource {
+  return {
+    async getEventMetadata(requestedTenantId, requestedEventId) {
+      if (requestedTenantId !== tenantId || requestedEventId !== eventId) return null;
+      return {
+        id: eventId,
+        name: "Monthly program",
+        timeZone: overrides.timeZone ?? "America/Los_Angeles",
+        startsAt: overrides.startsAt ?? "2026-08-09T16:00:00.000Z",
+        endsAt: overrides.endsAt ?? "2026-09-30T23:59:00.000Z",
+      };
+    },
+  };
+}
 
 const organizer: EvaluationActor = {
   tenantId,
@@ -245,15 +267,22 @@ async function fixture(
       options.submissionMaterial ?? submission,
       { ...submission, id: "submission-2", title: "Another session" },
     ]);
-  const service = new EvaluationService(repository, submissions, {
-    clock: () => new Date(currentTime),
-    ...(options.acceptanceHandoff === undefined
-      ? {}
-      : { acceptanceHandoff: options.acceptanceHandoff }),
-    ...(options.decisionProjection === undefined
-      ? {}
-      : { decisionProjection: options.decisionProjection }),
-  });
+  const service = new EvaluationService(
+    repository,
+    submissions,
+    {
+      ...evaluationEventSource(),
+    },
+    {
+      clock: () => new Date(currentTime),
+      ...(options.acceptanceHandoff === undefined
+        ? {}
+        : { acceptanceHandoff: options.acceptanceHandoff }),
+      ...(options.decisionProjection === undefined
+        ? {}
+        : { decisionProjection: options.decisionProjection }),
+    },
+  );
   const draft = await service.createPlan(organizer, {
     id: "plan-1",
     eventId,
@@ -304,7 +333,11 @@ async function expectEvaluationError(
 describe("evaluation plans and assignments", () => {
   it("loads reviewer work across every granted organization scope", async () => {
     const repository = new MultiTenantWorkspaceRepository();
-    const service = new EvaluationService(repository, new InMemorySubmissionReviewSource());
+    const service = new EvaluationService(
+      repository,
+      new InMemorySubmissionReviewSource(),
+      evaluationEventSource(),
+    );
 
     await expect(
       service.listReviewerWorkspace({
@@ -328,6 +361,8 @@ describe("evaluation plans and assignments", () => {
     const service = new EvaluationService(
       new InMemoryEvaluationRepository(),
       new InMemorySubmissionReviewSource(),
+      evaluationEventSource(),
+      { clock: () => new Date(nowIso) },
     );
     const plan = await service.createPlan(organizer, {
       id: "plan-non-numeric-criteria",
@@ -1247,7 +1282,7 @@ describe("evaluation plans and assignments", () => {
     const repository = new WorkspaceBatchRepository();
     repository.organizerWorkspaceFailure = new Error("Decision row could not be decoded.");
     const submissions = new WorkspaceBatchSource([submission]);
-    const service = new EvaluationService(repository, submissions);
+    const service = new EvaluationService(repository, submissions, evaluationEventSource());
 
     await expectEvaluationError(
       service.getOrganizerWorkspace(organizer, eventId),
@@ -1431,6 +1466,185 @@ describe("evaluation plans and assignments", () => {
       submitted: 2,
       completionPercent: 67,
     });
+  });
+});
+
+describe("evaluation temporal integrity", () => {
+  it.each(["2026-08-10", "2026-08-10T12:00:00"])(
+    "rejects evaluation boundaries without an explicit offset: %s",
+    async (boundary) => {
+      const service = new EvaluationService(
+        new InMemoryEvaluationRepository(),
+        new InMemorySubmissionReviewSource(),
+        evaluationEventSource(),
+        { clock: () => new Date(nowIso) },
+      );
+
+      await expect(
+        service.createPlan(organizer, {
+          id: `invalid-${boundary}`,
+          eventId,
+          name: "Invalid review boundary",
+          blindReview: true,
+          closesAt: boundary,
+          assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+          rounds: [round],
+        }),
+      ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
+      await expect(
+        service.createPlan(organizer, {
+          id: `invalid-round-${boundary}`,
+          eventId,
+          name: "Invalid round boundary",
+          blindReview: true,
+          closesAt: "2026-08-12T12:00:00.000Z",
+          assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+          rounds: [{ ...round, closesAt: boundary }],
+        }),
+      ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
+    },
+  );
+
+  it("normalizes alternate offsets before ordering, event-bound checks, and persistence", async () => {
+    const service = new EvaluationService(
+      new InMemoryEvaluationRepository(),
+      new InMemorySubmissionReviewSource(),
+      evaluationEventSource({ endsAt: "2026-08-11T12:00:00.000Z" }),
+      { clock: () => new Date(nowIso) },
+    );
+
+    const created = await service.createPlan(organizer, {
+      id: "offset-plan",
+      eventId,
+      name: "Offset review",
+      blindReview: true,
+      closesAt: "2026-08-11T08:00:00-04:00",
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+      rounds: [
+        {
+          ...round,
+          opensAt: "2026-08-10T10:00:00+02:00",
+          closesAt: "2026-08-10T08:30:00Z",
+        },
+      ],
+    });
+
+    expect(created.closesAt).toBe("2026-08-11T12:00:00.000Z");
+    expect(created.rounds[0]?.opensAt).toBe("2026-08-10T08:00:00.000Z");
+    expect(created.rounds[0]?.closesAt).toBe("2026-08-10T08:30:00.000Z");
+
+    await expect(
+      service.createPlan(organizer, {
+        id: "offset-bypass-plan",
+        eventId,
+        name: "Late offset review",
+        blindReview: true,
+        closesAt: "2026-08-11T08:30:00-04:00",
+        assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+        rounds: [round],
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
+  });
+
+  it("rejects new review boundaries before today or after event end", async () => {
+    const repository = new InMemoryEvaluationRepository();
+    const service = new EvaluationService(
+      repository,
+      new InMemorySubmissionReviewSource(),
+      evaluationEventSource({ endsAt: "2026-08-11T23:59:00.000Z" }),
+      { clock: () => new Date(nowIso) },
+    );
+
+    await expect(
+      service.createPlan(organizer, {
+        id: "past-plan",
+        eventId,
+        name: "Past review",
+        blindReview: true,
+        closesAt: "2026-08-10T12:00:00.000Z",
+        assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+        rounds: [{ ...round, closesAt: "2026-08-07T12:00:00.000Z" }],
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
+
+    await expect(
+      service.createPlan(organizer, {
+        id: "late-plan",
+        eventId,
+        name: "Late review",
+        blindReview: true,
+        closesAt: "2026-08-12T12:00:00.000Z",
+        assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+        rounds: [{ ...round, closesAt: "2026-08-12T12:00:00.000Z" }],
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
+  });
+
+  it("requires the overall deadline to cover the final round", async () => {
+    const service = new EvaluationService(
+      new InMemoryEvaluationRepository(),
+      new InMemorySubmissionReviewSource(),
+      evaluationEventSource(),
+      { clock: () => new Date(nowIso) },
+    );
+
+    await expect(
+      service.createPlan(organizer, {
+        id: "short-plan",
+        eventId,
+        name: "Short plan",
+        blindReview: true,
+        closesAt: "2026-08-09T12:00:00.000Z",
+        assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+        rounds: [round],
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
+  });
+
+  it("preserves unchanged historical boundaries but rejects changed past values", async () => {
+    let currentTime = new Date(nowIso);
+    const service = new EvaluationService(
+      new InMemoryEvaluationRepository(),
+      new InMemorySubmissionReviewSource(),
+      evaluationEventSource(),
+      { clock: () => new Date(currentTime) },
+    );
+    const created = await service.createPlan(organizer, {
+      id: "active-plan",
+      eventId,
+      name: "Active review",
+      blindReview: true,
+      closesAt: "2026-08-10T12:00:00.000Z",
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 1 },
+      rounds: [round],
+    });
+    currentTime = new Date("2026-08-12T12:00:00.000Z");
+
+    const unchanged = await service.updatePlan(organizer, created.id, {
+      expectedVersion: created.version,
+      name: created.name,
+      blindReview: created.blindReview,
+      closesAt: created.closesAt,
+      assignmentRule: created.assignmentRule,
+      rounds: created.rounds,
+    });
+    const unchangedRound = unchanged.rounds[0];
+    if (unchangedRound === undefined) throw new Error("Expected the review round to exist.");
+    await expect(
+      service.updatePlan(organizer, unchanged.id, {
+        expectedVersion: unchanged.version,
+        name: unchanged.name,
+        blindReview: unchanged.blindReview,
+        closesAt: unchanged.closesAt,
+        assignmentRule: unchanged.assignmentRule,
+        rounds: [
+          {
+            ...unchangedRound,
+            closesAt: "2026-08-11T12:00:00.000Z",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_INVALID_INPUT" });
   });
 });
 
@@ -2034,9 +2248,16 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         ],
       },
     ]);
-    const service = new EvaluationService(repository, source, {
-      clock: () => new Date(nowIso),
-    });
+    const service = new EvaluationService(
+      repository,
+      source,
+      {
+        ...evaluationEventSource(),
+      },
+      {
+        clock: () => new Date(nowIso),
+      },
+    );
     const draft = await service.createPlan(organizer, {
       id: "authoring-plan",
       eventId,
@@ -2236,10 +2457,17 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         },
       }),
     };
-    const service = new EvaluationService(repository, source, {
-      clock: () => new Date(nowIso),
-      aiSuggestionProvider: provider,
-    });
+    const service = new EvaluationService(
+      repository,
+      source,
+      {
+        ...evaluationEventSource(),
+      },
+      {
+        clock: () => new Date(nowIso),
+        aiSuggestionProvider: provider,
+      },
+    );
     const draft = await service.createPlan(organizer, {
       id: "suggestion-plan",
       eventId,
@@ -2345,24 +2573,31 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
   it("marks suggestions stale when the submission revision changes", async () => {
     const repository = new InMemoryEvaluationRepository();
     const source = new InMemorySubmissionReviewSource([{ ...submission, version: 1 }]);
-    const service = new EvaluationService(repository, source, {
-      clock: () => new Date(nowIso),
-      aiSuggestionProducer: async () => ({
-        candidates: [
-          {
-            criterionId: "quality",
-            value: 3,
-            evidence: ["The abstract contains a claim."],
-            provenance: {
-              provider: "test",
-              model: "test",
-              generatedAt: nowIso,
-              sourceReferences: ["abstract"],
+    const service = new EvaluationService(
+      repository,
+      source,
+      {
+        ...evaluationEventSource(),
+      },
+      {
+        clock: () => new Date(nowIso),
+        aiSuggestionProducer: async () => ({
+          candidates: [
+            {
+              criterionId: "quality",
+              value: 3,
+              evidence: ["The abstract contains a claim."],
+              provenance: {
+                provider: "test",
+                model: "test",
+                generatedAt: nowIso,
+                sourceReferences: ["abstract"],
+              },
             },
-          },
-        ],
-      }),
-    });
+          ],
+        }),
+      },
+    );
     const draft = await service.createPlan(organizer, {
       id: "stale-plan",
       eventId,

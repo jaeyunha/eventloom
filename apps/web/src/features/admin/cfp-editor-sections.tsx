@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import type { ChangeEvent, FormEvent, RefObject } from "react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "./cfp-editor.module.css";
 import {
   type CfpCondition,
@@ -11,6 +13,7 @@ import {
   fieldOptionValues,
   fieldReferenceLabel,
   fieldTypeLabel,
+  isCfpCloseDatePast,
   ruleKey,
   TIMEZONE_OPTIONS,
 } from "./cfp-editor-model";
@@ -37,15 +40,115 @@ interface CfpPreviewSubmissionResult {
   readonly confirmationTitle: string;
   readonly successMessage: string;
 }
+export function CfpEventIdentityFields({
+  eventName,
+  slug,
+  timezone,
+  organizationId,
+}: {
+  readonly eventName: string;
+  readonly slug: string;
+  readonly timezone: string;
+  readonly organizationId: string;
+}) {
+  return (
+    <>
+      <div className={styles.fieldGroup}>
+        <label htmlFor="event-name">Event name</label>
+        <input id="event-name" name="eventName" required readOnly value={eventName} />
+      </div>
+      <div className={styles.fieldGroup}>
+        <label htmlFor="event-slug">Public URL slug</label>
+        <input
+          id="event-slug"
+          name="slug"
+          required
+          readOnly
+          pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+          title="Use lowercase letters, numbers, and hyphens."
+          value={slug}
+        />
+        <p className={styles.fieldHint}>
+          {slug
+            ? `/cfp/organizations/${organizationId}/events/${slug}`
+            : "Public URL unavailable until the authoritative event slug loads."}
+        </p>
+      </div>
+      <div className={styles.fieldGroup}>
+        <label htmlFor="event-timezone">Event timezone</label>
+        <select
+          id="event-timezone"
+          name="timezone"
+          required
+          value={timezone}
+          disabled
+          aria-describedby="event-timezone-help"
+        >
+          {TIMEZONE_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <p id="event-timezone-help">
+          Event identity is authoritative.{" "}
+          <Link href="/admin/events">Change it in Event details.</Link>
+        </p>
+        <p className={styles.fieldHint}>Dates shown to applicants use this timezone.</p>
+      </div>
+    </>
+  );
+}
+
+export function CfpPastCloseConfirmation({
+  closesAt,
+  persistedClosesAt,
+  timezone,
+  now,
+  acknowledged,
+  onAcknowledgedChange,
+}: {
+  readonly closesAt: string;
+  readonly persistedClosesAt?: string | undefined;
+  readonly timezone: string;
+  readonly now: Date;
+  readonly acknowledged: boolean;
+  readonly onAcknowledgedChange: (acknowledged: boolean) => void;
+}) {
+  if (!isCfpCloseDatePast(closesAt, now, timezone, persistedClosesAt)) return null;
+
+  return (
+    <>
+      <p className={styles.fieldHint} role="note">
+        Server-authoritative status: Closed. This CFP is closed to new submissions. Public visitors
+        see the closed portal and speakers cannot edit until an organizer records an audited reopen.
+      </p>
+      <label className={styles.toggleRow}>
+        <input
+          id="confirm-past-close"
+          name="confirmPastClose"
+          type="checkbox"
+          checked={acknowledged}
+          onChange={(event) => onAcknowledgedChange(event.target.checked)}
+        />
+        <span>
+          <strong>Confirm past close date</strong>
+          <small>I understand this save keeps the CFP closed.</small>
+        </span>
+      </label>
+    </>
+  );
+}
 
 interface CfpEventDetailsSectionProps {
   readonly active: boolean;
   readonly configuration: CfpConfiguration;
   readonly effectiveClosed: boolean;
-  readonly publicRoute: string | null;
   readonly publicRoutePath: string | null;
   readonly minimumCfpDate: string | null;
+  readonly maximumCfpDate: string | undefined;
   readonly dateValidationError: string | null;
+  readonly historicalCfpDates: readonly string[];
   readonly closeDatePast: boolean;
   readonly pastCloseAcknowledged: boolean;
   readonly saveState: CfpSaveState;
@@ -58,30 +161,24 @@ interface CfpEventDetailsSectionProps {
 function renderEventBasics({
   configuration,
   publicRoutePath,
-  publicRoute,
   minimumCfpDate,
-  onConfigurationChange,
+  maximumCfpDate,
+  historicalCfpDates,
   onDateRangeChange,
 }: Pick<
   CfpEventDetailsSectionProps,
   | "configuration"
-  | "publicRoute"
   | "publicRoutePath"
   | "minimumCfpDate"
-  | "onConfigurationChange"
+  | "maximumCfpDate"
+  | "historicalCfpDates"
   | "onDateRangeChange"
 >) {
   return (
     <>
       <div className={styles.fieldGroup}>
         <label htmlFor="event-name">Event name</label>
-        <input
-          id="event-name"
-          name="eventName"
-          required
-          value={configuration.eventName}
-          onChange={(event) => onConfigurationChange("eventName", event.target.value)}
-        />
+        <input id="event-name" name="eventName" required readOnly value={configuration.eventName} />
       </div>
       <div className={styles.fieldGroup}>
         <label htmlFor="event-slug">Public URL slug</label>
@@ -89,13 +186,13 @@ function renderEventBasics({
           id="event-slug"
           name="slug"
           required
+          readOnly
           pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
           title="Use lowercase letters, numbers, and hyphens."
           value={configuration.slug}
-          onChange={(event) => onConfigurationChange("slug", event.target.value)}
         />
         <p className={styles.fieldHint}>
-          {publicRoute
+          {configuration.slug
             ? publicRoutePath
             : "Public URL unavailable until the authoritative event slug loads."}
         </p>
@@ -107,7 +204,8 @@ function renderEventBasics({
           name="timezone"
           required
           value={configuration.timezone}
-          onChange={(event) => onConfigurationChange("timezone", event.target.value)}
+          disabled
+          aria-describedby="event-timezone-help"
         >
           {TIMEZONE_OPTIONS.map((timezone) => (
             <option key={timezone} value={timezone}>
@@ -115,6 +213,10 @@ function renderEventBasics({
             </option>
           ))}
         </select>
+        <p id="event-timezone-help">
+          Event identity is authoritative.{" "}
+          <Link href="/admin/events">Change it in Event details.</Link>
+        </p>
         <p className={styles.fieldHint}>Dates shown to applicants use this timezone.</p>
       </div>
       <div className={styles.dateRangeGroup}>
@@ -124,7 +226,9 @@ function renderEventBasics({
           endsAt={configuration.closesAt}
           scheduleDates={[]}
           minimumDateTime={minimumCfpDate ? `${minimumCfpDate}T00:00` : undefined}
+          maximumDateTime={maximumCfpDate ? `${maximumCfpDate}T23:59` : undefined}
           minimumEndDate={configuration.opensAt}
+          unchangedValues={historicalCfpDates}
           dateOnly
           showModeToggle={false}
           showTimeControls={false}
@@ -309,10 +413,11 @@ function renderEventDetailsSection({
   active,
   configuration,
   effectiveClosed,
-  publicRoute,
   publicRoutePath,
   minimumCfpDate,
+  maximumCfpDate,
   dateValidationError,
+  historicalCfpDates,
   closeDatePast,
   pastCloseAcknowledged,
   saveState,
@@ -349,9 +454,9 @@ function renderEventDetailsSection({
         {renderEventBasics({
           configuration,
           minimumCfpDate,
-          publicRoute,
           publicRoutePath,
-          onConfigurationChange,
+          maximumCfpDate,
+          historicalCfpDates,
           onDateRangeChange,
         })}
         {renderEventStatusAndLimits({
@@ -1083,9 +1188,8 @@ function renderPreviewForm({
   configuredFieldForKey,
   previewResponses,
   previewSelections,
-  submittedPreviewResult,
-  previewResultRef,
   ruleSummary,
+  previewView,
   onPreviewInput,
   onPreviewResponseChange,
   onPreviewSelectionChange,
@@ -1096,9 +1200,8 @@ function renderPreviewForm({
   readonly configuredFieldForKey: (key: string) => CfpFormField | undefined;
   readonly previewResponses: Readonly<Record<string, string>>;
   readonly previewSelections: CfpPreviewSelections;
-  readonly submittedPreviewResult: CfpPreviewSubmissionResult | null;
-  readonly previewResultRef: RefObject<HTMLDivElement | null>;
   readonly ruleSummary: string;
+  readonly previewView: "application" | "confirmation";
   readonly onPreviewInput: () => void;
   readonly onPreviewResponseChange: (fieldId: string, value: string) => void;
   readonly onPreviewSelectionChange: (key: CfpPreviewSelectionKey, value: string) => void;
@@ -1108,6 +1211,7 @@ function renderPreviewForm({
     <section
       className={styles.publicForm}
       aria-label="Public CFP form preview"
+      hidden={previewView !== "application"}
       onInput={onPreviewInput}
     >
       <p className={styles.previewEyebrow}>{configuration.eventName} · Call for proposals</p>
@@ -1163,33 +1267,37 @@ function renderPreviewForm({
       <button className={styles.primaryButton} onClick={onPreviewSubmit} type="button">
         Submit preview response
       </button>
-      {submittedPreviewResult ? (
-        <div
-          ref={previewResultRef}
-          className={styles.previewSubmissionResult}
-          role="status"
-          aria-live="polite"
-          tabIndex={-1}
-        >
-          <p className={styles.previewConfirmation}>
-            <strong>{submittedPreviewResult.confirmationTitle}</strong> —{" "}
-            {submittedPreviewResult.confirmationBody}
-          </p>
-          <p className={styles.previewSuccess}>{submittedPreviewResult.successMessage}</p>
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function renderPreviewAside({ configuration }: { readonly configuration: CfpConfiguration }) {
+function renderPreviewConfirmation({
+  configuration,
+  submittedPreviewResult,
+  previewResultRef,
+  previewView,
+}: {
+  readonly configuration: CfpConfiguration;
+  readonly submittedPreviewResult: CfpPreviewSubmissionResult | null;
+  readonly previewResultRef: RefObject<HTMLElement | null>;
+  readonly previewView: "application" | "confirmation";
+}) {
   return (
-    <aside className={styles.previewDetails} aria-label="Public form behavior">
+    <section
+      ref={previewResultRef}
+      className={styles.previewDetails}
+      aria-label="After submission preview"
+      aria-live={submittedPreviewResult ? "polite" : "off"}
+      hidden={previewView !== "confirmation"}
+      tabIndex={-1}
+    >
       <div>
         <p className={styles.sectionKicker}>After submission</p>
-        <h3>{configuration.confirmationTitle}</h3>
-        <p>{configuration.confirmationBody}</p>
-        <p className={styles.previewSuccessText}>{configuration.successMessage}</p>
+        <h3>{submittedPreviewResult?.confirmationTitle ?? configuration.confirmationTitle}</h3>
+        <p>{submittedPreviewResult?.confirmationBody ?? configuration.confirmationBody}</p>
+        <p className={styles.previewSuccessText}>
+          {submittedPreviewResult?.successMessage ?? configuration.successMessage}
+        </p>
       </div>
       <div>
         <p className={styles.sectionKicker}>Helpful links</p>
@@ -1204,7 +1312,7 @@ function renderPreviewAside({ configuration }: { readonly configuration: CfpConf
       <p className={styles.fieldHint}>
         Redirect after submit: <code>{configuration.redirectUrl}</code>
       </p>
-    </aside>
+    </section>
   );
 }
 
@@ -1216,7 +1324,8 @@ interface CfpPublicPreviewSectionProps {
   readonly previewResponses: Readonly<Record<string, string>>;
   readonly previewSelections: CfpPreviewSelections;
   readonly submittedPreviewResult: CfpPreviewSubmissionResult | null;
-  readonly previewResultRef: RefObject<HTMLDivElement | null>;
+  readonly previewView: "application" | "confirmation";
+  readonly previewResultRef: RefObject<HTMLElement | null>;
   readonly ruleSummary: string;
   readonly publicLinkAvailable: boolean;
   readonly publicRoute: string | null;
@@ -1224,6 +1333,7 @@ interface CfpPublicPreviewSectionProps {
   readonly onPreviewResponseChange: (fieldId: string, value: string) => void;
   readonly onPreviewSelectionChange: (key: CfpPreviewSelectionKey, value: string) => void;
   readonly onPreviewSubmit: () => void;
+  readonly onPreviewViewChange: (view: "application" | "confirmation") => void;
 }
 
 function renderPublicPreviewSection({
@@ -1234,6 +1344,7 @@ function renderPublicPreviewSection({
   previewResponses,
   previewSelections,
   submittedPreviewResult,
+  previewView,
   previewResultRef,
   ruleSummary,
   publicLinkAvailable,
@@ -1242,6 +1353,7 @@ function renderPublicPreviewSection({
   onPreviewResponseChange,
   onPreviewSelectionChange,
   onPreviewSubmit,
+  onPreviewViewChange,
 }: CfpPublicPreviewSectionProps) {
   return (
     <section
@@ -1265,22 +1377,43 @@ function renderPublicPreviewSection({
           </a>
         ) : null}
       </div>
+      <div className={styles.previewViewBar}>
+        <ToggleGroup
+          type="single"
+          value={previewView}
+          variant="outline"
+          spacing={0}
+          role="group"
+          aria-label="Public preview view"
+          className={styles.previewViewToggle}
+          onValueChange={(value) => {
+            if (value === "application" || value === "confirmation") onPreviewViewChange(value);
+          }}
+        >
+          <ToggleGroupItem value="application">Application form</ToggleGroupItem>
+          <ToggleGroupItem value="confirmation">After submission</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
       <div className={styles.previewGrid}>
         {renderPreviewForm({
           configuredFieldForKey,
           configuration,
           previewResponses,
-          previewResultRef,
           previewSelections,
           ruleSummary,
-          submittedPreviewResult,
+          previewView,
           visibleFields,
           onPreviewInput,
           onPreviewResponseChange,
           onPreviewSelectionChange,
           onPreviewSubmit,
         })}
-        {renderPreviewAside({ configuration })}
+        {renderPreviewConfirmation({
+          configuration,
+          previewResultRef,
+          previewView,
+          submittedPreviewResult,
+        })}
       </div>
     </section>
   );
@@ -1293,7 +1426,9 @@ interface CfpEditorSectionsProps {
   readonly publicRoute: string | null;
   readonly publicRoutePath: string | null;
   readonly minimumCfpDate: string | null;
+  readonly maximumCfpDate: string | undefined;
   readonly dateValidationError: string | null;
+  readonly historicalCfpDates: readonly string[];
   readonly closeDatePast: boolean;
   readonly pastCloseAcknowledged: boolean;
   readonly saveState: CfpSaveState;
@@ -1306,7 +1441,8 @@ interface CfpEditorSectionsProps {
   readonly previewResponses: Readonly<Record<string, string>>;
   readonly previewSelections: CfpPreviewSelections;
   readonly submittedPreviewResult: CfpPreviewSubmissionResult | null;
-  readonly previewResultRef: RefObject<HTMLDivElement | null>;
+  readonly previewView: "application" | "confirmation";
+  readonly previewResultRef: RefObject<HTMLElement | null>;
   readonly publicLinkAvailable: boolean;
   readonly onSave: (event: FormEvent<HTMLFormElement>) => void;
   readonly onConfigurationChange: CfpConfigurationUpdater;
@@ -1331,6 +1467,7 @@ interface CfpEditorSectionsProps {
   readonly onPreviewResponseChange: (fieldId: string, value: string) => void;
   readonly onPreviewSelectionChange: (key: CfpPreviewSelectionKey, value: string) => void;
   readonly onPreviewSubmit: () => void;
+  readonly onPreviewViewChange: (view: "application" | "confirmation") => void;
 }
 
 export function CfpEditorSections({
@@ -1340,8 +1477,10 @@ export function CfpEditorSections({
   publicRoute,
   publicRoutePath,
   minimumCfpDate,
+  maximumCfpDate,
   dateValidationError,
   closeDatePast,
+  historicalCfpDates,
   pastCloseAcknowledged,
   saveState,
   visibleFields,
@@ -1354,6 +1493,7 @@ export function CfpEditorSections({
   previewSelections,
   submittedPreviewResult,
   previewResultRef,
+  previewView,
   publicLinkAvailable,
   onSave,
   onConfigurationChange,
@@ -1373,6 +1513,7 @@ export function CfpEditorSections({
   onPreviewResponseChange,
   onPreviewSelectionChange,
   onPreviewSubmit,
+  onPreviewViewChange,
 }: CfpEditorSectionsProps) {
   return (
     <div className={styles.workspaceGrid}>
@@ -1390,8 +1531,9 @@ export function CfpEditorSections({
           dateValidationError,
           effectiveClosed,
           minimumCfpDate,
+          maximumCfpDate,
           pastCloseAcknowledged,
-          publicRoute,
+          historicalCfpDates,
           publicRoutePath,
           saveState,
           onCloseNow,
@@ -1442,6 +1584,8 @@ export function CfpEditorSections({
         onPreviewResponseChange,
         onPreviewSelectionChange,
         onPreviewSubmit,
+        previewView,
+        onPreviewViewChange,
       })}
     </div>
   );

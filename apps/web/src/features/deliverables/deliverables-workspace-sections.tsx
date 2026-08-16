@@ -2,7 +2,16 @@
 
 import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import Link from "next/link";
-import { type FormEvent, useMemo, useReducer, useState, useSyncExternalStore } from "react";
+import {
+  createContext,
+  type FormEvent,
+  type ReactNode,
+  useContext,
+  useMemo,
+  useReducer,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -46,7 +55,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  deadlineAfterEventWarning,
+  deadlineTemporalPolicy,
+  type SpeakerEventTemporalContext,
+} from "@/features/speakers/speaker-temporal-policy";
 import {
   type DeliverableAsset,
   type DeliverableAssetHistoryEntry,
@@ -85,6 +100,20 @@ const stackClass = styles.stack;
 const clusterClass = styles.cluster;
 const gridClass = styles.grid;
 const tableWrapClass = styles.tableWrap;
+const DeliverablesTemporalContext = createContext<SpeakerEventTemporalContext | undefined>(
+  undefined,
+);
+
+export function DeliverablesTemporalContextProvider({
+  value,
+  children,
+}: Readonly<{ value?: SpeakerEventTemporalContext; children: ReactNode }>) {
+  return (
+    <DeliverablesTemporalContext.Provider value={value}>
+      {children}
+    </DeliverablesTemporalContext.Provider>
+  );
+}
 
 function subscribeToDeliverableTime(): () => void {
   return () => undefined;
@@ -165,6 +194,7 @@ export function DeliverablesSummary({
   onFilter,
   participants,
   busy,
+  temporalContext,
   onCreateTask,
 }: {
   readonly rows: readonly DeliverableRow[];
@@ -172,6 +202,7 @@ export function DeliverablesSummary({
   readonly onFilter: (filter: ContentRequestStatusFilter) => void;
   readonly participants: readonly DeliverableSubjectParticipant[];
   readonly busy: boolean;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }) {
   const metrics = contentRequestMetrics(rows);
@@ -194,6 +225,7 @@ export function DeliverablesSummary({
         <TaskComposer
           participants={participants}
           busy={busy}
+          {...(temporalContext === undefined ? {} : { temporalContext })}
           {...(onCreateTask === undefined ? {} : { onCreateTask })}
         />
       </div>
@@ -333,6 +365,7 @@ interface TaskComposerRequestSectionProps {
   readonly title: string;
   readonly description: string;
   readonly dueAt: string;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly onTitleChange: (value: string) => void;
   readonly onDescriptionChange: (value: string) => void;
   readonly onDueAtChange: (value: string) => void;
@@ -341,10 +374,21 @@ function TaskComposerRequestSection({
   title,
   description,
   dueAt,
+  temporalContext,
   onTitleChange,
   onDescriptionChange,
   onDueAtChange,
 }: Readonly<TaskComposerRequestSectionProps>) {
+  const inheritedTemporalContext = useContext(DeliverablesTemporalContext);
+  const effectiveTemporalContext = temporalContext ?? inheritedTemporalContext;
+  const deadlinePolicy =
+    effectiveTemporalContext === undefined
+      ? null
+      : deadlineTemporalPolicy(effectiveTemporalContext);
+  const deadlineWarning =
+    effectiveTemporalContext === undefined
+      ? null
+      : deadlineAfterEventWarning(dueAt, effectiveTemporalContext);
   return (
     <section className={styles.composerSection} aria-labelledby="request-section-heading">
       <div className={styles.composerSectionHeading}>
@@ -365,15 +409,23 @@ function TaskComposerRequestSection({
             required
           />
         </div>
-        <div className={fieldClass}>
-          <Label htmlFor="task-due-date">Due date</Label>
-          <Input
+        <div className={fieldClass} style={{ gridColumn: "1 / -1" }}>
+          <TemporalPicker
             id="task-due-date"
-            type="date"
+            mode="single"
+            precision="date"
             value={dueAt}
-            onChange={(event) => onDueAtChange(event.currentTarget.value)}
-            required
+            label="Due date"
+            eyebrow="Request deadline"
+            description="Choose the exact day this content is due."
+            minimumDateTime={deadlinePolicy?.minimumDate}
+            onChange={onDueAtChange}
           />
+          {deadlineWarning ? (
+            <p className={mutedClass} role="status">
+              {deadlineWarning}
+            </p>
+          ) : null}
         </div>
       </div>
       <div className={fieldClass}>
@@ -608,10 +660,12 @@ function TaskComposerAssignmentSection({
 function TaskComposer({
   participants,
   busy,
+  temporalContext,
   onCreateTask,
 }: Readonly<{
   participants: readonly DeliverableSubjectParticipant[];
   busy: boolean;
+  temporalContext?: SpeakerEventTemporalContext;
   onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }>) {
   const [state, dispatch] = useReducer(taskComposerReducer, undefined, taskComposerInitialState);
@@ -720,6 +774,7 @@ function TaskComposer({
               onTitleChange={(value) => dispatch({ type: "set-title", value })}
               onDescriptionChange={(value) => dispatch({ type: "set-description", value })}
               onDueAtChange={(value) => dispatch({ type: "set-due-at", value })}
+              {...(temporalContext === undefined ? {} : { temporalContext })}
             />
             <TaskComposerFileSection
               acceptedAssetKind={acceptedAssetKind}

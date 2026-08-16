@@ -6,6 +6,11 @@ import { previewReviewAssignments } from "./assignment-preview-review-assignment
 import { distributionPreviewKey } from "./model-distribution-preview-key";
 import type { OrganizerPlanActions } from "./organizer-authoring-plan-actions";
 
+export function distributionAppliedMessage(activeAssignmentCount: number): string {
+  const assignmentLabel = activeAssignmentCount === 1 ? "assignment" : "assignments";
+  return `Reviewer assignments updated. ${activeAssignmentCount} active ${assignmentLabel}.`;
+}
+
 export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
   const {
     seed,
@@ -126,15 +131,7 @@ export function useOrganizerAssignmentActions(scope: OrganizerPlanActions) {
       });
       setAssignmentPreview(null);
       setAssignmentPreviewKey(null);
-      const activeIds = [...result.activeAssignments]
-        .sort((left, right) => left.id.localeCompare(right.id))
-        .map((assignment) => assignment.id);
-      const supersededIds = [...result.supersededAssignments]
-        .sort((left, right) => left.id.localeCompare(right.id))
-        .map((assignment) => assignment.id);
-      setMessage(
-        `Distribution applied atomically. Active assignments: ${activeIds.join(", ") || "none"}. Superseded: ${supersededIds.join(", ") || "none"}. History preserved: ${result.history.length}.`,
-      );
+      setMessage(distributionAppliedMessage(result.activeAssignments.length));
       await onAssignmentsPersisted?.();
     } catch (reason: unknown) {
       setMessage(

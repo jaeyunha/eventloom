@@ -1,7 +1,14 @@
 import { apiErrorSchema } from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
-import { type AgendaEngine, AgendaError, AgendaValidationError } from "../features/agenda/engine";
+import {
+  type AgendaEngine,
+  AgendaEntryTemporalValidationError,
+  AgendaError,
+  AgendaValidationError,
+  validateAgendaEntriesWithinEvent,
+} from "../features/agenda/engine";
+import { localDateInTimeZone } from "../features/agenda/timezone";
 import type {
   PublishedAgendaRevision as AgendaPublishedRevision,
   AgendaState,
@@ -21,6 +28,8 @@ export interface AgendaEventMetadata {
   readonly slug: string;
   readonly name: string;
   readonly timeZone: string;
+  readonly startsAt?: string;
+  readonly endsAt?: string;
   readonly startsOn: string;
   readonly endsOn: string;
   readonly scheduleDates?: readonly string[];
@@ -92,10 +101,7 @@ const entrySchema = z
   })
   .strict();
 const createAgendaSchema = catalogSchema
-  .extend({
-    timeZone: z.string().trim().min(1).max(100),
-    minimumTravelMinutes: z.number().int().nonnegative().max(1_440),
-  })
+  .extend({ minimumTravelMinutes: z.number().int().nonnegative().max(1_440) })
   .strict();
 const updateDraftSchema = z
   .object({ expectedVersion: expectedVersionSchema, entries: z.array(entrySchema).max(2_000) })
@@ -236,6 +242,15 @@ function staleRevisionDetails(
 }
 
 function agendaErrorResponse(context: AgendaContext, error: AgendaError): Response {
+  if (error instanceof AgendaEntryTemporalValidationError) {
+    return errorResponse(context, 400, "VALIDATION_FAILED", error.message, [
+      {
+        path: ["entries", error.entryIndex, error.field],
+        code: `agenda.${error.issueCode}`,
+        message: error.message,
+      },
+    ]);
+  }
   if (error instanceof AgendaValidationError) {
     return errorResponse(
       context,
@@ -351,6 +366,8 @@ type AgendaLocalEntry = Readonly<{
   id: string;
   startsAtLocal: string;
   endsAtLocal: string;
+  startDisambiguation?: "earlier" | "later" | undefined;
+  endDisambiguation?: "earlier" | "later" | undefined;
 }>;
 
 function agendaDate(value: string): string | null {
@@ -394,6 +411,15 @@ function validateAgendaEntryDates(
   entries: readonly AgendaLocalEntry[],
 ): void {
   if (metadata === null) return;
+  if (metadata.startsAt !== undefined && metadata.endsAt !== undefined) {
+    validateAgendaEntriesWithinEvent(entries, {
+      startsAt: metadata.startsAt,
+      endsAt: metadata.endsAt,
+      timeZone: metadata.timeZone,
+      ...(metadata.scheduleDates === undefined ? {} : { scheduleDates: metadata.scheduleDates }),
+    });
+    return;
+  }
   const allowedDates = agendaDateRange(metadata);
   for (const entry of entries) {
     const start = agendaDate(entry.startsAtLocal.slice(0, 10));
@@ -509,7 +535,7 @@ function adminAgendaWorkspaceView(
     eventMetadata?.startsOn ??
     publicEvent?.startsOn ??
     localDates[0] ??
-    new Date().toISOString().slice(0, 10);
+    localDateInTimeZone(new Date().toISOString(), state.timeZone);
   const endsOn = eventMetadata?.endsOn ?? publicEvent?.endsOn ?? localDates.at(-1) ?? startsOn;
   const trackColors = ["#4f46e5", "#0f766e", "#b45309", "#be123c", "#6d28d9"];
 
@@ -518,8 +544,13 @@ function adminAgendaWorkspaceView(
       id: state.eventId,
       name: eventMetadata?.name ?? publicEvent?.name ?? state.eventId,
       timeZone: eventMetadata?.timeZone ?? state.timeZone,
+      ...(eventMetadata?.startsAt === undefined ? {} : { startsAt: eventMetadata.startsAt }),
+      ...(eventMetadata?.endsAt === undefined ? {} : { endsAt: eventMetadata.endsAt }),
       startsOn,
       endsOn,
+      ...(eventMetadata?.scheduleDates === undefined
+        ? {}
+        : { scheduleDates: eventMetadata.scheduleDates }),
     },
     draft: {
       version: state.draft.version,
@@ -547,6 +578,12 @@ function adminAgendaWorkspaceView(
               : entry.trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
           startsAtLocal: entry.startsAtLocal,
           endsAtLocal: entry.endsAtLocal,
+          ...(entry.startDisambiguation === undefined
+            ? {}
+            : { startDisambiguation: entry.startDisambiguation }),
+          ...(entry.endDisambiguation === undefined
+            ? {}
+            : { endDisambiguation: entry.endDisambiguation }),
         };
       }),
     },

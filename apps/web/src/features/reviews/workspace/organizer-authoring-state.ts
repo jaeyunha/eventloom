@@ -93,6 +93,9 @@ export function useOrganizerAuthoringState({
   const [assignmentPreviewOverride, setAssignmentPreviewOverride] =
     useState<AssignmentPreviewOverride | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [unresolvedTemporalFields, setUnresolvedTemporalFields] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [assignmentSubmissionOverride, setAssignmentSubmissionOverride] =
     useState<AssignmentFieldOverride | null>(null);
   const [assignmentReviewerOverride, setAssignmentReviewerOverride] =
@@ -180,6 +183,18 @@ export function useOrganizerAuthoringState({
     },
     [assignmentOwnerKey, defaultAssignmentReviewerIds],
   );
+
+  function setTemporalFieldValidity(field: string, isValid: boolean): void {
+    setUnresolvedTemporalFields((current) => {
+      const hasField = current.has(field);
+      if (hasField === !isValid) return current;
+      const next = new Set(current);
+      if (isValid) next.delete(field);
+      else next.add(field);
+      return next;
+    });
+  }
+
   const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerIds.join(",")}:${version}`;
   const ownedAssignmentPreview =
     assignmentPreviewOverride?.ownerKey === assignmentOwnerKey &&
@@ -254,6 +269,8 @@ export function useOrganizerAuthoringState({
     setAssignmentPreviewKey,
     message,
     setMessage,
+    unresolvedTemporalFields,
+    setTemporalFieldValidity,
     assignmentSubmissionId,
     setAssignmentSubmissionId,
     assignmentReviewerIds,

@@ -20,6 +20,8 @@ import {
 } from "../../components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "../../components/ui/field";
 import { Input } from "../../components/ui/input";
+import { TemporalPicker } from "../../components/ui/temporal-picker";
+import { apiKeyExpirationInstant, minimumApiKeyExpirationLocal } from "./api-key-expiration-model";
 import styles from "./integrations.module.css";
 import type {
   ApiKeySummary,
@@ -214,6 +216,8 @@ export function ApiKeysSection({
   actions,
 }: Readonly<{ keys: readonly ApiKeySummary[]; actions: IntegrationActions }>) {
   const [selectedScopes, setSelectedScopes] = useState<ReadonlySet<ApiScope>>(new Set());
+  const [expiresAt, setExpiresAt] = useState("");
+  const [expirationError, setExpirationError] = useState<string | null>(null);
 
   function toggleScope(scope: ApiScope) {
     setSelectedScopes((current) => {
@@ -231,14 +235,23 @@ export function ApiKeysSection({
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    let expirationInstant: string | null;
+    try {
+      expirationInstant = apiKeyExpirationInstant(expiresAt);
+      setExpirationError(null);
+    } catch (error) {
+      setExpirationError(error instanceof Error ? error.message : "The expiration is invalid.");
+      return;
+    }
     const created = await actions.createApiKey({
       label: String(data.get("label") ?? ""),
       scopes: [...selectedScopes],
-      expiresAt: String(data.get("expiresAt") ?? "").trim() || null,
+      expiresAt: expirationInstant,
     });
     if (created) {
       form.reset();
       setSelectedScopes(new Set());
+      setExpiresAt("");
     }
   }
 
@@ -265,12 +278,24 @@ export function ApiKeysSection({
                   required
                 />
               </Field>
-              <Field>
-                <FieldLabel htmlFor="api-key-expiry">Expires</FieldLabel>
-                <Input id="api-key-expiry" name="expiresAt" type="date" />
+              <Field style={{ gridColumn: "1 / -1" }}>
+                <TemporalPicker
+                  id="api-key-expiry"
+                  mode="single"
+                  precision="date-time"
+                  value={expiresAt}
+                  label="Expiration date and time"
+                  name="expiresAt"
+                  eyebrow="Access lifetime"
+                  description="Choose the local date and time when this key should stop working, or leave it unset."
+                  minimumDateTime={minimumApiKeyExpirationLocal()}
+                  clearable
+                  onChange={setExpiresAt}
+                />
                 <FieldDescription>
                   Leave blank only for long-running server integrations.
                 </FieldDescription>
+                {expirationError === null ? null : <p role="alert">{expirationError}</p>}
               </Field>
             </div>
             <fieldset className={styles.checkboxFieldset}>

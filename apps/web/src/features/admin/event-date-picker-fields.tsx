@@ -1,16 +1,23 @@
 "use client";
 
+import type { TimeDisambiguation } from "@eventloom/contracts";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TemporalDisambiguation } from "@/components/ui/temporal-disambiguation";
+import {
+  isTemporalDateDisabled,
+  rangeBoundaryTimeBounds,
+  type TemporalConstraints,
+  temporalTimeBounds,
+} from "@/components/ui/temporal-picker-model";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { EventDateMode, EventDateSelectionValue } from "./event-date-picker";
 import styles from "./event-date-picker.module.css";
 import {
   datePart,
   eventDatesBetween,
-  isEventDateDisabled,
   localDateKey,
   parseDateOnly,
   sortedUniqueDates,
@@ -18,16 +25,38 @@ import {
 } from "./event-date-picker-model";
 
 interface EventDatePickerFieldsProps extends EventDateSelectionValue {
+  readonly id: string;
+  readonly selectionMode: "single" | "range";
   readonly minimumDateTime?: string | undefined;
+  readonly maximumDateTime?: string | undefined;
   readonly minimumEndDate?: string | undefined;
+  readonly allowedDates?: readonly string[] | undefined;
+  readonly unchangedValues?: readonly string[] | undefined;
+  readonly timeZone?: string | undefined;
+  readonly startDisambiguation?: TimeDisambiguation | undefined;
+  readonly endDisambiguation?: TimeDisambiguation | undefined;
+  readonly onStartDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
+  readonly onEndDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
   readonly dateOnly: boolean;
   readonly showModeToggle: boolean;
   readonly showTimeControls: boolean;
+  readonly layout: "split" | "stacked";
+  readonly clearable: boolean;
+  readonly disabled: boolean;
   readonly eyebrow: string;
   readonly title: string;
   readonly description: string;
   readonly startLabel: string;
   readonly endLabel: string;
+  readonly startTimeLabel: string;
+  readonly endTimeLabel: string;
+  readonly defaultStartTime: string;
+  readonly defaultEndTime: string;
+  readonly timeHint: string;
   readonly onChange: (value: EventDateSelectionValue) => void;
 }
 
@@ -129,6 +158,8 @@ function nextModeSelection({
   startDate,
   endDate,
   dateOnly,
+  defaultStartTime,
+  defaultEndTime,
 }: {
   readonly nextMode: EventDateMode;
   readonly startsAt: string;
@@ -137,6 +168,8 @@ function nextModeSelection({
   readonly startDate: string;
   readonly endDate: string;
   readonly dateOnly: boolean;
+  readonly defaultStartTime: string;
+  readonly defaultEndTime: string;
 }): EventDateSelectionValue {
   if (nextMode === "individual") {
     return {
@@ -151,8 +184,8 @@ function nextModeSelection({
   const lastDate = normalizedDates.at(-1) ?? endDate;
   return {
     mode: nextMode,
-    startsAt: selectionDateTime(firstDate, timePart(startsAt, "09:00"), dateOnly),
-    endsAt: selectionDateTime(lastDate, timePart(endsAt, "17:00"), dateOnly),
+    startsAt: selectionDateTime(firstDate, timePart(startsAt, defaultStartTime), dateOnly),
+    endsAt: selectionDateTime(lastDate, timePart(endsAt, defaultEndTime), dateOnly),
     scheduleDates: [],
   };
 }
@@ -166,6 +199,8 @@ function nextRangeSelection({
   startDate,
   endDate,
   dateOnly,
+  defaultStartTime,
+  defaultEndTime,
 }: {
   readonly activeBoundary: "start" | "end";
   readonly date: string;
@@ -175,21 +210,23 @@ function nextRangeSelection({
   readonly startDate: string;
   readonly endDate: string;
   readonly dateOnly: boolean;
+  readonly defaultStartTime: string;
+  readonly defaultEndTime: string;
 }): EventDateSelectionValue {
   if (activeBoundary === "start") {
     const nextEndDate = endDate && date <= endDate ? endDate : date;
     return {
       mode,
-      startsAt: selectionDateTime(date, timePart(startsAt, "09:00"), dateOnly),
-      endsAt: selectionDateTime(nextEndDate, timePart(endsAt, "17:00"), dateOnly),
+      startsAt: selectionDateTime(date, timePart(startsAt, defaultStartTime), dateOnly),
+      endsAt: selectionDateTime(nextEndDate, timePart(endsAt, defaultEndTime), dateOnly),
       scheduleDates: [],
     };
   }
   const nextStartDate = startDate && date >= startDate ? startDate : date;
   return {
     mode,
-    startsAt: selectionDateTime(nextStartDate, timePart(startsAt, "09:00"), dateOnly),
-    endsAt: selectionDateTime(date, timePart(endsAt, "17:00"), dateOnly),
+    startsAt: selectionDateTime(nextStartDate, timePart(startsAt, defaultStartTime), dateOnly),
+    endsAt: selectionDateTime(date, timePart(endsAt, defaultEndTime), dateOnly),
     scheduleDates: [],
   };
 }
@@ -201,6 +238,8 @@ function nextIndividualSelection({
   endsAt,
   scheduleDates,
   dateOnly,
+  defaultStartTime,
+  defaultEndTime,
 }: {
   readonly date: string;
   readonly mode: EventDateMode;
@@ -208,14 +247,16 @@ function nextIndividualSelection({
   readonly endsAt: string;
   readonly scheduleDates: readonly string[];
   readonly dateOnly: boolean;
+  readonly defaultStartTime: string;
+  readonly defaultEndTime: string;
 }): EventDateSelectionValue {
   const nextDates = toggleEventDate(scheduleDates, date);
   const firstDate = nextDates[0] ?? "";
   const lastDate = nextDates.at(-1) ?? "";
   return {
     mode,
-    startsAt: selectionDateTime(firstDate, timePart(startsAt, "09:00"), dateOnly),
-    endsAt: selectionDateTime(lastDate, timePart(endsAt, "17:00"), dateOnly),
+    startsAt: selectionDateTime(firstDate, timePart(startsAt, defaultStartTime), dateOnly),
+    endsAt: selectionDateTime(lastDate, timePart(endsAt, defaultEndTime), dateOnly),
     scheduleDates: nextDates,
   };
 }
@@ -252,6 +293,8 @@ function renderDatePickerSummary({
   startLabel,
   endLabel,
   activeBoundary,
+  isSingleSelection,
+  disabled,
   onBoundaryChange,
 }: {
   readonly mode: EventDateMode;
@@ -261,6 +304,8 @@ function renderDatePickerSummary({
   readonly startLabel: string;
   readonly endLabel: string;
   readonly activeBoundary: "start" | "end";
+  readonly isSingleSelection: boolean;
+  readonly disabled: boolean;
   readonly onBoundaryChange: (boundary: "start" | "end") => void;
 }) {
   return (
@@ -271,22 +316,30 @@ function renderDatePickerSummary({
           <button
             className={styles.boundaryButton}
             data-active={activeBoundary === "start"}
+            data-boundary-control="start"
+            disabled={disabled}
             type="button"
             onClick={() => onBoundaryChange("start")}
           >
             <span>{startLabel}</span>
             <strong>{conciseDate(startDate)}</strong>
           </button>
-          <span className={styles.rangeArrow}>to</span>
-          <button
-            className={styles.boundaryButton}
-            data-active={activeBoundary === "end"}
-            type="button"
-            onClick={() => onBoundaryChange("end")}
-          >
-            <span>{endLabel}</span>
-            <strong>{conciseDate(endDate)}</strong>
-          </button>
+          {isSingleSelection ? null : (
+            <>
+              <span className={styles.rangeArrow}>to</span>
+              <button
+                className={styles.boundaryButton}
+                data-active={activeBoundary === "end"}
+                data-boundary-control="end"
+                disabled={disabled}
+                type="button"
+                onClick={() => onBoundaryChange("end")}
+              >
+                <span>{endLabel}</span>
+                <strong>{conciseDate(endDate)}</strong>
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className={styles.individualSummary}>
@@ -304,8 +357,11 @@ function renderDatePickerSummary({
 
 function renderDatePickerCalendar({
   cells,
-  minimumDate,
   minimumEndDate,
+  constraints,
+  dateOnly,
+  disabled,
+  isSingleSelection,
   mode,
   activeBoundary,
   startDate,
@@ -316,8 +372,11 @@ function renderDatePickerCalendar({
   onSelectDate,
 }: {
   readonly cells: readonly MonthCell[];
-  readonly minimumDate: string;
   readonly minimumEndDate: string;
+  readonly constraints: TemporalConstraints;
+  readonly dateOnly: boolean;
+  readonly disabled: boolean;
+  readonly isSingleSelection: boolean;
   readonly mode: EventDateMode;
   readonly activeBoundary: "start" | "end";
   readonly startDate: string;
@@ -357,17 +416,20 @@ function renderDatePickerCalendar({
           <span key={weekDay}>{weekDay}</span>
         ))}
       </div>
-      <div className={styles.days}>
+      <div className={styles.days} data-calendar-grid="">
         {cells.map((cell) => {
-          const disabled = isEventDateDisabled(
-            cell.dateKey,
-            minimumDate,
-            mode === "range" ? minimumEndDate : "",
-            activeBoundary,
-          );
+          const dateDisabled =
+            disabled ||
+            isTemporalDateDisabled(cell.dateKey, constraints) ||
+            (mode === "range" &&
+              !isSingleSelection &&
+              activeBoundary === "end" &&
+              minimumEndDate !== "" &&
+              (dateOnly ? cell.dateKey <= minimumEndDate : cell.dateKey < minimumEndDate));
           const individuallySelected = selectedDateSet.has(cell.dateKey);
           const inRange =
             mode === "range" &&
+            !isSingleSelection &&
             startDate !== "" &&
             endDate !== "" &&
             cell.dateKey >= startDate &&
@@ -382,7 +444,7 @@ function renderDatePickerCalendar({
               data-muted={!cell.isCurrentMonth}
               data-selected={individuallySelected}
               data-within-range={inRange}
-              disabled={disabled}
+              disabled={dateDisabled}
               key={cell.dateKey}
               type="button"
               onClick={() => onSelectDate(cell.dateKey)}
@@ -397,6 +459,7 @@ function renderDatePickerCalendar({
 }
 
 function renderDatePickerDetails({
+  id,
   selectedDates,
   showSelectedDates,
   showTimeControls,
@@ -404,9 +467,26 @@ function renderDatePickerDetails({
   endsAt,
   startDate,
   endDate,
+  isSingleSelection,
+  disabled,
+  layout,
+  startLabel,
+  endLabel,
+  startTimeLabel,
+  endTimeLabel,
+  defaultStartTime,
+  defaultEndTime,
+  timeHint,
+  constraints,
+  timeZone,
+  startDisambiguation,
+  endDisambiguation,
+  onStartDisambiguationChange,
+  onEndDisambiguationChange,
   onSelectDate,
   onUpdateTime,
 }: {
+  readonly id: string;
   readonly selectedDates: readonly string[];
   readonly showSelectedDates: boolean;
   readonly showTimeControls: boolean;
@@ -414,11 +494,31 @@ function renderDatePickerDetails({
   readonly endsAt: string;
   readonly startDate: string;
   readonly endDate: string;
+  readonly isSingleSelection: boolean;
+  readonly disabled: boolean;
+  readonly layout: "split" | "stacked";
+  readonly startLabel: string;
+  readonly endLabel: string;
+  readonly startTimeLabel: string;
+  readonly endTimeLabel: string;
+  readonly defaultStartTime: string;
+  readonly defaultEndTime: string;
+  readonly timeHint: string;
+  readonly constraints: TemporalConstraints;
+  readonly timeZone?: string | undefined;
+  readonly startDisambiguation?: TimeDisambiguation | undefined;
+  readonly endDisambiguation?: TimeDisambiguation | undefined;
+  readonly onStartDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
+  readonly onEndDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
   readonly onSelectDate: (date: string) => void;
   readonly onUpdateTime: (boundary: "start" | "end", time: string) => void;
 }) {
   return (
-    <div className={styles.details}>
+    <div className={`${styles.details} ${layout === "stacked" ? styles.detailsStacked : ""}`}>
       {showSelectedDates ? (
         <div className={styles.selectedDates}>
           <span className={styles.detailLabel}>Selected days</span>
@@ -427,6 +527,7 @@ function renderDatePickerDetails({
               <button
                 aria-label={`Remove ${longDate(date)}`}
                 className={styles.dateChip}
+                disabled={disabled}
                 key={date}
                 type="button"
                 onClick={() => onSelectDate(date)}
@@ -440,40 +541,83 @@ function renderDatePickerDetails({
       ) : null}
       {showTimeControls ? (
         <>
-          <div className={styles.timeGrid}>
-            <label htmlFor="organizer-event-start-time">
-              <span className={styles.detailLabel}>
-                <Clock3 aria-hidden="true" />
-                Start time
-              </span>
-              <Input
-                aria-label="Event start time"
-                disabled={startDate === ""}
-                id="organizer-event-start-time"
-                type="time"
-                value={startDate === "" ? "" : timePart(startsAt, "09:00")}
-                onChange={(event) => onUpdateTime("start", event.target.value)}
-              />
-            </label>
-            <label htmlFor="organizer-event-end-time">
-              <span className={styles.detailLabel}>
-                <Clock3 aria-hidden="true" />
-                End time
-              </span>
-              <Input
-                aria-label="Event end time"
-                disabled={endDate === ""}
-                id="organizer-event-end-time"
-                type="time"
-                value={endDate === "" ? "" : timePart(endsAt, "17:00")}
-                onChange={(event) => onUpdateTime("end", event.target.value)}
-              />
-            </label>
+          <div className={styles.timeGrid} data-single={isSingleSelection}>
+            <div className={styles.timeField}>
+              <label htmlFor={`${id}-time`}>
+                <span className={styles.detailLabel}>
+                  <Clock3 aria-hidden="true" />
+                  {startTimeLabel}
+                </span>
+                <Input
+                  aria-label={startTimeLabel}
+                  disabled={disabled || startDate === ""}
+                  id={`${id}-time`}
+                  max={
+                    (isSingleSelection
+                      ? temporalTimeBounds(startDate, constraints)
+                      : rangeBoundaryTimeBounds("start", startDate, startsAt, endsAt, constraints)
+                    ).maximum
+                  }
+                  min={
+                    (isSingleSelection
+                      ? temporalTimeBounds(startDate, constraints)
+                      : rangeBoundaryTimeBounds("start", startDate, startsAt, endsAt, constraints)
+                    ).minimum
+                  }
+                  type="time"
+                  value={startDate === "" ? "" : timePart(startsAt, defaultStartTime)}
+                  onChange={(event) => onUpdateTime("start", event.target.value)}
+                />
+              </label>
+              {timeZone === undefined ? null : (
+                <TemporalDisambiguation
+                  id={`${id}-start`}
+                  label={startLabel}
+                  localDateTime={startsAt}
+                  timeZone={timeZone}
+                  value={startDisambiguation}
+                  disabled={disabled}
+                  onChange={(value) => onStartDisambiguationChange?.(value)}
+                />
+              )}
+            </div>
+            {isSingleSelection ? null : (
+              <div className={styles.timeField}>
+                <label htmlFor={`${id}-end-time`}>
+                  <span className={styles.detailLabel}>
+                    <Clock3 aria-hidden="true" />
+                    {endTimeLabel}
+                  </span>
+                  <Input
+                    aria-label={endTimeLabel}
+                    disabled={disabled || endDate === ""}
+                    id={`${id}-end-time`}
+                    max={
+                      rangeBoundaryTimeBounds("end", endDate, startsAt, endsAt, constraints).maximum
+                    }
+                    min={
+                      rangeBoundaryTimeBounds("end", endDate, startsAt, endsAt, constraints).minimum
+                    }
+                    type="time"
+                    value={endDate === "" ? "" : timePart(endsAt, defaultEndTime)}
+                    onChange={(event) => onUpdateTime("end", event.target.value)}
+                  />
+                </label>
+                {timeZone === undefined ? null : (
+                  <TemporalDisambiguation
+                    id={`${id}-end`}
+                    label={endLabel}
+                    localDateTime={endsAt}
+                    timeZone={timeZone}
+                    value={endDisambiguation}
+                    disabled={disabled}
+                    onChange={(value) => onEndDisambiguationChange?.(value)}
+                  />
+                )}
+              </div>
+            )}
           </div>
-          <p className={styles.timeHint}>
-            Times use the event time zone. For individual days, these are the opening time on the
-            first day and closing time on the last day.
-          </p>
+          <p className={styles.timeHint}>{timeHint}</p>
         </>
       ) : null}
     </div>
@@ -481,24 +625,49 @@ function renderDatePickerDetails({
 }
 
 export function EventDatePickerFields({
+  id,
   mode,
   startsAt,
   endsAt,
   scheduleDates,
+  selectionMode,
   minimumDateTime,
+  maximumDateTime,
   minimumEndDate,
+  allowedDates,
+  unchangedValues,
+  timeZone,
+  startDisambiguation,
+  endDisambiguation,
+  onStartDisambiguationChange,
+  onEndDisambiguationChange,
   dateOnly,
   showModeToggle,
   showTimeControls,
+  layout,
+  clearable,
+  disabled,
   eyebrow,
   title,
   description,
   startLabel,
   endLabel,
+  startTimeLabel,
+  endTimeLabel,
+  defaultStartTime,
+  defaultEndTime,
+  timeHint,
   onChange,
 }: EventDatePickerFieldsProps) {
   const startDate = datePart(startsAt);
   const endDate = datePart(endsAt);
+  const isSingleSelection = selectionMode === "single";
+  const constraints: TemporalConstraints = {
+    ...(minimumDateTime === undefined ? {} : { minimum: minimumDateTime }),
+    ...(maximumDateTime === undefined ? {} : { maximum: maximumDateTime }),
+    ...(allowedDates === undefined ? {} : { allowedDates }),
+    ...(unchangedValues === undefined ? {} : { unchangedValues }),
+  };
   const minimumDate = minimumDateTime?.slice(0, 10) ?? "";
   const minimumEndDateValue = minimumEndDate?.slice(0, 10) ?? "";
   const initialMonth = parseDateOnly(scheduleDates[0] || startDate || minimumDate) ?? new Date();
@@ -514,6 +683,7 @@ export function EventDatePickerFields({
 
   function changeMode(nextMode: EventDateMode): void {
     if (nextMode === mode) return;
+    resetDisambiguation();
     onChange(
       nextModeSelection({
         nextMode,
@@ -523,13 +693,47 @@ export function EventDatePickerFields({
         startDate,
         endDate,
         dateOnly,
+        defaultStartTime,
+        defaultEndTime,
       }),
     );
   }
 
+  function resetDisambiguation(boundary?: "start" | "end"): void {
+    if (boundary === undefined || boundary === "start") {
+      onStartDisambiguationChange?.(undefined);
+    }
+    if (boundary === undefined || boundary === "end") {
+      onEndDisambiguationChange?.(undefined);
+    }
+  }
+
   function selectDate(date: string): void {
     if (mode === "individual") {
-      onChange(nextIndividualSelection({ date, mode, startsAt, endsAt, scheduleDates, dateOnly }));
+      resetDisambiguation();
+      onChange(
+        nextIndividualSelection({
+          date,
+          mode,
+          startsAt,
+          endsAt,
+          scheduleDates,
+          dateOnly,
+          defaultStartTime,
+          defaultEndTime,
+        }),
+      );
+      return;
+    }
+    resetDisambiguation(isSingleSelection ? "start" : activeBoundary);
+    if (isSingleSelection) {
+      const nextValue = selectionDateTime(date, timePart(startsAt, defaultStartTime), dateOnly);
+      onChange({
+        mode,
+        startsAt: nextValue,
+        endsAt: nextValue,
+        scheduleDates: [],
+      });
       return;
     }
     onChange(
@@ -542,59 +746,90 @@ export function EventDatePickerFields({
         startDate,
         endDate,
         dateOnly,
+        defaultStartTime,
+        defaultEndTime,
       }),
     );
     setActiveBoundary((boundary) => (boundary === "start" ? "end" : "start"));
   }
 
   function updateTime(boundary: "start" | "end", time: string): void {
+    resetDisambiguation(boundary);
+    const nextSelection = nextTimeSelection({
+      boundary,
+      mode,
+      startDate,
+      endDate,
+      time,
+      startsAt,
+      endsAt,
+      scheduleDates,
+    });
     onChange(
-      nextTimeSelection({
-        boundary,
-        mode,
-        startDate,
-        endDate,
-        time,
-        startsAt,
-        endsAt,
-        scheduleDates,
-      }),
+      isSingleSelection && boundary === "start"
+        ? { ...nextSelection, endsAt: nextSelection.startsAt }
+        : nextSelection,
     );
   }
 
+  function clearSelection(): void {
+    resetDisambiguation();
+    onChange({
+      mode,
+      startsAt: "",
+      endsAt: "",
+      scheduleDates: [],
+    });
+    setActiveBoundary("start");
+  }
   return (
-    <section className={styles.root} aria-labelledby="event-date-schedule-title">
+    <section
+      className={styles.root}
+      aria-labelledby={`${id}-title`}
+      aria-disabled={disabled || undefined}
+      data-selection-mode={selectionMode}
+    >
       <div className={styles.heading}>
         <div>
           <span className={styles.eyebrow}>{eyebrow}</span>
-          <h3 id="event-date-schedule-title">{title}</h3>
+          <h3 id={`${id}-title`}>{title}</h3>
           <p>{description}</p>
         </div>
-        {showModeToggle ? (
-          <ToggleGroup
-            aria-label="Event date selection mode"
-            className={styles.modeToggle}
-            type="single"
-            value={mode}
-            variant="outline"
-            onValueChange={(value) => {
-              if (value === "range" || value === "individual") changeMode(value);
-            }}
-          >
-            <ToggleGroupItem type="button" value="range">
-              Date range
-            </ToggleGroupItem>
-            <ToggleGroupItem type="button" value="individual">
-              Individual days
-            </ToggleGroupItem>
-          </ToggleGroup>
-        ) : null}
+        <div className={styles.headingActions}>
+          {clearable && (startDate !== "" || endDate !== "" || scheduleDates.length > 0) ? (
+            <Button type="button" variant="ghost" onClick={clearSelection} disabled={disabled}>
+              Clear {isSingleSelection ? "date" : "dates"}
+            </Button>
+          ) : null}
+          {showModeToggle ? (
+            <ToggleGroup
+              aria-label="Event date selection mode"
+              className={styles.modeToggle}
+              disabled={disabled}
+              type="single"
+              value={mode}
+              variant="outline"
+              onValueChange={(value) => {
+                if (value === "range" || value === "individual") changeMode(value);
+              }}
+            >
+              <ToggleGroupItem type="button" value="range">
+                Date range
+              </ToggleGroupItem>
+              <ToggleGroupItem type="button" value="individual">
+                Individual days
+              </ToggleGroupItem>
+            </ToggleGroup>
+          ) : null}
+        </div>
       </div>
 
       {renderDatePickerSummary({
         activeBoundary,
+        disabled,
         endDate,
         endLabel,
+        isSingleSelection,
         mode,
         selectedDates,
         startDate,
@@ -602,12 +837,15 @@ export function EventDatePickerFields({
         onBoundaryChange: setActiveBoundary,
       })}
 
-      <div className={styles.pickerLayout} data-details-hidden={!showDetails}>
+      <div className={styles.pickerLayout} data-details-hidden={!showDetails} data-layout={layout}>
         {renderDatePickerCalendar({
           activeBoundary,
           cells,
+          constraints,
+          dateOnly,
+          disabled,
           endDate,
-          minimumDate: minimumDate,
+          isSingleSelection,
           minimumEndDate: minimumEndDateValue,
           mode,
           selectedDateSet,
@@ -621,15 +859,32 @@ export function EventDatePickerFields({
         })}
         {showDetails
           ? renderDatePickerDetails({
+              constraints,
+              defaultEndTime,
+              defaultStartTime,
+              disabled,
               endDate,
-              endsAt,
+              endLabel,
+              endDisambiguation,
+              id,
+              isSingleSelection,
+              layout,
+              onEndDisambiguationChange,
+              onSelectDate: selectDate,
+              onStartDisambiguationChange,
+              onUpdateTime: updateTime,
               selectedDates,
               showSelectedDates,
               showTimeControls,
               startDate,
+              startDisambiguation,
+              startLabel,
+              startTimeLabel,
               startsAt,
-              onSelectDate: selectDate,
-              onUpdateTime: updateTime,
+              endTimeLabel,
+              endsAt,
+              timeHint,
+              timeZone,
             })
           : null}
       </div>

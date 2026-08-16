@@ -175,7 +175,8 @@ test("CFP editor keeps every configuration section usable on a compact desktop",
 test("CFP editor lets incomplete draft save attempts reach persistence", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${eventBase}/cfp`);
-  await page.getByLabel("Event name").fill("");
+  await page.getByRole("button", { name: "Messaging" }).click();
+  await page.getByLabel("Form label").fill("");
 
   const saveRequest = page.waitForRequest(
     (request) =>
@@ -185,4 +186,86 @@ test("CFP editor lets incomplete draft save attempts reach persistence", async (
   await page.getByRole("button", { name: "Save changes" }).click();
 
   await saveRequest;
+});
+
+test("CFP editor keeps standard desktop gutters around its document", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${eventBase}/cfp`);
+
+  const insets = await page
+    .locator('form[aria-label="Event and CFP configuration"]')
+    .evaluate((form) => {
+      const viewport = form.parentElement?.parentElement;
+      const workspace = viewport?.parentElement;
+      if (!viewport || !workspace) throw new Error("CFP viewport ancestry is unavailable.");
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const workspaceRect = workspace.getBoundingClientRect();
+      return {
+        left: viewportRect.left - workspaceRect.left,
+        right: workspaceRect.right - viewportRect.right,
+      };
+    });
+
+  expect(insets.left).toBeGreaterThanOrEqual(24);
+  expect(insets.right).toBeGreaterThanOrEqual(24);
+});
+
+test("CFP editor keeps historical close confirmation compact", async ({ page }, testInfo) => {
+  await page.clock.install({ time: new Date("2026-09-16T09:00:00.000Z") });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${eventBase}/cfp`);
+
+  const checkbox = page.getByRole("checkbox", { name: /Confirm past close date/u });
+  await expect(checkbox).toBeVisible();
+
+  const metrics = await checkbox.evaluate((input) => {
+    const label = input.closest("label");
+    const copy = label?.querySelector("span");
+    if (!label || !copy) throw new Error("Historical close confirmation structure is unavailable.");
+
+    const inputRect = input.getBoundingClientRect();
+    const copyRect = copy.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    return {
+      checkboxWidth: inputRect.width,
+      copyWidth: copyRect.width,
+      labelHeight: labelRect.height,
+    };
+  });
+
+  expect(metrics.checkboxWidth).toBeLessThanOrEqual(24);
+  expect(metrics.copyWidth).toBeGreaterThanOrEqual(240);
+  expect(metrics.labelHeight).toBeLessThanOrEqual(96);
+  await checkbox.locator("xpath=ancestor::label").screenshot({
+    path: testInfo.outputPath("cfp-historical-close-confirmation-desktop.png"),
+  });
+});
+
+test("CFP editor switches public preview between full-width views", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${eventBase}/cfp`);
+  await page.getByRole("button", { name: "Public preview" }).click();
+
+  const viewToggle = page.getByRole("group", { name: "Public preview view" });
+  await expect(viewToggle).toBeVisible();
+  await expect(viewToggle.getByRole("radio", { name: "Application form" })).toHaveAttribute(
+    "data-state",
+    "on",
+  );
+
+  const applicationPreview = page.locator('section[aria-label="Public CFP form preview"]');
+  await expect(applicationPreview).toBeVisible();
+  await expect(applicationPreview).toHaveRole("region");
+
+  await viewToggle.getByRole("radio", { name: "After submission" }).click();
+  await expect(applicationPreview).toBeHidden();
+
+  const confirmationPreview = page.locator('section[aria-label="After submission preview"]');
+  await expect(confirmationPreview).toBeVisible();
+  await expect(confirmationPreview).toHaveRole("region");
+  await page.screenshot({
+    path: testInfo.outputPath("cfp-after-submission-preview-desktop.png"),
+    fullPage: true,
+  });
 });

@@ -1,4 +1,8 @@
-import { type ApiScope, standardPresentationUploadMimeTypes } from "@eventloom/contracts";
+import {
+  type ApiScope,
+  localDateInTimeZone,
+  standardPresentationUploadMimeTypes,
+} from "@eventloom/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaCatalogSynchronizer } from "../features/agenda/catalog-sync";
 import { AgendaEngine, AgendaError } from "../features/agenda/engine";
@@ -160,6 +164,7 @@ import {
 } from "./constants";
 
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
+const EVENT_SEED_AT = "2026-07-31T12:00:00.000Z";
 const FAR_FUTURE = new Date("2099-01-01T00:00:00.000Z");
 const LOCAL_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   "events:read",
@@ -1599,7 +1604,10 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
   }
 }
 
-function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"]): AgendaEngine {
+function localAgendaEngine(
+  eventRepository: InMemoryEventRepository,
+  suggestionProvider?: CloudflareAiProviders["agenda"],
+): AgendaEngine {
   return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
     clock: { now: () => new Date(SEEDED_AT) },
     idGenerator: {
@@ -1609,6 +1617,17 @@ function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"])
       })(),
     },
     ...(suggestionProvider === undefined ? {} : { suggestionProvider }),
+    async eventScheduleForEvent(eventId) {
+      const event = await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+      return event === null
+        ? null
+        : {
+            startsAt: event.startsAt,
+            endsAt: event.endsAt,
+            timeZone: event.timeZone,
+            ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
+          };
+    },
   });
 }
 
@@ -2428,6 +2447,7 @@ function localCfpEvent(event: Event): EventCfp {
     slug: event.slug,
     name: event.name,
     timezone: event.timeZone,
+    eventStartsAt: event.startsAt,
     opensAt: hasValidConfiguredWindow ? configuredOpensAt : event.startsAt,
     closesAt: hasValidConfiguredWindow ? configuredClosesAt : event.endsAt,
   };
@@ -2544,13 +2564,52 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   let speakerService!: SpeakerService;
   const publicRepository = new LocalPublicApiRepository();
   const eventRepository = new InMemoryEventRepository();
-  const eventService = new EventService(eventRepository, {
-    clock: () => new Date(SEEDED_AT),
-    generateId: (() => {
-      let sequence = 0;
-      return () => `local-event-id-${++sequence}`;
-    })(),
-  });
+  const eventService = new EventService(
+    eventRepository,
+    {
+      async reviewBoundaries(organizationId, eventId) {
+        const plans = await evaluationRepository.listPlans(organizationId, eventId);
+        return plans.flatMap((plan) => [
+          ...(plan.closesAt === null
+            ? []
+            : [{ label: "Review deadline", occursAt: plan.closesAt }]),
+          ...plan.rounds.flatMap((round) => [
+            ...(round.opensAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
+            ...(round.closesAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
+          ]),
+        ]);
+      },
+      async agendaState(_organizationId, eventId) {
+        const state = await agendaEngine.repository.load(eventId);
+        return state === null ? null : { timeZone: state.timeZone };
+      },
+      async agendaEntries(_organizationId, eventId) {
+        const state = await agendaEngine.repository.load(eventId);
+        if (state === null) return [];
+        const published = state.revisions.find(
+          (revision) => revision.id === state.currentPublishedRevisionId,
+        );
+        return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
+          label: `Agenda entry ${entry.id}`,
+          startsAt: entry.startsAt,
+          endsAt: entry.endsAt,
+          startsAtLocal: entry.startsAtLocal,
+          endsAtLocal: entry.endsAtLocal,
+        }));
+      },
+    },
+    {
+      clock: () => new Date(EVENT_SEED_AT),
+      generateId: (() => {
+        let sequence = 0;
+        return () => `local-event-id-${++sequence}`;
+      })(),
+    },
+  );
   const publicationRepository = new InMemoryProgramPublicationRepository();
   let publicationService!: ProgramPublicationService;
   publicationService = new ProgramPublicationService(
@@ -2579,15 +2638,13 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
-  const agendaEngine = localAgendaEngine(aiProviders?.agenda);
+  const agendaEngine = localAgendaEngine(eventRepository, aiProviders?.agenda);
   let sessionService!: SessionService;
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
     engine: agendaEngine,
     catalogReader: {
       getAgendaCatalog: (tenantId, eventId) => sessionService.getAgendaCatalog(tenantId, eventId),
     },
-    eventTimeZone: async (_tenantId, eventId) =>
-      (await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId))?.timeZone ?? "UTC",
     minimumTravelMinutes: 10,
     actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
   });
@@ -2871,7 +2928,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
               acceptedAssetKinds: ["slides" as const],
             }
           : {}),
-        dueAt: "2026-09-01T23:59:00.000Z",
+        dueAt: "2026-09-01",
         reminderOffsetsMinutes: [10_080, 1_440],
         assignments: material.participants.map((participant) => ({
           participantId: participant.id,
@@ -2880,14 +2937,32 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       });
     },
   };
-  const evaluationService = new EvaluationService(evaluationRepository, evaluationSubmissions, {
-    clock: () => new Date(SEEDED_AT),
-    eventSource: eventRepository,
-    acceptanceHandoff: localAcceptanceHandoff,
-    ...(aiProviders?.evaluations === undefined
-      ? {}
-      : { aiSuggestionProvider: aiProviders.evaluations }),
-  });
+  const evaluationService = new EvaluationService(
+    evaluationRepository,
+    evaluationSubmissions,
+    {
+      async getEventMetadata(tenantId, eventId) {
+        const event = await eventRepository.getEvent(tenantId, eventId);
+        return event === null
+          ? null
+          : {
+              id: event.id,
+              name: event.name,
+              timeZone: event.timeZone,
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+            };
+      },
+    },
+    {
+      clock: () => new Date(SEEDED_AT),
+      eventSource: eventRepository,
+      acceptanceHandoff: localAcceptanceHandoff,
+      ...(aiProviders?.evaluations === undefined
+        ? {}
+        : { aiSuggestionProvider: aiProviders.evaluations }),
+    },
+  );
   const organizerOverview = new LocalOrganizerOverviewRepository({
     publicRepository,
     speakerRepository,
@@ -2994,7 +3069,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         organizationId: LOCAL_ORGANIZATION_ID,
         eventId: "demo-event",
         endpointUrl: "https://hooks.local.eventloom.test/demo",
-        events: ["agenda.published", "integration.publication_completed"],
+        events: ["agenda.published"],
         active: true,
         signingSecret: "local-demo-webhook-secret-20260808-000000",
         signingSecretLastFour: "0000",
@@ -3095,6 +3170,20 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   );
   speakerService = new SpeakerService(speakerRepository, privateAssetGateway, {
     speakerSender: LOCAL_COMMUNICATION_SENDERS.speakers,
+    eventTemporalSource: {
+      async getEventTemporalContext(organizationId, eventId) {
+        const event = await eventRepository.getEvent(organizationId, eventId);
+        return event === null
+          ? null
+          : {
+              organizationId: event.organizationId,
+              eventId: event.id,
+              timeZone: event.timeZone,
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+            };
+      },
+    },
     now: () => new Date(SEEDED_AT),
     generateId: (() => {
       let sequence = 0;
@@ -3229,9 +3318,6 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           organizationId: event.tenantId,
           eventId: event.id,
           expectedVersion,
-          slug: event.slug,
-          name: event.name,
-          timeZone: event.timezone,
           cfpSettings: {
             enabled: true,
             opensAt: event.opensAt,
@@ -3438,8 +3524,8 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         slug: event.slug,
         name: event.name,
         timeZone: event.timeZone,
-        startsOn: event.startsAt.slice(0, 10),
-        endsOn: event.endsAt.slice(0, 10),
+        startsOn: localDateInTimeZone(event.startsAt, event.timeZone),
+        endsOn: localDateInTimeZone(event.endsAt, event.timeZone),
         venueName: event.venue,
       },
       revision: {
@@ -3680,8 +3766,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           slug: event.slug,
           name: event.name,
           timeZone: event.timeZone,
-          startsOn: event.startsAt.slice(0, 10),
-          endsOn: event.endsAt.slice(0, 10),
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
+          startsOn: localDateInTimeZone(event.startsAt, event.timeZone),
+          endsOn: localDateInTimeZone(event.endsAt, event.timeZone),
           ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
           venueName: event.venue,
         };
@@ -3775,8 +3863,8 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
                     slug: event.slug,
                     name: event.name,
                     timeZone: event.timeZone,
-                    startsOn: event.startsAt.slice(0, 10),
-                    endsOn: event.endsAt.slice(0, 10),
+                    startsOn: localDateInTimeZone(event.startsAt, event.timeZone),
+                    endsOn: localDateInTimeZone(event.endsAt, event.timeZone),
                     venueName: event.venue,
                     programPublished: true,
                   },

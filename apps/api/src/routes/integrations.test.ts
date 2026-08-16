@@ -23,7 +23,7 @@ function principal(role: OrganizationRole, tenant = organizationId): AuthPrincip
   };
 }
 
-function fixture() {
+function fixture(now = new Date("2026-08-16T12:00:00.000Z")) {
   const keys = new Map<string, IntegrationApiKeySummary>();
   let sequence = 0;
   const listApiKeys = vi.fn(async (tenant: string, scopedEventId?: string) =>
@@ -64,6 +64,7 @@ function fixture() {
     return true;
   });
   const dependencies: IntegrationAdminRouteDependencies = {
+    clock: () => new Date(now),
     getEvent: async (tenant, id) =>
       tenant === organizationId && id === eventId
         ? {
@@ -154,6 +155,69 @@ describe("organization API-key management", () => {
       expect(response.status).toBe(authorization === undefined ? 401 : 403);
     }
     expect(listApiKeys).not.toHaveBeenCalled();
+  });
+
+  it("normalizes an explicit-offset future expiration before persistence and output", async () => {
+    const { app, createApiKey } = fixture();
+    const created = await app.request(`/organizations/${organizationId}/api-keys`, {
+      method: "POST",
+      headers: jsonHeaders("Bearer owner"),
+      body: JSON.stringify({
+        label: "Timed automation",
+        scopes: ["events:read"],
+        expiresAt: "2026-08-16T09:30:00-07:00",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(createApiKey).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: "2026-08-16T16:30:00.000Z" }),
+    );
+
+    const listed = await app.request(`/organizations/${organizationId}/api-keys`, {
+      headers: { authorization: "Bearer owner" },
+    });
+    await expect(listed.json()).resolves.toEqual({
+      data: [expect.objectContaining({ expiresAt: "2026-08-16T16:30:00.000Z" })],
+    });
+  });
+
+  it.each([
+    ["date-only", "2026-08-17"],
+    ["offset-free", "2026-08-17T12:00:00"],
+    ["invalid calendar date", "2027-02-30T12:00:00Z"],
+    ["invalid", "not-a-date"],
+    ["equal to now", "2026-08-16T12:00:00Z"],
+    ["past", "2026-08-16T11:59:59Z"],
+  ])("rejects %s expirations before persistence", async (_label, expiresAt) => {
+    const { app, createApiKey } = fixture();
+    const response = await app.request(`/organizations/${organizationId}/api-keys`, {
+      method: "POST",
+      headers: jsonHeaders("Bearer owner"),
+      body: JSON.stringify({ label: "Invalid timing", scopes: ["events:read"], expiresAt }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(createApiKey).not.toHaveBeenCalled();
+  });
+
+  it("applies the same expiration rules to the event compatibility route", async () => {
+    const { app, createApiKey } = fixture();
+    const response = await app.request(
+      `/organizations/${organizationId}/events/${eventId}/api-keys`,
+      {
+        method: "POST",
+        headers: jsonHeaders("Bearer owner"),
+        body: JSON.stringify({
+          label: "Compatibility client",
+          scopes: ["events:read"],
+          expiresAt: "2026-08-16T13:00:00+01:00",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(createApiKey).not.toHaveBeenCalled();
   });
 
   it("returns the secret only at creation and keeps eventId as nullable metadata", async () => {

@@ -2,6 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 
 import { createDatabase } from "../../../db/client";
 import { eventEmbedConfigurations, events } from "../../../db/schema";
+import { eventAllowedDates } from "../../../features/events/event-temporal-dependencies";
 import type {
   Event,
   EventAuditEntry,
@@ -10,7 +11,7 @@ import type {
   EventRepositoryCommand,
 } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
-import { airtableSyncStatement } from "./shared";
+import { airtableSyncStatement, guard as d1Guard } from "./shared";
 
 const EMBED_METADATA_PREFIX = "__osb_embed_v1:";
 
@@ -233,6 +234,84 @@ export class D1EventRepository implements EventRepository {
             );
 
     const statements: D1PreparedStatement[] = [primary];
+    statements.push(
+      d1Guard(
+        this.binding,
+        `NOT EXISTS (
+           SELECT 1
+             FROM review_plans p
+            WHERE p.organization_id = ?
+              AND p.event_id = ?
+              AND p.closes_at IS NOT NULL
+              AND p.closes_at > ?
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM review_rounds r
+             JOIN review_plans p
+               ON p.organization_id = r.organization_id
+              AND p.id = r.plan_id
+            WHERE p.organization_id = ?
+              AND p.event_id = ?
+              AND (
+                (r.opens_at IS NOT NULL AND r.opens_at > ?)
+                OR (r.closes_at IS NOT NULL AND r.closes_at > ?)
+              )
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM agenda_states s
+            WHERE s.organization_id = ?
+              AND s.event_id = ?
+              AND s.time_zone <> ?
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM agenda_entries e
+             JOIN agenda_states s
+               ON s.organization_id = e.organization_id
+              AND s.event_id = e.event_id
+            WHERE e.organization_id = ?
+              AND e.event_id = ?
+              AND (
+                e.container_type = 'draft'
+                OR (
+                  e.container_type = 'revision'
+                  AND e.container_id = s.current_published_revision_id
+                )
+              )
+              AND (
+                s.time_zone <> ?
+                OR e.starts_at < ?
+                OR e.ends_at > ?
+                OR substr(e.starts_at_local, 1, 10) <> substr(e.ends_at_local, 1, 10)
+                OR NOT EXISTS (
+                  SELECT 1
+                    FROM json_each(?)
+                   WHERE value = substr(e.starts_at_local, 1, 10)
+                )
+              )
+         )`,
+        [
+          event.organizationId,
+          event.id,
+          event.endsAt,
+          event.organizationId,
+          event.id,
+          event.endsAt,
+          event.endsAt,
+          event.organizationId,
+          event.id,
+          event.timeZone,
+          event.organizationId,
+          event.id,
+          event.timeZone,
+          event.startsAt,
+          event.endsAt,
+          JSON.stringify(eventAllowedDates(event)),
+        ],
+      ),
+    );
     const auditId = audit?.id;
     const eventGuard =
       "EXISTS (SELECT 1 FROM events WHERE organization_id = ? AND id = ? AND version = ?)";

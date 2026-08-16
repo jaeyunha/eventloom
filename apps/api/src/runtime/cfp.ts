@@ -158,7 +158,6 @@ function localFixtureForm(tenantId: string, eventId: string, formId = "main-cfp"
 }
 
 class LocalCfpRepository implements CfpRepository {
-  readonly #events = new Map<string, EventCfp>();
   readonly #forms = new Map<string, CfpForm>();
   readonly #submissions = new Map<string, Submission>();
   readonly #sharedEvents: LocalCfpEventRepository | undefined;
@@ -170,31 +169,19 @@ class LocalCfpRepository implements CfpRepository {
   }
 
   async getEvent(tenantId: string, eventId: string) {
-    const shared = await this.#sharedEvents?.getEvent(tenantId, eventId);
-    if (shared !== undefined && shared !== null) return clone(shared);
-    return clone(this.#events.get(key(tenantId, eventId)) ?? null);
+    return clone((await this.#sharedEvents?.getEvent(tenantId, eventId)) ?? null);
   }
 
   async getEventBySlug(tenantId: string, eventSlug: string) {
-    const shared = await this.#sharedEvents?.getEventBySlug(tenantId, eventSlug);
-    if (shared !== undefined && shared !== null) return clone(shared);
-    const event = [...this.#events.values()].find(
-      (candidate) => candidate.tenantId === tenantId && candidate.slug === eventSlug,
-    );
-    return clone(event ?? null);
+    return clone((await this.#sharedEvents?.getEventBySlug(tenantId, eventSlug)) ?? null);
   }
 
   async saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void> {
     const shared = await this.#sharedEvents?.getEvent(event.tenantId, event.id);
-    if (shared !== undefined && shared !== null) {
-      await this.#sharedEvents?.saveEvent(event, expectedVersion);
-      return;
+    if (shared === undefined || shared === null || this.#sharedEvents === undefined) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
     }
-    const storageKey = key(event.tenantId, event.id);
-    if ((this.#events.get(storageKey)?.version ?? null) !== expectedVersion) {
-      throw new CfpError("CONFLICT", "The event CFP configuration has changed.");
-    }
-    this.#events.set(storageKey, clone(event));
+    await this.#sharedEvents.saveEvent(event, expectedVersion);
   }
 
   async getForm(tenantId: string, formId: string) {

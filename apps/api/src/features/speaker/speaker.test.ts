@@ -635,6 +635,21 @@ class FakePrivateAssetGateway implements PrivateAssetGateway {
 
 const speakerSender = "speakers@self-hosted.example";
 const now = "2026-08-08T12:00:00.000Z";
+const speakerEventTemporalSource = {
+  getEventTemporalContext(organizationId: string, eventId: string) {
+    return Promise.resolve(
+      organizationId === "org-1" && eventId === "event-1"
+        ? {
+            organizationId,
+            eventId,
+            timeZone: "America/Los_Angeles",
+            startsAt: "2026-08-10T16:00:00.000Z",
+            endsAt: "2026-08-12T23:00:00.000Z",
+          }
+        : null,
+    );
+  },
+};
 
 function submission(
   id: string,
@@ -1900,7 +1915,7 @@ describe("SpeakerService organizer speaker writes", () => {
       biography: "SBEK-ORG-EDIT-01",
       travelLogistics: {
         travelRequired: true,
-        arrivalAt: "2027-05-01T12:00:00.000Z",
+        arrivalAt: "2027-05-01",
         dietaryRequirements: "Vegan",
         travelNotes: "Arrive before check-in.",
       },
@@ -1914,6 +1929,7 @@ describe("SpeakerService organizer speaker writes", () => {
         biography: "SBEK-ORG-EDIT-01",
         travelLogistics: expect.objectContaining({
           travelRequired: true,
+          arrivalAt: "2027-05-01",
           dietaryRequirements: "Vegan",
           travelNotes: "Arrive before check-in.",
         }),
@@ -4098,6 +4114,40 @@ describe("speaker routes", () => {
   });
 });
 describe("canonical speaker admin routes", () => {
+  it.each(["2027-02-30", "2027-04-01T12:00:00", "2027-04-01T12:00:00.000Z"])(
+    "rejects non-calendar task deadlines before calling the service: %s",
+    async (dueAt) => {
+      const { service } = createOrganizerFixture();
+      const assign = vi.spyOn(service, "assignOrganizerSpeakerTask");
+      const app = new Hono();
+      app.route(
+        "/api/admin/organizations/:organizationId/events/:eventId/speaker-tasks",
+        createSpeakerTaskAdminRoutes({
+          service,
+          authenticate: async () => ({ accountId: "account-1" }),
+        }),
+      );
+
+      const response = await app.request(
+        "/api/admin/organizations/org-1/events/event-1/speaker-tasks",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            title: "Invalid deadline task",
+            description: "Must not reach the service.",
+            dueAt,
+            assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
+          }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+      expect(assign).not.toHaveBeenCalled();
+    },
+  );
+
   it("commits a server-issued import preview instead of accepting client-owned rows", async () => {
     const { service } = createOrganizerFixture();
     const commit = vi.spyOn(service, "commitSpeakerImport").mockResolvedValue({
@@ -4381,6 +4431,298 @@ describe("SpeakerService organizer email previews", () => {
   });
 });
 
+describe("speaker temporal integrity", () => {
+  const temporalContext = {
+    organizationId: "org-1",
+    eventId: "event-1",
+    timeZone: "America/Los_Angeles",
+    startsAt: "2026-08-10T16:00:00.000Z",
+    endsAt: "2026-08-12T23:00:00.000Z",
+  };
+
+  function temporalService(
+    repository: OrganizerSpeakerRepository,
+    referenceNow = now,
+    context = temporalContext,
+  ) {
+    return new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new FakePrivateAssetGateway(),
+      {
+        speakerSender,
+        now: () => new Date(referenceNow),
+        generateId: () => "temporal-generated",
+        eventTemporalSource: {
+          getEventTemporalContext(organizationId, eventId) {
+            return Promise.resolve(
+              organizationId === context.organizationId && eventId === context.eventId
+                ? context
+                : null,
+            );
+          },
+        },
+      },
+    );
+  }
+
+  it.each(["2027-02-30", "2027-04-01T12:00:00", "2027-04-01T12:00:00.000Z"])(
+    "rejects non-calendar organizer deadlines without persisting them: %s",
+    async (dueAt) => {
+      const { repository } = createOrganizerFixture();
+      repository.profiles.push(profile("participant-1"));
+      const service = temporalService(repository);
+
+      await expect(
+        service.createOrganizerTask({
+          eventId: "event-1",
+          accountId: "account-1",
+          type: "action",
+          title: "Invalid deadline task",
+          dueAt,
+          assignments: [{ participantId: "participant-1", submissionId: null }],
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(repository.tasks).toEqual([]);
+    },
+  );
+
+  it("rejects newly selected past deadlines, preserves an exact historical value, and allows dates after event end", async () => {
+    const { repository } = createOrganizerFixture();
+    repository.profiles.push(profile("participant-1"), profile("participant-2"));
+    const service = temporalService(repository);
+
+    await expect(
+      service.createOrganizerTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        type: "action",
+        title: "Past task",
+        dueAt: "2026-08-07",
+        assignments: [{ participantId: "participant-1", submissionId: null }],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    const created = await service.createOrganizerTask({
+      eventId: "event-1",
+      accountId: "account-1",
+      type: "action",
+      title: "After event task",
+      dueAt: "2026-08-20",
+      assignments: [{ participantId: "participant-1", submissionId: null }],
+    });
+    expect(created[0]?.dueAt).toBe("2026-08-20");
+    await expect(
+      service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
+    ).resolves.toMatchObject({ temporalContext });
+
+    const historical = task({
+      id: "historical-task",
+      participantId: "participant-1",
+      type: "action",
+      dueAt: "2026-08-07",
+      version: 4,
+    });
+    repository.tasks.push(historical);
+    await expect(
+      service.updateOrganizerTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: historical.id,
+        expectedVersion: historical.version,
+        title: "Historical task renamed",
+        dueAt: "2026-08-07",
+      }),
+    ).resolves.toMatchObject({ dueAt: "2026-08-07", title: "Historical task renamed" });
+
+    await expect(
+      service.updateOrganizerTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: historical.id,
+        expectedVersion: historical.version + 1,
+        dueAt: "2026-08-06",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("changes overdue and zero-offset reminder eligibility only at the event-local day boundary", async () => {
+    const { repository } = createOrganizerFixture();
+    repository.profiles.push(profile("participant-1"));
+    const beforeBoundary = temporalService(repository, "2026-08-09T06:59:59.999Z");
+    await beforeBoundary.createOrganizerTask({
+      eventId: "event-1",
+      accountId: "account-1",
+      type: "upload",
+      title: "Boundary upload",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
+      dueAt: "2026-08-08",
+      reminderOffsetsMinutes: [0],
+      assignments: [{ participantId: "participant-1", submissionId: null }],
+    });
+    repository.tasks.push(
+      task({
+        id: "boundary-action",
+        participantId: "participant-1",
+        submissionId: null,
+        type: "action",
+        dueAt: "2026-08-08",
+      }),
+    );
+
+    await expect(beforeBoundary.listDeliverables("event-1", "account-1")).resolves.toMatchObject({
+      items: [{ status: "not_started" }],
+    });
+    await expect(
+      beforeBoundary.previewReminderEligibility({ eventId: "event-1", accountId: "account-1" }),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          dueAt: "2026-08-08",
+          deadlineAt: "2026-08-09T07:00:00.000Z",
+          eligible: false,
+          reason: "outside_window",
+        },
+      ],
+    });
+    await expect(
+      beforeBoundary.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
+    ).resolves.toMatchObject({ speakers: [{ taskSummary: { overdue: 0 } }] });
+
+    const atBoundary = temporalService(repository, "2026-08-09T07:00:00.000Z");
+    await expect(atBoundary.listDeliverables("event-1", "account-1")).resolves.toMatchObject({
+      items: [{ status: "overdue" }],
+    });
+    await expect(
+      atBoundary.previewReminderEligibility({ eventId: "event-1", accountId: "account-1" }),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          deadlineAt: "2026-08-09T07:00:00.000Z",
+          eligible: true,
+          reason: "due",
+        },
+      ],
+    });
+    await expect(
+      atBoundary.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
+    ).resolves.toMatchObject({ speakers: [{ taskSummary: { overdue: 1 } }] });
+  });
+
+  it.each([
+    {
+      dueAt: "2019-09-07",
+      timeZone: "America/Santiago",
+      deadlineAt: "2019-09-08T04:00:00.000Z",
+    },
+    {
+      dueAt: "2011-12-29",
+      timeZone: "Pacific/Apia",
+      deadlineAt: "2011-12-30T10:00:00.000Z",
+    },
+  ])(
+    "keeps $dueAt inclusive for speaker status and reminders across the $timeZone transition",
+    async ({ dueAt, timeZone, deadlineAt }) => {
+      const { repository } = createOrganizerFixture();
+      repository.profiles.push(profile("participant-1"));
+      repository.tasks.push(
+        task({
+          id: "transition-upload",
+          participantId: "participant-1",
+          submissionId: null,
+          type: "upload",
+          dueAt,
+          reminderOffsetsMinutes: [0],
+        }),
+      );
+      const context = {
+        ...temporalContext,
+        timeZone,
+        startsAt: deadlineAt,
+        endsAt: new Date(new Date(deadlineAt).getTime() + 24 * 60 * 60 * 1000).toISOString(),
+      };
+      const beforeDeadline = temporalService(
+        repository,
+        new Date(new Date(deadlineAt).getTime() - 1).toISOString(),
+        context,
+      );
+
+      await expect(beforeDeadline.listDeliverables("event-1", "account-1")).resolves.toMatchObject({
+        items: [{ status: "not_started" }],
+      });
+      await expect(
+        beforeDeadline.previewReminderEligibility({
+          eventId: "event-1",
+          accountId: "account-1",
+        }),
+      ).resolves.toMatchObject({
+        items: [{ deadlineAt, eligible: false, reason: "outside_window" }],
+      });
+
+      const atDeadline = temporalService(repository, deadlineAt, context);
+      await expect(atDeadline.listDeliverables("event-1", "account-1")).resolves.toMatchObject({
+        items: [{ status: "overdue" }],
+      });
+      await expect(
+        atDeadline.previewReminderEligibility({ eventId: "event-1", accountId: "account-1" }),
+      ).resolves.toMatchObject({
+        items: [{ deadlineAt, eligible: true, reason: "due" }],
+      });
+    },
+  );
+
+  it("requires strict travel dates, enforces ordering, and converts stored timestamps in the event timezone", async () => {
+    const { repository } = createOrganizerFixture();
+    repository.profiles.push({
+      ...profile("participant-1"),
+      version: 3,
+      travelLogistics: {
+        travelRequired: true,
+        arrivalAt: "2026-08-10T06:30:00.000Z",
+        departureAt: "2026-08-13T06:30:00.000Z",
+        accommodation: "",
+        dietaryRequirements: "",
+        accessibilityNeeds: "",
+        travelNotes: "",
+      },
+    });
+    const service = temporalService(repository);
+
+    await expect(
+      service.updateOrganizerProfile({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        expectedVersion: 3,
+        travelLogistics: { arrivalAt: "2026-08-10T12:00:00.000Z" },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    await expect(
+      service.updateOrganizerProfile({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        expectedVersion: 3,
+        travelLogistics: { arrivalAt: "2026-08-14", departureAt: "2026-08-13" },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    const updated = await service.updateOrganizerProfile({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      expectedVersion: 3,
+      company: "Updated company",
+      travelLogistics: {},
+    });
+    expect(updated.travelLogistics).toMatchObject({
+      arrivalAt: "2026-08-09",
+      departureAt: "2026-08-12",
+    });
+  });
+});
+
 it("persists logistics, exposes reminder eligibility, and queues a versioned bulk email", async () => {
   const { repository } = createOrganizerFixture();
   const deliveries: Array<{
@@ -4411,6 +4753,7 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
         return () => `email-generated-${++sequence}`;
       })(),
       communications: communicationFixture.communications,
+      eventTemporalSource: speakerEventTemporalSource,
     },
   );
 
@@ -4473,8 +4816,8 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     description: "Share the confirmed arrival plan.",
     allowedMimeTypes: ["application/pdf"],
     maxBytes: 5_000_000,
-    dueAt: "2026-08-07",
-    reminderOffsetsMinutes: [60],
+    dueAt: "2026-08-08",
+    reminderOffsetsMinutes: [1_440],
     assignments: [
       { participantId: "participant-1", submissionId: null },
       { participantId: "participant-2", submissionId: null },
@@ -4485,7 +4828,7 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     new Set(["participant-1", "participant-2"]),
   );
   expect(task.map((item) => item.subject?.type)).toEqual(["participant", "participant"]);
-  expect(task.every((item) => item.dueAt === "2026-08-07")).toBe(true);
+  expect(task.every((item) => item.dueAt === "2026-08-08")).toBe(true);
 
   const actionTask = task[0];
   if (actionTask === undefined) {
@@ -4758,14 +5101,14 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
     task({
       id: "scheduled-due",
       participantId: "participant-1",
-      dueAt: "2026-08-07T12:00:00.000Z",
+      dueAt: "2026-08-07",
       reminderOffsetsMinutes: [60],
     }),
     task({
       id: "scheduled-complete",
       participantId: "participant-1",
       status: "completed",
-      dueAt: "2026-08-07T12:00:00.000Z",
+      dueAt: "2026-08-07",
       reminderOffsetsMinutes: [60],
     }),
     task({
@@ -4776,7 +5119,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
     task({
       id: "scheduled-future",
       participantId: "participant-1",
-      dueAt: "2026-09-01T12:00:00.000Z",
+      dueAt: "2026-09-01",
       reminderOffsetsMinutes: [60],
     }),
   );
@@ -4792,6 +5135,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
     {
       speakerSender,
       now: () => new Date(now),
+      eventTemporalSource: speakerEventTemporalSource,
       delivery: {
         enqueue(input) {
           deliveries.push({

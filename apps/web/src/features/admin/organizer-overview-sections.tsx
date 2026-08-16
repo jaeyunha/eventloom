@@ -20,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import styles from "./admin-shell.module.css";
 import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import type { OrganizerEventEditorProps, OrganizerEventsData } from "./organizer-overview";
@@ -119,11 +120,8 @@ function OrganizerEventEditor({
   );
   const [formError, setFormError] = useState<string | null>(null);
   const eventSlugPreview = normalizeOrganizerEventSlug(values.slug || values.name);
-  const minimumDateTime = event ? undefined : organizerEventMinimumDateTimeLocal(values.timeZone);
-  const cfpCloseMinimum =
-    minimumDateTime === undefined || values.cfpOpensAt > minimumDateTime
-      ? values.cfpOpensAt || minimumDateTime
-      : minimumDateTime;
+  const minimumDateTime = organizerEventMinimumDateTimeLocal(values.timeZone);
+  const originalValues = event === undefined ? undefined : organizerEventEditorFormValues(event);
 
   function updateValue<K extends keyof OrganizerEventFormValues>(
     key: K,
@@ -135,7 +133,18 @@ function OrganizerEventEditor({
 
   async function submit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
-    const result = validateOrganizerEventForm(values, { allowPastDates: event !== undefined });
+    const result = validateOrganizerEventForm(values, {
+      ...(event === undefined
+        ? {}
+        : {
+            currentEvent: {
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+              cfpOpensAt: event.cfpSettings.opensAt,
+              cfpClosesAt: event.cfpSettings.closesAt,
+            },
+          }),
+    });
     if (!result.input) {
       setFormError(result.error ?? "Check the event fields.");
       return;
@@ -162,7 +171,7 @@ function OrganizerEventEditor({
           Add the public identity, schedule, and location. New events start as drafts.
         </p>
       </div>
-      <div className={styles.eventTwoColumn}>
+      <div className={`${styles.eventTwoColumn} ${styles.eventIdentityFields}`}>
         <label className={styles.eventField} htmlFor="organizer-event-name">
           <span className={styles.eventFieldLabel}>Event name</span>
           <Input
@@ -236,7 +245,18 @@ function OrganizerEventEditor({
             value={values.timeZone}
             placeholder="America/Los_Angeles"
             required
-            onChange={(formEvent) => updateValue("timeZone", formEvent.target.value)}
+            onChange={(formEvent) => {
+              const timeZone = formEvent.target.value;
+              setValues((current) => ({
+                ...current,
+                timeZone,
+                startDisambiguation: undefined,
+                endDisambiguation: undefined,
+                cfpOpenDisambiguation: undefined,
+                cfpCloseDisambiguation: undefined,
+              }));
+              if (formError) setFormError(null);
+            }}
           />
           <span className={styles.eventFieldDescription}>
             All event and agenda times are entered and shown in this time zone.
@@ -256,6 +276,20 @@ function OrganizerEventEditor({
         endsAt={values.endsAt}
         scheduleDates={values.scheduleDates}
         minimumDateTime={minimumDateTime}
+        unchangedValues={
+          originalValues === undefined
+            ? undefined
+            : [originalValues.startsAt, originalValues.endsAt]
+        }
+        timeZone={values.timeZone}
+        startDisambiguation={values.startDisambiguation}
+        endDisambiguation={values.endDisambiguation}
+        onStartDisambiguationChange={(value) =>
+          setValues((current) => ({ ...current, startDisambiguation: value }))
+        }
+        onEndDisambiguationChange={(value) =>
+          setValues((current) => ({ ...current, endDisambiguation: value }))
+        }
         onChange={(selection: EventDateSelectionValue) => {
           setValues((current) => ({
             ...current,
@@ -302,29 +336,49 @@ function OrganizerEventEditor({
             </span>
           </div>
           {values.cfpEnabled ? (
-            <div className={styles.eventTwoColumn}>
-              <label className={styles.eventField} htmlFor="organizer-event-cfp-opens-at">
-                <span className={styles.eventFieldLabel}>CFP opens</span>
-                <Input
-                  id="organizer-event-cfp-opens-at"
-                  name="cfpSettings.opensAt"
-                  type="datetime-local"
-                  value={values.cfpOpensAt}
-                  min={minimumDateTime}
-                  onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
-                />
-              </label>
-              <label className={styles.eventField} htmlFor="organizer-event-cfp-closes-at">
-                <span className={styles.eventFieldLabel}>CFP closes</span>
-                <Input
-                  id="organizer-event-cfp-closes-at"
-                  name="cfpSettings.closesAt"
-                  type="datetime-local"
-                  value={values.cfpClosesAt}
-                  min={cfpCloseMinimum}
-                  onChange={(formEvent) => updateValue("cfpClosesAt", formEvent.target.value)}
-                />
-              </label>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <TemporalPicker
+                id="organizer-event-cfp-window"
+                mode="range"
+                precision="date-time"
+                startValue={values.cfpOpensAt}
+                endValue={values.cfpClosesAt}
+                startLabel="CFP opens"
+                endLabel="CFP closes"
+                startName="cfpSettings.opensAt"
+                endName="cfpSettings.closesAt"
+                minimumDateTime={minimumDateTime}
+                maximumDateTime={values.startsAt}
+                unchangedValues={
+                  originalValues === undefined
+                    ? undefined
+                    : [originalValues.cfpOpensAt, originalValues.cfpClosesAt].filter(
+                        (value) => value !== "",
+                      )
+                }
+                timeZone={values.timeZone}
+                startDisambiguation={values.cfpOpenDisambiguation}
+                endDisambiguation={values.cfpCloseDisambiguation}
+                onStartDisambiguationChange={(value) =>
+                  setValues((current) => ({
+                    ...current,
+                    cfpOpenDisambiguation: value,
+                  }))
+                }
+                onEndDisambiguationChange={(value) =>
+                  setValues((current) => ({
+                    ...current,
+                    cfpCloseDisambiguation: value,
+                  }))
+                }
+                eyebrow="CFP schedule"
+                description="Set the proposal window directly on the calendar."
+                clearable
+                onChange={({ start, end }) => {
+                  updateValue("cfpOpensAt", start);
+                  updateValue("cfpClosesAt", end);
+                }}
+              />
             </div>
           ) : null}
         </fieldset>
@@ -695,7 +749,7 @@ export function OrganizerEventsLoaded({
 
   return (
     <>
-      <header className={styles.pageHeader}>
+      <header className={`${styles.pageHeader} ${editor === null ? "" : styles.eventEditorHeader}`}>
         <div className={styles.pageHeaderCopy}>
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Event management</h1>
@@ -726,7 +780,7 @@ export function OrganizerEventsLoaded({
         </Alert>
       ) : null}
 
-      {editor !== null && onCreate && onUpdate ? (
+      {editor !== null ? (
         <Card
           className={styles.eventEditorCard}
           id="organizer-event-editor"
@@ -736,7 +790,7 @@ export function OrganizerEventsLoaded({
             <OrganizerEventEditor
               key={`${data.organizationId}:${editor}`}
               event={editingEvent}
-              busy={busy}
+              busy={busy || onCreate === undefined || onUpdate === undefined}
               onCancel={() => setEditor(null)}
               onSave={editor === "create" ? create : update}
             />

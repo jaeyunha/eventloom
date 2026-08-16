@@ -23,6 +23,25 @@ export interface SpeakerRouteDependencies {
   authenticate(request: Request): Promise<{ accountId: string } | null>;
 }
 
+const calendarDatePattern = /^\d{4}-\d{2}-\d{2}$/u;
+const calendarDateSchema = z.string().superRefine((value, context) => {
+  if (!calendarDatePattern.test(value)) {
+    context.addIssue({ code: "custom", message: "Expected YYYY-MM-DD." });
+    return;
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  const roundTrip = new Date(0);
+  roundTrip.setUTCFullYear(year ?? 0, (month ?? 0) - 1, day ?? 0);
+  roundTrip.setUTCHours(0, 0, 0, 0);
+  if (
+    roundTrip.getUTCFullYear() !== year ||
+    roundTrip.getUTCMonth() + 1 !== month ||
+    roundTrip.getUTCDate() !== day
+  ) {
+    context.addIssue({ code: "custom", message: "Expected a real calendar date." });
+  }
+});
+
 const transitionTaskSchema = z.object({
   toStatus: z.enum(speakerTaskStatuses),
   expectedVersion: z.number().int().nonnegative(),
@@ -74,8 +93,8 @@ const organizerTaskCreateSchema = z.object({
   title: z.string().trim().min(1).max(200),
   instructions: z.string().max(10_000).optional(),
   description: z.string().max(10_000).optional(),
-  dueAt: z.string().trim().min(1).optional(),
-  dueDate: z.string().trim().min(1).optional(),
+  dueAt: calendarDateSchema.optional(),
+  dueDate: calendarDateSchema.optional(),
   allowedMimeTypes: z.array(z.string().trim().min(1).max(120)).default([]),
   maxBytes: z.number().int().positive().optional(),
   maxSizeBytes: z.number().int().positive().optional(),
@@ -96,8 +115,8 @@ const organizerTaskUpdateSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   instructions: z.string().max(10_000).optional(),
   description: z.string().max(10_000).optional(),
-  dueDate: z.string().trim().min(1).optional(),
-  dueAt: z.string().trim().min(1).optional(),
+  dueDate: calendarDateSchema.optional(),
+  dueAt: calendarDateSchema.optional(),
   allowedMimeTypes: z.array(z.string().trim().min(1).max(120)).optional(),
   maxBytes: z.number().int().positive().optional(),
   maxSizeBytes: z.number().int().positive().optional(),
@@ -1422,7 +1441,7 @@ const canonicalImportCommitSchema = z
 const canonicalTaskSchema = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().max(10_000),
-  dueAt: z.string().trim().min(1),
+  dueAt: calendarDateSchema,
   assignments: z
     .array(
       z.object({

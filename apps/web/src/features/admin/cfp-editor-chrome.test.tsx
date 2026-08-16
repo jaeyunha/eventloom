@@ -75,4 +75,18 @@ describe("CFP editor chrome", () => {
     expect(styles).not.toMatch(/\.stepActions\s*\{[^}]*position:\s*sticky/su);
     expect(styles).toMatch(/\.stepButtons\s*\{[^}]*grid-template-columns:\s*repeat\(2/su);
   });
+
+  it("keeps the editor guttered and both preview states full width", () => {
+    const styles = readFileSync(new URL("./cfp-editor.module.css", import.meta.url), "utf8");
+
+    expect(styles).toMatch(
+      /\.viewport\s*\{[^}]*width:\s*min\(calc\(100% - 3rem\),\s*73\.75rem\)/su,
+    );
+    expect(styles).toMatch(
+      /\.fieldGroup input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\)/su,
+    );
+    expect(styles).toMatch(
+      /\.previewGrid\s*>\s*\.publicForm,\s*\.previewGrid\s*>\s*\.previewDetails\s*\{[^}]*width:\s*100%[^}]*grid-column:\s*1\s*\/\s*-1/su,
+    );
+  });
 });

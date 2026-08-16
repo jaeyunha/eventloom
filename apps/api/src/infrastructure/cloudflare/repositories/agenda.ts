@@ -1,4 +1,5 @@
 import { AgendaRepositoryConflictError } from "../../../features/agenda/infrastructure";
+import { disambiguationForInstant } from "../../../features/agenda/timezone";
 import type {
   AgendaAuditEntry,
   AgendaEntry,
@@ -7,6 +8,11 @@ import type {
   AgendaSuggestionRun,
   PublishedAgendaRevision,
 } from "../../../features/agenda/types";
+import {
+  agendaEntryFallsOutsideEvent,
+  type EventCalendarContext,
+} from "../../../features/events/event-temporal-dependencies";
+import { guard } from "./shared";
 
 interface Row extends Record<string, unknown> {}
 interface RunResult {
@@ -30,17 +36,41 @@ function statement(
   return db.prepare(sql).bind(...values);
 }
 
+function stateEntries(state: AgendaState): readonly AgendaEntry[] {
+  return [
+    ...state.draft.entries,
+    ...state.revisions.flatMap((revision) => revision.entries),
+    ...state.suggestionRuns.flatMap((run) => [
+      ...run.baseEntries,
+      ...run.proposedEntries,
+      ...run.diff.changes.flatMap((change) => [
+        ...(change.before === null ? [] : [change.before]),
+        ...(change.after === null ? [] : [change.after]),
+      ]),
+    ]),
+  ];
+}
+
 function entryFrom(row: Row, tracks: readonly string[]): AgendaEntry {
+  const startsAt = text(row.starts_at);
+  const endsAt = text(row.ends_at);
+  const startsAtLocal = text(row.starts_at_local);
+  const endsAtLocal = text(row.ends_at_local);
+  const timeZone = text(row.time_zone);
+  const startDisambiguation = disambiguationForInstant(startsAtLocal, timeZone, startsAt);
+  const endDisambiguation = disambiguationForInstant(endsAtLocal, timeZone, endsAt);
   return {
     id: text(row.id),
     sessionId: text(row.session_id),
     roomId: text(row.room_id),
     trackIds: tracks,
-    startsAt: text(row.starts_at),
-    endsAt: text(row.ends_at),
-    startsAtLocal: text(row.starts_at_local),
-    endsAtLocal: text(row.ends_at_local),
-    timeZone: text(row.time_zone),
+    startsAt,
+    endsAt,
+    startsAtLocal,
+    endsAtLocal,
+    timeZone,
+    ...(startDisambiguation === undefined ? {} : { startDisambiguation }),
+    ...(endDisambiguation === undefined ? {} : { endDisambiguation }),
     metadata: {
       title: text(row.title),
       summary: text(row.summary),
@@ -371,6 +401,50 @@ export class D1AgendaRepository implements AgendaRepository {
     const current = await this.load(eventId);
     if ((current?.stateVersion ?? null) !== expectedStateVersion)
       throw new AgendaRepositoryConflictError(eventId);
+    const eventRow = await this.db
+      .prepare(
+        "SELECT starts_at,ends_at,time_zone,schedule_dates_json FROM events WHERE organization_id=? AND id=?",
+      )
+      .bind(this.organizationId, eventId)
+      .first<Row>();
+    if (eventRow === null) throw new AgendaRepositoryConflictError(eventId);
+    const eventCalendar: EventCalendarContext = {
+      startsAt: text(eventRow.starts_at),
+      endsAt: text(eventRow.ends_at),
+      timeZone: text(eventRow.time_zone),
+      scheduleDates:
+        eventRow.schedule_dates_json == null
+          ? []
+          : parse<readonly string[]>(eventRow.schedule_dates_json),
+    };
+    if (
+      next.timeZone !== eventCalendar.timeZone ||
+      next.draft.timeZone !== eventCalendar.timeZone ||
+      next.revisions.some((revision) => revision.timeZone !== eventCalendar.timeZone) ||
+      stateEntries(next).some((entry) => entry.timeZone !== eventCalendar.timeZone)
+    ) {
+      throw new AgendaRepositoryConflictError(eventId);
+    }
+    const published = next.revisions.find(
+      (revision) => revision.id === next.currentPublishedRevisionId,
+    );
+    const activeEntries = [...next.draft.entries, ...(published?.entries ?? [])];
+    if (
+      activeEntries.some((entry) =>
+        agendaEntryFallsOutsideEvent(
+          {
+            label: `Agenda entry ${entry.id}`,
+            startsAt: entry.startsAt,
+            endsAt: entry.endsAt,
+            startsAtLocal: entry.startsAtLocal,
+            endsAtLocal: entry.endsAtLocal,
+          },
+          eventCalendar,
+        ),
+      )
+    ) {
+      throw new AgendaRepositoryConflictError(eventId);
+    }
     const token = crypto.randomUUID();
     const statements: D1PreparedStatement[] = [];
     if (expectedStateVersion === null) {
@@ -717,6 +791,31 @@ export class D1AgendaRepository implements AgendaRepository {
       ),
     );
 
+    statements.splice(
+      1,
+      0,
+      guard(
+        this.db,
+        `EXISTS (
+           SELECT 1
+             FROM events
+            WHERE organization_id = ?
+              AND id = ?
+              AND starts_at = ?
+              AND ends_at = ?
+              AND time_zone = ?
+              AND COALESCE(schedule_dates_json, '[]') = ?
+         )`,
+        [
+          this.organizationId,
+          eventId,
+          eventCalendar.startsAt,
+          eventCalendar.endsAt,
+          next.timeZone,
+          JSON.stringify(eventCalendar.scheduleDates ?? []),
+        ],
+      ),
+    );
     const results = await this.db.batch<RunResult>(statements);
     if (Number(results[0]?.meta?.changes ?? 0) !== 1)
       throw new AgendaRepositoryConflictError(eventId);

@@ -9,6 +9,7 @@ import {
   WorkspaceState,
 } from "../../components/workspace/workspace-state";
 import { StatusBadge, type StatusTone } from "../../components/workspace/workspace-ui";
+import { deadlineAfterEventWarning } from "../speakers/speaker-temporal-policy";
 import { isTaskBlocked, taskStatusPresentation } from "./model";
 import { usePortal } from "./portal-provider";
 import { PortalTaskAssetView } from "./portal-task-asset-view";
@@ -33,7 +34,7 @@ function finished(task: PortalTask): boolean {
 }
 
 export function PortalTaskDetail({ task }: Readonly<{ task: PortalTask }>) {
-  const { busyTaskIds, transitionTask, view, workspace } = usePortal();
+  const { busyTaskIds, context, transitionTask, view, workspace } = usePortal();
   const [note, setNote] = useState("");
   if (!view) return null;
   const subject = taskSubjectPresentation(task, view.profiles, view.submissions);
@@ -46,6 +47,10 @@ export function PortalTaskDetail({ task }: Readonly<{ task: PortalTask }>) {
   const resolution = resolveTaskAsset(task, assets);
   const busy = busyTaskIds.has(task.id);
   const actionable = !blocked && !finished(task) && task.status !== "submitted";
+  const deadlineWarning =
+    context?.temporalContext === undefined || task.dueAt === undefined
+      ? null
+      : deadlineAfterEventWarning(task.dueAt.slice(0, 10), context.temporalContext);
   const returnedUploadFeedback =
     task.status === "needs_changes" && resolution.current?.reviewState === "needs_changes"
       ? resolution.current.reviewNote?.trim() || null
@@ -87,6 +92,8 @@ export function PortalTaskDetail({ task }: Readonly<{ task: PortalTask }>) {
           <dd>{subject.description}</dd>
         </div>
       </dl>
+
+      {deadlineWarning ? <p role="status">{deadlineWarning}</p> : null}
 
       {subject.error ? (
         <WorkspaceState
