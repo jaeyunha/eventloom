@@ -726,6 +726,10 @@ describe("admin navigation", () => {
     const agenda = items.find((item) => item.label === "Agenda");
     expect(agenda?.match(`${expected[5][1]}/sessions`)).toBe(true);
     expect(agenda?.match(`${expected[5][1]}-draft`)).toBe(false);
+    const contentCollection = items.find((item) => item.label === "Content collection");
+    expect(
+      contentCollection?.match("/admin/organizations/org%2Flive/events/event%2Flive/files"),
+    ).toBe(true);
   });
 
   it("uses canonical organization destinations in the sidebar and event workspace menu", () => {

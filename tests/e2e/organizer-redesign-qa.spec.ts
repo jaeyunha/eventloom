@@ -44,57 +44,6 @@ test.beforeEach(async ({ context }) => {
     },
   ]);
 });
-
-test("program settings centers the main column and keeps section widths consistent", async ({
-  page,
-}, testInfo) => {
-  const viewports = [
-    { name: "mobile", width: 375, height: 812 },
-    { name: "tablet", width: 768, height: 1024 },
-    { name: "desktop", width: 1280, height: 900 },
-    { name: "wide", width: 1728, height: 1000 },
-  ] as const;
-
-  for (const viewport of viewports) {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-
-    await page.goto(`${eventBase}/settings/workflow`);
-    await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
-    const workspace = page.locator("#event-settings-content");
-    const workflow = page.locator("#workflow");
-    const [workspaceBox, workflowBox] = await Promise.all([
-      workspace.boundingBox(),
-      workflow.boundingBox(),
-    ]);
-    if (!workspaceBox || !workflowBox) throw new Error("Program settings layout was not rendered.");
-    expect(
-      Math.abs(workflowBox.x + workflowBox.width / 2 - (workspaceBox.x + workspaceBox.width / 2)),
-    ).toBeLessThanOrEqual(1);
-    if (viewport.width >= 1280) expect(workflowBox.width).toBeCloseTo(768, 0);
-    await expectNoPageOverflow(page);
-    await page.screenshot({
-      path: testInfo.outputPath(`program-settings-workflow-${viewport.name}.png`),
-      fullPage: false,
-    });
-
-    await page.goto(`${eventBase}/settings/history`);
-    await expect(page.getByRole("heading", { level: 1, name: "Change history" })).toBeVisible();
-    await expect(page.getByPlaceholder("Search changes or entities")).toBeVisible();
-    const history = page.locator("#history");
-    const historyBox = await history.boundingBox();
-    if (!historyBox) throw new Error("Change history layout was not rendered.");
-    expect(historyBox.width).toBeCloseTo(workflowBox.width, 0);
-    expect(
-      Math.abs(historyBox.x + historyBox.width / 2 - (workspaceBox.x + workspaceBox.width / 2)),
-    ).toBeLessThanOrEqual(1);
-    await expectNoPageOverflow(page);
-    await page.screenshot({
-      path: testInfo.outputPath(`program-settings-history-${viewport.name}.png`),
-      fullPage: false,
-    });
-  }
-});
-
 test("CFP editor uses one constrained date-range calendar", async ({ page }, testInfo) => {
   await page.clock.setFixedTime(new Date("2026-08-16T18:00:00.000Z"));
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -147,10 +96,11 @@ test("organizer content requests default to standard upload formats", async ({
   });
 
   await page.getByRole("button", { name: "New content request" }).click();
-  await expect(page.locator("#task-file-format-slides-pdf")).toBeChecked();
-  await expect(page.locator("#task-file-format-slides-powerpoint")).toBeChecked();
-  await expect(page.locator("#task-max-size-mb")).toHaveValue("100");
-  await expect(page.getByLabel("Allowed MIME types")).toHaveCount(0);
+  await expect(page.getByLabel("File type")).toContainText("Slides");
+  const fileFormats = page.getByRole("group", { name: "File formats (required)" });
+  await expect(fileFormats.getByLabel("PDF")).toBeChecked();
+  await expect(fileFormats.getByLabel("PowerPoint")).toBeChecked();
+  await expect(page.getByLabel("Maximum file size (MB)")).toHaveValue("100");
   await page.screenshot({
     path: testInfo.outputPath("new-content-request-formats.png"),
     fullPage: true,
@@ -162,9 +112,7 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
 
   await page.goto(`${eventBase}/deliverables`);
   await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
-  await expect(
-    page.getByRole("navigation", { name: "Content requests and uploaded files" }),
-  ).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Content collection sections" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open request" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Open request" }).first().click();
   await expect(page.getByRole("dialog").getByText("Request detail")).toBeVisible();

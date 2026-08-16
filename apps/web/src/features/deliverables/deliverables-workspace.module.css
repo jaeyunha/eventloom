@@ -130,25 +130,7 @@
 }
 
 .createTaskAction {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-.createTaskAction > div:first-child {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.createTaskLabel {
-  font-size: 0.78rem;
-  font-weight: 750;
-}
-
-.createTaskAction small {
-  color: var(--color-muted, #697181);
-  font-size: 0.68rem;
+  display: contents;
 }
 
 .overviewHeader h2,
