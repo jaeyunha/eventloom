@@ -704,14 +704,23 @@ CREATE TRIGGER event_role_invitations_accept
 AFTER UPDATE OF status ON event_role_invitations
 WHEN OLD.status = 'pending' AND NEW.status = 'accepted'
 BEGIN
-  INSERT INTO organization_memberships (organization_id, user_id, role, created_at, updated_at)
+  INSERT OR IGNORE INTO organization_memberships (
+    organization_id,
+    user_id,
+    role,
+    created_at,
+    updated_at
+  )
   SELECT NEW.organization_id, NEW.recipient_user_id, 'reviewer', NEW.accepted_at, NEW.accepted_at
+   WHERE NEW.role = 'reviewer';
+
+  UPDATE organization_memberships
+     SET role = 'reviewer',
+         updated_at = NEW.accepted_at
    WHERE NEW.role = 'reviewer'
-  ON CONFLICT(organization_id, user_id) DO UPDATE SET
-    role = CASE WHEN organization_memberships.role IN ('owner', 'admin')
-                THEN organization_memberships.role ELSE 'reviewer' END,
-    updated_at = CASE WHEN organization_memberships.role IN ('owner', 'admin')
-                      THEN organization_memberships.updated_at ELSE excluded.updated_at END;
+     AND organization_id = NEW.organization_id
+     AND user_id = NEW.recipient_user_id
+     AND role NOT IN ('owner', 'admin');
 
   UPDATE auth_verifications
      SET identifier = json_set(
@@ -730,18 +739,25 @@ BEGIN
      AND json_extract(identifier, '$.invitation.role') = 'reviewer'
      AND json_extract(identifier, '$.invitation.status') IN ('pending', 'delivered');
 
-  INSERT INTO participant_grants (
+  INSERT OR IGNORE INTO participant_grants (
     organization_id, event_id, participant_id, user_id, permissions_json,
     created_at, updated_at, revoked_at
   )
   SELECT NEW.organization_id, NEW.event_id, NEW.participant_id, NEW.recipient_user_id,
          '["edit_own_profile","manage_own_assets","view_own_tasks","update_own_tasks"]',
          NEW.accepted_at, NEW.accepted_at, NULL
+   WHERE NEW.role = 'speaker';
+
+  UPDATE participant_grants
+     SET permissions_json =
+           '["edit_own_profile","manage_own_assets","view_own_tasks","update_own_tasks"]',
+         updated_at = NEW.accepted_at,
+         revoked_at = NULL
    WHERE NEW.role = 'speaker'
-  ON CONFLICT(organization_id, event_id, participant_id, user_id) DO UPDATE SET
-    permissions_json = excluded.permissions_json,
-    updated_at = excluded.updated_at,
-    revoked_at = NULL;
+     AND organization_id = NEW.organization_id
+     AND event_id = NEW.event_id
+     AND participant_id = NEW.participant_id
+     AND user_id = NEW.recipient_user_id;
 
   UPDATE participants SET claimed_user_id = NEW.recipient_user_id, updated_at = NEW.accepted_at
    WHERE NEW.role = 'speaker' AND organization_id = NEW.organization_id
