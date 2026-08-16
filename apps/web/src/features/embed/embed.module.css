@@ -1082,6 +1082,45 @@ ul.publicSessionList > li:last-child .speakerCard {
 }
 
 /* detail profile (gallery + speakers list reuse) */
+.detailDialog {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pub-ink);
+  font: inherit;
+  overflow: auto;
+}
+
+.dialogDismissLayer {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+
+.detailDialogSurface {
+  position: relative;
+  z-index: 1;
+  width: min(60rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  margin: 1rem auto;
+  padding: var(--pub-space-5);
+  border: 1px solid var(--pub-border);
+  border-radius: var(--pub-radius-panel);
+  background: var(--pub-canvas);
+  box-shadow: var(--pub-shadow-raised);
+  overflow: auto;
+}
+
+.detailDialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
 
 .speakerDetail {
   display: grid;

@@ -13,12 +13,10 @@ import {
   type ReminderFacts,
   type ReminderRun,
 } from "./api";
+import { CommunicationsWorkspaceView } from "./communications-workspace";
 import {
-  CommunicationsWorkspaceView,
   communicationNavigationCacheKey,
   communicationNavigationCacheTags,
-} from "./communications-workspace";
-import {
   communicationTemplateSelectionFromKey,
   communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,

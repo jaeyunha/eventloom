@@ -53,11 +53,14 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
       provenance?: ApiSuggestion["candidates"][string][number]["provenance"];
     };
   } | null {
+    const criteria = assignment.round.rubric.criteria;
+    const criteriaById = new Map<string, (typeof criteria)[number]>();
+    for (const criterion of criteria) {
+      if (!criteriaById.has(criterion.id)) criteriaById.set(criterion.id, criterion);
+    }
     for (const suggestion of suggestions) {
       if (suggestion.status !== "pending") continue;
-      const criterion = assignment.round.rubric.criteria.find(
-        (candidate) => candidate.id === criterionId,
-      );
+      const criterion = criteriaById.get(criterionId);
       if (criterion === undefined || criterionType(criterion) !== "numeric") continue;
       const candidate = suggestion.candidates[criterionId]?.[0];
       if (candidate !== undefined) return { suggestion, candidate };
@@ -71,10 +74,13 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     const nextScores: Record<string, string> = {};
     const nextResponses: Record<string, string> = {};
     const nextConfirmed = new Set<string>();
+    const criteria = assignment.round.rubric.criteria;
+    const criteriaById = new Map<string, (typeof criteria)[number]>();
+    for (const criterion of criteria) {
+      if (!criteriaById.has(criterion.id)) criteriaById.set(criterion.id, criterion);
+    }
     for (const [criterionId, score] of Object.entries(review.scores)) {
-      const criterion = assignment.round.rubric.criteria.find(
-        (candidate) => candidate.id === criterionId,
-      );
+      const criterion = criteriaById.get(criterionId);
       if (criterion === undefined) continue;
       if (criterionType(criterion) === "free_text") {
         if (typeof score.value === "string") nextResponses[criterionId] = score.value;

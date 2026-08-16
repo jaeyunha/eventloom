@@ -20,6 +20,9 @@ const blockedTags = new Set([
   "template",
 ]);
 const voidTags = new Set(["br", "hr"]);
+const PUBLISHED_CONTENT_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+});
 
 export function safePublishedUrl(value: string | undefined): string | null {
   if (!value) return null;
@@ -109,5 +112,5 @@ export function formatPublishedContentDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
     ? "Unknown date"
-    : new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(date);
+    : PUBLISHED_CONTENT_DATE_FORMATTER.format(date);
 }

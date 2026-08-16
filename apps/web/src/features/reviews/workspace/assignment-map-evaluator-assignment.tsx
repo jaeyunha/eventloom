@@ -55,9 +55,12 @@ export function mapEvaluatorAssignment(
   const initialResponses: Record<string, string> = {
     ...parsedComment.responses,
   };
+  const criterionById = new Map(
+    round.rubric.criteria.map((criterion) => [criterion.id, criterion] as const),
+  );
   const initialScores = Object.fromEntries(
     Object.entries(scores).flatMap(([criterionId, score]) => {
-      const criterion = round.rubric.criteria.find((candidate) => candidate.id === criterionId);
+      const criterion = criterionById.get(criterionId);
       if (criterion === undefined) return [];
       if (criterionType(criterion) === "free_text") {
         if (typeof score.value === "string") initialResponses[criterionId] = score.value;
@@ -74,35 +77,54 @@ export function mapEvaluatorAssignment(
       ];
     }),
   );
-  const aiSuggestions = Object.fromEntries([
-    ...Object.entries(scores)
-      .filter(([criterionId, score]) => {
-        const criterion = round.rubric.criteria.find((candidate) => candidate.id === criterionId);
-        return (
-          score.origin === "ai" &&
-          criterion !== undefined &&
-          criterionType(criterion) === "numeric" &&
-          typeof score.value === "number"
-        );
-      })
-      .map(([criterionId, score]) => [
+  const aiSuggestionEntries: Array<
+    readonly [string, { value: number; evidence: readonly string[] }]
+  > = [];
+  for (const [criterionId, score] of Object.entries(scores)) {
+    const criterion = criterionById.get(criterionId);
+    if (
+      score.origin !== "ai" ||
+      criterion === undefined ||
+      criterionType(criterion) !== "numeric" ||
+      typeof score.value !== "number"
+    ) {
+      continue;
+    }
+    aiSuggestionEntries.push([
+      criterionId,
+      { value: Number(score.value), evidence: score.evidence },
+    ]);
+  }
+  for (const suggestion of suggestions) {
+    if (suggestion.status !== "pending") continue;
+    for (const [criterionId, candidates] of Object.entries(suggestion.candidates)) {
+      const criterion = criterionById.get(criterionId);
+      const candidate = candidates[0];
+      if (
+        criterion === undefined ||
+        criterionType(criterion) !== "numeric" ||
+        candidate === undefined
+      ) {
+        continue;
+      }
+      aiSuggestionEntries.push([
         criterionId,
-        { value: Number(score.value), evidence: score.evidence },
-      ]),
-    ...suggestions
-      .filter((suggestion) => suggestion.status === "pending")
-      .flatMap((suggestion) =>
-        Object.entries(suggestion.candidates).flatMap(([criterionId, candidates]) => {
-          const criterion = round.rubric.criteria.find((candidate) => candidate.id === criterionId);
-          const candidate = candidates[0];
-          return criterion !== undefined &&
-            criterionType(criterion) === "numeric" &&
-            candidate !== undefined
-            ? [[criterionId, { value: candidate.value, evidence: candidate.evidence }]]
-            : [];
-        }),
-      ),
-  ]);
+        { value: candidate.value, evidence: candidate.evidence },
+      ]);
+    }
+  }
+  const aiSuggestions = Object.fromEntries(aiSuggestionEntries);
+  const initialConfirmed: string[] = [];
+  for (const [criterionId, score] of Object.entries(scores)) {
+    const criterion = criterionById.get(criterionId);
+    if (
+      isHumanConfirmedReviewScore(score) &&
+      criterion !== undefined &&
+      criterionType(criterion) !== "free_text"
+    ) {
+      initialConfirmed.push(criterionId);
+    }
+  }
   const resolvedEventId = context.assignment.eventId || plan.eventId;
   return {
     organizationId: plan.organizationId ?? resolvedEventId,
@@ -115,16 +137,7 @@ export function mapEvaluatorAssignment(
     reviewVersion: context.review?.version,
     initialScores,
     initialResponses,
-    initialConfirmed: Object.entries(scores)
-      .filter(([criterionId, score]) => {
-        const criterion = round.rubric.criteria.find((candidate) => candidate.id === criterionId);
-        return (
-          isHumanConfirmedReviewScore(score) &&
-          criterion !== undefined &&
-          criterionType(criterion) !== "free_text"
-        );
-      })
-      .map(([criterionId]) => criterionId),
+    initialConfirmed,
     initialComment: parsedComment.comment,
     submittedAt:
       context.review?.submittedAt ??

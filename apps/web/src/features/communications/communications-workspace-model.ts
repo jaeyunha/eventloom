@@ -6,6 +6,9 @@ import {
   type CommunicationPreview,
   type CommunicationTemplate,
   type CommunicationTemplatePurpose,
+  type ReminderDispatch,
+  type ReminderFacts,
+  type ReminderRun,
 } from "./api";
 
 export type CommunicationProviderState =
@@ -13,6 +16,43 @@ export type CommunicationProviderState =
   | "available"
   | "unavailable"
   | "domain-unverified";
+
+export type CommunicationNavigationCacheResource = "templates" | "reminder-truth";
+
+export interface CommunicationReminderTruthSnapshot {
+  readonly runs: readonly ReminderRun[];
+  readonly dispatches: readonly ReminderDispatch[];
+  readonly facts: ReminderFacts | null;
+}
+
+export function normalizeCommunicationScopeId(value: string): string {
+  return value.trim();
+}
+
+export function communicationNavigationCacheKey(
+  resource: CommunicationNavigationCacheResource,
+  organizationId: string,
+  eventId: string,
+): string {
+  const organization = normalizeCommunicationScopeId(organizationId);
+  const event = normalizeCommunicationScopeId(eventId);
+  return `organization:${organization}:event:${event}:communications:${resource}`;
+}
+
+export function communicationNavigationCacheTags(
+  resource: CommunicationNavigationCacheResource,
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeCommunicationScopeId(organizationId);
+  const event = normalizeCommunicationScopeId(eventId);
+  return [
+    `organization:${organization}`,
+    `event:${event}`,
+    `communications:${event}`,
+    `communications:${resource}:${event}`,
+  ];
+}
 
 export type ReminderTruthState =
   | "idle"

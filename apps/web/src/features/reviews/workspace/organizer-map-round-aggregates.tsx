@@ -9,11 +9,12 @@ export function mapRoundAggregates(
   aggregates: readonly ApiAggregate[],
   roundId: string,
 ): readonly AggregateRow[] {
-  const aggregateBySubmissionId = new Map(
-    aggregates
-      .filter((aggregate) => aggregate.roundId === roundId)
-      .map((aggregate) => [aggregate.submissionId, aggregate] as const),
-  );
+  const aggregateBySubmissionId = aggregates.reduce((bySubmissionId, aggregate) => {
+    if (aggregate.roundId === roundId) {
+      bySubmissionId.set(aggregate.submissionId, aggregate);
+    }
+    return bySubmissionId;
+  }, new Map<string, ApiAggregate>());
   return submissions.map((submission) => {
     const aggregate = aggregateBySubmissionId.get(submission.id);
     const submissionAssignments = assignments.filter(

@@ -3,6 +3,7 @@ import { LandingIcon } from "./landing-icon";
 import { LandingProductDemo } from "./landing-product-demo";
 
 const repositoryApiUrl = "https://api.github.com/repos/jaeyunha/open-sessionboard";
+const GITHUB_STAR_COUNT_FORMATTER = new Intl.NumberFormat("en-US");
 const repositoryResponseSchema = z.object({
   stargazers_count: z.number().int().nonnegative(),
 });
@@ -45,7 +46,7 @@ async function resolveRepositoryBadge(): Promise<RepositoryBadge> {
       };
     }
 
-    const label = new Intl.NumberFormat("en-US").format(repository.data.stargazers_count);
+    const label = GITHUB_STAR_COUNT_FORMATTER.format(repository.data.stargazers_count);
     return {
       accessibleLabel: `${label} GitHub stars`,
       label,

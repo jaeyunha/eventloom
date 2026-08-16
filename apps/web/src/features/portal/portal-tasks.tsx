@@ -4,8 +4,8 @@ import { useState } from "react";
 import {
   WorkspaceListDetail,
   WorkspaceProgressSummary,
-  WorkspaceState,
-} from "../../components/workspace";
+} from "../../components/workspace/workspace-content";
+import { WorkspaceState } from "../../components/workspace/workspace-state";
 import { filterTasks, summarizePortal } from "./model";
 import { usePortal } from "./portal-provider";
 import { PortalTaskDetail } from "./portal-task-detail";

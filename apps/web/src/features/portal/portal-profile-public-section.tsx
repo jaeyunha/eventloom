@@ -5,14 +5,16 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+} from "../../components/ui/card";
+import {
   Field,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
-  Input,
-  Textarea,
-} from "../../components/ui";
+} from "../../components/ui/field";
+import { Input } from "../../components/ui/input";
+import { Textarea } from "../../components/ui/textarea";
 import styles from "./portal-profile.module.css";
 import {
   type ProfileDraft,

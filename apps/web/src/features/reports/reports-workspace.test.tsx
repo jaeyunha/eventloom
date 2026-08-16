@@ -8,8 +8,6 @@ import {
   ReportPreview,
   ReportsWorkspace,
   ReportsWorkspaceStatus,
-  reportsNavigationCacheKey,
-  reportsNavigationCacheTags,
   UnavailableState,
 } from "./reports-workspace";
 import {
@@ -18,6 +16,8 @@ import {
   REPORT_DIALOG_COPY,
   REPORT_FIELD_ALLOWLIST,
   REPORT_TEMPLATES,
+  reportsNavigationCacheKey,
+  reportsNavigationCacheTags,
 } from "./reports-workspace-model";
 
 const definition: ReportDefinition = {

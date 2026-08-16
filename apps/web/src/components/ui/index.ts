@@ -18,12 +18,7 @@ export * from "./field";
 export * from "./input";
 export * from "./label";
 export * from "./progress";
-export {
-  RichTextArea,
-  type RichTextAreaProps,
-  RichTextShell,
-  type RichTextShellProps,
-} from "./rich-text";
+export { RichTextArea, type RichTextAreaProps } from "./rich-text";
 export {
   applyRichTextCommand,
   type RichTextCommand,

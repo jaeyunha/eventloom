@@ -40,7 +40,14 @@ export function useOrganizerWorkspaceViewController({
     activeRound?.id ??
     seed.rounds[0]?.id ??
     "";
-  const [selectedRoundId, setSelectedRoundId] = useState(initialRoundId);
+  const [selectedRoundOverride, setSelectedRoundOverride] = useState<string | null>(null);
+  const selectedRoundCandidate = selectedRoundOverride ?? initialRoundId;
+  const selectedRoundId = seed.rounds.some((round) => round.id === selectedRoundCandidate)
+    ? selectedRoundCandidate
+    : initialRoundId;
+  const setSelectedRoundId = (value: string): void => {
+    setSelectedRoundOverride(value);
+  };
   const [roundAggregates, setRoundAggregates] = useState<readonly AggregateRow[]>(seed.aggregates);
   const [aggregateLoading, setAggregateLoading] = useState(false);
   const [aggregateError, setAggregateError] = useState<string | null>(null);
@@ -61,13 +68,6 @@ export function useOrganizerWorkspaceViewController({
   const [decisionRowLimit, setDecisionRowLimit] = useState(5);
   const decisionEditorRef = useRef<HTMLDivElement | null>(null);
   const selectedRound = seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
-  useEffect(() => {
-    setRoundAggregates(seed.aggregates);
-    setAggregateError(null);
-    if (!seed.rounds.some((round) => round.id === selectedRoundId)) {
-      setSelectedRoundId(initialRoundId);
-    }
-  }, [initialRoundId, seed, selectedRoundId]);
   useEffect(() => {
     if (selectedRoundId.length === 0) return;
     let cancelled = false;

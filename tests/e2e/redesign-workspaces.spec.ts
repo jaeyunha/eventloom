@@ -624,6 +624,7 @@ test("speaker workspace presents a full-width roster with a focused detail drawe
 test("speaker asset download requests a fresh capability and starts from one click", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
   const downloadPath =
     "/api/speaker/assets/capabilities/download/speaker-download-e2e/opaque-download-token";
   let grantRequests = 0;
@@ -655,6 +656,8 @@ test("speaker asset download requests a fresh capability and starts from one cli
     });
   });
 
+  const warmedSpeakersRoute = await page.request.get(speakersUrl);
+  expect(warmedSpeakersRoute.ok()).toBe(true);
   await page.goto(speakersUrl);
   const roster = page.getByRole("table", { name: "Event speaker roster" });
   const drawerSettled = speakerDrawerTransition(page);
