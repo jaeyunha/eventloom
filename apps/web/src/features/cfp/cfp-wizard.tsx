@@ -917,6 +917,17 @@ function formatCfpWindowDate(value: string, timeZone: string): string {
     return value;
   }
 }
+function focusFirstError(nextErrors: ValidationErrors): void {
+  const firstKey = Object.keys(nextErrors)[0];
+  if (!firstKey) return;
+  window.setTimeout(() => {
+    document.getElementById(firstKey)?.focus();
+  });
+}
+
+function reloadPinnedDraft(): void {
+  window.location.reload();
+}
 
 export function CfpWizard({
   eventSlug,
@@ -1578,14 +1589,6 @@ export function CfpWizard({
     }
   }
 
-  function focusFirstError(nextErrors: ValidationErrors): void {
-    const firstKey = Object.keys(nextErrors)[0];
-    if (!firstKey) return;
-    window.setTimeout(() => {
-      document.getElementById(firstKey)?.focus();
-    });
-  }
-
   async function continueFlow(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (step === "welcome" && submissionsClosed) {
@@ -1748,10 +1751,6 @@ export function CfpWizard({
         ),
       );
     }
-  }
-
-  function reloadPinnedDraft(): void {
-    window.location.reload();
   }
 
   function discardStaleDraftAndStartNew(): void {

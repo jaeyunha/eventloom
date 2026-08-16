@@ -63,6 +63,9 @@ export async function signOutAdminSession({
   navigate("/");
   return true;
 }
+function signOut(): Promise<boolean> {
+  return signOutAdminSession();
+}
 
 export function useAdminShellController(): AdminShellController {
   const pathname = usePathname();
@@ -101,10 +104,6 @@ export function useAdminShellController(): AdminShellController {
     if (requiredOrganizationId !== null) {
       window.location.assign(organizationOverviewHref(organizationId));
     }
-  }
-
-  function signOut(): Promise<boolean> {
-    return signOutAdminSession();
   }
 
   return {

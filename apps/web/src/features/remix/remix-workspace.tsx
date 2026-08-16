@@ -493,6 +493,7 @@ export function RemixWorkspace({
     }
   }
 
+
   if (!scopeValid) {
     return <ScopeStatus message="Organization and event scope are required." error />;
   }

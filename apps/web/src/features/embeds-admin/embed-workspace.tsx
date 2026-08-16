@@ -308,6 +308,14 @@ function EmbedConfigurationLibrary({
     </Card>
   );
 }
+function setListValue(value: string, onChange: (next: readonly string[]) => void): void {
+  onChange(
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index),
+  );
+}
 
 function EmbedControls({
   widget,
@@ -363,14 +371,6 @@ function EmbedControls({
   onRefresh: () => void;
 }>) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const setListValue = (value: string, onChange: (next: readonly string[]) => void): void => {
-    onChange(
-      value
-        .split(",")
-        .map((item) => item.trim())
-        .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index),
-    );
-  };
 
   return (
     <div className={workspaceStyles.setupControls}>

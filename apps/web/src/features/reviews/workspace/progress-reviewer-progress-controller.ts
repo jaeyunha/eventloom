@@ -18,6 +18,9 @@ export interface ReviewerProgressProps {
   baseUrl: string;
   reviewerMembers: readonly OrganizationMember[];
 }
+function keyFor(reviewer: ReviewerProgressSummary): string {
+  return `${reviewer.reviewerId}\u0000${reviewer.roundId}`;
+}
 
 export function useReviewerProgressController({
   seed,
@@ -44,8 +47,6 @@ export function useReviewerProgressController({
   const visibleReviewers = filteredReviewers.slice(0, reviewerRowLimit);
   const visibleOutstanding = visibleReviewers.filter((reviewer) => reviewer.outstanding > 0);
   const reviewerLabel = (reviewerId: string) => reviewerDisplayLabel(reviewerId, reviewerMembers);
-  const keyFor = (reviewer: ReviewerProgressSummary) =>
-    `${reviewer.reviewerId}\u0000${reviewer.roundId}`;
   const selectedOutstanding = outstanding.filter((reviewer) => selected.has(keyFor(reviewer)));
   const selectedVisibleOutstanding = visibleOutstanding.filter((reviewer) =>
     selected.has(keyFor(reviewer)),
