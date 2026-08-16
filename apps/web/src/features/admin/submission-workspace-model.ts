@@ -18,6 +18,23 @@ export type SubmissionStatus =
   | "waitlisted"
   | "declined"
   | "withdrawn";
+export const submissionStatusLabels: Record<SubmissionStatus, string> = {
+  draft: "Draft",
+  submitted: "Submitted",
+  reopened: "Reopened",
+  under_review: "Under review",
+  accepted: "Accepted",
+  waitlisted: "Waitlisted",
+  declined: "Declined",
+  withdrawn: "Withdrawn",
+};
+
+export type SubmissionSortKey = "title" | "status" | "updatedAt";
+export type SubmissionSortDirection = "asc" | "desc";
+
+export function submissionListHref(eventId: string, organizationId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
+}
 
 export interface SubmissionParticipant {
   id: string;

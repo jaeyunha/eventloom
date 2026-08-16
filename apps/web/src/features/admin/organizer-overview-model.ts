@@ -55,6 +55,22 @@ export interface OrganizerOverviewConfig {
 }
 
 export type OrganizerOverviewConfigResult = OrganizerOverviewConfig | { readonly error: string };
+export type OrganizerOverviewCacheResource = "activity" | "core" | "events";
+
+export function organizerOverviewCacheKey(
+  organizationId: string,
+  resource: OrganizerOverviewCacheResource,
+): string {
+  return `organizer-overview:${organizationId.trim()}:${resource}`;
+}
+
+export function organizerOverviewCacheTags(organizationId: string): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `organizer-overview:${normalizedOrganizationId}`,
+  ];
+}
 
 type UnknownRecord = Record<string, unknown>;
 

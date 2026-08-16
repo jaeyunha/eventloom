@@ -1,6 +1,7 @@
 import {
   RemixApiError,
   type RemixAuditAction,
+  type RemixAuditEntry,
   type RemixCandidate,
   type RemixContent,
   type RemixField,
@@ -10,6 +11,35 @@ import {
   remixSessionFields,
   remixSpeakerFields,
 } from "../api";
+
+export interface RemixNavigationCacheSnapshot {
+  readonly records: readonly RemixSourceRecord[];
+  readonly candidates: readonly RemixCandidate[];
+  readonly audit: readonly RemixAuditEntry[];
+}
+
+function normalizeRemixScopeId(value: string): string {
+  return value.trim();
+}
+
+export function remixNavigationCacheKey(
+  organizationId: string,
+  eventId: string,
+  sourceType: RemixSourceType,
+): string {
+  const organization = normalizeRemixScopeId(organizationId);
+  const event = normalizeRemixScopeId(eventId);
+  return `organization:${organization}:event:${event}:remix:workspace:${sourceType}`;
+}
+
+export function remixNavigationCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeRemixScopeId(organizationId);
+  const event = normalizeRemixScopeId(eventId);
+  return [`organization:${organization}`, `event:${event}`, `remix:${event}`];
+}
 
 const REMIX_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",

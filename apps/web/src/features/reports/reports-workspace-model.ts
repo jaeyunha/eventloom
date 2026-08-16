@@ -1,4 +1,28 @@
-import type { ReportDefinitionInput, ReportRelationship } from "./api";
+import type { ReportDefinition, ReportDefinitionInput, ReportRelationship, ReportRun } from "./api";
+
+export interface ReportsNavigationCacheSnapshot {
+  readonly definitions: readonly ReportDefinition[];
+  readonly runs: readonly ReportRun[];
+}
+
+export function normalizeReportsScopeId(value: string): string {
+  return value.trim();
+}
+
+export function reportsNavigationCacheKey(organizationId: string, eventId: string): string {
+  const organization = normalizeReportsScopeId(organizationId);
+  const event = normalizeReportsScopeId(eventId);
+  return `organization:${organization}:event:${event}:reports:workspace`;
+}
+
+export function reportsNavigationCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeReportsScopeId(organizationId);
+  const event = normalizeReportsScopeId(eventId);
+  return [`organization:${organization}`, `event:${event}`, `reports:${event}`];
+}
 
 export interface FieldOption {
   readonly key: string;

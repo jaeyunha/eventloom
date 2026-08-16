@@ -8,13 +8,17 @@ import type { EmbedDisplayField, EmbedLayout } from "./model";
 import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
-  formatPublishedSessionSchedule,
   literalSearchPattern,
   publicAgendaDays,
   publishedEntryPresenters,
   publishedSpeakerSearchTermsBySessionId,
   uniqueSorted,
 } from "./model";
+import {
+  PublicAgendaDayList,
+  PublicAgendaFilters,
+  PublicAgendaHeader,
+} from "./public-agenda-sections";
 import type {
   PublishedAgenda,
   PublishedAgendaEntry,
@@ -400,131 +404,45 @@ export function PublicAgendaView({
 
   return (
     <section aria-labelledby="agenda-heading" data-layout={layout ?? undefined}>
-      <div className={styles.viewHeading}>
-        <div>
-          <p className={styles.eyebrow}>Plan your itinerary</p>
-          <h2 id="agenda-heading">Agenda</h2>
-          <p>
-            Browse revision {agenda.revision.number}, published for attendees and event partners.
-          </p>
-        </div>
-        {jsonFeedAvailable || icsFeedAvailable ? (
-          <nav className={styles.feedLinks} aria-label="Agenda downloads">
-            {jsonFeedAvailable ? <a href={`${publicBase}/agenda.json`}>JSON feed</a> : null}
-            {icsFeedAvailable ? <a href={`${publicBase}/agenda.ics`}>Add to calendar</a> : null}
-          </nav>
-        ) : null}
-      </div>
+      <PublicAgendaHeader
+        revision={agenda.revision.number}
+        publicBase={publicBase}
+        jsonFeedAvailable={jsonFeedAvailable}
+        icsFeedAvailable={icsFeedAvailable}
+      />
 
-      <form
+      <PublicAgendaFilters
         key={agendaOwnerKey}
-        className={styles.agendaFilters}
-        onSubmit={(event) => event.preventDefault()}
-      >
-        <label>
-          <span>Search sessions or speakers</span>
-          <input
-            type="search"
-            value={query}
-            placeholder="Search by title or speaker"
-            onChange={(event) =>
-              updateInteraction((current) => ({ ...current, query: event.target.value }))
-            }
-          />
-        </label>
-        <label>
-          <span>Day</span>
-          <select
-            value={validDay}
-            onChange={(event) =>
-              updateInteraction((current) => ({ ...current, day: event.target.value }))
-            }
-          >
-            <option value="">All days</option>
-            {eventDays.map((eventDay) => (
-              <option key={eventDay.date} value={eventDay.date}>
-                {eventDay.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Track</span>
-          <select
-            value={validTrack}
-            onChange={(event) =>
-              updateInteraction((current) => ({ ...current, track: event.target.value }))
-            }
-          >
-            <option value="">All tracks</option>
-            {tracks.map((trackName) => (
-              <option key={trackName} value={trackName}>
-                {trackName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Format</span>
-          <select
-            value={validFormat}
-            onChange={(event) =>
-              updateInteraction((current) => ({ ...current, format: event.target.value }))
-            }
-          >
-            <option value="">All formats</option>
-            {formats.map((formatName) => (
-              <option key={formatName} value={formatName}>
-                {formatName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Location</span>
-          <select
-            value={validRoom}
-            onChange={(event) =>
-              updateInteraction((current) => ({ ...current, room: event.target.value }))
-            }
-          >
-            <option value="">All locations</option>
-            {rooms.map((roomName) => (
-              <option key={roomName} value={roomName}>
-                {roomName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.localTimeToggle}>
-          <input
-            type="checkbox"
-            checked={viewerLocal}
-            onChange={(event) =>
-              updateInteraction((current) => ({ ...current, viewerLocal: event.target.checked }))
-            }
-          />
-          <span>Show in my local time</span>
-        </label>
-        {query || validDay || validTrack || validFormat || validRoom ? (
-          <button
-            className={styles.clearButton}
-            type="button"
-            onClick={() =>
-              updateInteraction((current) => ({
-                ...current,
-                query: "",
-                day: "",
-                track: "",
-                format: "",
-                room: "",
-              }))
-            }
-          >
-            Clear filters
-          </button>
-        ) : null}
-      </form>
+        formKey={agendaOwnerKey}
+        query={query}
+        validDay={validDay}
+        validTrack={validTrack}
+        validFormat={validFormat}
+        validRoom={validRoom}
+        viewerLocal={viewerLocal}
+        eventDays={eventDays}
+        tracks={tracks}
+        formats={formats}
+        rooms={rooms}
+        onQueryChange={(value) => updateInteraction((current) => ({ ...current, query: value }))}
+        onDayChange={(value) => updateInteraction((current) => ({ ...current, day: value }))}
+        onTrackChange={(value) => updateInteraction((current) => ({ ...current, track: value }))}
+        onFormatChange={(value) => updateInteraction((current) => ({ ...current, format: value }))}
+        onRoomChange={(value) => updateInteraction((current) => ({ ...current, room: value }))}
+        onViewerLocalChange={(value) =>
+          updateInteraction((current) => ({ ...current, viewerLocal: value }))
+        }
+        onClear={() =>
+          updateInteraction((current) => ({
+            ...current,
+            query: "",
+            day: "",
+            track: "",
+            format: "",
+            room: "",
+          }))
+        }
+      />
 
       <div className={styles.resultBar} role="status" aria-live="polite">
         <span>
@@ -533,115 +451,17 @@ export function PublicAgendaView({
         <span>Times shown in {displayTimeZone}</span>
       </div>
 
-      {visibleDays.length === 0 ? (
-        <div className={styles.emptyResult} role="status">
-          <h3>No sessions match these filters</h3>
-          <p>
-            Choose a different day, search term, track, format, or location to continue planning.
-          </p>
-        </div>
-      ) : (
-        <div className={styles.publicDays}>
-          {visibleDays.map((agendaDay) => {
-            const publishedDay = eventDays.find((eventDay) => eventDay.date === agendaDay.date);
-            const hasPublishedSessions = (publishedDay?.entries.length ?? 0) > 0;
-            return (
-              <section key={agendaDay.date} aria-labelledby={`agenda-day-${agendaDay.date}`}>
-                <header className={styles.publicDayHeading}>
-                  <h3 id={`agenda-day-${agendaDay.date}`}>{agendaDay.label}</h3>
-                </header>
-                {agendaDay.entries.length === 0 ? (
-                  <div
-                    className={styles.emptyResult}
-                    role="status"
-                    aria-labelledby={`agenda-empty-${agendaDay.date}`}
-                  >
-                    <h4 id={`agenda-empty-${agendaDay.date}`}>
-                      {hasPublishedSessions && hasFacetFilters
-                        ? "No sessions match these filters"
-                        : "No sessions published for this day"}
-                    </h4>
-                    <p>
-                      {hasPublishedSessions && hasFacetFilters
-                        ? "Choose a different search term, track, format, or location to continue planning."
-                        : "No published sessions are scheduled for this day."}
-                    </p>
-                  </div>
-                ) : (
-                  <ol className={styles.publicSessionList}>
-                    {agendaDay.entries.map((entry) => {
-                      const presenters = publishedEntryPresenters(entry, speakers);
-                      const schedule = formatPublishedSessionSchedule(
-                        entry.startsAt,
-                        entry.endsAt,
-                        displayTimeZone,
-                      );
-                      return (
-                        <li key={entry.id}>
-                          <button
-                            id={`agenda-entry-trigger-${entry.id}`}
-                            className={styles.publicSessionCard}
-                            type="button"
-                            aria-labelledby={`agenda-entry-${entry.id}`}
-                            aria-haspopup="dialog"
-                            onClick={(event) => openEntry(entry.id, event.currentTarget)}
-                          >
-                            {showField("date-time") ? (
-                              <div className={styles.publicSessionTime}>
-                                <time dateTime={entry.startsAt} className={styles.sessionDate}>
-                                  {schedule.dateLabel}
-                                </time>
-                                <time dateTime={entry.endsAt} className={styles.sessionClock}>
-                                  <span>{schedule.startTimeLabel}</span>
-                                  <span aria-hidden="true">–</span>
-                                  <span>{schedule.endTimeLabel}</span>
-                                </time>
-                              </div>
-                            ) : null}
-                            <div className={styles.publicSessionCopy}>
-                              <div className={styles.publicSessionMeta}>
-                                {showField("format") && entry.format.trim() ? (
-                                  <span>Format: {entry.format}</span>
-                                ) : null}
-                                {showField("track") ? trackNameLabels(entry.trackNames) : null}
-                              </div>
-                              <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
-                              {showField("speakers") && presenters.length > 0 ? (
-                                <p className={styles.publicSpeakers}>
-                                  Presented by{" "}
-                                  {presenters.map((presenter, index) => (
-                                    <span key={presenter.key}>
-                                      {index > 0 ? ", " : null}
-                                      {presenter.speaker
-                                        ? `${presenter.displayName} (${speakerRole(
-                                            presenter.speaker,
-                                          )})`
-                                        : presenter.displayName}
-                                    </span>
-                                  ))}
-                                </p>
-                              ) : null}
-                              {showField("summary") ? (
-                                <p>{entry.summary || "No description was published."}</p>
-                              ) : null}
-                            </div>
-                            {showField("room") ? (
-                              <div className={styles.publicRoom}>
-                                <span>Room</span>
-                                <strong>{entry.roomName || "Room not published"}</strong>
-                              </div>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      )}
+      <PublicAgendaDayList
+        visibleDays={visibleDays}
+        eventDays={eventDays}
+        displayTimeZone={displayTimeZone}
+        speakers={speakers}
+        hasFacetFilters={hasFacetFilters}
+        showField={showField}
+        renderTrackLabels={trackNameLabels}
+        renderSpeakerRole={speakerRole}
+        onOpenEntry={openEntry}
+      />
     </section>
   );
 }

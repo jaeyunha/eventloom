@@ -4,8 +4,10 @@ import type {
   DeliverableComment,
   DeliverableContentHistoryEntry,
   DeliverableExportDownload,
+  DeliverableMatrixItem,
   DeliverableMatrixStatus,
   DeliverableSession,
+  DeliverableSpeakerContentHistoryEntry,
   DeliverableSpeakerProfile,
   DeliverablesApi,
   DeliverableTask,
@@ -13,6 +15,41 @@ import type {
 } from "./api";
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
+export function deliverablesCoreCacheKey(
+  organizationId: string,
+  eventId: string,
+  mode: DeliverablesWorkspaceMode,
+): string {
+  return `organization:${organizationId.trim()}:event:${eventId.trim()}:deliverables:${mode}:core`;
+}
+
+export function deliverablesCoreCacheTags(
+  organizationId: string,
+  eventId: string,
+  mode: DeliverablesWorkspaceMode,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}:${mode}`,
+  ];
+}
+
+export function deliverablesCoreCacheInvalidationTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}`,
+  ];
+}
 
 export type DeliverablesExportUiStatus =
   | "idle"
@@ -44,6 +81,32 @@ export const deliverablesExportActionLabels: Readonly<Record<DeliverablesExportU
     "download-started": "Download started",
     failure: "Retry ZIP export",
   };
+export type DeliverableSpeakerContentHistoryStatus = "loading" | "empty" | "success" | "error";
+
+export interface DeliverableSpeakerContentHistoryState {
+  readonly status: DeliverableSpeakerContentHistoryStatus;
+  readonly entries: readonly DeliverableSpeakerContentHistoryEntry[];
+  readonly error?: string;
+}
+
+export interface DeliverablesSnapshot {
+  readonly sessions: readonly DeliverableSession[];
+  readonly tasks: readonly DeliverableTask[];
+  readonly assets: readonly DeliverableAsset[];
+  readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly matrix?: DeliverableTaskMatrix;
+  readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
+}
+
+export async function authorizeContentCollectionNavigationSnapshot(
+  api: Pick<DeliverablesApi, "listDeliverableMatrix">,
+  snapshot: DeliverablesSnapshot,
+  signal?: AbortSignal,
+): Promise<DeliverablesSnapshot | undefined> {
+  if (api.listDeliverableMatrix === undefined) return undefined;
+  await api.listDeliverableMatrix(signal === undefined ? {} : { signal });
+  return snapshot;
+}
 
 export interface DeliverableRow {
   readonly task: DeliverableTask;
@@ -230,7 +293,7 @@ export function startDeliverablesCoreRequests(
     );
   }
 
-  const needsProjectionFallback = mode === "deliverables" && listDeliverableMatrix === undefined;
+  const needsProjectionFallback = listDeliverableMatrix === undefined;
   if (needsProjectionFallback) {
     const listTasks = api.listTasks;
     if (listTasks !== undefined) {
@@ -267,11 +330,73 @@ export function settleDeliverablesRequest<T>(
         (reason: unknown) => ({ ok: false as const, reason }),
       );
 }
+function requiredDeliverablesCoreValue<T>(
+  result: DeliverablesSettledResult<T> | undefined,
+  resource: string,
+): T {
+  if (result?.ok === true) return result.value;
+  throw result === undefined
+    ? new Error(`The ${resource} core projection was not provisioned.`)
+    : result.reason;
+}
+
+function matrixAssetsFromItems(
+  items: readonly DeliverableMatrixItem[],
+): readonly DeliverableAsset[] {
+  const byId = new Map<string, DeliverableAsset>();
+  for (const item of items) {
+    for (const asset of item.assets) byId.set(asset.id, asset);
+    if (item.currentAsset !== undefined) byId.set(item.currentAsset.id, item.currentAsset);
+  }
+  return [...byId.values()];
+}
+
+function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
+  return matrixAssetsFromItems(matrixValue.items);
+}
+
+export async function loadDeliverablesCoreSnapshot(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+  signal?: AbortSignal,
+): Promise<DeliverablesSnapshot> {
+  const requests = startDeliverablesCoreRequests(api, mode, signal);
+  const listProfiles = api.listProfiles;
+  const profileRequest =
+    requests.profiles ??
+    (listProfiles === undefined ? undefined : startDeliverablesRequest(() => listProfiles(signal)));
+  const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
+    await Promise.all([
+      settleDeliverablesRequest(requests.sessions),
+      settleDeliverablesRequest(requests.matrix),
+      settleDeliverablesRequest(requests.tasks),
+      settleDeliverablesRequest(requests.assets),
+      settleDeliverablesRequest(profileRequest),
+    ]);
+
+  const sessions = requiredDeliverablesCoreValue(sessionsResult, "sessions");
+  const matrix =
+    requests.matrix === undefined
+      ? undefined
+      : requiredDeliverablesCoreValue(matrixResult, "deliverables matrix");
+  const tasks =
+    matrix === undefined
+      ? requiredDeliverablesCoreValue(tasksResult, "tasks")
+      : matrix.items.map((item) => item.task);
+  const assets =
+    matrix === undefined || mode === "files"
+      ? requiredDeliverablesCoreValue(assetsResult, "assets")
+      : matrixAssets(matrix);
+  const profiles = requiredDeliverablesCoreValue(profilesResult, "speaker profiles");
+
+  return { sessions, tasks, assets, profiles, ...(matrix === undefined ? {} : { matrix }) };
+}
 
 export interface DeliverablesWorkspaceScope {
   readonly api: DeliverablesApi;
   readonly eventId: string;
   readonly organizationId: string;
+  readonly mode?: DeliverablesWorkspaceMode;
   readonly epoch: number;
 }
 
@@ -283,7 +408,8 @@ export function isDeliverablesWorkspaceScopeCurrent(
     expected.epoch === current.epoch &&
     expected.api === current.api &&
     expected.eventId === current.eventId &&
-    expected.organizationId === current.organizationId
+    expected.organizationId === current.organizationId &&
+    (expected.mode === undefined || current.mode === undefined || expected.mode === current.mode)
   );
 }
 

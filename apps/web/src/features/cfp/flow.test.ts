@@ -35,7 +35,10 @@ import {
   syncPrimaryParticipant,
 } from "./types";
 
-const cfpWizardSource = readFileSync(new URL("./cfp-wizard.tsx", import.meta.url), "utf8");
+const cfpWizardSectionsSource = readFileSync(
+  new URL("./cfp-wizard-sections.tsx", import.meta.url),
+  "utf8",
+);
 
 describe("CFP flow", () => {
   it("matches server URL validation for absolute HTTP and HTTPS values", () => {
@@ -45,24 +48,28 @@ describe("CFP flow", () => {
     expect(cfpHttpUrlIsValid("javascript:alert(1)")).toBe(false);
   });
   it("mounts the public application flow inside the shared workspace shell", () => {
-    expect(cfpWizardSource).toContain(
+    expect(cfpWizardSectionsSource).toContain(
       'import { ThemeToggle } from "../../components/product-shell/theme-toggle";',
     );
-    expect(cfpWizardSource).toContain(
+    expect(cfpWizardSectionsSource).toContain(
       'import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";',
     );
-    expect(cfpWizardSource).toContain("<WorkspaceShell");
-    expect(cfpWizardSource).toContain("<WorkspaceContextBar");
-    expect(cfpWizardSource).toContain("<ThemeToggle />");
+    expect(cfpWizardSectionsSource).toContain("<WorkspaceShell");
+    expect(cfpWizardSectionsSource).toContain("<WorkspaceContextBar");
+    expect(cfpWizardSectionsSource).toContain("<ThemeToggle />");
   });
   it("uses client navigation when returning to the organizer workspace", () => {
-    expect(cfpWizardSource).toContain('import Link from "next/link";');
-    expect(cfpWizardSource).toContain('<Link href="/admin">Return to organizer workspace</Link>');
-    expect(cfpWizardSource).not.toContain('<a href="/admin">Return to organizer workspace</a>');
-    expect(cfpWizardSource).toContain(
+    expect(cfpWizardSectionsSource).toContain('import Link from "next/link";');
+    expect(cfpWizardSectionsSource).toContain(
+      '<Link href="/admin">Return to organizer workspace</Link>',
+    );
+    expect(cfpWizardSectionsSource).not.toContain(
+      '<a href="/admin">Return to organizer workspace</a>',
+    );
+    expect(cfpWizardSectionsSource).toContain(
       '<Link href="/login?next=%2Fportal%2Fsubmissions">Use another account</Link>',
     );
-    expect(cfpWizardSource).not.toContain(
+    expect(cfpWizardSectionsSource).not.toContain(
       '<a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>',
     );
   });

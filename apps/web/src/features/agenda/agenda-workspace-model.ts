@@ -1,11 +1,213 @@
 import type { NavigationDataCache } from "@/lib/navigation-data-cache";
 import { type AgendaApi, createAgendaApi } from "./api";
 import { agendaDays, eventDates, formatLocalDate } from "./model";
-import type { AgendaEntry, AgendaWorkspaceData } from "./types";
+import type {
+  AgendaCalendarDeliveryState,
+  AgendaEntry,
+  AgendaEntryInput,
+  AgendaPreview,
+  AgendaSession,
+  AgendaTrack,
+  AgendaValidationReport,
+  AgendaWorkspaceData,
+} from "./types";
 
 export interface AgendaSuggestionOptions {
   ignoreExistingTimes: boolean;
   ignoreExistingRooms: boolean;
+}
+
+export type AgendaCandidateDiagnostics = AgendaValidationReport;
+
+export interface AgendaSuggestionChangeView {
+  id: string;
+  kind: "add" | "move" | "change" | "remove";
+  entryId: string;
+  sessionId: string;
+  summary: string;
+}
+
+export interface AgendaSuggestionRunView {
+  id: string;
+  version: number;
+  status: "pending" | "rejected" | "superseded" | "applied" | "stale";
+  baseDraftVersion: number;
+  diff: {
+    summary: string;
+    changes: readonly AgendaSuggestionChangeView[];
+  };
+  candidateDiagnostics?: AgendaCandidateDiagnostics;
+  acceptedChangeIds?: readonly string[];
+}
+
+export type AgendaBusyOperation =
+  | "save"
+  | "remove"
+  | "validate"
+  | "override-warning"
+  | "publish"
+  | "generate-suggestion"
+  | "regenerate-suggestion"
+  | "reject-suggestion"
+  | "apply-suggestion"
+  | "retry-calendar-delivery";
+
+export interface AgendaSuggestionApi {
+  generateSuggestion(input: {
+    eventId: string;
+    baseDraftVersion: number;
+    dates: readonly string[];
+    eligibleStatuses: readonly string[];
+    roomIds: readonly string[];
+    dayWindows: readonly { date: string; startLocal: string; endLocal: string }[];
+    orderedRules: readonly string[];
+    ignoreExistingTimes: boolean;
+    ignoreExistingRooms: boolean;
+  }): Promise<AgendaSuggestionRunView>;
+  regenerateSuggestion(input: {
+    eventId: string;
+    runId: string;
+    baseDraftVersion: number;
+  }): Promise<AgendaSuggestionRunView>;
+  rejectSuggestion(input: { eventId: string; runId: string }): Promise<AgendaSuggestionRunView>;
+  applySuggestion(input: {
+    eventId: string;
+    runId: string;
+    acceptedChangeIds: readonly string[];
+  }): Promise<AgendaWorkspaceData>;
+}
+
+export function messageFrom(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "The agenda request could not be completed.";
+}
+
+export function suggestionApiFor(api: AgendaApi | null): AgendaSuggestionApi | null {
+  if (api === null) return null;
+  const candidate = api as AgendaApi & Partial<AgendaSuggestionApi>;
+  return typeof candidate.generateSuggestion === "function" &&
+    typeof candidate.regenerateSuggestion === "function" &&
+    typeof candidate.rejectSuggestion === "function" &&
+    typeof candidate.applySuggestion === "function"
+    ? (candidate as AgendaSuggestionApi)
+    : null;
+}
+
+export interface EntryFormProps {
+  entry?: AgendaEntry;
+  sessions: readonly AgendaSession[];
+  rooms: AgendaWorkspaceData["rooms"];
+  tracks: readonly AgendaTrack[];
+  eventStart: string;
+  busy: boolean;
+  initialPlacement?: import("./agenda-timetable").AgendaTimetablePlacement;
+  initialSessionId?: string;
+  onSubmit(entry: AgendaEntryInput): Promise<void>;
+  onCancel?: () => void;
+  onCreateRoom?: (input: {
+    name: string;
+    capacity: number;
+  }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
+}
+
+export type EntryFormState = {
+  sessionId: string;
+  roomId: string;
+  trackIds: readonly string[];
+  startsAtLocal: string;
+  endsAtLocal: string;
+};
+
+export type EntryFormAction =
+  | { type: "session-changed"; sessionId: string }
+  | { type: "room-changed"; roomId: string }
+  | { type: "track-toggled"; trackId: string }
+  | { type: "track-added"; trackId: string }
+  | { type: "starts-at-changed"; startsAtLocal: string }
+  | { type: "ends-at-changed"; endsAtLocal: string };
+
+export function entryFormReducer(state: EntryFormState, action: EntryFormAction): EntryFormState {
+  switch (action.type) {
+    case "session-changed":
+      return { ...state, sessionId: action.sessionId };
+    case "room-changed":
+      return { ...state, roomId: action.roomId };
+    case "track-toggled":
+      return {
+        ...state,
+        trackIds: state.trackIds.includes(action.trackId)
+          ? state.trackIds.filter((trackId) => trackId !== action.trackId)
+          : [...state.trackIds, action.trackId],
+      };
+    case "track-added":
+      return state.trackIds.includes(action.trackId)
+        ? state
+        : { ...state, trackIds: [...state.trackIds, action.trackId] };
+    case "starts-at-changed":
+      return { ...state, startsAtLocal: action.startsAtLocal };
+    case "ends-at-changed":
+      return { ...state, endsAtLocal: action.endsAtLocal };
+  }
+}
+
+export interface AgendaBoardProps {
+  organizationId: string;
+  data: AgendaWorkspaceData;
+  preview: AgendaPreview | null;
+  busy: boolean;
+  busyOperation?: AgendaBusyOperation | null;
+  statusMessage: string | null;
+  error: string | null;
+  initialView?: AgendaViewMode;
+  suggestionRun?: AgendaSuggestionRunView | null;
+  onSaveEntry(entry: AgendaEntryInput): Promise<boolean | undefined>;
+  onRemoveEntry(entryId: string): Promise<boolean | undefined>;
+  onPreview(): Promise<void>;
+  onOverrideWarning(warningId: string, reason: string): Promise<boolean | undefined>;
+  onPublish(): Promise<boolean | undefined>;
+  onDismissError(): void;
+  onGenerateSuggestion?: (options: AgendaSuggestionOptions) => Promise<void>;
+  onRegenerateSuggestion?: () => Promise<void>;
+  onRejectSuggestion?: () => Promise<void>;
+  onApplySuggestion?: (changeIds: readonly string[]) => Promise<void>;
+  onCreateRoom?: (input: {
+    name: string;
+    capacity: number;
+  }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
+  calendarDelivery?: AgendaCalendarDeliveryState | null;
+  onRetryCalendarDelivery?: () => Promise<void>;
+}
+
+export interface AgendaSuggestionPanelProps {
+  run: AgendaSuggestionRunView | null;
+  currentDraftVersion: number;
+  busy: boolean;
+  busyOperation?: AgendaBusyOperation | null;
+  eligibleUnscheduledCount: number;
+  selectedChangeIds: readonly string[];
+  onSelectionChange: (changeIds: readonly string[]) => void;
+  onGenerate: ((options: AgendaSuggestionOptions) => Promise<void>) | undefined;
+  onRegenerate: (() => Promise<void>) | undefined;
+  onReject: (() => Promise<void>) | undefined;
+  onApply: ((changeIds: readonly string[]) => Promise<void>) | undefined;
+}
+
+export interface AgendaWorkspaceProps {
+  eventId: string;
+  organizationId: string;
+  api?: AgendaApi;
+}
+
+export interface ScopedAgendaSnapshot {
+  readonly scopeKey: string;
+  readonly api: AgendaApi;
+  readonly data: AgendaWorkspaceData;
+}
+
+export interface ScopedAgendaWorkspaceProps extends AgendaWorkspaceProps {
+  readonly scopeKey: string;
 }
 
 export type ExistingSessionTimesSelection = "keep" | "move";

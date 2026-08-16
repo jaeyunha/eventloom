@@ -4,17 +4,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createNavigationDataCache } from "@/lib/navigation-data-cache";
-import {
-  EmbedWorkspaceView,
-  embedWorkspaceCacheKey,
-  embedWorkspaceCacheTags,
-} from "./embed-workspace";
+import { EmbedWorkspaceView } from "./embed-workspace";
 import {
   createEmbedWorkspaceApi,
   DEFAULT_EMBED_ACCENT,
   EMBED_WIDGETS,
   type EmbedEventRecord,
   type EmbedPublicationMetadata,
+  embedWorkspaceCacheKey,
+  embedWorkspaceCacheTags,
   iframeSnippet,
   normalizeEmbedSlug,
   parseEmbedPublicationResponse,
@@ -88,6 +86,14 @@ const workspaceSource = readFileSync(
   fileURLToPath(new URL("./embed-workspace.tsx", import.meta.url)),
   "utf8",
 );
+const workspaceViewsSource = readFileSync(
+  fileURLToPath(new URL("./embed-workspace-views.tsx", import.meta.url)),
+  "utf8",
+);
+const modelSource = readFileSync(
+  fileURLToPath(new URL("./embed-workspace-model.ts", import.meta.url)),
+  "utf8",
+);
 describe("embed publication response parsing", () => {
   it("accepts a nullable data envelope for an unpublished event", () => {
     expect(parseEmbedPublicationResponse({ data: null }, "org-1", "event-1")).toBeNull();
@@ -153,24 +159,22 @@ describe("embed workspace navigation cache", () => {
   });
 
   it("keeps same-origin validation on Next Link while public target-blank URLs stay native", () => {
-    expect(workspaceSource).toContain('import Link from "next/link";');
-    expect(workspaceSource).toContain(
-      "<Link href={agendaValidationHref(organizationId, eventId)}>",
+    expect(workspaceViewsSource).toContain('import Link from "next/link";');
+    expect(workspaceViewsSource).toContain("<Link href={agendaHref}>");
+    expect(workspaceViewsSource).not.toContain("<a href={agendaHref}>");
+    expect(workspaceViewsSource).toContain(
+      '<a href={previewUrl} target="_blank" rel="noreferrer">',
     );
-    expect(workspaceSource).not.toContain(
-      "<a href={agendaValidationHref(organizationId, eventId)}>",
-    );
-    expect(workspaceSource).toContain('<a href={previewUrl} target="_blank" rel="noreferrer">');
   });
 
   it("routes initial snapshots through the cache and exposes explicit fresh retry", () => {
-    expect(workspaceSource).toContain("navigationCache.read<EmbedWorkspaceCacheSnapshot>");
-    expect(workspaceSource).toContain("fresh: true");
+    expect(modelSource).toContain("navigationCache.read<EmbedWorkspaceCacheSnapshot>");
+    expect(modelSource).toContain("fresh: true");
     expect(workspaceSource).toContain("fresh: reloadNonce > 0");
     expect(workspaceSource).toContain(
       "void loadEmbedWorkspace({ ...loadOptions, signal: controller.signal });",
     );
-    expect(workspaceSource).toContain(
+    expect(modelSource).toContain(
       "embedConfigurations: eventEmbedConfigurations(event.embedConfigurations)",
     );
   });

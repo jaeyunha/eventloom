@@ -43,6 +43,7 @@ import {
   withUpdatedAsset,
   withUpdatedTask,
 } from "./portal-provider-model";
+import { PortalProviderBoundary } from "./portal-provider-sections";
 import type {
   PortalAsset,
   PortalAssetComment,
@@ -519,11 +520,13 @@ interface PortalProviderProps {
   apiBaseUrl?: string;
 }
 
-export function PortalProvider({
-  children,
+function usePortalProviderValue({
   api: providedApi,
   apiBaseUrl: providedApiBaseUrl,
-}: Readonly<PortalProviderProps>) {
+}: Readonly<{
+  readonly api?: PortalApi | undefined;
+  readonly apiBaseUrl?: string | undefined;
+}>) {
   const searchParams = useSearchParams();
   const requestedEventId =
     searchParams?.get("eventId")?.trim() || searchParams?.get("event")?.trim() || undefined;
@@ -2261,10 +2264,21 @@ export function PortalProvider({
     ],
   );
 
+  return value;
+}
+
+export function PortalProvider({ children, api, apiBaseUrl }: Readonly<PortalProviderProps>) {
+  const value = usePortalProviderValue({ api, apiBaseUrl });
   return (
-    <PortalContextValueProvider.Provider value={value}>
+    <PortalProviderBoundary
+      render={(runtimeChildren) => (
+        <PortalContextValueProvider.Provider value={value}>
+          {runtimeChildren}
+        </PortalContextValueProvider.Provider>
+      )}
+    >
       {children}
-    </PortalContextValueProvider.Provider>
+    </PortalProviderBoundary>
   );
 }
 

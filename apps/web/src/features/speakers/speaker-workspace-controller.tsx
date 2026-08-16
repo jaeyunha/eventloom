@@ -1,18 +1,5 @@
 "use client";
-import {
-  CheckCircle2,
-  Eye,
-  FileText,
-  ListTodo,
-  Mail,
-  RefreshCw,
-  Search,
-  Send,
-  Upload,
-  UserPlus,
-  Users,
-} from "lucide-react";
-import Link from "next/link";
+import { RefreshCw, UserPlus } from "lucide-react";
 import {
   type ChangeEvent,
   type FormEvent,
@@ -23,83 +10,8 @@ import {
   useReducer,
   useRef,
 } from "react";
-import {
-  StatusBadge,
-  WorkspaceHeader,
-  WorkspaceListDetail,
-  WorkspaceMetaItem,
-} from "@/components/workspace";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "../../components/ui/accordion";
-import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../components/ui/alert-dialog";
-import { Badge } from "../../components/ui/badge";
+import { StatusBadge, WorkspaceHeader, WorkspaceMetaItem } from "@/components/workspace";
 import { Button } from "../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "../../components/ui/card";
-import { Checkbox } from "../../components/ui/checkbox";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../../components/ui/collapsible";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../components/ui/dialog";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "../../components/ui/empty";
-import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../components/ui/field";
-import { Input } from "../../components/ui/input";
-import { Progress } from "../../components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "../../components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
-import { Textarea } from "../../components/ui/textarea";
-import adminStyles from "../admin/admin-shell.module.css";
 import {
   assertAdvancedSpeakerRevision,
   assertSpeakerHeadshotReplacement,
@@ -126,12 +38,6 @@ import {
   type SpeakerUpdateInput,
 } from "./api";
 import {
-  SpeakerAssetDownload,
-  SpeakerAssetMetadata,
-  SpeakerHeadshot,
-  SpeakerStatusBadge,
-} from "./speaker-assets";
-import {
   duplicateEmailConflicts,
   mergeProgressSummaries,
   mergeSpeaker,
@@ -147,14 +53,8 @@ import {
   organizerHeadshotSubmissionId,
   validateOrganizerHeadshotFile,
 } from "./speaker-headshot-logic";
+import { FormMessage } from "./speaker-invitations";
 import {
-  FormMessage,
-  MutationStatusMessage,
-  SpeakerInvitationControls,
-} from "./speaker-invitations";
-import {
-  dateLabel,
-  dateTimeLabel,
   editDraftFor,
   emptyCreateDraft,
   errorMessage,
@@ -162,8 +62,6 @@ import {
   filterSpeakersByAttention,
   type SpeakerAttentionFilter,
   speakerProgressMatches,
-  statusLabel,
-  taskComplete,
   withTimeout,
 } from "./speaker-roster-logic";
 import {
@@ -173,214 +71,23 @@ import {
   socialLinksFor,
   speakerInvitationReady,
   speakerOnboardingTaskDefinitions,
-  taskStatusLabel,
-  taskStatusTone,
   travelLogisticsFor,
   validateSpeakerTaskAssignment,
 } from "./speaker-task-model";
 import styles from "./speaker-workspace.module.css";
+import { SpeakerAddDialog } from "./speaker-workspace-sections";
 import {
   ASYNC_ACTION_TIMEOUT_MS,
   type CreateDraft,
   DEFAULT_STATUS_OPTIONS,
   type EditDraft,
-  MAX_ORGANIZER_ONBOARDING_TASKS,
   type ProgressFilter,
-  SPEAKER_CUSTOM_FIELDS_CONTRACT_GAP,
-  SPEAKER_ROSTER_COLUMNS,
   SPEAKER_WELCOME_EMAIL_STARTER,
   type SpeakerInvitationHistoryEntry,
   type SpeakerWorkspaceProps,
 } from "./speaker-workspace-types";
+import { SpeakerWorkspaceViews } from "./speaker-workspace-views";
 
-function ProfileFields({
-  draft,
-  onChange,
-  disabled,
-}: Readonly<{
-  draft: CreateDraft | EditDraft;
-  onChange: (field: keyof CreateDraft, value: string | boolean) => void;
-  disabled: boolean;
-}>) {
-  return (
-    <FieldGroup className={styles.actionsStack}>
-      <div className={styles.fieldGrid}>
-        <Field>
-          <FieldLabel htmlFor="speaker-display-name">Name</FieldLabel>
-          <Input
-            id="speaker-display-name"
-            value={draft.displayName}
-            onChange={(event) => onChange("displayName", event.target.value)}
-            required
-            maxLength={200}
-            disabled={disabled}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="speaker-email">Email</FieldLabel>
-          <Input
-            id="speaker-email"
-            type="email"
-            value={draft.email}
-            onChange={(event) => onChange("email", event.target.value)}
-            required
-            maxLength={320}
-            disabled={disabled}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="speaker-title">Title</FieldLabel>
-          <Input
-            id="speaker-title"
-            value={draft.title}
-            onChange={(event) => onChange("title", event.target.value)}
-            placeholder="Principal Engineer"
-            maxLength={160}
-            disabled={disabled}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="speaker-company">Company</FieldLabel>
-          <Input
-            id="speaker-company"
-            value={draft.company}
-            onChange={(event) => onChange("company", event.target.value)}
-            placeholder="Organization"
-            maxLength={200}
-            disabled={disabled}
-          />
-        </Field>
-      </div>
-      <Field>
-        <FieldLabel htmlFor="speaker-biography">Biography</FieldLabel>
-        <Textarea
-          id="speaker-biography"
-          value={draft.biography}
-          onChange={(event) => onChange("biography", event.target.value)}
-          maxLength={20_000}
-          disabled={disabled}
-        />
-      </Field>
-      <div className={styles.fieldGrid}>
-        <Field>
-          <FieldLabel htmlFor="speaker-twitter">Twitter / X</FieldLabel>
-          <Input
-            id="speaker-twitter"
-            value={draft.twitter}
-            onChange={(event) => onChange("twitter", event.target.value)}
-            placeholder="https://x.com/…"
-            maxLength={500}
-            disabled={disabled}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="speaker-linkedin">LinkedIn</FieldLabel>
-          <Input
-            id="speaker-linkedin"
-            value={draft.linkedin}
-            onChange={(event) => onChange("linkedin", event.target.value)}
-            placeholder="https://linkedin.com/in/…"
-            maxLength={500}
-            disabled={disabled}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="speaker-website">Website</FieldLabel>
-          <Input
-            id="speaker-website"
-            value={draft.website}
-            onChange={(event) => onChange("website", event.target.value)}
-            placeholder="https://…"
-            maxLength={500}
-            disabled={disabled}
-          />
-        </Field>
-      </div>
-      <FieldSet className={styles.detailBlock}>
-        <FieldLegend variant="label">Travel and logistics</FieldLegend>
-        <Field orientation="horizontal" className={styles.checkboxField}>
-          <Checkbox
-            id="speaker-travel-required"
-            checked={draft.travelRequired}
-            onCheckedChange={(checked) => onChange("travelRequired", checked === true)}
-            disabled={disabled}
-          />
-          <FieldLabel htmlFor="speaker-travel-required">
-            Speaker requires travel coordination
-          </FieldLabel>
-        </Field>
-        <div className={styles.fieldGrid}>
-          <Field>
-            <FieldLabel htmlFor="speaker-arrival">Arrival date</FieldLabel>
-            <Input
-              id="speaker-arrival"
-              type="date"
-              value={draft.arrivalAt}
-              onChange={(event) => onChange("arrivalAt", event.target.value)}
-              disabled={disabled}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="speaker-departure">Departure date</FieldLabel>
-            <Input
-              id="speaker-departure"
-              type="date"
-              value={draft.departureAt}
-              onChange={(event) => onChange("departureAt", event.target.value)}
-              disabled={disabled}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="speaker-accommodation">Accommodation</FieldLabel>
-            <Input
-              id="speaker-accommodation"
-              value={draft.accommodation}
-              onChange={(event) => onChange("accommodation", event.target.value)}
-              maxLength={500}
-              disabled={disabled}
-            />
-          </Field>
-        </div>
-        <div className={styles.fieldGrid}>
-          <Field>
-            <FieldLabel htmlFor="speaker-dietary">Dietary requirements</FieldLabel>
-            <Input
-              id="speaker-dietary"
-              value={draft.dietaryRequirements}
-              onChange={(event) => onChange("dietaryRequirements", event.target.value)}
-              maxLength={2_000}
-              disabled={disabled}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="speaker-accessibility">Accessibility needs</FieldLabel>
-            <Input
-              id="speaker-accessibility"
-              value={draft.accessibilityNeeds}
-              onChange={(event) => onChange("accessibilityNeeds", event.target.value)}
-              maxLength={2_000}
-              disabled={disabled}
-            />
-          </Field>
-        </div>
-        <Field>
-          <FieldLabel htmlFor="speaker-travel-notes">Travel notes</FieldLabel>
-          <Textarea
-            id="speaker-travel-notes"
-            value={draft.travelNotes}
-            onChange={(event) => onChange("travelNotes", event.target.value)}
-            maxLength={5_000}
-            disabled={disabled}
-          />
-        </Field>
-      </FieldSet>
-    </FieldGroup>
-  );
-}
-
-function SpeakerTaskStatusBadge({ status }: Readonly<{ status: string }>) {
-  return <StatusBadge tone={taskStatusTone(status)}>{taskStatusLabel(status)}</StatusBadge>;
-}
 type SpeakerWorkspaceView = "roster" | "tasks" | "email";
 
 type RosterScopeState = {
@@ -1335,7 +1042,7 @@ function profileHeadshotDetailsReducer(
   }
 }
 
-export function SpeakerWorkspaceController({
+function useSpeakerWorkspaceController({
   organizationId,
   eventId,
   api: providedApi,
@@ -1683,10 +1390,6 @@ export function SpeakerWorkspaceController({
           ? cachedHeadshotAsset
           : null));
   const duplicateEmailWarnings = useMemo(() => duplicateEmailConflicts(speakers), [speakers]);
-  const emailAnyBusy = emailSaveBusy || emailPreviewBusy || emailSendBusy || emailHistoryBusy;
-  const selectedEmailTemplate = emailTemplates.find(
-    (template) => template.id === emailTemplateId && template.version === emailTemplateVersion,
-  );
   const statusOptions = useMemo(() => {
     const values = new Set<string>([
       ...DEFAULT_STATUS_OPTIONS,
@@ -1756,7 +1459,6 @@ export function SpeakerWorkspaceController({
       : (invitationPreview ?? []).filter(
           (preview) => preview.participantId === selectedSpeaker.participantId,
         );
-  const invitationPreviewCount = selectedInvitationPreview.length;
   const invitationReady =
     selectedSpeaker !== null && speakerInvitationReady(invitationPreview ?? [], selectedSpeaker);
   const selectedInvitationResultRecipient =
@@ -2809,1774 +2511,291 @@ export function SpeakerWorkspaceController({
       />
       {error ? <FormMessage message={error} error /> : null}
       {notice ? <FormMessage message={notice} /> : null}
-      <Dialog
+      <SpeakerAddDialog
         open={showAdd}
+        draft={createDraft}
+        statusOptions={statusOptions}
+        saveBusy={saveBusy}
+        apiAvailable={api !== null}
         onOpenChange={(open) => dispatchRoster({ type: "add-dialog-changed", open })}
-      >
-        <DialogContent className={styles.dialogContent}>
-          <DialogHeader>
-            <DialogTitle>Add speaker</DialogTitle>
-            <DialogDescription>
-              Capture identity and profile details before sending an optional portal invitation.
-            </DialogDescription>
-          </DialogHeader>
-          <form className={styles.actionsStack} onSubmit={(event) => void createSpeaker(event)}>
-            <ProfileFields draft={createDraft} onChange={updateCreate} disabled={saveBusy} />
-            <Field>
-              <FieldLabel htmlFor="create-speaker-status">Workflow status</FieldLabel>
-              <Select
-                value={createDraft.status}
-                onValueChange={(value) => updateCreate("status", value)}
-                disabled={saveBusy}
-              >
-                <SelectTrigger id="create-speaker-status" className={styles.control}>
-                  <SelectValue placeholder="Select workflow status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {statusOptions.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {statusLabel(status)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Button variant="default" type="submit" disabled={saveBusy || api === null}>
-              <CheckCircle2 data-icon="inline-start" />
-              {saveBusy ? "Saving…" : "Save speaker"}
-            </Button>
-            <p className={styles.muted} role="note">
-              Headshot upload is completed by the speaker in their portal.{" "}
-              {SPEAKER_CUSTOM_FIELDS_CONTRACT_GAP}
-            </p>
-          </form>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              type="button"
-              onClick={() => dispatchRoster({ type: "add-dialog-changed", open: false })}
-            >
-              Cancel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Tabs
-        value={activeView}
-        onValueChange={(value) =>
-          dispatchRoster({ type: "view-changed", view: value as SpeakerWorkspaceView })
-        }
-        className={styles.tabs}
-      >
-        <TabsList variant="line" aria-label="Speaker workspace views">
-          <TabsTrigger id="roster-tab" aria-controls="roster-view" value="roster">
-            <Users data-icon="inline-start" />
-            Roster
-          </TabsTrigger>
-          <TabsTrigger id="tasks-tab" aria-controls="tasks-view" value="tasks">
-            <ListTodo data-icon="inline-start" />
-            Onboarding
-          </TabsTrigger>
-          <TabsTrigger id="email-tab" aria-controls="email-view" value="email">
-            <Mail data-icon="inline-start" />
-            Email
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent
-          value="roster"
-          id="roster-view"
-          aria-labelledby="roster-tab"
-          className={styles.view}
-        >
-          {rosterEmpty ? (
-            <Card className={styles.firstRunCard}>
-              <CardHeader>
-                <CardTitle id="roster-empty-heading">Start your speaker roster</CardTitle>
-                <CardDescription>
-                  Add speakers one at a time or import a CSV to give this event a clear home for
-                  profiles, sessions, and delivery details.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className={styles.actionsStack}>
-                <Empty className={styles.empty}>
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Users />
-                    </EmptyMedia>
-                    <EmptyTitle>No speakers added yet</EmptyTitle>
-                    <EmptyDescription>
-                      Start with a speaker profile or bring in your existing roster. You can invite
-                      speakers to their portal and assign onboarding after people are here.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  <div className={styles.actions}>
-                    <Button
-                      variant="default"
-                      type="button"
-                      onClick={() => dispatchRoster({ type: "add-dialog-changed", open: true })}
-                    >
-                      <UserPlus data-icon="inline-start" />
-                      Add speaker
-                    </Button>
-                    <Button
-                      variant="outline"
-                      type="button"
-                      onClick={() => dispatchRoster({ type: "csv-dialog-toggled" })}
-                      aria-expanded={showCsv}
-                      aria-controls="speaker-csv-import"
-                    >
-                      <FileText data-icon="inline-start" />
-                      {showCsv ? "Hide CSV import" : "Import CSV"}
-                    </Button>
-                  </div>
-                </Empty>
-              </CardContent>
-            </Card>
-          ) : (
-            <>
-              <section className={styles.attentionStrip} aria-label="Speaker attention filters">
-                {(
-                  [
-                    ["all", "All speakers"],
-                    ["overdue", "Overdue tasks"],
-                    ["awaiting-invite", "Awaiting invite"],
-                    ["duplicate-email", "Duplicate emails"],
-                    ["inactive", "Inactive"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    className={styles.attentionFilter}
-                    type="button"
-                    aria-pressed={attentionFilter === value}
-                    onClick={() =>
-                      dispatchRoster({ type: "attention-filter-changed", attention: value })
-                    }
-                  >
-                    <span>{label}</span>
-                    <strong>{attentionCounts[value]}</strong>
-                  </button>
-                ))}
-              </section>
-              <Card className={styles.panel} aria-busy={loading}>
-                <CardHeader className={styles.panelHeader}>
-                  <div>
-                    <CardTitle id="roster-heading">Roster</CardTitle>
-                    <CardDescription>
-                      Manage people and profile/delivery records for this event, then open a speaker
-                      for details.
-                    </CardDescription>
-                  </div>
-                  <Badge variant="outline">
-                    {scopedRoster ? `${filteredSpeakers.length} of ${speakers.length}` : "Loading"}
-                  </Badge>
-                </CardHeader>
-                <CardContent className={styles.actionsStack}>
-                  <div className={styles.rosterToolbar}>
-                    <Field className={styles.searchField}>
-                      <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-search">
-                        Search speakers
-                      </FieldLabel>
-                      <div className={styles.inputWithIcon}>
-                        <Search aria-hidden="true" />
-                        <Input
-                          id="speaker-search"
-                          aria-label="Search speakers"
-                          placeholder="Search speakers"
-                          value={query}
-                          onChange={(event) =>
-                            dispatchRoster({ type: "query-changed", query: event.target.value })
-                          }
-                        />
-                      </div>
-                    </Field>
-                    <Button
-                      variant="outline"
-                      type="button"
-                      aria-expanded={filtersOpen}
-                      onClick={() => dispatchRoster({ type: "filters-toggled" })}
-                    >
-                      Filters
-                    </Button>
-                    {hasActiveRosterFilters || attentionFilter !== "all" ? (
-                      <Button variant="ghost" type="button" onClick={clearRosterFilters}>
-                        Clear
-                      </Button>
-                    ) : null}
-                  </div>
-                  {filtersOpen ? (
-                    <div className={styles.filterPanel}>
-                      <Field>
-                        <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-status-filter">
-                          Filter by status
-                        </FieldLabel>
-                        <Select
-                          value={statusFilter}
-                          onValueChange={(value) =>
-                            dispatchRoster({ type: "status-filter-changed", status: value })
-                          }
-                        >
-                          <SelectTrigger id="speaker-status-filter" aria-label="Filter by status">
-                            <SelectValue placeholder="All statuses" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="all">All statuses</SelectItem>
-                              {statusOptions.map((status) => (
-                                <SelectItem key={status} value={status}>
-                                  {statusLabel(status)}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Field>
-                        <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-session-filter">
-                          Filter by session
-                        </FieldLabel>
-                        <Select
-                          value={sessionFilter}
-                          onValueChange={(value) =>
-                            dispatchRoster({ type: "session-filter-changed", session: value })
-                          }
-                        >
-                          <SelectTrigger id="speaker-session-filter" aria-label="Filter by session">
-                            <SelectValue placeholder="All sessions" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="all">All sessions</SelectItem>
-                              {sessionOptions.map(([sessionId, title]) => (
-                                <SelectItem key={sessionId} value={sessionId}>
-                                  {title}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Field>
-                        <FieldLabel
-                          className={adminStyles.srOnly}
-                          htmlFor="speaker-progress-filter"
-                        >
-                          Filter by task progress
-                        </FieldLabel>
-                        <Select
-                          value={progressFilter}
-                          onValueChange={(value) =>
-                            dispatchRoster({
-                              type: "progress-filter-changed",
-                              progress: value as ProgressFilter,
-                            })
-                          }
-                        >
-                          <SelectTrigger
-                            id="speaker-progress-filter"
-                            aria-label="Filter by task progress"
-                          >
-                            <SelectValue placeholder="All task progress" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="all">All task progress</SelectItem>
-                              <SelectItem value="complete">Complete</SelectItem>
-                              <SelectItem value="incomplete">Incomplete</SelectItem>
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                    </div>
-                  ) : null}
-                  {hasActiveRosterFilters ? (
-                    <p className={styles.muted} role="status" aria-live="polite">
-                      Showing {filteredSpeakers.length} of {speakers.length} speakers after filters.
-                    </p>
-                  ) : null}
-                  {selectedSpeakerIds.length > 0 ? (
-                    <div className={styles.selectionBar} role="status">
-                      <span>
-                        <strong>{selectedSpeakerIds.length}</strong> selected for email
-                      </span>
-                      <div className={styles.actions}>
-                        <Button size="sm" type="button" onClick={openSelectedEmail}>
-                          <Mail data-icon="inline-start" />
-                          Compose email
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          type="button"
-                          onClick={toggleVisibleSpeakerSelection}
-                          disabled={filteredSpeakers.length === 0}
-                        >
-                          {allVisibleSelected ? "Deselect visible" : "Select visible"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          type="button"
-                          onClick={clearSpeakerSelection}
-                        >
-                          Clear
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-                  {loading ? (
-                    <FormMessage
-                      message={
-                        scopedRoster ? "Refreshing speaker roster…" : "Loading speaker roster…"
-                      }
-                    />
-                  ) : null}
-                  {duplicateEmailWarnings.length > 0 ? (
-                    <FormMessage
-                      error
-                      message={`Duplicate speaker email conflict: ${duplicateEmailWarnings
-                        .map(
-                          (conflict) =>
-                            `${conflict.email} (${conflict.speakers.map((speaker) => speaker.displayName).join(", ")})`,
-                        )
-                        .join("; ")}. Each authoritative speaker remains visible.`}
-                    />
-                  ) : null}
-                  <WorkspaceListDetail
-                    className={styles.rosterGrid}
-                    listLabel="Speaker roster"
-                    detailLabel="Selected speaker record"
-                    list={
-                      <div className={styles.rosterList}>
-                        {!loading && scopedRoster && speakers.length === 0 ? (
-                          <Empty className={styles.empty}>
-                            <EmptyHeader>
-                              <EmptyMedia variant="icon">
-                                <Users />
-                              </EmptyMedia>
-                              <EmptyTitle>No speakers yet</EmptyTitle>
-                              <EmptyDescription>
-                                Add a speaker or use the Import CSV control below to start this
-                                event roster.
-                              </EmptyDescription>
-                            </EmptyHeader>
-                          </Empty>
-                        ) : null}
-                        {!loading &&
-                        scopedRoster &&
-                        speakers.length > 0 &&
-                        filteredSpeakers.length === 0 ? (
-                          <Empty className={styles.empty}>
-                            <EmptyHeader>
-                              <EmptyTitle>No matching speakers</EmptyTitle>
-                              <EmptyDescription>
-                                No speakers match the current search and filters. Clear them to
-                                restore the roster.
-                              </EmptyDescription>
-                            </EmptyHeader>
-                          </Empty>
-                        ) : null}
-                        {filteredSpeakers.length > 0 ? (
-                          <div className={styles.speakerTableViewport}>
-                            <Table className={styles.speakerTable}>
-                              <TableCaption className={styles.srOnly}>
-                                Event speaker roster
-                              </TableCaption>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>
-                                    <span className={styles.srOnly}>Select</span>
-                                  </TableHead>
-                                  {SPEAKER_ROSTER_COLUMNS.map((column) => (
-                                    <TableHead key={column}>{column}</TableHead>
-                                  ))}
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {filteredSpeakers.map((speaker) => (
-                                  <TableRow
-                                    className={styles.speakerRow}
-                                    key={speaker.participantId}
-                                    aria-current={
-                                      selectedId === speaker.participantId ? "true" : undefined
-                                    }
-                                    data-state={
-                                      selectedId === speaker.participantId ? "selected" : undefined
-                                    }
-                                  >
-                                    <TableCell className={styles.checkboxCell}>
-                                      <Checkbox
-                                        id={`roster-selection-${speaker.participantId}`}
-                                        aria-label={`Select ${speaker.displayName}`}
-                                        checked={selectedSpeakerIdSet.has(speaker.participantId)}
-                                        onCheckedChange={() =>
-                                          toggleSpeakerSelection(speaker.participantId)
-                                        }
-                                      />
-                                    </TableCell>
-                                    <TableHead scope="row" className={styles.speakerIdentityCell}>
-                                      <div className={styles.speakerCopy}>
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className={styles.speakerName}
-                                          type="button"
-                                          onClick={() => beginEdit(speaker)}
-                                        >
-                                          {speaker.displayName}
-                                        </Button>
-                                        <span className={styles.speakerMeta}>{speaker.email}</span>
-                                        <span className={styles.speakerMeta}>
-                                          {speaker.jobTitle || speaker.company
-                                            ? `${speaker.jobTitle ?? ""}${speaker.jobTitle && speaker.company ? " · " : ""}${speaker.company ?? ""}`
-                                            : "Profile details pending"}
-                                        </span>
-                                      </div>
-                                    </TableHead>
-                                    <TableCell>
-                                      <SpeakerStatusBadge status={speaker.status} />
-                                    </TableCell>
-                                    <TableCell className={styles.numericCell}>
-                                      {speaker.sessions.length} session
-                                      {speaker.sessions.length === 1 ? "" : "s"}
-                                    </TableCell>
-                                    <TableCell className={styles.taskCell}>
-                                      {speaker.taskSummary.completed} / {speaker.taskSummary.total}{" "}
-                                      tasks
-                                      {speaker.taskSummary.overdue > 0
-                                        ? ` · ${speaker.taskSummary.overdue} overdue`
-                                        : ""}
-                                    </TableCell>
-                                    <TableCell className={styles.actionCell}>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        type="button"
-                                        onClick={() => beginEdit(speaker)}
-                                      >
-                                        Open
-                                      </Button>
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        ) : null}
-                      </div>
-                    }
-                    detail={
-                      selectedSpeaker ? (
-                        <Card className={styles.detail} aria-labelledby="speaker-detail-heading">
-                          <CardHeader className={styles.detailHeader}>
-                            <div>
-                              <p className={styles.eyebrow}>Speaker record</p>
-                              <CardTitle id="speaker-detail-heading">
-                                {selectedSpeaker.displayName}
-                              </CardTitle>
-                              <CardDescription>
-                                {selectedSpeaker.email} ·{" "}
-                                <SpeakerStatusBadge status={selectedSpeaker.status} />
-                              </CardDescription>
-                            </div>
-                            <div className={styles.actions}>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                type="button"
-                                onClick={() => void refreshDetails()}
-                                disabled={detailBusy || api === null}
-                              >
-                                <RefreshCw data-icon="inline-start" />
-                                {detailBusy ? "Refreshing details…" : "Refresh details"}
-                              </Button>
-                              <SpeakerInvitationControls
-                                previewBusy={invitationPreviewBusy}
-                                sendBusy={invitationSendBusy}
-                                disabled={api === null}
-                                canSend={invitationReady}
-                                onPreview={() => void previewSelectedSpeakerInvitation()}
-                                onSend={() => void sendSelectedSpeakerInvitation()}
-                              />
-                            </div>
-                          </CardHeader>
-                          <CardContent className={styles.actionsStack}>
-                            {invitationPreviewCount > 0 ? (
-                              <Alert>
-                                <Mail />
-                                <AlertTitle>Invitation preview ready</AlertTitle>
-                                <AlertDescription>
-                                  {invitationPreviewCount} speaker previewed.{" "}
-                                  {invitationReady ? "Eligible to send." : "Sending is blocked."}{" "}
-                                  Sending remains a separate explicit action.
-                                  <ul
-                                    className={styles.list}
-                                    aria-label="Portal invitation preview"
-                                  >
-                                    {selectedInvitationPreview.map((preview) => (
-                                      <li key={preview.participantId}>
-                                        <strong>{statusLabel(preview.state)}</strong> ·{" "}
-                                        {preview.recipientEmail || "No deliverable email"}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </AlertDescription>
-                              </Alert>
-                            ) : null}
-                            {invitationResult &&
-                            selectedInvitationResultRecipient &&
-                            invitationResultParticipantId === selectedSpeaker.participantId ? (
-                              <FormMessage
-                                message={`Invitation ${selectedInvitationResultRecipient.status} for ${selectedInvitationResultRecipient.recipientEmail}.`}
-                                error={selectedInvitationResultRecipient.status === "failed"}
-                              />
-                            ) : null}
-                            {invitationError ? (
-                              <FormMessage message={invitationError} error />
-                            ) : null}
-                            {invitationHistory.length > 0 ? (
-                              <div className={styles.detailBlock}>
-                                <h3 className={styles.subheading}>
-                                  Portal invitation send history
-                                </h3>
-                                <ul
-                                  className={styles.list}
-                                  aria-label="Portal invitation send history"
-                                >
-                                  {invitationHistory.map((entry) => (
-                                    <li key={`${entry.result.idempotencyKey}:${entry.occurredAt}`}>
-                                      <strong>{statusLabel(entry.result.status)}</strong> ·{" "}
-                                      {entry.preview
-                                        .map(
-                                          (preview) =>
-                                            preview.recipientEmail || preview.participantId,
-                                        )
-                                        .join(", ")}{" "}
-                                      · {dateTimeLabel(entry.occurredAt)} UTC
-                                    </li>
-                                  ))}
-                                </ul>
-                                <p className={styles.muted}>
-                                  Sent invitations persist in the durable server email history; use
-                                  Refresh history in the Email view to reload the authoritative
-                                  record.
-                                </p>
-                              </div>
-                            ) : null}
-                            {detailNotice ? (
-                              <FormMessage
-                                message={detailNotice}
-                                error={
-                                  detailNotice.includes("unavailable") ||
-                                  detailNotice.includes("could")
-                                }
-                              />
-                            ) : null}
-                            <Card className={styles.uploadPanel}>
-                              <CardHeader>
-                                <CardTitle className={styles.subheading}>Headshot</CardTitle>
-                                <CardDescription>
-                                  Secure event-scoped preview and organizer replacement.
-                                </CardDescription>
-                              </CardHeader>
-                              <CardContent className={styles.actionsStack}>
-                                <SpeakerHeadshot
-                                  speakerName={selectedSpeaker.displayName}
-                                  asset={selectedHeadshotAsset}
-                                  imageUrl={headshotPreviewUrl}
-                                  loading={headshotPreviewLoading}
-                                  error={headshotPreviewError}
-                                  revision={headshotPreviewRevision}
-                                  onRetry={retryHeadshotPreview}
-                                  onImageError={markHeadshotPreviewFailed}
-                                />
-                                {eligibleHeadshotSessions.length > 1 ? (
-                                  <Field>
-                                    <FieldLabel htmlFor="speaker-headshot-session">
-                                      Session for headshot replacement
-                                    </FieldLabel>
-                                    <Select
-                                      value={headshotSubmissionId ?? ""}
-                                      onValueChange={(value) => {
-                                        dispatchProfileHeadshotDetails({
-                                          type: "headshot-session-selected",
-                                          submissionId: value,
-                                        });
-                                      }}
-                                    >
-                                      <SelectTrigger id="speaker-headshot-session">
-                                        <SelectValue placeholder="Choose an accepted session" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {eligibleHeadshotSessions.map((session) => (
-                                          <SelectItem
-                                            key={session.submissionId}
-                                            value={session.submissionId}
-                                          >
-                                            {session.title}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </Field>
-                                ) : eligibleHeadshotSessions.length === 0 ? (
-                                  <p className={styles.muted} role="status">
-                                    Headshot replacement requires an accepted session owned by this
-                                    speaker.
-                                  </p>
-                                ) : null}
-                                <Field>
-                                  <FieldLabel htmlFor="speaker-headshot-upload">
-                                    Upload or replace headshot
-                                  </FieldLabel>
-                                  <Input
-                                    id="speaker-headshot-upload"
-                                    type="file"
-                                    accept={ORGANIZER_HEADSHOT_ACCEPTED_TYPES.join(",")}
-                                    onChange={(event) => void uploadOrganizerHeadshot(event)}
-                                    disabled={
-                                      headshotUploadStatus === "busy" ||
-                                      api === null ||
-                                      api.replaceHeadshot === undefined ||
-                                      selectedHeadshotSubmissionId === null
-                                    }
-                                  />
-                                </Field>
-                                <p className={styles.muted}>
-                                  Accepted headshot types: JPEG, PNG, or WebP; maximum size 5
-                                  MB.Uploads use the event-scoped organizer private upload flow.
-                                </p>
-                                {headshotUploadMessage ? (
-                                  <FormMessage
-                                    message={headshotUploadMessage}
-                                    error={headshotUploadStatus === "error"}
-                                  />
-                                ) : null}
-                                <MutationStatusMessage
-                                  label="Headshot"
-                                  status={headshotMutationStatus}
-                                  message={headshotMutationMessage}
-                                />
-                              </CardContent>
-                            </Card>
-                            {editDraft ? (
-                              <form
-                                className={styles.detailBlock}
-                                onSubmit={(event) => void saveSpeaker(event)}
-                              >
-                                <ProfileFields
-                                  draft={editDraft}
-                                  onChange={updateEdit}
-                                  disabled={saveBusy}
-                                />
-                                <Field>
-                                  <FieldLabel htmlFor="edit-speaker-status">
-                                    Workflow status
-                                  </FieldLabel>
-                                  <Select
-                                    value={editDraft.status}
-                                    onValueChange={(value) => updateEdit("status", value)}
-                                    disabled={saveBusy}
-                                  >
-                                    <SelectTrigger id="edit-speaker-status">
-                                      <SelectValue placeholder="Select workflow status" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectGroup>
-                                        {statusOptions.map((status) => (
-                                          <SelectItem key={status} value={status}>
-                                            {statusLabel(status)}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectGroup>
-                                    </SelectContent>
-                                  </Select>
-                                </Field>
-                                <MutationStatusMessage
-                                  label="Profile"
-                                  status={profileMutationStatus}
-                                  message={profileMutationMessage}
-                                />
-                                {editError ? <FormMessage message={editError} error /> : null}
-                                <div className={styles.actions}>
-                                  <Button
-                                    variant="default"
-                                    type="submit"
-                                    disabled={saveBusy || api === null}
-                                  >
-                                    <CheckCircle2 data-icon="inline-start" />
-                                    {profileMutationStatus === "pending"
-                                      ? "Pending…"
-                                      : saveBusy
-                                        ? "Saving…"
-                                        : "Save profile changes"}
-                                  </Button>
-                                  <Badge variant="outline">
-                                    Version {editDraft.expectedVersion}
-                                  </Badge>
-                                </div>
-                              </form>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                type="button"
-                                onClick={() => beginEdit(selectedSpeaker)}
-                              >
-                                Edit profile
-                              </Button>
-                            )}
-                            <div className={styles.detailGrid}>
-                              <Card size="sm">
-                                <CardHeader>
-                                  <CardTitle className={styles.subheading}>
-                                    Session assignments
-                                  </CardTitle>
-                                  <CardDescription>Authoritative agenda links.</CardDescription>
-                                </CardHeader>
-                                <CardContent className={styles.actionsStack}>
-                                  {selectedSpeaker.sessions.length === 0 ? (
-                                    <Empty>
-                                      <EmptyTitle>No sessions linked</EmptyTitle>
-                                      <EmptyDescription>
-                                        No sessions are linked to this speaker yet.
-                                      </EmptyDescription>
-                                    </Empty>
-                                  ) : (
-                                    <ul className={styles.list}>
-                                      {selectedSpeaker.sessions.map((session: SpeakerSession) => (
-                                        <li key={session.submissionId} className={styles.preview}>
-                                          <strong>{session.title}</strong>
-                                          <Badge variant="outline">
-                                            {statusLabel(session.status)}
-                                          </Badge>
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                  <div className={styles.actions}>
-                                    <Button
-                                      variant="outline"
-                                      type="button"
-                                      disabled
-                                      title="Session linking is managed by the agenda service."
-                                    >
-                                      Assign a session
-                                    </Button>
-                                    <Button variant="outline" asChild>
-                                      <Link
-                                        href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`}
-                                      >
-                                        Open Agenda
-                                      </Link>
-                                    </Button>
-                                  </div>
-                                  <p className={styles.muted}>
-                                    Session linking is managed in Agenda; this workspace shows the
-                                    authoritative assignments.
-                                  </p>
-                                </CardContent>
-                              </Card>
-                              <Card size="sm">
-                                <CardHeader>
-                                  <CardTitle className={styles.subheading}>
-                                    Uploaded deliverables
-                                  </CardTitle>
-                                  <CardDescription>
-                                    Private event files and headshots.
-                                  </CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                  {selectedSpeaker.assets.length === 0 ? (
-                                    <Empty>
-                                      <EmptyTitle>No deliverables</EmptyTitle>
-                                      <EmptyDescription>
-                                        No uploaded headshot or deliverables are available.
-                                      </EmptyDescription>
-                                    </Empty>
-                                  ) : (
-                                    <ul className={styles.list}>
-                                      {selectedSpeaker.assets.map((asset: SpeakerAsset) => (
-                                        <li key={asset.assetId} className={styles.preview}>
-                                          <strong>{asset.fileName}</strong>
-                                          <SpeakerAssetMetadata asset={asset} />
-                                          <SpeakerAssetDownload
-                                            asset={asset}
-                                            downloadUrl={downloadUrls[asset.assetId] ?? null}
-                                            busy={downloadBusyAssetId === asset.assetId}
-                                            disabled={api === null || downloadBusyAssetId !== null}
-                                            error={downloadErrors[asset.assetId] ?? null}
-                                            onRequest={requestAssetDownload}
-                                          />
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </CardContent>
-                              </Card>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ) : (
-                        <Empty className={styles.empty}>
-                          <EmptyHeader>
-                            <EmptyMedia variant="icon">
-                              <Users />
-                            </EmptyMedia>
-                            <EmptyTitle>Select a speaker</EmptyTitle>
-                            <EmptyDescription>
-                              Select a speaker to see profile and delivery details.
-                            </EmptyDescription>
-                          </EmptyHeader>
-                        </Empty>
-                      )
-                    }
-                  />
-                </CardContent>
-              </Card>
-            </>
-          )}
-          <Collapsible
-            open={showCsv}
-            onOpenChange={(open) => dispatchRoster({ type: "csv-dialog-changed", open })}
-            className={styles.importDetails}
-          >
-            {!rosterEmpty ? (
-              <CollapsibleTrigger asChild>
-                <Button variant="outline" type="button">
-                  <FileText data-icon="inline-start" />
-                  {showCsv ? "Hide CSV import" : "Import CSV"}
-                </Button>
-              </CollapsibleTrigger>
-            ) : null}
-            <CollapsibleContent id="speaker-csv-import" className={styles.importBody}>
-              <Card aria-busy={importBusy}>
-                <CardHeader>
-                  <CardTitle>Import speaker roster</CardTitle>
-                  <CardDescription>
-                    Preview validation before committing rows. Invalid rows are never written to
-                    this event.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className={styles.actionsStack}>
-                  <Field>
-                    <FieldLabel htmlFor="speaker-csv">Speakers CSV</FieldLabel>
-                    <Input
-                      id="speaker-csv"
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={(event) => void previewCsv(event)}
-                      disabled={importCommitBusy || api === null}
-                    />
-                  </Field>
-                  {importFileName ? (
-                    <p className={styles.muted}>
-                      Selected file: <strong>{importFileName}</strong>
-                    </p>
-                  ) : null}
-                  {importBusy ? <FormMessage message="Validating CSV…" /> : null}
-                  {importPreview ? (
-                    <div className={styles.actionsStack}>
-                      <div className={styles.actions}>
-                        <Badge variant="secondary">{importPreview.validRows.length} valid</Badge>
-                        <Badge variant="destructive">
-                          {importPreview.invalidRows.length} invalid
-                        </Badge>
-                      </div>
-                      {importPreview.invalidRows.length > 0 ? (
-                        <ul className={styles.list} aria-label="CSV validation errors">
-                          {importPreview.invalidRows.map((issue) => (
-                            <li key={`${issue.rowNumber}-${issue.field ?? "row"}-${issue.message}`}>
-                              Row {issue.rowNumber}
-                              {issue.field ? ` · ${issue.field}` : ""}: {issue.message}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className={styles.muted}>
-                          All previewed rows passed required identity validation.
-                        </p>
-                      )}
-                      <Button
-                        variant="default"
-                        type="button"
-                        onClick={() => void commitCsv()}
-                        disabled={
-                          importCommitBusy ||
-                          importPreviewBusy ||
-                          importPreview.validRows.length === 0 ||
-                          api === null
-                        }
-                      >
-                        <Upload data-icon="inline-start" />
-                        {importCommitBusy
-                          ? "Importing…"
-                          : `Commit ${importPreview.validRows.length} valid row${importPreview.validRows.length === 1 ? "" : "s"}`}
-                      </Button>
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            </CollapsibleContent>
-          </Collapsible>
-        </TabsContent>
-        <TabsContent
-          value="tasks"
-          id="tasks-view"
-          aria-labelledby="tasks-tab"
-          className={styles.view}
-        >
-          <Card className={styles.panel}>
-            <CardHeader className={styles.panelHeader}>
-              <div>
-                <p className={styles.eyebrow}>Assign a new action</p>
-                <CardTitle id="tasks-heading">Speaker onboarding</CardTitle>
-                <CardDescription>
-                  Organizers assign action items that speakers complete in their portal. Email is
-                  for messages that do not require task completion.
-                </CardDescription>
-              </div>
-              <Badge variant="outline">
-                {onboardingTaskDefinitions.length} / {MAX_ORGANIZER_ONBOARDING_TASKS} task
-                definitions
-              </Badge>
-            </CardHeader>
-            <CardContent className={styles.actionsStack}>
-              {rosterEmpty ? (
-                <Empty className={styles.empty}>
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <ListTodo />
-                    </EmptyMedia>
-                    <EmptyTitle>Add speakers to start onboarding</EmptyTitle>
-                    <EmptyDescription>
-                      Add or import speakers before assigning action items they can complete in
-                      their portal.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  <div className={styles.actions}>
-                    <Button
-                      variant="default"
-                      type="button"
-                      onClick={() => {
-                        dispatchRoster({ type: "view-changed", view: "roster" });
-                        dispatchRoster({ type: "add-dialog-changed", open: true });
-                      }}
-                    >
-                      <UserPlus data-icon="inline-start" />
-                      Add speaker
-                    </Button>
-                    <Button
-                      variant="outline"
-                      type="button"
-                      onClick={() => {
-                        dispatchRoster({ type: "view-changed", view: "roster" });
-                        dispatchRoster({ type: "csv-dialog-changed", open: true });
-                      }}
-                    >
-                      <FileText data-icon="inline-start" />
-                      Import CSV
-                    </Button>
-                  </div>
-                </Empty>
-              ) : (
-                <>
-                  {!progressSectionVisible ? (
-                    <Button
-                      variant="outline"
-                      type="button"
-                      onClick={() =>
-                        dispatchRoster({
-                          type: "progress-context-changed",
-                          context: secondaryContextKey,
-                        })
-                      }
-                      disabled={api === null || loading || roster === null}
-                    >
-                      <RefreshCw data-icon="inline-start" />
-                      Load task progress
-                    </Button>
-                  ) : progress === null && progressError === null ? (
-                    <FormMessage message="Loading task progress…" />
-                  ) : null}
-                  <form
-                    className={styles.actionsStack}
-                    onSubmit={(event) => void assignTask(event)}
-                  >
-                    <div className={styles.fieldGrid}>
-                      <Field>
-                        <FieldLabel htmlFor="task-title">Task title</FieldLabel>
-                        <Input
-                          id="task-title"
-                          value={taskTitle}
-                          onChange={(event) =>
-                            dispatchImportTaskInvitation({
-                              type: "task-title-changed",
-                              title: event.target.value,
-                            })
-                          }
-                          placeholder="Confirm participation"
-                          required
-                          disabled={taskBusy}
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="task-due-date">Due date</FieldLabel>
-                        <Input
-                          id="task-due-date"
-                          type="date"
-                          value={taskDueAt}
-                          onChange={(event) =>
-                            dispatchImportTaskInvitation({
-                              type: "task-due-changed",
-                              dueAt: event.target.value,
-                            })
-                          }
-                          required
-                          disabled={taskBusy}
-                        />
-                      </Field>
-                    </div>
-                    <FieldSet className={styles.detailBlock}>
-                      <FieldLegend variant="label">Assign to speakers</FieldLegend>
-                      {speakers.length === 0 ? (
-                        <Empty>
-                          <EmptyTitle>Add speakers first</EmptyTitle>
-                          <EmptyDescription>Add speakers before assigning a task.</EmptyDescription>
-                        </Empty>
-                      ) : (
-                        <div className={styles.checkboxGrid}>
-                          {speakers.map((speaker) => (
-                            <Field
-                              key={speaker.participantId}
-                              orientation="horizontal"
-                              className={styles.checkboxField}
-                            >
-                              <Checkbox
-                                id={`task-assignee-${speaker.participantId}`}
-                                aria-label={`Assign task to ${speaker.displayName}`}
-                                checked={taskAssigneeIdSet.has(speaker.participantId)}
-                                onCheckedChange={() => toggleAssignee(speaker.participantId)}
-                                disabled={taskBusy}
-                              />
-                              <FieldLabel htmlFor={`task-assignee-${speaker.participantId}`}>
-                                Assign task to {speaker.displayName}
-                              </FieldLabel>
-                            </Field>
-                          ))}
-                        </div>
-                      )}
-                    </FieldSet>
-                    <div className={styles.actions}>
-                      <Button
-                        variant="default"
-                        type="submit"
-                        disabled={
-                          taskBusy ||
-                          api === null ||
-                          speakers.length === 0 ||
-                          progress === null ||
-                          progressError !== null ||
-                          onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
-                        }
-                      >
-                        <ListTodo data-icon="inline-start" />
-                        {taskBusy
-                          ? "Assigning…"
-                          : onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
-                            ? "Three onboarding tasks configured"
-                            : "Assign onboarding task"}
-                      </Button>
-                      <Badge variant="outline">Task type: action / mark complete</Badge>
-                    </div>
-                  </form>
-                  {onboardingTaskDefinitions.length > 0 ? (
-                    <Table>
-                      <TableCaption className={adminStyles.srOnly}>
-                        API-loaded organizer onboarding task definitions
-                      </TableCaption>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Task</TableHead>
-                          <TableHead>Due</TableHead>
-                          <TableHead>Assignees</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {onboardingTaskDefinitions.map((definition) => (
-                          <TableRow key={definition.definitionId}>
-                            <TableHead scope="row">{definition.title}</TableHead>
-                            <TableCell>{dateLabel(definition.dueAt)}</TableCell>
-                            <TableCell>
-                              {definition.participantIds
-                                .map((participantId) => {
-                                  const assignee = speakers.find(
-                                    (speaker) => speaker.participantId === participantId,
-                                  );
-                                  return assignee === undefined
-                                    ? participantId
-                                    : `${assignee.displayName} (${participantId})`;
-                                })
-                                .join(", ")}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  ) : null}
-                </>
-              )}
-            </CardContent>
-          </Card>
-          {!rosterEmpty ? (
-            <>
-              <Card className={styles.panel}>
-                <CardHeader className={styles.panelHeader}>
-                  <div>
-                    <CardTitle id="progress-heading">Onboarding progress</CardTitle>
-                    <CardDescription>
-                      List-level general-task completion, including changes speakers make in their
-                      portal.
-                    </CardDescription>
-                  </div>
-                  <Field>
-                    <FieldLabel className={adminStyles.srOnly} htmlFor="task-progress-filter">
-                      Filter task progress
-                    </FieldLabel>
-                    <Select
-                      value={progressFilter}
-                      onValueChange={(value) =>
-                        dispatchRoster({
-                          type: "progress-filter-changed",
-                          progress: value as ProgressFilter,
-                        })
-                      }
-                    >
-                      <SelectTrigger id="task-progress-filter" aria-label="Filter task progress">
-                        <SelectValue placeholder="All progress" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="all">All progress</SelectItem>
-                          <SelectItem value="complete">Complete</SelectItem>
-                          <SelectItem value="incomplete">Incomplete</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </CardHeader>
-                <CardContent>
-                  {progressError ? (
-                    <FormMessage message={`Progress unavailable: ${progressError}`} error />
-                  ) : null}
-                  {!progressError && progress && progressRows.length === 0 ? (
-                    <Empty>
-                      <EmptyTitle>No progress matches</EmptyTitle>
-                      <EmptyDescription>No speakers match this progress filter.</EmptyDescription>
-                    </Empty>
-                  ) : null}
-                  {!progressError && progress && progressRows.length > 0 ? (
-                    <Table>
-                      <TableCaption className={adminStyles.srOnly}>
-                        Speaker task completion progress
-                      </TableCaption>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Speaker</TableHead>
-                          <TableHead>Tasks and due dates</TableHead>
-                          <TableHead>Progress</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {progressRows.map((row) => {
-                          const completed = row.tasks.filter((task) =>
-                            taskComplete(task.status),
-                          ).length;
-                          const progressValue =
-                            row.tasks.length === 0 ? 0 : (completed / row.tasks.length) * 100;
-                          return (
-                            <TableRow key={row.participantId}>
-                              <TableHead scope="row">{row.displayName}</TableHead>
-                              <TableCell>
-                                <ul className={styles.list}>
-                                  {row.tasks.length === 0 ? (
-                                    <li className={styles.muted}>No general tasks assigned.</li>
-                                  ) : (
-                                    row.tasks.map((task) => (
-                                      <li key={task.taskId}>
-                                        <strong>{task.title}</strong> · {dateLabel(task.dueAt)} ·{" "}
-                                        <SpeakerTaskStatusBadge status={task.status} />
-                                      </li>
-                                    ))
-                                  )}
-                                </ul>
-                              </TableCell>
-                              <TableCell>
-                                <div className={styles.progressCell}>
-                                  <Progress
-                                    value={progressValue}
-                                    aria-label={`${completed} of ${row.tasks.length} tasks complete`}
-                                  />
-                                  <span>
-                                    {completed} / {row.tasks.length} complete
-                                  </span>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  ) : null}
-                </CardContent>
-              </Card>
-              <div ref={reminderSectionRef}>
-                <Card className={styles.panel}>
-                  <CardHeader className={styles.panelHeader}>
-                    <div>
-                      <CardTitle id="upcoming-reminders-heading">Upcoming reminders</CardTitle>
-                      <CardDescription>
-                        Only reminders that are currently eligible for delivery are shown here.
-                      </CardDescription>
-                    </div>
-                    <Badge variant="outline">
-                      {reminderEligibility === null
-                        ? "Loading"
-                        : `${eligibleReminderItems.length} due`}
-                    </Badge>
-                  </CardHeader>
-                  <CardContent className={styles.actionsStack}>
-                    {reminderEligibility === null ? (
-                      <FormMessage message="Checking upcoming reminders…" />
-                    ) : eligibleReminderItems.length === 0 ? (
-                      <Empty>
-                        <EmptyTitle>No eligible reminders</EmptyTitle>
-                        <EmptyDescription>
-                          Eligible reminders will appear here when their delivery window opens.
-                        </EmptyDescription>
-                      </Empty>
-                    ) : (
-                      <ul className={styles.list} aria-label="Upcoming reminders">
-                        {eligibleReminderItems.map((item) => (
-                          <li className={styles.reminderItem} key={item.taskId}>
-                            <strong>{item.title}</strong>
-                            <span>{dateLabel(item.dueAt)}</span>
-                            <Badge variant="secondary">Ready to send</Badge>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {ineligibleReminderItems.length > 0 ? (
-                      <Accordion type="single" collapsible defaultValue="">
-                        <AccordionItem value="diagnostics">
-                          <AccordionTrigger>Reminder diagnostics</AccordionTrigger>
-                          <AccordionContent>
-                            <p className={styles.muted}>
-                              Internal eligibility reasons are available for operators who need to
-                              investigate a reminder schedule.
-                            </p>
-                            <ul className={styles.list}>
-                              {ineligibleReminderItems.map((item) => (
-                                <li key={item.taskId}>
-                                  <strong>{item.title}</strong> · {item.reason}
-                                </li>
-                              ))}
-                            </ul>
-                          </AccordionContent>
-                        </AccordionItem>
-                      </Accordion>
-                    ) : null}
-                  </CardContent>
-                </Card>
-              </div>
-            </>
-          ) : null}
-        </TabsContent>
-        <TabsContent
-          value="email"
-          id="email-view"
-          aria-labelledby="email-tab"
-          className={styles.view}
-        >
-          <div ref={emailSectionRef}>
-            {rosterEmpty ? (
-              <Empty className={styles.empty}>
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Mail />
-                  </EmptyMedia>
-                  <EmptyTitle>Add speakers before emailing</EmptyTitle>
-                  <EmptyDescription>
-                    Add or import speakers before sending speaker-only outreach for this event.
-                  </EmptyDescription>
-                </EmptyHeader>
-                <div className={styles.actions}>
-                  <Button
-                    variant="default"
-                    type="button"
-                    onClick={() => {
-                      dispatchRoster({ type: "view-changed", view: "roster" });
-                      dispatchRoster({ type: "add-dialog-changed", open: true });
-                    }}
-                  >
-                    <UserPlus data-icon="inline-start" />
-                    Add speaker
-                  </Button>
-                  <Button
-                    variant="outline"
-                    type="button"
-                    onClick={() => {
-                      dispatchRoster({ type: "view-changed", view: "roster" });
-                      dispatchRoster({ type: "csv-dialog-changed", open: true });
-                    }}
-                  >
-                    <FileText data-icon="inline-start" />
-                    Import CSV
-                  </Button>
-                </div>
-              </Empty>
-            ) : scopedRoster !== null && selectedSpeakerIds.length === 0 ? (
-              <Empty className={styles.empty}>
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Users />
-                  </EmptyMedia>
-                  <EmptyTitle>Choose recipients</EmptyTitle>
-                  <EmptyDescription>
-                    Select speakers in Roster before composing speaker-only outreach. Broader
-                    announcements belong in Communications.
-                  </EmptyDescription>
-                </EmptyHeader>
-                <Button
-                  variant="default"
-                  type="button"
-                  onClick={() => dispatchRoster({ type: "view-changed", view: "roster" })}
-                >
-                  <Users data-icon="inline-start" />
-                  Choose recipients
-                </Button>
-              </Empty>
-            ) : (
-              <>
-                <Card className={styles.panel} aria-busy={emailAnyBusy}>
-                  <CardHeader className={styles.panelHeader}>
-                    <div>
-                      <CardTitle id="bulk-email-heading">Speaker email</CardTitle>
-                      <CardDescription>
-                        Use this event-scoped Email workspace for speaker-only outreach; broader
-                        announcements belong in Communications. Compose a message for{" "}
-                        {selectedSpeakerIds.length} selected speaker
-                        {selectedSpeakerIds.length === 1 ? "" : "s"}, save a draft, preview selected
-                        recipients, then confirm the send. Start with a blank message or apply an
-                        editable starter.
-                      </CardDescription>
-                    </div>
-                    <Badge variant="outline">Preview required before send</Badge>
-                  </CardHeader>
-                  <CardContent className={styles.actionsStack}>
-                    <div className={styles.emailFlowGrid}>
-                      <div className={styles.emailEditor}>
-                        <div className={styles.emailTemplateRow}>
-                          <Field>
-                            <FieldLabel htmlFor="email-template">Template version</FieldLabel>
-                            <Select
-                              value={
-                                emailTemplateId
-                                  ? `${emailTemplateId}:${emailTemplateVersion ?? ""}`
-                                  : "new"
-                              }
-                              onValueChange={(value) => {
-                                invalidateEmailPreview();
-                                if (value === "new") {
-                                  dispatchEmail({
-                                    type: "email-template-selected",
-                                    id: "",
-                                    version: undefined,
-                                    template: null,
-                                  });
-                                  emailCreateTemplateIdRef.current = null;
-                                  return;
-                                }
-                                const separator = value.lastIndexOf(":");
-                                const nextId = separator < 0 ? value : value.slice(0, separator);
-                                const rawVersion = separator < 0 ? "" : value.slice(separator + 1);
-                                const nextVersion = Number(rawVersion);
-                                const template = emailTemplates.find(
-                                  (candidate) =>
-                                    candidate.id === nextId && candidate.version === nextVersion,
-                                );
-                                dispatchEmail({
-                                  type: "email-template-selected",
-                                  id: nextId,
-                                  version: Number.isFinite(nextVersion) ? nextVersion : undefined,
-                                  template: template ?? null,
-                                });
-                                emailCreateTemplateIdRef.current = null;
-                              }}
-                              disabled={emailSaveBusy}
-                            >
-                              <SelectTrigger id="email-template">
-                                <SelectValue placeholder="New template version" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectGroup>
-                                  <SelectItem value="new">New template version</SelectItem>
-                                  {emailTemplates.map((template) => (
-                                    <SelectItem
-                                      key={`${template.id}:${template.version}`}
-                                      value={`${template.id}:${template.version}`}
-                                    >
-                                      {template.name} · v{template.version} · {template.status}
-                                    </SelectItem>
-                                  ))}
-                                </SelectGroup>
-                              </SelectContent>
-                            </Select>
-                          </Field>
-                          <div className={styles.emailTemplateMeta} aria-live="polite">
-                            <strong>{selectedEmailTemplate?.name ?? emailTemplateName}</strong>
-                            <span className={styles.muted}>
-                              {emailTemplateId
-                                ? `Exact template ${emailTemplateId} · version ${emailTemplateVersion ?? "unsaved"}`
-                                : "New draft · save to create an exact server version"}
-                            </span>
-                            {selectedEmailTemplate ? (
-                              <span className={styles.muted}>
-                                {statusLabel(selectedEmailTemplate.status)} · Sender{" "}
-                                {selectedEmailTemplate.sender}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                        <Field>
-                          <div className={styles.actions}>
-                            <FieldLabel htmlFor="email-template-name">Template name</FieldLabel>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={emailSaveBusy}
-                              onClick={() => {
-                                dispatchEmail({
-                                  type: "email-template-selected",
-                                  id: "",
-                                  version: undefined,
-                                  template: null,
-                                });
-                                emailCreateTemplateIdRef.current = null;
-                                dispatchEmail({
-                                  type: "email-template-name-changed",
-                                  name: SPEAKER_WELCOME_EMAIL_STARTER.name,
-                                });
-                                dispatchEmail({
-                                  type: "email-subject-changed",
-                                  subject: SPEAKER_WELCOME_EMAIL_STARTER.subject,
-                                });
-                                dispatchEmail({
-                                  type: "email-html-changed",
-                                  html: SPEAKER_WELCOME_EMAIL_STARTER.html,
-                                });
-                                dispatchEmail({
-                                  type: "email-text-changed",
-                                  text: SPEAKER_WELCOME_EMAIL_STARTER.text,
-                                });
-                                dispatchEmail({
-                                  type: "email-editor-mode-changed",
-                                  mode: "visual",
-                                });
-                                invalidateEmailPreview();
-                              }}
-                            >
-                              Use welcome starter
-                            </Button>
-                          </div>
-                          <Input
-                            id="email-template-name"
-                            value={emailTemplateName}
-                            onChange={(event) => {
-                              dispatchEmail({
-                                type: "email-template-name-changed",
-                                name: event.target.value,
-                              });
-                              invalidateEmailPreview();
-                            }}
-                            maxLength={200}
-                            disabled={emailSaveBusy}
-                          />
-                        </Field>
-                        <Field>
-                          <FieldLabel htmlFor="email-subject">Subject</FieldLabel>
-                          <Input
-                            id="email-subject"
-                            value={emailSubject}
-                            onChange={(event) => {
-                              dispatchEmail({
-                                type: "email-subject-changed",
-                                subject: event.target.value,
-                              });
-                              invalidateEmailPreview();
-                            }}
-                            placeholder="Add a clear subject for {{first_name}}"
-                            maxLength={500}
-                            disabled={emailSaveBusy}
-                          />
-                        </Field>
-                        <Tabs
-                          value={emailEditorMode}
-                          onValueChange={(value) =>
-                            dispatchEmail({
-                              type: "email-editor-mode-changed",
-                              mode: value as "visual" | "html" | "text",
-                            })
-                          }
-                          className={styles.emailEditorTabs}
-                        >
-                          <TabsList
-                            variant="line"
-                            className={styles.emailEditorTabsList}
-                            aria-label="Email editor mode"
-                          >
-                            <TabsTrigger value="visual">Visual preview</TabsTrigger>
-                            <TabsTrigger value="html">HTML source</TabsTrigger>
-                            <TabsTrigger value="text">Plain text</TabsTrigger>
-                          </TabsList>
-                          <TabsContent value="visual" className={styles.actionsStack}>
-                            <p className={styles.muted}>
-                              Visual mode uses the safe server preview. Raw HTML is never executed
-                              in this workspace.
-                            </p>
-                            {emailPreviewCurrent && emailPreview ? (
-                              <div className={styles.emailPreviewOutput}>
-                                <p className={styles.muted}>Server-rendered text</p>
-                                <pre>{emailPreview.text}</pre>
-                                <p className={styles.muted}>Escaped HTML output</p>
-                                <pre>{emailPreview.html}</pre>
-                              </div>
-                            ) : (
-                              <p className={styles.muted} role="status">
-                                Preview selected recipients to see the server-rendered result.
-                              </p>
-                            )}
-                          </TabsContent>
-                          <TabsContent value="html">
-                            <Field>
-                              <FieldLabel htmlFor="email-html">HTML source</FieldLabel>
-                              <Textarea
-                                id="email-html"
-                                value={emailHtml}
-                                onChange={(event) => {
-                                  dispatchEmail({
-                                    type: "email-html-changed",
-                                    html: event.target.value,
-                                  });
-                                  invalidateEmailPreview();
-                                }}
-                                placeholder="<p>Hello {{first_name}},</p><p>Add your message here.</p>"
-                                maxLength={100_000}
-                                disabled={emailSaveBusy}
-                              />
-                            </Field>
-                          </TabsContent>
-                          <TabsContent value="text">
-                            <Field>
-                              <FieldLabel htmlFor="email-text">Plain text body</FieldLabel>
-                              <Textarea
-                                id="email-text"
-                                value={emailText}
-                                onChange={(event) => {
-                                  dispatchEmail({
-                                    type: "email-text-changed",
-                                    text: event.target.value,
-                                  });
-                                  invalidateEmailPreview();
-                                }}
-                                placeholder={"Hello {{first_name}},\n\nAdd your message here."}
-                                maxLength={100_000}
-                                disabled={emailSaveBusy}
-                              />
-                            </Field>
-                          </TabsContent>
-                        </Tabs>
-                        <p className={styles.muted}>
-                          Merge variables are resolved by the server:{" "}
-                          <code className={styles.code}>{"{{first_name}}"}</code>,{" "}
-                          <code className={styles.code}>{"{{display_name}}"}</code>,{" "}
-                          <code className={styles.code}>{"{{email}}"}</code>.
-                        </p>
-                      </div>
-                      <Card
-                        size="sm"
-                        className={styles.emailPreviewPanel}
-                        aria-label="Selected speaker email preview"
-                      >
-                        <CardHeader>
-                          <CardTitle>Preview selected recipients</CardTitle>
-                          <CardDescription>
-                            Exact server result; this panel never executes template HTML.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className={styles.actionsStack}>
-                          {emailPreviewCurrent && emailPreview ? (
-                            <>
-                              <p className={styles.muted}>
-                                {emailPreview.recipientIds.length} recipient
-                                {emailPreview.recipientIds.length === 1 ? "" : "s"} · exact template{" "}
-                                {emailPreview.templateId} · version {emailPreview.templateVersion}
-                              </p>
-                              <p>
-                                <strong>Subject:</strong> {emailPreview.subject}
-                              </p>
-                              <ul
-                                className={styles.list}
-                                aria-label="Speaker email preview recipient names"
-                              >
-                                {emailPreview.recipients.map((recipient) => (
-                                  <li key={recipient.participantId}>
-                                    <strong>{recipient.displayName}</strong> · {recipient.email}
-                                  </li>
-                                ))}
-                              </ul>
-                              <div className={styles.emailPreviewOutput}>
-                                <p className={styles.muted}>Server-rendered text</p>
-                                <pre>{emailPreview.text}</pre>
-                                <p className={styles.muted}>Escaped HTML output</p>
-                                <pre>{emailPreview.html}</pre>
-                              </div>
-                            </>
-                          ) : (
-                            <p className={styles.muted} role="status">
-                              No current preview. Select recipients and preview before confirming a
-                              send.
-                            </p>
-                          )}
-                        </CardContent>
-                      </Card>
-                    </div>
-                  </CardContent>
-                  <CardFooter className={styles.actions}>
-                    <Button
-                      variant="outline"
-                      type="button"
-                      onClick={() => void saveEmailTemplate()}
-                      disabled={emailSaveBusy || api === null}
-                    >
-                      <CheckCircle2 data-icon="inline-start" />
-                      {emailSaveBusy ? "Saving…" : "Save draft"}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      onClick={() => void previewBulkEmail()}
-                      disabled={emailPreviewBusy || api === null || selectedSpeakerIds.length === 0}
-                    >
-                      <Eye data-icon="inline-start" />
-                      {emailPreviewBusy ? "Preparing…" : "Preview selected recipients"}
-                    </Button>
-                    <Button
-                      variant="default"
-                      type="button"
-                      onClick={() => dispatchEmail({ type: "email-confirm-changed", open: true })}
-                      disabled={emailSendBusy || api === null || !emailPreviewCurrent}
-                    >
-                      <Send data-icon="inline-start" />
-                      {emailSendBusy ? "Queueing…" : "Confirm send"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => void refreshEmailHistory()}
-                      disabled={emailHistoryBusy || api === null}
-                      aria-label="Refresh speaker email history"
-                    >
-                      <RefreshCw data-icon="inline-start" />
-                      {emailHistoryBusy ? "Refreshing history…" : "Refresh history"}
-                    </Button>
-                  </CardFooter>
-                  <CardContent className={styles.actionsStack}>
-                    {emailNotice ? (
-                      <FormMessage
-                        message={emailNotice}
-                        error={emailNotice.includes("unavailable") || emailNotice.includes("could")}
-                      />
-                    ) : null}
-                    <Card size="sm" className={styles.emailHistory}>
-                      <CardHeader>
-                        <CardTitle>Email send history</CardTitle>
-                        <CardDescription>
-                          Completed send records stay here when you start a new draft or preview.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        {emailSends.length === 0 ? (
-                          <p className={styles.muted} role="status">
-                            No email sends recorded for this event.
-                          </p>
-                        ) : (
-                          <Table>
-                            <TableCaption className={adminStyles.srOnly}>
-                              Speaker email send history
-                            </TableCaption>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Template</TableHead>
-                                <TableHead>Recipients</TableHead>
-                                <TableHead>Updated</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {emailSends.map((send) => (
-                                <TableRow key={send.id}>
-                                  <TableCell>
-                                    <Badge variant="outline">{send.status}</Badge>
-                                  </TableCell>
-                                  <TableCell>
-                                    {send.templateId} · v{send.templateVersion}
-                                  </TableCell>
-                                  <TableCell>{send.recipientIds.length}</TableCell>
-                                  <TableCell>{dateLabel(send.updatedAt)}</TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        )}
-                      </CardContent>
-                    </Card>
-                  </CardContent>
-                </Card>
-                <AlertDialog
-                  open={emailConfirmOpen}
-                  onOpenChange={(open) => dispatchEmail({ type: "email-confirm-changed", open })}
-                >
-                  <AlertDialogContent className={styles.dialogContent}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Confirm speaker email send</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Queue the current server preview for{" "}
-                        {emailPreview?.recipientIds.length ?? 0} selected recipient
-                        {(emailPreview?.recipientIds.length ?? 0) === 1 ? "" : "s"} using exact
-                        template version {emailPreview?.templateVersion ?? "unavailable"}. This
-                        action uses the current idempotency key and cannot be edited after queueing.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel disabled={emailSendBusy}>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        disabled={emailSendBusy || !emailPreviewCurrent}
-                        onClick={() => void sendBulkEmail()}
-                      >
-                        {emailSendBusy ? "Queueing…" : "Confirm send"}
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </>
-            )}
-          </div>
-        </TabsContent>
-      </Tabs>
+        onSubmit={(event) => void createSpeaker(event)}
+        onChange={updateCreate}
+      />
+      <SpeakerWorkspaceViews
+        activeView={activeView}
+        onViewChange={(view) => dispatchRoster({ type: "view-changed", view })}
+        roster={{
+          rosterEmpty,
+          attentionFilter,
+          attentionCounts,
+          onAttentionFilterChange: (attention) =>
+            dispatchRoster({ type: "attention-filter-changed", attention }),
+          scopedRoster,
+          loading,
+          speakers,
+          filteredSpeakers,
+          selectedId,
+          selectedSpeakerIdSet,
+          duplicateEmailWarnings,
+          statusOptions,
+          sessionOptions,
+          query,
+          filtersOpen,
+          statusFilter,
+          sessionFilter,
+          progressFilter,
+          hasActiveRosterFilters,
+          hasAnyFilters: hasActiveRosterFilters || attentionFilter !== "all",
+          selectedSpeakerIds,
+          allVisibleSelected,
+          selectedSpeaker,
+          detailProps: {
+            organizationId,
+            eventId,
+            apiAvailable: api !== null,
+            detailBusy,
+            onRefreshDetails: () => void refreshDetails(),
+            detailNotice,
+            invitation: {
+              previewBusy: invitationPreviewBusy,
+              sendBusy: invitationSendBusy,
+              canSend: invitationReady,
+              selectedPreview: selectedInvitationPreview,
+              result: invitationResult,
+              resultParticipantId: invitationResultParticipantId,
+              selectedResultRecipient: selectedInvitationResultRecipient,
+              error: invitationError,
+              history: invitationHistory,
+              onPreview: () => void previewSelectedSpeakerInvitation(),
+              onSend: () => void sendSelectedSpeakerInvitation(),
+            },
+            headshot: {
+              asset: selectedHeadshotAsset,
+              imageUrl: headshotPreviewUrl,
+              loading: headshotPreviewLoading,
+              error: headshotPreviewError,
+              revision: headshotPreviewRevision,
+              eligibleSessions: eligibleHeadshotSessions,
+              selectedSubmissionId: selectedHeadshotSubmissionId,
+              uploadStatus: headshotUploadStatus,
+              uploadMessage: headshotUploadMessage,
+              replacementAvailable: api?.replaceHeadshot !== undefined,
+              onRetry: retryHeadshotPreview,
+              onImageError: markHeadshotPreviewFailed,
+              onSessionChange: (submissionId) =>
+                dispatchProfileHeadshotDetails({
+                  type: "headshot-session-selected",
+                  submissionId,
+                }),
+              onUpload: (event) => void uploadOrganizerHeadshot(event),
+              mutationStatus: headshotMutationStatus,
+              mutationMessage: headshotMutationMessage,
+            },
+            editDraft,
+            statusOptions,
+            profileMutationStatus,
+            profileMutationMessage,
+            editError,
+            saveBusy,
+            downloadUrls,
+            downloadErrors,
+            downloadBusyAssetId,
+            onEditDraftChange: updateEdit,
+            onSave: (event) => void saveSpeaker(event),
+            onBeginEdit: beginEdit,
+            onAssetDownload: (asset) => void requestAssetDownload(asset),
+          },
+          showCsv,
+          importProps: {
+            busy: importBusy,
+            previewBusy: importPreviewBusy,
+            commitBusy: importCommitBusy,
+            apiAvailable: api !== null,
+            fileName: importFileName,
+            preview: importPreview,
+            onOpenChange: (open) => dispatchRoster({ type: "csv-dialog-changed", open }),
+            onPreview: (event) => void previewCsv(event),
+            onCommit: () => void commitCsv(),
+          },
+          onQueryChange: (nextQuery) => dispatchRoster({ type: "query-changed", query: nextQuery }),
+          onToggleFilters: () => dispatchRoster({ type: "filters-toggled" }),
+          onStatusFilterChange: (status) =>
+            dispatchRoster({ type: "status-filter-changed", status }),
+          onSessionFilterChange: (session) =>
+            dispatchRoster({ type: "session-filter-changed", session }),
+          onProgressFilterChange: (progress) =>
+            dispatchRoster({ type: "progress-filter-changed", progress }),
+          onClearFilters: clearRosterFilters,
+          onOpenSelectedEmail: openSelectedEmail,
+          onToggleVisibleSelection: toggleVisibleSpeakerSelection,
+          onClearSelection: clearSpeakerSelection,
+          onToggleSelection: toggleSpeakerSelection,
+          onBeginEdit: beginEdit,
+          onAddSpeaker: () => dispatchRoster({ type: "add-dialog-changed", open: true }),
+          onImportCsv: () => dispatchRoster({ type: "csv-dialog-toggled" }),
+        }}
+        tasks={{
+          rosterEmpty,
+          reminderSectionRef,
+          taskProps: {
+            apiAvailable: api !== null,
+            loading,
+            rosterLoaded: roster !== null,
+            speakers,
+            taskTitle,
+            taskDueAt,
+            taskAssigneeIdSet,
+            taskBusy,
+            progress,
+            progressError,
+            progressSectionVisible,
+            taskDefinitions: onboardingTaskDefinitions,
+            onLoadProgress: () =>
+              dispatchRoster({ type: "progress-context-changed", context: secondaryContextKey }),
+            onTaskTitleChange: (title) =>
+              dispatchImportTaskInvitation({ type: "task-title-changed", title }),
+            onTaskDueChange: (dueAt) =>
+              dispatchImportTaskInvitation({ type: "task-due-changed", dueAt }),
+            onToggleAssignee: toggleAssignee,
+            onAssign: (event) => void assignTask(event),
+            onAddSpeaker: () => {
+              dispatchRoster({ type: "view-changed", view: "roster" });
+              dispatchRoster({ type: "add-dialog-changed", open: true });
+            },
+            onImportCsv: () => {
+              dispatchRoster({ type: "view-changed", view: "roster" });
+              dispatchRoster({ type: "csv-dialog-changed", open: true });
+            },
+          },
+          progressProps: {
+            progress,
+            progressError,
+            progressRows,
+            progressFilter,
+            onProgressFilterChange: (nextProgress) =>
+              dispatchRoster({ type: "progress-filter-changed", progress: nextProgress }),
+          },
+          reminderProps: {
+            reminderEligibility,
+            eligibleItems: eligibleReminderItems,
+            ineligibleItems: ineligibleReminderItems,
+          },
+        }}
+        email={{
+          rosterEmpty,
+          selectedSpeakerIds,
+          emailSectionRef,
+          onAddSpeaker: () => {
+            dispatchRoster({ type: "view-changed", view: "roster" });
+            dispatchRoster({ type: "add-dialog-changed", open: true });
+          },
+          onImportCsv: () => {
+            dispatchRoster({ type: "view-changed", view: "roster" });
+            dispatchRoster({ type: "csv-dialog-changed", open: true });
+          },
+          onChooseRecipients: () => dispatchRoster({ type: "view-changed", view: "roster" }),
+          emailProps: {
+            templates: emailTemplates,
+            apiAvailable: api !== null,
+            templateId: emailTemplateId,
+            templateVersion: emailTemplateVersion,
+            templateName: emailTemplateName,
+            subject: emailSubject,
+            html: emailHtml,
+            text: emailText,
+            editorMode: emailEditorMode,
+            preview: emailPreview,
+            previewCurrent: emailPreviewCurrent,
+            sends: emailSends,
+            notice: emailNotice,
+            confirmOpen: emailConfirmOpen,
+            saveBusy: emailSaveBusy,
+            previewBusy: emailPreviewBusy,
+            sendBusy: emailSendBusy,
+            historyBusy: emailHistoryBusy,
+            onTemplateChange: (value) => {
+              invalidateEmailPreview();
+              if (value === "new") {
+                dispatchEmail({
+                  type: "email-template-selected",
+                  id: "",
+                  version: undefined,
+                  template: null,
+                });
+                emailCreateTemplateIdRef.current = null;
+                return;
+              }
+              const separator = value.lastIndexOf(":");
+              const nextId = separator < 0 ? value : value.slice(0, separator);
+              const rawVersion = separator < 0 ? "" : value.slice(separator + 1);
+              const nextVersion = Number(rawVersion);
+              const template = emailTemplates.find(
+                (candidate) => candidate.id === nextId && candidate.version === nextVersion,
+              );
+              dispatchEmail({
+                type: "email-template-selected",
+                id: nextId,
+                version: Number.isFinite(nextVersion) ? nextVersion : undefined,
+                template: template ?? null,
+              });
+              emailCreateTemplateIdRef.current = null;
+            },
+            onUseStarter: () => {
+              dispatchEmail({
+                type: "email-template-selected",
+                id: "",
+                version: undefined,
+                template: null,
+              });
+              emailCreateTemplateIdRef.current = null;
+              dispatchEmail({
+                type: "email-template-name-changed",
+                name: SPEAKER_WELCOME_EMAIL_STARTER.name,
+              });
+              dispatchEmail({
+                type: "email-subject-changed",
+                subject: SPEAKER_WELCOME_EMAIL_STARTER.subject,
+              });
+              dispatchEmail({
+                type: "email-html-changed",
+                html: SPEAKER_WELCOME_EMAIL_STARTER.html,
+              });
+              dispatchEmail({
+                type: "email-text-changed",
+                text: SPEAKER_WELCOME_EMAIL_STARTER.text,
+              });
+              dispatchEmail({ type: "email-editor-mode-changed", mode: "visual" });
+              invalidateEmailPreview();
+            },
+            onTemplateNameChange: (name) => {
+              dispatchEmail({ type: "email-template-name-changed", name });
+              invalidateEmailPreview();
+            },
+            onSubjectChange: (subject) => {
+              dispatchEmail({ type: "email-subject-changed", subject });
+              invalidateEmailPreview();
+            },
+            onHtmlChange: (html) => {
+              dispatchEmail({ type: "email-html-changed", html });
+              invalidateEmailPreview();
+            },
+            onTextChange: (text) => {
+              dispatchEmail({ type: "email-text-changed", text });
+              invalidateEmailPreview();
+            },
+            onEditorModeChange: (mode) =>
+              dispatchEmail({ type: "email-editor-mode-changed", mode }),
+            onSave: () => void saveEmailTemplate(),
+            onPreview: () => void previewBulkEmail(),
+            onConfirmOpenChange: (open) => dispatchEmail({ type: "email-confirm-changed", open }),
+            onSend: () => void sendBulkEmail(),
+            onRefreshHistory: () => void refreshEmailHistory(),
+          },
+        }}
+      />
     </div>
   );
+}
+export function SpeakerWorkspaceController(props: SpeakerWorkspaceProps) {
+  return useSpeakerWorkspaceController(props);
 }

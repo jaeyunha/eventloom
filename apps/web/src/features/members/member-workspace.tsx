@@ -1,59 +1,15 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import {
   createMemberApi,
   type MemberApi,
   MemberApiError,
   type MemberRole,
-  memberRoles,
   type OrganizationMember,
 } from "./api";
-import styles from "./member-workspace.module.css";
 import { inviteRolesForOrganization } from "./member-workspace-model";
-
-const MEMBER_UPDATED_AT_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  dateStyle: "medium",
-  timeZone: "UTC",
-});
+import { MemberWorkspaceLayout } from "./member-workspace-sections";
 
 export interface MemberWorkspaceProps {
   readonly organizationId: string;
@@ -164,10 +120,6 @@ function apiBaseUrl(explicit: string | undefined): string {
   return (explicit ?? "").trim().replace(/\/+$/u, "");
 }
 
-function statusLabel(value: string): string {
-  return value.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
-}
-
 function roleLabel(role: MemberRole): string {
   if (role === "reviewer") return "Evaluator";
   if (role === "admin") return "Organization admin";
@@ -193,100 +145,7 @@ function errorMessage(reason: unknown): string {
     : "We could not complete that request. Try again.";
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "Date unavailable";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "Date unavailable";
-  return MEMBER_UPDATED_AT_FORMATTER.format(date);
-}
-
-function StatusMessage({ message, error = false }: Readonly<{ message: string; error?: boolean }>) {
-  if (error) {
-    return (
-      <Alert variant="destructive" className={styles.alert}>
-        <AlertTitle>Action needed</AlertTitle>
-        <AlertDescription>{message}</AlertDescription>
-      </Alert>
-    );
-  }
-  return (
-    <p className={styles.statusMessage} role="status" aria-live="polite">
-      {message}
-    </p>
-  );
-}
-
-function MemberRow({
-  member,
-  busy,
-  onRoleChange,
-  onRevoke,
-}: Readonly<{
-  readonly member: OrganizationMember;
-  readonly busy: boolean;
-  readonly onRoleChange: (member: OrganizationMember, role: MemberRole) => void;
-  readonly onRevoke: (member: OrganizationMember) => void;
-}>) {
-  const ownerProtected = member.role === "owner";
-  return (
-    <TableRow>
-      <TableHead scope="row" className={styles.memberCell}>
-        <strong className={styles.memberName}>{member.name || "Unnamed member"}</strong>
-        <span className={styles.memberMeta}>{member.email}</span>
-        {!member.emailVerified ? <span className={styles.pendingText}>Setup pending</span> : null}
-      </TableHead>
-      <TableCell>
-        <Badge variant="secondary">{roleLabel(member.role)}</Badge>
-        {member.role === "reviewer" ? (
-          <span className={styles.cellHint}>Review access only</span>
-        ) : null}
-      </TableCell>
-      <TableCell>
-        <Badge variant={member.status === "active" ? "default" : "outline"}>
-          {statusLabel(member.status)}
-        </Badge>
-      </TableCell>
-      <TableCell className={styles.dateCell}>{formatDate(member.updatedAt)}</TableCell>
-      <TableCell>
-        <div className={styles.rowActions}>
-          <Select
-            value={member.role}
-            onValueChange={(value) => onRoleChange(member, value as MemberRole)}
-            disabled={busy || ownerProtected}
-          >
-            <SelectTrigger
-              className={styles.compactControl}
-              aria-label={`Change role for ${member.email}`}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {memberRoles.map((role) => (
-                <SelectItem value={role} key={role}>
-                  {roleLabel(role)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {ownerProtected ? (
-            <span className={styles.cellHint}>Owner access is protected</span>
-          ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            onClick={() => onRevoke(member)}
-            disabled={busy || ownerProtected}
-          >
-            {busy ? "Updating…" : "Revoke access"}
-          </Button>
-        </div>
-      </TableCell>
-    </TableRow>
-  );
-}
-
-export function MemberWorkspace({
+function useMemberWorkspaceController({
   organizationId,
   baseUrl: explicitBaseUrl,
   api: providedApi,
@@ -632,431 +491,64 @@ export function MemberWorkspace({
     }
   }
 
-  return (
-    <main className={styles.workspace}>
-      <header className={styles.header}>
-        <div className={styles.headerCopy}>
-          <p className={styles.eyebrow}>Organization workspace</p>
-          <h1 className={styles.title}>{settingsOnly ? "Settings" : "People"}</h1>
-          <p className={styles.description}>
-            {settingsOnly
-              ? "Manage details and configuration for this organization."
-              : "Manage who can access this organization and invite teammates for organizer or reviewer work."}
-          </p>
-          <p className={styles.contextLine}>
-            {currentOrganization?.name ?? "Your organization"}
-            {currentOrganization ? ` · ${roleLabel(currentOrganization.role)}` : ""}
-          </p>
-        </div>
-        <div className={styles.headerActions}>
-          <Button
-            variant="outline"
-            type="button"
-            onClick={() => void (settingsOnly ? loadOrganizations() : loadMembers())}
-            disabled={settingsOnly ? organizationsLoading : loading}
-          >
-            {settingsOnly
-              ? organizationsLoading
-                ? "Refreshing…"
-                : "Refresh settings"
-              : loading
-                ? "Refreshing…"
-                : "Refresh people"}
-          </Button>
-        </div>
-      </header>
+  return {
+    settingsOnly,
+    currentOrganization,
+    organizationsLoading,
+    loading,
+    loadOrganizations,
+    loadMembers,
+    workspaceError,
+    notice,
+    organizationsError,
+    activeTab,
+    onActiveTabChange: setActiveTab,
+    members,
+    filteredMembers,
+    query,
+    roleFilter,
+    statusFilter,
+    busyUserId,
+    onQueryChange: setQuery,
+    onRoleFilterChange: setRoleFilter,
+    onStatusFilterChange: setStatusFilter,
+    onInvite: () => setActiveTab("invite"),
+    onRoleChange: (member: OrganizationMember, role: MemberRole) => {
+      void changeRole(member, role);
+    },
+    onRevoke: (member: OrganizationMember) => {
+      void revokeMember(member);
+    },
+    memberOwnerKey,
+    inviteDraft,
+    inviteRole,
+    inviteRoles,
+    inviteBusy,
+    apiAvailable: api !== null,
+    onInviteSubmit: (event: FormEvent<HTMLFormElement>) => {
+      void inviteMember(event);
+    },
+    onInviteUpdate: updateInvite,
+    onInviteRoleChange: (value: MemberRole) => {
+      setInviteRoleOverride({ ownerKey: memberOwnerKey, value });
+      setNotice(null);
+    },
+    organizationDraft,
+    organizationBusy,
+    organizationNotice,
+    onOrganizationDraftChange: (field: keyof typeof organizationDraft, value: string) => {
+      setOrganizationDraft((current) => ({ ...current, [field]: value }));
+    },
+    onOrganizationUpdate: (event: FormEvent<HTMLFormElement>) => {
+      void updateOrganization(event);
+    },
+    onOrganizationCreate: (event: FormEvent<HTMLFormElement>) => {
+      void createOrganization(event);
+    },
+  };
+}
 
-      {workspaceError ? <StatusMessage message={workspaceError} error /> : null}
-      {notice ? <StatusMessage message={notice} /> : null}
-      {settingsOnly && organizationsError ? (
-        <StatusMessage message={organizationsError} error />
-      ) : null}
-
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
-        className={styles.tabs}
-      >
-        {!settingsOnly ? (
-          <TabsList className={styles.tabList} aria-label="People workspace sections">
-            <TabsTrigger value="people">People</TabsTrigger>
-            <TabsTrigger value="invite">Invite member</TabsTrigger>
-          </TabsList>
-        ) : null}
-
-        <TabsContent value="people" className={styles.tabContent}>
-          <Card>
-            <CardHeader className={styles.cardHeader}>
-              <div>
-                <CardTitle>People directory</CardTitle>
-                <CardDescription>
-                  Search everyone in this organization and keep administrative access separate from
-                  review access.
-                </CardDescription>
-              </div>
-              <CardAction>
-                <Button type="button" onClick={() => setActiveTab("invite")}>
-                  Invite member
-                </Button>
-              </CardAction>
-            </CardHeader>
-            <CardContent className={styles.cardContent}>
-              <div className={styles.filters}>
-                <div className={styles.searchField}>
-                  <Label htmlFor="member-search">Search people</Label>
-                  <Input
-                    id="member-search"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search by name or email"
-                  />
-                </div>
-                <div className={styles.filterField}>
-                  <Label htmlFor="member-role-filter">Role</Label>
-                  <Select
-                    value={roleFilter}
-                    onValueChange={(value) => setRoleFilter(value as MemberFilter)}
-                  >
-                    <SelectTrigger id="member-role-filter" aria-label="Filter people by role">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All roles</SelectItem>
-                      {memberRoles.map((role) => (
-                        <SelectItem value={role} key={role}>
-                          {roleLabel(role)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className={styles.filterField}>
-                  <Label htmlFor="member-status-filter">Status</Label>
-                  <Select
-                    value={statusFilter}
-                    onValueChange={(value) => setStatusFilter(value as MemberStatusFilter)}
-                  >
-                    <SelectTrigger id="member-status-filter" aria-label="Filter people by status">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All statuses</SelectItem>
-                      <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="pending">Pending setup</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {loading ? <p className={styles.statusMessage}>Loading people…</p> : null}
-              {!loading && workspaceError === null && members.length === 0 ? (
-                <Empty className={styles.empty}>
-                  <EmptyHeader>
-                    <EmptyTitle>No one has been added yet</EmptyTitle>
-                    <EmptyDescription>
-                      Invite a teammate to give them organization access. Evaluators can finish
-                      setup from their email.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  <EmptyContent>
-                    <Button type="button" onClick={() => setActiveTab("invite")}>
-                      Invite your first member
-                    </Button>
-                  </EmptyContent>
-                </Empty>
-              ) : null}
-              {!loading && members.length > 0 && filteredMembers.length === 0 ? (
-                <p className={styles.statusMessage} role="status" aria-live="polite">
-                  No people match the current search and filters.
-                </p>
-              ) : null}
-              {filteredMembers.length > 0 ? (
-                <Table>
-                  <caption className={styles.srOnly}>People and organization access</caption>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Person</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Last updated</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredMembers.map((member) => (
-                      <MemberRow
-                        key={member.userId}
-                        member={member}
-                        busy={busyUserId === member.userId}
-                        onRoleChange={(candidate, role) => void changeRole(candidate, role)}
-                        onRevoke={(candidate) => void revokeMember(candidate)}
-                      />
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : null}
-            </CardContent>
-            <CardFooter className={styles.cardFooter}>
-              <span>
-                {loading ? "" : `${filteredMembers.length} of ${members.length} people shown`}
-              </span>
-              <span>Owners are protected from accidental removal.</span>
-            </CardFooter>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="invite" className={styles.tabContent}>
-          <Card>
-            <CardHeader>
-              <CardTitle>Invite member</CardTitle>
-              <CardDescription>
-                Send a secure email invitation. The recipient creates their own sign-in details
-                during setup.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className={styles.cardContent}>
-              <form
-                key={memberOwnerKey}
-                onSubmit={(event) => void inviteMember(event)}
-                className={styles.formStack}
-              >
-                <div className={styles.fieldGrid}>
-                  <div className={styles.field}>
-                    <Label htmlFor="invite-name">Name</Label>
-                    <Input
-                      id="invite-name"
-                      type="text"
-                      value={inviteDraft.name}
-                      onChange={(event) => updateInvite("name", event.target.value)}
-                      maxLength={200}
-                      autoComplete="name"
-                      placeholder="Taylor Member"
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <Label htmlFor="invite-email">Email</Label>
-                    <Input
-                      id="invite-email"
-                      type="email"
-                      value={inviteDraft.email}
-                      onChange={(event) => updateInvite("email", event.target.value)}
-                      maxLength={320}
-                      autoComplete="email"
-                      required
-                      placeholder="member@example.com"
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <Label htmlFor="invite-role">Access level</Label>
-                    <Select
-                      value={inviteRole}
-                      onValueChange={(value) => {
-                        setInviteRoleOverride({
-                          ownerKey: memberOwnerKey,
-                          value: value as MemberRole,
-                        });
-                        setNotice(null);
-                      }}
-                      disabled={inviteBusy || api === null}
-                    >
-                      <SelectTrigger id="invite-role" aria-label="Choose an access level">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {inviteRoles.map((role) => (
-                          <SelectItem value={role} key={role}>
-                            {roleLabel(role)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className={styles.fieldHint}>
-                      {currentOrganization?.role === "owner"
-                        ? "Owners can invite owners, admins, or evaluators."
-                        : "Your organization role can invite evaluators only."}
-                    </p>
-                  </div>
-                </div>
-                <div className={styles.formActions}>
-                  <Button type="submit" disabled={inviteBusy || api === null}>
-                    {inviteBusy ? "Sending invitation…" : "Send invitation"}
-                  </Button>
-                  <span className={styles.fieldHint}>
-                    No credentials are created or shown here.
-                  </span>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="settings" className={styles.tabContent} aria-label="Settings">
-          <Card>
-            <CardHeader>
-              <CardTitle>Organization settings</CardTitle>
-              <CardDescription>
-                Update the current organization. Owner-only changes are checked on the server.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className={styles.cardContent}>
-              <section
-                className={styles.settingsSection}
-                aria-labelledby="current-settings-heading"
-              >
-                <div>
-                  <h2 id="current-settings-heading" className={styles.sectionTitle}>
-                    Current organization
-                  </h2>
-                  <p className={styles.fieldHint}>
-                    Update the display name or slug for this workspace.
-                  </p>
-                </div>
-                <form
-                  onSubmit={(event) => void updateOrganization(event)}
-                  className={styles.formStack}
-                >
-                  <div className={styles.fieldGrid}>
-                    <div className={styles.field}>
-                      <Label htmlFor="current-organization-name">Display name</Label>
-                      <Input
-                        id="current-organization-name"
-                        value={organizationDraft.name}
-                        onChange={(event) =>
-                          setOrganizationDraft((current) => ({
-                            ...current,
-                            name: event.target.value,
-                          }))
-                        }
-                        maxLength={200}
-                        placeholder="Your organization"
-                      />
-                    </div>
-                    <div className={styles.field}>
-                      <Label htmlFor="current-organization-slug">Workspace slug</Label>
-                      <Input
-                        id="current-organization-slug"
-                        value={organizationDraft.slug}
-                        onChange={(event) =>
-                          setOrganizationDraft((current) => ({
-                            ...current,
-                            slug: event.target.value,
-                          }))
-                        }
-                        maxLength={64}
-                        placeholder="your-team"
-                      />
-                    </div>
-                  </div>
-                  <details className={styles.advanced}>
-                    <summary>Advanced configuration (JSON)</summary>
-                    <div className={styles.field}>
-                      <Label htmlFor="organization-config">Configuration object</Label>
-                      <Textarea
-                        id="organization-config"
-                        value={organizationDraft.config}
-                        onChange={(event) =>
-                          setOrganizationDraft((current) => ({
-                            ...current,
-                            config: event.target.value,
-                          }))
-                        }
-                        spellCheck={false}
-                        className={styles.configInput}
-                      />
-                    </div>
-                  </details>
-                  <div className={styles.formActions}>
-                    <Button type="submit" variant="outline" disabled={organizationBusy}>
-                      {organizationBusy ? "Saving settings…" : "Save organization settings"}
-                    </Button>
-                  </div>
-                </form>
-              </section>
-
-              <details className={styles.advanced}>
-                <summary>Create another organization (advanced)</summary>
-                <form
-                  onSubmit={(event) => void createOrganization(event)}
-                  className={styles.formStack}
-                >
-                  <p className={styles.fieldHint}>
-                    The authenticated owner becomes an owner of the new organization. Use this only
-                    when you need a separate workspace.
-                  </p>
-                  <div className={styles.fieldGrid}>
-                    <div className={styles.field}>
-                      <Label htmlFor="new-organization-id">Organization identifier</Label>
-                      <Input
-                        id="new-organization-id"
-                        value={organizationDraft.organizationId}
-                        onChange={(event) =>
-                          setOrganizationDraft((current) => ({
-                            ...current,
-                            organizationId: event.target.value,
-                          }))
-                        }
-                        maxLength={128}
-                        placeholder="org-secondary"
-                      />
-                    </div>
-                    <div className={styles.field}>
-                      <Label htmlFor="new-organization-slug">Workspace slug</Label>
-                      <Input
-                        id="new-organization-slug"
-                        value={organizationDraft.slug}
-                        onChange={(event) =>
-                          setOrganizationDraft((current) => ({
-                            ...current,
-                            slug: event.target.value,
-                          }))
-                        }
-                        maxLength={64}
-                        placeholder="secondary-team"
-                      />
-                    </div>
-                    <div className={styles.field}>
-                      <Label htmlFor="new-organization-name">Display name</Label>
-                      <Input
-                        id="new-organization-name"
-                        value={organizationDraft.name}
-                        onChange={(event) =>
-                          setOrganizationDraft((current) => ({
-                            ...current,
-                            name: event.target.value,
-                          }))
-                        }
-                        maxLength={200}
-                        placeholder="Secondary team"
-                      />
-                    </div>
-                  </div>
-                  <div className={styles.field}>
-                    <Label htmlFor="new-organization-config">Configuration object (JSON)</Label>
-                    <Textarea
-                      id="new-organization-config"
-                      value={organizationDraft.config}
-                      onChange={(event) =>
-                        setOrganizationDraft((current) => ({
-                          ...current,
-                          config: event.target.value,
-                        }))
-                      }
-                      spellCheck={false}
-                      className={styles.configInput}
-                    />
-                  </div>
-                  <div className={styles.formActions}>
-                    <Button type="submit" disabled={organizationBusy}>
-                      {organizationBusy ? "Creating organization…" : "Create organization"}
-                    </Button>
-                  </div>
-                </form>
-              </details>
-              {organizationNotice ? <StatusMessage message={organizationNotice} /> : null}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </main>
-  );
+export function MemberWorkspace(props: MemberWorkspaceProps) {
+  const controller = useMemberWorkspaceController(props);
+  return <MemberWorkspaceLayout {...controller} />;
 }

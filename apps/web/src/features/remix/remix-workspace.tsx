@@ -2,7 +2,6 @@
 
 // allow: SIZE_OK — this module owns one Remix client state machine; visual sections are extracted.
 import { type FormEvent, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import { StatusBadge, WorkspaceHeader } from "@/components/workspace/workspace-ui";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
@@ -15,11 +14,7 @@ import {
   type RemixSourceRecord,
   type RemixSourceType,
 } from "./api";
-import styles from "./remix-workspace.module.css";
-import { RemixActivity } from "./workspace/remix-activity";
-import { RemixApplyDialog } from "./workspace/remix-apply-dialog";
-import { RemixComposer } from "./workspace/remix-composer";
-import { RemixReview } from "./workspace/remix-review";
+import { RemixWorkspaceLoader, RemixWorkspaceSections } from "./remix-workspace-sections";
 import { CapabilityUnavailable, ScopeStatus } from "./workspace/remix-status";
 import {
   allowedContentForApply,
@@ -30,11 +25,12 @@ import {
   isCapabilityUnavailable,
   messageFrom,
   normalizeFilterInput,
+  type RemixNavigationCacheSnapshot,
   recordMatches,
+  remixNavigationCacheKey,
+  remixNavigationCacheTags,
   valueForField,
 } from "./workspace/remix-workspace-model";
-
-export { allowedContentForApply, candidateIsStale } from "./workspace/remix-workspace-model";
 
 export interface RemixWorkspaceProps {
   readonly organizationId: string;
@@ -43,34 +39,10 @@ export interface RemixWorkspaceProps {
   readonly api?: RemixApi | null;
 }
 
-export interface RemixNavigationCacheSnapshot {
-  readonly records: readonly RemixSourceRecord[];
-  readonly candidates: readonly RemixCandidate[];
-  readonly audit: readonly RemixAuditEntry[];
-}
-
 function normalizeRemixScopeId(value: string): string {
   return value.trim();
 }
 
-export function remixNavigationCacheKey(
-  organizationId: string,
-  eventId: string,
-  sourceType: RemixSourceType,
-): string {
-  const organization = normalizeRemixScopeId(organizationId);
-  const event = normalizeRemixScopeId(eventId);
-  return `organization:${organization}:event:${event}:remix:workspace:${sourceType}`;
-}
-
-export function remixNavigationCacheTags(
-  organizationId: string,
-  eventId: string,
-): readonly string[] {
-  const organization = normalizeRemixScopeId(organizationId);
-  const event = normalizeRemixScopeId(eventId);
-  return [`organization:${organization}`, `event:${event}`, `remix:${event}`];
-}
 type RemixWorkspaceState = {
   sourceType: RemixSourceType;
   capabilityUnavailable: boolean;
@@ -376,6 +348,216 @@ function remixWorkspaceReducer(
       return { ...state, applyDialogOpen: action.open };
   }
 }
+type RemixDispatch = (action: RemixWorkspaceAction) => void;
+
+async function generateRemixSuggestions(
+  api: RemixApi | null,
+  eventId: string,
+  sourceType: RemixSourceType,
+  selectedSourceIds: readonly string[],
+  fields: readonly RemixField[],
+  tone: string,
+  guidance: string,
+  loading: boolean,
+  dispatch: RemixDispatch,
+  invalidate: () => void,
+): Promise<void> {
+  dispatch({ type: "action-error", message: null });
+  dispatch({ type: "action-message", message: null });
+  if (api === null) {
+    dispatch({
+      type: "action-error",
+      message: "Content remix is unavailable. No suggestion was created.",
+    });
+    return;
+  }
+  if (loading) {
+    dispatch({
+      type: "action-error",
+      message: "Event content is still loading. Try again in a moment.",
+    });
+    return;
+  }
+  if (selectedSourceIds.length === 0) {
+    dispatch({
+      type: "action-error",
+      message: "Select at least one session or speaker profile.",
+    });
+    return;
+  }
+  if (fields.length === 0) {
+    dispatch({ type: "action-error", message: "Select at least one field to rewrite." });
+    return;
+  }
+  if (tone.trim().length === 0) {
+    dispatch({ type: "action-error", message: "Describe the tone before generating." });
+    return;
+  }
+  dispatch({ type: "operation-started", action: "generate", clearApplyError: false });
+  try {
+    const generated = await api.generate({
+      eventId,
+      sourceType,
+      sourceIds: selectedSourceIds,
+      fields,
+      tone: tone.trim(),
+      ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
+    });
+    invalidate();
+    dispatch({
+      type: "generated",
+      candidates: generated,
+      message: `${generated.length} private suggestion${generated.length === 1 ? "" : "s"} ready for review.`,
+    });
+  } catch (reason: unknown) {
+    dispatch({ type: "action-error", message: messageFrom(reason) });
+  } finally {
+    dispatch({ type: "operation-finished" });
+  }
+}
+
+async function regenerateRemixSuggestion(
+  api: RemixApi | null,
+  eventId: string,
+  selectedCandidate: RemixCandidate | undefined,
+  candidates: readonly RemixCandidate[],
+  tone: string,
+  guidance: string,
+  dispatch: RemixDispatch,
+  invalidate: () => void,
+): Promise<void> {
+  if (api === null) {
+    dispatch({
+      type: "action-error",
+      message: "Content remix is unavailable. No suggestion was regenerated.",
+    });
+    return;
+  }
+  if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
+  dispatch({ type: "operation-started", action: "regenerate", clearApplyError: false });
+  try {
+    const regenerated = await api.regenerate({
+      eventId,
+      candidateId: selectedCandidate.id,
+      ...(tone.trim().length === 0 ? {} : { tone: tone.trim() }),
+      ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
+    });
+    invalidate();
+    dispatch({
+      type: "regenerated",
+      candidates: [
+        regenerated,
+        ...candidates.map((candidate) =>
+          candidate.id === selectedCandidate.id && candidate.status === "pending"
+            ? {
+                ...candidate,
+                status: "rejected" as const,
+                version: candidate.version + 1,
+                rejectionReason: "Superseded by regeneration.",
+              }
+            : candidate,
+        ),
+      ],
+      selectedCandidateId: regenerated.id,
+      message: "A fresh suggestion is ready. The previous version remains in activity.",
+    });
+  } catch (reason: unknown) {
+    dispatch({ type: "action-error", message: messageFrom(reason) });
+  } finally {
+    dispatch({ type: "operation-finished" });
+  }
+}
+
+async function rejectRemixSuggestion(
+  api: RemixApi | null,
+  eventId: string,
+  selectedCandidate: RemixCandidate | undefined,
+  candidates: readonly RemixCandidate[],
+  dispatch: RemixDispatch,
+  invalidate: () => void,
+): Promise<void> {
+  if (api === null) {
+    dispatch({
+      type: "action-error",
+      message: "Content remix is unavailable. No suggestion was rejected.",
+    });
+    return;
+  }
+  if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
+  dispatch({ type: "operation-started", action: "reject", clearApplyError: false });
+  try {
+    const rejected = await api.reject({
+      eventId,
+      candidateId: selectedCandidate.id,
+      reason: "Rejected by the human organizer.",
+    });
+    invalidate();
+    const nextCandidates = candidates.map((candidate) =>
+      candidate.id === rejected.id ? rejected : candidate,
+    );
+    const nextAudit = await api.listAudit(eventId);
+    dispatch({
+      type: "candidate-rejected",
+      candidates: nextCandidates,
+      audit: nextAudit.filter((entry) => entry.eventId === eventId),
+      message: "Suggestion rejected and recorded in activity.",
+    });
+  } catch (reason: unknown) {
+    dispatch({ type: "action-error", message: messageFrom(reason) });
+  } finally {
+    dispatch({ type: "operation-finished" });
+  }
+}
+
+async function applyRemixSuggestion(
+  api: RemixApi | null,
+  eventId: string,
+  selectedCandidate: RemixCandidate | undefined,
+  candidates: readonly RemixCandidate[],
+  canApply: boolean,
+  draftContent: Readonly<Record<string, string>>,
+  dispatch: RemixDispatch,
+  invalidate: () => void,
+): Promise<void> {
+  if (api === null || selectedCandidate === undefined || !canApply) return;
+  dispatch({ type: "operation-started", action: "apply", clearApplyError: true });
+  try {
+    const content = allowedContentForApply(selectedCandidate, draftContent);
+    const revision: RemixContentRevision = await api.apply({
+      eventId,
+      candidateId: selectedCandidate.id,
+      expectedVersion: selectedCandidate.version,
+      content,
+    });
+    invalidate();
+    const nextCandidates = candidates.map((candidate) =>
+      candidate.id === selectedCandidate.id
+        ? {
+            ...candidate,
+            status: "applied" as const,
+            version: candidate.version + 1,
+            candidate: revision.content,
+            appliedAt: revision.appliedAt,
+            appliedBy: revision.appliedBy,
+            appliedRevisionId: revision.id,
+          }
+        : candidate,
+    );
+    const nextAudit = await api.listAudit(eventId);
+    dispatch({
+      type: "candidate-applied",
+      candidates: nextCandidates,
+      audit: nextAudit.filter((entry) => entry.eventId === eventId),
+      message: "Approved changes were applied and recorded in activity.",
+    });
+  } catch (reason: unknown) {
+    const message = messageFrom(reason);
+    dispatch({ type: "action-error", message });
+    dispatch({ type: "apply-error", message });
+  } finally {
+    dispatch({ type: "operation-finished" });
+  }
+}
 
 export function RemixWorkspace({
   organizationId,
@@ -481,79 +663,23 @@ export function RemixWorkspace({
     dispatch({ type: "capability-synced", available: api !== null });
   }, [api]);
 
-  useEffect(() => {
-    if (!scopeValid || api === null || capabilityUnavailable) {
-      dispatch({ type: "loading-changed", loading: false });
+  const setLoading = useCallback((loading: boolean): void => {
+    dispatch({ type: "loading-changed", loading });
+  }, []);
+  const clearLoadError = useCallback((): void => {
+    dispatch({ type: "load-error", unavailable: false, message: null });
+  }, []);
+  const handleLoadError = useCallback((reason: unknown): void => {
+    if (isCapabilityUnavailable(reason)) {
+      dispatch({
+        type: "load-error",
+        unavailable: true,
+        message: reason instanceof Error ? reason.message : "Capability not found.",
+      });
       return;
     }
-    let active = true;
-    const generation = ++loadGenerationRef.current;
-    const immediateSnapshot = navigationCache?.peek<RemixNavigationCacheSnapshot>(remixCacheKey);
-    const hasImmediateSnapshot = immediateSnapshot !== undefined;
-    if (immediateSnapshot !== undefined) applySnapshot(immediateSnapshot);
-    dispatch({ type: "loading-changed", loading: !hasImmediateSnapshot });
-    dispatch({ type: "load-error", unavailable: false, message: null });
-    const controller = new AbortController();
-    const load = async (): Promise<RemixNavigationCacheSnapshot> => {
-      const signal = navigationCache === null ? controller.signal : undefined;
-      const [nextRecords, nextCandidates, nextAudit] = await Promise.all([
-        api.listRecords({ eventId, sourceType, ...(signal === undefined ? {} : { signal }) }),
-        api.listCandidates({ eventId, ...(signal === undefined ? {} : { signal }) }),
-        api.listAudit(eventId, signal),
-      ]);
-      return {
-        records: nextRecords.filter(
-          (record) => record.eventId === eventId && record.kind === sourceType,
-        ),
-        candidates: nextCandidates.filter((candidate) => candidate.eventId === eventId),
-        audit: nextAudit.filter((entry) => entry.eventId === eventId),
-      };
-    };
-    const isCurrent = (): boolean =>
-      active && generation === loadGenerationRef.current && !controller.signal.aborted;
-    const read = navigationCache
-      ? navigationCache.read<RemixNavigationCacheSnapshot>({
-          key: remixCacheKey,
-          tags: remixCacheTags,
-          load,
-        })
-      : load();
-    void read
-      .then((snapshot) => {
-        if (!isCurrent()) return;
-        applySnapshot(snapshot);
-      })
-      .catch((reason: unknown) => {
-        if (!isCurrent() || (reason instanceof DOMException && reason.name === "AbortError"))
-          return;
-        if (isCapabilityUnavailable(reason)) {
-          dispatch({
-            type: "load-error",
-            unavailable: true,
-            message: reason instanceof Error ? reason.message : "Capability not found.",
-          });
-          return;
-        }
-        dispatch({ type: "load-error", unavailable: false, message: messageFrom(reason) });
-      })
-      .finally(() => {
-        if (isCurrent()) dispatch({ type: "loading-changed", loading: false });
-      });
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [
-    api,
-    applySnapshot,
-    capabilityUnavailable,
-    eventId,
-    navigationCache,
-    remixCacheKey,
-    remixCacheTags,
-    scopeValid,
-    sourceType,
-  ]);
+    dispatch({ type: "load-error", unavailable: false, message: messageFrom(reason) });
+  }, []);
 
   const availableFields = fieldsForSourceType(sourceType);
   const visibleRecords = useMemo(() => {
@@ -588,192 +714,58 @@ export function RemixWorkspace({
     humanConfirmed &&
     busyAction === null;
 
-  function toggleSource(sourceId: string): void {
-    dispatch({ type: "source-toggled", sourceId });
-  }
-
-  function toggleField(field: RemixField): void {
-    dispatch({ type: "field-toggled", field });
-  }
-
-  function selectCandidate(candidateId: string): void {
-    dispatch({ type: "candidate-selected", candidateId });
-  }
-
   async function generate(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    dispatch({ type: "action-error", message: null });
-    dispatch({ type: "action-message", message: null });
-    if (api === null) {
-      dispatch({
-        type: "action-error",
-        message: "Content remix is unavailable. No suggestion was created.",
-      });
-      return;
-    }
-    if (loading) {
-      dispatch({
-        type: "action-error",
-        message: "Event content is still loading. Try again in a moment.",
-      });
-      return;
-    }
-    if (selectedSourceIds.length === 0) {
-      dispatch({
-        type: "action-error",
-        message: "Select at least one session or speaker profile.",
-      });
-      return;
-    }
-    if (fields.length === 0) {
-      dispatch({ type: "action-error", message: "Select at least one field to rewrite." });
-      return;
-    }
-    if (tone.trim().length === 0) {
-      dispatch({ type: "action-error", message: "Describe the tone before generating." });
-      return;
-    }
-    dispatch({ type: "operation-started", action: "generate", clearApplyError: false });
-    try {
-      const generated = await api.generate({
-        eventId,
-        sourceType,
-        sourceIds: selectedSourceIds,
-        fields,
-        tone: tone.trim(),
-        ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
-      });
-      invalidateRemixCache();
-      dispatch({
-        type: "generated",
-        candidates: generated,
-        message: `${generated.length} private suggestion${generated.length === 1 ? "" : "s"} ready for review.`,
-      });
-    } catch (reason: unknown) {
-      dispatch({ type: "action-error", message: messageFrom(reason) });
-    } finally {
-      dispatch({ type: "operation-finished" });
-    }
+    return generateRemixSuggestions(
+      api,
+      eventId,
+      sourceType,
+      selectedSourceIds,
+      fields,
+      tone,
+      guidance,
+      loading,
+      dispatch,
+      invalidateRemixCache,
+    );
   }
 
   async function regenerate(): Promise<void> {
-    if (api === null) {
-      dispatch({
-        type: "action-error",
-        message: "Content remix is unavailable. No suggestion was regenerated.",
-      });
-      return;
-    }
-    if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
-    dispatch({ type: "operation-started", action: "regenerate", clearApplyError: false });
-    try {
-      const regenerated = await api.regenerate({
-        eventId,
-        candidateId: selectedCandidate.id,
-        ...(tone.trim().length === 0 ? {} : { tone: tone.trim() }),
-        ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
-      });
-      invalidateRemixCache();
-      dispatch({
-        type: "regenerated",
-        candidates: [
-          regenerated,
-          ...candidates.map((candidate) =>
-            candidate.id === selectedCandidate.id && candidate.status === "pending"
-              ? {
-                  ...candidate,
-                  status: "rejected" as const,
-                  version: candidate.version + 1,
-                  rejectionReason: "Superseded by regeneration.",
-                }
-              : candidate,
-          ),
-        ],
-        selectedCandidateId: regenerated.id,
-        message: "A fresh suggestion is ready. The previous version remains in activity.",
-      });
-    } catch (reason: unknown) {
-      dispatch({ type: "action-error", message: messageFrom(reason) });
-    } finally {
-      dispatch({ type: "operation-finished" });
-    }
+    return regenerateRemixSuggestion(
+      api,
+      eventId,
+      selectedCandidate,
+      candidates,
+      tone,
+      guidance,
+      dispatch,
+      invalidateRemixCache,
+    );
   }
 
   async function reject(): Promise<void> {
-    if (api === null) {
-      dispatch({
-        type: "action-error",
-        message: "Content remix is unavailable. No suggestion was rejected.",
-      });
-      return;
-    }
-    if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
-    dispatch({ type: "operation-started", action: "reject", clearApplyError: false });
-    try {
-      const rejected = await api.reject({
-        eventId,
-        candidateId: selectedCandidate.id,
-        reason: "Rejected by the human organizer.",
-      });
-      invalidateRemixCache();
-      const nextCandidates = candidates.map((candidate) =>
-        candidate.id === rejected.id ? rejected : candidate,
-      );
-      const nextAudit = await api.listAudit(eventId);
-      dispatch({
-        type: "candidate-rejected",
-        candidates: nextCandidates,
-        audit: nextAudit.filter((entry) => entry.eventId === eventId),
-        message: "Suggestion rejected and recorded in activity.",
-      });
-    } catch (reason: unknown) {
-      dispatch({ type: "action-error", message: messageFrom(reason) });
-    } finally {
-      dispatch({ type: "operation-finished" });
-    }
+    return rejectRemixSuggestion(
+      api,
+      eventId,
+      selectedCandidate,
+      candidates,
+      dispatch,
+      invalidateRemixCache,
+    );
   }
 
   async function commitApply(): Promise<void> {
-    if (api === null || selectedCandidate === undefined || !canApply) return;
-    dispatch({ type: "operation-started", action: "apply", clearApplyError: true });
-    try {
-      const content = allowedContentForApply(selectedCandidate, draftContent);
-      const revision: RemixContentRevision = await api.apply({
-        eventId,
-        candidateId: selectedCandidate.id,
-        expectedVersion: selectedCandidate.version,
-        content,
-      });
-      invalidateRemixCache();
-      const nextCandidates = candidates.map((candidate) =>
-        candidate.id === selectedCandidate.id
-          ? {
-              ...candidate,
-              status: "applied" as const,
-              version: candidate.version + 1,
-              candidate: revision.content,
-              appliedAt: revision.appliedAt,
-              appliedBy: revision.appliedBy,
-              appliedRevisionId: revision.id,
-            }
-          : candidate,
-      );
-      const nextAudit = await api.listAudit(eventId);
-      dispatch({
-        type: "candidate-applied",
-        candidates: nextCandidates,
-        audit: nextAudit.filter((entry) => entry.eventId === eventId),
-        message: "Approved changes were applied and recorded in activity.",
-      });
-    } catch (reason: unknown) {
-      const message = messageFrom(reason);
-      dispatch({ type: "action-error", message });
-      dispatch({ type: "apply-error", message });
-    } finally {
-      dispatch({ type: "operation-finished" });
-    }
+    return applyRemixSuggestion(
+      api,
+      eventId,
+      selectedCandidate,
+      candidates,
+      canApply,
+      draftContent,
+      dispatch,
+      invalidateRemixCache,
+    );
   }
-
   if (!scopeValid) {
     return <ScopeStatus message="Organization and event scope are required." error />;
   }
@@ -782,84 +774,77 @@ export function RemixWorkspace({
   }
 
   return (
-    <main className={styles.workspace} id="remix-workspace">
-      <a className={styles.skipLink} href="#remix-composer">
-        Skip to content remix controls
-      </a>
-      <WorkspaceHeader
-        eyebrow="Content remix"
-        title="Polish event content"
-        description="Select sessions or speaker profiles, generate private rewrite suggestions, then review and apply only the changes you approve."
-        status={<StatusBadge tone="info">Private until applied</StatusBadge>}
+    <>
+      <RemixWorkspaceLoader
+        api={api}
+        scopeValid={scopeValid}
+        capabilityUnavailable={capabilityUnavailable}
+        eventId={eventId}
+        sourceType={sourceType}
+        navigationCache={navigationCache}
+        cacheKey={remixCacheKey}
+        cacheTags={remixCacheTags}
+        loadGenerationRef={loadGenerationRef}
+        onSnapshot={applySnapshot}
+        onLoadingChange={setLoading}
+        onLoadStart={clearLoadError}
+        onLoadError={handleLoadError}
       />
-      <div className={styles.pageBody}>
-        <RemixComposer
-          sourceType={sourceType}
-          onSourceTypeChange={(nextSourceType) =>
-            dispatch({ type: "source-type-changed", sourceType: nextSourceType })
-          }
-          search={search}
-          onSearchChange={(value) => dispatch({ type: "search-changed", value })}
-          tagFilter={tagFilter}
-          onTagFilterChange={(value) => dispatch({ type: "tag-filter-changed", value })}
-          trackFilter={trackFilter}
-          onTrackFilterChange={(value) => dispatch({ type: "track-filter-changed", value })}
-          records={visibleRecords}
-          selectedSourceIds={selectedSourceIds}
-          onToggleSource={toggleSource}
-          loading={loading}
-          error={error}
-          availableFields={availableFields}
-          fields={fields}
-          onToggleField={toggleField}
-          tone={tone}
-          onToneChange={(value) => dispatch({ type: "tone-changed", value })}
-          guidance={guidance}
-          onGuidanceChange={(value) => dispatch({ type: "guidance-changed", value })}
-          actionError={actionError}
-          actionMessage={actionMessage}
-          busyAction={busyAction}
-          onGenerate={(event) => void generate(event)}
-        />
-        <RemixReview
-          candidates={visibleCandidates}
-          records={records}
-          candidateFilter={candidateFilter}
-          onCandidateFilterChange={(filter) =>
-            dispatch({ type: "candidate-filter-changed", filter })
-          }
-          selectedCandidateId={selectedCandidateId}
-          onSelectCandidate={selectCandidate}
-          selectedCandidate={selectedCandidate}
-          staleCandidate={staleCandidate}
-          draftContent={draftContent}
-          onDraftChange={(field, value) => dispatch({ type: "draft-changed", field, value })}
-          busyAction={busyAction}
-          loading={loading}
-          apiAvailable={api !== null}
-          onRegenerate={() => void regenerate()}
-          onReject={() => void reject()}
-          humanConfirmed={humanConfirmed}
-          onHumanConfirmedChange={(value) => dispatch({ type: "human-confirmed", value })}
-          canApply={canApply}
-          onOpenApply={() => {
-            if (!canApply) return;
-            dispatch({ type: "apply-error", message: null });
-            dispatch({ type: "action-error", message: null });
-            dispatch({ type: "apply-dialog-changed", open: true });
-          }}
-          applyButtonRef={applyButtonRef}
-        />
-        <RemixActivity audit={audit} />
-      </div>
-      <RemixApplyDialog
-        open={applyDialogOpen}
-        onOpenChange={(open) => dispatch({ type: "apply-dialog-changed", open })}
-        busy={busyAction === "apply"}
-        error={applyError}
-        onConfirm={() => void commitApply()}
-        returnFocusRef={applyButtonRef}
+      <RemixWorkspaceSections
+        sourceType={sourceType}
+        onSourceTypeChange={(nextSourceType) =>
+          dispatch({ type: "source-type-changed", sourceType: nextSourceType })
+        }
+        search={search}
+        onSearchChange={(value) => dispatch({ type: "search-changed", value })}
+        tagFilter={tagFilter}
+        onTagFilterChange={(value) => dispatch({ type: "tag-filter-changed", value })}
+        trackFilter={trackFilter}
+        onTrackFilterChange={(value) => dispatch({ type: "track-filter-changed", value })}
+        records={visibleRecords}
+        selectedSourceIds={selectedSourceIds}
+        onToggleSource={(sourceId) => dispatch({ type: "source-toggled", sourceId })}
+        loading={loading}
+        error={error}
+        availableFields={availableFields}
+        fields={fields}
+        onToggleField={(field) => dispatch({ type: "field-toggled", field })}
+        tone={tone}
+        onToneChange={(value) => dispatch({ type: "tone-changed", value })}
+        guidance={guidance}
+        onGuidanceChange={(value) => dispatch({ type: "guidance-changed", value })}
+        actionError={actionError}
+        actionMessage={actionMessage}
+        busyAction={busyAction}
+        onGenerate={(event) => void generate(event)}
+        candidates={visibleCandidates}
+        candidateFilter={candidateFilter}
+        onCandidateFilterChange={(filter) => dispatch({ type: "candidate-filter-changed", filter })}
+        selectedCandidateId={selectedCandidateId}
+        onSelectCandidate={(candidateId) => dispatch({ type: "candidate-selected", candidateId })}
+        selectedCandidate={selectedCandidate}
+        staleCandidate={staleCandidate}
+        draftContent={draftContent}
+        onDraftChange={(field, value) => dispatch({ type: "draft-changed", field, value })}
+        apiAvailable={api !== null}
+        onRegenerate={() => void regenerate()}
+        onReject={() => void reject()}
+        humanConfirmed={humanConfirmed}
+        onHumanConfirmedChange={(value) => dispatch({ type: "human-confirmed", value })}
+        canApply={canApply}
+        onOpenApply={() => {
+          if (!canApply) return;
+          dispatch({ type: "apply-error", message: null });
+          dispatch({ type: "action-error", message: null });
+          dispatch({ type: "apply-dialog-changed", open: true });
+        }}
+        applyButtonRef={applyButtonRef}
+        audit={audit}
+        applyDialogOpen={applyDialogOpen}
+        onApplyDialogChange={(open) => dispatch({ type: "apply-dialog-changed", open })}
+        applyError={applyError}
+        onConfirmApply={() => void commitApply()}
       />
-    </main>
+    </>
   );
 }

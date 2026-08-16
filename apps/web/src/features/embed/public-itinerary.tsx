@@ -3,12 +3,13 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useReducer, useRef } from "react";
 import styles from "./embed.module.css";
+import { publicAgendaDays, publishedEntryPresenters } from "./model";
 import {
-  formatPublishedDateTimeRange,
-  formatPublishedSessionSchedule,
-  publicAgendaDays,
-  publishedEntryPresenters,
-} from "./model";
+  PublicItineraryControls,
+  PublicItineraryDayTabs,
+  PublicItineraryResultBar,
+  PublicItinerarySessionList,
+} from "./public-itinerary-sections";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -478,325 +479,62 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
         </div>
       </div>
 
-      <search>
-        <form className={styles.filters} onSubmit={(event) => event.preventDefault()}>
-          <label>
-            <span>Search sessions or speakers</span>
-            <input
-              type="search"
-              value={query}
-              placeholder="Search by title or speaker"
-              onChange={(event) =>
-                dispatch({ type: "set-query", value: event.currentTarget.value })
-              }
-            />
-          </label>
-          <button
-            className={styles.clearButton}
-            type="button"
-            aria-expanded={filtersOpen}
-            aria-controls="itinerary-filters"
-            onClick={() => dispatch({ type: "toggle-filters" })}
-          >
-            {filtersOpen ? "Hide filters" : "Filters"}
-          </button>
-          <button
-            className={`${styles.clearButton} ${styles.scheduleToggle}`}
-            type="button"
-            aria-pressed={personalOnly}
-            onClick={togglePersonalView}
-          >
-            {personalOnly
-              ? `All sessions (${agenda.entries.length})`
-              : `My schedule (${selectedIds.length})`}
-          </button>
-          <button
-            className={`${styles.clearButton} ${styles.exportButton}`}
-            type="button"
-            onClick={downloadCalendar}
-          >
-            Download calendar (.ics)
-          </button>
-          {hasFilters ? (
-            <button className={styles.clearButton} type="button" onClick={clearFilters}>
-              Clear filters
-            </button>
-          ) : null}
-        </form>
-        <fieldset
-          id="itinerary-filters"
-          className={styles.filters}
-          aria-label="Itinerary filters"
-          hidden={!filtersOpen}
-        >
-          <label>
-            <span>Track</span>
-            <select
-              value={track}
-              onChange={(event) =>
-                dispatch({ type: "set-track", value: event.currentTarget.value })
-              }
-            >
-              <option value="">All tracks</option>
-              {tracks.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Format</span>
-            <select
-              value={format}
-              onChange={(event) =>
-                dispatch({ type: "set-format", value: event.currentTarget.value })
-              }
-            >
-              <option value="">All formats</option>
-              {formats.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Location</span>
-            <select
-              value={room}
-              onChange={(event) => dispatch({ type: "set-room", value: event.currentTarget.value })}
-            >
-              <option value="">All locations</option>
-              {rooms.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-        </fieldset>
-      </search>
+      <PublicItineraryControls
+        query={query}
+        filtersOpen={filtersOpen}
+        personalOnly={personalOnly}
+        selectedCount={selectedIds.length}
+        totalCount={agenda.entries.length}
+        track={track}
+        format={format}
+        room={room}
+        tracks={tracks}
+        formats={formats}
+        rooms={rooms}
+        hasFilters={hasFilters}
+        onQueryChange={(value) => dispatch({ type: "set-query", value })}
+        onToggleFilters={() => dispatch({ type: "toggle-filters" })}
+        onTogglePersonalView={togglePersonalView}
+        onDownloadCalendar={downloadCalendar}
+        onClearFilters={clearFilters}
+        onTrackChange={(value) => dispatch({ type: "set-track", value })}
+        onFormatChange={(value) => dispatch({ type: "set-format", value })}
+        onRoomChange={(value) => dispatch({ type: "set-room", value })}
+      />
 
-      <div className={styles.resultBar} role="status" aria-live="polite">
-        <span>
-          {personalOnly
-            ? `My schedule: ${visibleEntries.length} session${visibleEntries.length === 1 ? "" : "s"}`
-            : `${visibleEntries.length} of ${agenda.entries.length} session${agenda.entries.length === 1 ? "" : "s"}`}
-        </span>
-        <span>{selectedIds.length} saved</span>
-      </div>
-      {exportMessage ? (
-        <p className={styles.exportMessage} role="status" aria-live="polite">
-          {exportMessage}
-        </p>
-      ) : null}
+      <PublicItineraryResultBar
+        personalOnly={personalOnly}
+        visibleCount={visibleEntries.length}
+        totalCount={agenda.entries.length}
+        selectedCount={selectedIds.length}
+        exportMessage={exportMessage}
+      />
 
-      <div role="tablist" aria-label="Event days" className={styles.itineraryTabs}>
-        {days.map((day) => {
-          const panelId = `itinerary-panel-${day.date}`;
-          const tabId = `itinerary-tab-${day.date}`;
-          return (
-            <button
-              key={day.date}
-              id={tabId}
-              className={styles.clearButton}
-              type="button"
-              role="tab"
-              aria-selected={!personalOnly && activeDay === day.date}
-              aria-controls={
-                visibleDays.some((candidate) => candidate.date === day.date) ? panelId : undefined
-              }
-              onClick={() => dispatch({ type: "select-day", value: day.date })}
-              onKeyDown={(event) => {
-                const currentIndex = days.findIndex((candidate) => candidate.date === day.date);
-                if (currentIndex < 0 || days.length < 2) return;
-                let nextIndex = -1;
-                if (event.key === "ArrowRight") {
-                  nextIndex = (currentIndex + 1) % days.length;
-                } else if (event.key === "ArrowLeft") {
-                  nextIndex = (currentIndex - 1 + days.length) % days.length;
-                } else if (event.key === "Home") {
-                  nextIndex = 0;
-                } else if (event.key === "End") {
-                  nextIndex = days.length - 1;
-                }
-                if (nextIndex < 0) return;
-                event.preventDefault();
-                const nextDay = days[nextIndex];
-                if (nextDay) {
-                  dispatch({ type: "select-day", value: nextDay.date });
-                  document.getElementById(`itinerary-tab-${nextDay.date}`)?.focus();
-                }
-              }}
-            >
-              {day.label}
-            </button>
-          );
-        })}
-      </div>
+      <PublicItineraryDayTabs
+        days={days}
+        activeDay={activeDay}
+        personalOnly={personalOnly}
+        visibleDays={visibleDays}
+        onSelectDay={(value) => dispatch({ type: "select-day", value })}
+      />
 
-      {visibleEntries.length === 0 ? (
-        <div className={styles.emptyResult} role="status">
-          <h3>{personalOnly ? "Your schedule is empty" : "No sessions match this day"}</h3>
-          <p>
-            {personalOnly
-              ? "Use Add to my schedule on a session card to build a personal itinerary."
-              : "Choose another day or clear your filters to keep browsing."}
-          </p>
-        </div>
-      ) : (
-        <div className={styles.publicDays}>
-          {visibleDays.map((day) => (
-            <section
-              key={day.date}
-              id={`itinerary-panel-${day.date}`}
-              role="tabpanel"
-              aria-labelledby={`itinerary-tab-${day.date}`}
-            >
-              <ol className={styles.publicSessionList}>
-                {[...day.entries]
-                  .sort((left, right) => {
-                    const leftStart = Date.parse(left.startsAt);
-                    const rightStart = Date.parse(right.startsAt);
-                    if (!Number.isNaN(leftStart) && !Number.isNaN(rightStart)) {
-                      return leftStart - rightStart;
-                    }
-                    return left.startsAt.localeCompare(right.startsAt);
-                  })
-                  .map((entry) => {
-                    const presenters = publishedEntryPresenters(entry, program.speakers.speakers);
-                    const schedule = formatPublishedSessionSchedule(
-                      entry.startsAt,
-                      entry.endsAt,
-                      agenda.event.timeZone,
-                    );
-                    const isDescriptionExpanded = expandedDescriptions.has(entry.id);
-                    const isDetailsExpanded = expandedDetails.has(entry.id);
-                    const isSelected = selectedSet.has(entry.id);
-                    const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
-                    const hasDescription = entry.summary.trim().length > 0;
-                    return (
-                      <li key={entry.id}>
-                        <article className={styles.publicSessionCard}>
-                          <div className={styles.publicSessionTime}>
-                            <time dateTime={entry.startsAt} className={styles.sessionDate}>
-                              {schedule.dateLabel}
-                            </time>
-                            <time dateTime={entry.endsAt} className={styles.sessionClock}>
-                              <span>{schedule.startTimeLabel}</span>
-                              <span aria-hidden="true">–</span>
-                              <span>{schedule.endTimeLabel}</span>
-                            </time>
-                          </div>
-                          <div className={styles.publicSessionCopy}>
-                            <div className={styles.publicSessionMeta}>
-                              {trackNameLabels(entry.trackNames)}
-                              {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-                            </div>
-                            <h4>{entry.title}</h4>
-                            {hasDescription ? (
-                              <p id={`itinerary-summary-${entry.id}`}>
-                                {isDescriptionExpanded || !hasLongDescription
-                                  ? entry.summary
-                                  : truncateDescription(entry.summary)}
-                              </p>
-                            ) : (
-                              <p>No description was published.</p>
-                            )}
-                            {hasLongDescription ? (
-                              <button
-                                className={styles.clearButton}
-                                type="button"
-                                aria-expanded={isDescriptionExpanded}
-                                aria-controls={`itinerary-summary-${entry.id}`}
-                                onClick={() =>
-                                  dispatch({
-                                    type: "toggle-description",
-                                    entryId: entry.id,
-                                  })
-                                }
-                              >
-                                {isDescriptionExpanded ? "Show less" : "Show more"}
-                              </button>
-                            ) : null}
-                            <p className={styles.publicSpeakers}>
-                              <strong>Speakers</strong>
-                            </p>
-                            {presenters.length > 0 ? (
-                              <ul>
-                                {presenters.map((presenter) => (
-                                  <li key={presenter.key}>
-                                    {presenter.speaker
-                                      ? `${presenter.displayName} (${speakerRole(
-                                          presenter.speaker,
-                                        )})`
-                                      : presenter.displayName}
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p>No speakers listed</p>
-                            )}
-                            <p>
-                              <strong>Format:</strong> {entry.format || "Format not published"}
-                              {entry.trackNames.length > 0 ? (
-                                <>
-                                  {" · "}
-                                  <strong>Track:</strong> {entry.trackNames.join(", ")}
-                                </>
-                              ) : null}
-                            </p>
-                            <div id={`itinerary-details-${entry.id}`} hidden={!isDetailsExpanded}>
-                              <p>
-                                <strong>Session details:</strong>{" "}
-                                {formatPublishedDateTimeRange(
-                                  entry.startsAt,
-                                  entry.endsAt,
-                                  agenda.event.timeZone,
-                                )}
-                              </p>
-                              <p>
-                                <strong>Room:</strong> {entry.roomName || "Room not published"}
-                              </p>
-                              <p>{entry.summary || "No additional description was published."}</p>
-                            </div>
-                            <button
-                              className={styles.clearButton}
-                              type="button"
-                              aria-expanded={isDetailsExpanded}
-                              aria-controls={`itinerary-details-${entry.id}`}
-                              onClick={() =>
-                                dispatch({
-                                  type: "toggle-details",
-                                  entryId: entry.id,
-                                })
-                              }
-                            >
-                              {isDetailsExpanded ? "Hide Details" : "View Details"}
-                            </button>
-                          </div>
-                          <div className={styles.publicRoom}>
-                            <span>Location</span>
-                            <strong>{entry.roomName || "Location to be announced"}</strong>
-                            <button
-                              className={styles.clearButton}
-                              type="button"
-                              aria-pressed={isSelected}
-                              onClick={() => toggleSelected(entry.id)}
-                            >
-                              {isSelected ? "Remove from my schedule" : "Add to my schedule"}
-                            </button>
-                          </div>
-                        </article>
-                      </li>
-                    );
-                  })}
-              </ol>
-            </section>
-          ))}
-        </div>
-      )}
+      <PublicItinerarySessionList
+        visibleEntries={visibleEntries}
+        visibleDays={visibleDays}
+        personalOnly={personalOnly}
+        timeZone={agenda.event.timeZone}
+        speakers={speakers.speakers}
+        selectedSet={selectedSet}
+        expandedDescriptions={expandedDescriptions}
+        expandedDetails={expandedDetails}
+        onToggleSelected={toggleSelected}
+        onToggleDescription={(entryId) => dispatch({ type: "toggle-description", entryId })}
+        onToggleDetails={(entryId) => dispatch({ type: "toggle-details", entryId })}
+        renderTrackLabels={trackNameLabels}
+        truncateDescription={truncateDescription}
+        renderSpeakerRole={speakerRole}
+        descriptionLimit={DESCRIPTION_LIMIT}
+      />
     </section>
   );
 }

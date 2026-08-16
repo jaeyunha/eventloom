@@ -56,7 +56,7 @@ const adminRailSource = readFileSync(
   "utf8",
 );
 const cfpWizardSource = readFileSync(
-  fileURLToPath(new URL("../../features/cfp/cfp-wizard.tsx", import.meta.url)),
+  fileURLToPath(new URL("../../features/cfp/cfp-wizard-sections.tsx", import.meta.url)),
   "utf8",
 );
 const workHubSource = readFileSync(
