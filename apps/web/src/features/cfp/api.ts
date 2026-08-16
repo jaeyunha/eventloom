@@ -128,7 +128,7 @@ const participantSchema = z
     biography: z.string(),
     answers: z.record(z.string(), z.unknown()),
   })
-  .passthrough();
+  .loose();
 
 const secondaryContactSchema = z
   .object({
@@ -136,7 +136,7 @@ const secondaryContactSchema = z
     name: z.string(),
     email: z.string(),
   })
-  .passthrough();
+  .loose();
 
 export const cfpSubmissionSchema = z
   .object({
@@ -159,7 +159,7 @@ export const cfpSubmissionSchema = z
     withdrawnAt: z.string().optional(),
     finalDecisionAt: z.string().optional(),
   })
-  .passthrough();
+  .loose();
 export type CfpServerSubmission = z.infer<typeof cfpSubmissionSchema>;
 
 const publicEventSchema = z.object({
@@ -180,7 +180,7 @@ const formFieldOptionSchema = z.union([
       description: z.string().optional(),
       disabled: z.boolean().optional(),
     })
-    .passthrough(),
+    .loose(),
 ]);
 const formFieldReferenceSchema = z.union([
   z.string(),
@@ -189,7 +189,7 @@ const formFieldReferenceSchema = z.union([
       id: z.string(),
       version: z.number().int().positive(),
     })
-    .passthrough(),
+    .loose(),
 ]);
 
 const fileRequestSchema = z
@@ -200,7 +200,7 @@ const fileRequestSchema = z
     required: z.boolean().optional(),
     owner: z.string().optional(),
   })
-  .passthrough();
+  .loose();
 
 export const cfpFormFieldSchema = z
   .object({
@@ -218,7 +218,7 @@ export const cfpFormFieldSchema = z
     fileRequest: fileRequestSchema.optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
-  .passthrough();
+  .loose();
 export type CfpFormField = z.infer<typeof cfpFormFieldSchema>;
 
 const formSectionSchema = z
@@ -227,7 +227,7 @@ const formSectionSchema = z
     title: z.string(),
     description: z.string().default(""),
   })
-  .passthrough();
+  .loose();
 
 const formRulesSchema = z.array(z.record(z.string(), z.unknown()));
 
@@ -246,13 +246,13 @@ const publicFormSchema = z
         successContent: z.string(),
         redirectUrl: z.string().optional(),
       })
-      .passthrough(),
+      .loose(),
     sections: z.array(formSectionSchema),
     submissionFields: z.array(cfpFormFieldSchema),
     participantFields: z.array(cfpFormFieldSchema),
     rules: formRulesSchema.default([]),
   })
-  .passthrough();
+  .loose();
 
 export const publishedCfpSchema = z.object({
   organization: z.object({
@@ -285,7 +285,7 @@ const cfpFileUploadAuthorizationSchema = z.object({
     .object({
       assetId: z.string().trim().min(1),
     })
-    .passthrough(),
+    .loose(),
   grant: z
     .object({
       method: z.literal("PUT"),
@@ -293,7 +293,7 @@ const cfpFileUploadAuthorizationSchema = z.object({
       headers: z.record(z.string(), z.string()),
       expiresAt: z.string().trim().min(1),
     })
-    .passthrough(),
+    .loose(),
 });
 const cfpFileUploadResultSchema = z
   .object({
@@ -302,7 +302,7 @@ const cfpFileUploadResultSchema = z
     contentType: z.string().trim().min(1),
     sizeBytes: z.number().int().nonnegative(),
   })
-  .passthrough();
+  .loose();
 
 const eventSchema = z
   .object({
@@ -315,7 +315,7 @@ const eventSchema = z
     opensAt: z.string(),
     closesAt: z.string(),
   })
-  .passthrough();
+  .loose();
 const formSchema = z
   .object({
     id: z.string(),
@@ -331,7 +331,7 @@ const formSchema = z
     participantFields: z.array(cfpFormFieldSchema),
     rules: formRulesSchema.default([]),
   })
-  .passthrough();
+  .loose();
 export type CfpEventConfiguration = z.infer<typeof eventSchema>;
 export type CfpFormConfiguration = z.infer<typeof formSchema>;
 
