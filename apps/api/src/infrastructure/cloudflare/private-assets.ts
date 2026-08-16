@@ -10,6 +10,7 @@ import type {
 } from "../../features/speaker/types";
 
 type JsonRecord = Record<string, unknown>;
+const downloadCapabilityRetentionMs = 24 * 60 * 60 * 1_000;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,6 +37,30 @@ interface PrivateUploadRow {
   byte_size: number;
   state: string;
   scan_result_code: string | null;
+}
+
+interface StoredDownloadCapability {
+  assetId: string;
+  tenantId: string;
+  objectKey: string;
+  contentType: string;
+  sizeBytes: number;
+  fileName: string;
+  capabilityHash: string;
+  expiresAt: string;
+  consumedAt: string | null;
+}
+
+interface PrivateDownloadCapabilityRow {
+  asset_id: string;
+  tenant_id: string;
+  object_key: string;
+  content_type: string;
+  byte_size: number;
+  file_name: string;
+  token_digest: string;
+  expires_at: string;
+  consumed_at: string | null;
 }
 
 function capabilityPayload(capability: StoredPrivateCapability): string {
@@ -94,6 +119,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       state: "pending" | "scanning" | "uploaded" | "consumed";
     }
   >();
+  readonly #downloadCapabilities = new Map<string, StoredDownloadCapability>();
 
   constructor(bucket: R2Bucket, _origin: string, database?: D1Database) {
     this.#bucket = bucket;
@@ -154,30 +180,59 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     ) {
       throw new Error("The requested private asset is not available.");
     }
+    const capabilityId = crypto.randomUUID();
     const token = capabilityToken();
-    const capability: StoredPrivateCapability = {
-      kind: "download",
-      capabilityHash: await capabilityHash(token),
+    const capability: StoredDownloadCapability = {
+      assetId: binding.capabilityId,
       tenantId: binding.tenantId,
-      eventId: binding.eventId,
-      ...(binding.submissionId === undefined ? {} : { submissionId: binding.submissionId }),
-      participantId: binding.participantId,
-      ...(binding.taskId === undefined ? {} : { taskId: binding.taskId }),
       objectKey: binding.objectKey,
       contentType: binding.contentType,
       sizeBytes: binding.sizeBytes,
       fileName: binding.fileName,
+      capabilityHash: await capabilityHash(token),
       expiresAt: binding.expiresAt,
+      consumedAt: null,
     };
-    const existing = await this.readRow(binding.capabilityId);
-    await this.storeCapability(
-      binding.capabilityId,
-      capability,
-      existing?.state === "pending" ? "pending" : "uploaded",
-    );
+    const createdAt = new Date().toISOString();
+    const retentionCutoff = new Date(
+      Date.parse(createdAt) - downloadCapabilityRetentionMs,
+    ).toISOString();
+    if (this.#database === undefined) {
+      for (const [storedCapabilityId, storedCapability] of this.#downloadCapabilities) {
+        if (Date.parse(storedCapability.expiresAt) <= Date.parse(retentionCutoff)) {
+          this.#downloadCapabilities.delete(storedCapabilityId);
+        }
+      }
+      this.#downloadCapabilities.set(capabilityId, capability);
+    } else {
+      await this.#database
+        .prepare("DELETE FROM private_download_capabilities WHERE expires_at <= ?")
+        .bind(retentionCutoff)
+        .run();
+      await this.#database
+        .prepare(
+          `INSERT INTO private_download_capabilities
+             (id, asset_id, tenant_id, object_key, content_type, byte_size, file_name,
+              token_digest, expires_at, consumed_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        )
+        .bind(
+          capabilityId,
+          capability.assetId,
+          capability.tenantId,
+          capability.objectKey,
+          capability.contentType,
+          capability.sizeBytes,
+          capability.fileName,
+          capability.capabilityHash,
+          capability.expiresAt,
+          createdAt,
+        )
+        .run();
+    }
     return {
       method: "GET",
-      url: `/api/speaker/assets/capabilities/download/${encodeURIComponent(binding.capabilityId)}/${token}`,
+      url: `/api/speaker/assets/capabilities/download/${encodeURIComponent(capabilityId)}/${token}`,
       expiresAt: binding.expiresAt,
     };
   }
@@ -233,6 +288,45 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     capabilityId: string,
     token: string,
   ): Promise<PrivateDownloadObject> {
+    const capability = await this.readDownloadCapability(capabilityId);
+    if (capability === null) {
+      return this.consumeLegacyDownloadCapability(capabilityId, token);
+    }
+    await this.assertToken(capability, token);
+    if (Date.parse(capability.expiresAt) <= Date.now()) {
+      throw new Error("The download capability has expired.");
+    }
+    if (capability.consumedAt !== null) {
+      throw new Error("The download capability has already been used.");
+    }
+    await this.claimDownloadCapability(
+      capabilityId,
+      capability.capabilityHash,
+      new Date().toISOString(),
+    );
+    const object = await this.#bucket.get(capability.objectKey);
+    if (object === null || object.body === null) {
+      throw new Error("The requested private asset is not available.");
+    }
+    const contentType = object.httpMetadata?.contentType ?? "";
+    if (
+      object.size !== capability.sizeBytes ||
+      contentType.trim().toLowerCase() !== capability.contentType.trim().toLowerCase()
+    ) {
+      throw new Error("The private asset no longer matches its immutable metadata.");
+    }
+    return {
+      body: object.body,
+      contentType: capability.contentType,
+      sizeBytes: object.size,
+      fileName: capability.fileName,
+    };
+  }
+
+  private async consumeLegacyDownloadCapability(
+    capabilityId: string,
+    token: string,
+  ): Promise<PrivateDownloadObject> {
     const row = await this.readRow(capabilityId);
     const capability = parseStoredCapability(row?.scan_result_code ?? null);
     if (row === null || capability === null || capability.kind !== "download") {
@@ -242,19 +336,24 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     if (Date.parse(capability.expiresAt) <= Date.now()) {
       throw new Error("The download capability has expired.");
     }
-    if (row.state !== "uploaded") throw new Error("The download capability has already been used.");
+    if (row.state !== "uploaded") {
+      throw new Error("The download capability has already been used.");
+    }
     await this.claim(capabilityId, row.scan_result_code ?? "", "download-consumed", "uploaded");
     const object = await this.#bucket.get(capability.objectKey);
     if (object === null || object.body === null) {
       throw new Error("The requested private asset is not available.");
     }
-    const contentType = object.httpMetadata?.contentType ?? capability.contentType;
-    if (object.size !== capability.sizeBytes) {
+    const contentType = object.httpMetadata?.contentType ?? "";
+    if (
+      object.size !== capability.sizeBytes ||
+      contentType.trim().toLowerCase() !== capability.contentType.trim().toLowerCase()
+    ) {
       throw new Error("The private asset no longer matches its immutable metadata.");
     }
     return {
       body: object.body,
-      contentType,
+      contentType: capability.contentType,
       sizeBytes: object.size,
       fileName: capability.fileName,
     };
@@ -340,9 +439,76 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     };
   }
 
-  private async assertToken(capability: StoredPrivateCapability, token: string): Promise<void> {
+  private async assertToken(
+    capability: Pick<StoredPrivateCapability, "capabilityHash">,
+    token: string,
+  ): Promise<void> {
     if (token.length < 32 || (await capabilityHash(token)) !== capability.capabilityHash) {
       throw new Error("The capability token is invalid.");
+    }
+  }
+
+  private async readDownloadCapability(
+    capabilityId: string,
+  ): Promise<StoredDownloadCapability | null> {
+    if (this.#database === undefined) {
+      return this.#downloadCapabilities.get(capabilityId) ?? null;
+    }
+    const row = await this.#database
+      .prepare(
+        `SELECT asset_id, tenant_id, object_key, content_type, byte_size, file_name,
+                token_digest, expires_at, consumed_at
+           FROM private_download_capabilities
+          WHERE id = ?
+          LIMIT 1`,
+      )
+      .bind(capabilityId)
+      .first<PrivateDownloadCapabilityRow>();
+    if (row === null) return null;
+    return {
+      assetId: row.asset_id,
+      tenantId: row.tenant_id,
+      objectKey: row.object_key,
+      contentType: row.content_type,
+      sizeBytes: row.byte_size,
+      fileName: row.file_name,
+      capabilityHash: row.token_digest,
+      expiresAt: row.expires_at,
+      consumedAt: row.consumed_at,
+    };
+  }
+
+  private async claimDownloadCapability(
+    capabilityId: string,
+    expectedCapabilityHash: string,
+    consumedAt: string,
+  ): Promise<void> {
+    if (this.#database === undefined) {
+      const stored = this.#downloadCapabilities.get(capabilityId);
+      if (
+        stored === undefined ||
+        stored.consumedAt !== null ||
+        stored.capabilityHash !== expectedCapabilityHash ||
+        Date.parse(stored.expiresAt) <= Date.parse(consumedAt)
+      ) {
+        throw new Error("The download capability is invalid or already used.");
+      }
+      stored.consumedAt = consumedAt;
+      return;
+    }
+    const result = await this.#database
+      .prepare(
+        `UPDATE private_download_capabilities
+            SET consumed_at = ?
+          WHERE id = ?
+            AND consumed_at IS NULL
+            AND expires_at > ?
+            AND token_digest = ?`,
+      )
+      .bind(consumedAt, capabilityId, consumedAt, expectedCapabilityHash)
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new Error("The download capability is invalid or already used.");
     }
   }
 

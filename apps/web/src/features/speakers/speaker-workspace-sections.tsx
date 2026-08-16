@@ -613,7 +613,6 @@ function SpeakerDetailSection({
   editError,
   detailNotice,
   saveBusy,
-  downloadUrls,
   downloadErrors,
   downloadBusyAssetId,
   onEditDraftChange,
@@ -666,13 +665,12 @@ function SpeakerDetailSection({
   detailNotice: string | null;
   editError: string | null;
   saveBusy: boolean;
-  downloadUrls: Readonly<Record<string, string>>;
   downloadErrors: Readonly<Record<string, string>>;
   downloadBusyAssetId: string | null;
   onEditDraftChange: (field: keyof CreateDraft, value: string | boolean) => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onBeginEdit: (speaker: SpeakerRecord) => void;
-  onAssetDownload: (asset: SpeakerAsset) => void;
+  onAssetDownload: (asset: SpeakerAsset) => Promise<string | null>;
 }>) {
   return (
     <Card className={styles.detail} aria-labelledby="speaker-detail-heading">
@@ -835,7 +833,6 @@ function SpeakerDetailSection({
                       <SpeakerAssetMetadata asset={asset} />
                       <SpeakerAssetDownload
                         asset={asset}
-                        downloadUrl={downloadUrls[asset.assetId] ?? null}
                         busy={downloadBusyAssetId === asset.assetId}
                         disabled={!apiAvailable || downloadBusyAssetId !== null}
                         error={downloadErrors[asset.assetId] ?? null}

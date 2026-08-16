@@ -1405,8 +1405,9 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     ) {
       throw new Error("The requested private asset is not available.");
     }
+    const capabilityId = `download:${crypto.randomUUID()}`;
     const token = await this.token("download", binding);
-    this.#capabilities.set(binding.capabilityId, {
+    this.#capabilities.set(capabilityId, {
       binding: { ...binding },
       kind: "download",
       token,
@@ -1414,7 +1415,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     });
     return {
       method: "GET" as const,
-      url: `/api/speaker/assets/capabilities/download/${encodeURIComponent(binding.capabilityId)}/${token}`,
+      url: `/api/speaker/assets/capabilities/download/${encodeURIComponent(capabilityId)}/${token}`,
       expiresAt: binding.expiresAt,
     };
   }

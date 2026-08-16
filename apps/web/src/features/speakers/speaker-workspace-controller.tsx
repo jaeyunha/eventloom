@@ -712,7 +712,6 @@ type ProfileHeadshotDetailsState = {
   headshotPreviewRevision: number;
   headshotPreviewRetry: number;
   headshotAssetsByParticipant: Readonly<Record<string, SpeakerAsset>>;
-  downloadUrls: Readonly<Record<string, string>>;
   downloadErrors: Readonly<Record<string, string>>;
   downloadBusyAssetId: string | null;
   saveBusy: boolean;
@@ -757,7 +756,6 @@ type ProfileHeadshotDetailsAction =
   | { type: "headshot-preview-marked-failed" }
   | { type: "headshot-asset-linked"; participantId: string; asset: SpeakerAsset }
   | { type: "download-started"; assetId: string }
-  | { type: "download-succeeded"; assetId: string; url: string }
   | { type: "download-failed"; assetId: string; message: string }
   | { type: "download-finished"; assetId: string }
   | { type: "save-busy-changed"; busy: boolean }
@@ -791,7 +789,6 @@ const INITIAL_PROFILE_HEADSHOT_DETAILS_STATE: ProfileHeadshotDetailsState = {
   headshotPreviewRevision: 0,
   headshotPreviewRetry: 0,
   headshotAssetsByParticipant: {},
-  downloadUrls: {},
   downloadErrors: {},
   downloadBusyAssetId: null,
   saveBusy: false,
@@ -813,7 +810,6 @@ function profileHeadshotDetailsReducer(
         editError: null,
         detailNotice: null,
         headshotAssetsByParticipant: {},
-        downloadUrls: {},
         downloadErrors: {},
         profileMutationStatus: "idle",
         profileMutationMessage: null,
@@ -924,11 +920,6 @@ function profileHeadshotDetailsReducer(
       const { [action.assetId]: _previousError, ...remaining } = state.downloadErrors;
       return { ...state, downloadBusyAssetId: action.assetId, downloadErrors: remaining };
     }
-    case "download-succeeded":
-      return {
-        ...state,
-        downloadUrls: { ...state.downloadUrls, [action.assetId]: action.url },
-      };
     case "download-failed":
       return {
         ...state,
@@ -1136,7 +1127,6 @@ function useSpeakerWorkspaceController({
     headshotPreviewRevision,
     headshotPreviewRetry,
     headshotAssetsByParticipant,
-    downloadUrls,
     downloadErrors,
     downloadBusyAssetId,
     saveBusy,
@@ -2383,8 +2373,8 @@ function useSpeakerWorkspaceController({
       dispatchProfileHeadshotDetails({ type: "detail-busy-changed", busy: false });
     }
   }
-  async function requestAssetDownload(asset: SpeakerAsset): Promise<void> {
-    if (api === null || asset.status !== "ready" || downloadBusyAssetId !== null) return;
+  async function requestAssetDownload(asset: SpeakerAsset): Promise<string | null> {
+    if (api === null || asset.status !== "ready" || downloadBusyAssetId !== null) return null;
     const assetId = asset.assetId;
     dispatchProfileHeadshotDetails({ type: "download-started", assetId });
     try {
@@ -2392,16 +2382,18 @@ function useSpeakerWorkspaceController({
         (signal) => api.getDownloadGrant(assetId, signal),
         "Asset download",
       );
-      if (grant.url.trim().length === 0) {
-        throw new Error("The private download capability returned an empty URL.");
+      const downloadPath = organizerHeadshotPreviewPath(grant.url);
+      if (downloadPath === null) {
+        throw new Error("The private download capability returned an unsafe URL.");
       }
-      dispatchProfileHeadshotDetails({ type: "download-succeeded", assetId, url: grant.url });
+      return downloadPath;
     } catch (reason: unknown) {
       dispatchProfileHeadshotDetails({
         type: "download-failed",
         assetId,
         message: errorMessage(reason),
       });
+      return null;
     } finally {
       dispatchProfileHeadshotDetails({ type: "download-finished", assetId });
     }
@@ -2619,13 +2611,12 @@ function useSpeakerWorkspaceController({
             profileMutationMessage,
             editError,
             saveBusy,
-            downloadUrls,
             downloadErrors,
             downloadBusyAssetId,
             onEditDraftChange: updateEdit,
             onSave: (event) => void saveSpeaker(event),
             onBeginEdit: beginEdit,
-            onAssetDownload: (asset) => void requestAssetDownload(asset),
+            onAssetDownload: requestAssetDownload,
           },
           showCsv,
           importProps: {

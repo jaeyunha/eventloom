@@ -172,13 +172,12 @@ function SpeakerRosterView({
     detailNotice: string | null;
     editError: string | null;
     saveBusy: boolean;
-    downloadUrls: Readonly<Record<string, string>>;
     downloadErrors: Readonly<Record<string, string>>;
     downloadBusyAssetId: string | null;
     onEditDraftChange: (field: keyof CreateDraft, value: string | boolean) => void;
     onSave: (event: FormEvent<HTMLFormElement>) => void;
     onBeginEdit: (speaker: SpeakerRecord) => void;
-    onAssetDownload: (asset: SpeakerAsset) => void;
+    onAssetDownload: (asset: SpeakerAsset) => Promise<string | null>;
   }>;
   showCsv: boolean;
   importProps: Readonly<{
