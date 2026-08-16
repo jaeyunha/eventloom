@@ -64,8 +64,10 @@ export function useOrganizerAuthoringState({
   const [maxAssignmentsPerReviewer, setMaxAssignmentsPerReviewer] = useState(
     seed.assignmentRule.maxAssignmentsPerReviewer,
   );
-  const [fieldIds, setFieldIds] = useState(seed.reviewerProjection?.fieldIds?.join(", ") ?? "");
-  const [fileIds, setFileIds] = useState(seed.reviewerProjection?.fileIds?.join(", ") ?? "");
+  const [fieldIds, setFieldIds] = useState(
+    () => seed.reviewerProjection?.fieldIds?.join(", ") ?? "",
+  );
+  const [fileIds, setFileIds] = useState(() => seed.reviewerProjection?.fileIds?.join(", ") ?? "");
   const [rounds, setRounds] = useState<readonly ApiPlan["rounds"][number][]>(initialRounds);
   const [assignmentRoundId, setAssignmentRoundId] = useState(
     seed.rounds[0]?.id ?? initialRounds[0]?.id ?? "",

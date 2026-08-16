@@ -549,7 +549,7 @@ function RoomForm({
   const createRoomId = useRef<string | null>(null);
   const [name, setName] = useState(room?.name ?? "");
   const [capacity, setCapacity] = useState(String(room?.capacity ?? ""));
-  const [resourcesText, setResourcesText] = useState(
+  const [resourcesText, setResourcesText] = useState(() =>
     (room?.resources ?? room?.resourceIds ?? []).join(", "),
   );
   const [formError, setFormError] = useState<string | null>(null);
