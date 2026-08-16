@@ -204,7 +204,3 @@ export function WorkspaceEmptyState({
     </div>
   );
 }
-
-export const workspaceClassNames = {
-  page: styles.page,
-} as const;

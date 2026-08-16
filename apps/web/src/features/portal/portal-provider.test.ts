@@ -9,7 +9,7 @@ import {
   portalViewAfterLoadFailure,
   portalViewMatchesSelection,
   profileAssetBelongsToPortalContext,
-} from "./portal-provider";
+} from "./portal-provider-model";
 import type {
   PortalAsset,
   PortalContext,

@@ -11,13 +11,7 @@ import {
 } from "react";
 import styles from "../../styles/design-system.module.css";
 import { cx } from "./class-names";
-
-export interface SearchableSelectOption {
-  value: string;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-}
+import { filterOptions, type SearchableSelectOption } from "./searchable-select-logic";
 
 export interface SearchableSelectProps {
   options: readonly SearchableSelectOption[];
@@ -36,24 +30,6 @@ export interface SearchableSelectProps {
   required?: boolean;
   disabled?: boolean;
   className?: string;
-}
-
-function normalize(value: string): string {
-  return value.trim().toLocaleLowerCase();
-}
-
-export function filterOptions(
-  options: readonly SearchableSelectOption[],
-  query: string,
-): SearchableSelectOption[] {
-  const normalizedQuery = normalize(query);
-  if (!normalizedQuery) {
-    return [...options];
-  }
-
-  return options.filter((option) =>
-    normalize(`${option.label} ${option.description ?? ""}`).includes(normalizedQuery),
-  );
 }
 
 function nextEnabledIndex(

@@ -2,25 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { useOrganizerOrganizationId } from "./admin-shell";
 import {
-  organizationEventsHref,
-  organizationOverviewHref,
-  useOrganizerOrganizationId,
-} from "./admin-shell";
-
-export type OrganizerRouteResolverDestination = "events" | "overview";
-
-export function organizerRouteResolverHref(
-  organizationId: string,
-  destination: OrganizerRouteResolverDestination,
-  createEvent = false,
-): string {
-  const href =
-    destination === "events"
-      ? organizationEventsHref(organizationId)
-      : organizationOverviewHref(organizationId);
-  return destination === "events" && createEvent ? `${href}?create=1` : href;
-}
+  organizerRouteResolverHref,
+  type OrganizerRouteResolverDestination,
+} from "./organizer-route-resolver-model";
 
 export function OrganizerRouteResolver({
   createEvent = false,

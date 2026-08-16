@@ -11,12 +11,13 @@ import {
 } from "./api";
 import {
   completeMemberSetup,
-  MemberSetup,
   MemberSetupActivatedSignInRequiredError,
   memberSetupPasswordIssues,
   setupUrlWithoutToken,
-} from "./member-setup";
-import { inviteRolesForOrganization, MemberWorkspace } from "./member-workspace";
+} from "./member-setup-model";
+import { MemberSetup } from "./member-setup";
+import { inviteRolesForOrganization } from "./member-workspace-model";
+import { MemberWorkspace } from "./member-workspace";
 import { OrganizationSettingsWorkspace } from "./organization-settings-workspace";
 
 const owner: OrganizationMember = {

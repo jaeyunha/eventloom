@@ -47,6 +47,7 @@ import {
   memberRoles,
   type OrganizationMember,
 } from "./api";
+import { inviteRolesForOrganization } from "./member-workspace-model";
 import styles from "./member-workspace.module.css";
 
 export interface MemberWorkspaceProps {
@@ -162,12 +163,6 @@ function roleLabel(role: MemberRole): string {
   if (role === "reviewer") return "Evaluator";
   if (role === "admin") return "Organization admin";
   return "Organization owner";
-}
-
-const reviewerOnlyInviteRoles = ["reviewer"] as const;
-
-export function inviteRolesForOrganization(role: MemberRole | undefined): readonly MemberRole[] {
-  return role === "owner" ? memberRoles : reviewerOnlyInviteRoles;
 }
 
 function errorMessage(reason: unknown): string {

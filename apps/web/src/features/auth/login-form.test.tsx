@@ -1,16 +1,16 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { LoginForm } from "./login-form";
 import {
   createLoginApi,
   getLoginCallbackUrl,
-  LoginForm,
   LoginRequestError,
   resolveLoginConfig,
   resolveLoginLandingRoute,
   resolveLoginWorkspace,
   signInAndRedirect,
-} from "./login-form";
+} from "./login-form-model";
 import { safeLoginReturnTo } from "./return-path";
 
 const API_ORIGIN = "https://api.example.com";

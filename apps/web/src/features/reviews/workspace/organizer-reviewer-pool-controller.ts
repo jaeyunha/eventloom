@@ -9,7 +9,7 @@ import {
   type ReviewerPool,
 } from "../../members/api";
 import { browserSameOrigin } from "./model-browser-same-origin";
-import { buildReviewerPoolInput, type ReviewerPoolDraft } from "./organizer-reviewer-pool-panel";
+import { buildReviewerPoolInput, type ReviewerPoolDraft } from "./organizer-reviewer-pool-model";
 
 interface OrganizerReviewerPoolOptions {
   readonly baseUrl: string;

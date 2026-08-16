@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { shouldRenderAdminShell } from "./admin-shell";
+import { shouldRenderAdminShell } from "./admin-shell-auth";
 import { signOutAdminSession } from "./admin-shell-controller";
 
 describe("organizer shell authentication boundary", () => {

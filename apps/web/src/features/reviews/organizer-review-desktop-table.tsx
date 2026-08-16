@@ -14,9 +14,9 @@ import {
   Attention,
   ReviewAction,
   ReviewerSummary,
-  reviewStatus,
   SubmissionIdentity,
 } from "./organizer-review-row-parts";
+import { reviewStatus } from "./organizer-review-status";
 export function OrganizerReviewDesktopTable({
   controller,
 }: Readonly<{ controller: OrganizerReviewOverviewController }>) {

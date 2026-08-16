@@ -14,29 +14,27 @@ import {
   qualifiedEventContext,
   sessionHasOrganizerMembership,
 } from "./admin-shell";
+import { OrganizerEventsView, OrganizerOverviewView } from "./organizer-overview";
 import {
-  calendarMonthCells,
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
-  eventIntersectsCalendarDate,
   eventStatusClass,
   getCalendarMonthCells,
   initialCalendarMonth,
   normalizeOrganizerEventSlug,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
-  OrganizerEventsView,
-  type OrganizerOverviewActivityData,
-  type OrganizerOverviewCoreData,
-  OrganizerOverviewView,
+  organizerEventIntersectsCalendarDate,
   organizerEventMinimumDateTimeLocal,
   parseOrganizerEventsResponse,
   parseOrganizerOverviewActivityResponse,
+  type OrganizerOverviewActivityData,
+  type OrganizerOverviewCoreData,
   parseOrganizerOverviewCoreResponse,
   resolveOrganizerOverviewConfig,
   validateOrganizerEventForm,
-} from "./organizer-overview";
-import { organizerRouteResolverHref } from "./organizer-route-resolver";
+} from "./organizer-overview-model";
+import { organizerRouteResolverHref } from "./organizer-route-resolver-model";
 
 const mockedPathname = vi.hoisted(() => ({ value: "/admin" }));
 const mockedRouter = vi.hoisted(() => ({ push: vi.fn() }));
@@ -378,7 +376,7 @@ describe("organizer overview", () => {
     expect(cells).toHaveLength(42);
     expect(cells[0]?.dateKey).toBe("2026-02-01");
     expect(cells[41]?.dateKey).toBe("2026-03-14");
-    expect(calendarMonthCells(new Date(2026, 1, 1))).toHaveLength(42);
+    expect(getCalendarMonthCells(new Date(2026, 1, 1))).toHaveLength(42);
   });
 
   it("places multi-day events by checking each visible date and ignores invalid spans", () => {
@@ -386,19 +384,19 @@ describe("organizer overview", () => {
       startsAt: "2026-02-28",
       endsAt: "2026-03-02",
     };
-    expect(eventIntersectsCalendarDate(event, new Date(2026, 1, 28))).toBe(true);
-    expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 1))).toBe(true);
-    expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 2))).toBe(true);
-    expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 3))).toBe(false);
+    expect(organizerEventIntersectsCalendarDate(event, new Date(2026, 1, 28))).toBe(true);
+    expect(organizerEventIntersectsCalendarDate(event, new Date(2026, 2, 1))).toBe(true);
+    expect(organizerEventIntersectsCalendarDate(event, new Date(2026, 2, 2))).toBe(true);
+    expect(organizerEventIntersectsCalendarDate(event, new Date(2026, 2, 3))).toBe(false);
     const individualDatesEvent = {
       startsAt: "2026-09-17T16:00:00.000Z",
       endsAt: "2026-09-20T00:00:00.000Z",
       scheduleDates: ["2026-09-17", "2026-09-19"],
     };
-    expect(eventIntersectsCalendarDate(individualDatesEvent, "2026-09-18")).toBe(false);
-    expect(eventIntersectsCalendarDate(individualDatesEvent, "2026-09-19")).toBe(true);
+    expect(organizerEventIntersectsCalendarDate(individualDatesEvent, "2026-09-18")).toBe(false);
+    expect(organizerEventIntersectsCalendarDate(individualDatesEvent, "2026-09-19")).toBe(true);
     expect(
-      eventIntersectsCalendarDate(
+      organizerEventIntersectsCalendarDate(
         { startsAt: "not-a-date", endsAt: "2026-03-02T01:00:00.000Z" },
         new Date(2026, 2, 1),
       ),

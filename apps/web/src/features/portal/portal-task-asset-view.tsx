@@ -6,8 +6,8 @@ import { WorkspaceFormSection, WorkspaceState } from "../../components/workspace
 import { assetPointerLabels } from "./portal-assets";
 import { usePortal } from "./portal-provider";
 import styles from "./portal-task-assets.module.css";
-import { assetVersionId, commentsForAsset, type TaskAssetResolution } from "./portal-tasks";
-import { formatPortalDate, formatPortalFileSize, portalAssetStateLabel } from "./portal-ui";
+import { assetVersionId, commentsForAsset, type TaskAssetResolution } from "./portal-task-assets";
+import { formatPortalDate, formatPortalFileSize, portalAssetStateLabel } from "./portal-ui-model";
 import type { PortalAsset, PortalTask } from "./types";
 
 export function PortalTaskAssetView({

@@ -7,13 +7,13 @@ import { WorkspaceState } from "@/components/workspace";
 import { AssetDetails } from "./portal-asset-details";
 import { EventGuideWorkspaceView } from "./portal-event-guide";
 import { type FilesWorkspaceUpload, FilesWorkspaceView } from "./portal-files-workspace";
-import { portalContextLabel, usePortal } from "./portal-provider";
-import { safePublishedUrl } from "./portal-published-content";
+import { portalContextLabel } from "./portal-provider-model";
+import { usePortal } from "./portal-provider";
+import { safePublishedUrl } from "./portal-published-content-model";
 import { participantDashboardHref } from "./participant-dashboard-model";
 import { SessionsWorkspaceView } from "./portal-sessions-workspace";
 import styles from "./portal-workspace.module.css";
 
-export { groupPortalAssetVersions } from "./portal-assets";
 export type { PortalAssetVersionFamily } from "./portal-assets";
 export type { EventGuideWorkspaceViewProps } from "./portal-event-guide";
 export { EventGuideWorkspaceView } from "./portal-event-guide";

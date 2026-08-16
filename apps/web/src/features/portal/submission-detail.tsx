@@ -12,12 +12,12 @@ import {
 } from "./portal-submission-model";
 import {
   EmptyState,
-  formatPortalDate,
   PageHeading,
   PortalContentState,
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
+import { formatPortalDate } from "./portal-ui-model";
 import { SubmissionAnswers, SubmissionParticipants } from "./submission-detail-sections";
 import type { PortalSubmissionStatus } from "./types";
 

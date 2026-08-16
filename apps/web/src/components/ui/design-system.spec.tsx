@@ -6,9 +6,11 @@ import { AppShell, SidebarNavigation } from "../layout";
 import { DataTable } from "./data-table";
 import { Field, FieldDescription, FieldError, FieldLabel } from "./field";
 import { Input } from "./input";
-import { applyRichTextCommand } from "./rich-text";
-import { filterOptions, SearchableSelect } from "./searchable-select";
-import { getStepState, Stepper } from "./stepper";
+import { applyRichTextCommand } from "./rich-text-logic";
+import { filterOptions } from "./searchable-select-logic";
+import { SearchableSelect } from "./searchable-select";
+import { getStepState } from "./stepper-logic";
+import { Stepper } from "./stepper";
 
 describe("design system accessibility", () => {
   it("restricts Tailwind source scanning to runtime web source", () => {

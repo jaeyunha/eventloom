@@ -4,26 +4,28 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, type PortalApi, validatePortalSocialUrl } from "./api";
-import { isPortalGenerationCurrent, loadPortalStartup, PortalProvider } from "./portal-provider";
+import { isPortalGenerationCurrent, loadPortalStartup } from "./portal-provider-model";
+import { PortalProvider } from "./portal-provider";
 import {
-  formatPortalFileSize,
   NoParticipantWorkspaceState,
   PageHeading,
   PortalFrame,
   PortalStaleDataNotice,
   PortalUnavailableState,
   Progress,
-  portalAssetStateLabel,
-  portalContentAvailability,
-  portalContentMode,
-  portalNavigation,
-  portalNavigationItemActive,
-  portalRouteAuthorized,
   SubmissionStatusBadge,
-  signOutAndRedirect,
   TaskStatusBadge,
 } from "./portal-ui";
-import { AssetDetails, groupPortalAssetVersions } from "./portal-workspace";
+import { portalContentMode, portalRouteAuthorized, signOutAndRedirect } from "./portal-shell-model";
+import {
+  formatPortalFileSize,
+  portalAssetStateLabel,
+  portalContentAvailability,
+  portalNavigation,
+  portalNavigationItemActive,
+} from "./portal-ui-model";
+import { groupPortalAssetVersions } from "./portal-assets";
+import { AssetDetails } from "./portal-workspace";
 import { SubmissionAnswers, SubmissionParticipants } from "./submission-detail";
 import type { PortalAsset, PortalContext, PortalProfile, PortalView } from "./types";
 

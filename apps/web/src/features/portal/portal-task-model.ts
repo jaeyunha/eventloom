@@ -1,6 +1,6 @@
 import { formatUploadMimeTypes } from "@eventloom/contracts";
 import { portalSubmissionIdsMatch } from "./model";
-import { formatPortalFileSize } from "./portal-ui";
+import { formatPortalFileSize } from "./portal-ui-model";
 import type { PortalProfile, PortalSubmission, PortalTask } from "./types";
 
 type RuntimeRecord = Record<string, unknown>;

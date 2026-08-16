@@ -7,8 +7,8 @@ import {
   WorkspaceBreadcrumb,
   WorkspaceHeader,
   WorkspaceMetaItem,
-  workspaceClassNames,
 } from "@/components/workspace/workspace-ui";
+import { workspaceClassNames } from "@/components/workspace/workspace-ui-model";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { Button } from "../../components/ui";
 import {

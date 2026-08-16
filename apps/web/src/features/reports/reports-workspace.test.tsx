@@ -5,14 +5,16 @@ import { createReportsApi, type ReportDefinition, type ReportRun } from "./api";
 import {
   DeleteReportDialog,
   DirtySelectionDialog,
-  normalizeDraft,
-  REPORT_DIALOG_COPY,
-  REPORT_FIELD_ALLOWLIST,
   ReportPreview,
   ReportsWorkspace,
   ReportsWorkspaceStatus,
   UnavailableState,
 } from "./reports-workspace";
+import {
+  normalizeDraft,
+  REPORT_DIALOG_COPY,
+  REPORT_FIELD_ALLOWLIST,
+} from "./reports-workspace-model";
 
 const definition: ReportDefinition = {
   id: "definition-1",

@@ -5,7 +5,7 @@ import {
   firstInvalidFieldId,
   responseFieldErrors,
   returnedOrganizerFeedback,
-} from "./portal-task-response";
+} from "./portal-task-response-model";
 import { PortalTaskResponseField } from "./portal-task-response-field";
 import type { PortalFormField } from "./types";
 

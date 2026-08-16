@@ -2,6 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ReviewDataNotice,
+  SubmissionDetailWorkspace,
+  SubmissionListWorkspace,
+} from "./submission-workspace";
+import {
   decisionNotificationSummary,
   enrichCanonicalSubmission,
   getAcceptedHandoffMetadata,
@@ -13,13 +18,10 @@ import {
   loadOrganizerEventName,
   mapCanonicalSubmission,
   mergeCanonicalSubmissionEvaluation,
-  ReviewDataNotice,
-  SubmissionDetailWorkspace,
-  SubmissionListWorkspace,
   submissionListState,
   submissionLoadErrorMessage,
   submissionLoadFailure,
-} from "./submission-workspace";
+} from "./submission-workspace-model";
 
 describe("review data notices", () => {
   it("treats a missing plan as setup guidance instead of a retryable error", () => {
