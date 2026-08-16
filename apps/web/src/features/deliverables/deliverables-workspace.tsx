@@ -2,7 +2,15 @@
 
 import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -3038,21 +3046,29 @@ export function DeliverablesWorkspace({
     mode,
     epoch: 0,
   });
-  if (
-    scopeRef.current.api !== api ||
-    scopeRef.current.eventId !== eventId ||
-    scopeRef.current.organizationId !== organizationId ||
-    scopeRef.current.mode !== mode
-  ) {
-    scopeRef.current = {
+  const currentScope = useMemo<DeliverablesWorkspaceScope>(() => {
+    const previousScope = scopeRef.current;
+    if (
+      previousScope.api === api &&
+      previousScope.eventId === eventId &&
+      previousScope.organizationId === organizationId &&
+      previousScope.mode === mode
+    ) {
+      return previousScope;
+    }
+    return {
       api,
       eventId,
       organizationId,
       mode,
-      epoch: scopeRef.current.epoch + 1,
+      epoch: previousScope.epoch + 1,
     };
-  }
-  const currentScope = scopeRef.current;
+  }, [api, eventId, mode, organizationId]);
+    };
+  }, [api, eventId, organizationId]);
+  useLayoutEffect(() => {
+    scopeRef.current = currentScope;
+  }, [currentScope]);
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
     seededCoreData?.sessions ?? [],
   );
@@ -3088,7 +3104,9 @@ export function DeliverablesWorkspace({
   const [sessionHistoryKey, setSessionHistoryKey] = useState<string | null>(null);
   const sessionHistoryCacheRef = useRef<DeliverablesSessionHistoryCache>(new Map());
   const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
-  selectedAssetIdRef.current = selectedAssetId;
+  useLayoutEffect(() => {
+    selectedAssetIdRef.current = selectedAssetId;
+  }, [selectedAssetId]);
   const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
   const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
   const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
