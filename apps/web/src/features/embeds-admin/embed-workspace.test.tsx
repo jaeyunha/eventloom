@@ -1,13 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { EmbedWorkspaceView } from "./embed-workspace";
 import {
   createEmbedWorkspaceApi,
   DEFAULT_EMBED_ACCENT,
   EMBED_WIDGETS,
   type EmbedEventRecord,
   type EmbedPublicationMetadata,
-  EmbedWorkspaceView,
   iframeSnippet,
   normalizeEmbedSlug,
   parseEmbedPublicationResponse,
@@ -15,7 +15,7 @@ import {
   publicEmbedUrl,
   scriptSnippet,
   verifyEmbedPublication,
-} from "./embed-workspace";
+} from "./embed-workspace-model";
 
 const agenda = EMBED_WIDGETS.find((widget) => widget.id === "agenda");
 const gallery = EMBED_WIDGETS.find((widget) => widget.id === "gallery");
@@ -355,7 +355,7 @@ describe("embed publication refresh verification", () => {
 });
 
 describe("embed workspace view", () => {
-  it("renders server configurations with explicit enabled controls and privacy boundary copy", () => {
+  it("renders server configurations with explicit enabled controls and public-data safeguards", () => {
     const markup = renderToStaticMarkup(
       createElement(EmbedWorkspaceView, {
         organizationId: "org-1",
@@ -368,21 +368,21 @@ describe("embed workspace view", () => {
       }),
     );
 
-    expect(markup).toContain("Choose or save a configuration");
     expect(markup).toContain("Main schedule");
     expect(markup).toContain("Disable Main schedule");
     expect(markup).toContain("Layout");
-    expect(markup).toContain("Custom CSS stays in host markup");
     expect(markup).toContain("Sessions List");
     expect(markup).toContain("Speakers List");
     expect(markup).toContain("Agenda");
     expect(markup).toContain("Schedule Itinerary");
     expect(markup).toContain("Speaker Gallery");
     expect(markup).toContain("Accent color");
-    expect(markup).toContain("Live published preview");
     expect(markup).toContain("Copy iframe code");
-    expect(markup).toContain("Public boundary");
-    expect(markup).toContain("Publication truth");
+    expect(markup).toContain("Published data only");
+    expect(markup).toContain('aria-label="Widget setup"');
+    expect(markup).toContain('aria-label="Widget preview studio"');
+    expect(markup).toContain('aria-label="Publication status"');
+    expect(markup).toContain("<iframe");
     expect(markup).toContain("Draft event");
     expect(markup).toContain("Served program revision");
     expect(markup).toContain("Publication state");
@@ -404,9 +404,8 @@ describe("embed workspace view", () => {
       }),
     );
 
-    expect(markup).toContain("Preview unavailable");
+    expect(markup).toContain('data-slot="empty"');
     expect(markup).not.toContain("<iframe");
-    expect(markup).not.toContain("Copy iframe code");
     expect(markup).not.toContain("stale-summit-2025");
   });
 
@@ -440,14 +439,13 @@ describe("embed workspace view", () => {
       }),
     );
 
-    expect(markup).toContain("No published program revision");
-    expect(markup).toContain("Preview unavailable");
-    expect(markup).toContain("Open Agenda validation and publish");
+    expect(markup).toContain('data-slot="empty"');
+    expect(markup).toContain('href="/admin/organizations/org-1/events/event-1/agenda"');
     expect(markup).not.toContain("<iframe");
     expect(markup).not.toContain("Copy iframe code");
   });
 
-  it("labels each lifecycle state and repeats one revision for preview and code", () => {
+  it("uses one served revision for preview and export outputs", () => {
     const markup = renderToStaticMarkup(
       createElement(EmbedWorkspaceView, {
         organizationId: "org-1",
@@ -460,35 +458,39 @@ describe("embed workspace view", () => {
       }),
     );
 
-    expect(markup).toContain("Draft event");
-    expect(markup).toContain("Served program revision");
-    expect(markup).toContain("Publication state");
+    expect(markup).toContain('aria-label="Publication status"');
+    expect(markup).toContain("<iframe");
     expect(markup).toContain("Revision 12");
     expect(markup.match(/Revision 12/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(markup).toContain("Preview and code use this exact published revision.");
   });
 
-  it("keeps the builder in tabs with a collapsible advanced section", () => {
+  it("places one setup surface before the full-width widget studio", () => {
     const markup = renderToStaticMarkup(
       createElement(EmbedWorkspaceView, {
         organizationId: "org-1",
         eventId: "event-1",
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
-        initialConfigurations: [],
+        initialConfigurations: eventRecord.embedConfigurations ?? [],
         publicOrigin: "https://eventloom.example",
         publication,
       }),
     );
 
-    expect(markup).toContain('role="tablist"');
-    expect(markup).toContain("1 Choose and save");
-    expect(markup).toContain("2 Configure widget");
-    expect(markup).toContain("Advanced public options");
+    const setupIndex = markup.indexOf('aria-label="Widget setup"');
+    const studioIndex = markup.indexOf('aria-label="Widget preview studio"');
+    const widgetMenuIndex = markup.indexOf('aria-label="Public widget"');
+    const previewIndex = markup.indexOf("<iframe");
+
+    expect(setupIndex).toBeGreaterThanOrEqual(0);
+    expect(setupIndex).toBeLessThan(studioIndex);
+    expect(studioIndex).toBeLessThan(widgetMenuIndex);
+    expect(widgetMenuIndex).toBeLessThan(previewIndex);
+    expect(markup).not.toContain('role="tablist"');
     expect(markup).toContain('data-slot="collapsible"');
   });
 
-  it("orders publication, builder, preview, and export as readable workflow stages", () => {
+  it("keeps preview actions and export details inside the widget studio", () => {
     const markup = renderToStaticMarkup(
       createElement(EmbedWorkspaceView, {
         organizationId: "org-1",
@@ -501,14 +503,14 @@ describe("embed workspace view", () => {
       }),
     );
 
-    const publicationIndex = markup.indexOf("Publication truth");
-    const builderIndex = markup.indexOf('aria-label="Embed builder"');
-    const previewIndex = markup.indexOf('aria-label="Live preview workspace"');
+    const studioIndex = markup.indexOf('aria-label="Widget preview studio"');
+    const actionsIndex = markup.indexOf('aria-label="Preview actions"');
+    const previewIndex = markup.indexOf("<iframe");
     const exportIndex = markup.indexOf("Share or embed");
 
-    expect(publicationIndex).toBeGreaterThanOrEqual(0);
-    expect(publicationIndex).toBeLessThan(builderIndex);
-    expect(builderIndex).toBeLessThan(previewIndex);
+    expect(studioIndex).toBeGreaterThanOrEqual(0);
+    expect(studioIndex).toBeLessThan(actionsIndex);
+    expect(actionsIndex).toBeLessThan(previewIndex);
     expect(previewIndex).toBeLessThan(exportIndex);
   });
 });
