@@ -1359,9 +1359,9 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
     return context.json({ data: receipt }, 201);
   });
 
-  app.get("/assets/capabilities/download/:assetId/:token", async (context) => {
+  app.get("/assets/capabilities/download/:capabilityId/:token", async (context) => {
     const object = await dependencies.service.consumeDownloadCapability(
-      context.req.param("assetId"),
+      context.req.param("capabilityId"),
       context.req.param("token"),
     );
     return new Response(object.body, {

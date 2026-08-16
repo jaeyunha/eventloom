@@ -7,8 +7,8 @@ import {
   getLoginCallbackUrl,
   LoginRequestError,
   resolveLoginConfig,
-  resolveLoginLandingRoute,
   resolveLoginWorkspace,
+  safeLoginLandingRoute,
   signInAndRedirect,
 } from "./login-form-model";
 import { safeLoginReturnTo } from "./return-path";
@@ -82,7 +82,7 @@ describe("organizer login", () => {
       `https://app.example.com${accountRoute}`,
     );
     expect(
-      resolveLoginLandingRoute(
+      safeLoginLandingRoute(
         {
           session: { id: "session-1" },
           user: { id: "user-1" },
@@ -266,7 +266,7 @@ describe("organizer login", () => {
     });
     expect(navigate).toHaveBeenLastCalledWith("/portal/tasks?eventId=event-1");
     expect(
-      resolveLoginLandingRoute(
+      safeLoginLandingRoute(
         { memberships: [], speakerGrants: [] },
         "/cfp/organizations/ai-engineer/events/devflow-conf-2027/account",
       ),
@@ -281,17 +281,17 @@ describe("organizer login", () => {
     const organizer = { memberships: [{ role: "owner" as const }], speakerGrants: [] };
     const speaker = { memberships: [], speakerGrants: [{ organizationId: "ai-engineer" }] };
 
-    expect(resolveLoginLandingRoute(reviewer)).toBe("/work");
-    expect(resolveLoginLandingRoute(organizer)).toBe("/work");
-    expect(resolveLoginLandingRoute(speaker)).toBe("/work");
-    expect(resolveLoginLandingRoute(reviewer, "/admin/events")).toBe("/admin/events");
-    expect(resolveLoginLandingRoute(reviewer, "https://evil.example")).toBe("/work");
-    expect(resolveLoginLandingRoute(reviewer, "//evil.example")).toBe("/work");
+    expect(safeLoginLandingRoute(reviewer)).toBe("/work");
+    expect(safeLoginLandingRoute(organizer)).toBe("/work");
+    expect(safeLoginLandingRoute(speaker)).toBe("/work");
+    expect(safeLoginLandingRoute(reviewer, "/admin/events")).toBe("/admin/events");
+    expect(safeLoginLandingRoute(reviewer, "https://evil.example")).toBe("/work");
+    expect(safeLoginLandingRoute(reviewer, "//evil.example")).toBe("/work");
   });
 
   it("fails closed for a missing or malformed authenticated session", () => {
-    expect(() => resolveLoginLandingRoute(null)).toThrow(LoginRequestError);
-    expect(() => resolveLoginLandingRoute({ memberships: "reviewer" })).toThrow(
+    expect(() => safeLoginLandingRoute(null)).toThrow(LoginRequestError);
+    expect(() => safeLoginLandingRoute({ memberships: "reviewer" })).toThrow(
       /verify your account access/i,
     );
   });

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import styles from "../review-workspace.module.css";
 import { AssignmentStatusBadge } from "./assignment-assignment-status-badge";
 import type { ReviewerAssignmentController } from "./assignment-reviewer-assignment-controller";
@@ -23,6 +24,15 @@ export function ReviewerAssignmentEditor({
     replaceAssignment,
   } = controller;
   if (!selectedAssignment) return null;
+  const replacementReviewerOptions: ReactNode[] = [];
+  for (const member of reviewerMembers) {
+    if (member.userId === selectedAssignment.reviewerId) continue;
+    replacementReviewerOptions.push(
+      <option value={member.userId} key={member.userId}>
+        {member.name ?? member.email} · {member.email}
+      </option>,
+    );
+  }
   return (
     <section
       ref={assignmentEditorRef}
@@ -76,13 +86,7 @@ export function ReviewerAssignmentEditor({
               disabled={busyAssignmentId !== null}
             >
               <option value="">Choose verified reviewer</option>
-              {reviewerMembers
-                .filter((member) => member.userId !== selectedAssignment.reviewerId)
-                .map((member) => (
-                  <option value={member.userId} key={member.userId}>
-                    {member.name ?? member.email} · {member.email}
-                  </option>
-                ))}
+              {replacementReviewerOptions}
             </select>
           </div>
           <div className={styles.formField}>

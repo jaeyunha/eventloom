@@ -18,6 +18,9 @@ export interface ReviewerProgressProps {
   baseUrl: string;
   reviewerMembers: readonly OrganizationMember[];
 }
+function keyFor(reviewer: ReviewerProgressSummary): string {
+  return `${reviewer.reviewerId}\u0000${reviewer.roundId}`;
+}
 
 export function useReviewerProgressController({
   seed,
@@ -44,8 +47,6 @@ export function useReviewerProgressController({
   const visibleReviewers = filteredReviewers.slice(0, reviewerRowLimit);
   const visibleOutstanding = visibleReviewers.filter((reviewer) => reviewer.outstanding > 0);
   const reviewerLabel = (reviewerId: string) => reviewerDisplayLabel(reviewerId, reviewerMembers);
-  const keyFor = (reviewer: ReviewerProgressSummary) =>
-    `${reviewer.reviewerId}\u0000${reviewer.roundId}`;
   const selectedOutstanding = outstanding.filter((reviewer) => selected.has(keyFor(reviewer)));
   const selectedVisibleOutstanding = visibleOutstanding.filter((reviewer) =>
     selected.has(keyFor(reviewer)),
@@ -93,39 +94,39 @@ export function useReviewerProgressController({
     );
     try {
       const byRound = new Map<string, string[]>();
-      const responseFacts: ReminderDeliveryFact[] = [];
       for (const reviewer of selectedOutstanding) {
         const ids = byRound.get(reviewer.roundId) ?? [];
         if (!ids.includes(reviewer.reviewerId)) ids.push(reviewer.reviewerId);
         byRound.set(reviewer.roundId, ids);
       }
-      for (const [roundId, reviewerIds] of byRound) {
-        const reviewerIdsToSend = reminderReviewerIdsRequiringSend(
-          deliveryFacts,
-          roundId,
-          reviewerIds,
-        );
-        responseFacts.push(
-          ...deliveryFacts.filter(
+      const responseFactsByRound = await Promise.all(
+        [...byRound].map(async ([roundId, reviewerIds]) => {
+          const existingFacts = deliveryFacts.filter(
             (fact) =>
               fact.roundId === roundId &&
               typeof fact.reviewerId === "string" &&
               reviewerIds.includes(fact.reviewerId) &&
               fact.status !== undefined &&
               ["queued", "processing", "delivered"].includes(fact.status.toLowerCase()),
-          ),
-        );
-        if (reviewerIdsToSend.length === 0) continue;
-        const result = await evaluationRequest<ReminderDeliveryResponse>(
-          baseUrl,
-          `/plans/${encodeURIComponent(seed.planId)}/reminders`,
-          {
-            method: "POST",
-            body: JSON.stringify({ roundId, reviewerIds: [...reviewerIdsToSend].sort() }),
-          },
-        );
-        responseFacts.push(...(result.facts ?? []));
-      }
+          );
+          const reviewerIdsToSend = reminderReviewerIdsRequiringSend(
+            deliveryFacts,
+            roundId,
+            reviewerIds,
+          );
+          if (reviewerIdsToSend.length === 0) return existingFacts;
+          const result = await evaluationRequest<ReminderDeliveryResponse>(
+            baseUrl,
+            `/plans/${encodeURIComponent(seed.planId)}/reminders`,
+            {
+              method: "POST",
+              body: JSON.stringify({ roundId, reviewerIds: [...reviewerIdsToSend].sort() }),
+            },
+          );
+          return [...existingFacts, ...(result.facts ?? [])];
+        }),
+      );
+      const responseFacts = responseFactsByRound.flat();
       setDeliveryFacts((current) => {
         const responseIds = new Set(responseFacts.map((fact) => fact.outboxId));
         return [...responseFacts, ...current.filter((fact) => !responseIds.has(fact.outboxId))];

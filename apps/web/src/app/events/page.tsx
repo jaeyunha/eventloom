@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ProductNavigation } from "@/components/product-shell/product-navigation";
 import {
   type PublicEventDirectoryResponse,
@@ -63,9 +64,9 @@ export default async function PublicEventsPage() {
           <strong>Eventloom</strong>
           <span>Public programs and open calls, organized by event.</span>
         </div>
-        <a className="home-inline-link" href="/">
+        <Link className="home-inline-link" href="/">
           Back to home
-        </a>
+        </Link>
       </footer>
     </div>
   );

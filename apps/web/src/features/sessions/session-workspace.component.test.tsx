@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
 import { createNavigationDataCache } from "@/lib/navigation-data-cache";
 import type { SessionRecord, SessionsApi } from "./api";
+import { SessionsWorkspaceView } from "./session-workspace";
 import {
   loadSessionsWorkspaceBundle,
   type SessionsWorkspaceCacheBundle,
-  SessionsWorkspaceView,
   sessionsWorkspaceCacheKey,
   sessionsWorkspaceCacheTags,
-} from "./session-workspace";
+} from "./session-workspace-model";
 
 const session: SessionRecord = {
   id: "session-1",

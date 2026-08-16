@@ -1,8 +1,11 @@
 "use client";
 
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
-import { Button } from "../../components/ui";
-import { WorkspaceActionBar, WorkspaceFormSection } from "../../components/workspace";
+import { Button } from "../../components/ui/button";
+import {
+  WorkspaceActionBar,
+  WorkspaceFormSection,
+} from "../../components/workspace/workspace-state";
 import { usePortal } from "./portal-provider";
 import styles from "./portal-task-form.module.css";
 import { PortalTaskResponseField } from "./portal-task-response-field";

@@ -129,10 +129,11 @@ export function getTaskUploadPolicy(task: PortalTask): TaskUploadPolicy {
   const record = asTaskRecord(task);
   const rawTypes = record?.allowedMimeTypes;
   const allowedMimeTypes = Array.isArray(rawTypes)
-    ? rawTypes
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean)
+    ? rawTypes.flatMap((value): string[] => {
+        if (typeof value !== "string") return [];
+        const trimmed = value.trim();
+        return trimmed ? [trimmed] : [];
+      })
     : [];
   if (
     !Array.isArray(rawTypes) ||

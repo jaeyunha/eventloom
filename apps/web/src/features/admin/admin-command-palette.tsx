@@ -43,6 +43,7 @@ export function AdminCommandPalette({
 }>) {
   const router = useRouter();
   const requestController = useRef<AbortController | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [eventState, setEventState] = useState<AdminCommandEventState>({ status: "idle" });
   const events = eventState.status === "loaded" ? eventState.events : noCommandEvents;
@@ -142,6 +143,10 @@ export function AdminCommandPalette({
         aria-label="Search events and pages"
         className={styles.dialog}
         showCloseButton={false}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          searchInputRef.current?.focus();
+        }}
       >
         <DialogHeader className="sr-only">
           <DialogTitle>Search events and pages</DialogTitle>
@@ -159,7 +164,7 @@ export function AdminCommandPalette({
             aria-controls="admin-command-results"
             aria-expanded="true"
             aria-haspopup="listbox"
-            autoFocus
+            ref={searchInputRef}
             placeholder="Search events and pages…"
             role="combobox"
             type="search"

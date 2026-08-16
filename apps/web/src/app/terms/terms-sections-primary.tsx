@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { LegalSection } from "@/components/legal/legal-document";
 
 export const termsSectionsPrimary: readonly LegalSection[] = [
@@ -164,7 +165,7 @@ export const termsSectionsPrimary: readonly LegalSection[] = [
     title: "9. Privacy and security",
     body: (
       <p>
-        Our <a href="/privacy">Privacy Policy</a> explains how we handle personal information.
+        Our <Link href="/privacy">Privacy Policy</Link> explains how we handle personal information.
         Organizations are responsible for configuring access, obtaining required notices and
         consents, and using Eventloom consistently with applicable privacy and employment laws. If
         we enter a data processing addendum or order form with you, that document controls for its

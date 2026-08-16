@@ -1399,6 +1399,7 @@
   display: grid;
   align-content: start;
   gap: 1.4rem;
+  min-width: 0;
   padding: 1.05rem;
   border-right: 1px solid var(--admin-border);
   background: var(--card);
@@ -1412,13 +1413,18 @@
 .statusLegend {
   display: grid;
   gap: 0.25rem;
+  min-width: 0;
   padding: 0;
   margin: 0;
   list-style: none;
 }
+.upcomingList li {
+  min-width: 0;
+}
 .upcomingLink {
   display: grid;
   gap: 0.15rem;
+  min-width: 0;
   padding: 0.52rem 0;
   color: var(--admin-ink);
   text-decoration: none;
@@ -1434,10 +1440,11 @@
   white-space: nowrap;
 }
 .upcomingTitleRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem;
+  min-width: 0;
 }
 .eventIdentifier {
   overflow: hidden;
@@ -1450,6 +1457,7 @@
 .upcomingLink > span:not(.upcomingTitleRow) {
   color: var(--admin-muted);
   font-size: 0.6875rem;
+  overflow-wrap: anywhere;
 }
 .statusLegend li {
   display: grid;

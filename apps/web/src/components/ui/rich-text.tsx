@@ -18,7 +18,7 @@ const commands: ReadonlyArray<{
   { command: "link", label: "Insert link", symbol: "↗" },
 ];
 
-export interface RichTextShellProps {
+interface RichTextShellProps {
   children: ReactNode;
   onCommand?: (command: RichTextCommand) => void;
   disabled?: boolean;
@@ -27,7 +27,7 @@ export interface RichTextShellProps {
   footer?: ReactNode;
 }
 
-export function RichTextShell({
+function RichTextShell({
   children,
   onCommand,
   disabled = false,

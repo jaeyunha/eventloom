@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { LandingHeader } from "./landing-header";
 import { LandingHero } from "./landing-hero";
 import { LandingInteractions } from "./landing-interactions";
@@ -8,9 +9,9 @@ import { LandingWorkspacesSection } from "./landing-workspaces-section";
 export function LandingPage() {
   return (
     <div className="shell" id="eventloom-landing">
-      <a className="skip-link" href="#main">
+      <Link className="skip-link" href="#main">
         Skip to main content
-      </a>
+      </Link>
       <LandingHeader />
       <main id="main" tabIndex={-1}>
         <LandingHero />
@@ -23,10 +24,10 @@ export function LandingPage() {
           <strong>Eventloom</strong>
           <span>Open-source program operations for conference teams.</span>
           <nav className="footer-links" aria-label="Footer navigation">
-            <a href="/events">Events</a>
-            <a href="/login">Sign in</a>
-            <a href="/privacy">Privacy</a>
-            <a href="/terms">Terms</a>
+            <Link href="/events">Events</Link>
+            <Link href="/login">Sign in</Link>
+            <Link href="/privacy">Privacy</Link>
+            <Link href="/terms">Terms</Link>
             <a href="https://github.com/jaeyunha/open-sessionboard">GitHub</a>
           </nav>
           <span>AGPL-3.0-or-later</span>

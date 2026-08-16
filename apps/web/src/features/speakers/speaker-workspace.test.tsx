@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createSpeakerApi,
   ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
@@ -1234,21 +1234,25 @@ describe("speaker workspace", () => {
     const readyMarkup = renderToStaticMarkup(
       createElement(SpeakerAssetDownload, {
         asset: readyAsset,
-        downloadUrl: null,
         busy: false,
         disabled: false,
         error: null,
-        onRequest: (asset: SpeakerAsset) => requests.push(asset),
+        onRequest: async (asset: SpeakerAsset) => {
+          requests.push(asset);
+          return null;
+        },
       }),
     );
     const pendingMarkup = renderToStaticMarkup(
       createElement(SpeakerAssetDownload, {
         asset: pendingAsset,
-        downloadUrl: null,
         busy: false,
         disabled: false,
         error: null,
-        onRequest: (asset: SpeakerAsset) => requests.push(asset),
+        onRequest: async (asset: SpeakerAsset) => {
+          requests.push(asset);
+          return null;
+        },
       }),
     );
 
@@ -1283,36 +1287,69 @@ describe("speaker workspace", () => {
     expect(controls.match(/disabled=""/g)).toHaveLength(1);
   });
 
-  it("requests exactly one grant when the ready-asset button is clicked", () => {
-    const requests: SpeakerAsset[] = [];
-    const rendered = SpeakerAssetDownload({
-      asset: readyAsset,
-      downloadUrl: null,
-      busy: false,
-      disabled: false,
-      error: null,
-      onRequest: (asset) => requests.push(asset),
-    });
-    const fragment = rendered as {
-      props?: {
-        children?: unknown;
-      };
+  it("requests a fresh grant and navigates from the same click without rendering its URL", async () => {
+    const freshGrant = {
+      url: "/api/speaker/assets/capabilities/download/asset-1/fresh-capability",
+      expiresAt: "2026-08-10T12:02:00.000Z",
     };
-    const children = Array.isArray(fragment.props?.children)
-      ? fragment.props.children
-      : [fragment.props?.children];
-    const button = children.find(
-      (child): child is { props: { onClick?: () => void; type?: string } } =>
-        typeof child === "object" &&
-        child !== null &&
-        "props" in child &&
-        (child as { props?: { type?: string } }).props?.type === "button",
-    );
-    const onClick = button?.props.onClick;
-    if (onClick === undefined) throw new Error("Expected a ready-asset download button.");
-    onClick();
+    const requestGrant = vi.fn(async (_asset: SpeakerAsset) => freshGrant.url);
+    const assign = vi.fn();
+    vi.stubGlobal("window", { location: { assign } });
 
-    expect(requests).toEqual([readyAsset]);
+    try {
+      const rendered = SpeakerAssetDownload({
+        asset: readyAsset,
+        busy: false,
+        disabled: false,
+        error: null,
+        onRequest: requestGrant,
+      });
+      const fragment = rendered as {
+        props?: {
+          children?: unknown;
+        };
+      };
+      const children = Array.isArray(fragment.props?.children)
+        ? fragment.props.children
+        : [fragment.props?.children];
+      const button = children.find(
+        (
+          child,
+        ): child is {
+          props: {
+            onClick?: () => void | Promise<void>;
+            type?: string;
+          };
+        } =>
+          typeof child === "object" &&
+          child !== null &&
+          "props" in child &&
+          (child as { props?: { type?: string } }).props?.type === "button",
+      );
+      const onClick = button?.props.onClick;
+      if (onClick === undefined) throw new Error("Expected a ready-asset download button.");
+
+      await onClick();
+
+      expect(requestGrant).toHaveBeenCalledTimes(1);
+      expect(requestGrant).toHaveBeenCalledWith(readyAsset);
+      expect(assign).toHaveBeenCalledTimes(1);
+      expect(assign).toHaveBeenCalledWith(freshGrant.url);
+
+      const postGrantMarkup = renderToStaticMarkup(
+        createElement(SpeakerAssetDownload, {
+          asset: readyAsset,
+          busy: false,
+          disabled: false,
+          error: null,
+          onRequest: requestGrant,
+        }),
+      );
+      expect(postGrantMarkup).not.toContain(freshGrant.url);
+      expect(postGrantMarkup).not.toContain("<a");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
   it("renders the roster controls and keeps private storage fields out of the UI", () => {
     const markup = renderToStaticMarkup(

@@ -2,7 +2,6 @@
 
 import { ClipboardCheck, LogOut, Presentation, Settings2, Tickets } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/product-shell/theme-toggle";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { AccountAccess, AccountCapability } from "./account-access";
 import { signOutAccount } from "./account-actions";
 import styles from "./account-hub.module.css";
-import { loadAccountAccess } from "./account-hub-loader";
 
 const workspaceCards: readonly {
   capability: AccountCapability;
@@ -124,46 +122,4 @@ export function AccountHubView({ access }: Readonly<{ access: AccountAccess }>) 
       </main>
     </div>
   );
-}
-
-export function AccountHub() {
-  const [access, setAccess] = useState<AccountAccess | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void loadAccountAccess(globalThis.fetch, controller.signal)
-      .then((nextAccess) => {
-        if (nextAccess === null) {
-          window.location.replace("/login?next=%2Fwork");
-          return;
-        }
-        setAccess(nextAccess);
-      })
-      .catch((caught: unknown) => {
-        if (!(caught instanceof DOMException && caught.name === "AbortError")) setError(true);
-      });
-    return () => controller.abort();
-  }, []);
-
-  if (error) {
-    return (
-      <main className={styles.main}>
-        <Alert className={styles.errorState} variant="destructive">
-          <AlertTitle>Account access is unavailable</AlertTitle>
-          <AlertDescription>
-            Reload the page to try loading your available work again.
-          </AlertDescription>
-        </Alert>
-      </main>
-    );
-  }
-  if (access === null) {
-    return (
-      <main className={styles.main} aria-busy="true">
-        <p className={styles.eyebrow}>Loading account access</p>
-      </main>
-    );
-  }
-  return <AccountHubView access={access} />;
 }

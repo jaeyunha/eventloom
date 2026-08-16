@@ -12,7 +12,12 @@ import {
 import { PrivateLogisticsSection, PublicProfileSection } from "./portal-profile-sections";
 import type { PortalProfile } from "./types";
 
-vi.mock("../../components/ui", () => {
+vi.mock("../../components/ui/button", () => ({
+  Button: ({ children, ...props }: { children?: ReactNode }) =>
+    createElement("button", { type: "button", ...props }, children),
+}));
+
+vi.mock("../../components/ui/card", () => {
   const element =
     (tag: string) =>
     ({ children, ...props }: { children?: ReactNode }) =>
@@ -23,26 +28,46 @@ vi.mock("../../components/ui", () => {
     CardDescription: element("p"),
     CardHeader: element("div"),
     CardTitle: element("div"),
+  };
+});
+
+vi.mock("../../components/ui/checkbox", () => ({
+  Checkbox: ({
+    checked,
+    onCheckedChange: _onCheckedChange,
+    ...props
+  }: {
+    checked?: boolean;
+    onCheckedChange?: unknown;
+  }) => createElement("input", { ...props, type: "checkbox", checked, readOnly: true }),
+}));
+
+vi.mock("../../components/ui/field", () => {
+  const element =
+    (tag: string) =>
+    ({ children, ...props }: { children?: ReactNode }) =>
+      createElement(tag, props, children);
+  return {
     Field: element("div"),
     FieldDescription: element("p"),
     FieldError: element("div"),
     FieldGroup: element("div"),
     FieldLabel: element("label"),
-    Input: element("input"),
-    Textarea: element("textarea"),
-    TemporalPicker: ({ startValue, endValue }: { startValue: string; endValue: string }) =>
-      createElement("div", { "data-temporal-picker": "range" }, `${startValue}:${endValue}`),
-    Button: element("button"),
-    Checkbox: ({
-      checked,
-      onCheckedChange: _onCheckedChange,
-      ...props
-    }: {
-      checked?: boolean;
-      onCheckedChange?: unknown;
-    }) => createElement("input", { ...props, type: "checkbox", checked, readOnly: true }),
   };
 });
+
+vi.mock("../../components/ui/input", () => ({
+  Input: (props: Record<string, unknown>) => createElement("input", props),
+}));
+
+vi.mock("../../components/ui/textarea", () => ({
+  Textarea: ({ children, ...props }: { children?: ReactNode }) =>
+    createElement("textarea", props, children),
+}));
+vi.mock("../../components/ui/temporal-picker", () => ({
+  TemporalPicker: ({ startValue, endValue }: { startValue: string; endValue: string }) =>
+    createElement("div", { "data-temporal-picker": "range" }, `${startValue}:${endValue}`),
+}));
 
 const profile: PortalProfile = {
   id: "profile-1",

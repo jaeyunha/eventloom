@@ -6,6 +6,22 @@ import type {
   AgendaWorkspaceData,
 } from "./types";
 
+const AGENDA_LOCAL_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  timeZone: "UTC",
+});
+const AGENDA_LOCAL_TIME_FORMATTER = new Intl.DateTimeFormat("en", {
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+const AGENDA_REVISION_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 export interface AgendaDay {
   date: string;
   label: string;
@@ -61,12 +77,7 @@ export function formatLocalDate(value: string): string {
   if (!date) {
     return value;
   }
-  return new Intl.DateTimeFormat("en", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(date);
+  return AGENDA_LOCAL_DATE_FORMATTER.format(date);
 }
 
 export function formatLocalTime(value: string): string {
@@ -74,11 +85,7 @@ export function formatLocalTime(value: string): string {
   if (!date) {
     return value;
   }
-  return new Intl.DateTimeFormat("en", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "UTC",
-  }).format(date);
+  return AGENDA_LOCAL_TIME_FORMATTER.format(date);
 }
 
 export function agendaDays(
@@ -172,8 +179,5 @@ export function formatRevisionTimestamp(value: string): string {
   if (Number.isNaN(date.valueOf())) {
     return "recently";
   }
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return AGENDA_REVISION_TIMESTAMP_FORMATTER.format(date);
 }

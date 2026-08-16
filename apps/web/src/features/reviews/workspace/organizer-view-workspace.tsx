@@ -10,16 +10,18 @@ import type { OrganizerWorkspaceViewController } from "./organizer-view-controll
 import { OrganizerDecisionsPanel } from "./organizer-view-decisions-panel";
 import { OrganizerOverviewPanel } from "./organizer-view-overview-panel";
 import { OrganizerSetupPanel } from "./organizer-view-setup-panel";
+
+const ORGANIZER_REVIEW_TABS = [
+  ["overview", "Overview"],
+  ["setup", "Setup"],
+  ["assignments", "Assignments"],
+  ["decisions", "Results"],
+] as const;
+
 export function OrganizerWorkspaceSurface({
   controller,
 }: Readonly<{ controller: OrganizerWorkspaceViewController }>) {
   const { seed, organizationId, view, setView } = controller;
-  const tabs = [
-    ["overview", "Overview"],
-    ["setup", "Setup"],
-    ["assignments", "Assignments"],
-    ["decisions", "Results"],
-  ] as const;
   return (
     <div className={styles.workspace} id="review-workspace">
       <a className={styles.skipLink} href="#review-content">
@@ -54,7 +56,7 @@ export function OrganizerWorkspaceSurface({
             variant="line"
             aria-label="Review plan sections"
           >
-            {tabs.map(([tabView, label]) => (
+            {ORGANIZER_REVIEW_TABS.map(([tabView, label]) => (
               <TabsTrigger
                 id={`review-tab-${tabView}`}
                 value={tabView}
