@@ -25,12 +25,8 @@ describe("CFP submission window", () => {
     expect(markup.match(/data-cfp-window-value="true"/gu)).toHaveLength(2);
     expect(markup.match(/data-cfp-window-date-group="true"/gu)).toHaveLength(2);
     expect(markup.match(/data-cfp-window-clock-group="true"/gu)).toHaveLength(2);
-    expect(markup).toMatch(
-      /data-cfp-window-date-group="true"[^>]*>Aug 15, 2026<\/span>/u,
-    );
-    expect(markup).toMatch(
-      /data-cfp-window-clock-group="true"[^>]*>4:00 PM PDT<\/span>/u,
-    );
+    expect(markup).toMatch(/data-cfp-window-date-group="true"[^>]*>Aug 15, 2026<\/span>/u);
+    expect(markup).toMatch(/data-cfp-window-clock-group="true"[^>]*>4:00 PM PDT<\/span>/u);
   });
 
   it.each([
