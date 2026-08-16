@@ -1,9 +1,11 @@
 "use client";
 
+import { ListFilter, Search, X } from "lucide-react";
 import Link from "next/link";
+import { Popover } from "radix-ui";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,6 +31,7 @@ import {
   StatusBadge as WorkspaceStatusBadge,
 } from "@/components/workspace/workspace-ui";
 import { useOrganizerEventId } from "./organizer-event-workspace";
+import { SubmissionDetailDrawer } from "./submission-detail-drawer";
 import styles from "./submission-workspace.module.css";
 import {
   ApiRequestError,
@@ -365,12 +368,16 @@ export function SubmissionListWorkspace({
         return sortDirection === "asc" ? result : -result;
       });
   }, [format, search, sortDirection, sortKey, status, submissions, track]);
+  const selectedSubmission =
+    selectedSubmissionId === undefined
+      ? undefined
+      : submissions.find((submission) => submission.id === selectedSubmissionId);
 
   const selectedVisibleCount = filteredSubmissions.filter((submission) =>
     selected.has(submission.id),
   ).length;
-  const filtersActive =
-    search.trim().length > 0 || status !== "all" || track !== "all" || format !== "all";
+  const activeFilterCount =
+    (status === "all" ? 0 : 1) + (track === "all" ? 0 : 1) + (format === "all" ? 0 : 1);
   const allVisibleSelected =
     filteredSubmissions.length > 0 && selectedVisibleCount === filteredSubmissions.length;
 
@@ -478,30 +485,20 @@ export function SubmissionListWorkspace({
         data-layout="submission-review-desk"
         tabIndex={-1}
       >
-        <div
-          className={styles.reviewDesk}
-          data-detail-open={selectedSubmissionId === undefined ? "false" : "true"}
-        >
+        <div className={styles.reviewDesk}>
           <div className={styles.submissionMaster}>
-            <Card
+            <section
               id="submission-list-card"
               className={styles.listPanel}
               aria-labelledby="submission-table-heading"
+              data-submission-collection="true"
             >
-              <CardHeader className={styles.panelHeader}>
-                <CardTitle id="submission-table-heading">
-                  {submissions.length === 0 ? "Submission inbox" : "Submission queue"}
-                </CardTitle>
-                {listState !== "empty" ? (
-                  <p className={styles.mutedText}>
-                    {filteredSubmissions.length} of {submissions.length}
-                    {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
-                  </p>
-                ) : null}
-              </CardHeader>
+              <h2 id="submission-table-heading" className={styles.srOnly}>
+                {submissions.length === 0 ? "Submission inbox" : "Submission queue"}
+              </h2>
 
               {submissions.length > 0 ? (
-                <CardContent className={styles.listContent}>
+                <div className={styles.listContent}>
                   <ReviewDataNotice
                     state={evaluationLoadState}
                     onRetry={() => setEvaluationReloadVersion((current) => current + 1)}
@@ -511,86 +508,161 @@ export function SubmissionListWorkspace({
                           setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
                         })}
                   />
-                  <fieldset className={styles.toolbar} aria-label="Submission filters">
-                    <legend className={styles.srOnly}>Filter submissions</legend>
-                    <label className={styles.toolbarSearch} htmlFor="submission-search">
-                      <span className={styles.srOnly}>Search</span>
-                      <Input
-                        id="submission-search"
-                        type="search"
-                        value={search}
-                        placeholder="Search submissions"
-                        onChange={(event) => setSearch(event.currentTarget.value)}
-                      />
-                    </label>
-                    <div className={styles.toolbarField}>
-                      <span className={styles.srOnly}>Status</span>
-                      <Select
-                        value={status}
-                        onValueChange={(value) => setStatus(value as SubmissionStatus | "all")}
-                      >
-                        <SelectTrigger id="submission-status" aria-label="Filter by status">
-                          <SelectValue placeholder="All statuses" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All statuses</SelectItem>
-                          {Object.entries(statusLabels).map(([value, label]) => (
-                            <SelectItem key={value} value={value}>
-                              {label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                  <div className={styles.toolbar}>
+                    <p className={styles.collectionCount} aria-live="polite">
+                      <span>
+                        {filteredSubmissions.length} of {submissions.length}
+                      </span>
+                      {selectedVisibleCount > 0 ? (
+                        <strong>{selectedVisibleCount} selected</strong>
+                      ) : null}
+                    </p>
+                    <div className={styles.toolbarControls}>
+                      <div className={styles.toolbarSearch}>
+                        <Search aria-hidden="true" />
+                        <label className={styles.srOnly} htmlFor="submission-search">
+                          Search submissions
+                        </label>
+                        <Input
+                          id="submission-search"
+                          type="search"
+                          value={search}
+                          placeholder="Search submissions"
+                          onChange={(event) => setSearch(event.currentTarget.value)}
+                        />
+                        {search.length > 0 ? (
+                          <Button
+                            className={styles.clearSearch}
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label="Clear submission search"
+                            onClick={() => setSearch("")}
+                          >
+                            <X aria-hidden="true" />
+                          </Button>
+                        ) : null}
+                      </div>
+                      <Popover.Root>
+                        <Popover.Trigger asChild>
+                          <Button
+                            className={styles.filterTrigger}
+                            type="button"
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label={
+                              activeFilterCount > 0
+                                ? `Filter submissions, ${activeFilterCount} active`
+                                : "Filter submissions"
+                            }
+                            title={
+                              activeFilterCount > 0
+                                ? `Filter submissions, ${activeFilterCount} active`
+                                : "Filter submissions"
+                            }
+                          >
+                            <ListFilter aria-hidden="true" />
+                            {activeFilterCount > 0 ? (
+                              <span className={styles.filterActiveCount} aria-hidden="true">
+                                {activeFilterCount}
+                              </span>
+                            ) : null}
+                          </Button>
+                        </Popover.Trigger>
+                        <Popover.Portal>
+                          <Popover.Content
+                            align="end"
+                            aria-label="Submission filters"
+                            className={styles.filterPopover}
+                            sideOffset={8}
+                          >
+                            <div className={styles.filterPopoverHeader}>
+                              <strong>Filters</strong>
+                              {activeFilterCount > 0 ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  onClick={() => {
+                                    setStatus("all");
+                                    setTrack("all");
+                                    setFormat("all");
+                                  }}
+                                >
+                                  Clear
+                                </Button>
+                              ) : null}
+                            </div>
+                            <fieldset className={styles.filterMenu}>
+                              <legend className={styles.srOnly}>Filter submissions</legend>
+                              <div className={styles.filterRow}>
+                                <label htmlFor="submission-status">Status</label>
+                                <Select
+                                  value={status}
+                                  onValueChange={(value) =>
+                                    setStatus(value as SubmissionStatus | "all")
+                                  }
+                                >
+                                  <SelectTrigger
+                                    id="submission-status"
+                                    className={styles.filterSelectTrigger}
+                                  >
+                                    <SelectValue placeholder="All statuses" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">All statuses</SelectItem>
+                                    {Object.entries(statusLabels).map(([value, label]) => (
+                                      <SelectItem key={value} value={value}>
+                                        {label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className={styles.filterRow}>
+                                <label htmlFor="submission-track">Track</label>
+                                <Select value={track} onValueChange={setTrack}>
+                                  <SelectTrigger
+                                    id="submission-track"
+                                    className={styles.filterSelectTrigger}
+                                  >
+                                    <SelectValue placeholder="All tracks" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">All tracks</SelectItem>
+                                    {tracks.map((value) => (
+                                      <SelectItem key={value} value={value}>
+                                        {value}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className={styles.filterRow}>
+                                <label htmlFor="submission-format">Format</label>
+                                <Select value={format} onValueChange={setFormat}>
+                                  <SelectTrigger
+                                    id="submission-format"
+                                    className={styles.filterSelectTrigger}
+                                  >
+                                    <SelectValue placeholder="All formats" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">All formats</SelectItem>
+                                    {formats.map((value) => (
+                                      <SelectItem key={value} value={value}>
+                                        {value}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </fieldset>
+                          </Popover.Content>
+                        </Popover.Portal>
+                      </Popover.Root>
                     </div>
-                    <div className={styles.toolbarField}>
-                      <span className={styles.srOnly}>Track</span>
-                      <Select value={track} onValueChange={setTrack}>
-                        <SelectTrigger id="submission-track" aria-label="Filter by track">
-                          <SelectValue placeholder="All tracks" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All tracks</SelectItem>
-                          {tracks.map((value) => (
-                            <SelectItem key={value} value={value}>
-                              {value}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className={styles.toolbarField}>
-                      <span className={styles.srOnly}>Format</span>
-                      <Select value={format} onValueChange={setFormat}>
-                        <SelectTrigger id="submission-format" aria-label="Filter by format">
-                          <SelectValue placeholder="All formats" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All formats</SelectItem>
-                          {formats.map((value) => (
-                            <SelectItem key={value} value={value}>
-                              {value}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {filtersActive ? (
-                      <Button
-                        className={styles.clearButton}
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSearch("");
-                          setStatus("all");
-                          setTrack("all");
-                          setFormat("all");
-                        }}
-                      >
-                        Clear
-                      </Button>
-                    ) : null}
-                  </fieldset>
+                  </div>
 
                   {listState === "loading" ? (
                     <div className={styles.emptyState} role="status" aria-live="polite">
@@ -643,27 +715,29 @@ export function SubmissionListWorkspace({
                         <TableHeader>
                           <TableRow>
                             <TableHead className={styles.checkboxColumn} scope="col">
-                              <label className={styles.checkboxLabel}>
-                                <input
-                                  type="checkbox"
-                                  checked={allVisibleSelected}
-                                  onChange={toggleAllVisible}
-                                  aria-label="Select all visible submissions"
-                                />
-                                <span className={styles.srOnly}>
-                                  Select all visible submissions
-                                </span>
-                              </label>
+                              <Checkbox
+                                checked={
+                                  allVisibleSelected
+                                    ? true
+                                    : selectedVisibleCount > 0
+                                      ? "indeterminate"
+                                      : false
+                                }
+                                onCheckedChange={toggleAllVisible}
+                                aria-label="Select all visible submissions"
+                              />
                             </TableHead>
                             <SortableHeader
+                              className={styles.titleColumn}
                               sortKey="title"
                               activeKey={sortKey}
                               direction={sortDirection}
                               onSort={toggleSort}
                             >
-                              Submission
+                              Title
                             </SortableHeader>
                             <SortableHeader
+                              className={styles.statusColumn}
                               sortKey="status"
                               activeKey={sortKey}
                               direction={sortDirection}
@@ -671,10 +745,17 @@ export function SubmissionListWorkspace({
                             >
                               Status
                             </SortableHeader>
-                            <TableHead scope="col">Participants</TableHead>
-                            <TableHead scope="col">Review progress</TableHead>
-                            <TableHead scope="col">Track / format</TableHead>
+                            <TableHead className={styles.speakersColumn} scope="col">
+                              Speakers
+                            </TableHead>
+                            <TableHead className={styles.reviewColumn} scope="col">
+                              Reviews
+                            </TableHead>
+                            <TableHead className={styles.taxonomyColumn} scope="col">
+                              Track / format
+                            </TableHead>
                             <SortableHeader
+                              className={styles.updatedColumn}
                               sortKey="updatedAt"
                               activeKey={sortKey}
                               direction={sortDirection}
@@ -694,17 +775,16 @@ export function SubmissionListWorkspace({
                               data-state={
                                 submission.id === selectedSubmissionId ? "selected" : undefined
                               }
+                              data-bulk-selected={selected.has(submission.id) ? "true" : "false"}
+                              aria-selected={selected.has(submission.id)}
+                              data-submission-row-layout="summary"
                             >
                               <TableCell className={styles.checkboxColumn}>
-                                <label className={styles.checkboxLabel}>
-                                  <input
-                                    type="checkbox"
-                                    checked={selected.has(submission.id)}
-                                    onChange={() => toggleSelected(submission.id)}
-                                    aria-label={`Select ${submission.title}`}
-                                  />
-                                  <span className={styles.srOnly}>Select {submission.title}</span>
-                                </label>
+                                <Checkbox
+                                  checked={selected.has(submission.id)}
+                                  onCheckedChange={() => toggleSelected(submission.id)}
+                                  aria-label={`Select ${submission.title}`}
+                                />
                               </TableCell>
                               <TableHead scope="row" className={styles.titleCell}>
                                 <a
@@ -714,21 +794,28 @@ export function SubmissionListWorkspace({
                                 >
                                   {submission.title}
                                 </a>
-                                <span className={styles.submissionMeta}>
-                                  {submission.id} · v{submission.version}
-                                </span>
                               </TableHead>
-                              <TableCell>
+                              <TableCell className={styles.statusCell}>
+                                <span className={styles.mobileLabel}>Status</span>
                                 <StatusBadge status={submission.status} />
                               </TableCell>
-                              <TableCell>
-                                <ProgressMeter
-                                  completed={submission.participantProgress.completed}
-                                  total={submission.participantProgress.total}
-                                  label={`${submission.title} participant profile progress`}
-                                />
+                              <TableCell className={styles.speakersCell}>
+                                <span className={styles.mobileLabel}>Speakers</span>
+                                <span
+                                  className={styles.speakerNames}
+                                  title={submission.participants
+                                    .map((participant) => participant.name)
+                                    .join(", ")}
+                                >
+                                  {submission.participants.length === 0
+                                    ? "No speaker"
+                                    : submission.participants
+                                        .map((participant) => participant.name)
+                                        .join(", ")}
+                                </span>
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={styles.reviewCell}>
+                                <span className={styles.mobileLabel}>Reviews</span>
                                 {reviewDataIsReady(submission) ? (
                                   <ProgressMeter
                                     completed={submission.reviewSummary.completed}
@@ -741,11 +828,13 @@ export function SubmissionListWorkspace({
                                   </span>
                                 )}
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={styles.taxonomyCell}>
+                                <span className={styles.mobileLabel}>Track / format</span>
                                 <span className={styles.trackValue}>{submission.track}</span>
                                 <span className={styles.submissionMeta}>{submission.format}</span>
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={styles.updatedCell}>
+                                <span className={styles.mobileLabel}>Updated</span>
                                 <time dateTime={submission.updatedAt}>
                                   {formatDate(submission.updatedAt)}
                                 </time>
@@ -756,16 +845,16 @@ export function SubmissionListWorkspace({
                       </Table>
                     </div>
                   )}
-                </CardContent>
+                </div>
               ) : listState === "loading" ? (
-                <CardContent>
+                <div className={styles.listContent}>
                   <div className={styles.emptyState} role="status" aria-live="polite">
                     <h3>Loading submissions</h3>
                     <p>We&apos;re getting the latest proposals for this event.</p>
                   </div>
-                </CardContent>
+                </div>
               ) : listState === "failure" || listState === "unconfigured" ? (
-                <CardContent>
+                <div className={styles.listContent}>
                   <div className={styles.emptyState} role="alert">
                     <h3>
                       {listState === "unconfigured"
@@ -784,9 +873,9 @@ export function SubmissionListWorkspace({
                       </Button>
                     ) : null}
                   </div>
-                </CardContent>
+                </div>
               ) : (
-                <CardContent className={styles.emptyCardContent}>
+                <div className={styles.emptyCardContent}>
                   <Empty className={styles.emptyState} role="status">
                     <EmptyHeader>
                       <EmptyTitle>No submissions yet</EmptyTitle>
@@ -796,19 +885,24 @@ export function SubmissionListWorkspace({
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
-                </CardContent>
+                </div>
               )}
-            </Card>
+            </section>
           </div>
-          {selectedSubmissionId === undefined ? null : (
+        </div>
+        {selectedSubmissionId === undefined ? null : (
+          <SubmissionDetailDrawer
+            closeHref={submissionListHref(eventId, organizationId)}
+            title={selectedSubmission?.title ?? "Submission details"}
+          >
             <SubmissionDetailWorkspace
               organizationId={organizationId}
               eventId={eventId}
               submissionId={selectedSubmissionId}
               displayMode="panel"
             />
-          )}
-        </div>
+          </SubmissionDetailDrawer>
+        )}
       </div>
     </div>
   );
@@ -819,16 +913,19 @@ function SortableHeader({
   direction,
   onSort,
   children,
+  className = "",
 }: Readonly<{
   sortKey: SortKey;
   activeKey: SortKey;
   direction: SortDirection;
   onSort: (sortKey: SortKey) => void;
   children: string;
+  className?: string | undefined;
 }>) {
   const active = activeKey === sortKey;
   return (
     <TableHead
+      className={className}
       scope="col"
       aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
     >
@@ -952,7 +1049,7 @@ function DecisionControl({
           onChange={(event) => setReason(event.currentTarget.value)}
         />
         <p className={styles.fieldHelp}>
-          The reason and server decision version are retained in the immutable decision history.
+          The reason is retained in the immutable decision history.
         </p>
         {!hasDecisionApi ? (
           <p className={styles.auditCallout} role="note">
@@ -992,10 +1089,7 @@ function DecisionControl({
                   <time dateTime={transition.decidedAt}>
                     {formatDateTime(transition.decidedAt)}
                   </time>
-                  <p>
-                    {transition.reason} · organizer {transition.decidedBy} · decision version{" "}
-                    {decisionHistory.indexOf(transition) + 1}
-                  </p>
+                  <p>{transition.reason} · recorded by organizer</p>
                 </div>
               </li>
             ))}
@@ -1056,10 +1150,6 @@ function AcceptedHandoffSummary({ submission }: Readonly<{ submission: Submissio
         <div>
           <dt>Track</dt>
           <dd>{metadata.track}</dd>
-        </div>
-        <div>
-          <dt>Submission version</dt>
-          <dd>{metadata.version}</dd>
         </div>
       </dl>
     </section>
@@ -1210,7 +1300,7 @@ export function SubmissionDetailWorkspace({
                 <span>/</span>
                 <Link href={submissionListHref(eventId, organizationId)}>Submissions</Link>
                 <span>/</span>
-                <strong>{submission.id}</strong>
+                <strong>Submission details</strong>
               </WorkspaceBreadcrumb>
             }
             title={submission.title}
@@ -1222,7 +1312,6 @@ export function SubmissionDetailWorkspace({
             description={`${submission.format} · ${submission.track}`}
             metadata={
               <>
-                <WorkspaceMetaItem>Version {submission.version}</WorkspaceMetaItem>
                 <WorkspaceMetaItem>
                   Updated{" "}
                   <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
@@ -1237,49 +1326,95 @@ export function SubmissionDetailWorkspace({
             }
           />
         </>
-      ) : (
-        <div className={styles.reviewPanelBar}>
-          <div>
-            <span className={styles.submissionCode}>{submission.id}</span>
-            <StatusBadge status={submission.status} />
-          </div>
-          <Button asChild size="sm" variant="ghost">
-            <Link href={submissionListHref(eventId, organizationId)}>Close</Link>
-          </Button>
-        </div>
-      )}
+      ) : null}
 
       <div
         id="submission-detail-content"
         className={displayMode === "panel" ? styles.reviewPanelBody : styles.workspaceMain}
-        data-scroll-region={displayMode === "panel" ? "submission-detail" : undefined}
         tabIndex={-1}
       >
+        {displayMode === "panel" ? (
+          <div className={styles.drawerIntro}>
+            <strong>Organizer review.</strong>
+            <span>
+              Review the submission content, participant context, committee activity, and final
+              decision.
+            </span>
+          </div>
+        ) : null}
         <div className={styles.detailGrid}>
           <div className={styles.detailPrimary}>
-            <section className={styles.detailPanel} aria-labelledby="abstract-heading">
-              <div className={styles.panelHeading}>
-                <div>
-                  <p className={styles.eyebrow}>Submission content</p>
-                  <h2 id="abstract-heading">Abstract</h2>
-                </div>
-                <span className={styles.versionBadge}>Version {submission.version}</span>
-              </div>
-              <p className={styles.abstract}>{submission.abstract}</p>
-            </section>
-
-            <section className={styles.detailPanel} aria-labelledby="answers-heading">
-              <p className={styles.eyebrow}>Form responses</p>
-              <h2 id="answers-heading">Structured answers</h2>
-              <dl className={styles.answerList}>
-                {submission.answers.map((answer) => (
-                  <div key={answer.question}>
-                    <dt>{answer.question}</dt>
-                    <dd>{answer.answer}</dd>
+            {displayMode === "panel" ? (
+              <section
+                className={`${styles.detailPanel} ${styles.submissionOverviewPanel}`}
+                aria-labelledby="submission-overview-heading"
+              >
+                <div className={styles.submissionOverviewHeader}>
+                  <div>
+                    <p className={styles.eyebrow}>{eventName} · Submission</p>
+                    <h1 id="submission-overview-heading">{submission.title}</h1>
                   </div>
-                ))}
-              </dl>
-            </section>
+                  <StatusBadge status={submission.status} />
+                </div>
+                <dl className={styles.submissionOverviewMeta}>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{statusLabels[submission.status]}</dd>
+                  </div>
+                  <div>
+                    <dt>Track / format</dt>
+                    <dd>
+                      {submission.track} · {submission.format}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatDateTime(submission.updatedAt)}</dd>
+                  </div>
+                </dl>
+                <div className={styles.submissionOverviewCopy}>
+                  <h2>Submission overview</h2>
+                  <p>{submission.abstract}</p>
+                </div>
+                <div className={styles.submissionOverviewAnswers}>
+                  <p className={styles.eyebrow}>Form responses</p>
+                  <h2>Structured answers</h2>
+                  <dl className={styles.answerList}>
+                    {submission.answers.map((answer) => (
+                      <div key={answer.question}>
+                        <dt>{answer.question}</dt>
+                        <dd>{answer.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              </section>
+            ) : (
+              <>
+                <section className={styles.detailPanel} aria-labelledby="abstract-heading">
+                  <div className={styles.panelHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>Submission content</p>
+                      <h2 id="abstract-heading">Abstract</h2>
+                    </div>
+                  </div>
+                  <p className={styles.abstract}>{submission.abstract}</p>
+                </section>
+
+                <section className={styles.detailPanel} aria-labelledby="answers-heading">
+                  <p className={styles.eyebrow}>Form responses</p>
+                  <h2 id="answers-heading">Structured answers</h2>
+                  <dl className={styles.answerList}>
+                    {submission.answers.map((answer) => (
+                      <div key={answer.question}>
+                        <dt>{answer.question}</dt>
+                        <dd>{answer.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              </>
+            )}
 
             <section className={styles.detailPanel} aria-labelledby="timeline-heading">
               <p className={styles.eyebrow}>Audit history</p>
