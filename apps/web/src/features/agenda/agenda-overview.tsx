@@ -1,6 +1,7 @@
 import styles from "./agenda-overview.module.css";
 
 interface AgendaOverviewProps {
+  readonly acceptedCount: number;
   readonly scheduledCount: number;
   readonly toPlaceCount: number;
   readonly hardConflictCount: number | null;
@@ -25,15 +26,15 @@ function AgendaMetric({ label, value, detail, tone }: AgendaMetricProps) {
 }
 
 export function AgendaOverview({
+  acceptedCount,
   scheduledCount,
   toPlaceCount,
   hardConflictCount,
   publishedRevisionNumber,
 }: AgendaOverviewProps) {
-  const agendaSessionCount = scheduledCount + toPlaceCount;
   return (
     <section className={styles.overview} aria-label="Schedule at a glance">
-      <AgendaMetric label="Sessions" value={agendaSessionCount} detail="in this draft" />
+      <AgendaMetric label="Accepted" value={acceptedCount} detail="eligible sessions" />
       <AgendaMetric label="Scheduled" value={scheduledCount} detail="placed on the agenda" />
       <AgendaMetric label="To place" value={toPlaceCount} detail="waiting for a time" />
       <AgendaMetric

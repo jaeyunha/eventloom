@@ -81,6 +81,7 @@ import {
   eventSettingsSectionDefinition,
   eventSettingsSectionHref,
 } from "./event-settings-sections";
+import styles from "./event-settings-workspace.module.css";
 import {
   canCommitEventSettingsAsyncCompletion,
   eventSettingsSectionNavigation,
@@ -90,7 +91,6 @@ import {
   persistEventSettingsMutation,
   validateRoomForm,
 } from "./event-settings-workspace-model";
-import styles from "./event-settings-workspace.module.css";
 
 export type EventSettingsDetailsStatus = "loading" | "loaded" | "error";
 
@@ -153,7 +153,6 @@ function contextLabel(organizationId: string, eventIdentity?: EventIdentity): st
     ? `Organization ${organizationId} · Loading public identity…`
     : `Organization ${organizationId} · Public slug ${eventIdentity.slug}`;
 }
-
 
 function messageFrom(error: unknown): string {
   if (error instanceof Error) return error.message;

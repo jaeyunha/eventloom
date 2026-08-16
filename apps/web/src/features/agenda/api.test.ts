@@ -18,6 +18,7 @@ const workspace = {
   },
   rooms: [],
   tracks: [],
+  acceptedSessionIds: [],
   unscheduledSessions: [],
   revisions: [],
   currentPublishedRevision: null,
@@ -50,6 +51,7 @@ describe("agenda API adapter", () => {
         { id: "track_existing", name: "Existing track", color: "#000000" },
         { id: "track_1", name: "Track 1", color: "#111111" },
       ],
+      acceptedSessionIds: ["session_1"],
       unscheduledSessions: [
         {
           id: "session_1",

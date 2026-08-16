@@ -247,9 +247,7 @@ describe("focused participant workspaces", () => {
     );
     expect(workspaceSource).not.toContain('<a href="/portal/submissions">');
     expect(sessionsSource).toContain('import Link from "next/link";');
-    expect(sessionsSource).toContain(
-      '<Link href="/portal/tasks">Open Requests & tasks</Link>',
-    );
+    expect(sessionsSource).toContain('<Link href="/portal/tasks">Open Requests & tasks</Link>');
     expect(sessionsSource).toContain(
       '<Link href="/portal?workspace=files">Manage session files</Link>',
     );

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CfpApi } from "../cfp/api";
 import { CfpEditor } from "./cfp-editor";
+import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 import {
   cfpActiveSectionThreshold,
   cfpContainerScrollTop,
@@ -19,9 +20,10 @@ import {
   selectEditorForm,
   summarizeRule,
   toFormConfiguration,
+  updateCfpEditorField,
+  updateCfpShowWhenCondition,
   validateCfpDateRange,
 } from "./cfp-editor-model";
-import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 
 describe("CFP editor", () => {
   it("defaults new CFPs to twenty proposals per account", () => {
@@ -173,10 +175,10 @@ describe("CFP editor", () => {
     );
   });
 
-  it("only reports a CFP save after event and form persistence both resolve", async () => {
+  it("persists an explicitly confirmed past window and only reports success after both writes", async () => {
     const configuration = createTestCfpConfiguration("devflow-conf-2027");
-    configuration.opensAt = "2027-01-01";
-    configuration.closesAt = "2027-02-01";
+    configuration.opensAt = "2026-08-01";
+    configuration.closesAt = "2026-08-15";
     configuration.id = "devflow-cfp";
     configuration.eventVersion = 3;
     configuration.formVersion = 4;
@@ -188,8 +190,8 @@ describe("CFP editor", () => {
       slug: "devflow-conf-2027",
       name: configuration.eventName,
       timezone: configuration.timezone,
-      opensAt: "2027-01-01T00:00:00.000Z",
-      closesAt: "2027-02-14T00:00:00.000Z",
+      opensAt: "2026-08-01T07:00:00.000Z",
+      closesAt: "2026-08-15T07:00:00.000Z",
     };
     const savedForm = {
       ...toFormConfiguration(configuration, "organization-1", "devflow-conf-2027"),
@@ -217,7 +219,7 @@ describe("CFP editor", () => {
     ).resolves.toEqual({ event: savedEvent, form: savedForm });
     expect(calls).toEqual(["event", "form"]);
     expect(configurationFromServer(configuration, savedEvent, savedForm).closesAt).toBe(
-      "2027-02-14",
+      "2026-08-15",
     );
 
     const partialApi = {
@@ -496,6 +498,58 @@ describe("CFP editor", () => {
         owner: "submission",
       },
     });
+  });
+
+  it("keeps show-when semantics and rule references when a target key is edited", () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    configuration.rule = {
+      type: "condition",
+      field: "format",
+      operator: "is not",
+      value: "Workshop (120 min)",
+    };
+    configuration.ruleTargetField = "workshop-prerequisites";
+    configuration.fields.push({
+      id: "workshop-prerequisites",
+      key: "workshop-prerequisites",
+      label: "Workshop prerequisites",
+      type: "textarea",
+      kind: "rich_text",
+      required: false,
+      visible: true,
+      placeholder: "",
+      options: [],
+    });
+
+    const withShowWhenSemantics = updateCfpShowWhenCondition(configuration, {
+      field: "format",
+      value: "Workshop (120 min)",
+    });
+    const updated = updateCfpEditorField(withShowWhenSemantics, "workshop-prerequisites", {
+      key: "workshop_prerequisites",
+    });
+
+    expect(updated.ruleTargetField).toBe("workshop_prerequisites");
+    expect(updated.rule).toEqual({
+      type: "condition",
+      field: "format",
+      operator: "is",
+      value: "Workshop (120 min)",
+    });
+    expect(toFormConfiguration(updated, "ai-engineer", "devflow-conf-2027").rules).toContainEqual(
+      expect.objectContaining({
+        when: expect.objectContaining({
+          conditions: [
+            expect.objectContaining({
+              fieldKey: "format",
+              operator: "equals",
+              value: "Workshop (120 min)",
+            }),
+          ],
+        }),
+        actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+      }),
+    );
   });
 
   it("round-trips equals Workshop to show_field prerequisites without inversion", () => {

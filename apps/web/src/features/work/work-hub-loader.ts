@@ -1,5 +1,5 @@
-import type { PortalContext } from "../portal/types";
 import { parseAccountSession } from "../account/account-access";
+import type { PortalContext } from "../portal/types";
 import {
   buildWorkHubModel,
   type WorkHubModel,

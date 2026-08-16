@@ -556,6 +556,9 @@ function adminAgendaWorkspaceView(
       name: track.name,
       color: trackColors[index % trackColors.length],
     })),
+    acceptedSessionIds: state.sessions
+      .filter((session) => isAcceptedAgendaSession(session))
+      .map((session) => session.id),
     unscheduledSessions: state.sessions
       .filter((session) => isAcceptedAgendaSession(session) && !scheduledSessionIds.has(session.id))
       .map((session) => {

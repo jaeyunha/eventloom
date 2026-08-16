@@ -1,7 +1,7 @@
 import {
-  CrmApiError,
   type CrmAnalytics,
   type CrmApi,
+  CrmApiError,
   type CrmContact,
   type CrmDuplicateReport,
   type CrmEvent,
@@ -11,7 +11,6 @@ import {
   type CrmImportResult,
   type CrmMergePreview,
   type CrmMergeResult,
-  type CrmMergeWinners,
   type CrmNote,
   type CrmOutreachCommand,
   type CrmPipelineEntry,

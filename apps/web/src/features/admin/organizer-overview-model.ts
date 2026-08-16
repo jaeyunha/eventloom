@@ -233,7 +233,7 @@ export function createOrganizerOverviewApi(
   let coreInFlight: Promise<OrganizerOverviewCoreData> | null = null;
   let activityInFlight: Promise<OrganizerOverviewActivityData> | null = null;
 
-  const request = async <T,>(
+  const request = async <T>(
     path: string,
     parser: (payload: unknown, expectedOrganizationId: string) => T,
   ): Promise<T> => {

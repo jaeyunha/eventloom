@@ -14,16 +14,15 @@ import {
 } from "../../../components/ui";
 import styles from "../integrations.module.css";
 import {
-  AirtableIntegrationApiError,
-  createAirtableIntegrationApi,
   type AirtableConflictResolution,
   type AirtableConflictResolutionInput,
   type AirtableConnectionState,
   type AirtableIntegrationApi,
+  AirtableIntegrationApiError,
   type AirtableIntegrationSnapshot,
   type AirtableProjectionHealth,
-  type AirtableProjectionStatus,
   type AirtableSyncDirection,
+  createAirtableIntegrationApi,
 } from "./api";
 
 const stateCopy: Record<

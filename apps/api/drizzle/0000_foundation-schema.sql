@@ -907,7 +907,7 @@ CREATE TABLE `cfp_form_fields` (
 	FOREIGN KEY (`organization_id`,`form_id`,`section_id`) REFERENCES `cfp_form_sections`(`organization_id`,`form_id`,`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`organization_id`,`reusable_field_id`,`reusable_field_version`) REFERENCES `reusable_fields`(`organization_id`,`id`,`version`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "cfp_form_fields_scope_check" CHECK("cfp_form_fields"."scope" in('submission','participant')),
-	CONSTRAINT "cfp_form_fields_kind_check" CHECK("cfp_form_fields"."kind" in('file_request','text','rich_text','email','select','multi_select','boolean','number')),
+	CONSTRAINT "cfp_form_fields_kind_check" CHECK("cfp_form_fields"."kind" in('file_request','text','rich_text','email','url','select','multi_select','boolean','number')),
 	CONSTRAINT "cfp_form_fields_file_check" CHECK(("cfp_form_fields"."kind"='file_request' and "cfp_form_fields"."file_owner" in('submission','participant') and "cfp_form_fields"."allowed_mime_types_json" is not null and "cfp_form_fields"."max_bytes">0) or ("cfp_form_fields"."kind"<>'file_request' and "cfp_form_fields"."file_owner" is null and "cfp_form_fields"."allowed_mime_types_json" is null and "cfp_form_fields"."max_bytes" is null)),
 	CONSTRAINT "cfp_form_fields_reusable_check" CHECK(("cfp_form_fields"."reusable_field_id" is null)=("cfp_form_fields"."reusable_field_version" is null)),
 	CONSTRAINT "cfp_form_fields_options_check" CHECK(json_valid("cfp_form_fields"."options_json") and json_type("cfp_form_fields"."options_json")=?)

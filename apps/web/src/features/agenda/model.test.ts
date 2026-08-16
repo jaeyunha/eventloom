@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { agendaDays, eventDates, publicationReadiness, resolveAgendaPlacementDate } from "./model";
+import {
+  acceptedSessionCount,
+  agendaDays,
+  eventDates,
+  publicationReadiness,
+  resolveAgendaPlacementDate,
+} from "./model";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const data: AgendaWorkspaceData = {
@@ -45,6 +51,7 @@ const data: AgendaWorkspaceData = {
   },
   rooms: [],
   tracks: [],
+  acceptedSessionIds: ["session_early", "session_later"],
   unscheduledSessions: [],
   revisions: [],
   currentPublishedRevision: null,
@@ -66,6 +73,28 @@ describe("agenda workspace model", () => {
   it("uses the selected event day as the placement context", () => {
     expect(resolveAgendaPlacementDate("2026-09-19", "2026-09-18")).toBe("2026-09-19");
     expect(resolveAgendaPlacementDate("", "2026-09-18")).toBe("2026-09-18");
+  });
+
+  it("counts unique authoritative accepted session IDs", () => {
+    expect(acceptedSessionCount(data)).toBe(2);
+    expect(
+      acceptedSessionCount({
+        acceptedSessionIds: ["session_early", "session_early"],
+      }),
+    ).toBe(1);
+  });
+
+  it("reports zero accepted sessions when nothing is scheduled or queued", () => {
+    expect(acceptedSessionCount({ acceptedSessionIds: [] })).toBe(0);
+  });
+
+  it("does not count retained scheduled entries that are no longer accepted", () => {
+    const staleSchedule = {
+      ...data,
+      acceptedSessionIds: [],
+    };
+
+    expect(acceptedSessionCount(staleSchedule)).toBe(0);
   });
 
   it("groups and orders draft entries by local event day", () => {

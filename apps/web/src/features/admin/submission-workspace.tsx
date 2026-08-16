@@ -28,10 +28,14 @@ import {
   WorkspaceMetaItem,
   StatusBadge as WorkspaceStatusBadge,
 } from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "./organizer-event-workspace";
+import styles from "./submission-workspace.module.css";
 import {
   ApiRequestError,
   answerText,
   decisionNotificationSummary,
+  type EvaluationDecisionRecord,
+  type EvaluationDecisionStatus,
   enrichCanonicalSubmission,
   evaluationRequest,
   formatDateTime,
@@ -43,22 +47,18 @@ import {
   loadOrganizerEventIdentity,
   mapCanonicalSubmission,
   mergeCanonicalSubmissionEvaluation,
+  type ReviewAssignment,
+  type ReviewDataState,
   reviewDataIsReady,
   reviewDataMessage,
   reviewDataStateForIndex,
   reviewDataStateFromError,
-  submissionLoadFailure,
-  submissionListState,
-  type EvaluationDecisionRecord,
-  type EvaluationDecisionStatus,
-  type ReviewAssignment,
-  type ReviewDataState,
   type SubmissionLoadFailure,
   type SubmissionRecord,
   type SubmissionStatus,
+  submissionListState,
+  submissionLoadFailure,
 } from "./submission-workspace-model";
-import { useOrganizerEventId } from "./organizer-event-workspace";
-import styles from "./submission-workspace.module.css";
 
 const statusLabels: Record<SubmissionStatus, string> = {
   draft: "Draft",

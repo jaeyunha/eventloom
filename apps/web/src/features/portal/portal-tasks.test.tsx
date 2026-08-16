@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assetPointerLabels, resolveAssetPointers } from "./portal-assets";
-import {
-  commentsForAsset,
-  resolveTaskAsset,
-} from "./portal-task-assets";
+import { commentsForAsset, resolveTaskAsset } from "./portal-task-assets";
 import {
   actionTaskPresentation,
   getTaskUploadPolicy,

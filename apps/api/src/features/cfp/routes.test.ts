@@ -78,6 +78,44 @@ class FakeCfpService implements CfpRouteService {
     this.#record("saveForm", { input, expectedVersion });
     return structuredClone(input as CfpForm);
   }
+
+  async publishForm(
+    input: Parameters<CfpService["publishForm"]>[0],
+  ): Promise<Awaited<ReturnType<CfpService["publishForm"]>>> {
+    this.#record("publishForm", input);
+    return { ...structuredClone(form), version: input.expectedVersion + 1, status: "published" };
+  }
+
+  async getPublishedCfp(
+    input: Parameters<CfpService["getPublishedCfp"]>[0],
+  ): Promise<Awaited<ReturnType<CfpService["getPublishedCfp"]>>> {
+    this.#record("getPublishedCfp", input);
+    return {
+      organization: { id: "org_1", slug: "org-1", name: "Organization 1" },
+      event: {
+        id: event.id,
+        slug: event.slug,
+        name: event.name,
+        timezone: event.timezone,
+        opensAt: event.opensAt,
+        closesAt: event.closesAt,
+      },
+      form: {
+        ...structuredClone(form),
+        status: "published",
+        rules: [],
+        settings: {
+          speakerLimit: form.settings.speakerLimit,
+          maxSubmissionsPerAccount: form.settings.maxSubmissionsPerAccount,
+          confirmationMessage: form.settings.confirmationMessage,
+          successContent: form.settings.successContent,
+          ...(form.settings.redirectUrl === undefined
+            ? {}
+            : { redirectUrl: form.settings.redirectUrl }),
+        },
+      },
+    };
+  }
   async listOrganizerSubmissions(
     input: Parameters<CfpService["listOrganizerSubmissions"]>[0],
   ): Promise<Awaited<ReturnType<CfpService["listOrganizerSubmissions"]>>> {
@@ -225,6 +263,84 @@ describe("CFP API routes", () => {
     await expect(formResponse.json()).resolves.toMatchObject({ data: { id: "form_1" } });
     expect(service.calls.map((call) => call.method)).toEqual(["saveEvent", "saveForm"]);
   });
+  it("accepts a fully configured form with a URL field before publishing", async () => {
+    const { app, service } = createFixture();
+    const configuredForm = {
+      ...form,
+      status: "draft" as const,
+      submissionFields: [
+        {
+          id: "proposal_website",
+          sectionId: "session",
+          key: "proposal_website",
+          label: "Proposal website",
+          kind: "url" as const,
+          required: false,
+          options: [],
+        },
+      ],
+    };
+
+    const response = await app.request(
+      `${basePath}/forms/form_1`,
+      {
+        method: "PUT",
+        headers: requestHeaders("organizer"),
+        body: JSON.stringify({ form: configuredForm, expectedVersion: 1 }),
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    expect(service.calls).toEqual([
+      { method: "saveForm", input: { input: configuredForm, expectedVersion: 1 } },
+    ]);
+  });
+
+  it("publishes with optimistic concurrency and resolves the exact logged-out slug route", async () => {
+    const { app, service } = createFixture();
+    const publishResponse = await app.request(
+      `${basePath}/forms/form_1/publish`,
+      {
+        method: "POST",
+        headers: requestHeaders("organizer", "publish-form-1"),
+        body: JSON.stringify({ expectedVersion: 4 }),
+      },
+      environment,
+    );
+    const publicResponse = await app.request(
+      "/api/public/cfp/organizations/org_1/events/future-conf",
+      { method: "GET" },
+      environment,
+    );
+
+    expect(publishResponse.status).toBe(200);
+    await expect(publishResponse.json()).resolves.toMatchObject({
+      data: { id: "form_1", status: "published", version: 5 },
+    });
+    expect(publicResponse.status).toBe(200);
+    await expect(publicResponse.json()).resolves.toMatchObject({
+      data: { event: { slug: "future-conf" }, form: { id: "form_1", status: "published" } },
+    });
+    expect(service.calls).toEqual([
+      {
+        method: "publishForm",
+        input: {
+          tenantId: "org_1",
+          eventId: "event_1",
+          formId: "form_1",
+          organizerId: "organizer_1",
+          expectedVersion: 4,
+          idempotencyKey: "publish-form-1",
+        },
+      },
+      {
+        method: "getPublishedCfp",
+        input: { tenantId: "org_1", eventSlug: "future-conf" },
+      },
+    ]);
+  });
+
   it("allows an organizer to persist a past close date without changing tenant scope", async () => {
     const { app, service } = createFixture();
     const pastEvent = {

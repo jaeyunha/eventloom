@@ -11,7 +11,7 @@ describe("admin shell command adapter", () => {
   it("preserves organization and event destinations with route state", () => {
     const pages = adminCommandPages(pathname, destinations, groups);
 
-    expect(pages).toHaveLength(21);
+    expect(pages).toHaveLength(20);
     expect(pages.find((page) => page.label === "Agenda")).toMatchObject({
       current: true,
       group: "Program",

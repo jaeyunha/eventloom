@@ -5690,7 +5690,7 @@
         },
         "cfp_form_fields_kind_check": {
           "name": "cfp_form_fields_kind_check",
-          "value": "\"cfp_form_fields\".\"kind\" in('file_request','text','rich_text','email','select','multi_select','boolean','number')"
+          "value": "\"cfp_form_fields\".\"kind\" in('file_request','text','rich_text','email','url','select','multi_select','boolean','number')"
         },
         "cfp_form_fields_file_check": {
           "name": "cfp_form_fields_file_check",

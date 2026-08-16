@@ -394,6 +394,31 @@ function validateFieldValue(field: FormField, value: unknown): AnswerValidationI
       return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
         ? undefined
         : { path, code: "invalid_type", message: `${field.label} must be a valid email.` };
+    case "url": {
+      if (typeof value !== "string") {
+        return {
+          path,
+          code: "invalid_type",
+          message: `${field.label} must be a valid HTTP or HTTPS URL.`,
+        };
+      }
+      try {
+        const url = new URL(value);
+        return url.protocol === "http:" || url.protocol === "https:"
+          ? undefined
+          : {
+              path,
+              code: "invalid_type",
+              message: `${field.label} must be a valid HTTP or HTTPS URL.`,
+            };
+      } catch {
+        return {
+          path,
+          code: "invalid_type",
+          message: `${field.label} must be a valid HTTP or HTTPS URL.`,
+        };
+      }
+    }
     case "boolean":
       return typeof value === "boolean"
         ? undefined

@@ -12,11 +12,7 @@ import {
   type SpeakerRosterEnvelope,
   type SpeakerTask,
 } from "./api";
-import {
-  SpeakerAssetDownload,
-  SpeakerAssetMetadata,
-  SpeakerHeadshot,
-} from "./speaker-assets";
+import { SpeakerAssetDownload, SpeakerAssetMetadata, SpeakerHeadshot } from "./speaker-assets";
 import {
   duplicateEmailConflicts,
   speakerErrorDiagnostic,
@@ -26,7 +22,9 @@ import {
 } from "./speaker-data-logic";
 import {
   acceptedSpeakerSessions,
+  organizerHeadshotPreviewKey,
   organizerHeadshotPreviewPath,
+  organizerHeadshotPreviewRequestKey,
   organizerHeadshotSubmissionId,
   validateOrganizerHeadshotFile,
 } from "./speaker-headshot-logic";
@@ -111,6 +109,76 @@ const task = {
   sessionId: null,
   latestAssetId: null,
 };
+describe("organizer headshot preview stability", () => {
+  it("keeps the secure preview key stable across roster and detail refreshes", () => {
+    const initial = organizerHeadshotPreviewKey("participant-1", "asset-headshot", headshotAsset);
+    const refreshed = organizerHeadshotPreviewKey("participant-1", "asset-headshot", {
+      ...headshotAsset,
+    });
+
+    expect(initial).not.toBeNull();
+    expect(refreshed).toBe(initial);
+    expect(
+      organizerHeadshotPreviewKey("participant-1", "asset-headshot", {
+        ...headshotAsset,
+        contentType: " IMAGE/WEBP ",
+      }),
+    ).toBe(initial);
+  });
+
+  it("keeps an in-flight preview request subscribed across equivalent asset refreshes", () => {
+    const initial = organizerHeadshotPreviewRequestKey(
+      0,
+      0,
+      "participant-1",
+      "asset-headshot",
+      headshotAsset,
+    );
+    const refreshed = organizerHeadshotPreviewRequestKey(0, 0, "participant-1", "asset-headshot", {
+      ...headshotAsset,
+    });
+
+    expect(refreshed).toBe(initial);
+    expect(
+      organizerHeadshotPreviewRequestKey(0, 1, "participant-1", "asset-headshot", headshotAsset),
+    ).not.toBe(initial);
+    expect(
+      organizerHeadshotPreviewRequestKey(1, 0, "participant-1", "asset-headshot", headshotAsset),
+    ).not.toBe(initial);
+  });
+
+  it("changes the preview key only when the headshot identity or readiness changes", () => {
+    const initial = organizerHeadshotPreviewKey("participant-1", "asset-headshot", headshotAsset);
+
+    expect(
+      organizerHeadshotPreviewKey("participant-1", "asset-headshot-v2", headshotAsset),
+    ).not.toBe(initial);
+    expect(
+      organizerHeadshotPreviewKey("participant-1", "asset-headshot", {
+        ...headshotAsset,
+        status: "pending",
+      }),
+    ).not.toBe(initial);
+    expect(
+      organizerHeadshotPreviewKey("participant-1", "asset-headshot", {
+        ...headshotAsset,
+        contentType: "image/png",
+      }),
+    ).not.toBe(initial);
+    expect(organizerHeadshotPreviewKey("participant-2", "asset-headshot", headshotAsset)).not.toBe(
+      initial,
+    );
+    expect(organizerHeadshotPreviewKey("participant-1", "asset-headshot", null)).not.toBe(initial);
+  });
+
+  it("drops the preview key when no speaker or headshot is selected", () => {
+    expect(organizerHeadshotPreviewKey(null, "asset-headshot", headshotAsset)).toBeNull();
+    expect(organizerHeadshotPreviewKey("participant-1", null, headshotAsset)).toBeNull();
+    expect(organizerHeadshotPreviewKey("participant-1", undefined, headshotAsset)).toBeNull();
+    expect(organizerHeadshotPreviewKey(undefined, "asset-headshot", headshotAsset)).toBeNull();
+  });
+});
+
 describe("organizer headshot session scope", () => {
   it("automatically uses the sole accepted session and excludes other statuses", () => {
     const sessions = [

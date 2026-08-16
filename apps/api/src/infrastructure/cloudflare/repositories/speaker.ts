@@ -48,6 +48,7 @@ import type {
   UpdateSpeakerProfileCommand,
   UpsertOrganizerSpeakerAggregateCommand,
 } from "../../../features/speaker/types";
+import { updateGuard } from "./shared";
 
 export function portalSubmissionStatus(
   submissionStatus: string,
@@ -1769,23 +1770,61 @@ export class D1SpeakerRepository
     const current = await this.getAsset(command.eventId, command.assetId);
     if (current === null) return { ok: false, reason: "not_found" };
     if (current.state !== "pending_upload") return { ok: false, reason: "invalid_state" };
-    const result = await this.#db
-      .prepare(
-        "UPDATE speaker_assets SET state = ?, finalized_at = ?, rejection_reason = ?, latest_version_id = ?, current_version_id = ? WHERE event_id = ? AND id = ? AND state = 'pending_upload'",
-      )
-      .bind(
-        command.state,
-        command.finalizedAt,
-        command.rejectionReason ?? null,
-        command.latestVersionId,
-        command.currentVersionId ?? null,
-        command.eventId,
-        command.assetId,
-      )
-      .run();
-    if ((result.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
+    const scope = await this.#eventScope(command.eventId);
+    if (scope === null) return { ok: false, reason: "not_found" };
+    try {
+      await this.#db.batch([
+        updateGuard(
+          this.#db,
+          "speaker_assets",
+          "organization_id = ? AND event_id = ? AND id = ? AND state = 'pending_upload'",
+          [scope.organizationId, command.eventId, command.assetId],
+        ),
+        updateGuard(
+          this.#db,
+          "speaker_assets",
+          "organization_id = ? AND event_id = ? AND version_family_id = ?",
+          [scope.organizationId, command.eventId, current.versionFamilyId ?? current.id],
+        ),
+        this.#db
+          .prepare(
+            `UPDATE speaker_assets
+                SET state = CASE WHEN id = ? THEN ? ELSE state END,
+                    finalized_at = CASE WHEN id = ? THEN ? ELSE finalized_at END,
+                    rejection_reason = CASE WHEN id = ? THEN ? ELSE rejection_reason END,
+                    latest_version_id = ?,
+                    current_version_id = ?
+              WHERE organization_id = ? AND event_id = ? AND version_family_id = ?`,
+          )
+          .bind(
+            command.assetId,
+            command.state,
+            command.assetId,
+            command.finalizedAt,
+            command.assetId,
+            command.rejectionReason ?? null,
+            command.latestVersionId,
+            command.currentVersionId ?? null,
+            scope.organizationId,
+            command.eventId,
+            current.versionFamilyId ?? current.id,
+          ),
+      ]);
+    } catch {
+      return { ok: false, reason: "version_conflict" };
+    }
     const value = await this.getAsset(command.eventId, command.assetId);
-    return value === null ? { ok: false, reason: "not_found" } : { ok: true, value };
+    if (value === null) return { ok: false, reason: "not_found" };
+    if (
+      value.state !== command.state ||
+      value.finalizedAt !== command.finalizedAt ||
+      value.rejectionReason !== command.rejectionReason ||
+      value.latestVersionId !== command.latestVersionId ||
+      value.currentVersionId !== (command.currentVersionId ?? current.currentVersionId)
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    return { ok: true, value };
   }
 
   async reviewAsset(command: SpeakerAssetReviewCommand): Promise<RepositoryResult<SpeakerAsset>> {
@@ -1797,35 +1836,103 @@ export class D1SpeakerRepository
       current.currentVersionId !== current.id
     )
       return { ok: false, reason: "version_conflict" };
+    const scope = await this.#eventScope(command.eventId);
+    if (scope === null) return { ok: false, reason: "not_found" };
     const statements: D1PreparedStatement[] = [
+      updateGuard(
+        this.#db,
+        "speaker_assets",
+        "organization_id = ? AND event_id = ? AND id = ? AND state = 'ready' AND review_version = ? AND current_version_id = id",
+        [scope.organizationId, command.eventId, command.assetId, command.expectedVersion],
+      ),
+      updateGuard(
+        this.#db,
+        "speaker_assets",
+        "organization_id = ? AND event_id = ? AND version_family_id = ?",
+        [scope.organizationId, command.eventId, current.versionFamilyId ?? current.id],
+      ),
       this.#db
         .prepare(
-          `UPDATE speaker_assets SET review_state = ?, review_note = ?, reviewed_at = ?, reviewed_by = ?, review_version = review_version + 1,
-              approved_version_id = CASE WHEN ? = 'approved' THEN id WHEN approved_version_id = id THEN NULL ELSE approved_version_id END,
-              released_version_id = CASE WHEN ? = 1 THEN id ELSE released_version_id END
-       WHERE event_id = ? AND id = ? AND state = 'ready' AND review_version = ? AND current_version_id = id`,
+          `UPDATE speaker_assets
+              SET review_state = ?, review_note = ?, reviewed_at = ?, reviewed_by = ?,
+                  review_version = review_version + 1
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND state = 'ready'
+              AND review_version = ? AND current_version_id = id`,
         )
         .bind(
           command.state,
           command.note ?? null,
           command.reviewedAt,
           command.reviewedBy,
-          command.state,
-          command.release ? 1 : 0,
+          scope.organizationId,
           command.eventId,
           command.assetId,
           command.expectedVersion,
         ),
+      this.#db
+        .prepare(
+          `UPDATE speaker_assets
+              SET approved_version_id = CASE
+                    WHEN ? = 'approved' THEN ?
+                    WHEN approved_version_id = ? THEN NULL
+                    ELSE approved_version_id
+                  END,
+                  released_version_id = CASE WHEN ? = 1 THEN ? ELSE released_version_id END
+            WHERE organization_id = ? AND event_id = ? AND version_family_id = ?
+              AND EXISTS (
+                SELECT 1
+                  FROM speaker_assets AS reviewed
+                 WHERE reviewed.organization_id = ? AND reviewed.event_id = ?
+                   AND reviewed.id = ? AND reviewed.review_version = ?
+                   AND reviewed.review_state = ? AND reviewed.reviewed_at = ?
+                   AND reviewed.reviewed_by = ?
+              )`,
+        )
+        .bind(
+          command.state,
+          command.assetId,
+          command.assetId,
+          command.release ? 1 : 0,
+          command.assetId,
+          scope.organizationId,
+          command.eventId,
+          current.versionFamilyId ?? current.id,
+          scope.organizationId,
+          command.eventId,
+          command.assetId,
+          command.expectedVersion + 1,
+          command.state,
+          command.reviewedAt,
+          command.reviewedBy,
+        ),
     ];
     if (command.audit !== undefined) statements.push(this.#auditStatement(command.audit));
     try {
-      const result = await this.#db.batch(statements);
-      if ((result[0]?.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
+      await this.#db.batch(statements);
     } catch {
       return { ok: false, reason: "version_conflict" };
     }
     const value = await this.getAsset(command.eventId, command.assetId);
-    return value === null ? { ok: false, reason: "not_found" } : { ok: true, value };
+    if (value === null) return { ok: false, reason: "not_found" };
+    const expectedApprovedVersionId =
+      command.state === "approved"
+        ? command.assetId
+        : current.approvedVersionId === command.assetId
+          ? undefined
+          : current.approvedVersionId;
+    const expectedReleasedVersionId = command.release ? command.assetId : current.releasedVersionId;
+    if (
+      value.reviewState !== command.state ||
+      value.reviewNote !== command.note ||
+      value.reviewedAt !== command.reviewedAt ||
+      value.reviewedBy !== command.reviewedBy ||
+      value.reviewVersion !== command.expectedVersion + 1 ||
+      value.approvedVersionId !== expectedApprovedVersionId ||
+      value.releasedVersionId !== expectedReleasedVersionId
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    return { ok: true, value };
   }
   async updateAssetReview(
     command: SpeakerAssetReviewCommand,

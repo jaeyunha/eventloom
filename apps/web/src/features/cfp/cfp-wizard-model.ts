@@ -1,11 +1,11 @@
-import {
-  type CfpAuthenticatedSession,
-  type CfpFormField,
-  type CfpPublishedForm,
-  type CfpServerSubmission,
+import type {
+  CfpAuthenticatedSession,
+  CfpFormField,
+  CfpPublishedForm,
+  CfpServerSubmission,
 } from "./api";
 import { getCfpSubmissionPointerStorageKey } from "./draft-persistence";
-import { type CfpDraft, type CfpStep } from "./types";
+import type { CfpDraft, CfpStep } from "./types";
 
 type FormFieldOption =
   | string
@@ -242,6 +242,23 @@ export function evaluatePublishedFields(
     }
   }
   return { fields, sections };
+}
+
+export function cfpPublishedFieldIsVisible(
+  form: CfpPublishedForm,
+  answers: DynamicAnswers,
+  fieldKey: string,
+): boolean {
+  return evaluatePublishedFields(form, answers).fields.get(fieldKey)?.visible ?? false;
+}
+
+export function cfpHttpUrlIsValid(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function reviewValueString(value: unknown): string {

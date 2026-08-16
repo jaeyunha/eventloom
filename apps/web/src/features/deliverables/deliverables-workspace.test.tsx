@@ -22,6 +22,7 @@ import {
 } from "./deliverables-workspace";
 import {
   contentRequestMetrics,
+  type DeliverableRow,
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
   deliverablesSessionHistoryKey,
@@ -33,7 +34,6 @@ import {
   settleDeliverablesAssetDetailRequests,
   startDeliverablesCoreRequests,
   triggerDeliverablesDownload,
-  type DeliverableRow,
 } from "./deliverables-workspace-model";
 import { projectFileFamilies } from "./file-family-model";
 import { FileReviewDrawerBody } from "./file-review-drawer";
@@ -899,16 +899,20 @@ describe("deliverables workspace", () => {
   });
   it("uses Next Link for private organizer destinations while retaining skip anchors", () => {
     expect(deliverablesWorkspaceSource).toContain('import Link from "next/link";');
-    expect(deliverablesWorkspaceSource).toContain('<Link href={href}>Open Sessions</Link>');
-    expect(deliverablesWorkspaceSource).toContain('<Link href={href}>Open Speakers</Link>');
-    expect(deliverablesWorkspaceSource).not.toContain('<a href={href}>');
+    expect(deliverablesWorkspaceSource).toContain("<Link href={href}>Open Sessions</Link>");
+    expect(deliverablesWorkspaceSource).toContain("<Link href={href}>Open Speakers</Link>");
+    expect(deliverablesWorkspaceSource).not.toContain("<a href={href}>");
     expect(deliverablesWorkspaceSource).toContain(
       '<a href={filesMode ? "#files-content" : "#deliverables-content"} className={styles.skipLink}>',
     );
 
     expect(fileLibrarySource).toContain('import Link from "next/link";');
     expect(fileLibrarySource).toContain(
-      "<Link\n                href={`/admin/organizations/${encodeURIComponent(\n                  organizationId,\n                )}/events/${encodeURIComponent(eventId)}/deliverables`}\n              >",
+      "<Link\n                href={`/admin/organizations/" +
+        "$" +
+        "{encodeURIComponent(\n                  organizationId,\n                )}/events/" +
+        "$" +
+        "{encodeURIComponent(eventId)}/deliverables`}\n              >",
     );
     expect(fileLibrarySource).not.toContain("<a");
   });

@@ -297,11 +297,9 @@ describe("speaker portal provider", () => {
     expect(providerSource.slice(switchStart, workspaceLoadStart)).toContain(
       "loadGeneration.current += 1;",
     );
-    expect(workspaceSource).toContain(
-      "if (context && view) void portal.loadWorkspace();",
+    expect(workspaceSource).toContain("if (context && view) void portal.loadWorkspace();");
+    expect(workspaceSource.split("if (context && view) void portal.loadWorkspace();")).toHaveLength(
+      2,
     );
-    expect(
-      workspaceSource.split("if (context && view) void portal.loadWorkspace();"),
-    ).toHaveLength(2);
   });
 });

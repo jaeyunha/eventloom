@@ -11,26 +11,23 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  type CfpEventConfiguration,
-  type CfpFormConfiguration,
-  createCfpApi,
-} from "../cfp/api";
+import { type CfpEventConfiguration, type CfpFormConfiguration, createCfpApi } from "../cfp/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 import { CfpEditorMasthead, CfpSectionNavigation, CfpStepActions } from "./cfp-editor-chrome";
-import { CfpOptionListEditor } from "./cfp-option-list-editor";
-import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
-import { useOrganizerEventId } from "./organizer-event-workspace";
 import {
+  type CfpCondition,
+  type CfpConfiguration,
+  type CfpEditorProps,
+  type CfpFormField,
+  type CfpRule,
+  cfpMinimumDate,
   closeCfpNowConfiguration,
   configurationFromServer,
   createEmptyCfpConfiguration,
-  cfpMinimumDate,
-  ORGANIZER_SCROLL_CONTAINER_ID,
   dateFromInstant,
-  fieldKeyForRuleField,
   editorFieldType,
+  fieldKeyForRuleField,
   fieldKeyFromLabel,
   fieldOptionValues,
   fieldReferenceLabel,
@@ -38,6 +35,7 @@ import {
   firstRuleCondition,
   isCfpCloseDatePast,
   loadCfpEditorConfiguration,
+  ORGANIZER_SCROLL_CONTAINER_ID,
   persistCfpConfiguration,
   resolveCfpEditorStepIndex,
   ruleKey,
@@ -45,91 +43,13 @@ import {
   SECTION_LINKS,
   summarizeRule,
   TIMEZONE_OPTIONS,
+  updateCfpEditorField,
+  updateCfpShowWhenCondition,
   validateCfpDateRange,
-  type CfpCondition,
-  type CfpConfiguration,
-  type CfpEditorProps,
-  type CfpFormField,
-  type CfpRule,
 } from "./cfp-editor-model";
-
-function updateCfpShowWhenCondition(
-  configuration: CfpConfiguration,
-  patch: Partial<Omit<CfpCondition, "type" | "operator">>,
-): CfpConfiguration {
-  return {
-    ...configuration,
-    rule: {
-      ...firstRuleCondition(configuration.rule),
-      ...patch,
-      operator: "is",
-    },
-  };
-}
-
-function replaceRuleField(rule: CfpRule, currentKey: string, nextKey: string): CfpRule {
-  if (rule.type === "condition") {
-    return rule.field === currentKey ? { ...rule, field: nextKey } : rule;
-  }
-  return {
-    ...rule,
-    conditions: rule.conditions.map((condition) =>
-      replaceRuleField(condition, currentKey, nextKey),
-    ),
-  };
-}
-
-function replacePersistedRuleField(value: unknown, currentKey: string, nextKey: string): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => replacePersistedRuleField(entry, currentKey, nextKey));
-  }
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      key === "fieldKey" && entry === currentKey
-        ? nextKey
-        : replacePersistedRuleField(entry, currentKey, nextKey),
-    ]),
-  );
-}
-
-function updateCfpEditorField(
-  configuration: CfpConfiguration,
-  fieldId: string,
-  patch: Partial<CfpFormField>,
-): CfpConfiguration {
-  const field = configuration.fields.find((candidate) => candidate.id === fieldId);
-  if (field === undefined) return configuration;
-  const currentKey = field.key ?? field.id;
-  const nextKey = patch.key ?? currentKey;
-  const keyChanged = nextKey !== currentKey;
-  return {
-    ...configuration,
-    fields: configuration.fields.map((candidate) =>
-      candidate.id === fieldId ? { ...candidate, ...patch } : candidate,
-    ),
-    ...(keyChanged
-      ? {
-          rule: replaceRuleField(configuration.rule, currentKey, nextKey),
-          ruleTargetField:
-            configuration.ruleTargetField === currentKey ? nextKey : configuration.ruleTargetField,
-          ...(configuration.rules === undefined
-            ? {}
-            : {
-                rules: configuration.rules.map(
-                  (rule) =>
-                    replacePersistedRuleField(
-                      rule,
-                      currentKey,
-                      nextKey,
-                    ) as (typeof configuration.rules)[number],
-                ),
-              }),
-        }
-      : {}),
-  };
-}
+import { CfpOptionListEditor } from "./cfp-option-list-editor";
+import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
+import { useOrganizerEventId } from "./organizer-event-workspace";
 
 function PreviewField({
   field,

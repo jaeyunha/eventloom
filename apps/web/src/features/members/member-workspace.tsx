@@ -47,8 +47,8 @@ import {
   memberRoles,
   type OrganizationMember,
 } from "./api";
-import { inviteRolesForOrganization } from "./member-workspace-model";
 import styles from "./member-workspace.module.css";
+import { inviteRolesForOrganization } from "./member-workspace-model";
 
 export interface MemberWorkspaceProps {
   readonly organizationId: string;

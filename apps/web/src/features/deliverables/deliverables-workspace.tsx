@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -80,12 +88,19 @@ import {
   deliverableAssetKinds,
 } from "./api";
 import {
-  createContentCollectionNavigationCache,
   type ContentCollectionNavigationCacheScope,
+  createContentCollectionNavigationCache,
 } from "./content-collection-cache";
+import styles from "./deliverables-workspace.module.css";
 import {
+  type ContentRequestFilters,
+  type ContentRequestStatusFilter,
   commitDeliverablesWorkspaceScope,
   contentRequestMetrics,
+  type DeliverableRow,
+  type DeliverablesSessionHistoryCache,
+  type DeliverablesWorkspaceMode,
+  type DeliverablesWorkspaceScope,
   deliverablesSessionHistoryKey,
   eligibleSpeakerHeadshotSessions,
   filterContentRequestRows,
@@ -96,21 +111,18 @@ import {
   startDeliverablesCoreRequests,
   startDeliverablesRequest,
   triggerDeliverablesDownload,
-  type ContentRequestFilters,
-  type ContentRequestStatusFilter,
-  type DeliverableRow,
-  type DeliverablesSessionHistoryCache,
-  type DeliverablesWorkspaceMode,
-  type DeliverablesWorkspaceScope,
 } from "./deliverables-workspace-model";
-import styles from "./deliverables-workspace.module.css";
-import { type FileFamilyProjection, projectFileFamilies } from "./file-family-model";
+import {
+  type FileFamilyProjection,
+  fileFamilyPointers,
+  projectFileFamilies,
+} from "./file-family-model";
 import { FileLibrary } from "./file-library";
 import { FileReviewDrawer } from "./file-review-drawer";
 import {
-  requestFilePolicyMimeTypes,
-  requestFilePolicyFor,
   type RequestFileFormat,
+  requestFilePolicyFor,
+  requestFilePolicyMimeTypes,
 } from "./request-file-policy";
 
 const pageClass = styles.workspace;
@@ -354,7 +366,6 @@ function statusForTask(
   return task.status;
 }
 
-
 function assetFamily(asset: DeliverableAsset): string {
   return `${asset.participantId}\u0000${asset.taskId ?? ""}\u0000${asset.versionFamilyId ?? asset.id}`;
 }
@@ -379,37 +390,11 @@ function reviewStateForAsset(asset: DeliverableAsset): string {
   if (asset.reviewState !== undefined) return formatStatus(asset.reviewState);
   return asset.state === "ready" ? "Pending review" : formatStatus(asset.state);
 }
-function authoritativeAssetPointerIds(versions: readonly DeliverableAsset[]): Readonly<{
-  latest?: string;
-  current?: string;
-  approved?: string;
-  released?: string;
-}> {
-  const pointerSources = versions.filter(
-    (version) =>
-      version.latestVersionId !== undefined ||
-      version.currentVersionId !== undefined ||
-      version.approvedVersionId !== undefined ||
-      version.releasedVersionId !== undefined,
-  );
-  const source =
-    pointerSources.find((version) => version.latestVersionId === version.id) ??
-    (pointerSources.length === 1 ? pointerSources[0] : undefined);
-  return source === undefined
-    ? {}
-    : {
-        ...(source.latestVersionId === undefined ? {} : { latest: source.latestVersionId }),
-        ...(source.currentVersionId === undefined ? {} : { current: source.currentVersionId }),
-        ...(source.approvedVersionId === undefined ? {} : { approved: source.approvedVersionId }),
-        ...(source.releasedVersionId === undefined ? {} : { released: source.releasedVersionId }),
-      };
-}
-
 function authoritativeAssetBadges(
   asset: DeliverableAsset,
   versions: readonly DeliverableAsset[],
 ): readonly string[] {
-  const pointers = authoritativeAssetPointerIds(versions);
+  const pointers = fileFamilyPointers(versions);
   return [
     ...(pointers.latest === asset.id ? ["Latest"] : []),
     ...(pointers.current === asset.id ? ["Current"] : []),
@@ -417,7 +402,6 @@ function authoritativeAssetBadges(
     ...(pointers.released === asset.id ? ["Released"] : []),
   ];
 }
-
 
 function isCurrentAsset(asset: DeliverableAsset, assets: readonly DeliverableAsset[]): boolean {
   const family = assetFamily(asset);
@@ -706,261 +690,258 @@ function TaskComposer({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-        <Button
-          type="button"
-          aria-haspopup="dialog"
-          disabled={onCreateTask === undefined}
-          onClick={() => setOpen(true)}
-        >
-          {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
-        </Button>
-        <DialogContent className={styles.composerDialog}>
-          <DialogHeader>
-            <DialogTitle>New content request</DialogTitle>
-            <DialogDescription>
-              Define the request, file policy, and exact speaker assignments.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={(event) => void submit(event)} className={styles.composerForm}>
-            <section className={styles.composerSection} aria-labelledby="request-section-heading">
-              <div className={styles.composerSectionHeading}>
-                <span>1</span>
-                <div>
-                  <h3 id="request-section-heading">Request</h3>
-                  <p>Give speakers clear instructions and a deadline.</p>
-                </div>
+      <Button
+        type="button"
+        aria-haspopup="dialog"
+        disabled={onCreateTask === undefined}
+        onClick={() => setOpen(true)}
+      >
+        {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
+      </Button>
+      <DialogContent className={styles.composerDialog}>
+        <DialogHeader>
+          <DialogTitle>New content request</DialogTitle>
+          <DialogDescription>
+            Define the request, file policy, and exact speaker assignments.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(event) => void submit(event)} className={styles.composerForm}>
+          <section className={styles.composerSection} aria-labelledby="request-section-heading">
+            <div className={styles.composerSectionHeading}>
+              <span>1</span>
+              <div>
+                <h3 id="request-section-heading">Request</h3>
+                <p>Give speakers clear instructions and a deadline.</p>
               </div>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-name">Task name</Label>
-                  <Input
-                    id="task-name"
-                    value={title}
-                    onChange={(event) => setTitle(event.currentTarget.value)}
-                    placeholder="Upload Session Presentation"
-                    required
-                  />
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-due-date">Due date</Label>
-                  <Input
-                    id="task-due-date"
-                    type="date"
-                    value={dueAt}
-                    onChange={(event) => setDueAt(event.currentTarget.value)}
-                    required
-                  />
-                </div>
-              </div>
+            </div>
+            <div className={gridClass}>
               <div className={fieldClass}>
-                <Label htmlFor="task-instructions">Instructions</Label>
-                <Textarea
-                  id="task-instructions"
-                  rows={3}
-                  value={description}
-                  onChange={(event) => setDescription(event.currentTarget.value)}
-                  placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
+                <Label htmlFor="task-name">Task name</Label>
+                <Input
+                  id="task-name"
+                  value={title}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                  placeholder="Upload Session Presentation"
                   required
                 />
               </div>
-            </section>
-
-            <section className={styles.composerSection} aria-labelledby="files-section-heading">
-              <div className={styles.composerSectionHeading}>
-                <span>2</span>
-                <div>
-                  <h3 id="files-section-heading">Files</h3>
-                  <p>Choose one deliverable type, then set its formats and size limit.</p>
-                </div>
-              </div>
               <div className={fieldClass}>
-                <Label htmlFor="task-asset-kind">File type</Label>
-                <Select value={acceptedAssetKind} onValueChange={updateSelectedAssetKind}>
-                  <SelectTrigger id="task-asset-kind">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {deliverableAssetKinds.map((kind) => {
-                      const policy = requestFilePolicyFor(kind);
-                      return (
-                        <SelectItem key={kind} value={kind}>
-                          {policy.label}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
+                <Label htmlFor="task-due-date">Due date</Label>
+                <Input
+                  id="task-due-date"
+                  type="date"
+                  value={dueAt}
+                  onChange={(event) => setDueAt(event.currentTarget.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-instructions">Instructions</Label>
+              <Textarea
+                id="task-instructions"
+                rows={3}
+                value={description}
+                onChange={(event) => setDescription(event.currentTarget.value)}
+                placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
+                required
+              />
+            </div>
+          </section>
+
+          <section className={styles.composerSection} aria-labelledby="files-section-heading">
+            <div className={styles.composerSectionHeading}>
+              <span>2</span>
+              <div>
+                <h3 id="files-section-heading">Files</h3>
+                <p>Choose one deliverable type, then set its formats and size limit.</p>
+              </div>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-asset-kind">File type</Label>
+              <Select value={acceptedAssetKind} onValueChange={updateSelectedAssetKind}>
+                <SelectTrigger id="task-asset-kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {deliverableAssetKinds.map((kind) => {
+                    const policy = requestFilePolicyFor(kind);
+                    return (
+                      <SelectItem key={kind} value={kind}>
+                        {policy.label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <small className={mutedClass}>
+                {selectedFilePolicy.description} Create a separate request when you need a different
+                file type or due date.
+              </small>
+            </div>
+            <div className={gridClass}>
+              <fieldset className={styles.fieldset} aria-describedby="file-format-help">
+                <legend>File formats (required)</legend>
+                <div className={styles.optionGrid}>
+                  {selectedFilePolicy.formats.map((format) => (
+                    <div key={format.id} className={styles.optionRow}>
+                      <Checkbox
+                        id={`task-file-format-${acceptedAssetKind}-${format.id}`}
+                        checked={fileFormatIsSelected(format)}
+                        onCheckedChange={(checked) => toggleFileFormat(format, checked === true)}
+                      />
+                      <Label htmlFor={`task-file-format-${acceptedAssetKind}-${format.id}`}>
+                        {format.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+                <small id="file-format-help" className={mutedClass}>
+                  Speakers will only be able to upload the selected formats.
+                </small>
+              </fieldset>
+              <div className={fieldClass}>
+                <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
+                <Input
+                  id="task-max-size-mb"
+                  type="number"
+                  min={1}
+                  max={selectedFilePolicy.maxBytes / bytesPerMegabyte}
+                  step={1}
+                  value={maxSizeMb}
+                  onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
+                />
                 <small className={mutedClass}>
-                  {selectedFilePolicy.description} Create a separate request when you need a
-                  different file type or due date.
+                  Platform limit for {selectedFilePolicy.label.toLowerCase()}:{" "}
+                  {selectedFilePolicy.maxBytes / bytesPerMegabyte} MB.
                 </small>
               </div>
-              <div className={gridClass}>
-                <fieldset className={styles.fieldset} aria-describedby="file-format-help">
-                  <legend>File formats (required)</legend>
-                  <div className={styles.optionGrid}>
-                    {selectedFilePolicy.formats.map((format) => (
-                      <div key={format.id} className={styles.optionRow}>
-                        <Checkbox
-                          id={`task-file-format-${acceptedAssetKind}-${format.id}`}
-                          checked={fileFormatIsSelected(format)}
-                          onCheckedChange={(checked) => toggleFileFormat(format, checked === true)}
-                        />
-                        <Label htmlFor={`task-file-format-${acceptedAssetKind}-${format.id}`}>
-                          {format.label}
-                        </Label>
-                      </div>
-                    ))}
-                  </div>
-                  <small id="file-format-help" className={mutedClass}>
-                    Speakers will only be able to upload the selected formats.
-                  </small>
-                </fieldset>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
-                  <Input
-                    id="task-max-size-mb"
-                    type="number"
-                    min={1}
-                    max={selectedFilePolicy.maxBytes / bytesPerMegabyte}
-                    step={1}
-                    value={maxSizeMb}
-                    onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
-                  />
-                  <small className={mutedClass}>
-                    Platform limit for {selectedFilePolicy.label.toLowerCase()}:{" "}
-                    {selectedFilePolicy.maxBytes / bytesPerMegabyte} MB.
-                  </small>
-                </div>
-              </div>
-            </section>
+            </div>
+          </section>
 
-            <section
-              className={styles.composerSection}
-              aria-labelledby="assignments-section-heading"
-            >
-              <div className={styles.composerSectionHeading}>
-                <span>3</span>
-                <div>
-                  <h3 id="assignments-section-heading">Assignments</h3>
-                  <p>Choose the speakers and the exact subject for each request.</p>
-                </div>
+          <section className={styles.composerSection} aria-labelledby="assignments-section-heading">
+            <div className={styles.composerSectionHeading}>
+              <span>3</span>
+              <div>
+                <h3 id="assignments-section-heading">Assignments</h3>
+                <p>Choose the speakers and the exact subject for each request.</p>
               </div>
-              <div className={fieldClass}>
-                <Label htmlFor="task-subject-type">Request subject</Label>
-                <Select
-                  value={subjectType}
-                  onValueChange={(value) => setSubjectType(value as "participant" | "session")}
-                >
-                  <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="session">One accepted session per speaker</SelectItem>
-                    <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <small id="task-subject-help" className={mutedClass}>
-                  Session requests require an explicit accepted session for every assignee.
-                </small>
-              </div>
-              <fieldset className={styles.fieldset}>
-                <legend>Assignees and subjects</legend>
-                {participants.length === 0 ? (
-                  <p className={mutedClass}>
-                    No authorized speaker records were returned. Task creation cannot be assigned
-                    safely.
-                  </p>
-                ) : (
-                  <div className={styles.assigneeList}>
-                    {participants.map((participant) => {
-                      const selected = assigneeIds.includes(participant.id);
-                      return (
-                        <div key={participant.id} className={styles.assigneeRow}>
-                          <div className={styles.optionRow}>
-                            <Checkbox
-                              id={`task-assignee-${participant.id}`}
-                              checked={selected}
-                              onCheckedChange={() => toggleAssignee(participant.id)}
-                            />
-                            <Label htmlFor={`task-assignee-${participant.id}`}>
-                              {participant.label}
-                            </Label>
-                            {participant.sessions.length > 1 ? (
-                              <Badge variant="outline">
-                                {participant.sessions.length} accepted sessions
-                              </Badge>
-                            ) : null}
-                          </div>
-                          {selected && subjectType === "session" ? (
-                            participant.sessions.length === 0 ? (
-                              <Alert variant="destructive">
-                                <AlertDescription>
-                                  No accepted session is available for this participant.
-                                </AlertDescription>
-                              </Alert>
-                            ) : (
-                              <div className={fieldClass}>
-                                <Label htmlFor={`task-session-${participant.id}`}>
-                                  Accepted session for {participant.label}
-                                </Label>
-                                <Select
-                                  {...(sessionByParticipant[participant.id] === undefined
-                                    ? {}
-                                    : { value: sessionByParticipant[participant.id] })}
-                                  onValueChange={(submissionId) =>
-                                    setSessionByParticipant((current) => ({
-                                      ...current,
-                                      [participant.id]: submissionId,
-                                    }))
-                                  }
-                                >
-                                  <SelectTrigger id={`task-session-${participant.id}`}>
-                                    <SelectValue placeholder="Choose an accepted session" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {participant.sessions.map((session) => (
-                                      <SelectItem key={session.id} value={session.id}>
-                                        {session.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            )
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-subject-type">Request subject</Label>
+              <Select
+                value={subjectType}
+                onValueChange={(value) => setSubjectType(value as "participant" | "session")}
+              >
+                <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session">One accepted session per speaker</SelectItem>
+                  <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
+                </SelectContent>
+              </Select>
+              <small id="task-subject-help" className={mutedClass}>
+                Session requests require an explicit accepted session for every assignee.
+              </small>
+            </div>
+            <fieldset className={styles.fieldset}>
+              <legend>Assignees and subjects</legend>
+              {participants.length === 0 ? (
+                <p className={mutedClass}>
+                  No authorized speaker records were returned. Task creation cannot be assigned
+                  safely.
+                </p>
+              ) : (
+                <div className={styles.assigneeList}>
+                  {participants.map((participant) => {
+                    const selected = assigneeIds.includes(participant.id);
+                    return (
+                      <div key={participant.id} className={styles.assigneeRow}>
+                        <div className={styles.optionRow}>
+                          <Checkbox
+                            id={`task-assignee-${participant.id}`}
+                            checked={selected}
+                            onCheckedChange={() => toggleAssignee(participant.id)}
+                          />
+                          <Label htmlFor={`task-assignee-${participant.id}`}>
+                            {participant.label}
+                          </Label>
+                          {participant.sessions.length > 1 ? (
+                            <Badge variant="outline">
+                              {participant.sessions.length} accepted sessions
+                            </Badge>
                           ) : null}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </fieldset>
-              <div className={styles.assignmentCount} role="status" aria-live="polite">
-                <strong>{assignmentCount}</strong> assignment{assignmentCount === 1 ? "" : "s"} will
-                be created.
-              </div>
-            </section>
+                        {selected && subjectType === "session" ? (
+                          participant.sessions.length === 0 ? (
+                            <Alert variant="destructive">
+                              <AlertDescription>
+                                No accepted session is available for this participant.
+                              </AlertDescription>
+                            </Alert>
+                          ) : (
+                            <div className={fieldClass}>
+                              <Label htmlFor={`task-session-${participant.id}`}>
+                                Accepted session for {participant.label}
+                              </Label>
+                              <Select
+                                {...(sessionByParticipant[participant.id] === undefined
+                                  ? {}
+                                  : { value: sessionByParticipant[participant.id] })}
+                                onValueChange={(submissionId) =>
+                                  setSessionByParticipant((current) => ({
+                                    ...current,
+                                    [participant.id]: submissionId,
+                                  }))
+                                }
+                              >
+                                <SelectTrigger id={`task-session-${participant.id}`}>
+                                  <SelectValue placeholder="Choose an accepted session" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {participant.sessions.map((session) => (
+                                    <SelectItem key={session.id} value={session.id}>
+                                      {session.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+            <div className={styles.assignmentCount} role="status" aria-live="polite">
+              <strong>{assignmentCount}</strong> assignment{assignmentCount === 1 ? "" : "s"} will
+              be created.
+            </div>
+          </section>
 
-            {formError !== null ? (
-              <Alert variant="destructive">
-                <AlertTitle>Request not saved</AlertTitle>
-                <AlertDescription>{formError}</AlertDescription>
-              </Alert>
-            ) : null}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={busy || onCreateTask === undefined}>
-                {busy
-                  ? "Saving request…"
-                  : onCreateTask === undefined
-                    ? "Task creation unavailable"
-                    : `Create ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
+          {formError !== null ? (
+            <Alert variant="destructive">
+              <AlertTitle>Request not saved</AlertTitle>
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy || onCreateTask === undefined}>
+              {busy
+                ? "Saving request…"
+                : onCreateTask === undefined
+                  ? "Task creation unavailable"
+                  : `Create ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
     </Dialog>
   );
 }
@@ -2592,9 +2573,7 @@ export function DeliverablesWorkspace({
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
     effectiveInitialData?.sessions ?? [],
   );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(
-    effectiveInitialData?.tasks ?? [],
-  );
+  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(effectiveInitialData?.tasks ?? []);
   const [assets, setAssets] = useState<readonly DeliverableAsset[]>(
     effectiveInitialData?.assets ?? [],
   );
@@ -2929,13 +2908,7 @@ export function DeliverablesWorkspace({
         if (isCurrent()) setLoading(false);
       }
     },
-    [
-      api,
-      currentScope,
-      effectiveInitialData,
-      mode,
-      refreshSpeakerContentHistory,
-    ],
+    [api, currentScope, effectiveInitialData, mode, refreshSpeakerContentHistory],
   );
 
   useEffect(() => {

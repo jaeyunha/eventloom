@@ -115,12 +115,8 @@ describe("navigation data cache", () => {
       return revision;
     };
 
-    await expect(
-      cache.read({ key: "overview", tags: ["event:event-1"], load }),
-    ).resolves.toBe(1);
-    await expect(
-      cache.read({ key: "overview", tags: ["event:event-1"], load }),
-    ).resolves.toBe(1);
+    await expect(cache.read({ key: "overview", tags: ["event:event-1"], load })).resolves.toBe(1);
+    await expect(cache.read({ key: "overview", tags: ["event:event-1"], load })).resolves.toBe(1);
     await expect(
       cache.read({ key: "overview", tags: ["event:event-1"], load, fresh: true }),
     ).resolves.toBe(2);

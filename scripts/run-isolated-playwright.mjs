@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,10 +33,86 @@ function assertAvailablePlan(specFiles, basePorts) {
   }
 }
 
-function runSpec(specFile, index, total, basePorts) {
-  const webPort = String(basePorts.web + index);
-  const apiPort = String(basePorts.api + index);
-  const inspectorPort = String(basePorts.inspector + index);
+function reservePort() {
+  return new Promise((resolveReservation, rejectReservation) => {
+    const server = createServer();
+    server.once("error", rejectReservation);
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close();
+        rejectReservation(new Error("Failed to reserve an isolated Playwright port."));
+        return;
+      }
+      resolveReservation({ port: address.port, server });
+    });
+  });
+}
+
+function closeReservation({ server }) {
+  return new Promise((resolveClose, rejectClose) => {
+    server.close((error) => {
+      if (error) {
+        rejectClose(error);
+        return;
+      }
+      resolveClose();
+    });
+  });
+}
+
+async function reserveNonJudgePort() {
+  while (true) {
+    const reservation = await reservePort();
+    if (!reservedPorts.has(reservation.port)) return reservation;
+    await closeReservation(reservation);
+  }
+}
+
+async function portsForSpec(index, basePorts) {
+  if (basePorts !== null) {
+    return {
+      web: basePorts.web + index,
+      api: basePorts.api + index,
+      inspector: basePorts.inspector + index,
+    };
+  }
+
+  const reservations = [];
+  try {
+    for (let count = 0; count < 3; count += 1) {
+      reservations.push(await reserveNonJudgePort());
+    }
+    return {
+      web: reservations[0].port,
+      api: reservations[1].port,
+      inspector: reservations[2].port,
+    };
+  } finally {
+    await Promise.all(reservations.map(closeReservation));
+  }
+}
+
+function stopChildProcessGroup(child) {
+  if (child.pid === undefined) return;
+  try {
+    if (process.platform === "win32") {
+      child.kill("SIGTERM");
+      return;
+    }
+    process.kill(-child.pid, "SIGTERM");
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
+async function runSpec(specFile, index, total, basePorts) {
+  const ports = await portsForSpec(index, basePorts);
+  const webPort = String(ports.web);
+  const apiPort = String(ports.api);
+  const inspectorPort = String(ports.inspector);
   const relativeSpec = relative(repositoryRoot, specFile);
 
   console.log(
@@ -46,6 +123,7 @@ function runSpec(specFile, index, total, basePorts) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn("bunx", ["playwright", "test", relativeSpec, "--workers=1"], {
       cwd: repositoryRoot,
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         PLAYWRIGHT_WEB_PORT: webPort,
@@ -57,36 +135,62 @@ function runSpec(specFile, index, total, basePorts) {
       stdio: "inherit",
     });
 
-    child.on("error", rejectRun);
+    let settled = false;
+    const settle = (callback) => {
+      if (settled) return;
+      settled = true;
+      stopChildProcessGroup(child);
+      callback();
+    };
+
+    child.on("error", (error) => {
+      settle(() => rejectRun(error));
+    });
     child.on("exit", (code, signal) => {
-      if (signal !== null) {
-        rejectRun(new Error(`${relativeSpec} terminated by ${signal}.`));
-        return;
-      }
-      resolveRun(code ?? 1);
+      settle(() => {
+        if (signal !== null) {
+          rejectRun(new Error(`${relativeSpec} terminated by ${signal}.`));
+          return;
+        }
+        resolveRun(code ?? 1);
+      });
     });
   });
 }
 
-const specFiles = readdirSync(e2eDirectory, { withFileTypes: true })
-  .filter((entry) => entry.isFile() && entry.name.endsWith(".spec.ts"))
-  .map((entry) => join(e2eDirectory, entry.name))
-  .sort();
+const requestedSpecFiles = process.argv
+  .slice(2)
+  .map((specFile) => resolve(repositoryRoot, specFile));
+const specFiles =
+  requestedSpecFiles.length > 0
+    ? requestedSpecFiles
+    : readdirSync(e2eDirectory, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".spec.ts"))
+        .map((entry) => join(e2eDirectory, entry.name))
+        .sort();
 
 if (specFiles.length === 0) {
   throw new Error("No Playwright spec files were found.");
 }
 
-const basePorts = {
-  web: parsePort(process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3120", "PLAYWRIGHT_WEB_PORT"),
-  api: parsePort(process.env.PLAYWRIGHT_API_PORT?.trim() || "8810", "PLAYWRIGHT_API_PORT"),
-  inspector: parsePort(
-    process.env.PLAYWRIGHT_API_INSPECTOR_PORT?.trim() || "9250",
-    "PLAYWRIGHT_API_INSPECTOR_PORT",
-  ),
-};
+const explicitPortPlan = [
+  process.env.PLAYWRIGHT_WEB_PORT,
+  process.env.PLAYWRIGHT_API_PORT,
+  process.env.PLAYWRIGHT_API_INSPECTOR_PORT,
+].some((value) => value !== undefined);
 
-assertAvailablePlan(specFiles, basePorts);
+const basePorts = explicitPortPlan
+  ? {
+      web: parsePort(process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3120", "PLAYWRIGHT_WEB_PORT"),
+      api: parsePort(process.env.PLAYWRIGHT_API_PORT?.trim() || "8810", "PLAYWRIGHT_API_PORT"),
+      inspector: parsePort(
+        process.env.PLAYWRIGHT_API_INSPECTOR_PORT?.trim() || "9250",
+        "PLAYWRIGHT_API_INSPECTOR_PORT",
+      ),
+    }
+  : null;
+
+if (basePorts !== null) assertAvailablePlan(specFiles, basePorts);
 
 const failures = [];
 for (const [index, specFile] of specFiles.entries()) {

@@ -23,13 +23,8 @@ import { Input } from "@/components/ui/input";
 import styles from "./crm-workspace.module.css";
 import { createCrmApi, idempotencyKey } from "./crm-workspace-api";
 import {
-  CRM_PIPELINE_STAGES,
-  createCrmWorkspaceReadCoordinator,
-  mergePlanKey,
-  messageFromError,
-  refreshCrmAnalyticsAfterContactSave,
-  refreshCrmDuplicatesAfterContactSave,
   type ContactDraft,
+  CRM_PIPELINE_STAGES,
   type CrmAnalytics,
   type CrmApi,
   type CrmContact,
@@ -53,6 +48,11 @@ import {
   type CrmSegmentOperator,
   type CrmSegmentRule,
   type CrmWorkspaceContactFilter,
+  createCrmWorkspaceReadCoordinator,
+  mergePlanKey,
+  messageFromError,
+  refreshCrmAnalyticsAfterContactSave,
+  refreshCrmDuplicatesAfterContactSave,
 } from "./crm-workspace-model";
 
 function displayName(contact: Pick<CrmContact, "displayName" | "email" | "id">): string {
@@ -83,7 +83,6 @@ function focusAndScroll(target: HTMLElement | null): void {
   }
   target.focus({ preventScroll: true });
 }
-
 
 function humanErrorSummary(error: string): string {
   const summary =

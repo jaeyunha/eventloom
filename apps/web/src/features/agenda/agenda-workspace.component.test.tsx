@@ -69,6 +69,7 @@ const data: AgendaWorkspaceData = {
   },
   rooms: [{ id: "room_main", name: "Main hall", capacity: 500 }],
   tracks: [{ id: "track_main", name: "Main stage", color: "#4f5ee8" }],
+  acceptedSessionIds: ["session_keynote", "session_workshop"],
   unscheduledSessions: [
     {
       id: "session_workshop",
@@ -370,18 +371,20 @@ describe("agenda organizer workspace", () => {
   it("uses Next Link for private organizer destinations while retaining the skip anchor", () => {
     expect(workspaceSource).toContain('import Link from "next/link";');
     expect(workspaceSource).toContain(
-      "<Link\n                href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}\n              >",
+      "<Link\n                href={`/admin/organizations/" +
+        "$" +
+        "{encodeURIComponent(organizationId)}/events/" +
+        "$" +
+        "{encodeURIComponent(data.event.id)}`}\n              >",
     );
-    expect(workspaceSource).toContain('<Link href={settingsHref}>Rooms and tracks</Link>');
+    expect(workspaceSource).toContain("<Link href={settingsHref}>Rooms and tracks</Link>");
     expect(workspaceSource).toContain(
-      '<Link href={settingsHref}>Create a room in Rooms and tracks settings</Link>',
+      "<Link href={settingsHref}>Create a room in Rooms and tracks settings</Link>",
     );
-    expect(workspaceSource).toContain('<Link href={sessionsHref}>Open sessions</Link>');
-    expect(workspaceSource).not.toContain('<a href={settingsHref}>');
-    expect(workspaceSource).not.toContain('<a href={sessionsHref}>');
-    expect(workspaceSource).toContain(
-      '<a className={styles.skipLink} href="#agenda-content">',
-    );
+    expect(workspaceSource).toContain("<Link href={sessionsHref}>Open sessions</Link>");
+    expect(workspaceSource).not.toContain("<a href={settingsHref}>");
+    expect(workspaceSource).not.toContain("<a href={sessionsHref}>");
+    expect(workspaceSource).toContain('<a className={styles.skipLink} href="#agenda-content">');
   });
 
   it("exposes accessible scheduling and disabled publication controls", () => {
@@ -712,8 +715,8 @@ describe("agenda organizer workspace", () => {
   });
 
   it("does not expose raw audit actor identifiers in organizer-facing markup", () => {
-    const rawActorId = "0610353b-d9fc-444c-ae55-a8996a896315";
-    const rawTimestampToken = "d49ad11a-a82c-4907-9915-fc6b4987abba";
+    const rawActorId = "00000000-0000-4000-8000-000000000001";
+    const rawTimestampToken = "2099-12-31T23:59:59.000Z";
     const markup = renderBoard({
       ...data,
       draft: {
@@ -730,6 +733,7 @@ describe("agenda organizer workspace", () => {
   it("treats zero accepted sessions as an empty collection rather than completion", () => {
     const markup = renderBoard({
       ...data,
+      acceptedSessionIds: [],
       draft: {
         ...data.draft,
         entries: [],
@@ -768,5 +772,36 @@ describe("agenda organizer workspace", () => {
     expect(roomMarkup).toContain("Empty room");
     expect(roomMarkup).toContain("No sessions scheduled in this room.");
     expect(roomMarkup).toContain("Sessions to place");
+  });
+
+  it("does not claim the schedule is complete when the event has zero accepted sessions", () => {
+    const markup = renderBoard(
+      {
+        ...data,
+        draft: { ...data.draft, entries: [] },
+        acceptedSessionIds: [],
+        unscheduledSessions: [],
+      },
+      undefined,
+      null,
+    );
+
+    expect(markup).not.toContain("Schedule complete");
+    expect(markup).not.toContain("All accepted sessions placed");
+    expect(markup).not.toContain("All accepted sessions are placed");
+    expect(markup).toContain('data-agenda-empty-state="no-accepted-sessions"');
+    expect(markup).toContain("Open sessions");
+  });
+
+  it("keeps the completion state once at least one accepted session exists and all are placed", () => {
+    const markup = renderBoard(
+      { ...data, acceptedSessionIds: ["session_keynote"], unscheduledSessions: [] },
+      undefined,
+      null,
+    );
+
+    expect(markup).toContain('data-placement-complete="true"');
+    expect(markup).toContain("Queue clear");
+    expect(markup).not.toContain('data-agenda-empty-state="no-accepted-sessions"');
   });
 });

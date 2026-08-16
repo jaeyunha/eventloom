@@ -136,11 +136,7 @@ export function createNavigationDataCache(
     }
   }
 
-  function pendingMatches(
-    key: string,
-    tags: readonly string[],
-    entry: PendingEntry,
-  ): boolean {
+  function pendingMatches(key: string, tags: readonly string[], entry: PendingEntry): boolean {
     if (pending.get(key) !== entry || entry.epoch !== epoch || entry.tags.length !== tags.length) {
       return false;
     }

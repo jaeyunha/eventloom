@@ -120,6 +120,7 @@ export interface AgendaWorkspaceData {
   };
   rooms: readonly AgendaRoom[];
   tracks: readonly AgendaTrack[];
+  acceptedSessionIds: readonly string[];
   unscheduledSessions: readonly AgendaSession[];
   revisions: readonly AgendaRevision[];
   currentPublishedRevision: AgendaRevision | null;

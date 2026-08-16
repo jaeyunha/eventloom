@@ -142,6 +142,70 @@ describe("CFP flow", () => {
     ).toBe(false);
   });
 
+  it("shows workshop prerequisites only when the published format equals Workshop", () => {
+    const form = {
+      id: "devflow-cfp",
+      name: "DevFlow Conf 2027 CFP",
+      version: 3,
+      status: "published" as const,
+      welcomeContent: "Share your proposal",
+      settings: {
+        speakerLimit: 3,
+        maxSubmissionsPerAccount: 3,
+        confirmationMessage: "Proposal received",
+        successContent: "Thank you",
+      },
+      sections: [{ id: "proposal", title: "Proposal", description: "" }],
+      submissionFields: [
+        {
+          id: "format",
+          sectionId: "proposal",
+          key: "format",
+          label: "Format",
+          kind: "select",
+          required: false,
+          options: ["Talk (30 min)", "Workshop (120 min)"],
+        },
+        {
+          id: "workshop_prerequisites",
+          sectionId: "proposal",
+          key: "workshop_prerequisites",
+          label: "Workshop prerequisites",
+          kind: "rich_text",
+          required: false,
+          options: [],
+        },
+      ],
+      participantFields: [],
+      rules: [
+        {
+          id: "workshop-prerequisites",
+          priority: 100,
+          when: {
+            type: "group",
+            operator: "all",
+            conditions: [
+              {
+                type: "predicate",
+                fieldKey: "format",
+                operator: "equals",
+                value: "Workshop (120 min)",
+              },
+            ],
+          },
+          actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+        },
+      ],
+    } as CfpPublishedForm;
+
+    expect(
+      cfpPublishedFieldIsVisible(form, { format: "Workshop (120 min)" }, "workshop_prerequisites"),
+    ).toBe(true);
+    expect(
+      cfpPublishedFieldIsVisible(form, { format: "Talk (30 min)" }, "workshop_prerequisites"),
+    ).toBe(false);
+  });
+
   it("deduplicates published form and session reads across step remounts", async () => {
     const store = createCfpStartupStore();
     const published = { form: { id: "form-1" } } as unknown as PublishedCfp;

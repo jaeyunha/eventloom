@@ -43,8 +43,29 @@ import {
   type AgendaTimetablePlacement,
 } from "./agenda-timetable";
 import styles from "./agenda-workspace.module.css";
+import {
+  AGENDA_VIEW_MODES,
+  type AgendaAsyncScopeToken,
+  type AgendaSuggestionOptions,
+  type AgendaViewGroup,
+  type AgendaViewMode,
+  type AgendaWorkspaceLoadResult,
+  agendaViewLabels,
+  agendaWorkspaceDataMatchesEvent,
+  agendaWorkspaceScopeKey,
+  canCommitAgendaAsyncCompletion,
+  createCanonicalAgendaWorkspaceApi,
+  deriveAgendaViewGroups,
+  type ExistingSessionTimesSelection,
+  formatScheduleDate,
+  loadCanonicalAgendaWorkspace,
+  safeScheduleId,
+  scheduleDate,
+  serializeAgendaSuggestionOptions,
+} from "./agenda-workspace-model";
 import { type AgendaApi, AgendaApiError } from "./api";
 import {
+  acceptedSessionCount,
   agendaDays,
   conflictsForEntry,
   eventDates,
@@ -54,27 +75,6 @@ import {
   resolveAgendaPlacementDate,
   warningsForEntry,
 } from "./model";
-import {
-  AGENDA_VIEW_MODES,
-  agendaViewLabels,
-  agendaWorkspaceDataMatchesEvent,
-  agendaWorkspaceScopeKey,
-  canCommitAgendaAsyncCompletion,
-  createCanonicalAgendaWorkspaceApi,
-  deriveAgendaViewGroups,
-  formatScheduleDate,
-  isAgendaAsyncScopeTokenCurrent,
-  loadCanonicalAgendaWorkspace,
-  safeScheduleId,
-  scheduleDate,
-  serializeAgendaSuggestionOptions,
-  type AgendaAsyncScopeToken,
-  type ExistingSessionTimesSelection,
-  type AgendaSuggestionOptions,
-  type AgendaViewGroup,
-  type AgendaViewMode,
-  type AgendaWorkspaceLoadResult,
-} from "./agenda-workspace-model";
 import type {
   AgendaCalendarDeliveryState,
   AgendaEntry,
@@ -426,7 +426,6 @@ function EntryForm({
   );
 }
 
-
 interface AgendaBoardProps {
   organizationId: string;
   data: AgendaWorkspaceData;
@@ -506,10 +505,11 @@ export function AgendaBoard({
   const settingsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/settings`;
   const sessionsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/sessions`;
   const hasRooms = data.rooms.length > 0;
+  const acceptedCount = acceptedSessionCount(data);
   const scheduledCount = data.draft.entries.length;
   const toPlaceCount = data.unscheduledSessions.length;
-  const agendaSessionCount = scheduledCount + toPlaceCount;
-  const placementComplete = agendaSessionCount > 0 && toPlaceCount === 0;
+  const hasScheduleInventory = acceptedCount > 0 || scheduledCount > 0;
+  const placementComplete = acceptedCount > 0 && toPlaceCount === 0;
   const hardConflictCount =
     preview === null ? null : preview.conflicts.length + preview.releaseConflicts.length;
 
@@ -823,6 +823,7 @@ export function AgendaBoard({
 
         <div className={styles.overviewBand}>
           <AgendaOverview
+            acceptedCount={acceptedCount}
             scheduledCount={scheduledCount}
             toPlaceCount={toPlaceCount}
             hardConflictCount={hardConflictCount}
@@ -1101,7 +1102,7 @@ export function AgendaBoard({
                 <h2 id="schedule-heading">Build the agenda</h2>
                 <p>Choose an event day, then place accepted sessions into a room and time.</p>
               </div>
-              {agendaSessionCount === 0 ? null : placementComplete ? (
+              {!hasScheduleInventory ? null : placementComplete ? (
                 <div
                   className={styles.placementComplete}
                   data-placement-complete="true"
@@ -1113,7 +1114,7 @@ export function AgendaBoard({
                     No sessions waiting to be placed
                   </span>
                 </div>
-              ) : (
+              ) : toPlaceCount > 0 ? (
                 <button
                   className={styles.primaryButton}
                   type="button"
@@ -1129,9 +1130,9 @@ export function AgendaBoard({
                 >
                   {showAddForm ? "Close form" : "Schedule session"}
                 </button>
-              )}
+              ) : null}
             </div>
-            {agendaSessionCount > 0 && !hasRooms ? (
+            {hasScheduleInventory && !hasRooms ? (
               <p className={styles.formError} role="status">
                 Scheduling is unavailable until you create a room.{" "}
                 <Link href={settingsHref}>Create a room in Rooms and tracks settings</Link> before
@@ -1139,7 +1140,7 @@ export function AgendaBoard({
               </p>
             ) : null}
 
-            {agendaSessionCount === 0 ? (
+            {!hasScheduleInventory ? (
               <Empty className={styles.agendaEmpty} data-agenda-empty-state="no-accepted-sessions">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
@@ -1239,7 +1240,7 @@ export function AgendaBoard({
                     />
                   ) : (
                     <div className={styles.placementDockEmpty} role="status">
-                      <strong>All accepted sessions are placed</strong>
+                      <strong>No sessions waiting to be placed</strong>
                       <span>Drag a scheduled session here to return it to the queue.</span>
                     </div>
                   )}
@@ -1706,7 +1707,6 @@ interface AgendaWorkspaceProps {
   organizationId: string;
   api?: AgendaApi;
 }
-
 
 interface ScopedAgendaSnapshot {
   readonly scopeKey: string;

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, type ReactNode, useContext, useRef } from "react";
-import { createCfpStartupStore, type CfpStartupStore } from "./cfp-startup-store";
+import { type CfpStartupStore, createCfpStartupStore } from "./cfp-startup-store";
 
 const CfpStartupContext = createContext<CfpStartupStore | null>(null);
 

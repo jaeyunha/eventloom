@@ -1,12 +1,12 @@
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { PortalTaskResponseField } from "./portal-task-response-field";
 import {
   firstInvalidFieldId,
   responseFieldErrors,
   returnedOrganizerFeedback,
 } from "./portal-task-response-model";
-import { PortalTaskResponseField } from "./portal-task-response-field";
 import type { PortalFormField } from "./types";
 
 function field(overrides: Partial<PortalFormField> = {}): PortalFormField {

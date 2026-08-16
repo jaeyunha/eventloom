@@ -1,10 +1,8 @@
 "use client";
 
 import { type FormEvent, useMemo, useRef, useState } from "react";
-import {
-  createLoginApi,
-  type LoginApi,
-} from "@/features/auth/login-form-model";
+import { createLoginApi, type LoginApi } from "@/features/auth/login-form-model";
+import { createMemberApi, type MemberApi } from "./api";
 import {
   clearMemberSetupTokenFromUrl,
   completeMemberSetup,
@@ -13,7 +11,6 @@ import {
   PASSWORD_REQUIREMENTS,
   setupError,
 } from "./member-setup-model";
-import { createMemberApi, type MemberApi } from "./api";
 
 const shellStyle = {
   minHeight: "100vh",

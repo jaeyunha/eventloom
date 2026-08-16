@@ -107,6 +107,12 @@ export function agendaDays(
   }));
 }
 
+export function acceptedSessionCount(
+  data: Pick<AgendaWorkspaceData, "acceptedSessionIds">,
+): number {
+  return new Set(data.acceptedSessionIds).size;
+}
+
 export function conflictsForEntry(
   entryId: string,
   conflicts: readonly AgendaConflict[],

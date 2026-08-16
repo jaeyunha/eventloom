@@ -124,6 +124,84 @@ export interface CfpEditorProps {
   api?: CfpApi;
 }
 
+export function updateCfpShowWhenCondition(
+  configuration: CfpConfiguration,
+  patch: Partial<Omit<CfpCondition, "type" | "operator">>,
+): CfpConfiguration {
+  return {
+    ...configuration,
+    rule: {
+      ...firstRuleCondition(configuration.rule),
+      ...patch,
+      operator: "is",
+    },
+  };
+}
+
+function replaceRuleField(rule: CfpRule, currentKey: string, nextKey: string): CfpRule {
+  if (rule.type === "condition") {
+    return rule.field === currentKey ? { ...rule, field: nextKey } : rule;
+  }
+  return {
+    ...rule,
+    conditions: rule.conditions.map((condition) =>
+      replaceRuleField(condition, currentKey, nextKey),
+    ),
+  };
+}
+
+function replacePersistedRuleField(value: unknown, currentKey: string, nextKey: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => replacePersistedRuleField(entry, currentKey, nextKey));
+  }
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "fieldKey" && entry === currentKey
+        ? nextKey
+        : replacePersistedRuleField(entry, currentKey, nextKey),
+    ]),
+  );
+}
+
+export function updateCfpEditorField(
+  configuration: CfpConfiguration,
+  fieldId: string,
+  patch: Partial<CfpFormField>,
+): CfpConfiguration {
+  const field = configuration.fields.find((candidate) => candidate.id === fieldId);
+  if (field === undefined) return configuration;
+  const currentKey = field.key ?? field.id;
+  const nextKey = patch.key ?? currentKey;
+  const keyChanged = nextKey !== currentKey;
+  return {
+    ...configuration,
+    fields: configuration.fields.map((candidate) =>
+      candidate.id === fieldId ? { ...candidate, ...patch } : candidate,
+    ),
+    ...(keyChanged
+      ? {
+          rule: replaceRuleField(configuration.rule, currentKey, nextKey),
+          ruleTargetField:
+            configuration.ruleTargetField === currentKey ? nextKey : configuration.ruleTargetField,
+          ...(configuration.rules === undefined
+            ? {}
+            : {
+                rules: configuration.rules.map(
+                  (rule) =>
+                    replacePersistedRuleField(
+                      rule,
+                      currentKey,
+                      nextKey,
+                    ) as (typeof configuration.rules)[number],
+                ),
+              }),
+        }
+      : {}),
+  };
+}
+
 const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
   {
     id: "title",

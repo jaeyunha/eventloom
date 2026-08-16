@@ -9,15 +9,15 @@ import {
   type OrganizationMember,
   type ReviewerPool,
 } from "./api";
+import { MemberSetup } from "./member-setup";
 import {
   completeMemberSetup,
   MemberSetupActivatedSignInRequiredError,
   memberSetupPasswordIssues,
   setupUrlWithoutToken,
 } from "./member-setup-model";
-import { MemberSetup } from "./member-setup";
-import { inviteRolesForOrganization } from "./member-workspace-model";
 import { MemberWorkspace } from "./member-workspace";
+import { inviteRolesForOrganization } from "./member-workspace-model";
 import { OrganizationSettingsWorkspace } from "./organization-settings-workspace";
 
 const owner: OrganizationMember = {

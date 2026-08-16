@@ -5,13 +5,13 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui";
 import { WorkspaceState } from "@/components/workspace";
+import { participantDashboardHref } from "./participant-dashboard-model";
 import { AssetDetails } from "./portal-asset-details";
 import { EventGuideWorkspaceView } from "./portal-event-guide";
 import { type FilesWorkspaceUpload, FilesWorkspaceView } from "./portal-files-workspace";
-import { portalContextLabel } from "./portal-provider-model";
 import { usePortal } from "./portal-provider";
+import { portalContextLabel } from "./portal-provider-model";
 import { safePublishedUrl } from "./portal-published-content-model";
-import { participantDashboardHref } from "./participant-dashboard-model";
 import { SessionsWorkspaceView } from "./portal-sessions-workspace";
 import styles from "./portal-workspace.module.css";
 

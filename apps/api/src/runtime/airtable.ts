@@ -175,7 +175,6 @@ import type {
   SpeakerReminderDeliveryInput,
   SpeakerReminderDeliveryReceipt,
   SpeakerRepository,
-  SpeakerSubmission,
   SpeakerTask,
   UpdateBiographyCommand,
 } from "../features/speaker/types";

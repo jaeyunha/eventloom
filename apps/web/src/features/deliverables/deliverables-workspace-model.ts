@@ -1,15 +1,15 @@
-import {
-  type DeliverableAsset,
-  type DeliverableAssetHistoryEntry,
-  type DeliverableComment,
-  type DeliverableContentHistoryEntry,
-  type DeliverableExportDownload,
-  type DeliverableMatrixStatus,
-  type DeliverableSession,
-  type DeliverableSpeakerProfile,
-  type DeliverableTask,
-  type DeliverableTaskMatrix,
-  type DeliverablesApi,
+import type {
+  DeliverableAsset,
+  DeliverableAssetHistoryEntry,
+  DeliverableComment,
+  DeliverableContentHistoryEntry,
+  DeliverableExportDownload,
+  DeliverableMatrixStatus,
+  DeliverableSession,
+  DeliverableSpeakerProfile,
+  DeliverablesApi,
+  DeliverableTask,
+  DeliverableTaskMatrix,
 } from "./api";
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";

@@ -11,6 +11,7 @@ import {
   type SpeakerLifecycleFixture,
   speakerLifecycleIds,
 } from "../../../test-support/speaker-lifecycle";
+import { D1CfpRepository } from "./cfp";
 import { D1SpeakerRepository } from "./speaker";
 
 const fixtures: SpeakerLifecycleFixture[] = [];
@@ -39,6 +40,63 @@ afterEach(() => {
 });
 
 describe("Airtable-free speaker lifecycle on canonical D1", () => {
+  it("persists and reloads a published CFP URL field through canonical D1", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const repository = new D1CfpRepository(fixture.database as unknown as D1Database);
+
+    await repository.saveForm(
+      {
+        id: "url-form",
+        tenantId: organizationId,
+        eventId,
+        name: "URL field form",
+        status: "published",
+        version: 1,
+        welcomeContent: "Share a project link.",
+        settings: {
+          speakerLimit: 3,
+          maxSubmissionsPerAccount: 3,
+          remindersEnabled: true,
+          adminNotificationsEnabled: true,
+          confirmationMessage: "Received",
+          successContent: "Thank you",
+        },
+        sections: [
+          {
+            id: "section-links",
+            title: "Links",
+            description: "Project references",
+          },
+        ],
+        submissionFields: [
+          {
+            id: "field-website",
+            sectionId: "section-links",
+            key: "website",
+            label: "Project website",
+            kind: "url",
+            required: false,
+            options: [],
+          },
+        ],
+        participantFields: [],
+        rules: [],
+      },
+      null,
+    );
+
+    await expect(repository.getForm(organizationId, "url-form")).resolves.toMatchObject({
+      status: "published",
+      submissionFields: [
+        expect.objectContaining({
+          key: "website",
+          kind: "url",
+        }),
+      ],
+    });
+  });
+
   it("roundtrips organizer, participant, task, profile, and private-headshot state", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);
@@ -512,6 +570,167 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         participantIds: [],
       });
     }
+  }, 120_000);
+
+  it("roundtrips immutable file pointers, cross-role comments, approval, and ZIP export", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const admitted = await fixture.createPhase().service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+      jobTitle: "Staff Engineer",
+      company: "Durable Systems",
+      biography: "Priya biography.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "content-roundtrip-priya",
+    });
+    const participantId = admitted.speakers.find(
+      (speaker) => speaker.email === "priya@example.test",
+    )?.participantId;
+    if (participantId === undefined) throw new Error("Expected the admitted participant.");
+    const assigned = await fixture.createPhase().service.createOrganizerTask({
+      eventId,
+      accountId: organizerAccountId,
+      type: "upload",
+      title: "Upload Session Presentation",
+      description: "Upload the final deck.",
+      acceptedAssetKinds: ["slides"],
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 100_000,
+      assignments: [{ participantId, submissionId: null }],
+    });
+    const taskId = assigned[0]?.id;
+    if (taskId === undefined) throw new Error("Expected the assigned upload task.");
+    const firstBytes = new TextEncoder().encode("first-deck");
+    const secondBytes = new TextEncoder().encode("second-deck");
+
+    const upload = async (input: {
+      fileName: string;
+      bytes: Uint8Array;
+      supersedesAssetId?: string;
+    }) => {
+      const { service } = fixture.createPhase();
+      const authorization = await service.issueUploadGrant({
+        eventId,
+        accountId: priyaAccountId,
+        participantId,
+        taskId,
+        kind: "slides",
+        fileName: input.fileName,
+        contentType: "application/pdf",
+        sizeBytes: input.bytes.byteLength,
+        ...(input.supersedesAssetId === undefined
+          ? {}
+          : { supersedesAssetId: input.supersedesAssetId }),
+      });
+      const capability = privateCapabilityParts(authorization.grant.url);
+      await service.consumeUploadCapability(
+        capability.capabilityId,
+        capability.token,
+        new Request("https://api.example.test/private-upload", {
+          method: "PUT",
+          headers: {
+            "content-type": "application/pdf",
+            "content-length": String(input.bytes.byteLength),
+          },
+          body: input.bytes,
+        }),
+      );
+      return service.finalizeUpload({
+        eventId,
+        accountId: priyaAccountId,
+        assetId: authorization.asset.id,
+        state: "ready",
+      });
+    };
+
+    const first = await upload({ fileName: "slides-v1.pdf", bytes: firstBytes });
+    const second = await upload({
+      fileName: "slides-v2.pdf",
+      bytes: secondBytes,
+      supersedesAssetId: first.id,
+    });
+
+    const participantService = fixture.createPhase().service;
+    await participantService.addAssetComment({
+      eventId,
+      accountId: priyaAccountId,
+      assetId: second.id,
+      body: "Draft deck - final version coming Friday.",
+      expectedVersion: 0,
+    });
+    const organizerService = fixture.createPhase().service;
+    await expect(
+      organizerService.listOrganizerAssetComments(eventId, organizerAccountId, second.id),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        assetId: second.id,
+        authorLabel: "Priya Raman",
+        version: 1,
+      }),
+    ]);
+    await organizerService.addOrganizerAssetComment({
+      eventId,
+      accountId: organizerAccountId,
+      assetId: second.id,
+      body: "Thanks - please confirm the final version by Tuesday.",
+      expectedVersion: 1,
+    });
+    await expect(
+      fixture.createPhase().service.listAssetComments(eventId, priyaAccountId, second.id),
+    ).resolves.toEqual([
+      expect.objectContaining({ authorLabel: "Priya Raman", version: 1 }),
+      expect.objectContaining({ authorLabel: "Organizer", version: 2 }),
+    ]);
+
+    await organizerService.reviewAsset({
+      eventId,
+      accountId: organizerAccountId,
+      assetId: second.id,
+      state: "approved",
+      release: true,
+      expectedVersion: 0,
+    });
+    const projected = await fixture
+      .createPhase()
+      .service.listOrganizerAssets(eventId, organizerAccountId);
+    expect(projected.map((asset) => asset.id)).toEqual(
+      expect.arrayContaining([first.id, second.id]),
+    );
+    expect(projected).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: first.id,
+          latestVersionId: second.id,
+          currentVersionId: second.id,
+          approvedVersionId: second.id,
+          releasedVersionId: second.id,
+        }),
+        expect.objectContaining({
+          id: second.id,
+          latestVersionId: second.id,
+          currentVersionId: second.id,
+          approvedVersionId: second.id,
+          releasedVersionId: second.id,
+        }),
+      ]),
+    );
+
+    const exported = await fixture.createPhase().service.exportDeliverables({
+      eventId,
+      accountId: organizerAccountId,
+      assetIds: [second.id],
+    });
+    expect(exported.contentType).toBe("application/zip");
+    expect(exported.manifest.entries).toEqual([
+      expect.objectContaining({ assetId: second.id, version: 2 }),
+    ]);
+    expect(new TextDecoder().decode(exported.body)).toContain("second-deck");
+    expect(new TextDecoder().decode(exported.body)).not.toContain("first-deck");
   }, 120_000);
 
   it("accepts a persisted profile CAS when remote batch metadata reports zero changes", async () => {

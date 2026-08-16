@@ -75,20 +75,19 @@ import {
 } from "./api";
 import styles from "./communications-workspace.module.css";
 import {
+  type CommunicationProviderState,
+  type CommunicationTemplateSelection,
   communicationTemplateSelectionFromKey,
   communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,
-  findCommunicationTemplate,
   invalidateCommunicationPreviewState,
   loadCommunicationTemplates,
   messageFromError,
   previewAudienceForTemplate,
-  reminderTruthStateFromError,
-  stateFromError,
-  type CommunicationProviderState,
-  type CommunicationTemplateSelection,
   type ReminderRunActionInput,
   type ReminderTruthState,
+  reminderTruthStateFromError,
+  stateFromError,
   type TemplateDraft,
 } from "./communications-workspace-model";
 

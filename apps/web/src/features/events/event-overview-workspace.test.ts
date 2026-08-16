@@ -1,14 +1,14 @@
-import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
 import { EventOverviewContent } from "./event-overview-content";
-import { EventOverviewWorkspace } from "./event-overview-workspace";
 import {
   type EventOverviewData,
   loadEventOverviewData,
   loadEventOverviewName,
 } from "./event-overview-data";
+import { EventOverviewWorkspace } from "./event-overview-workspace";
 
 const overviewData: EventOverviewData = {
   event: {

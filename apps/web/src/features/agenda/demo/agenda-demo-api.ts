@@ -441,6 +441,7 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       },
       rooms,
       tracks,
+      acceptedSessionIds: sessions.map((session) => session.id),
       unscheduledSessions: sessions.filter((session) => !scheduledSessionIds.has(session.id)),
       revisions,
       currentPublishedRevision,

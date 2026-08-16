@@ -13,7 +13,6 @@ import { SpeakerService } from "../../../features/speaker/service";
 import { withTestSpeakerOrganizerLifecycle } from "../../../features/speaker/test-lifecycle-adapter";
 import type {
   SpeakerAssetAuditEntry,
-  SpeakerRepository,
   SpeakerTask,
   SpeakerTaskResponseRecord,
 } from "../../../features/speaker/types";
@@ -30,6 +29,7 @@ class RecordingD1 {
   constructor(
     private readonly contextRows: readonly QueryRow[] = [],
     private readonly contextRow: QueryRow | null = null,
+    private readonly batchChanges: readonly number[] = [],
   ) {}
 
   withSession(constraint?: string) {
@@ -95,7 +95,10 @@ class RecordingD1 {
   }
   async batch(statements: Array<{ sql?: string }>) {
     this.batches.push(statements.map((statement) => statement.sql ?? String(statement)));
-    return statements.map(() => ({ meta: { changes: 1 }, results: [] }));
+    return statements.map((_, index) => ({
+      meta: { changes: this.batchChanges[index] ?? 1 },
+      results: [],
+    }));
   }
 }
 
@@ -882,10 +885,106 @@ describe("D1SpeakerRepository", () => {
     );
   });
 
+  it("verifies persisted asset review state when D1 change metadata is zero", async () => {
+    const database = new RecordingD1([], null, [0, 0, 0, 0, 0]);
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+    const current = {
+      id: "asset-1",
+      tenantId: "org-1",
+      eventId: "event-1",
+      participantId: "participant-1",
+      kind: "slides" as const,
+      objectKey: "private/asset-1",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 100,
+      state: "ready",
+      createdAt: "2026-08-13T09:00:00.000Z",
+      reviewVersion: 0,
+      currentVersionId: "asset-1",
+      versionFamilyId: "family-1",
+    } as const;
+    const persisted = {
+      ...current,
+      reviewState: "approved" as const,
+      reviewedAt: audit.occurredAt,
+      reviewedBy: audit.actorAccountId,
+      reviewVersion: 1,
+      approvedVersionId: "asset-1",
+      releasedVersionId: "asset-1",
+    };
+    let assetRead = 0;
+    repository.getAsset = async () => (assetRead++ === 0 ? current : persisted);
+
+    await expect(
+      repository.reviewAsset?.({
+        eventId: "event-1",
+        assetId: "asset-1",
+        state: "approved",
+        expectedVersion: 0,
+        reviewedAt: audit.occurredAt,
+        reviewedBy: audit.actorAccountId,
+        release: true,
+        audit,
+      }),
+    ).resolves.toEqual({ ok: true, value: persisted });
+    expect(database.batches).toHaveLength(1);
+    expect(database.batches[0]).toHaveLength(5);
+    expect(database.batches[0]?.slice(0, 2)).toEqual([
+      expect.stringContaining("D1_CAS_CONFLICT"),
+      expect.stringContaining("D1_CAS_CONFLICT"),
+    ]);
+  });
+
+  it("verifies persisted asset finalization when D1 change metadata is zero", async () => {
+    const database = new RecordingD1([], null, [0, 0, 0]);
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+    const current = {
+      id: "asset-1",
+      tenantId: "org-1",
+      eventId: "event-1",
+      participantId: "participant-1",
+      kind: "slides" as const,
+      objectKey: "private/asset-1",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 100,
+      state: "pending_upload" as const,
+      createdAt: "2026-08-13T09:00:00.000Z",
+      currentVersionId: "asset-1",
+      versionFamilyId: "family-1",
+    };
+    const persisted = {
+      ...current,
+      state: "ready" as const,
+      finalizedAt: audit.occurredAt,
+      latestVersionId: "asset-1",
+    };
+    let assetRead = 0;
+    repository.getAsset = async () => (assetRead++ === 0 ? current : persisted);
+
+    await expect(
+      repository.finalizeAsset?.({
+        eventId: "event-1",
+        assetId: "asset-1",
+        state: "ready",
+        finalizedAt: audit.occurredAt,
+        latestVersionId: "asset-1",
+        currentVersionId: "asset-1",
+      }),
+    ).resolves.toEqual({ ok: true, value: persisted });
+    expect(database.batches).toHaveLength(1);
+    expect(database.batches[0]).toHaveLength(3);
+    expect(database.batches[0]?.slice(0, 2)).toEqual([
+      expect.stringContaining("D1_CAS_CONFLICT"),
+      expect.stringContaining("D1_CAS_CONFLICT"),
+    ]);
+  });
+
   it("includes asset review and audit in one D1 batch", async () => {
     const database = new RecordingD1();
     const repository = new D1SpeakerRepository(database as unknown as D1Database);
-    repository.getAsset = async () => ({
+    const current = {
       id: "asset-1",
       tenantId: "org-1",
       eventId: "event-1",
@@ -899,7 +998,18 @@ describe("D1SpeakerRepository", () => {
       createdAt: "2026-08-13T09:00:00.000Z",
       reviewVersion: 0,
       currentVersionId: "asset-1",
-    });
+    } as const;
+    const persisted = {
+      ...current,
+      reviewState: "approved" as const,
+      reviewedAt: audit.occurredAt,
+      reviewedBy: audit.actorAccountId,
+      reviewVersion: 1,
+      approvedVersionId: "asset-1",
+      releasedVersionId: "asset-1",
+    };
+    let assetRead = 0;
+    repository.getAsset = async () => (assetRead++ === 0 ? current : persisted);
 
     const result = await repository.reviewAsset?.({
       eventId: "event-1",
