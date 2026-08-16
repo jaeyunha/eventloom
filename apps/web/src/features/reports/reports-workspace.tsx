@@ -1946,6 +1946,10 @@ export function ReportsWorkspace({
       setRequestError("The reports API is not configured.");
       return;
     }
+    if (typeof document === "undefined") {
+      setRequestError("Report downloads require a browser.");
+      return;
+    }
     setBusy(true);
     setRequestError(null);
     setMessage(null);
@@ -1958,7 +1962,6 @@ export function ReportsWorkspace({
               contentType: run.export.contentType,
             }
           : await api.download(run.id);
-      if (typeof document === "undefined") throw new Error("Report downloads require a browser.");
       const blob = new Blob([download.body], { type: download.contentType });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
