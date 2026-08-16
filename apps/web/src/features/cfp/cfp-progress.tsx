@@ -2,7 +2,7 @@ import { Check } from "lucide-react";
 import styles from "./cfp-progress.module.css";
 import { CFP_STEPS, type CfpStep } from "./types";
 
-const STEP_LABELS: Record<CfpStep, string> = {
+export const CFP_STEP_LABELS: Record<CfpStep, string> = {
   welcome: "Get started",
   account: "Account",
   submission: "Proposal",
@@ -25,7 +25,7 @@ export function CfpProgress({ step, mobile = false }: CfpProgressProps) {
           <span>
             Step {currentIndex + 1} of {CFP_STEPS.length}
           </span>
-          <strong>{STEP_LABELS[step]}</strong>
+          <strong>{CFP_STEP_LABELS[step]}</strong>
         </div>
         <ol className={styles.mobileSegments}>
           {CFP_STEPS.map((wizardStep, index) => (
@@ -42,7 +42,7 @@ export function CfpProgress({ step, mobile = false }: CfpProgressProps) {
             >
               <span aria-hidden="true" />
               <span className="sr-only">
-                {STEP_LABELS[wizardStep]}
+                {CFP_STEP_LABELS[wizardStep]}
                 {index < currentIndex ? " complete" : ""}
               </span>
             </li>
@@ -68,7 +68,7 @@ export function CfpProgress({ step, mobile = false }: CfpProgressProps) {
               <span className={styles.indicator} aria-hidden="true">
                 {state === "complete" ? <Check size={12} strokeWidth={2.5} /> : index + 1}
               </span>
-              <span className={styles.label}>{STEP_LABELS[wizardStep]}</span>
+              <span className={styles.label}>{CFP_STEP_LABELS[wizardStep]}</span>
               <span className="sr-only">
                 {state === "complete" ? "Complete" : state === "current" ? "Current step" : ""}
               </span>

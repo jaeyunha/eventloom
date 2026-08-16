@@ -12,6 +12,11 @@ export interface CfpFixtureOptions {
   eventName?: string;
   formName?: string;
   formVersion?: number;
+  initiallyAuthenticated?: boolean;
+  memberships?: readonly {
+    organizationId: string;
+    role: "owner" | "admin" | "reviewer";
+  }[];
 }
 
 export interface CfpFixtureHarness {
@@ -228,7 +233,7 @@ export async function installCfpApi(
     updatedAt: UPDATED_AT,
   };
   const requests: Request[] = [];
-  let authenticated = false;
+  let authenticated = options.initiallyAuthenticated ?? false;
   const publicPath = `/api/public/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${eventSlug}`;
   const apiPath = `/api/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
   const draftPath = `${apiPath}/submissions/${submission.id}/draft`;
@@ -259,7 +264,7 @@ export async function installCfpApi(
           name: session.displayName,
           emailVerified: true,
         },
-        memberships: [],
+        memberships: options.memberships ?? [],
         speakerGrants: [],
       });
       return;

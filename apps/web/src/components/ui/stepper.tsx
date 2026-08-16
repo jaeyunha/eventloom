@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import styles from "../../styles/design-system.module.css";
 import { cx } from "./class-names";
+import { getStepState } from "./stepper-logic";
+
+export { getStepState, type StepState } from "./stepper-logic";
 
 export interface StepperStep {
   id: string;
@@ -14,18 +17,6 @@ export interface StepperProps {
   currentStep: string | number;
   label?: string;
   className?: string;
-}
-
-export type StepState = "complete" | "current" | "upcoming";
-
-export function getStepState(index: number, currentIndex: number): StepState {
-  if (index < currentIndex) {
-    return "complete";
-  }
-  if (index === currentIndex) {
-    return "current";
-  }
-  return "upcoming";
 }
 
 function CompleteIcon() {

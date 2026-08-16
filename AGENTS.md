@@ -47,3 +47,5 @@ Use Ever for regular deployed-browser acceptance and the `codex-cua` skill for e
 
 - Forge and GitHub are intentional private mirrors. Keep both private until the release gate; retain Forge for competition-bonus eligibility. Do not describe Forge as the sole remote or either mirror as public before that gate.
 - Preserve unrelated user work. Do not commit secrets, runtime state, Wrangler state, browser recordings containing secrets, or build output. Do not weaken or delete tests to make a check pass.
+- After verified work is complete, commit and push it without asking whether to do so unless a material risk or an important manual verification requires a human decision first.
+- Merging verified work to `main` is allowed without separate approval. Pause before merging only when an important human check could materially change whether the work should ship.

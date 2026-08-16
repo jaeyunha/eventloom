@@ -54,10 +54,7 @@ import {
   WorkspaceHeader,
   WorkspaceMetaItem,
 } from "@/components/workspace/workspace-ui";
-import {
-  useOrganizerEventId,
-  useOrganizerEventSlug,
-} from "@/features/admin/organizer-event-workspace";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
@@ -79,6 +76,11 @@ import {
   eventSettingsAuditPresentation,
   settingsOnlyAuditEntries,
 } from "./event-settings-audit";
+import {
+  eventSettingsNavigationScopeKey,
+  isCompleteEventSettingsNavigationCacheSnapshot,
+  useEventSettingsNavigationCache,
+} from "./event-settings-navigation-cache";
 import {
   type EventSettingsSection,
   eventSettingsSectionDefinition,
@@ -316,7 +318,6 @@ function SettingsSectionNavigation({
   section: EventSettingsSection;
 }>) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const eventSlug = useOrganizerEventSlug(eventId);
 
   const groups = useMemo(() => {
     const grouped = new Map<string, (typeof eventSettingsSections)[number][]>();
@@ -335,7 +336,7 @@ function SettingsSectionNavigation({
         <li key={item.id}>
           <Link
             className={`${styles.navigationLink} ${section === item.id ? styles.navigationLinkActive : ""}`}
-            href={eventSettingsSectionHref(organizationId, eventSlug, item.id)}
+            href={eventSettingsSectionHref(organizationId, eventId, item.id)}
             aria-current={section === item.id ? "page" : undefined}
             title={item.description}
             onClick={() => setMobileOpen(false)}
@@ -1682,7 +1683,7 @@ export interface EventSettingsWorkspaceProps {
 }
 
 export function eventSettingsWorkspaceScopeKey(organizationId: string, eventId: string): string {
-  return `${organizationId}\u0000${eventId}`;
+  return eventSettingsNavigationScopeKey(organizationId, eventId);
 }
 
 export function EventSettingsWorkspace(props: Readonly<EventSettingsWorkspaceProps>) {
@@ -1698,7 +1699,35 @@ function ScopedEventSettingsWorkspace({
   api: providedApi,
   initialData,
 }: Readonly<EventSettingsWorkspaceProps>) {
+  const navigationCache = useEventSettingsNavigationCache();
+  const cacheScope = useMemo(() => ({ organizationId, eventId }), [eventId, organizationId]);
+  const initialCacheSnapshot = useMemo(
+    () => navigationCache?.get(cacheScope),
+    [cacheScope, navigationCache],
+  );
+  const initialCachedData = useMemo(() => {
+    if (initialCacheSnapshot?.state.status !== "loaded") return undefined;
+    try {
+      return normalizeData(initialCacheSnapshot.state.data, organizationId, eventId);
+    } catch {
+      return undefined;
+    }
+  }, [eventId, initialCacheSnapshot, organizationId]);
+  const initialCacheIdentity = initialCacheSnapshot?.eventIdentity;
+  const initialCacheIdentityMatchesScope =
+    initialCacheIdentity === undefined || initialCacheIdentity.id === eventId;
   const [state, setState] = useState<EventSettingsWorkspaceState>(() => {
+    const cachedState = initialCacheSnapshot?.state;
+    if (cachedState !== undefined) {
+      if (cachedState.status !== "loaded") return cachedState;
+      if (initialCachedData !== undefined) {
+        return { ...cachedState, data: initialCachedData };
+      }
+      return {
+        status: "config-error",
+        message: "The cached event settings response belongs to a different scope.",
+      };
+    }
     if (initialData) {
       try {
         return { status: "loaded", data: normalizeData(initialData, organizationId, eventId) };
@@ -1708,11 +1737,20 @@ function ScopedEventSettingsWorkspace({
     }
     return { status: "loading" };
   });
-  const [eventIdentity, setEventIdentity] = useState<EventIdentity>();
+  const [eventIdentity, setEventIdentity] = useState<EventIdentity | undefined>(() =>
+    initialCacheIdentityMatchesScope && initialCachedData !== undefined
+      ? initialCacheIdentity
+      : undefined,
+  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const requestVersion = useRef(0);
   const mountedRef = useRef(true);
+  const reuseInitialCache =
+    initialCacheIdentity !== undefined &&
+    initialCacheIdentityMatchesScope &&
+    initialCachedData !== undefined &&
+    isCompleteEventSettingsNavigationCacheSnapshot(initialCacheSnapshot);
 
   const api = useMemo(() => {
     if (providedApi) return providedApi;
@@ -1741,28 +1779,44 @@ function ScopedEventSettingsWorkspace({
           mountedRef.current,
           signal?.aborted ?? false,
         );
+      const writeCache = (
+        nextState: EventSettingsWorkspaceState,
+        identity = !initialCacheIdentityMatchesScope || initialCachedData === undefined
+          ? undefined
+          : initialCacheIdentity,
+      ) => {
+        if (!navigationCache) return;
+        navigationCache.set(cacheScope, {
+          state: nextState,
+          ...(identity === undefined ? {} : { eventIdentity: identity }),
+        });
+      };
       if (!organizationId.trim() || !eventId.trim()) {
         if (requestIsCurrent()) {
-          setState({
+          const nextState: EventSettingsWorkspaceState = {
             status: "config-error",
             message: "An organization and event context are required.",
-          });
+          };
+          setState(nextState);
+          writeCache(nextState);
         }
         return;
       }
       if (!api) {
         if (requestIsCurrent()) {
-          setState({
+          const nextState: EventSettingsWorkspaceState = {
             status: "config-error",
             message: "The organizer API URL is not configured for event settings.",
-          });
+          };
+          setState(nextState);
+          writeCache(nextState);
         }
         return;
       }
       setState((current) => (current.status === "loaded" ? current : { status: "loading" }));
       setEventIdentity(undefined);
       setNotice(null);
-      let coreCommitted = false;
+      let coreData: EventSettingsData | undefined;
       try {
         const [identity, loaded] = await Promise.all([
           api.getEventIdentity(eventId, signal),
@@ -1772,40 +1826,72 @@ function ScopedEventSettingsWorkspace({
             eventId,
             (core) => {
               if (!requestIsCurrent()) return;
-              coreCommitted = true;
-              setState({ status: "loaded", data: core, detailsStatus: "loading" });
+              coreData = core;
+              const nextState: EventSettingsWorkspaceState = {
+                status: "loaded",
+                data: core,
+                detailsStatus: "loading",
+              };
+              setState(nextState);
+              writeCache(nextState);
             },
             signal,
           ),
         ]);
         if (requestIsCurrent()) {
+          const nextState: EventSettingsWorkspaceState = {
+            status: "loaded",
+            data: loaded,
+            detailsStatus: "loaded",
+          };
           setEventIdentity(identity);
-          setState({ status: "loaded", data: loaded, detailsStatus: "loaded" });
+          setState(nextState);
+          writeCache(nextState, identity);
         }
       } catch (error) {
         if (!requestIsCurrent() || (error instanceof DOMException && error.name === "AbortError")) {
           return;
         }
-        setState((current) => {
-          if (coreCommitted && current.status === "loaded") {
-            return {
-              ...current,
-              detailsStatus: "error",
-              detailsMessage: messageFrom(error),
-            };
-          }
-          return { status: "error", message: messageFrom(error) };
-        });
+        const preservedData = coreData ?? initialCachedData;
+        if (preservedData !== undefined) {
+          const nextState: EventSettingsWorkspaceState = {
+            status: "loaded",
+            data: preservedData,
+            detailsStatus: "error",
+            detailsMessage: messageFrom(error),
+          };
+          setState(nextState);
+          writeCache(nextState);
+        } else {
+          const nextState: EventSettingsWorkspaceState = {
+            status: "error",
+            message: messageFrom(error),
+          };
+          setState(nextState);
+          writeCache(nextState);
+        }
       }
     },
-    [api, eventId, organizationId],
+    [
+      api,
+      cacheScope,
+      eventId,
+      initialCacheIdentity,
+      initialCacheIdentityMatchesScope,
+      initialCachedData,
+      navigationCache,
+      organizationId,
+    ],
   );
 
   useEffect(() => {
+    if (reuseInitialCache && navigationCache?.get(cacheScope) === initialCacheSnapshot) {
+      return;
+    }
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [cacheScope, initialCacheSnapshot, load, navigationCache, reuseInitialCache]);
 
   const currentData = state.status === "loaded" ? state.data : null;
 
@@ -1817,16 +1903,33 @@ function ScopedEventSettingsWorkspace({
     if (
       canCommitEventSettingsAsyncCompletion(requestId, requestVersion.current, mountedRef.current)
     ) {
-      setState({
+      const nextState: EventSettingsWorkspaceState = {
         status: "loaded",
         data: normalizeData(loaded, organizationId, eventId),
         detailsStatus: "loaded",
+      };
+      const refreshedIdentity =
+        eventIdentity ?? (initialCacheIdentityMatchesScope ? initialCacheIdentity : undefined);
+      setState(nextState);
+      navigationCache?.set(cacheScope, {
+        state: nextState,
+        ...(refreshedIdentity === undefined ? {} : { eventIdentity: refreshedIdentity }),
       });
     }
-  }, [api, eventId, organizationId]);
+  }, [
+    api,
+    cacheScope,
+    eventId,
+    eventIdentity,
+    initialCacheIdentity,
+    initialCacheIdentityMatchesScope,
+    navigationCache,
+    organizationId,
+  ]);
 
   async function mutate(operation: () => Promise<void>, successMessage: string): Promise<void> {
     if (!currentData || !mountedRef.current) return;
+    navigationCache?.invalidate(cacheScope);
     if (!api) {
       const error = new TypeError("The organizer API URL is not configured for event settings.");
       setNotice(`Unable to complete this change. ${error.message}`);

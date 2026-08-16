@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   type CfpAuthenticatedSession,
@@ -34,12 +35,26 @@ import {
   syncPrimaryParticipant,
 } from "./types";
 
+const cfpWizardSource = readFileSync(new URL("./cfp-wizard.tsx", import.meta.url), "utf8");
+
 describe("CFP flow", () => {
   it("matches server URL validation for absolute HTTP and HTTPS values", () => {
     expect(cfpHttpUrlIsValid("https://example.test/project")).toBe(true);
     expect(cfpHttpUrlIsValid("http://localhost:3000/demo")).toBe(true);
     expect(cfpHttpUrlIsValid("not a URL")).toBe(false);
     expect(cfpHttpUrlIsValid("javascript:alert(1)")).toBe(false);
+  });
+
+  it("mounts the public application flow inside the shared workspace shell", () => {
+    expect(cfpWizardSource).toContain(
+      'import { ThemeToggle } from "../../components/product-shell/theme-toggle";',
+    );
+    expect(cfpWizardSource).toContain(
+      'import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";',
+    );
+    expect(cfpWizardSource).toContain("<WorkspaceShell");
+    expect(cfpWizardSource).toContain("<WorkspaceContextBar");
+    expect(cfpWizardSource).toContain("<ThemeToggle />");
   });
 
   it("starts draft saving only after authentication reaches the proposal", () => {
@@ -203,6 +218,7 @@ describe("CFP flow", () => {
         name: "Speaker",
         firstName: "Speaker",
         lastName: "",
+        memberships: [],
       }),
     ).toBe(false);
     expect(shouldAuthenticateCfpAccount("submission", null)).toBe(false);
