@@ -4,17 +4,6 @@ import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,11 +78,7 @@ import {
   deliverableAssetKinds,
 } from "./api";
 import styles from "./deliverables-workspace.module.css";
-import {
-  type FileFamilyProjection,
-  fileFamilyPointers,
-  projectFileFamilies,
-} from "./file-family-model";
+import { type FileFamilyProjection, projectFileFamilies } from "./file-family-model";
 import { FileLibrary } from "./file-library";
 import { FileReviewDrawer } from "./file-review-drawer";
 import {
@@ -534,18 +519,6 @@ function latestAsset(assets: readonly DeliverableAsset[]): DeliverableAsset | un
 function reviewStateForAsset(asset: DeliverableAsset): string {
   if (asset.reviewState !== undefined) return formatStatus(asset.reviewState);
   return asset.state === "ready" ? "Pending review" : formatStatus(asset.state);
-}
-function authoritativeAssetBadges(
-  asset: DeliverableAsset,
-  versions: readonly DeliverableAsset[],
-): readonly string[] {
-  const pointers = fileFamilyPointers(versions);
-  return [
-    ...(pointers.latest === asset.id ? ["Latest"] : []),
-    ...(pointers.current === asset.id ? ["Current"] : []),
-    ...(pointers.approved === asset.id ? ["Approved"] : []),
-    ...(pointers.released === asset.id ? ["Released"] : []),
-  ];
 }
 
 export function eligibleSpeakerHeadshotSessions(
@@ -1685,335 +1658,6 @@ export function ReminderPreview({
   );
 }
 
-function AssetDetail({
-  asset,
-  allAssets,
-  history,
-  assetHistoryError,
-  comments,
-  commentsError,
-  authoritativeCurrentAssetId,
-  matrixAuthoritative,
-  loading,
-  busy,
-  onDownload,
-  onAddComment,
-  onReview,
-  reviewAvailable,
-}: Readonly<{
-  asset: DeliverableAsset;
-  allAssets: readonly DeliverableAsset[];
-  history: readonly DeliverableAssetHistoryEntry[];
-  readonly assetHistoryError: string | null;
-  readonly commentsError: string | null;
-  comments: readonly DeliverableComment[];
-  authoritativeCurrentAssetId?: string;
-  matrixAuthoritative: boolean;
-  loading: boolean;
-  busy: boolean;
-  onDownload?: (assetId: string) => Promise<void>;
-  onAddComment?: (body: string, expectedVersion: number) => Promise<void>;
-  onReview?: (
-    state: DeliverableReviewState,
-    note: string | undefined,
-    release: boolean,
-  ) => Promise<void>;
-  reviewAvailable: boolean;
-}>) {
-  const family = assetFamily(asset);
-  const fallbackHistory = allAssets
-    .filter((candidate) => assetFamily(candidate) === family)
-    .sort((left, right) => (left.version ?? 0) - (right.version ?? 0));
-  const scopedHistory = history.filter((candidate) => assetFamily(candidate) === family);
-  const versions =
-    assetHistoryError === null && scopedHistory.length === 0 ? fallbackHistory : scopedHistory;
-  const [commentBody, setCommentBody] = useState("");
-  const [reviewNote, setReviewNote] = useState("");
-  const [commentError, setCommentError] = useState<string | null>(null);
-  const thread = [...comments]
-    .filter(
-      (comment) =>
-        comment.assetId === asset.id && comment.versionId === (asset.versionId ?? asset.id),
-    )
-    .sort(
-      (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) ||
-        (left.version ?? 0) - (right.version ?? 0) ||
-        left.id.localeCompare(right.id),
-    );
-  const pointerBadges = authoritativeAssetBadges(asset, versions);
-  const latestCommentVersion = thread.reduce(
-    (current, comment) => Math.max(current, comment.version ?? 0),
-    0,
-  );
-
-  async function submitComment(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const body = commentBody.trim();
-    if (body.length === 0) {
-      setCommentError("Enter a comment before posting.");
-      return;
-    }
-    setCommentError(null);
-    if (onAddComment === undefined) {
-      setCommentError(
-        "Cross-role comments are unavailable because the private asset comment endpoint is not provisioned.",
-      );
-      return;
-    }
-    await onAddComment(body, latestCommentVersion);
-    setCommentBody("");
-  }
-
-  return (
-    <div className={stackClass}>
-      <div className={clusterClass}>
-        <div>
-          <p className={mutedClass}>Private asset review</p>
-          <h2 id="asset-detail-heading">{asset.fileName}</h2>
-          <p className={mutedClass}>
-            {asset.contentType} · {Math.ceil(asset.sizeBytes / 1024)} KB
-          </p>
-        </div>
-        <div className={clusterClass}>
-          <Badge variant="outline">Authorized detail</Badge>
-          {pointerBadges.map((badge) => (
-            <Badge key={badge} variant={badge === "Released" ? "default" : "outline"}>
-              {badge}
-            </Badge>
-          ))}
-        </div>
-      </div>
-      <p className={mutedClass}>
-        Asset metadata is immutable. Each version remains independently accessible through a
-        short-lived server capability; object keys are never shown here.
-      </p>
-      <section aria-labelledby="asset-version-history-heading" className={stackClass}>
-        <h3 id="asset-version-history-heading">Version history</h3>
-        {assetHistoryError !== null ? (
-          <Alert variant="destructive" role="alert">
-            <AlertTitle>Version history unavailable</AlertTitle>
-            <AlertDescription>Version history unavailable: {assetHistoryError}</AlertDescription>
-          </Alert>
-        ) : versions.length === 0 ? (
-          loading ? (
-            <p role="status">Loading immutable versions and comments…</p>
-          ) : (
-            <p className={mutedClass}>No version history was returned.</p>
-          )
-        ) : (
-          <div className={tableWrapClass}>
-            <Table>
-              <TableCaption>Immutable asset versions</TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col">Version</TableHead>
-                  <TableHead scope="col">Uploaded</TableHead>
-                  <TableHead scope="col">State</TableHead>
-                  <TableHead scope="col">Review state</TableHead>
-                  <TableHead scope="col">Authoritative pointers</TableHead>
-                  <TableHead scope="col">Download</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {versions.map((version) => {
-                  const badges = authoritativeAssetBadges(version, versions);
-                  const current =
-                    authoritativeCurrentAssetId === undefined
-                      ? badges.includes("Current")
-                      : version.id === authoritativeCurrentAssetId;
-                  return (
-                    <TableRow key={version.id}>
-                      <TableHead scope="row">v{version.version ?? 1}</TableHead>
-                      <TableCell>{formatTime(version.createdAt)}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{formatStatus(version.state)}</Badge>
-                      </TableCell>
-                      <TableCell>{reviewStateForAsset(version)}</TableCell>
-                      <TableCell>
-                        <div className={clusterClass}>
-                          {badges.length === 0
-                            ? matrixAuthoritative
-                              ? "No pointer"
-                              : "Pointer unavailable"
-                            : badges.map((badge) => (
-                                <Badge
-                                  key={badge}
-                                  variant={badge === "Released" ? "default" : "outline"}
-                                >
-                                  {badge}
-                                </Badge>
-                              ))}
-                          {current && !badges.includes("Current") ? (
-                            <Badge variant="outline">Current</Badge>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          type="button"
-                          disabled={busy || onDownload === undefined}
-                          onClick={() =>
-                            onDownload === undefined ? undefined : void onDownload(version.id)
-                          }
-                        >
-                          {onDownload === undefined ? "Download unavailable" : "Download version"}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
-      <section aria-labelledby="asset-comments-heading" className={stackClass}>
-        <h3 id="asset-comments-heading">Version-specific comments</h3>
-        <p className={mutedClass}>
-          Replies below belong only to immutable asset v{asset.version ?? 1} ({asset.id}). Selecting
-          another version loads its separate thread.
-        </p>
-        {commentsError !== null ? (
-          <Alert variant="destructive" role="alert">
-            <AlertTitle>Comments unavailable</AlertTitle>
-            <AlertDescription>{commentsError}</AlertDescription>
-          </Alert>
-        ) : thread.length === 0 ? (
-          loading ? (
-            <p role="status">Loading comments…</p>
-          ) : (
-            <p className={mutedClass}>No comments have been returned for this asset version.</p>
-          )
-        ) : (
-          <ol aria-label={`Comments for asset version ${asset.id}`}>
-            {thread.map((comment) => (
-              <li key={comment.id}>
-                <strong>{comment.authorLabel}</strong> ·{" "}
-                <time dateTime={comment.createdAt}>{formatTime(comment.createdAt)}</time>
-                <p>{comment.body}</p>
-              </li>
-            ))}
-          </ol>
-        )}
-        <form onSubmit={(event) => void submitComment(event)} className={stackClass}>
-          <div className={fieldClass}>
-            <Label htmlFor="asset-comment-body">Reply to asset v{asset.version ?? 1}</Label>
-            <Textarea
-              id="asset-comment-body"
-              rows={3}
-              value={commentBody}
-              onChange={(event) => setCommentBody(event.currentTarget.value)}
-              placeholder="Reply to the speaker…"
-            />
-          </div>
-          {commentError !== null ? (
-            <Alert variant="destructive" role="alert">
-              <AlertDescription>{commentError}</AlertDescription>
-            </Alert>
-          ) : null}
-          <Button variant="outline" type="submit" disabled={busy || onAddComment === undefined}>
-            {onAddComment === undefined ? "Comments unavailable" : "Post organizer reply"}
-          </Button>
-        </form>
-      </section>
-      <section aria-labelledby="asset-review-heading" className={stackClass}>
-        <h3 id="asset-review-heading">Review decision</h3>
-        {reviewAvailable ? (
-          <>
-            <div className={fieldClass}>
-              <Label htmlFor="asset-review-note">Review note (optional)</Label>
-              <Textarea
-                id="asset-review-note"
-                rows={2}
-                value={reviewNote}
-                onChange={(event) => setReviewNote(event.currentTarget.value)}
-              />
-            </div>
-            <p className={mutedClass}>
-              Approve records this exact version as approved. Approve and release additionally moves
-              the authoritative released pointer to this version.
-            </p>
-            <div className={clusterClass}>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button type="button" disabled={busy}>
-                    Approve
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Confirm asset approval</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Approve this exact asset version? This records the review decision and does
-                      not publish the file immediately.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() =>
-                        void onReview?.("approved", reviewNote.trim() || undefined, false)
-                      }
-                    >
-                      Confirm approval
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button variant="outline" type="button" disabled={busy}>
-                    Approve and release
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Confirm asset release</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Approve and release this exact asset version? This changes the authoritative
-                      approved and released pointers.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() =>
-                        void onReview?.("approved", reviewNote.trim() || undefined, true)
-                      }
-                    >
-                      Confirm release
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-              <Button
-                variant="outline"
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  onReview === undefined
-                    ? undefined
-                    : void onReview("needs_changes", reviewNote.trim() || undefined, false)
-                }
-              >
-                Needs changes
-              </Button>
-            </div>
-          </>
-        ) : (
-          <p className={mutedClass}>
-            Organizer asset approval is unavailable because the private asset API exposes no review
-            endpoint. No decision was fabricated.
-          </p>
-        )}
-      </section>
-    </div>
-  );
-}
-
 function SessionEditor(
   props: Readonly<{
     readonly organizationId: string;
@@ -2530,121 +2174,52 @@ export function DeliverablesWorkspaceView({
               </SheetContent>
             </Sheet>
           ) : null}
-          {filesMode ? (
-            <FileReviewDrawer
-              open={selectedAssetId !== null}
-              family={activeFileFamily}
-              asset={selectedAsset}
-              sessions={sessions}
-              tasks={tasks}
-              profiles={profiles}
-              history={assetHistory}
-              comments={comments}
-              loading={loadingAssetDetails}
-              busy={busy}
-              assetHistoryError={assetHistoryError ?? null}
-              commentsError={commentsError ?? null}
-              reviewAvailable={onReviewAsset !== undefined}
-              onOpenChange={(open) => {
-                if (!open) onCloseAsset?.();
-              }}
-              {...(onInspectAsset === undefined ? {} : { onSelectVersion: onInspectAsset })}
-              {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
-              {...(onAddComment === undefined || selectedAsset === undefined
-                ? {}
-                : {
-                    onAddComment: (body: string, expectedVersion: number) =>
-                      onAddComment({
-                        assetId: selectedAsset.id,
-                        body,
-                        expectedVersion,
-                      }),
-                  })}
-              {...(onReviewAsset === undefined || selectedAsset === undefined
-                ? {}
-                : {
-                    onReview: (
-                      state: DeliverableReviewState,
-                      note: string | undefined,
-                      release: boolean,
-                    ) =>
-                      onReviewAsset({
-                        assetId: selectedAsset.id,
-                        state,
-                        expectedVersion: selectedAsset.reviewVersion ?? 0,
-                        release,
-                        ...(note === undefined ? {} : { note }),
-                      }),
-                  })}
-            />
-          ) : null}
-          {!filesMode ? (
-            <Sheet
-              open={selectedAssetId !== null}
-              onOpenChange={(open) => {
-                if (!open) onCloseAsset?.();
-              }}
-            >
-              <SheetContent className={styles.assetSheet}>
-                <SheetHeader>
-                  <SheetTitle>Asset detail</SheetTitle>
-                  <SheetDescription>
-                    Authorized immutable history, comments, review, and version downloads.
-                  </SheetDescription>
-                </SheetHeader>
-                <ScrollArea className={styles.assetScroll}>
-                  {selectedAsset === undefined ? (
-                    <Alert variant="destructive" role="alert">
-                      <AlertDescription>
-                        The selected private asset is no longer present in this event projection.
-                      </AlertDescription>
-                    </Alert>
-                  ) : (
-                    <AssetDetail
-                      asset={selectedAsset}
-                      allAssets={matrixAssetsForView}
-                      history={assetHistory}
-                      assetHistoryError={assetHistoryError ?? null}
-                      commentsError={commentsError ?? null}
-                      comments={comments}
-                      matrixAuthoritative={matrixItems !== undefined}
-                      {...(authoritativeCurrentAsset === undefined
-                        ? {}
-                        : { authoritativeCurrentAssetId: authoritativeCurrentAsset.id })}
-                      loading={loadingAssetDetails}
-                      busy={busy}
-                      reviewAvailable={onReviewAsset !== undefined}
-                      {...(onDownloadVersion === undefined
-                        ? {}
-                        : { onDownload: onDownloadVersion })}
-                      {...(onAddComment === undefined
-                        ? {}
-                        : {
-                            onAddComment: async (body, expectedVersion) =>
-                              onAddComment({
-                                assetId: selectedAsset.id,
-                                body,
-                                expectedVersion,
-                              }),
-                          })}
-                      {...(onReviewAsset === undefined
-                        ? {}
-                        : {
-                            onReview: async (state, note, release) =>
-                              onReviewAsset({
-                                assetId: selectedAsset.id,
-                                state,
-                                expectedVersion: selectedAsset.reviewVersion ?? 0,
-                                release,
-                                ...(note === undefined ? {} : { note }),
-                              }),
-                          })}
-                    />
-                  )}
-                </ScrollArea>
-              </SheetContent>
-            </Sheet>
-          ) : null}
+          <FileReviewDrawer
+            open={selectedAssetId !== null}
+            family={activeFileFamily}
+            asset={selectedAsset}
+            sessions={sessions}
+            tasks={tasks}
+            profiles={profiles}
+            history={assetHistory}
+            comments={comments}
+            loading={loadingAssetDetails}
+            busy={busy}
+            assetHistoryError={assetHistoryError ?? null}
+            commentsError={commentsError ?? null}
+            reviewAvailable={onReviewAsset !== undefined}
+            onOpenChange={(open) => {
+              if (!open) onCloseAsset?.();
+            }}
+            {...(onInspectAsset === undefined ? {} : { onSelectVersion: onInspectAsset })}
+            {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
+            {...(onAddComment === undefined || selectedAsset === undefined
+              ? {}
+              : {
+                  onAddComment: (body: string, expectedVersion: number) =>
+                    onAddComment({
+                      assetId: selectedAsset.id,
+                      body,
+                      expectedVersion,
+                    }),
+                })}
+            {...(onReviewAsset === undefined || selectedAsset === undefined
+              ? {}
+              : {
+                  onReview: (
+                    state: DeliverableReviewState,
+                    note: string | undefined,
+                    release: boolean,
+                  ) =>
+                    onReviewAsset({
+                      assetId: selectedAsset.id,
+                      state,
+                      expectedVersion: selectedAsset.reviewVersion ?? 0,
+                      release,
+                      ...(note === undefined ? {} : { note }),
+                    }),
+                })}
+          />
           {!filesMode && selectedAssetId !== null ? (
             <Card className={sectionClass} aria-label="Selected asset evidence">
               <CardHeader>

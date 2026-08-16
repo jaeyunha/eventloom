@@ -25,6 +25,9 @@ describe("public theme toggle", () => {
   });
 
   it("keeps the appearance trigger at a touch-safe size in every theme", () => {
+    expect(themeToggleSource).toContain(
+      'className="product-theme-toggle size-11 rounded-[var(--radius-sm)]"',
+    );
     expect(globalStyles).toMatch(
       /\.product-theme-toggle\s*\{[\s\S]*min-width:\s*2\.75rem;[\s\S]*min-height:\s*2\.75rem;/u,
     );
