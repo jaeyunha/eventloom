@@ -146,7 +146,7 @@ export const cfpFormFields = sqliteTable(
     check("cfp_form_fields_scope_check", sql`${t.scope} in('submission','participant')`),
     check(
       "cfp_form_fields_kind_check",
-      sql`${t.kind} in('file_request','text','rich_text','email','select','multi_select','boolean','number')`,
+      sql`${t.kind} in('file_request','text','rich_text','email','url','select','multi_select','boolean','number')`,
     ),
     check(
       "cfp_form_fields_file_check",

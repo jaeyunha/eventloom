@@ -7,7 +7,7 @@ import type {
   SubmissionStep,
   SubmissionVersion,
 } from "./model";
-import { evaluateFormRules, validateCfpForm } from "./rules";
+import { evaluateFormRules, validateCfpForm, validateSubmissionAnswers } from "./rules";
 import {
   CfpError,
   type CfpFileAssetAuthorizer,
@@ -587,6 +587,90 @@ describe("CFP rules and configuration", () => {
     expect(published.form.settings).not.toHaveProperty("remindersEnabled");
   });
 
+  it("saves a fully configured draft, publishes it with CAS, and resolves it by public slug", async () => {
+    const { service, repository } = createFixture();
+    const draft = buildForm({
+      version: 2,
+      status: "draft",
+      submissionFields: [
+        ...buildForm().submissionFields,
+        {
+          id: "proposal_website",
+          sectionId: "session",
+          key: "proposal_website",
+          label: "Proposal website",
+          kind: "url",
+          required: false,
+          options: [],
+        },
+        {
+          id: "workshop_prerequisites",
+          sectionId: "session",
+          key: "workshop_prerequisites",
+          label: "Workshop prerequisites",
+          kind: "rich_text",
+          required: false,
+          options: [],
+        },
+      ],
+      rules: [
+        {
+          id: "workshop_prerequisites_rule",
+          priority: 100,
+          when: {
+            type: "group",
+            operator: "all",
+            conditions: [
+              {
+                type: "predicate",
+                fieldKey: "format",
+                operator: "equals",
+                value: "workshop",
+              },
+            ],
+          },
+          actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+        },
+      ],
+    });
+
+    await expect(service.saveForm(draft, 1)).resolves.toMatchObject({
+      version: 2,
+      status: "draft",
+    });
+    const published = await service.publishForm({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      organizerId: "organizer_1",
+      expectedVersion: 2,
+      idempotencyKey: "publish-complete-cfp",
+    });
+    expect(published).toMatchObject({ version: 3, status: "published" });
+    expect(repository.forms.get("form_1")).toMatchObject({ version: 3, status: "published" });
+
+    const publicCfp = await service.getPublishedCfp({
+      tenantId: "tenant_1",
+      eventSlug: "future-conf",
+    });
+    expect(publicCfp).toMatchObject({
+      event: { id: "event_1", slug: "future-conf" },
+      form: {
+        id: "form_1",
+        version: 3,
+        status: "published",
+        rules: [
+          {
+            when: {
+              conditions: [{ fieldKey: "format", operator: "equals", value: "workshop" }],
+            },
+            actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+          },
+        ],
+      },
+    });
+  });
+
   it("resolves a public CFP by organization-scoped slug and returns canonical IDs", async () => {
     const { service } = createFixture();
 
@@ -926,6 +1010,41 @@ describe("CFP submission lifecycle", () => {
         idempotencyKey: "invalid-submit",
       }),
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("accepts HTTP URLs and rejects malformed URL answers at the API boundary", () => {
+    const websiteField = {
+      id: "field_website",
+      sectionId: "session",
+      key: "website",
+      label: "Project website",
+      kind: "url" as const,
+      required: false,
+      options: [],
+    };
+    const urlForm = buildForm({
+      submissionFields: [websiteField],
+      participantFields: [],
+      rules: [],
+    });
+
+    expect(
+      validateSubmissionAnswers(urlForm, { website: "https://example.test/project" }, []),
+    ).toEqual([]);
+    expect(validateSubmissionAnswers(urlForm, { website: "not a URL" }, [])).toEqual([
+      {
+        path: "answers.website",
+        code: "invalid_type",
+        message: "Project website must be a valid HTTP or HTTPS URL.",
+      },
+    ]);
+    expect(validateSubmissionAnswers(urlForm, { website: 42 }, [])).toEqual([
+      {
+        path: "answers.website",
+        code: "invalid_type",
+        message: "Project website must be a valid HTTP or HTTPS URL.",
+      },
+    ]);
   });
 
   it("rejects submission without a title even when the form marks title optional", async () => {

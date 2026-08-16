@@ -1,6 +1,7 @@
 import {
   ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
   ORGANIZER_HEADSHOT_MAX_BYTES,
+  type SpeakerAsset,
   type SpeakerSession,
 } from "./api";
 
@@ -38,6 +39,38 @@ export function validateOrganizerHeadshotFile(file: File): string | null {
     return "Headshots must be 5 MB or smaller.";
   }
   return null;
+}
+
+export function organizerHeadshotPreviewKey(
+  participantId: string | null | undefined,
+  assetId: string | null | undefined,
+  asset: Pick<SpeakerAsset, "contentType" | "status"> | null,
+): string | null {
+  if (
+    participantId === null ||
+    participantId === undefined ||
+    assetId === null ||
+    assetId === undefined
+  ) {
+    return null;
+  }
+  return [
+    participantId,
+    assetId,
+    asset?.status ?? "unknown",
+    asset === null ? "" : asset.contentType.trim().toLowerCase(),
+  ].join("\u0000");
+}
+
+export function organizerHeadshotPreviewRequestKey(
+  sourceVersion: number,
+  retry: number,
+  participantId: string | null | undefined,
+  assetId: string | null | undefined,
+  asset: Pick<SpeakerAsset, "contentType" | "status"> | null,
+): string | null {
+  const previewKey = organizerHeadshotPreviewKey(participantId, assetId, asset);
+  return previewKey === null ? null : `${sourceVersion}:${retry}:${previewKey}`;
 }
 
 export function organizerHeadshotPreviewPath(value: string): string | null {

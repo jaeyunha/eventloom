@@ -1,0 +1,131 @@
+.window {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 88%, var(--color-canvas));
+}
+
+.heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.icon {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+  color: var(--color-accent);
+}
+
+.heading p,
+.heading h2,
+.description,
+.limit {
+  margin: 0;
+}
+
+.heading p {
+  color: var(--color-muted);
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.heading h2 {
+  margin-top: 0.1rem;
+  color: var(--color-ink);
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.description {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.dates {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.dates > div {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dates dt {
+  color: var(--color-muted);
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.dates dd {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.limit {
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.window[data-status="open"] .icon {
+  background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));
+  color: var(--color-success);
+}
+
+.window[data-status="closed"] .icon {
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+  color: var(--color-danger);
+}
+
+@media (max-width: 52rem) {
+  .window {
+    margin-top: 1rem;
+  }
+
+  .dates {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .dates > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 34rem) {
+  .dates {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .dates > div {
+    grid-template-columns: 3rem minmax(0, 1fr);
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+}

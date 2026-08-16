@@ -46,6 +46,7 @@ export const formFieldKindSchema = z.enum([
   "text",
   "rich_text",
   "email",
+  "url",
   "select",
   "multi_select",
   "boolean",

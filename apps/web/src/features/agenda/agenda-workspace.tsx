@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2 } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock3, Save } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   StatusBadge,
   WorkspaceBreadcrumb,
   WorkspaceHeader,
@@ -25,6 +33,8 @@ import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
 } from "@/lib/scoped-read-flight";
+import { AgendaDaySelector } from "./agenda-day-selector";
+import { AgendaOverview } from "./agenda-overview";
 import { AgendaPlacementQueue } from "./agenda-placement-queue";
 import {
   AGENDA_ENTRY_DRAG_TYPE,
@@ -34,6 +44,7 @@ import {
 import styles from "./agenda-workspace.module.css";
 import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
 import {
+  acceptedSessionCount,
   agendaDays,
   conflictsForEntry,
   eventDates,
@@ -41,6 +52,7 @@ import {
   formatLocalTime,
   formatRevisionTimestamp,
   publicationReadiness,
+  resolveAgendaPlacementDate,
   warningsForEntry,
 } from "./model";
 import type {
@@ -457,15 +469,6 @@ function formatScheduleDate(date: string): string {
   return formatLocalDate(`${date}T12:00`);
 }
 
-function formatCompactScheduleDate(date: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${date}T12:00:00Z`));
-}
-
 function safeScheduleId(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
@@ -634,7 +637,6 @@ export function AgendaBoard({
   const [selectedDay, setSelectedDay] = useState(() => eventDays[0]?.date ?? "");
   const [selectedSuggestionChanges, setSelectedSuggestionChanges] = useState<readonly string[]>([]);
   const viewTabRefs = useRef<Partial<Record<AgendaViewMode, HTMLButtonElement | null>>>({});
-  const dateRailRef = useRef<HTMLElement | null>(null);
   const currentRevision = data.currentPublishedRevision;
   const editingEntry =
     editingEntryId === null
@@ -643,7 +645,15 @@ export function AgendaBoard({
   const isBusyFor = (operation: AgendaBusyOperation): boolean =>
     busy && (busyOperation === undefined || busyOperation === null || busyOperation === operation);
   const settingsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/settings`;
+  const sessionsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/sessions`;
   const hasRooms = data.rooms.length > 0;
+  const acceptedCount = acceptedSessionCount(data);
+  const scheduledCount = data.draft.entries.length;
+  const toPlaceCount = data.unscheduledSessions.length;
+  const hasScheduleInventory = acceptedCount > 0 || scheduledCount > 0;
+  const placementComplete = acceptedCount > 0 && toPlaceCount === 0;
+  const hardConflictCount =
+    preview === null ? null : preview.conflicts.length + preview.releaseConflicts.length;
 
   useEffect(() => {
     const suggestionId = suggestionRun?.id;
@@ -656,13 +666,6 @@ export function AgendaBoard({
       setSelectedDay(eventDays[0]?.date ?? "");
     }
   }, [eventDays, selectedDay]);
-  useEffect(() => {
-    if (viewMode !== "day") return;
-    dateRailRef.current
-      ?.querySelector<HTMLElement>(`[data-date="${safeScheduleId(selectedDay)}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [selectedDay, viewMode]);
-
   function selectView(nextView: AgendaViewMode) {
     setViewMode(nextView);
   }
@@ -791,67 +794,6 @@ export function AgendaBoard({
     );
   }
 
-  function renderDayNavigation(groups: readonly AgendaViewGroup[]) {
-    const currentIndex = groups.findIndex((group) => group.id === selectedDay);
-    const activeIndex = currentIndex >= 0 ? currentIndex : 0;
-    const currentGroup = groups[activeIndex];
-    const previousGroup = groups[activeIndex - 1];
-    const nextGroup = groups[activeIndex + 1];
-
-    return (
-      <nav className={styles.dayPager} aria-label="Event day navigation">
-        <span className={styles.viewLabel}>Event days</span>
-        <div className={styles.dayPagerControls}>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={previousGroup === undefined}
-            onClick={() => {
-              if (previousGroup) setSelectedDay(previousGroup.id);
-            }}
-          >
-            Previous day
-          </button>
-          <p className={styles.dayPagerCurrent} aria-live="polite">
-            {currentGroup
-              ? `${currentGroup.label} · Day ${activeIndex + 1} of ${groups.length}`
-              : "No event days available"}
-          </p>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={nextGroup === undefined}
-            onClick={() => {
-              if (nextGroup) setSelectedDay(nextGroup.id);
-            }}
-          >
-            Next day
-          </button>
-        </div>
-        {groups.length > 1 ? (
-          <nav ref={dateRailRef} className={styles.dateRail} aria-label="Choose an event day">
-            {groups.map((group, index) => (
-              <button
-                key={group.id}
-                className={styles.dateRailItem}
-                type="button"
-                data-date={safeScheduleId(group.id)}
-                aria-current={group.id === currentGroup?.id ? "date" : undefined}
-                onClick={() => setSelectedDay(group.id)}
-              >
-                <span>Day {index + 1}</span>
-                <strong>{formatCompactScheduleDate(group.id)}</strong>
-                <small>
-                  {group.entries.length} {group.entries.length === 1 ? "session" : "sessions"}
-                </small>
-              </button>
-            ))}
-          </nav>
-        ) : null}
-      </nav>
-    );
-  }
-
   function renderScheduleView() {
     const groups = deriveAgendaViewGroups(data, viewMode);
     if (viewMode === "list") {
@@ -893,7 +835,6 @@ export function AgendaBoard({
       );
       return (
         <>
-          {renderDayNavigation(groups)}
           {currentGroup ? (
             <AgendaTimetable
               date={currentGroup.id}
@@ -961,7 +902,7 @@ export function AgendaBoard({
       <a className={styles.skipLink} href="#agenda-content">
         Skip to agenda workspace
       </a>
-      <main id="agenda-content" className={styles.workspace} tabIndex={-1}>
+      <div id="agenda-content" className={styles.workspace} tabIndex={-1}>
         <WorkspaceHeader
           breadcrumb={
             <WorkspaceBreadcrumb>
@@ -980,13 +921,20 @@ export function AgendaBoard({
               Draft v{data.draft.version}
             </StatusBadge>
           }
-          description="Place accepted sessions into rooms and times, resolve conflicts, and publish with confidence."
+          description="Place accepted sessions into rooms and times, resolve conflicts, then publish."
           metadata={
             <>
-              <WorkspaceMetaItem>{data.draft.entries.length} scheduled</WorkspaceMetaItem>
-              <WorkspaceMetaItem>{data.unscheduledSessions.length} unscheduled</WorkspaceMetaItem>
-              <WorkspaceMetaItem>
-                Updated {formatRevisionTimestamp(data.draft.updatedAt)} by {data.draft.updatedBy}
+              <WorkspaceMetaItem icon={<CalendarDays aria-hidden="true" />}>
+                {formatScheduleDate(data.event.startsOn)}
+                {data.event.endsOn === data.event.startsOn
+                  ? ""
+                  : ` – ${formatScheduleDate(data.event.endsOn)}`}
+              </WorkspaceMetaItem>
+              <WorkspaceMetaItem icon={<Clock3 aria-hidden="true" />}>
+                {data.event.timeZone}
+              </WorkspaceMetaItem>
+              <WorkspaceMetaItem icon={<Save aria-hidden="true" />}>
+                Last saved {formatRevisionTimestamp(data.draft.updatedAt)}
               </WorkspaceMetaItem>
             </>
           }
@@ -1015,33 +963,15 @@ export function AgendaBoard({
           {statusMessage}
         </div>
 
-        <section className={styles.agendaSummary} aria-label="Schedule at a glance">
-          <div>
-            <span>Schedule at a glance</span>
-            <strong>
-              {data.draft.entries.length} scheduled · {data.unscheduledSessions.length} to place
-            </strong>
-          </div>
-          <div>
-            <span>Event dates</span>
-            <strong>
-              {formatScheduleDate(data.event.startsOn)}
-              {data.event.endsOn === data.event.startsOn
-                ? ""
-                : ` – ${formatScheduleDate(data.event.endsOn)}`}
-            </strong>
-          </div>
-          <div>
-            <span>Timezone</span>
-            <strong>{data.event.timeZone}</strong>
-          </div>
-          <div>
-            <span>Publication</span>
-            <strong>
-              {currentRevision ? `Revision ${currentRevision.number} is live` : "Not published"}
-            </strong>
-          </div>
-        </section>
+        <div className={styles.overviewBand}>
+          <AgendaOverview
+            acceptedCount={acceptedCount}
+            scheduledCount={scheduledCount}
+            toPlaceCount={toPlaceCount}
+            hardConflictCount={hardConflictCount}
+            publishedRevisionNumber={currentRevision?.number ?? null}
+          />
+        </div>
 
         <section
           className={styles.releaseCenter}
@@ -1311,18 +1241,22 @@ export function AgendaBoard({
             <div className={styles.sectionHeading}>
               <div>
                 <p className={styles.eyebrow}>Schedule builder</p>
-                <h2 id="schedule-heading">Build the event day</h2>
-                <p>Choose a day, then place accepted sessions into the schedule.</p>
+                <h2 id="schedule-heading">Build the agenda</h2>
+                <p>Choose an event day, then place accepted sessions into a room and time.</p>
               </div>
-              {data.unscheduledSessions.length === 0 ? (
-                <div className={styles.placementComplete} role="status">
+              {!hasScheduleInventory ? null : placementComplete ? (
+                <div
+                  className={styles.placementComplete}
+                  data-placement-complete="true"
+                  role="status"
+                >
                   <CheckCircle2 aria-hidden="true" />
                   <span>
-                    <strong>Schedule complete</strong>
-                    All accepted sessions placed
+                    <strong>Queue clear</strong>
+                    No sessions waiting to be placed
                   </span>
                 </div>
-              ) : (
+              ) : toPlaceCount > 0 ? (
                 <button
                   className={styles.primaryButton}
                   type="button"
@@ -1338,9 +1272,9 @@ export function AgendaBoard({
                 >
                   {showAddForm ? "Close form" : "Schedule session"}
                 </button>
-              )}
+              ) : null}
             </div>
-            {!hasRooms ? (
+            {hasScheduleInventory && !hasRooms ? (
               <p className={styles.formError} role="status">
                 Scheduling is unavailable until you create a room.{" "}
                 <a href={settingsHref}>Create a room in Rooms and tracks settings</a> before
@@ -1348,103 +1282,136 @@ export function AgendaBoard({
               </p>
             ) : null}
 
-            <div className={styles.scheduleToolbar}>
-              <span id="agenda-view-label" className={styles.viewLabel}>
-                Schedule view
-              </span>
-              <div
-                className={styles.viewTablist}
-                role="tablist"
-                aria-labelledby="agenda-view-label"
-                aria-orientation="horizontal"
-              >
-                {AGENDA_VIEW_MODES.map((mode) => (
-                  <button
-                    key={mode}
-                    id={`agenda-view-${mode}`}
-                    className={styles.viewTab}
-                    type="button"
-                    role="tab"
-                    aria-selected={viewMode === mode}
-                    aria-controls="agenda-view-panel"
-                    tabIndex={viewMode === mode ? 0 : -1}
-                    ref={(node) => {
-                      viewTabRefs.current[mode] = node;
-                    }}
-                    onClick={() => selectView(mode)}
-                    onKeyDown={(event) => moveView(event, mode)}
+            {!hasScheduleInventory ? (
+              <Empty className={styles.agendaEmpty} data-agenda-empty-state="no-accepted-sessions">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <CalendarDays aria-hidden="true" />
+                  </EmptyMedia>
+                  <EmptyTitle>No accepted sessions to schedule</EmptyTitle>
+                  <EmptyDescription>
+                    Accept sessions before assigning rooms and times. Accepted sessions will appear
+                    here automatically.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button asChild>
+                    <a href={sessionsHref}>Open sessions</a>
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            ) : (
+              <>
+                {viewMode === "day" ? (
+                  <AgendaDaySelector
+                    days={eventDays.map((day) => ({
+                      date: day.date,
+                      label: day.label,
+                      sessionCount: day.entries.length,
+                    }))}
+                    selectedDate={selectedDay}
+                    onSelectDate={setSelectedDay}
+                  />
+                ) : null}
+                <div className={styles.scheduleToolbar}>
+                  <span id="agenda-view-label" className={styles.viewLabel}>
+                    Schedule view
+                  </span>
+                  <div
+                    className={styles.viewTablist}
+                    role="tablist"
+                    aria-labelledby="agenda-view-label"
+                    aria-orientation="horizontal"
                   >
-                    {agendaViewLabels[mode]}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <section
-              className={styles.placementDock}
-              aria-label="Placement queue drop zone"
-              data-agenda-drop-target="placement-queue"
-              data-empty={data.unscheduledSessions.length === 0 ? "true" : undefined}
-              data-active={queueDropActive ? "true" : undefined}
-              onDragEnter={(event) => {
-                if (event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) {
-                  setQueueDropActive(true);
-                }
-              }}
-              onDragLeave={() => setQueueDropActive(false)}
-              onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setQueueDropActive(false);
-                const entryId = event.dataTransfer.getData(AGENDA_ENTRY_DRAG_TYPE);
-                if (entryId !== "") void onRemoveEntry(entryId);
-              }}
-            >
-              {data.unscheduledSessions.length > 0 ? (
-                <AgendaPlacementQueue
-                  sessions={data.unscheduledSessions}
-                  busy={busy}
-                  onChooseSession={(sessionId) => {
-                    setPlacementSessionId(sessionId);
-                    setPlacementDraft(undefined);
-                    setEditingEntryId(null);
-                    setShowAddForm(true);
-                  }}
-                />
-              ) : (
-                <div className={styles.placementDockEmpty} role="status">
-                  <strong>All accepted sessions are placed</strong>
-                  <span>Drag a scheduled session here to return it to the queue.</span>
+                    {AGENDA_VIEW_MODES.map((mode) => (
+                      <button
+                        key={mode}
+                        id={`agenda-view-${mode}`}
+                        className={styles.viewTab}
+                        type="button"
+                        role="tab"
+                        aria-selected={viewMode === mode}
+                        aria-controls="agenda-view-panel"
+                        tabIndex={viewMode === mode ? 0 : -1}
+                        ref={(node) => {
+                          viewTabRefs.current[mode] = node;
+                        }}
+                        onClick={() => selectView(mode)}
+                        onKeyDown={(event) => moveView(event, mode)}
+                      >
+                        {agendaViewLabels[mode]}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </section>
 
-            <div
-              id="agenda-view-panel"
-              className={styles.viewPanel}
-              role="tabpanel"
-              aria-labelledby={`agenda-view-${viewMode}`}
-              aria-label="Schedule canvas"
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                const sessionId = event.dataTransfer.getData("text/plain");
-                if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
-                  setPlacementSessionId(sessionId);
-                  setPlacementDraft(undefined);
-                  setShowAddForm(true);
-                }
-              }}
-            >
-              {renderScheduleView()}
-            </div>
+                <section
+                  className={styles.placementDock}
+                  aria-label="Placement queue drop zone"
+                  data-agenda-drop-target="placement-queue"
+                  data-empty={data.unscheduledSessions.length === 0 ? "true" : undefined}
+                  data-active={queueDropActive ? "true" : undefined}
+                  onDragEnter={(event) => {
+                    if (event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) {
+                      setQueueDropActive(true);
+                    }
+                  }}
+                  onDragLeave={() => setQueueDropActive(false)}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setQueueDropActive(false);
+                    const entryId = event.dataTransfer.getData(AGENDA_ENTRY_DRAG_TYPE);
+                    if (entryId !== "") void onRemoveEntry(entryId);
+                  }}
+                >
+                  {data.unscheduledSessions.length > 0 ? (
+                    <AgendaPlacementQueue
+                      sessions={data.unscheduledSessions}
+                      busy={busy}
+                      onChooseSession={(sessionId) => {
+                        setPlacementSessionId(sessionId);
+                        setPlacementDraft(undefined);
+                        setEditingEntryId(null);
+                        setShowAddForm(true);
+                      }}
+                    />
+                  ) : (
+                    <div className={styles.placementDockEmpty} role="status">
+                      <strong>No sessions waiting to be placed</strong>
+                      <span>Drag a scheduled session here to return it to the queue.</span>
+                    </div>
+                  )}
+                </section>
+
+                <div
+                  id="agenda-view-panel"
+                  className={styles.viewPanel}
+                  role="tabpanel"
+                  aria-labelledby={`agenda-view-${viewMode}`}
+                  aria-label="Schedule canvas"
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sessionId = event.dataTransfer.getData("text/plain");
+                    if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
+                      setPlacementSessionId(sessionId);
+                      setPlacementDraft(undefined);
+                      setShowAddForm(true);
+                    }
+                  }}
+                >
+                  {renderScheduleView()}
+                </div>
+              </>
+            )}
           </section>
           <Dialog
             open={showAddForm || editingEntry !== null}
@@ -1488,7 +1455,7 @@ export function AgendaBoard({
                     sessions={data.unscheduledSessions}
                     rooms={data.rooms}
                     tracks={data.tracks}
-                    eventStart={data.event.startsOn}
+                    eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
                     busy={busy}
                     onCancel={() => {
                       setShowAddForm(false);
@@ -1517,7 +1484,7 @@ export function AgendaBoard({
                       sessions={[]}
                       rooms={data.rooms}
                       tracks={data.tracks}
-                      eventStart={data.event.startsOn}
+                      eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
                       busy={busy}
                       onCancel={() => setEditingEntryId(null)}
                       {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
@@ -1550,7 +1517,7 @@ export function AgendaBoard({
             </DialogContent>
           </Dialog>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
@@ -2325,23 +2292,23 @@ function ScopedAgendaWorkspace({
 
   if (loading && !data) {
     return (
-      <main className={styles.loadingState} aria-live="polite">
+      <div className={styles.loadingState} aria-live="polite">
         <span className={styles.loadingBar} aria-hidden="true" />
         <h1>Loading agenda workspace</h1>
         <p>Retrieving the private draft and published revision.</p>
-      </main>
+      </div>
     );
   }
 
   if (!data) {
     return (
-      <main className={styles.loadingState}>
+      <div className={styles.loadingState}>
         <h1>Agenda workspace unavailable</h1>
         <p role="alert">{error ?? "The agenda could not be loaded."}</p>
         <button className={styles.primaryButton} type="button" onClick={() => void load()}>
           Try again
         </button>
-      </main>
+      </div>
     );
   }
 

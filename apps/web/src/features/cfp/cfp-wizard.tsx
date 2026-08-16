@@ -18,7 +18,7 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
-import { Stepper } from "../../components/ui/stepper";
+
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
@@ -36,7 +36,9 @@ import {
 } from "./api";
 import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
 import { CharacterCount, Field, Input } from "./cfp-field";
+import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
 import { useCfpStartupStore } from "./cfp-startup-provider";
+import { CfpSubmissionWindow } from "./cfp-submission-window";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import {
@@ -46,7 +48,6 @@ import {
   getPreviousCfpStep,
 } from "./routes";
 import {
-  CFP_STEPS,
   type CfpDraft,
   type CfpParticipant,
   type CfpSecondaryContact,
@@ -70,14 +71,6 @@ import {
 
 const LOCAL_MAIL_INBOX_URL =
   process.env.NODE_ENV === "development" ? "http://127.0.0.1:8025/" : null;
-
-const STEP_LABELS: Record<CfpStep, string> = {
-  welcome: "Start",
-  account: "Your account",
-  submission: "Your proposal",
-  participants: "Speakers",
-  review: "Review & submit",
-};
 
 const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
 
@@ -311,6 +304,14 @@ function evaluatePublishedFields(
   return { fields, sections };
 }
 
+export function cfpPublishedFieldIsVisible(
+  form: CfpPublishedForm,
+  answers: Record<string, unknown>,
+  fieldKey: string,
+): boolean {
+  return evaluatePublishedFields(form, answers).fields.get(fieldKey)?.visible ?? false;
+}
+
 function fileStateKey(fieldKey: string, participantIndex?: number): string {
   return participantIndex === undefined ? fieldKey : `participants.${participantIndex}.${fieldKey}`;
 }
@@ -356,55 +357,6 @@ interface CfpWizardProps {
   api?: CfpApi;
 }
 
-const WIZARD_STEPS = CFP_STEPS.map((step) => ({
-  id: step,
-  label: STEP_LABELS[step],
-}));
-function CfpProgress({ step, mobile = false }: { step: CfpStep; mobile?: boolean }) {
-  const currentIndex = Math.max(CFP_STEPS.indexOf(step), 0);
-  if (!mobile) {
-    return (
-      <div className={styles.desktopStepper}>
-        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
-      </div>
-    );
-  }
-
-  return (
-    <nav aria-label="Submission progress" className={styles.mobileProgress}>
-      <div className={styles.mobileProgressHeader}>
-        <span>
-          Step {currentIndex + 1} of {CFP_STEPS.length}
-        </span>
-        <strong>{STEP_LABELS[step]}</strong>
-      </div>
-      <ol className={styles.mobileStepList}>
-        {WIZARD_STEPS.map((wizardStep, index) => (
-          <li
-            aria-current={index === currentIndex ? "step" : undefined}
-            className={
-              index === currentIndex
-                ? styles.mobileStepCurrent
-                : index < currentIndex
-                  ? styles.mobileStepComplete
-                  : undefined
-            }
-            key={wizardStep.id}
-          >
-            <span aria-hidden="true" className={styles.mobileStepNumber}>
-              {index + 1}
-            </span>
-            <span className="sr-only">
-              {wizardStep.label}
-              {index < currentIndex ? " complete" : ""}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </nav>
-  );
-}
-
 function PublicCfpShell({
   children,
   organization,
@@ -427,7 +379,16 @@ function PublicCfpShell({
   const resolvedOrganizationName = organization?.name ?? "Eventloom";
   const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
   const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
-  const resolvedStepName = step === undefined ? "Submission complete" : STEP_LABELS[step];
+  const resolvedStepName = step === undefined ? "Submission complete" : CFP_STEP_LABELS[step];
+  const now = Date.now();
+  const opensAt = event ? Date.parse(event.opensAt) : Number.NaN;
+  const closesAt = event ? Date.parse(event.closesAt) : Number.NaN;
+  const windowStatus =
+    Number.isFinite(closesAt) && closesAt <= now
+      ? "closed"
+      : Number.isFinite(opensAt) && opensAt > now
+        ? "upcoming"
+        : "open";
 
   return (
     <WorkspaceShell
@@ -473,27 +434,14 @@ function PublicCfpShell({
           {event ? (
             <>
               <Separator className={styles.railSeparator} />
-              <section className={styles.deadlineCard} aria-labelledby="cfp-window-heading">
-                <p id="cfp-window-heading" className={styles.deadlineLabel}>
-                  Submission window
-                </p>
-                <dl className={styles.railMeta}>
-                  <div>
-                    <dt>Opens</dt>
-                    <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
-                  </div>
-                  <div>
-                    <dt>Closes</dt>
-                    <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
-                  </div>
-                </dl>
-              </section>
-              {form ? (
-                <p className={styles.limitText}>
-                  Up to {formSubmissionLimit(form)} proposal
-                  {formSubmissionLimit(form) === 1 ? "" : "s"} per account
-                </p>
-              ) : null}
+              <CfpSubmissionWindow
+                opensAt={event.opensAt}
+                opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
+                closesAt={event.closesAt}
+                closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
+                {...(form ? { limit: formSubmissionLimit(form) } : {})}
+                status={windowStatus}
+              />
             </>
           ) : null}
         </div>
@@ -503,22 +451,16 @@ function PublicCfpShell({
         <Card className={`${styles.card} ${className ?? ""}`}>
           <div className={styles.formColumn}>
             {event ? (
-              <section className={styles.mobileContextCard} aria-label="Submission window">
-                <div>
-                  <span>Opens</span>
-                  <strong>{formatCfpWindowDate(event.opensAt, event.timezone)}</strong>
-                </div>
-                <div>
-                  <span>Closes</span>
-                  <strong>{formatCfpWindowDate(event.closesAt, event.timezone)}</strong>
-                </div>
-                {form ? (
-                  <p>
-                    Up to {formSubmissionLimit(form)} proposal
-                    {formSubmissionLimit(form) === 1 ? "" : "s"} per account
-                  </p>
-                ) : null}
-              </section>
+              <div className={styles.mobileSubmissionWindow}>
+                <CfpSubmissionWindow
+                  opensAt={event.opensAt}
+                  opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
+                  closesAt={event.closesAt}
+                  closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
+                  {...(form ? { limit: formSubmissionLimit(form) } : {})}
+                  status={windowStatus}
+                />
+              </div>
             ) : null}
             {step ? <CfpProgress mobile step={step} /> : null}
             {children}
@@ -957,6 +899,15 @@ function fieldValueForValidation(field: CfpFormField, value: unknown): unknown {
   return value;
 }
 
+export function cfpHttpUrlIsValid(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function dynamicFormErrors(
   form: CfpPublishedForm,
   draft: CfpDraft,
@@ -1000,6 +951,11 @@ function dynamicFormErrors(
       if (field.kind === "email" && typeof value === "string" && value.trim()) {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
           errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
+        }
+      }
+      if (field.kind === "url" && typeof value === "string" && value.trim()) {
+        if (!cfpHttpUrlIsValid(value)) {
+          errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
         }
       }
       if (["select", "multi_select"].includes(field.kind) && field.options.length > 0) {
@@ -1048,6 +1004,11 @@ function dynamicFormErrors(
         if (field.kind === "email" && typeof value === "string" && value.trim()) {
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
             errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
+          }
+        }
+        if (field.kind === "url" && typeof value === "string" && value.trim()) {
+          if (!cfpHttpUrlIsValid(value)) {
+            errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
           }
         }
       }
