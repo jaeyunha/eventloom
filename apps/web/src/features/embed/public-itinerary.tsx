@@ -311,16 +311,14 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
     const blob = new Blob([createCalendar(agenda.event.name, agenda.event.slug, entries)], {
       type: "text/calendar;charset=utf-8",
     });
-    const url = URL.createObjectURL(blob);
+    const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = url;
+    anchor.href = objectUrl;
     anchor.download = `${agenda.event.slug.replace(/[^a-z0-9]+/giu, "-") || "event"}-schedule.ics`;
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
-    if (typeof URL.revokeObjectURL === "function") {
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    }
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     setExportMessage(
       `Downloaded ${entries.length} session${entries.length === 1 ? "" : "s"} for your calendar.`,
     );
