@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { createNavigationDataCache } from "@/lib/navigation-data-cache";
 import {
   createDeliverablesApi,
   type DeliverableAsset,
@@ -20,12 +21,16 @@ import {
   contentRequestMetrics,
   type DeliverableRow,
   DeliverablesWorkspaceView,
+  deliverablesCoreCacheInvalidationTags,
+  deliverablesCoreCacheKey,
+  deliverablesCoreCacheTags,
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
   deliverablesSessionHistoryKey,
   eligibleSpeakerHeadshotSessions,
   filterContentRequestRows,
   isDeliverablesWorkspaceScopeCurrent,
+  loadDeliverablesCoreSnapshot,
   loadDeliverablesSessionHistory,
   ReminderPreview,
   resolveSpeakerHeadshotSubmissionId,
@@ -56,6 +61,19 @@ describe("deliverables workspace navigation", () => {
     expect(fileLibrarySource).toContain('import Link from "next/link";');
     expect(fileLibrarySource).toContain("<Link");
     expect(fileLibrarySource).toContain("Create a content request");
+  });
+  it("hydrates the core bundle from RAM and retries as a fresh read", () => {
+    expect(deliverablesWorkspaceSource).toContain("useNavigationDataCache");
+    expect(deliverablesWorkspaceSource).toContain("navigationDataCache?.peek");
+    expect(deliverablesWorkspaceSource).toContain("navigationDataCache.read<DeliverablesSnapshot>");
+    expect(deliverablesWorkspaceSource).toContain("fresh");
+    expect(deliverablesWorkspaceSource).toContain("onRetry={() => void load(undefined, true)}");
+    expect(deliverablesWorkspaceSource).toContain(
+      "load: () => loadDeliverablesCoreSnapshot(api, mode),",
+    );
+    expect(deliverablesWorkspaceSource).toContain("invalidateDeliverablesCoreCache(scope)");
+    expect(deliverablesWorkspaceSource).toContain("getDownloadGrant");
+    expect(deliverablesWorkspaceSource).toContain("listAssetComments");
   });
 });
 
@@ -890,6 +908,81 @@ describe("deliverables core request starter", () => {
   });
 });
 
+describe("deliverables core navigation cache", () => {
+  it("normalizes canonical scope keys and keeps modes and events isolated", () => {
+    expect(deliverablesCoreCacheKey(" org-1 ", " event-1 ", "files")).toBe(
+      "organization:org-1:event:event-1:deliverables:files:core",
+    );
+    expect(deliverablesCoreCacheKey("org-1", "event-1", "files")).not.toBe(
+      deliverablesCoreCacheKey("org-1", "event-1", "deliverables"),
+    );
+    expect(deliverablesCoreCacheKey("org-1", "event-1", "files")).not.toBe(
+      deliverablesCoreCacheKey("org-1", "event-2", "files"),
+    );
+    expect(deliverablesCoreCacheTags("org-1", "event-1", "files")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "deliverables:event-1",
+      "deliverables:event-1:files",
+    ]);
+    expect(deliverablesCoreCacheInvalidationTags("org-1", "event-1")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "deliverables:event-1",
+    ]);
+  });
+
+  it("coalesces complete core reads, hydrates hits without another read, and refreshes explicitly", async () => {
+    const matrix: DeliverableTaskMatrix = {
+      organizationId: "org-1",
+      eventId: "event-1",
+      total: 1,
+      filters: {},
+      items: [matrixItem],
+    };
+    const api = {
+      listSessions: vi.fn().mockResolvedValue([session]),
+      listDeliverableMatrix: vi.fn().mockResolvedValue(matrix),
+      listAssets: vi.fn().mockResolvedValue([assetV2]),
+      listProfiles: vi.fn().mockResolvedValue([profile]),
+    } as unknown as DeliverablesApi;
+    const cache = createNavigationDataCache();
+    const key = deliverablesCoreCacheKey("org-1", "event-1", "files");
+    const tags = deliverablesCoreCacheTags("org-1", "event-1", "files");
+    const load = () => loadDeliverablesCoreSnapshot(api, "files");
+    const firstRead = cache.read({ key, tags, load });
+    const duplicateRead = cache.read({ key, tags, load });
+    const snapshot = await firstRead;
+
+    expect(duplicateRead).toBe(firstRead);
+    expect(snapshot).toMatchObject({
+      sessions: [session],
+      tasks: [task],
+      assets: [assetV2],
+      profiles: [profile],
+      matrix,
+    });
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
+    expect(api.listDeliverableMatrix).toHaveBeenCalledTimes(1);
+    expect(api.listAssets).toHaveBeenCalledTimes(1);
+    expect(api.listProfiles).toHaveBeenCalledTimes(1);
+    expect(cache.peek(key)).toBe(snapshot);
+
+    const noRead = vi.fn();
+    await expect(cache.read({ key, tags, load: noRead })).resolves.toBe(snapshot);
+    expect(noRead).not.toHaveBeenCalled();
+
+    const freshSnapshot = { ...snapshot, sessions: [] };
+    await expect(
+      cache.read({ key, tags, fresh: true, load: async () => freshSnapshot }),
+    ).resolves.toBe(freshSnapshot);
+    expect(cache.peek(key)).toBe(freshSnapshot);
+
+    cache.invalidate(deliverablesCoreCacheInvalidationTags("org-1", "event-1"));
+    expect(cache.peek(key)).toBeUndefined();
+    expect(deliverablesCoreCacheKey("org-1", "event-2", "files")).not.toBe(key);
+  });
+});
 describe("deliverables workspace", () => {
   it("routes session content work to the canonical Sessions workspace", () => {
     const markup = renderToStaticMarkup(

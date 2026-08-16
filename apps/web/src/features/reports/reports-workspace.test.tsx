@@ -8,6 +8,8 @@ import {
   ReportPreview,
   ReportsWorkspace,
   ReportsWorkspaceStatus,
+  reportsNavigationCacheKey,
+  reportsNavigationCacheTags,
   UnavailableState,
 } from "./reports-workspace";
 import {
@@ -408,6 +410,19 @@ describe("reports workspace", () => {
     expect(markup).not.toContain("individualGrade");
     expect(markup).not.toContain("fileIds");
     expect(markup).not.toContain("email");
+  });
+  it("normalizes reports cache scope keys and isolates event resources", () => {
+    expect(reportsNavigationCacheKey(" org-1 ", " event-1 ")).toBe(
+      "organization:org-1:event:event-1:reports:workspace",
+    );
+    expect(reportsNavigationCacheKey("org-1", "event-2")).not.toBe(
+      reportsNavigationCacheKey("org-1", "event-1"),
+    );
+    expect(reportsNavigationCacheTags(" org-1 ", " event-1 ")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "reports:event-1",
+    ]);
   });
 
   it("keeps the UI field registry allowlisted and exposes no private evaluator assets", () => {

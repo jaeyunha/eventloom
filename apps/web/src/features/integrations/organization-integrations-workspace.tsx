@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SettingGroup, SettingRow, SettingsShell } from "@/components/workspace/settings-ui";
 import {
@@ -95,7 +96,7 @@ export function OrganizationIntegrationsWorkspace({
                 description="Select the event whose webhook subscriptions or delivery operations you want to inspect."
                 controls={
                   <Button asChild size="sm" variant="outline">
-                    <a href={`${organizationBase}/events`}>View events</a>
+                    <Link href={`${organizationBase}/events`}>View events</Link>
                   </Button>
                 }
               />

@@ -1,7 +1,14 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { EmbedWorkspaceView } from "./embed-workspace";
+import { createNavigationDataCache } from "@/lib/navigation-data-cache";
+import {
+  EmbedWorkspaceView,
+  embedWorkspaceCacheKey,
+  embedWorkspaceCacheTags,
+} from "./embed-workspace";
 import {
   createEmbedWorkspaceApi,
   DEFAULT_EMBED_ACCENT,
@@ -77,6 +84,10 @@ const eventRecord: EmbedEventRecord = {
   updatedBy: "organizer-1",
 };
 
+const workspaceSource = readFileSync(
+  fileURLToPath(new URL("./embed-workspace.tsx", import.meta.url)),
+  "utf8",
+);
 describe("embed publication response parsing", () => {
   it("accepts a nullable data envelope for an unpublished event", () => {
     expect(parseEmbedPublicationResponse({ data: null }, "org-1", "event-1")).toBeNull();
@@ -92,6 +103,75 @@ describe("embed publication response parsing", () => {
   );
 });
 
+describe("embed workspace navigation cache", () => {
+  it("normalizes organization and canonical event scopes", () => {
+    expect(embedWorkspaceCacheKey(" org-1 ", " event-1 ")).toBe("embeds:workspace:org-1:event-1");
+    expect(embedWorkspaceCacheTags(" org-1 ", " event-1 ")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "embeds:event-1",
+    ]);
+  });
+
+  it("coalesces initial reads and bypasses completed data only for fresh retry", async () => {
+    const cache = createNavigationDataCache();
+    const key = embedWorkspaceCacheKey("org-1", "event-1");
+    const tags = embedWorkspaceCacheTags("org-1", "event-1");
+    let starts = 0;
+    const load = async () => {
+      starts += 1;
+      return starts;
+    };
+
+    const first = cache.read({ key, tags, load });
+    const second = cache.read({ key, tags, load });
+    expect(second).toBe(first);
+    await expect(first).resolves.toBe(1);
+    await expect(cache.read({ key, tags, load })).resolves.toBe(1);
+    await expect(cache.read({ key, tags, load, fresh: true })).resolves.toBe(2);
+    expect(starts).toBe(2);
+  });
+
+  it("fences pending reads when event or embed configuration writes invalidate the scope", async () => {
+    const cache = createNavigationDataCache();
+    const key = embedWorkspaceCacheKey("org-1", "event-1");
+    const tags = embedWorkspaceCacheTags("org-1", "event-1");
+    let resolveLoad!: (value: string) => void;
+    const pending = cache.read({
+      key,
+      tags,
+      load: () =>
+        new Promise<string>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    });
+
+    cache.invalidate(["event:event-1", "embeds:event-1"]);
+    resolveLoad("stale");
+    await expect(pending).resolves.toBe("stale");
+    expect(cache.peek(key)).toBeUndefined();
+  });
+
+  it("keeps same-origin validation on Next Link while public target-blank URLs stay native", () => {
+    expect(workspaceSource).toContain('import Link from "next/link";');
+    expect(workspaceSource).toContain(
+      "<Link href={agendaValidationHref(organizationId, eventId)}>",
+    );
+    expect(workspaceSource).not.toContain(
+      "<a href={agendaValidationHref(organizationId, eventId)}>",
+    );
+    expect(workspaceSource).toContain('<a href={previewUrl} target="_blank" rel="noreferrer">');
+  });
+
+  it("routes initial snapshots through the cache and exposes explicit fresh retry", () => {
+    expect(workspaceSource).toContain("navigationCache.read<EmbedWorkspaceCacheSnapshot>");
+    expect(workspaceSource).toContain("fresh: true");
+    expect(workspaceSource).toContain("void load(controller.signal, reloadNonce > 0)");
+    expect(workspaceSource).toContain(
+      "embedConfigurations: eventEmbedConfigurations(event.embedConfigurations)",
+    );
+  });
+});
 describe("authoritative embed configuration transport", () => {
   it("replaces the complete event configuration list with expectedVersion", async () => {
     let requestedUrl = "";
