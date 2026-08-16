@@ -1,18 +1,21 @@
-# Public release checklist
+# Public repository checklist
 
 Eventloom is licensed under the Elastic License 2.0 (`Elastic-2.0`).
 That license is source-available and is not an OSI-approved open-source
 license. Do not describe the project as "open source" in public copy unless
 the licensing decision changes.
 
-This checklist is intentionally separate from deployment readiness. A passing
-build or a passing deployment does not make a repository safe to publish.
+This checklist governs source-repository publication independently from product
+deployment and release readiness. A passing build or deployment does not make a
+repository safe to publish, and a public repository does not make the product
+release-verified.
 
 ## Current state
 
-GitHub and Forge remain private until both this checklist and the release gate
-in [`release-runbook.md`](release-runbook.md) pass. Repository visibility is not
-release verification.
+GitHub and Forge may become public after this checklist passes for the exact
+candidate commit and selected reachable history. Deployment, staging-provider,
+browser-acceptance, and production-release evidence remain governed separately
+by [`release-runbook.md`](release-runbook.md).
 
 The prepared current-tree policy excludes screenshots, provider observations,
 source snapshots, transcripts, browser recordings, migration outputs, and
@@ -47,12 +50,12 @@ public when:
 - the public repository does not include generated Wrangler state, release
   environment files, browser profiles, or private evidence.
 
-Do not rely on an earlier working-tree scan. A release candidate requires a
-fresh full-history secret scan and review of generated configuration,
-transcripts, screenshots, and evidence provenance. The capability of a script
-to deploy or mutate remote resources is not itself a reason to hide source
-code; it is a reason to require least-privilege credentials and explicit
-confirmation.
+Do not rely on an earlier working-tree scan. A publication candidate requires a
+fresh full-history and current-tree secret scan plus review of generated
+configuration, transcripts, screenshots, and evidence provenance. The
+capability of a script to deploy or mutate remote resources is not itself a
+reason to hide source code; it is a reason to require least-privilege credentials
+and explicit confirmation.
 
 Run the repeatable history, current-tree, and dependency scans from the
 repository root:
@@ -78,8 +81,8 @@ bun audit
       compatible redistribution rights.
 - [ ] Run `git status --short` from a clean candidate and inspect the complete
       diff.
-- [ ] Verify GitHub and Forge visibility immediately before and after the
-      external visibility change.
+- [ ] Record authenticated and unauthenticated GitHub/Forge visibility immediately
+      before and after the external visibility change.
 - [ ] Rotate any credential if the full-history scan finds it anywhere.
 
 ## Questions requiring owner decisions
@@ -93,7 +96,7 @@ bun audit
    no unapproved copied assets, source snapshots, transcripts, screenshots, or
    private evidence.
 
-## GitHub visibility command
+## Visibility commands and anonymous verification
 
 Changing repository visibility is an external write and is intentionally not
 part of this preparation change. After every item above is complete and the
@@ -104,7 +107,27 @@ gh repo edit jaeyunha/eventloom --visibility public --accept-visibility-change-c
 gh repo view jaeyunha/eventloom --json visibility,isPrivate,url,licenseInfo
 ```
 
+After changing visibility, verify both mirrors without stored credentials:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
+  git -c credential.helper= ls-remote \
+  https://github.com/jaeyunha/eventloom.git HEAD
+
+env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
+  git -c credential.helper= ls-remote \
+  https://forge.smol.ai/jaeyunha/open-sessionboard.git HEAD
+```
+
+Before publication, record that anonymous access fails as expected. After
+publication, both commands must succeed and return the approved commit. Record
+the observed URLs, commit, operator, and UTC time.
+
 Run the GitHub command only after the configuration, secret, contributor, and
 dependency checks above pass. Apply the equivalent verified visibility
 procedure to Forge after confirming Forge's public-repository behavior and
-access controls. Both mirrors must expose the same sanitized commit.
+access controls. Both mirrors must expose the same approved commit and history.
+
+Repository publication does not assert that a hosted Eventloom deployment is
+ready for production. Keep product status and deployed-evidence claims bound to
+the product contract and QA/release runbooks.
