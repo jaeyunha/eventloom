@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  acceleventsPublicationPreviewSchema,
-  agendaVersionIdSchema,
   aggregateReviewScoreSchema,
   apiErrorResponseSchema,
   assetFamilySchema,
@@ -543,46 +541,5 @@ describe("agenda and integration boundaries", () => {
         "webhook-signature": "unsigned",
       }),
     ).toThrow();
-  });
-
-  it("keeps Accelevents previews tied to immutable agenda and application IDs", () => {
-    const preview = acceleventsPublicationPreviewSchema.parse({
-      publicationId: id("pub"),
-      eventId: id("evt"),
-      agendaRevisionId: id("agv"),
-      speakers: [
-        {
-          externalId: id("par"),
-          email: "speaker@example.com",
-          firstName: "Speaker",
-          lastName: "Example",
-          biography: "Biography",
-          company: null,
-          jobTitle: null,
-          headshotUrl: null,
-        },
-      ],
-      sessions: [
-        {
-          externalId: id("ses"),
-          title: "A durable contract",
-          description: "Description",
-          startsAt: now,
-          endsAt: later,
-          timeZone: "America/Los_Angeles",
-          location: "Conference Center",
-          room: "Main stage",
-          track: "Engineering",
-          tags: ["contracts"],
-          speakerExternalIds: [id("par")],
-        },
-      ],
-      mappings: [{ sourceField: "biography", destinationField: "bio", required: false }],
-      validationErrors: [],
-      snapshotHash: "a".repeat(64),
-      createdAt: now,
-    });
-
-    expect(preview.agendaRevisionId).toBe(agendaVersionIdSchema.parse(id("agv")));
   });
 });

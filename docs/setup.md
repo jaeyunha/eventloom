@@ -45,7 +45,6 @@ hosting requirements. Do not manually point a custom hostname at a
 - A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled.
 - An Airtable base and restricted personal access token only when the optional organization integration is enabled.
 - An OpenSend sending-scoped key per environment. OpenSend is required by the current runtime, including local integrated development. Staging must be suppressed, sandboxed, or recipient-allowlisted.
-- Access to the private Forge repository `jaeyunha/open-sessionboard`.
 
 Keep local, staging, and production separate. Never copy an Airtable base/token, D1 database, R2 bucket, Queue, Better Auth secret, Cloudflare deployment token, or OpenSend key between environments. Staging data and delivery must never reach production resources or recipients.
 

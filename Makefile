@@ -24,4 +24,4 @@ fix:
 	bun run fix
 
 clean:
-	rm -rf apps/web/.next apps/api/dist apps/api/.wrangler coverage playwright-report test-results
+	rm -rf apps/web/.next apps/web/.next-* apps/api/dist apps/api/.wrangler coverage playwright-report test-results

@@ -172,12 +172,14 @@ Custom domains are recommended for stable production URLs. Sender and calendar i
 
 ## Repository policy
 
-Forge and GitHub are intentional dual private mirrors:
+Forge and GitHub are intentional dual mirrors:
 
 - Forge: `https://forge.smol.ai/jaeyunha/open-sessionboard`
-- GitHub: `https://github.com/jaeyunha/open-sessionboard`
+- GitHub: `https://github.com/jaeyunha/eventloom`
 
-Both remain private until the release gate passes. Forge is retained for competition-bonus eligibility. Neither mirror is the sole repository mirror or public before that gate.
+Visibility is an operator-controlled release action governed by
+[`docs/public-release.md`](docs/public-release.md). Neither mirror is the sole
+repository, and public visibility does not establish release verification.
 
 ## Invariants
 
@@ -204,7 +206,7 @@ Both remain private until the release gate passes. Forge is retained for competi
   [`docs/public-release.md`](docs/public-release.md)
 - Evaluator history and limitations:
   [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md)
-- Retained evidence classes and provenance: [`evidence/README.md`](evidence/README.md)
+- Source-repository evidence policy: [`evidence/README.md`](evidence/README.md)
 
 This architecture document does not claim release verification. Advisory AI
 remains partial until deployed real-provider end-to-end evidence is accepted.
