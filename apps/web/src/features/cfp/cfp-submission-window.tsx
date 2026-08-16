@@ -80,7 +80,7 @@ export function CfpSubmissionWindow({
       data-cfp-submission-window="true"
       data-status={status}
     >
-      <div className={styles.summary}>
+      <div className={styles.summary} data-cfp-window-summary="true">
         <span aria-hidden="true" className={styles.icon}>
           <CalendarClock size={15} />
         </span>

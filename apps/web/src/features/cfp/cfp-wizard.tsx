@@ -1866,7 +1866,13 @@ export function CfpWizard({
           {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
         </p>
       ) : null}
-      <form ref={formRef} noValidate onSubmit={(event) => void continueFlow(event)}>
+      <form
+        className={step === "account" ? styles.accountForm : undefined}
+        data-cfp-account-form={step === "account" ? "true" : undefined}
+        ref={formRef}
+        noValidate
+        onSubmit={(event) => void continueFlow(event)}
+      >
         {step === "welcome" ? (
           <WelcomeStep
             {...(published === null ? {} : { event: published.event, form: published.form })}
