@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  initialCalendarMonth,
+  organizerEventIntersectsCalendarDate,
   type OrganizerEventFormValues,
   validateOrganizerEventForm,
 } from "./organizer-overview-model";
@@ -96,4 +98,125 @@ describe("organizer event timezone validation", () => {
 
     expect(result.error).toMatch(/event begins/i);
   });
+});
+
+describe("organizer event calendar dates", () => {
+  it.each([
+    {
+      browserTimeZone: "UTC",
+      eventTimeZone: "Pacific/Auckland",
+      startsAt: "2027-04-02T20:00:00.000Z",
+      endsAt: "2027-04-05T04:00:00.000Z",
+      probeDates: ["2027-04-02", "2027-04-03", "2027-04-04", "2027-04-05", "2027-04-06"],
+      expectedDates: ["2027-04-03", "2027-04-04", "2027-04-05"],
+    },
+    {
+      browserTimeZone: "Asia/Tokyo",
+      eventTimeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:00:00.000Z",
+      endsAt: "2027-05-14T23:00:00.000Z",
+      probeDates: [
+        "2027-05-11",
+        "2027-05-12",
+        "2027-05-13",
+        "2027-05-14",
+        "2027-05-15",
+        "2027-05-16",
+      ],
+      expectedDates: ["2027-05-12", "2027-05-13", "2027-05-14"],
+    },
+    {
+      browserTimeZone: "Pacific/Honolulu",
+      eventTimeZone: "Asia/Tokyo",
+      startsAt: "2027-05-12T00:00:00.000Z",
+      endsAt: "2027-05-14T07:00:00.000Z",
+      probeDates: [
+        "2027-05-10",
+        "2027-05-11",
+        "2027-05-12",
+        "2027-05-13",
+        "2027-05-14",
+        "2027-05-15",
+      ],
+      expectedDates: ["2027-05-12", "2027-05-13", "2027-05-14"],
+    },
+    {
+      browserTimeZone: "Asia/Tokyo",
+      eventTimeZone: "America/Los_Angeles",
+      startsAt: "2027-03-13T17:00:00.000Z",
+      endsAt: "2027-03-15T23:00:00.000Z",
+      probeDates: [
+        "2027-03-12",
+        "2027-03-13",
+        "2027-03-14",
+        "2027-03-15",
+        "2027-03-16",
+        "2027-03-17",
+      ],
+      expectedDates: ["2027-03-13", "2027-03-14", "2027-03-15"],
+    },
+  ])(
+    "keeps $eventTimeZone dates fixed in a $browserTimeZone browser",
+    ({ browserTimeZone, eventTimeZone, startsAt, endsAt, probeDates, expectedDates }) => {
+      const originalTimeZone = process.env.TZ;
+      process.env.TZ = browserTimeZone;
+      try {
+        const event = {
+          startsAt,
+          endsAt,
+          timeZone: eventTimeZone,
+          scheduleDates: [],
+        };
+
+        expect(
+          probeDates.filter((date) => organizerEventIntersectsCalendarDate(event, date)),
+        ).toEqual(expectedDates);
+      } finally {
+        if (originalTimeZone === undefined) {
+          delete process.env.TZ;
+        } else {
+          process.env.TZ = originalTimeZone;
+        }
+      }
+    },
+  );
+
+  it.each([
+    {
+      browserTimeZone: "Asia/Tokyo",
+      eventTimeZone: "America/Los_Angeles",
+      startsAt: "2027-07-01T03:00:00.000Z",
+      expectedYear: 2027,
+      expectedMonth: 5,
+    },
+    {
+      browserTimeZone: "Pacific/Honolulu",
+      eventTimeZone: "Asia/Tokyo",
+      startsAt: "2027-01-01T00:00:00.000Z",
+      expectedYear: 2027,
+      expectedMonth: 0,
+    },
+  ])(
+    "opens the event month for $eventTimeZone in a $browserTimeZone browser",
+    ({ browserTimeZone, eventTimeZone, startsAt, expectedYear, expectedMonth }) => {
+      const originalTimeZone = process.env.TZ;
+      process.env.TZ = browserTimeZone;
+      try {
+        const event = {
+          startsAt,
+          status: "draft" as const,
+          timeZone: eventTimeZone,
+        };
+        const month = initialCalendarMonth([event]);
+
+        expect([month.getFullYear(), month.getMonth()]).toEqual([expectedYear, expectedMonth]);
+      } finally {
+        if (originalTimeZone === undefined) {
+          delete process.env.TZ;
+        } else {
+          process.env.TZ = originalTimeZone;
+        }
+      }
+    },
+  );
 });

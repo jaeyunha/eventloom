@@ -395,6 +395,7 @@ describe("organizer overview", () => {
     const event = {
       startsAt: "2026-02-28",
       endsAt: "2026-03-02",
+      timeZone: "UTC",
     };
     expect(organizerEventIntersectsCalendarDate(event, new Date(2026, 1, 28))).toBe(true);
     expect(organizerEventIntersectsCalendarDate(event, new Date(2026, 2, 1))).toBe(true);
@@ -404,12 +405,13 @@ describe("organizer overview", () => {
       startsAt: "2026-09-17T16:00:00.000Z",
       endsAt: "2026-09-20T00:00:00.000Z",
       scheduleDates: ["2026-09-17", "2026-09-19"],
+      timeZone: "America/Los_Angeles",
     };
     expect(organizerEventIntersectsCalendarDate(individualDatesEvent, "2026-09-18")).toBe(false);
     expect(organizerEventIntersectsCalendarDate(individualDatesEvent, "2026-09-19")).toBe(true);
     expect(
       organizerEventIntersectsCalendarDate(
-        { startsAt: "not-a-date", endsAt: "2026-03-02T01:00:00.000Z" },
+        { startsAt: "not-a-date", endsAt: "2026-03-02T01:00:00.000Z", timeZone: "UTC" },
         new Date(2026, 2, 1),
       ),
     ).toBe(false);
@@ -417,10 +419,10 @@ describe("organizer overview", () => {
 
   it("initializes from the earliest non-archived valid event start", () => {
     const month = initialCalendarMonth([
-      { status: "archived", startsAt: "2020-01-01T00:00:00.000Z" },
-      { status: "active", startsAt: "not-a-date" },
-      { status: "draft", startsAt: "2026-04-08T00:00:00.000Z" },
-      { status: "active", startsAt: "2026-03-08T00:00:00.000Z" },
+      { status: "archived", startsAt: "2020-01-01T00:00:00.000Z", timeZone: "UTC" },
+      { status: "active", startsAt: "not-a-date", timeZone: "UTC" },
+      { status: "draft", startsAt: "2026-04-08T00:00:00.000Z", timeZone: "UTC" },
+      { status: "active", startsAt: "2026-03-08T00:00:00.000Z", timeZone: "UTC" },
     ]);
     expect([month.getFullYear(), month.getMonth(), month.getDate()]).toEqual([2026, 2, 1]);
   });
