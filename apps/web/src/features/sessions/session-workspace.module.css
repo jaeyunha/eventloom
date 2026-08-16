@@ -1,6 +1,11 @@
 .workspace {
   display: grid;
+}
+
+.body {
+  display: grid;
   gap: 1.5rem;
+  padding: 1.5rem var(--workspace-heading-padding-inline, 1.5rem);
 }
 
 .contentGrid {
@@ -12,6 +17,49 @@
 .stack {
   display: grid;
   gap: 1.5rem;
+}
+
+.emptySurface {
+  overflow: hidden;
+}
+
+.emptyState {
+  min-height: max(28rem, calc(100dvh - 22rem));
+  padding: clamp(3.5rem, 8vw, 6rem) 1.5rem;
+  background:
+    radial-gradient(
+      circle at 50% 44%,
+      color-mix(in srgb, var(--muted) 54%, transparent) 0,
+      transparent 42%
+    ),
+    var(--card);
+}
+
+.emptyHeader {
+  max-width: 34rem;
+  gap: 0.65rem;
+}
+
+.emptyMedia {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.8rem;
+}
+
+.emptyMedia svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.emptyTitle {
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+
+.emptyDescription {
+  max-width: 32rem;
+  font-size: 0.82rem;
+  line-height: 1.6;
 }
 
 .sessionList {
@@ -172,5 +220,16 @@
 @media (max-width: 1023px) {
   .contentGrid {
     grid-template-columns: 1fr;
+  }
+
+  .emptyState {
+    min-height: 18rem;
+    padding: 3rem 1.25rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .body {
+    padding: 1rem;
   }
 }

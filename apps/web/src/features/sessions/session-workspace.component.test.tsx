@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
 import { SessionsWorkspaceView } from "./session-workspace";
 
 const session = {
@@ -20,6 +21,36 @@ const session = {
 };
 
 describe("sessions workspace presentation", () => {
+  it("renders one accessible empty workspace with the event name", () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        OrganizerEventWorkspaceProvider,
+        {
+          organizationId: "org-1",
+          event: {
+            id: "87aadc17-5e75-4732-9085-65df6b8e9a9b",
+            name: "Test Summit Local",
+            slug: "test-summit-local",
+          },
+        },
+        createElement(SessionsWorkspaceView, {
+          organizationId: "org-1",
+          eventId: "87aadc17-5e75-4732-9085-65df6b8e9a9b",
+          sessions: [],
+          selectedSessionId: null,
+          history: [],
+        }),
+      ),
+    );
+
+    expect(markup).toContain('data-sessions-state="empty"');
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain("Test Summit Local");
+    expect(markup).not.toContain("Event 87aadc17-5e75-4732-9085-65df6b8e9a9b");
+    expect(markup).not.toContain('data-sessions-layout="split"');
+  });
+
   it("presents canonical editing, approval, attributed history, and restore controls", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionsWorkspaceView, {
@@ -71,6 +102,7 @@ describe("sessions workspace presentation", () => {
       }),
     );
 
+    expect(markup).toContain('data-sessions-layout="split"');
     expect(markup).toContain("Sessions");
     expect(markup).toContain("Reliable worker pools");
     expect(markup).toContain("Session content");

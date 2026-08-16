@@ -1,10 +1,18 @@
 "use client";
 
+import { CalendarDays } from "lucide-react";
 import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,9 +22,12 @@ import {
   WorkspaceHeader,
   WorkspaceMetaItem,
   WorkspaceSurface,
-  workspaceClassNames,
 } from "@/components/workspace/workspace-ui";
-import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { workspaceClassNames } from "@/components/workspace/workspace-ui-model";
+import {
+  useOrganizerEventId,
+  useOrganizerEventWorkspace,
+} from "@/features/admin/organizer-event-workspace";
 import {
   createSessionsApi,
   type SessionContentStatus,
@@ -450,7 +461,10 @@ export function SessionsWorkspaceView({
   onRetry,
   onRetrySpeakers,
 }: Readonly<SessionsWorkspaceViewProps>) {
+  const event = useOrganizerEventWorkspace();
+  const eventName = event?.id === eventId ? event.name : undefined;
   const selected = sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const empty = !loading && error === null && sessions.length === 0;
 
   return (
     <main className={`${workspaceClassNames.page} ${styles.workspace}`}>
@@ -466,102 +480,130 @@ export function SessionsWorkspaceView({
         metadata={
           <>
             <WorkspaceMetaItem>{sessions.length} sessions</WorkspaceMetaItem>
-            <WorkspaceMetaItem>Event {eventId}</WorkspaceMetaItem>
+            {eventName === undefined ? null : (
+              <WorkspaceMetaItem>Event {eventName}</WorkspaceMetaItem>
+            )}
             <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
           </>
         }
         title="Sessions"
       />
 
-      {error === null ? null : (
-        <Alert variant="destructive">
-          <AlertTitle>Sessions unavailable</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-          {!onRetry ? null : (
-            <Button className="mt-3" size="sm" type="button" variant="outline" onClick={onRetry}>
-              Retry
-            </Button>
-          )}
-        </Alert>
-      )}
-      {statusMessage === null ? null : (
-        <Alert aria-live="polite" role="status">
-          {statusMessage}
-        </Alert>
-      )}
+      <div className={styles.body}>
+        {error === null ? null : (
+          <Alert variant="destructive">
+            <AlertTitle>Sessions unavailable</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+            {!onRetry ? null : (
+              <Button className="mt-3" size="sm" type="button" variant="outline" onClick={onRetry}>
+                Retry
+              </Button>
+            )}
+          </Alert>
+        )}
+        {statusMessage === null ? null : (
+          <Alert aria-live="polite" role="status">
+            {statusMessage}
+          </Alert>
+        )}
 
-      <div className={styles.contentGrid}>
-        <WorkspaceSurface
-          title="Session list"
-          description="Choose a session to edit its canonical content and history."
-        >
-          {loading ? <p className={styles.muted}>Loading sessions...</p> : null}
-          {!loading && sessions.length === 0 ? (
-            <p className={styles.muted}>No sessions are available for this event.</p>
-          ) : null}
+        {empty ? (
+          <WorkspaceSurface className={styles.emptySurface}>
+            <Empty
+              aria-live="polite"
+              className={styles.emptyState}
+              data-sessions-state="empty"
+              role="status"
+            >
+              <EmptyHeader className={styles.emptyHeader}>
+                <EmptyMedia className={styles.emptyMedia} variant="icon">
+                  <CalendarDays aria-hidden="true" />
+                </EmptyMedia>
+                <EmptyTitle aria-level={2} className={styles.emptyTitle} role="heading">
+                  No sessions yet
+                </EmptyTitle>
+                <EmptyDescription className={styles.emptyDescription}>
+                  {eventName === undefined
+                    ? "This event does not have any sessions yet."
+                    : `${eventName} does not have any sessions yet.`}{" "}
+                  Add sessions to the event program first, then return here to manage public copy,
+                  speakers, and version history.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </WorkspaceSurface>
+        ) : (
+          <div className={styles.contentGrid} data-sessions-layout="split">
+            <WorkspaceSurface
+              title="Session list"
+              description="Choose a session to edit its canonical content and history."
+            >
+              {loading ? <p className={styles.muted}>Loading sessions...</p> : null}
 
-          <ul className={styles.sessionList}>
-            {sessions.map((session) => {
-              const selectedItem = session.id === selectedSessionId;
-              return (
-                <li key={session.id}>
-                  <Button
-                    aria-pressed={selectedItem}
-                    className={styles.sessionButton}
-                    type="button"
-                    variant={selectedItem ? "secondary" : "ghost"}
-                    onClick={() => onSelectSession?.(session.id)}
-                  >
-                    <span className={styles.sessionButtonCopy}>
-                      <span>{session.title}</span>
-                      <span className={styles.sessionButtonMeta}>
-                        {session.status} - {displayStatus(session.contentStatus)}
-                      </span>
-                    </span>
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        </WorkspaceSurface>
-
-        <div className={styles.stack}>
-          {selected === null ? (
-            <WorkspaceSurface title="Select a session">
-              <p className={styles.muted}>
-                Choose a session to edit its content and inspect its version history.
-              </p>
+              <ul className={styles.sessionList}>
+                {sessions.map((session) => {
+                  const selectedItem = session.id === selectedSessionId;
+                  return (
+                    <li key={session.id}>
+                      <Button
+                        aria-pressed={selectedItem}
+                        className={styles.sessionButton}
+                        type="button"
+                        variant={selectedItem ? "secondary" : "ghost"}
+                        onClick={() => onSelectSession?.(session.id)}
+                      >
+                        <span className={styles.sessionButtonCopy}>
+                          <span>{session.title}</span>
+                          <span className={styles.sessionButtonMeta}>
+                            {session.status} - {displayStatus(session.contentStatus)}
+                          </span>
+                        </span>
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
             </WorkspaceSurface>
-          ) : (
-            <>
-              <SessionEditor
-                busy={busy}
-                key={`${selected.id}:${selected.version}`}
-                session={selected}
-                onSave={onSave}
-                onSetContentStatus={onSetContentStatus}
-              />
-              <SpeakerAssignments
-                busy={busy}
-                error={speakerError}
-                key={selected.id}
-                loading={loadingSpeakers}
-                session={selected}
-                speakers={speakers}
-                onRetry={onRetrySpeakers}
-                onSave={onSaveSpeakers}
-              />
-              <SessionHistory
-                busy={busy}
-                entries={history}
-                error={historyError}
-                loading={loadingHistory}
-                session={selected}
-                onRestore={onRestore}
-              />
-            </>
-          )}
-        </div>
+
+            <div className={styles.stack}>
+              {selected === null ? (
+                <WorkspaceSurface title="Select a session">
+                  <p className={styles.muted}>
+                    Choose a session to edit its content and inspect its version history.
+                  </p>
+                </WorkspaceSurface>
+              ) : (
+                <>
+                  <SessionEditor
+                    busy={busy}
+                    key={`${selected.id}:${selected.version}`}
+                    session={selected}
+                    onSave={onSave}
+                    onSetContentStatus={onSetContentStatus}
+                  />
+                  <SpeakerAssignments
+                    busy={busy}
+                    error={speakerError}
+                    key={selected.id}
+                    loading={loadingSpeakers}
+                    session={selected}
+                    speakers={speakers}
+                    onRetry={onRetrySpeakers}
+                    onSave={onSaveSpeakers}
+                  />
+                  <SessionHistory
+                    busy={busy}
+                    entries={history}
+                    error={historyError}
+                    loading={loadingHistory}
+                    session={selected}
+                    onRestore={onRestore}
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
