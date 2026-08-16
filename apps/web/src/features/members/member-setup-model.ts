@@ -1,7 +1,7 @@
 import { type LoginApi, resolveLoginLandingRoute } from "@/features/auth/login-form-model";
 import { type MemberApi, MemberApiError } from "./api";
 
-export const PASSWORD_REQUIREMENTS =
+export const MEMBER_SETUP_PASSWORD_POLICY_MESSAGE =
   "Use 8–128 characters with uppercase, lowercase, a number, and a special character.";
 
 export function memberSetupPasswordIssues(
@@ -9,7 +9,8 @@ export function memberSetupPasswordIssues(
   confirmation: string,
 ): readonly string[] {
   const issues: string[] = [];
-  if (password.length < 8 || password.length > 128) issues.push(PASSWORD_REQUIREMENTS);
+  if (password.length < 8 || password.length > 128)
+    issues.push(MEMBER_SETUP_PASSWORD_POLICY_MESSAGE);
   if (!/[A-Z]/u.test(password)) issues.push("Add an uppercase letter.");
   if (!/[a-z]/u.test(password)) issues.push("Add a lowercase letter.");
   if (!/[0-9]/u.test(password)) issues.push("Add a number.");

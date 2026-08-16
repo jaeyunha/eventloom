@@ -6,9 +6,9 @@ import { createMemberApi, type MemberApi } from "./api";
 import {
   clearMemberSetupTokenFromUrl,
   completeMemberSetup,
+  MEMBER_SETUP_PASSWORD_POLICY_MESSAGE,
   MemberSetupActivatedSignInRequiredError,
   memberSetupPasswordIssues,
-  PASSWORD_REQUIREMENTS,
   setupError,
 } from "./member-setup-model";
 
@@ -189,7 +189,7 @@ export function MemberSetup({
             />
           </label>
           <p id="member-password-help" style={{ margin: 0, color: "#53617a" }}>
-            {PASSWORD_REQUIREMENTS}
+            {MEMBER_SETUP_PASSWORD_POLICY_MESSAGE}
           </p>
           <label style={fieldStyle}>
             Confirm password
