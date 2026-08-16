@@ -32,6 +32,12 @@ describe("speaker workspace presentation", () => {
     expect(markup).toContain('data-slot="card"');
     expect(markup).toContain('data-slot="button"');
     expect(markup).toContain("Speaker operations");
+    expect(markup).toContain("Onboarding");
+    expect(markup).toContain("assign onboarding action items");
+    expect(markup).toContain("people and profile/delivery records");
+    expect(markup).toContain("complete in their portal");
+    expect(markup).toContain("speaker-only outreach");
+    expect(markup).toContain("broader announcements belong in Communications");
     expect(markup).toContain("Organization org-1");
     expect(markup).toContain("Event event-1");
     expect(markup).toContain('data-tone="neutral"');

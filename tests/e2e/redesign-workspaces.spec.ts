@@ -93,7 +93,10 @@ const speakerRosterFixture = {
   ],
 };
 
-async function installSpeakerWorkspaceFixture(page: Page): Promise<void> {
+async function installSpeakerWorkspaceFixture(
+  page: Page,
+  roster: typeof speakerRosterFixture = speakerRosterFixture,
+): Promise<void> {
   await Promise.all([
     page.route("**/api/auth/get-session", async (route) => {
       await route.fulfill({ json: organizerSessionFixture });
@@ -104,7 +107,7 @@ async function installSpeakerWorkspaceFixture(page: Page): Promise<void> {
     page.route(
       `**/api/admin/organizations/${ORGANIZATION_ID}/events/${EVENT_ID}/speakers`,
       async (route) => {
-        await route.fulfill({ json: { data: speakerRosterFixture } });
+        await route.fulfill({ json: { data: roster } });
       },
     ),
   ]);
@@ -510,6 +513,58 @@ test("speaker workspace presents the roster as a compact master-detail table", a
       path: testInfo.outputPath(`speakers-master-detail-${viewport.name}.png`),
     });
   }
+});
+
+test("speaker workspace replaces empty controls with guided next steps", async ({
+  page,
+}, testInfo) => {
+  await installSpeakerWorkspaceFixture(page, { ...speakerRosterFixture, speakers: [] });
+  await page.setViewportSize({ width: 1728, height: 1000 });
+  await page.goto(speakersUrl);
+
+  const heading = page.getByRole("heading", { level: 1, name: "Speaker operations" });
+  await expect(heading).toBeVisible();
+  const workspaceWidth = await heading.evaluate(
+    (element) => element.closest("header")?.parentElement?.getBoundingClientRect().width ?? 0,
+  );
+  expect(workspaceWidth).toBeGreaterThan(0);
+  expect(workspaceWidth).toBeLessThanOrEqual(1216);
+
+  const rosterView = page.locator("#roster-view");
+  await expect(rosterView.locator('[data-slot="empty"]')).toHaveCount(1);
+  await expect(rosterView.getByRole("button", { name: "Add speaker" })).toBeVisible();
+  await expect(rosterView.getByRole("button", { name: "Import CSV" })).toBeVisible();
+  await expect(rosterView.getByRole("textbox", { name: "Search speakers" })).toHaveCount(0);
+  await expect(rosterView.getByText("Select a speaker", { exact: true })).toHaveCount(0);
+
+  await page.screenshot({
+    path: testInfo.outputPath("speakers-first-run-desktop.png"),
+  });
+
+  await page.getByRole("tab", { name: "Onboarding" }).click();
+  await expect(page.locator("#tasks-heading")).toHaveText("Speaker onboarding");
+  await expect(page.locator("#tasks-view").locator('[data-slot="empty"]')).toHaveCount(1);
+  await expect(page.locator("#task-title")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Email" }).click();
+  await expect(page.locator("#email-view").locator('[data-slot="empty"]')).toHaveCount(1);
+  await expect(page.locator("#email-template-name")).toHaveCount(0);
+});
+
+test("speaker email waits for an explicit roster selection", async ({ page }) => {
+  await installSpeakerWorkspaceFixture(page);
+  await page.goto(speakersUrl);
+
+  await page.getByRole("tab", { name: "Email" }).click();
+  await expect(page.locator("#email-view").locator('[data-slot="empty-title"]')).toHaveText(
+    "Choose recipients",
+  );
+  await expect(page.locator("#email-template-name")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Roster" }).click();
+  await page.getByRole("checkbox", { name: "Select Avery Morgan" }).click();
+  await page.getByRole("tab", { name: "Email" }).click();
+  await expect(page.locator("#email-template-name")).toBeVisible();
 });
 
 test("speaker workspace reflows at 320px with 200% text zoom", async ({ page }) => {
