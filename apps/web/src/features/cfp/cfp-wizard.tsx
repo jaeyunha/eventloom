@@ -1753,6 +1753,7 @@ export function CfpWizard({
   function changeAccountMode(nextMode: CfpAccountMode): void {
     setAccountMode(nextMode);
     setSaveError(null);
+    setSaveState("idle");
     setErrors((current) => {
       if (nextMode === "sign_up") return current;
 

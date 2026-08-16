@@ -166,6 +166,45 @@ async function installCfpPortalHandoffApi(
   return { selectedEventIds };
 }
 
+test("switching Account modes clears rejected authentication errors", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "evt_evaluator_2026",
+    eventSlug: "evaluator-2026",
+    formId: "evaluator-2026-cfp",
+  });
+  await page.route(/\/api\/auth\/sign-(?:in|up)\/email$/u, async (route) => {
+    const action = route.request().url().includes("/sign-up/") ? "sign-up" : "sign-in";
+    await route.fulfill({
+      body: JSON.stringify({
+        code: "INVALID_CREDENTIALS",
+        message: `Rejected synthetic ${action}.`,
+      }),
+      contentType: "application/json",
+      status: 401,
+    });
+  });
+
+  await page.goto(`${EVALUATOR_CFP_PATH}/account`);
+  await page.getByLabel("Email address").fill("rejected@example.test");
+  await page.getByLabel("Password").fill("StrongPass1!");
+  await page.getByRole("button", { name: "Sign in and continue" }).click();
+  await expect(page.getByText("Rejected synthetic sign-in.", { exact: true })).toBeVisible();
+
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await expect(page.locator('p[aria-live="polite"]')).toHaveText("");
+  await page.getByLabel("First name").fill("Rejected");
+  await page.getByLabel("Last name").fill("Applicant");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Create account and continue" }).click();
+  await expect(page.getByText("Rejected synthetic sign-up.", { exact: true })).toBeVisible();
+
+  await page.locator('[data-cfp-account-mode="sign_in"]').click();
+  await expect(page.locator('p[aria-live="polite"]')).toHaveText("");
+});
+
 test("account access mode stays locked while authentication is pending", async ({
   page,
   authSession,
