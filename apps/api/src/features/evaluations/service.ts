@@ -249,8 +249,16 @@ export interface RecordDecisionInput {
   expectedVersion?: number | undefined;
 }
 
+export interface EvaluationEventSource {
+  getEvent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<{ readonly id: string; readonly name: string } | null>;
+}
+
 export interface EvaluationServiceOptions {
   clock?: (() => Date) | undefined;
+  eventSource?: EvaluationEventSource | undefined;
   acceptanceHandoff?: EvaluationAcceptanceHandoff | undefined;
   decisionProjection?: EvaluationDecisionProjection | undefined;
   aiSuggestionProvider?: EvaluationAiSuggestionProvider | EvaluationSuggestionProducer | undefined;
@@ -844,6 +852,7 @@ export class EvaluationService {
   readonly #acceptanceHandoffInFlight = new Map<string, Promise<void>>();
   readonly #repository: EvaluationRepository;
   readonly #submissions: SubmissionReviewSource;
+  readonly #eventSource: EvaluationEventSource | undefined;
   readonly #clock: () => Date;
   readonly #aiSuggestionProvider:
     | EvaluationAiSuggestionProvider
@@ -858,6 +867,7 @@ export class EvaluationService {
   ) {
     this.#repository = repository;
     this.#submissions = submissions;
+    this.#eventSource = options.eventSource;
     this.#clock = options.clock ?? (() => new Date());
     this.#acceptanceHandoff = options.acceptanceHandoff;
     this.#decisionProjection = options.decisionProjection;
@@ -1782,6 +1792,19 @@ export class EvaluationService {
       );
     });
 
+    const eventNames = new Map<string, string>();
+    if (this.#eventSource !== undefined) {
+      await Promise.all(
+        [...new Set(currentCandidates.map(({ plan }) => plan.eventId))].map(async (eventId) => {
+          const event = await this.#eventSource?.getEvent(actor.tenantId, eventId);
+          if (event === null || event === undefined || event.id !== eventId) {
+            throw notFound("The assigned event was not found.");
+          }
+          eventNames.set(eventId, requireText(event.name, "Event name", 200));
+        }),
+      );
+    }
+
     const contexts = await Promise.all(
       currentCandidates.map(async ({ plan, assignment, review }) => {
         const materialKey = `${assignment.eventId}\u0000${assignment.submissionId}`;
@@ -1821,7 +1844,7 @@ export class EvaluationService {
             organizationId: actor.tenantId,
             organizationName: actor.tenantId,
             eventId: plan.eventId,
-            eventName: plan.eventId,
+            eventName: eventNames.get(plan.eventId) ?? plan.eventId,
             name: plan.name,
             status: plan.status,
             blindReview: plan.blindReview,

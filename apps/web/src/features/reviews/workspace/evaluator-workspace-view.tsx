@@ -16,54 +16,62 @@ export function EvaluatorWorkspaceView({
 }: Readonly<{ controller: EvaluatorController }>) {
   const { assignment, embedded, submitted, queuePosition, abstained } = controller;
   if (abstained) return <EvaluatorAbstainedView controller={controller} />;
+  const reviewSections = (
+    <>
+      <EvaluatorPrivacyNotice controller={controller} />
+      <EvaluatorRoundAvailabilityNotice round={assignment.round} />
+      <EvaluatorSubmissionPanel controller={controller} showReference={!embedded} />
+      <EvaluatorScorecardView controller={controller} />
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className={`${styles.embeddedEvaluator} ${styles.evaluatorMode}`}>
+        <div className={styles.embeddedEvaluatorScroll} data-reviewer-scorecard-scroll="true">
+          <AuthorityNotice />
+          {reviewSections}
+        </div>
+        <EvaluatorActionBar controller={controller} />
+        <EvaluatorConflictDialog controller={controller} />
+      </div>
+    );
+  }
+
   return (
-    <div
-      className={
-        embedded
-          ? `${styles.embeddedEvaluator} ${styles.evaluatorMode}`
-          : `${styles.workspace} ${styles.evaluatorMode}`
-      }
-      id={embedded ? undefined : "review-workspace"}
-    >
-      {embedded ? null : (
-        <>
-          <a className={styles.skipLink} href="#review-content">
-            Skip to review workspace content
-          </a>
-          <header className={styles.workspaceHeader}>
-            <div>
-              <p className={styles.eyebrow}>
-                Assigned review · {assignment.eventName} · {assignment.planName}
-              </p>
-              <h1>{assignment.title}</h1>
-              <p className={styles.headerDescription}>
-                Evaluate this submission in <strong>{assignment.round.name}</strong>. Only your
-                assigned submission is available in this workspace; your draft stays available while
-                you move through the reviewer queue.
-              </p>
-            </div>
-            <div className={styles.headerSide}>
-              <ReviewNavigation mode="evaluator" />
-              <section className={styles.reviewState} aria-label="Review state">
-                <EvaluatorAssignmentStatusBadge
-                  status={submitted ? "submitted" : assignment.assignmentStatus}
-                />
-                <span className={styles.queuePosition}>
-                  {queuePosition
-                    ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
-                    : "Assigned submission"}
-                </span>
-              </section>
-            </div>
-          </header>
-        </>
-      )}
-      <div id={embedded ? undefined : "review-content"} tabIndex={embedded ? undefined : -1}>
+    <div className={`${styles.workspace} ${styles.evaluatorMode}`} id="review-workspace">
+      <a className={styles.skipLink} href="#review-content">
+        Skip to review workspace content
+      </a>
+      <header className={styles.workspaceHeader}>
+        <div>
+          <p className={styles.eyebrow}>
+            Assigned review · {assignment.eventName} · {assignment.planName}
+          </p>
+          <h1>{assignment.title}</h1>
+          <p className={styles.headerDescription}>
+            Evaluate this submission in <strong>{assignment.round.name}</strong>. Only your assigned
+            submission is available in this workspace; your draft stays available while you move
+            through the reviewer queue.
+          </p>
+        </div>
+        <div className={styles.headerSide}>
+          <ReviewNavigation mode="evaluator" />
+          <section className={styles.reviewState} aria-label="Review state">
+            <EvaluatorAssignmentStatusBadge
+              status={submitted ? "submitted" : assignment.assignmentStatus}
+            />
+            <span className={styles.queuePosition}>
+              {queuePosition
+                ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
+                : "Assigned submission"}
+            </span>
+          </section>
+        </div>
+      </header>
+      <div id="review-content" tabIndex={-1}>
         <AuthorityNotice />
-        <EvaluatorPrivacyNotice controller={controller} />
-        <EvaluatorRoundAvailabilityNotice round={assignment.round} />
-        <EvaluatorSubmissionPanel controller={controller} />
-        <EvaluatorScorecardView controller={controller} />
+        {reviewSections}
         <EvaluatorActionBar controller={controller} />
         <EvaluatorConflictDialog controller={controller} />
       </div>

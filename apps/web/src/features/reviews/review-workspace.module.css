@@ -1199,15 +1199,58 @@
   text-align: right;
 }
 
-.submissionContent {
+.submissionHeadingMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.submissionProperties {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(15rem, 0.75fr);
-  gap: 1.5rem;
-  align-items: start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.submissionProperties div {
+  min-inline-size: 0;
+  padding: 0 var(--space-3);
+  border-left: 1px solid var(--color-border);
+}
+
+.submissionProperties div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.submissionProperties div:last-child {
+  padding-right: 0;
+}
+
+.submissionProperties dt {
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.submissionProperties dd {
+  margin: var(--space-1) 0 0;
+  color: var(--color-ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .submissionProse {
   max-width: 52rem;
+  margin-top: var(--space-5);
 }
 
 .submissionProse h3,
@@ -2374,7 +2417,20 @@
 }
 
 .embeddedEvaluator {
+  display: flex;
+  block-size: 100%;
+  min-block-size: 0;
   min-inline-size: 0;
+  flex-direction: column;
+}
+
+.embeddedEvaluatorScroll {
+  min-block-size: 0;
+  flex: 1 1 auto;
+  padding: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--space-5);
 }
 
 .confirmationActions {
@@ -3942,15 +3998,15 @@
 [data-reviewer-shell="true"] .workspace {
   width: 100%;
   margin: 0;
-  padding: 0 0 3rem;
+  padding: var(--space-5) clamp(var(--space-4), 2.25vw, var(--space-8)) 3rem;
 }
 
 [data-reviewer-shell="true"] .workspaceHeader {
-  padding: 0 0 1.25rem;
+  padding: 0 0 var(--space-4);
 }
 
 [data-reviewer-shell="true"] .workspaceHeader h1 {
-  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  font-size: 1.5rem;
 }
 
 /* Evaluator workspace refinement */
@@ -3966,10 +4022,11 @@
 }
 
 .evaluatorQueueMode .reviewerWorkbench {
-  margin-top: var(--space-4);
-  overflow: hidden;
-  border-color: var(--border);
-  background: var(--background);
+  gap: var(--space-5);
+  margin-top: var(--space-3);
+  overflow: visible;
+  border: 0;
+  background: transparent;
 }
 
 .evaluatorQueueMode .reviewerQueuePanel,
@@ -3984,10 +4041,13 @@
 }
 
 .evaluatorQueueMode .reviewerQueuePanel {
-  position: sticky;
-  top: 0;
-  max-block-size: 100dvh;
-  overflow-y: auto;
+  position: static;
+  max-block-size: none;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .evaluatorQueueGuidance {
@@ -4003,11 +4063,10 @@
 }
 
 .evaluatorQueueMode .reviewerStatusViews {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   max-inline-size: 100%;
-  padding-bottom: var(--space-2);
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
+  padding-bottom: 0;
+  overflow: visible;
 }
 
 .evaluatorQueueMode .reviewerStatusViews button {
@@ -4015,8 +4074,10 @@
 }
 
 .evaluatorQueueMode .reviewerFilterBar {
+  grid-template-columns: repeat(6, minmax(7.5rem, 1fr));
   gap: var(--space-2);
   padding: var(--space-3);
+  margin-block: var(--space-4);
   border-color: var(--border);
   background: var(--muted);
 }
@@ -4160,6 +4221,17 @@
   box-shadow: var(--shadow-card);
 }
 
+.embeddedEvaluator > .evaluatorActionBar {
+  position: static;
+  flex: none;
+  margin: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: 0 -0.5rem 1.5rem color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
 .evaluatorActionSummary {
   display: grid;
   gap: var(--space-1);
@@ -4173,20 +4245,39 @@
   color: var(--muted-foreground);
 }
 
+@media (max-width: 80rem) {
+  .evaluatorQueueMode .reviewerFilterBar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 64rem) {
   .evaluatorQueueMode .reviewerQueuePanel {
     position: static;
     max-block-size: none;
   }
+
+  .evaluatorQueueMode .reviewerFilterBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 48rem) {
+  [data-reviewer-shell="true"] .workspace {
+    padding: var(--space-4) var(--space-3) calc(2rem + env(safe-area-inset-bottom));
+  }
+
   .evaluatorQueueMode .reviewerStatusViews {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .evaluatorQueueMode .reviewerStatusViews button {
-    width: auto;
+    width: 100%;
+  }
+
+  .evaluatorQueueMode .reviewerFilterBar {
+    grid-template-columns: 1fr;
   }
 
   .evaluatorMode .scoreControls {
@@ -4203,6 +4294,12 @@
   .evaluatorActionBar .confirmationActions,
   .evaluatorActionBar button {
     width: 100%;
+  }
+}
+
+@media (max-width: 30rem) {
+  .evaluatorQueueMode .reviewerStatusViews {
+    grid-template-columns: 1fr;
   }
 }
 

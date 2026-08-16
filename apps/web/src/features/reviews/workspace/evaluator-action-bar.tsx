@@ -22,6 +22,7 @@ export function EvaluatorActionBar({ controller }: Readonly<{ controller: Evalua
   return (
     <StickyActionBar
       className={styles.evaluatorActionBar}
+      data-reviewer-scorecard-footer="true"
       summary={
         <div className={styles.evaluatorActionSummary}>
           <strong>Submit review</strong>

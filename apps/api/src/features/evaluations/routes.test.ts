@@ -485,7 +485,11 @@ describe("evaluation HTTP routes", () => {
     await expect(mine.json()).resolves.toEqual({ assignments: [] });
   });
   it("loads the authenticated reviewer workspace in one redacted batch", async () => {
-    const app = createTestApp({}, {}, [
+    const getEvent = vi.fn(async (tenantId: string, eventId: string) => ({
+      id: eventId,
+      name: tenantId === "tenant-1" ? "Research Exchange 2027" : "Other event",
+    }));
+    const app = createTestApp({ eventSource: { getEvent } }, {}, [
       {
         id: "submission-1",
         tenantId: "tenant-1",
@@ -563,7 +567,7 @@ describe("evaluation HTTP routes", () => {
       data: {
         assignments: Array<{
           assignment: { id: string; reviewerId: string; status: string };
-          plan: { name: string; closesAt: string | null };
+          plan: { name: string; eventName: string; closesAt: string | null };
           submission: {
             title: string;
             participants: unknown[];
@@ -590,6 +594,9 @@ describe("evaluation HTTP routes", () => {
     ).toBe(true);
     expect(body.data.assignments.map((entry) => entry.assignment.status)).toContain("submitted");
     expect(body.data.assignments[0]?.plan.name).toBe("Committee");
+    expect(body.data.assignments[0]?.plan.eventName).toBe("Research Exchange 2027");
+    expect(getEvent).toHaveBeenCalledOnce();
+    expect(getEvent).toHaveBeenCalledWith("tenant-1", "event-1");
     expect(body.data.assignments[0]?.plan.closesAt).toBe(planRequest.closesAt);
     expect(body.data.assignments[0]?.submission.title).toBe("Blind proposal");
     expect(body.data.assignments[0]?.submission.participants).toEqual([]);

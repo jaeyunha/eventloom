@@ -22,6 +22,7 @@ const ownedStyles = [
   "../../features/reviews/organizer-review-overview.module.css",
   "../../features/reviews/review-workspace.module.css",
   "../../features/reviews/reviewer-shell.module.css",
+  "../../features/reviews/workspace/reviewer-queue.module.css",
   "../../features/speakers/speaker-workspace.module.css",
 ] as const;
 
@@ -64,14 +65,16 @@ describe("workspace semantic surfaces", () => {
     }
   });
 
-  it("preserves reviewer horizontal controls at narrow widths and zoom", () => {
-    const css = styleSource.get("../../features/reviews/review-workspace.module.css") ?? "";
-    const evaluatorRefinement = css.split("/* Evaluator workspace refinement */")[1] ?? "";
+  it("keeps reviewer status and filter controls compact at narrow widths", () => {
+    const css = styleSource.get("../../features/reviews/workspace/reviewer-queue.module.css") ?? "";
 
-    expect(evaluatorRefinement).toContain(".reviewerStatusViews");
-    expect(evaluatorRefinement).toContain("flex-wrap: nowrap");
-    expect(evaluatorRefinement).toContain("overflow-x: auto");
-    expect(evaluatorRefinement).toContain("flex: 0 0 auto");
+    expect(css).toMatch(/@media\s*\(max-width:\s*48rem\)/u);
+    expect(css).toContain(".filterPopover");
+    expect(css).toMatch(
+      /\.filterBar\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/su,
+    );
+    expect(css).toMatch(/\.statusViews\s*\{[^}]*overflow-x:\s*auto[^}]*flex-wrap:\s*nowrap/su);
+    expect(css).toMatch(/\.row\s*\{[^}]*grid-template-columns:\s*1fr/su);
   });
 
   it("keeps the viewport minimum width stable under text zoom", () => {
