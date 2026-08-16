@@ -2,18 +2,33 @@
 
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { LandingIcon } from "./landing-icon";
+
+function subscribeToHydration(): () => void {
+  return () => undefined;
+}
+
+function clientHydrationSnapshot(): boolean {
+  return true;
+}
+
+function serverHydrationSnapshot(): boolean {
+  return false;
+}
 
 export function LandingHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydrationSnapshot,
+    serverHydrationSnapshot,
+  );
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const navLinksRef = useRef<HTMLDivElement>(null);
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = mounted && resolvedTheme === "dark";
 
-  useEffect(() => setMounted(true), []);
   useEffect(() => {
     if (!menuOpen) return;
     navLinksRef.current?.querySelector<HTMLElement>("a")?.focus();
