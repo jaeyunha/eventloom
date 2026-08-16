@@ -32,7 +32,9 @@ export function useZonedTemporalValue({
 }: ZonedTemporalValueOptions) {
   const externalLocalValue = localValue(value, valueTimeZone);
   const onValidityChangeRef = useRef(onValidityChange);
-  onValidityChangeRef.current = onValidityChange;
+  useEffect(() => {
+    onValidityChangeRef.current = onValidityChange;
+  }, [onValidityChange]);
   const [draft, setDraft] = useState(externalLocalValue);
   const [disambiguation, setDisambiguation] = useState<TimeDisambiguation | undefined>(() =>
     initialDisambiguation(value, externalLocalValue, valueTimeZone),
@@ -86,7 +88,9 @@ export function useZonedTemporalRange({
   onValidityChange,
 }: ZonedTemporalRangeOptions) {
   const onValidityChangeRef = useRef(onValidityChange);
-  onValidityChangeRef.current = onValidityChange;
+  useEffect(() => {
+    onValidityChangeRef.current = onValidityChange;
+  }, [onValidityChange]);
   const initialStart = localValue(startValue, valueTimeZone);
   const initialEnd = localValue(endValue, valueTimeZone);
   const [startLocal, setStartLocal] = useState(initialStart);

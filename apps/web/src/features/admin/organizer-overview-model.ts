@@ -1,6 +1,7 @@
 import {
   analyzeLocalDateTime,
   disambiguationForInstant,
+  localDateInTimeZone,
   resolveLocalDateTime,
   type TimeDisambiguation,
 } from "@eventloom/contracts";
@@ -62,6 +63,22 @@ export interface OrganizerOverviewConfig {
 }
 
 export type OrganizerOverviewConfigResult = OrganizerOverviewConfig | { readonly error: string };
+export type OrganizerOverviewCacheResource = "activity" | "core" | "events";
+
+export function organizerOverviewCacheKey(
+  organizationId: string,
+  resource: OrganizerOverviewCacheResource,
+): string {
+  return `organizer-overview:${organizationId.trim()}:${resource}`;
+}
+
+export function organizerOverviewCacheTags(organizationId: string): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `organizer-overview:${normalizedOrganizationId}`,
+  ];
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -542,11 +559,19 @@ function parseOrganizerEventEmbedConfiguration(
     if (!Array.isArray(listValue) || !listValue.every((item) => typeof item === "string")) {
       throw eventRecordError(`${listField} must be an array of strings.`);
     }
-    return listValue
-      .map((item) => item.trim())
-      .filter((item, index, list) => {
-        return item.length > 0 && list.indexOf(item) === index;
-      });
+    const values: string[] = [];
+    const seen = new Set<string>();
+    const itemCount = listValue.length;
+    for (let index = 0; index < itemCount; index += 1) {
+      if (!(index in listValue)) continue;
+      const itemValue = listValue[index];
+      if (typeof itemValue !== "string") continue;
+      const item = itemValue.trim();
+      if (item.length === 0 || seen.has(item)) continue;
+      seen.add(item);
+      values.push(item);
+    }
+    return values;
   };
 
   return {
@@ -896,7 +921,6 @@ function localDateTimeToIso(
     return null;
   }
 }
-
 function localDateTimeIssue(
   value: string,
   timeZone: string,
@@ -914,20 +938,20 @@ function localDateTimeIssue(
 function isoToLocalDateTime(value: string, timeZone: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf()) || !validEventTimeZone(timeZone)) return "";
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
+  const parts: Record<string, string> = {};
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)) {
+    if (part.type !== "literal") {
+      parts[part.type] = part.value;
+    }
+  }
   if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) return "";
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
@@ -1199,8 +1223,12 @@ function localDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function calendarDateStart(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+function eventLocalDate(value: string, timeZone: string): string | null {
+  try {
+    return localDateInTimeZone(value, timeZone);
+  } catch {
+    return null;
+  }
 }
 
 export function parseCalendarInstant(value: string | null | undefined): Date | null {
@@ -1245,33 +1273,38 @@ export function getCalendarMonthCells(month: Date): readonly OrganizerCalendarDa
 }
 
 export function organizerEventIntersectsCalendarDate(
-  event: Pick<OrganizerEventRecord, "startsAt" | "endsAt" | "scheduleDates">,
+  event: Pick<OrganizerEventRecord, "startsAt" | "endsAt" | "scheduleDates" | "timeZone">,
   date: Date | string,
 ): boolean {
   const cellDate = typeof date === "string" ? parseCalendarInstant(date) : date;
   if (cellDate === null || Number.isNaN(cellDate.valueOf())) return false;
+  const cellDateKey = localDateKey(cellDate);
   if (event.scheduleDates !== undefined && event.scheduleDates.length > 0) {
-    return event.scheduleDates.includes(localDateKey(cellDate));
+    return event.scheduleDates.includes(cellDateKey);
   }
-  const startsAt = parseCalendarInstant(event.startsAt);
-  const endsAt = parseCalendarInstant(event.endsAt);
-  if (startsAt === null || endsAt === null || startsAt > endsAt) return false;
-  const dayStart = calendarDateStart(cellDate);
-  const dayEnd = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1);
-  return startsAt < dayEnd && endsAt >= dayStart;
+  const startDate = eventLocalDate(event.startsAt, event.timeZone);
+  const endDate = eventLocalDate(event.endsAt, event.timeZone);
+  return (
+    startDate !== null &&
+    endDate !== null &&
+    startDate <= endDate &&
+    startDate <= cellDateKey &&
+    cellDateKey <= endDate
+  );
 }
 
 export function initialCalendarMonth(
-  events: readonly Pick<OrganizerEventRecord, "status" | "startsAt">[],
+  events: readonly Pick<OrganizerEventRecord, "status" | "startsAt" | "timeZone">[],
 ): Date {
-  let earliest: Date | null = null;
+  let earliestDate: string | null = null;
   for (const event of events) {
     if (event.status === "archived") continue;
-    const startsAt = parseCalendarInstant(event.startsAt);
-    if (startsAt !== null && (earliest === null || startsAt < earliest)) {
-      earliest = startsAt;
+    const startDate = eventLocalDate(event.startsAt, event.timeZone);
+    if (startDate !== null && (earliestDate === null || startDate < earliestDate)) {
+      earliestDate = startDate;
     }
   }
-  const source = earliest ?? new Date();
+  const source = earliestDate === null ? new Date() : parseCalendarInstant(earliestDate);
+  if (source === null) return new Date();
   return new Date(source.getFullYear(), source.getMonth(), 1);
 }

@@ -3,6 +3,13 @@ import { type KeyboardEvent, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import styles from "./agenda-day-selector.module.css";
 
+const AGENDA_DAY_SELECTOR_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
 export interface AgendaDayOption {
   readonly date: string;
   readonly label: string;
@@ -18,12 +25,7 @@ interface AgendaDaySelectorProps {
 function formatCompactDate(date: string): string {
   const value = new Date(`${date}T00:00:00Z`);
   if (Number.isNaN(value.valueOf())) return date;
-  return new Intl.DateTimeFormat("en", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(value);
+  return AGENDA_DAY_SELECTOR_DATE_FORMATTER.format(value);
 }
 
 export function AgendaDaySelector({ days, selectedDate, onSelectDate }: AgendaDaySelectorProps) {

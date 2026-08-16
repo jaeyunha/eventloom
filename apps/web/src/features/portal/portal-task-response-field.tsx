@@ -1,14 +1,9 @@
 "use client";
 
 import type { Ref } from "react";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-  Input,
-  Textarea,
-} from "../../components/ui";
+import { Field, FieldDescription, FieldError, FieldLabel } from "../../components/ui/field";
+import { Input } from "../../components/ui/input";
+import { Textarea } from "../../components/ui/textarea";
 import styles from "./portal-task-form.module.css";
 import type { PortalFormAnswer, PortalFormField } from "./types";
 

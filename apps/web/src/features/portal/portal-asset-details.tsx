@@ -1,6 +1,6 @@
 "use client";
 
-import type { FormEvent } from "react";
+import { type FormEvent, useSyncExternalStore } from "react";
 import { Button, Input } from "@/components/ui";
 import { MetadataList, MetadataRow, StatusBadge } from "@/components/workspace";
 import {
@@ -12,6 +12,10 @@ import {
 import styles from "./portal-workspace.module.css";
 import type { PortalAsset } from "./types";
 
+const PORTAL_ASSET_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+});
+
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "Unknown size";
   if (value < 1024) return `${value} B`;
@@ -19,11 +23,21 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function formatDate(value: string): string {
+function subscribeToPortalAssetDate(): () => void {
+  return () => undefined;
+}
+
+function browserPortalAssetDate(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? "Unknown date"
-    : new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(date);
+  return Number.isNaN(date.valueOf()) ? "Unknown date" : PORTAL_ASSET_DATE_FORMATTER.format(date);
+}
+
+function PortalAssetDate({ value }: Readonly<{ value: string }>) {
+  return useSyncExternalStore(
+    subscribeToPortalAssetDate,
+    () => browserPortalAssetDate(value),
+    () => value,
+  );
 }
 
 export interface AssetDetailsProps {
@@ -89,7 +103,10 @@ export function AssetDetails({
               <MetadataList>
                 <MetadataRow label="Format" value={version.contentType} />
                 <MetadataRow label="Size" value={formatBytes(version.sizeBytes)} />
-                <MetadataRow label="Uploaded" value={formatDate(version.createdAt)} />
+                <MetadataRow
+                  label="Uploaded"
+                  value={<PortalAssetDate value={version.createdAt} />}
+                />
                 <MetadataRow label="Review" value={portalReviewStatus(version)} />
               </MetadataList>
               <div>

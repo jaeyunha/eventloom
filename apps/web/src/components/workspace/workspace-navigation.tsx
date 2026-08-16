@@ -1,6 +1,6 @@
 import { type LucideIcon, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
-import type { ComponentProps, HTMLAttributes } from "react";
+import type { HTMLAttributes } from "react";
 import {
   Button,
   Sheet,
@@ -147,9 +147,3 @@ export function MobileBottomNavigation({
     </nav>
   );
 }
-
-export type WorkspaceNavigationLinkProps = ComponentProps<"a"> & {
-  readonly item: WorkspaceNavigationItem;
-};
-
-export const WorkspaceNavigation = DesktopNavigation;

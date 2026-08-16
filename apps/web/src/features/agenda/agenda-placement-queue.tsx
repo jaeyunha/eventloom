@@ -1,7 +1,7 @@
 "use client";
 
 import { Search } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useReducer, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +15,7 @@ import styles from "./agenda-placement-queue.module.css";
 import {
   AGENDA_PLACEMENT_TRAY_LIMIT,
   type AgendaPlacementDurationFilter,
+  type AgendaPlacementQueueFilters,
   type AgendaPlacementSort,
   agendaPlacementQueueOptions,
   DEFAULT_AGENDA_PLACEMENT_FILTERS,
@@ -26,6 +27,33 @@ interface AgendaPlacementQueueProps {
   sessions: readonly AgendaSession[];
   busy: boolean;
   onChooseSession: (sessionId: string) => void;
+}
+type AgendaPlacementQueueAction =
+  | { type: "query-changed"; query: string }
+  | { type: "track-changed"; track: string }
+  | { type: "format-changed"; format: string }
+  | { type: "duration-changed"; duration: AgendaPlacementDurationFilter }
+  | { type: "sort-changed"; sort: AgendaPlacementSort }
+  | { type: "filters-cleared" };
+
+function agendaPlacementQueueReducer(
+  state: AgendaPlacementQueueFilters,
+  action: AgendaPlacementQueueAction,
+): AgendaPlacementQueueFilters {
+  switch (action.type) {
+    case "query-changed":
+      return { ...state, query: action.query };
+    case "track-changed":
+      return { ...state, track: action.track };
+    case "format-changed":
+      return { ...state, format: action.format };
+    case "duration-changed":
+      return { ...state, duration: action.duration };
+    case "sort-changed":
+      return { ...state, sort: action.sort };
+    case "filters-cleared":
+      return DEFAULT_AGENDA_PLACEMENT_FILTERS;
+  }
 }
 
 function sessionSupportingText(session: AgendaSession): string {
@@ -44,21 +72,11 @@ export function AgendaPlacementQueue({
   const traySearchId = useId();
   const browserSearchId = useId();
   const [browserOpen, setBrowserOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [track, setTrack] = useState("all");
-  const [format, setFormat] = useState("all");
-  const [duration, setDuration] = useState<AgendaPlacementDurationFilter>("all");
-  const [sort, setSort] = useState<AgendaPlacementSort>("title");
-  const filters = useMemo(
-    () => ({
-      query,
-      track,
-      format,
-      duration,
-      sort,
-    }),
-    [duration, format, query, sort, track],
+  const [filters, dispatchFilters] = useReducer(
+    agendaPlacementQueueReducer,
+    DEFAULT_AGENDA_PLACEMENT_FILTERS,
   );
+  const { query, track, format, duration, sort } = filters;
   const filteredSessions = useMemo(
     () => filterAgendaPlacementSessions(sessions, filters),
     [filters, sessions],
@@ -79,11 +97,7 @@ export function AgendaPlacementQueue({
   }
 
   function clearFilters() {
-    setQuery(DEFAULT_AGENDA_PLACEMENT_FILTERS.query);
-    setTrack(DEFAULT_AGENDA_PLACEMENT_FILTERS.track);
-    setFormat(DEFAULT_AGENDA_PLACEMENT_FILTERS.format);
-    setDuration(DEFAULT_AGENDA_PLACEMENT_FILTERS.duration);
-    setSort(DEFAULT_AGENDA_PLACEMENT_FILTERS.sort);
+    dispatchFilters({ type: "filters-cleared" });
   }
 
   return (
@@ -115,7 +129,9 @@ export function AgendaPlacementQueue({
                 type="search"
                 value={query}
                 placeholder="Search title, speaker, track, or format"
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) =>
+                  dispatchFilters({ type: "query-changed", query: event.target.value })
+                }
               />
             </div>
             <Button
@@ -208,14 +224,21 @@ export function AgendaPlacementQueue({
                   type="search"
                   value={query}
                   placeholder="Title, speaker, track, or format"
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) =>
+                    dispatchFilters({ type: "query-changed", query: event.target.value })
+                  }
                 />
               </span>
             </div>
             <div className={styles.filterGrid}>
               <label>
                 <span>Track</span>
-                <select value={track} onChange={(event) => setTrack(event.target.value)}>
+                <select
+                  value={track}
+                  onChange={(event) =>
+                    dispatchFilters({ type: "track-changed", track: event.target.value })
+                  }
+                >
                   <option value="all">All tracks</option>
                   {options.tracks.map((trackName) => (
                     <option key={trackName} value={trackName}>
@@ -226,7 +249,12 @@ export function AgendaPlacementQueue({
               </label>
               <label>
                 <span>Format</span>
-                <select value={format} onChange={(event) => setFormat(event.target.value)}>
+                <select
+                  value={format}
+                  onChange={(event) =>
+                    dispatchFilters({ type: "format-changed", format: event.target.value })
+                  }
+                >
                   <option value="all">All formats</option>
                   {options.formats.map((formatName) => (
                     <option key={formatName} value={formatName}>
@@ -240,7 +268,10 @@ export function AgendaPlacementQueue({
                 <select
                   value={duration}
                   onChange={(event) =>
-                    setDuration(event.target.value as AgendaPlacementDurationFilter)
+                    dispatchFilters({
+                      type: "duration-changed",
+                      duration: event.target.value as AgendaPlacementDurationFilter,
+                    })
                   }
                 >
                   <option value="all">Any duration</option>
@@ -253,7 +284,12 @@ export function AgendaPlacementQueue({
                 <span>Sort</span>
                 <select
                   value={sort}
-                  onChange={(event) => setSort(event.target.value as AgendaPlacementSort)}
+                  onChange={(event) =>
+                    dispatchFilters({
+                      type: "sort-changed",
+                      sort: event.target.value as AgendaPlacementSort,
+                    })
+                  }
                 >
                   <option value="title">Title A–Z</option>
                   <option value="shortest">Shortest first</option>

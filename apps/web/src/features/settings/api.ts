@@ -625,4 +625,3 @@ export function createEventSettingsApi(
   };
   return api;
 }
-export const createSessionSettingsApi = createEventSettingsApi;

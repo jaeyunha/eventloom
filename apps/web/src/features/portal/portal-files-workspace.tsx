@@ -7,7 +7,7 @@ import {
   standardSupportingFileUploadMimeTypes,
   standardUploadMaximumBytes,
 } from "@eventloom/contracts";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { Button, Input } from "@/components/ui";
 import {
   MetadataList,
@@ -51,6 +51,14 @@ export interface FilesWorkspaceViewProps {
   readonly onDownload: (asset: PortalAsset) => void;
 }
 
+interface FilesWorkspaceDraft {
+  readonly ownerKey: string;
+  readonly selectedFamilyId?: string | null;
+  readonly uploadFamilyId?: string;
+  readonly kind?: PortalAsset["kind"];
+  readonly file?: File | null;
+}
+
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "Unknown size";
   if (value < 1024) return `${value} B`;
@@ -89,12 +97,22 @@ export function FilesWorkspaceView({
   onCompleteUpload,
   onDownload,
 }: FilesWorkspaceViewProps) {
-  const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
-  const [uploadFamilyId, setUploadFamilyId] = useState("");
-  const [kind, setKind] = useState<PortalAsset["kind"]>("supporting_file");
-  const [file, setFile] = useState<File | null>(null);
-  const previousSessionId = useRef(selectedSessionId);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const eventId = selectedSession?.eventId ?? sessions[0]?.eventId ?? eventName;
+  const ownerKey = `${eventId}\u0000${participantId ?? ""}\u0000${selectedSessionId ?? ""}`;
+  const [draft, setDraft] = useState<FilesWorkspaceDraft | null>(null);
+  const ownedDraft = draft?.ownerKey === ownerKey ? draft : null;
+  const selectedFamilyId = ownedDraft?.selectedFamilyId ?? null;
+  const uploadFamilyId = ownedDraft?.uploadFamilyId ?? "";
+  const kind = ownedDraft?.kind ?? "supporting_file";
+  const file = ownedDraft?.file ?? null;
+  function updateDraft(patch: Omit<FilesWorkspaceDraft, "ownerKey">): void {
+    setDraft((current) => ({
+      ownerKey,
+      ...(current?.ownerKey === ownerKey ? current : {}),
+      ...patch,
+    }));
+  }
   const uploadInputId = selectedSession
     ? `portal-file-upload-${selectedSession.id}`
     : "portal-file-upload";
@@ -110,15 +128,6 @@ export function FilesWorkspaceView({
   const uploadResolution = uploadFamily
     ? resolvePortalAssetFamily(uploadFamily.versions, uploadFamily.current)
     : null;
-
-  useEffect(() => {
-    if (previousSessionId.current === selectedSessionId) return;
-    previousSessionId.current = selectedSessionId;
-    setSelectedFamilyId(null);
-    setUploadFamilyId("");
-    setFile(null);
-  }, [selectedSessionId]);
-
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file || !participantId || !selectedSession) return;
@@ -131,7 +140,7 @@ export function FilesWorkspaceView({
       file,
       ...(supersedesAssetId ? { supersedesAssetId } : {}),
     });
-    if (saved) setFile(null);
+    if (saved) updateDraft({ file: null });
   }
 
   return (
@@ -182,12 +191,13 @@ export function FilesWorkspaceView({
                 <select
                   value={uploadFamilyId}
                   onChange={(event) => {
-                    setUploadFamilyId(event.currentTarget.value);
-                    setFile(null);
-                    const family = families.find(
-                      (candidate) => candidate.id === event.currentTarget.value,
-                    );
-                    if (family) setKind(family.kind);
+                    const value = event.currentTarget.value;
+                    const family = families.find((candidate) => candidate.id === value);
+                    updateDraft({
+                      uploadFamilyId: value,
+                      file: null,
+                      ...(family ? { kind: family.kind } : {}),
+                    });
                   }}
                 >
                   <option value="">New file</option>
@@ -204,8 +214,10 @@ export function FilesWorkspaceView({
                   disabled={Boolean(uploadFamily)}
                   value={uploadKind}
                   onChange={(event) => {
-                    setKind(event.currentTarget.value as PortalAsset["kind"]);
-                    setFile(null);
+                    updateDraft({
+                      kind: event.currentTarget.value as PortalAsset["kind"],
+                      file: null,
+                    });
                   }}
                 >
                   <option value="headshot">Headshot</option>
@@ -222,7 +234,7 @@ export function FilesWorkspaceView({
                 required
                 type="file"
                 accept={uploadPolicy.mimeTypes.join(",")}
-                onChange={(event) => setFile(event.currentTarget.files?.[0] ?? null)}
+                onChange={(event) => updateDraft({ file: event.currentTarget.files?.[0] ?? null })}
               />
               <small>
                 Accepted: {formatUploadMimeTypes(uploadPolicy.mimeTypes)}. Maximum{" "}
@@ -275,7 +287,7 @@ export function FilesWorkspaceView({
                         className={styles.listButton}
                         type="button"
                         aria-current={family.id === selectedFamily?.id ? "true" : undefined}
-                        onClick={() => setSelectedFamilyId(family.id)}
+                        onClick={() => updateDraft({ selectedFamilyId: family.id })}
                       >
                         <strong>{family.current.fileName}</strong>
                         <span>

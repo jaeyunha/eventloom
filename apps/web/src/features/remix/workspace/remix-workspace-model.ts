@@ -1,6 +1,7 @@
 import {
   RemixApiError,
   type RemixAuditAction,
+  type RemixAuditEntry,
   type RemixCandidate,
   type RemixContent,
   type RemixField,
@@ -10,6 +11,41 @@ import {
   remixSessionFields,
   remixSpeakerFields,
 } from "../api";
+
+export interface RemixNavigationCacheSnapshot {
+  readonly records: readonly RemixSourceRecord[];
+  readonly candidates: readonly RemixCandidate[];
+  readonly audit: readonly RemixAuditEntry[];
+}
+
+function normalizeRemixScopeId(value: string): string {
+  return value.trim();
+}
+
+export function remixNavigationCacheKey(
+  organizationId: string,
+  eventId: string,
+  sourceType: RemixSourceType,
+): string {
+  const organization = normalizeRemixScopeId(organizationId);
+  const event = normalizeRemixScopeId(eventId);
+  return `organization:${organization}:event:${event}:remix:workspace:${sourceType}`;
+}
+
+export function remixNavigationCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeRemixScopeId(organizationId);
+  const event = normalizeRemixScopeId(eventId);
+  return [`organization:${organization}`, `event:${event}`, `remix:${event}`];
+}
+
+const REMIX_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
 
 export const fieldLabels: Readonly<Record<RemixField, string>> = {
   title: "Title",
@@ -110,9 +146,11 @@ export function recordMatches(
   if (record.kind === "speaker") return tags.length === 0 && tracks.length === 0;
   const normalizedTags = sessionTags.map((tag) => tag.toLocaleLowerCase());
   const normalizedTracks = sessionTracks.map((track) => track.toLocaleLowerCase());
+  const normalizedTagSet = new Set(normalizedTags);
+  const normalizedTrackSet = new Set(normalizedTracks);
   return (
-    tags.every((tag) => normalizedTags.includes(tag)) &&
-    tracks.every((track) => normalizedTracks.includes(track))
+    tags.every((tag) => normalizedTagSet.has(tag)) &&
+    tracks.every((track) => normalizedTrackSet.has(track))
   );
 }
 
@@ -162,9 +200,5 @@ export function auditActionLabel(action: RemixAuditAction): string {
 export function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  }).format(date);
+  return REMIX_TIMESTAMP_FORMATTER.format(date);
 }

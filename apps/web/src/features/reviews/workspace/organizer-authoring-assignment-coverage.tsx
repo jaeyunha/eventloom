@@ -42,6 +42,7 @@ export function OrganizerAssignmentCoverage({
     organizationId,
   } = controller;
   const selectedRound = rounds.find((round) => round.id === assignmentRoundId);
+  const selectedAssignmentReviewerIds = new Set(assignmentReviewerIds);
   const poolReviewerIds = useMemo(
     () => new Set(reviewerPool.pool?.reviewerIds ?? []),
     [reviewerPool.pool?.reviewerIds],
@@ -175,7 +176,7 @@ export function OrganizerAssignmentCoverage({
           >
             {visiblePoolReviewers.map((member) => {
               const inputId = `assignment-reviewer-${member.userId}`;
-              const checked = assignmentReviewerIds.includes(member.userId);
+              const checked = selectedAssignmentReviewerIds.has(member.userId);
               const grant = poolGrants.get(member.userId);
               const capacityReached =
                 grant !== undefined && grant.assignedCount >= grant.maxAssignments && !checked;

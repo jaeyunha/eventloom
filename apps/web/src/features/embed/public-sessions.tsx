@@ -1,9 +1,15 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
 import type { EmbedDisplayField, EmbedLayout } from "./model";
-import { formatPublishedSessionSchedule, publishedEntryPresenters } from "./model";
+import {
+  formatPublishedSessionSchedule,
+  literalSearchPattern,
+  publishedEntryPresenters,
+  publishedSpeakerSearchTermsBySessionId,
+} from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -12,6 +18,14 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
     left.localeCompare(right),
   );
+}
+function trackNameLabels(trackNames: readonly string[]): readonly ReactNode[] {
+  const labels: ReactNode[] = [];
+  for (const trackName of trackNames) {
+    if (trackName.trim().length === 0) continue;
+    labels.push(<span key={trackName}>Track: {trackName}</span>);
+  }
+  return labels;
 }
 
 function truncateDescription(value: string): string {
@@ -32,14 +46,13 @@ function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry):
 
 function entrySearchText(
   entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
+  searchTermsBySessionId: ReadonlyMap<string, readonly string[]>,
 ): string {
-  const presenters = publishedEntryPresenters(entry, speakers);
-  const speakerDetails = presenters.flatMap((presenter) => {
-    const speaker = presenter.speaker;
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
-  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
+  return [
+    entry.title,
+    ...entry.speakerNames,
+    ...(searchTermsBySessionId.get(entry.sessionId) ?? []),
+  ]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase();
@@ -67,6 +80,7 @@ const DEFAULT_SESSIONS_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "track",
   "summary",
 ];
+const EMPTY_TRACK_LIST: readonly string[] = [];
 
 function sessionsIncludeField(
   displayFields: readonly EmbedDisplayField[],
@@ -78,7 +92,7 @@ function sessionsIncludeField(
 export function PublicSessionsView({
   program,
   layout = null,
-  tracks: trackList = [],
+  tracks: trackList = EMPTY_TRACK_LIST,
   displayFields = null,
 }: Readonly<PublicSessionsViewProps>) {
   const { agenda, speakers } = program;
@@ -104,26 +118,42 @@ export function PublicSessionsView({
     () => uniqueValues(agenda.entries.map((entry) => entry.roomName)),
     [agenda.entries],
   );
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const entries = useMemo(
-    () =>
-      [...agenda.entries]
-        .filter((entry) => {
-          if (track && !entry.trackNames.includes(track)) return false;
-          if (
-            trackList.length > 0 &&
-            !trackList.some((trackName) => entry.trackNames.includes(trackName))
-          )
-            return false;
-          if (format && entry.format !== format) return false;
-          if (room && entry.roomName !== room) return false;
-          return (
-            !normalizedQuery || entrySearchText(entry, speakers.speakers).includes(normalizedQuery)
-          );
-        })
-        .sort(compareStarts),
-    [agenda.entries, format, normalizedQuery, room, speakers.speakers, track, trackList],
+  const speakerSearchTermsBySessionId = useMemo(
+    () => publishedSpeakerSearchTermsBySessionId(speakers.speakers),
+    [speakers.speakers],
   );
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const normalizedQueryPattern = useMemo(
+    () => literalSearchPattern(normalizedQuery),
+    [normalizedQuery],
+  );
+  const entries = useMemo(() => {
+    const selectedTrackSet = new Set(trackList);
+    return [...agenda.entries]
+      .filter((entry) => {
+        if (track && !entry.trackNames.some((trackName) => trackName === track)) return false;
+        if (
+          trackList.length > 0 &&
+          !entry.trackNames.some((trackName) => selectedTrackSet.has(trackName))
+        )
+          return false;
+        if (format && entry.format !== format) return false;
+        if (room && entry.roomName !== room) return false;
+        return (
+          normalizedQueryPattern === null ||
+          normalizedQueryPattern.test(entrySearchText(entry, speakerSearchTermsBySessionId))
+        );
+      })
+      .sort(compareStarts);
+  }, [
+    agenda.entries,
+    format,
+    normalizedQueryPattern,
+    room,
+    speakerSearchTermsBySessionId,
+    track,
+    trackList,
+  ]);
 
   const hasFilters = Boolean(query || track || format || room);
   const clearFilters = () => {
@@ -263,11 +293,7 @@ export function PublicSessionsView({
                       {entry.format.trim() && showField("format") ? (
                         <span>Format: {entry.format}</span>
                       ) : null}
-                      {showField("track")
-                        ? entry.trackNames
-                            .filter((trackName) => trackName.trim().length > 0)
-                            .map((trackName) => <span key={trackName}>Track: {trackName}</span>)
-                        : null}
+                      {showField("track") ? trackNameLabels(entry.trackNames) : null}
                     </div>
                     <h3>{entry.title}</h3>
                     {showField("speakers") ? (
