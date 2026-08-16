@@ -12,7 +12,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   type CfpFormField as ApiCfpFormField,
   type CfpApi,
@@ -23,6 +22,8 @@ import {
 } from "../cfp/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
+import { CfpEditorMasthead, CfpSectionNavigation, CfpStepActions } from "./cfp-editor-chrome";
+import { CfpOptionListEditor } from "./cfp-option-list-editor";
 import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import { useOrganizerEventId } from "./organizer-event-workspace";
 
@@ -1044,21 +1045,6 @@ function ruleMatches(rule: CfpRule, answers: Record<string, string>): boolean {
   return rule.operator === "OR" ? results.some(Boolean) : results.every(Boolean);
 }
 
-function listFromInput(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function updateList(
-  current: CfpConfiguration,
-  key: "tracks" | "tags" | "formats" | "levels",
-  value: string,
-): CfpConfiguration {
-  return { ...current, [key]: listFromInput(value) };
-}
-
 function fieldTypeLabel(type: FieldType): string {
   switch (type) {
     case "email":
@@ -1201,9 +1187,8 @@ export function CfpEditor({
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
-  const [mobileSectionsOpen, setMobileSectionsOpen] = useState(false);
   const previewResultRef = useRef<HTMLDivElement | null>(null);
-  const sectionNavRef = useRef<HTMLElement | null>(null);
+  const saveInFlightRef = useRef(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [preparedPublishVersion, setPreparedPublishVersion] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -1358,11 +1343,45 @@ export function CfpEditor({
     setSaveState("idle");
   }
 
-  async function saveConfiguration(): Promise<{
+  function replaceTaxonomyOptions(
+    key: "formats" | "levels" | "tags" | "tracks",
+    values: string[],
+  ): void {
+    setConfiguration((current) => ({ ...current, [key]: values }));
+    setSaveState("idle");
+  }
+
+  function focusFirstInvalidControl(): boolean {
+    if (typeof document === "undefined") return true;
+    const form = document.getElementById("cfp-editor-form");
+    if (!(form instanceof HTMLFormElement) || form.checkValidity()) return true;
+
+    const invalidControl = Array.from(
+      form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+        "input, select, textarea",
+      ),
+    ).find((control) => !control.disabled && !control.checkValidity());
+    if (!invalidControl) return false;
+
+    const sectionId = invalidControl.closest("section")?.id;
+    const section = SECTION_LINKS.find((candidate) => candidate.id === sectionId);
+    if (section) setActiveSection(section.id);
+    setSaveState("error");
+    setSaveError("Complete the highlighted field before publishing.");
+    window.requestAnimationFrame(() => {
+      invalidControl.focus();
+      invalidControl.reportValidity();
+    });
+    return false;
+  }
+
+  async function saveConfiguration(options?: { readonly validateForPublish?: boolean }): Promise<{
     event: CfpEventConfiguration;
     form: CfpFormConfiguration;
   } | null> {
+    if (saveInFlightRef.current) return null;
     setSaveError(null);
+    if (options?.validateForPublish === true && !focusFirstInvalidControl()) return null;
     if (!resolvedOrganizationId || !resolvedFormId) {
       setSaveState("error");
       setSaveError("An organizer organization and form are required before saving.");
@@ -1379,6 +1398,7 @@ export function CfpEditor({
       return null;
     }
     try {
+      saveInFlightRef.current = true;
       setSaveState("saving");
       const saved = await persistCfpConfiguration(api, {
         configuration,
@@ -1395,6 +1415,8 @@ export function CfpEditor({
         error instanceof Error ? error.message : "The CFP configuration could not be saved.",
       );
       return null;
+    } finally {
+      saveInFlightRef.current = false;
     }
   }
 
@@ -1404,8 +1426,9 @@ export function CfpEditor({
   }
 
   async function requestPublish(): Promise<void> {
+    if (saveInFlightRef.current) return;
     setSaveError(null);
-    const saved = await saveConfiguration();
+    const saved = await saveConfiguration({ validateForPublish: true });
     if (saved === null) return;
     setPreparedPublishVersion(saved.form.version);
     setPublishDialogOpen(true);
@@ -1511,7 +1534,6 @@ export function CfpEditor({
       return;
     }
     setActiveSection(SECTION_LINKS[nextIndex]?.id ?? "event-details");
-    setMobileSectionsOpen(false);
     const scrollContainer = document.getElementById(ORGANIZER_SCROLL_CONTAINER_ID);
     if (scrollContainer === null) {
       window.scrollTo({ top: 0, behavior: "auto" });
@@ -1520,8 +1542,7 @@ export function CfpEditor({
     }
   }
 
-  function handlePreviewSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
+  function handlePreviewSubmit(): void {
     setPreviewSubmissionKey(previewStateKey);
     window.requestAnimationFrame(() => previewResultRef.current?.focus());
   }
@@ -1660,17 +1681,24 @@ export function CfpEditor({
 
   return (
     <div className={styles.viewport}>
-      <header className={styles.pageHeader}>
-        <div>
-          <p className={styles.eyebrow}>Organizer workspace / {eventId}</p>
-          <h1>Configure your call for proposals</h1>
-          <p className={styles.pageIntro}>
-            Shape the event details, applicant experience, and rules before publishing a clear,
-            accessible public form.
-          </p>
-        </div>
-        <div className={styles.headerActionArea}>
-          <div className={styles.headerActions}>
+      <CfpEditorMasthead
+        status={
+          configuration.status === "published"
+            ? "Published"
+            : configuration.status === "closed"
+              ? "Closed"
+              : "Draft"
+        }
+        metadata={[
+          configuration.eventName,
+          `${configuration.opensAt} – ${configuration.closesAt}`,
+          configuration.timezone,
+          `${visibleFields.length} public fields`,
+          configuration.adminNotifications ? "Notifications on" : "Notifications off",
+        ]}
+        error={saveState === "error" ? saveError : null}
+        actions={
+          <>
             {publicLinkAvailable && publicRoute ? (
               <>
                 <button className={styles.secondaryButton} type="button" onClick={copyPublicLink}>
@@ -1683,76 +1711,24 @@ export function CfpEditor({
                   {publicLinkCopied ? "Public CFP link copied to clipboard." : ""}
                 </span>
               </>
-            ) : (
-              <span className={styles.publicationHint}>
-                Public link available after publishing.
-              </span>
-            )}
-            <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
-              Save changes
-            </button>
-            {activeSection === "public-preview" ? (
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void requestPublish()}
-                disabled={saveState === "saving"}
-              >
-                {saveState === "saving" ? "Checking form…" : "Publish form"}
-              </button>
             ) : null}
-          </div>
-          {saveState === "error" && saveError ? (
-            <p className={styles.headerActionStatus} role="alert">
-              {saveError}
-            </p>
-          ) : null}
-        </div>
-      </header>
-
-      <nav ref={sectionNavRef} className={styles.sectionNav} aria-label="CFP workspace sections">
-        <div className={styles.desktopSectionNav}>
-          {SECTION_LINKS.map((section) => (
             <button
-              key={section.id}
-              type="button"
-              aria-controls={section.id}
-              aria-current={activeSection === section.id ? "location" : undefined}
-              className={activeSection === section.id ? styles.activeNavButton : undefined}
-              onClick={() => openSection(section.id)}
+              className={styles.primaryButton}
+              type="submit"
+              form="cfp-editor-form"
+              disabled={saveState === "saving"}
             >
-              {section.label}
+              {saveState === "saving" ? "Saving…" : "Save changes"}
             </button>
-          ))}
-        </div>
-        <Collapsible
-          className={styles.mobileSectionNav}
-          open={mobileSectionsOpen}
-          onOpenChange={setMobileSectionsOpen}
-        >
-          <CollapsibleTrigger className={styles.mobileSectionTrigger} type="button">
-            <span>
-              <span className={styles.mobileSectionLabel}>Current section</span>
-              {SECTION_LINKS.find((section) => section.id === activeSection)?.label}
-            </span>
-            <span aria-hidden="true">⌄</span>
-          </CollapsibleTrigger>
-          <CollapsibleContent className={styles.mobileSectionContent}>
-            {SECTION_LINKS.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                aria-controls={section.id}
-                aria-current={activeSection === section.id ? "location" : undefined}
-                className={activeSection === section.id ? styles.activeNavButton : undefined}
-                onClick={() => openSection(section.id)}
-              >
-                {section.label}
-              </button>
-            ))}
-          </CollapsibleContent>
-        </Collapsible>
-      </nav>
+          </>
+        }
+      />
+
+      <CfpSectionNavigation
+        activeSection={activeSection}
+        sections={SECTION_LINKS}
+        onChange={(sectionId) => openSection(sectionId as (typeof SECTION_LINKS)[number]["id"])}
+      />
 
       <div className={styles.workspaceGrid}>
         <form
@@ -2003,7 +1979,7 @@ export function CfpEditor({
             </p>
             <div className={styles.copyStack}>
               <div className={styles.fieldGroup}>
-                <label htmlFor="welcome-title">Welcome heading</label>
+                <label htmlFor="welcome-title">Form label</label>
                 <input
                   id="welcome-title"
                   name="welcomeTitle"
@@ -2013,7 +1989,7 @@ export function CfpEditor({
                 />
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="welcome-body">Welcome copy</label>
+                <label htmlFor="welcome-body">Welcome message</label>
                 <textarea
                   id="welcome-body"
                   name="welcomeBody"
@@ -2036,7 +2012,7 @@ export function CfpEditor({
                   />
                 </div>
                 <div className={styles.fieldGroup}>
-                  <label htmlFor="success-message">Success message</label>
+                  <label htmlFor="success-message">Supporting success message</label>
                   <input
                     id="success-message"
                     name="successMessage"
@@ -2047,7 +2023,7 @@ export function CfpEditor({
                 </div>
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="confirmation-body">Confirmation copy</label>
+                <label htmlFor="confirmation-body">Confirmation message</label>
                 <textarea
                   id="confirmation-body"
                   name="confirmationBody"
@@ -2057,7 +2033,7 @@ export function CfpEditor({
                 />
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="redirect-url">After-submit redirect URL</label>
+                <label htmlFor="redirect-url">Next destination URL</label>
                 <input
                   id="redirect-url"
                   name="redirectUrl"
@@ -2086,65 +2062,39 @@ export function CfpEditor({
               </div>
             </div>
             <p className={styles.sectionDescription}>
-              Consistent options make routing and review easier. Separate each option with a comma.
+              Add the choices applicants use to classify a proposal. Press Enter after each option.
             </p>
             <div className={styles.formGrid}>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="tracks">Tracks</label>
-                <input
-                  id="tracks"
-                  name="tracks"
-                  required
-                  value={configuration.tracks.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "tracks", event.target.value))
-                  }
-                  aria-describedby="tracks-help"
-                />
-                <p id="tracks-help" className={styles.fieldHint}>
-                  Route proposals into a program area.
-                </p>
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="tags">Tags</label>
-                <input
-                  id="tags"
-                  name="tags"
-                  value={configuration.tags.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "tags", event.target.value))
-                  }
-                  aria-describedby="tags-help"
-                />
-                <p id="tags-help" className={styles.fieldHint}>
-                  Add searchable labels for reviewers.
-                </p>
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="formats">Formats</label>
-                <input
-                  id="formats"
-                  name="formats"
-                  required
-                  value={configuration.formats.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) =>
-                      updateList(current, "formats", event.target.value),
-                    )
-                  }
-                />
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="levels">Levels</label>
-                <input
-                  id="levels"
-                  name="levels"
-                  value={configuration.levels.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "levels", event.target.value))
-                  }
-                />
-              </div>
+              <CfpOptionListEditor
+                id="tracks"
+                label="Tracks"
+                description="Route proposals into program areas."
+                required
+                values={configuration.tracks}
+                onChange={(values) => replaceTaxonomyOptions("tracks", values)}
+              />
+              <CfpOptionListEditor
+                id="formats"
+                label="Formats"
+                description="Define the session formats applicants can propose."
+                required
+                values={configuration.formats}
+                onChange={(values) => replaceTaxonomyOptions("formats", values)}
+              />
+              <CfpOptionListEditor
+                id="levels"
+                label="Levels"
+                description="Describe the intended audience experience."
+                values={configuration.levels}
+                onChange={(values) => replaceTaxonomyOptions("levels", values)}
+              />
+              <CfpOptionListEditor
+                id="tags"
+                label="Tags"
+                description="Add searchable labels for reviewers."
+                values={configuration.tags}
+                onChange={(values) => replaceTaxonomyOptions("tags", values)}
+              />
             </div>
 
             <div className={styles.linksBlock}>
@@ -2195,9 +2145,20 @@ export function CfpEditor({
               visible only when they help an applicant complete a thoughtful proposal.
             </p>
             <fieldset className={styles.fieldList}>
-              <legend>Applicant fields</legend>
-              {configuration.fields.map((field) => (
+              <legend>Proposal questions</legend>
+              <p className={styles.fieldsetDescription}>
+                Configure the questions applicants answer. Technical keys stay stable for
+                integrations and conditional logic.
+              </p>
+              {configuration.fields.map((field, index) => (
                 <div className={styles.fieldRuleRow} key={field.id}>
+                  <div className={styles.fieldCardHeading}>
+                    <div>
+                      <span>Question {index + 1}</span>
+                      <strong>{field.label || "Untitled question"}</strong>
+                    </div>
+                    <span>{fieldTypeLabel(field.type)}</span>
+                  </div>
                   <div className={styles.formGrid}>
                     <div className={styles.fieldGroup}>
                       <label htmlFor={`field-label-${field.id}`}>Field label</label>
@@ -2246,16 +2207,14 @@ export function CfpEditor({
                       ) : null}
                     </div>
                     {field.type === "select" || field.type === "multi_select" ? (
-                      <div className={styles.fieldGroup}>
-                        <label htmlFor={`field-options-${field.id}`}>Options</label>
-                        <input
-                          id={`field-options-${field.id}`}
-                          value={fieldOptionValues(field).join(", ")}
-                          onChange={(event) =>
-                            updateField(field.id, { options: listFromInput(event.target.value) })
-                          }
-                        />
-                      </div>
+                      <CfpOptionListEditor
+                        id={`field-options-${field.id}`}
+                        label="Answer options"
+                        description="Applicants choose from these options in the public form."
+                        required
+                        values={fieldOptionValues(field)}
+                        onChange={(values) => updateField(field.id, { options: values })}
+                      />
                     ) : null}
                   </div>
                   <label>
@@ -2290,8 +2249,12 @@ export function CfpEditor({
               </button>
             </fieldset>
             {configuration.participantFields && configuration.participantFields.length > 0 ? (
-              <fieldset className={styles.fieldList}>
-                <legend>Participant identity and profile fields</legend>
+              <fieldset className={`${styles.fieldList} ${styles.identityFields}`}>
+                <legend>Applicant identity</legend>
+                <p className={styles.fieldsetDescription}>
+                  Name and email identify each applicant. Profile questions can be required for the
+                  submission without changing the person’s account identity.
+                </p>
                 {configuration.participantFields.map((field) => (
                   <div className={styles.fieldRuleRow} key={field.id}>
                     <div>
@@ -2323,7 +2286,7 @@ export function CfpEditor({
                           }))
                         }
                       />
-                      Required
+                      Require for applicants
                     </label>
                   </div>
                 ))}
@@ -2409,100 +2372,30 @@ export function CfpEditor({
             <section className={styles.rulePreview} aria-labelledby="condition-preview-heading">
               <div className={styles.subheadingRow}>
                 <div>
-                  <p className={styles.sectionKicker}>Nested condition preview</p>
-                  <h3 id="condition-preview-heading">When should this field appear?</h3>
+                  <p className={styles.sectionKicker}>Conditional visibility</p>
+                  <h3 id="condition-preview-heading">Show a field based on an answer</h3>
                 </div>
-                <span className={styles.logicBadge}>Saved on publish</span>
+                <span className={styles.logicBadge}>Optional</span>
               </div>
               <p className={styles.ruleSummary}>
-                If <strong>{ruleSummary}</strong>, then <strong>{configuration.ruleAction}</strong>.
+                Show{" "}
+                <strong>
+                  {configuration.ruleAction.replace(/^show\s+/iu, "") || "the selected field"}
+                </strong>{" "}
+                when <strong>{ruleSummary}</strong>.
               </p>
-              <ul className={styles.ruleTree} aria-label="Nested condition tree">
-                <RuleTree rule={configuration.rule} />
-              </ul>
-              <p className={styles.fieldHint}>
-                Rules support nested AND / OR groups and are evaluated before the public form is
-                published. Cycles are rejected during validation.
-              </p>
+              <details className={styles.advancedLogic}>
+                <summary>View advanced condition structure</summary>
+                <ul className={styles.ruleTree} aria-label="Advanced condition structure">
+                  <RuleTree rule={configuration.rule} />
+                </ul>
+                <p className={styles.fieldHint}>
+                  Existing nested AND/OR groups are preserved when the CFP is saved.
+                </p>
+              </details>
             </section>
-
-            <div className={styles.formActions}>
-              <button className={styles.primaryButton} type="submit">
-                Save CFP configuration
-              </button>
-              <span className={styles.saveStatus} role="status" aria-live="polite">
-                {saveState === "saving" ? "Saving event and CFP form…" : ""}
-                {saveState === "saved"
-                  ? "Event and CFP form saved. The close date below reflects the server response."
-                  : ""}
-                {saveState === "error"
-                  ? (saveError ??
-                    "Changes could not be saved. Check your organizer session and try again.")
-                  : ""}
-              </span>
-            </div>
           </section>
         </form>
-
-        <aside className={styles.summaryAside} aria-label="Configuration summary">
-          <div className={styles.summaryCard}>
-            <p className={styles.sectionKicker}>At a glance</p>
-            <h2>Ready for review</h2>
-            <dl className={styles.summaryList}>
-              <div>
-                <dt>Event</dt>
-                <dd>{configuration.eventName}</dd>
-              </div>
-              <div>
-                <dt>Public URL</dt>
-                <dd>
-                  {publicLinkAvailable && publicRoute ? (
-                    <a href={publicRoute}>
-                      /cfp/organizations/{resolvedOrganizationId}/events/{configuration.slug}
-                    </a>
-                  ) : (
-                    "Available after this CFP is published."
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Window</dt>
-                <dd>
-                  {configuration.opensAt} → {configuration.closesAt}
-                </dd>
-              </div>
-              <div>
-                <dt>Timezone</dt>
-                <dd>{configuration.timezone}</dd>
-              </div>
-              <div>
-                <dt>Visible fields</dt>
-                <dd>
-                  {visibleFields.length} of {configuration.fields.length}
-                </dd>
-              </div>
-              <div>
-                <dt>Notifications</dt>
-                <dd>
-                  {configuration.reminderEmails && configuration.adminNotifications
-                    ? "Reminders + admin alerts"
-                    : configuration.reminderEmails
-                      ? "Reminders only"
-                      : configuration.adminNotifications
-                        ? "Admin alerts only"
-                        : "Off"}
-                </dd>
-              </div>
-            </dl>
-            <a className={styles.textLink} href="#public-preview">
-              Jump to public preview <span aria-hidden="true">→</span>
-            </a>
-          </div>
-          <div className={styles.accessibilityNote}>
-            <strong>Accessibility check</strong>
-            <p>Every public field has a visible label, keyboard focus, and a required state.</p>
-          </div>
-        </aside>
       </div>
 
       <section
@@ -2528,11 +2421,10 @@ export function CfpEditor({
         </div>
 
         <div className={styles.previewGrid}>
-          <form
+          <section
             className={styles.publicForm}
             aria-label="Public CFP form preview"
             onInput={() => setPreviewSubmissionKey(null)}
-            onSubmit={handlePreviewSubmit}
           >
             <p className={styles.previewEyebrow}>{configuration.eventName} · Call for proposals</p>
             <h3>{configuration.welcomeTitle}</h3>
@@ -2621,7 +2513,7 @@ export function CfpEditor({
             <p className={styles.previewRuleNote}>
               Conditional preview: {ruleSummary} → {configuration.ruleAction}.
             </p>
-            <button className={styles.primaryButton} type="submit">
+            <button className={styles.primaryButton} onClick={handlePreviewSubmit} type="button">
               Submit preview response
             </button>
             {submittedPreviewResult ? (
@@ -2639,7 +2531,7 @@ export function CfpEditor({
                 <p className={styles.previewSuccess}>{submittedPreviewResult.successMessage}</p>
               </div>
             ) : null}
-          </form>
+          </section>
 
           <aside className={styles.previewDetails} aria-label="Public form behavior">
             <div>
@@ -2664,33 +2556,26 @@ export function CfpEditor({
           </aside>
         </div>
       </section>
-      <nav className={styles.editorStepActions} aria-label="CFP editor progress">
-        <button
-          className={styles.secondaryButton}
-          disabled={activeSectionIndex === 0}
-          onClick={() => openSection(SECTION_LINKS[activeSectionIndex - 1]?.id ?? "event-details")}
-          type="button"
-        >
-          ← Back
-        </button>
-        <span className={styles.editorStepStatus}>
-          Step {activeSectionIndex + 1} of {SECTION_LINKS.length}
-        </span>
-        {activeSectionIndex < SECTION_LINKS.length - 1 ? (
-          <button
-            className={styles.primaryButton}
-            onClick={() => {
-              const nextSection = SECTION_LINKS[activeSectionIndex + 1];
-              if (nextSection !== undefined) openSection(nextSection.id);
-            }}
-            type="button"
-          >
-            Next →
-          </button>
-        ) : (
-          <span />
-        )}
-      </nav>
+      <CfpStepActions
+        activeSection={activeSection}
+        busy={saveState === "saving"}
+        sections={SECTION_LINKS}
+        saveStatus={
+          saveState === "saved"
+            ? "All changes saved"
+            : saveState === "saving"
+              ? "Saving changes…"
+              : saveState === "error"
+                ? "Save failed"
+                : "Changes save when you choose Save changes"
+        }
+        onBack={() => openSection(SECTION_LINKS[activeSectionIndex - 1]?.id ?? "event-details")}
+        onNext={() => {
+          const nextSection = SECTION_LINKS[activeSectionIndex + 1];
+          if (nextSection !== undefined) openSection(nextSection.id);
+        }}
+        onFinish={() => void requestPublish()}
+      />
       <AlertDialog
         open={publishDialogOpen}
         onOpenChange={(open) => {

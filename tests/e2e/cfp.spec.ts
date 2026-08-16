@@ -381,7 +381,7 @@ test("new submitter returns from email verification and continues automatically"
 test("CFP shell reflows without clipping and exposes the current step", async ({
   page,
   authSession,
-}) => {
+}, testInfo) => {
   await installCfpApi(page, authSession, {
     eventId: "mobile-progress",
     formId: "mobile-progress-cfp",
@@ -393,8 +393,8 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   const progressNavigations = page.getByRole("navigation", { name: "Submission progress" });
   await expect(progressNavigations).toHaveCount(1);
   await expect(progressNavigations).toBeVisible();
-  await expect(progressNavigations.getByText("Start", { exact: true })).toBeVisible();
-  await expect(progressNavigations.getByText("Review & submit", { exact: true })).toBeVisible();
+  await expect(progressNavigations.getByText("Get started", { exact: true })).toBeVisible();
+  await expect(progressNavigations.getByText("Review", { exact: true })).toBeVisible();
   await expect(progressNavigations.locator('[aria-current="step"]')).toHaveCount(1);
   expect(
     await page.evaluate(
@@ -403,6 +403,10 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
         document.body.scrollWidth <= document.body.clientWidth,
     ),
   ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-shell-desktop.png"),
+    fullPage: true,
+  });
 
   await page.setViewportSize({ height: 844, width: 390 });
   const compactProgress = page.getByRole("navigation", { name: "Submission progress" });
@@ -410,7 +414,7 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   await expect(compactProgress.getByText("Step 1 of 5", { exact: true })).toBeVisible();
   const currentCompactStep = compactProgress.locator('[aria-current="step"]');
   await expect(currentCompactStep).toHaveCount(1);
-  await expect(currentCompactStep).toContainText("Start");
+  await expect(currentCompactStep).toContainText("Get started");
 
   const fitsViewport = await page.evaluate(
     () =>
@@ -418,6 +422,10 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
       document.body.scrollWidth <= document.body.clientWidth,
   );
   expect(fitsViewport).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-shell-mobile.png"),
+    fullPage: true,
+  });
 });
 
 test("required CFP validation announces errors and focuses the first invalid field", async ({

@@ -17,7 +17,6 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
-import { Stepper } from "../../components/ui/stepper";
 import {
   type CfpApi,
   CfpApiError,
@@ -33,7 +32,9 @@ import {
   type PublishedCfp,
 } from "./api";
 import { CharacterCount, Field, Input } from "./cfp-field";
+import { CfpProgress } from "./cfp-progress";
 import { useCfpStartupStore } from "./cfp-startup-provider";
+import { CfpSubmissionWindow } from "./cfp-submission-window";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import {
@@ -43,7 +44,6 @@ import {
   getPreviousCfpStep,
 } from "./routes";
 import {
-  CFP_STEPS,
   type CfpDraft,
   type CfpParticipant,
   type CfpSecondaryContact,
@@ -67,14 +67,6 @@ import {
 
 const LOCAL_MAIL_INBOX_URL =
   process.env.NODE_ENV === "development" ? "http://127.0.0.1:8025/" : null;
-
-const STEP_LABELS: Record<CfpStep, string> = {
-  welcome: "Start",
-  account: "Your account",
-  submission: "Your proposal",
-  participants: "Speakers",
-  review: "Review & submit",
-};
 
 const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
 
@@ -332,55 +324,6 @@ interface CfpWizardProps {
   api?: CfpApi;
 }
 
-const WIZARD_STEPS = CFP_STEPS.map((step) => ({
-  id: step,
-  label: STEP_LABELS[step],
-}));
-function CfpProgress({ step, mobile = false }: { step: CfpStep; mobile?: boolean }) {
-  const currentIndex = Math.max(CFP_STEPS.indexOf(step), 0);
-  if (!mobile) {
-    return (
-      <div className={styles.desktopStepper}>
-        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
-      </div>
-    );
-  }
-
-  return (
-    <nav aria-label="Submission progress" className={styles.mobileProgress}>
-      <div className={styles.mobileProgressHeader}>
-        <span>
-          Step {currentIndex + 1} of {CFP_STEPS.length}
-        </span>
-        <strong>{STEP_LABELS[step]}</strong>
-      </div>
-      <ol className={styles.mobileStepList}>
-        {WIZARD_STEPS.map((wizardStep, index) => (
-          <li
-            aria-current={index === currentIndex ? "step" : undefined}
-            className={
-              index === currentIndex
-                ? styles.mobileStepCurrent
-                : index < currentIndex
-                  ? styles.mobileStepComplete
-                  : undefined
-            }
-            key={wizardStep.id}
-          >
-            <span aria-hidden="true" className={styles.mobileStepNumber}>
-              {index + 1}
-            </span>
-            <span className="sr-only">
-              {wizardStep.label}
-              {index < currentIndex ? " complete" : ""}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </nav>
-  );
-}
-
 function PublicCfpShell({
   children,
   organization,
@@ -403,27 +346,31 @@ function PublicCfpShell({
   const resolvedOrganizationName = organization?.name ?? "Eventloom";
   const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
   const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
+  const now = Date.now();
+  const opensAt = event ? Date.parse(event.opensAt) : Number.NaN;
+  const closesAt = event ? Date.parse(event.closesAt) : Number.NaN;
+  const windowStatus =
+    Number.isFinite(closesAt) && closesAt <= now
+      ? "closed"
+      : Number.isFinite(opensAt) && opensAt > now
+        ? "upcoming"
+        : "open";
 
   return (
     <main className={styles.viewport}>
-      <header className={styles.publicHeader}>
-        <div className={styles.publicBrand}>
-          <span aria-hidden="true" className={styles.brandMark}>
-            E
-          </span>
-          <span>{resolvedOrganizationName}</span>
-        </div>
-        <div className={styles.publicHeaderContext}>
-          <span>{resolvedEventName}</span>
-          <span aria-hidden="true" className={styles.publicHeaderDivider}>
-            /
-          </span>
-          <span>{resolvedFormName}</span>
-        </div>
-      </header>
       <Card className={`${styles.card} ${className ?? ""}`}>
         <div className={styles.publicShell}>
           <aside aria-label="Event and submission context" className={styles.contextRail}>
+            <header className={styles.applicantIdentity}>
+              <span aria-hidden="true" className={styles.brandMark}>
+                E
+              </span>
+              <span className={styles.applicantIdentityCopy}>
+                <strong>{resolvedOrganizationName}</strong>
+                <span>Applicant workspace</span>
+              </span>
+            </header>
+            <Separator className={styles.identitySeparator} />
             <div className={styles.railIntro}>
               <p className={styles.railKicker}>Call for proposals</p>
               <p className={styles.railEventName}>{resolvedEventName}</p>
@@ -437,27 +384,14 @@ function PublicCfpShell({
             {event ? (
               <>
                 <Separator className={styles.railSeparator} />
-                <section className={styles.deadlineCard} aria-labelledby="cfp-window-heading">
-                  <p id="cfp-window-heading" className={styles.deadlineLabel}>
-                    Submission window
-                  </p>
-                  <dl className={styles.railMeta}>
-                    <div>
-                      <dt>Opens</dt>
-                      <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
-                    </div>
-                    <div>
-                      <dt>Closes</dt>
-                      <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
-                    </div>
-                  </dl>
-                </section>
-                {form ? (
-                  <p className={styles.limitText}>
-                    Up to {formSubmissionLimit(form)} proposal
-                    {formSubmissionLimit(form) === 1 ? "" : "s"} per account
-                  </p>
-                ) : null}
+                <CfpSubmissionWindow
+                  opensAt={event.opensAt}
+                  opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
+                  closesAt={event.closesAt}
+                  closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
+                  {...(form ? { limit: formSubmissionLimit(form) } : {})}
+                  status={windowStatus}
+                />
               </>
             ) : null}
           </aside>
