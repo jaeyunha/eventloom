@@ -50,11 +50,21 @@ describe("event settings change history", () => {
 
   it("presents human settings language while retaining the technical revision", () => {
     expect(eventSettingsAuditPresentation(roomUpdate)).toMatchObject({
+      changeKind: "updated",
       domain: "Rooms and venues",
       entityLabel: "Main Hall",
       summary: "Changed capacity and resources",
       versionLabel: "v2 → v3",
     });
+  });
+
+  it.each([
+    ["created", "created"],
+    ["updated", "updated"],
+    ["settings.updated", "updated"],
+    ["deleted", "deleted"],
+  ] as const)("exposes %s entries as the %s visual change kind", (action, changeKind) => {
+    expect(eventSettingsAuditPresentation({ ...roomUpdate, action }).changeKind).toBe(changeKind);
   });
 
   it("excludes ordinary session activity from the settings history destination", () => {
