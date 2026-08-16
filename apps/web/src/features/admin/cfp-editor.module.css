@@ -363,7 +363,7 @@
   font-weight: 750;
 }
 
-.fieldGroup input,
+.fieldGroup input:not([type="checkbox"]):not([type="radio"]),
 .fieldGroup textarea,
 .fieldGroup select,
 .publicForm input,
@@ -450,7 +450,13 @@
 
 .toggleRow span {
   display: grid;
+  min-width: 0;
   gap: 0.15rem;
+}
+
+.toggleRow strong,
+.toggleRow small {
+  overflow-wrap: anywhere;
 }
 
 .toggleRow strong {
@@ -1020,7 +1026,7 @@
   line-height: 1.35;
 }
 
-.fieldGroup input,
+.fieldGroup input:not([type="checkbox"]):not([type="radio"]),
 .fieldGroup select,
 .fieldGroup textarea {
   width: 100%;
@@ -1087,6 +1093,14 @@
   border-radius: var(--radius-md);
   background: var(--background);
   color: var(--foreground);
+}
+
+.toggleRow input {
+  width: 1rem;
+  height: 1rem;
+  min-height: 0;
+  flex: 0 0 auto;
+  padding: 0;
 }
 
 .linkRow {
@@ -1294,11 +1308,42 @@
   align-items: center;
 }
 
+.previewViewBar {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 1rem;
+}
+
+.previewViewToggle {
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--muted) 38%, var(--background));
+}
+
+.previewViewToggle > button {
+  min-width: 9.5rem;
+  justify-content: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+.previewViewToggle > button[data-state="on"] {
+  background: var(--foreground);
+  color: var(--background);
+}
+
 .previewGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
-  gap: 1rem;
-  padding-top: 0;
+  grid-template-columns: minmax(0, 1fr);
+  padding-top: 1rem;
+}
+
+.previewGrid > .publicForm,
+.previewGrid > .previewDetails {
+  width: 100%;
+  grid-column: 1 / -1;
 }
 
 .publicForm,
@@ -1315,6 +1360,11 @@
 
 .previewDetails {
   align-self: start;
+  display: grid;
+  min-height: 22rem;
+  grid-template-columns: minmax(0, 1.5fr) minmax(14rem, 0.5fr);
+  gap: 1.5rem;
+  align-content: start;
   padding: 1rem;
   background: color-mix(in srgb, var(--muted) 35%, var(--background));
 }
@@ -1384,8 +1434,8 @@
 }
 
 .viewport {
-  width: 100%;
-  margin: 0;
+  width: min(calc(100% - 3rem), 73.75rem);
+  margin: 0 auto;
   padding: 0 0 3rem;
 }
 
@@ -1431,5 +1481,20 @@
 @media (max-width: 56rem) {
   .workspaceGrid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 48rem) {
+  .viewport {
+    width: min(calc(100% - 2rem), 73.75rem);
+  }
+
+  .previewViewToggle {
+    width: 100%;
+  }
+
+  .previewViewToggle > button {
+    min-width: 0;
+    flex: 1;
   }
 }
