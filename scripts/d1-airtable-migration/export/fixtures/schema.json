@@ -1,0 +1,50 @@
+{
+  "tables": [
+    {
+      "id": "tblOrganizations",
+      "name": "Organizations",
+      "description": "Tenants",
+      "primaryFieldId": "fldOrgApplicationId",
+      "fields": [
+        { "id": "fldOrgApplicationId", "name": "Application ID", "type": "singleLineText" },
+        { "id": "fldOrgName", "name": "Name", "type": "singleLineText" }
+      ],
+      "views": [{ "id": "viwOrganizations", "name": "Grid view", "type": "grid" }]
+    },
+    {
+      "id": "tblEvents",
+      "name": "Events",
+      "description": "Tenant events",
+      "primaryFieldId": "fldEventApplicationId",
+      "fields": [
+        { "id": "fldEventApplicationId", "name": "Application ID", "type": "singleLineText" },
+        {
+          "id": "fldEventOrganization",
+          "name": "Organization",
+          "type": "multipleRecordLinks",
+          "options": { "linkedTableId": "tblOrganizations", "prefersSingleRecordLink": true }
+        },
+        { "id": "fldEventName", "name": "Name", "type": "singleLineText" }
+      ],
+      "views": [{ "id": "viwEvents", "name": "Grid view", "type": "grid" }]
+    },
+    {
+      "id": "tblSessions",
+      "name": "Sessions",
+      "description": "Scoped sessions",
+      "primaryFieldId": "fldSessionApplicationId",
+      "fields": [
+        { "id": "fldSessionApplicationId", "name": "Application ID", "type": "singleLineText" },
+        { "id": "fldSessionOrganizationId", "name": "Organization ID", "type": "singleLineText" },
+        {
+          "id": "fldSessionEvent",
+          "name": "Event",
+          "type": "multipleRecordLinks",
+          "options": { "linkedTableId": "tblEvents", "prefersSingleRecordLink": true }
+        },
+        { "id": "fldSessionTitle", "name": "Title", "type": "singleLineText" }
+      ],
+      "views": [{ "id": "viwSessions", "name": "Grid view", "type": "grid" }]
+    }
+  ]
+}

@@ -1,15 +1,10 @@
 # Calendar and timezone semantics
 
-Open Sessionboard sends provider-neutral RFC 5545 attachments through OpenSend at `https://opensend.namuh.co`. It does not write directly to a calendar provider account. Calendar delivery is an email attachment/outbox boundary, not an external sign-in integration.
+Eventloom sends provider-neutral RFC 5545 attachments through OpenSend at `https://opensend.namuh.co`. It does not write directly to a calendar provider account. Calendar delivery is an email attachment/outbox boundary, not an external sign-in integration.
 
 ## Current implementation status
 
-The sections below define the intended calendar contract and the invariants the serializer/lifecycle components are designed to preserve. They are not a claim that an end-to-end release run has completed. Current known implementation gaps are:
-
-- Changing an event timezone does not yet perform a complete schedule migration: draft entries are not fully reinterpreted, revalidated, and republished through one delivered workflow.
-- The API does not yet map resolver-specific DST failures to stable public error codes. Unit-level timezone resolution may identify `NONEXISTENT_LOCAL_TIME` and `AMBIGUOUS_LOCAL_TIME`, but a browser/API run must record the actual response rather than claim those codes are delivered.
-
-Do not present either gap as a shipped feature or convert it into a pass using only unit-level tests.
+The sections below describe the implemented temporal contract and the invariants the serializer and lifecycle components preserve. They are not a claim that an end-to-end release run, staging run, or calendar-client delivery has completed. Remaining limitations are called out where they affect the evidence status.
 
 ## Source of time
 
@@ -31,7 +26,13 @@ The resolver accepts `YYYY-MM-DDTHH:mm[:ss]` without an offset because the event
 - Reject a fall-back wall time that occurs twice with `AMBIGUOUS_LOCAL_TIME` unless the organizer explicitly chooses `earlier` or `later`.
 - Require the resolved end instant to be strictly after the resolved start instant.
 
-These semantic conditions are implementation intent, not a release assertion about the current API response. In particular, the API-level mapping for DST-specific errors and the event-timezone migration workflow remain known gaps as stated above.
+The agenda engine and its route error mapping expose stable field-level errors for these cases. A nonexistent local time is reported on the affected local-time field with `nonexistent_local_time`; an ambiguous time is reported with `ambiguous_local_time`. The resolver still requires an explicit `earlier` or `later` choice for a fold. These claims describe code and tests, not deployed or staging observations.
+
+## Event and agenda boundaries
+
+Event `startsAt` and `endsAt` are exact instants. Agenda entries must start at or after the event start and end at or before the event end. Each entry must also start and end on the same allowed local schedule date. When an event supplies sparse `scheduleDates`, only those dates are allowed. Without an explicit sparse list, the allowed dates are the local date range from the event start through the event end. These checks apply to direct agenda mutations as well as route callers, and entries must have a strictly positive duration.
+
+Agenda timezone is always derived from the authoritative event; callers cannot select a separate agenda timezone. Changing an event timezone is rejected while any agenda state exists, even when the draft is empty. This protects stored local interpretations and dependent schedules. The current implementation does not provide a complete automatic migration and republish workflow for an existing agenda. That is a remaining limitation, not evidence that timezone changes are migrated automatically.
 
 ## Draft, publication, and downstream work
 
@@ -47,6 +48,12 @@ Publication is one locked operation:
 6. Append idempotent outbox work for public agenda projections, embed-cache invalidation, webhook delivery, and calendar delivery.
 
 Public feeds and embeds read only the current immutable revision. Rollback creates a new immutable revision derived from an earlier one; it does not mutate history. Corrective calendar work uses the same outbox and idempotency rules.
+
+Event date updates also protect dependent temporal data. An event cannot be shortened below any retained review-plan boundary or agenda entry. Historical event dates may remain unchanged, but changing a past value is rejected.
+
+New review-plan and round boundaries cannot be before today in the event timezone or after the exact event end. Exact unchanged historical boundaries remain valid, the overall deadline cannot precede the final round close, and authoring surfaces warn without blocking when review continues after event start but remains within event end.
+
+CFP windows must have an open time before the close time, and neither boundary can extend past the authoritative event start. New CFP dates cannot be before today in the event timezone. The standalone date-only editor preserves an unchanged persisted instant exactly, including a non-midnight instant; changing the calendar date intentionally applies the documented event-local date-only conversion.
 
 ## Calendar identity
 
@@ -85,6 +92,16 @@ Calendar text escapes backslashes, line breaks, semicolons, and commas. Lines fo
 
 The calendar email adapter builds a `text/calendar; charset=utf-8; method=REQUEST|CANCEL` attachment plus matching human-readable text/HTML. Update mail is visibly labeled as an update; cancellation mail is visibly labeled as cancelled. Wiring agenda publication through the adapter and ingesting bounce/complaint state require staging and release evidence; component source alone does not establish delivery.
 
+## Speaker deadlines, travel, and expiring credentials
+
+Speaker task and deliverable deadlines use strict, real `YYYY-MM-DD` calendar dates. They are inclusive through the end of that calendar day in the authoritative event timezone: the comparison boundary is the start of the following local date, resolved in that IANA timezone. A task becomes overdue at that boundary, reminder offsets are measured back from the same boundary, and scheduler cadence keys use those resolved instants. Bare calendar dates are never parsed as UTC instants. This keeps deadline behavior tied to event-local day boundaries across UTC offsets and daylight-saving transitions.
+
+Newly selected deadlines cannot be before today in the event timezone, but an exact unchanged historical deadline may be retained when editing. Deadlines may fall after the event ends and produce a non-blocking warning.
+
+Travel arrival and departure inputs also use strict `YYYY-MM-DD` semantics, require arrival to be no later than departure, and warn without blocking when travel falls outside the event dates. Legacy persisted timestamps are projected to dates in the authoritative event timezone; new timestamp-shaped travel input is rejected. Travel constraints remain warnings in agenda validation, not hard conflicts.
+
+Supplied API-key expirations must be explicit-offset ISO instants, are normalized to UTC, and must be strictly later than the current time. Browser-local expiration input rejects nonexistent DST times and ambiguous repeated times rather than silently selecting an occurrence. A key without an expiration remains valid until revoked, and revoked or expired keys are rejected. This documents authentication behavior only. It does not claim that any key is deployed or active in a particular environment.
+
 ## Attendees and privacy
 
 Only authorized session attendees receive private invitations. Evaluator identities, internal comments, task state, private assets, secondary-contact data not intended as attendees, and unpublished session data must not enter a calendar payload. The attendee list is part of the idempotency fingerprint; a changed list requires a new idempotency key and incremented sequence.
@@ -115,9 +132,14 @@ Use fixed fixtures with non-ASCII titles/locations and a transition in the event
 | Attendee update | Existing UID changes and intended recipients receive the update | Must be observed with synthetic recipients |
 | Cancellation | Existing UID becomes cancelled, no second event | Must be observed with synthetic recipients |
 | Retry same idempotency key | No second send or sequence allocation | Must be observed in delivery records |
-| Spring-forward invalid local time | Resolver contract rejects it; API error mapping is a known gap | Do not mark API code as delivered |
-| Fall-back ambiguous local time | Explicit earlier/later choice resolves predictably; API mapping is a known gap | Record actual API response |
-| Event timezone change | Full draft migration/revalidation/new publication | Known implementation gap; not delivered |
+| Spring-forward invalid local time | Resolver rejects it and the agenda surface reports `nonexistent_local_time` on the affected field | `packages/contracts/src/domain/temporal.test.ts`, `apps/api/src/features/agenda/engine.test.ts`; route mapping is covered in `apps/api/src/routes/agenda.test.ts`; local tests only, no deployment claim |
+| Fall-back ambiguous local time | Missing disambiguation reports `ambiguous_local_time`; explicit earlier/later choices resolve predictably | `packages/contracts/src/domain/temporal.test.ts`, `apps/api/src/features/agenda/engine.test.ts`, `apps/api/src/routes/agenda.test.ts`; local tests only, no deployment claim |
+| Exact event and sparse schedule boundaries | Entries outside exact instants or allowed local dates are rejected | Unit tests, including direct engine mutations |
+| Event timezone change with active agenda | Change is rejected to protect active agenda entries | Event temporal dependency tests; no migration workflow claim |
+| Review and CFP boundaries | Event shortening respects review and agenda boundaries; CFP boundaries are at or before event start | Event route and service tests; local tests only, no deployment claim |
+| Speaker deadlines and travel | New past deadlines and invalid travel ordering are rejected; historical deadlines can remain unchanged | Speaker service tests |
+| API-key expiration | Revoked or expired keys are rejected; non-expiring keys are checked only for revocation | Authenticator tests |
+| Event timezone migration | Full draft migration/revalidation/new publication | Remaining limitation; not delivered |
 | Unicode over 75 octets | Attachment unfolds to the original valid text | Must be observed in a controlled importer |
 
 Release evidence must distinguish local serializer/unit tests from staging Ever/`codex-cua` and real OpenSend/calendar observations. Never retain attendee secrets, passwords, or authentication links.

@@ -83,6 +83,7 @@ export interface CfpFileUploadResult extends CfpFileAssetReference {
   state: "ready" | "rejected";
   contentType: string;
   sizeBytes: number;
+  fileName: string;
 }
 
 export function isCfpSchemaVersionConflict(error: unknown): error is CfpApiError {
@@ -254,6 +255,11 @@ const publicFormSchema = z
   .passthrough();
 
 export const publishedCfpSchema = z.object({
+  organization: z.object({
+    id: z.string(),
+    slug: z.string(),
+    name: z.string(),
+  }),
   event: publicEventSchema,
   form: publicFormSchema,
 });
@@ -306,6 +312,7 @@ const eventSchema = z
     slug: z.string(),
     name: z.string(),
     timezone: z.string(),
+    eventStartsAt: z.string().optional(),
     opensAt: z.string(),
     closesAt: z.string(),
   })
@@ -329,15 +336,25 @@ const formSchema = z
 export type CfpEventConfiguration = z.infer<typeof eventSchema>;
 export type CfpFormConfiguration = z.infer<typeof formSchema>;
 
-export interface CfpAccountAuthentication {
-  status: "authenticated" | "verification_required";
+export interface CfpOrganizationMembership {
+  organizationId: string;
+  role: "owner" | "admin" | "reviewer";
 }
 export interface CfpAuthenticatedSession {
   email: string;
   name: string;
   firstName: string;
   lastName: string;
+  memberships: readonly CfpOrganizationMembership[];
 }
+export type CfpAccountAuthentication =
+  | {
+      status: "authenticated";
+      session: CfpAuthenticatedSession;
+    }
+  | {
+      status: "verification_required";
+    };
 export interface CfpApi {
   uploadFile?(input: {
     organizationId: string;
@@ -358,6 +375,7 @@ export interface CfpApi {
   }): Promise<PublishedCfp>;
   authenticateAccount(input: {
     email: string;
+    mode: "sign_in" | "sign_up";
     password: string;
     name: string;
     verificationCallbackUrl?: string;
@@ -464,6 +482,11 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
+function withApiPath(baseUrl: string, path: string): string {
+  const normalizedBaseUrl = trimTrailingSlash(baseUrl);
+  return normalizedBaseUrl ? `${normalizedBaseUrl}${path}` : path;
+}
+
 function segment(value: string): string {
   const normalized = value.trim();
   if (!normalized) throw new TypeError("A CFP route identifier is required.");
@@ -565,31 +588,26 @@ function isEmailNotVerifiedError(response: Response, body: unknown): boolean {
   );
 }
 
-function isInvalidCredentialsError(response: Response, body: unknown): boolean {
-  const fields = authErrorFields(body);
-  return (
-    fields.code === "INVALID_EMAIL_OR_PASSWORD" ||
-    (response.status === 401 &&
-      (fields.message?.toLowerCase().includes("password") === true ||
-        fields.message?.toLowerCase().includes("email") === true ||
-        fields.message?.toLowerCase().includes("credential") === true))
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasAuthSession(body: unknown): boolean {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
-  const responseBody = body as AuthResponseBody;
-  const token = responseBody.token;
-  if (typeof token === "string" && token.trim().length > 0) return true;
+function authResponsePayload(body: unknown): Record<string, unknown> | null {
   const payload = isRecord(body) && Object.hasOwn(body, "data") ? body.data : body;
-  if (isRecord(payload) && typeof payload.token === "string" && payload.token.trim().length > 0) {
-    return true;
-  }
-  return isRecord(payload) && isRecord(payload.user) && isRecord(payload.session);
+  return isRecord(payload) ? payload : null;
+}
+
+function hasAuthSession(body: unknown): boolean {
+  const payload = authResponsePayload(body);
+  if (payload === null) return false;
+  if (typeof payload.token === "string" && payload.token.trim().length > 0) return true;
+  if (isRecord(payload.session)) return true;
+  return isRecord(payload.user) && payload.user.emailVerified === true;
+}
+
+function hasUnverifiedAuthUser(body: unknown): boolean {
+  const payload = authResponsePayload(body);
+  return isRecord(payload?.user) && payload.user.emailVerified === false;
 }
 export const CFP_REQUEST_TIMEOUT_MS = 20_000;
 
@@ -643,13 +661,14 @@ async function withCfpRequestTimeout<T>(
 }
 
 function authenticatedSessionFrom(body: unknown): CfpAuthenticatedSession | null {
-  const payload = isRecord(body) && Object.hasOwn(body, "data") ? body.data : body;
-  if (payload === null || payload === undefined) return null;
-  if (!isRecord(payload)) return null;
-  if (payload.session === null || payload.user === null) return null;
-
-  const user = isRecord(payload.user) ? payload.user : payload;
-  if (user.emailVerified === false) return null;
+  const payload = authResponsePayload(body);
+  if (payload === null) return null;
+  const user = isRecord(payload.user) ? payload.user : null;
+  if (user === null) return null;
+  const hasSessionCredential =
+    (typeof payload.token === "string" && payload.token.trim().length > 0) ||
+    isRecord(payload.session);
+  if (!hasSessionCredential || user.emailVerified !== true) return null;
   const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
   if (!email) return null;
 
@@ -674,7 +693,29 @@ function authenticatedSessionFrom(body: unknown): CfpAuthenticatedSession | null
     name: name || [firstName, lastName].filter(Boolean).join(" ") || email,
     firstName,
     lastName,
+    memberships: authenticatedMembershipsFrom(payload, user),
   };
+}
+
+function authenticatedMembershipsFrom(
+  payload: Record<string, unknown>,
+  user: Record<string, unknown>,
+): readonly CfpOrganizationMembership[] {
+  const source = Array.isArray(payload.memberships)
+    ? payload.memberships
+    : Array.isArray(user.memberships)
+      ? user.memberships
+      : [];
+  return source.flatMap((value) => {
+    if (!isRecord(value)) return [];
+    const rawOrganizationId = value.organizationId ?? value.organization_id;
+    const organizationId = typeof rawOrganizationId === "string" ? rawOrganizationId.trim() : "";
+    const role = typeof value.role === "string" ? value.role.trim().toLowerCase() : "";
+    if (organizationId === "" || (role !== "owner" && role !== "admin" && role !== "reviewer")) {
+      return [];
+    }
+    return [{ organizationId, role }];
+  });
 }
 
 async function authSessionRequest(
@@ -724,9 +765,9 @@ async function authRequest(
 }
 
 export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi {
-  const apiBase = `${trimTrailingSlash(baseUrl)}/api/cfp`;
-  const publicBase = `${trimTrailingSlash(baseUrl)}/api/public/cfp`;
-  const authBase = `${trimTrailingSlash(baseUrl)}/api/auth`;
+  const apiBase = withApiPath(baseUrl, "/api/cfp");
+  const publicBase = withApiPath(baseUrl, "/api/public/cfp");
+  const authBase = withApiPath(baseUrl, "/api/auth");
 
   async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
@@ -838,7 +879,7 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
           409,
         );
       }
-      return finalized;
+      return { ...finalized, fileName: input.file.name };
     },
     getSession: async (input) => {
       const result = await authSessionRequest(fetcher, authBase, input?.signal);
@@ -863,24 +904,46 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
     },
     authenticateAccount: async (input) => {
       const email = input.email.trim().toLowerCase();
-      const signIn = await authRequest(fetcher, authBase, "/sign-in/email", {
-        email,
-        password: input.password,
-      });
-
-      if (signIn.response.ok) {
-        if (hasAuthSession(signIn.body)) return { status: "authenticated" };
-        throw authError(
-          signIn.response,
-          signIn.body,
-          "AUTH_SESSION_NOT_CREATED",
-          "Your sign-in session could not be established.",
-        );
-      }
-      if (isEmailNotVerifiedError(signIn.response, signIn.body)) {
-        return { status: "verification_required" };
-      }
-      if (!isInvalidCredentialsError(signIn.response, signIn.body)) {
+      if (input.mode === "sign_in") {
+        const signIn = await authRequest(fetcher, authBase, "/sign-in/email", {
+          email,
+          password: input.password,
+          ...(input.verificationCallbackUrl ? { callbackURL: input.verificationCallbackUrl } : {}),
+        });
+        if (signIn.response.ok) {
+          const session = authenticatedSessionFrom(signIn.body);
+          if (session !== null) {
+            const refreshed = await authSessionRequest(fetcher, authBase);
+            if (!refreshed.response.ok) {
+              throw authError(
+                refreshed.response,
+                refreshed.body,
+                "AUTH_SESSION_LOOKUP_FAILED",
+                "We could not check your sign-in session.",
+              );
+            }
+            const authoritativeSession = authenticatedSessionFrom(refreshed.body);
+            if (authoritativeSession !== null) {
+              return { status: "authenticated", session: authoritativeSession };
+            }
+            throw authError(
+              refreshed.response,
+              refreshed.body,
+              "AUTH_SESSION_NOT_CREATED",
+              "Your sign-in session could not be established.",
+            );
+          }
+          if (hasUnverifiedAuthUser(signIn.body)) return { status: "verification_required" };
+          throw authError(
+            signIn.response,
+            signIn.body,
+            "AUTH_SESSION_NOT_CREATED",
+            "Your sign-in session could not be established.",
+          );
+        }
+        if (isEmailNotVerifiedError(signIn.response, signIn.body)) {
+          return { status: "verification_required" };
+        }
         throw authError(
           signIn.response,
           signIn.body,
@@ -896,6 +959,9 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
         ...(input.verificationCallbackUrl ? { callbackURL: input.verificationCallbackUrl } : {}),
       });
       if (!signUp.response.ok) {
+        if (isEmailNotVerifiedError(signUp.response, signUp.body)) {
+          return { status: "verification_required" };
+        }
         throw authError(
           signUp.response,
           signUp.body,
@@ -903,8 +969,17 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
           "We could not create your account.",
         );
       }
-      if (hasAuthSession(signUp.body)) return { status: "authenticated" };
-      return { status: "verification_required" };
+      const session = authenticatedSessionFrom(signUp.body);
+      if (session !== null) return { status: "authenticated", session };
+      if (hasUnverifiedAuthUser(signUp.body) || !hasAuthSession(signUp.body)) {
+        return { status: "verification_required" };
+      }
+      throw authError(
+        signUp.response,
+        signUp.body,
+        "AUTH_SESSION_NOT_CREATED",
+        "Your sign-up session could not be established.",
+      );
     },
 
     loadDraft(input) {

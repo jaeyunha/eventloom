@@ -1,4 +1,4 @@
-import type { ApiScope, WebhookEventType } from "@open-sessionboard/contracts";
+import type { ApiScope, WebhookEventType } from "@eventloom/contracts";
 
 export type IntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
 
@@ -16,6 +16,7 @@ export interface ApiKeySummary {
   readonly label: string;
   readonly prefix: string;
   readonly scopes: readonly ApiScope[];
+  readonly eventId?: string | null;
   readonly createdAt: string;
   readonly lastUsedAt: string | null;
   readonly expiresAt: string | null;

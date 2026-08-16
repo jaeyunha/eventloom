@@ -7,7 +7,7 @@ const METADATA_WRITE_SCOPE = "schema.bases:write";
 const APPLICATION_ID_FIELD = "Application ID";
 
 /**
- * Airtable field definitions for the Open Sessionboard business-data model.
+ * Airtable field definitions for the Eventloom business-data model.
  *
  * `linkTable` is an internal reference used while provisioning. Airtable needs
  * the linked table's generated `tbl...` identifier in the API payload, so link
@@ -21,6 +21,10 @@ const json = (name, description) => ({
   description: `${description} Store valid JSON text.`,
 });
 const email = (name, description) => ({ name, type: "email", description });
+const senderEmail = (description) => ({
+  ...email("Sender", description),
+  migrateFromType: "singleSelect",
+});
 const url = (name, description) => ({ name, type: "url", description });
 const number = (name, description, precision = 0) => ({
   name,
@@ -44,6 +48,12 @@ const select = (name, choices, description) => ({
   description,
   options: { choices: choices.map((choice) => ({ name: choice })) },
 });
+const checkbox = (name, description) => ({
+  name,
+  type: "checkbox",
+  description,
+  options: { icon: "check", color: "greenBright" },
+});
 const link = (name, linkTable, description) => ({
   name,
   type: "multipleRecordLinks",
@@ -53,7 +63,7 @@ const link = (name, linkTable, description) => ({
 const applicationId = () =>
   text(
     APPLICATION_ID_FIELD,
-    "Unique stable Open Sessionboard application ID; never use an Airtable record ID.",
+    "Unique stable Eventloom application ID; never use an Airtable record ID.",
   );
 const organizationScopeFields = () => [
   text("Organization ID", "Owning organization application ID."),
@@ -80,7 +90,7 @@ const versionedAuditFields = () => [
 export const TABLE_DEFINITIONS = [
   {
     name: "Organizations",
-    description: "Tenant organizations that own Open Sessionboard events.",
+    description: "Tenant organizations that own Eventloom events.",
     fields: [
       applicationId(),
       text("Name", "Organization display name."),
@@ -178,14 +188,32 @@ export const TABLE_DEFINITIONS = [
     description: "People participating in an event submission.",
     fields: [
       applicationId(),
+      ...organizationScopeFields(),
+      text("Event ID", "Owning event application ID."),
       link("Event", "Events", "Event in which this participant appears."),
+      text("Submission ID", "Stable submission application ID."),
       link("Submission", "Submissions", "Submission containing this participant."),
       link("Speaker Profile", "Speaker Profiles", "Optional public speaker profile."),
       select("Role", ["primary_speaker", "co_speaker"], "Participant role."),
       text("First Name", "Participant first name."),
       text("Last Name", "Participant last name."),
       email("Email", "Participant email address."),
+      email("Normalized Email", "Lowercase, trimmed participant email used for identity matching."),
+      text("CRM Contact ID", "Optional organization-scoped CRM contact application ID."),
+      select(
+        "Identity State",
+        ["resolved", "ambiguous", "unclaimed"],
+        "Canonical participant identity resolution state.",
+      ),
+      select(
+        "Source Type",
+        ["cfp", "manual", "csv", "crm"],
+        "Authoritative source that created or resolved this participant.",
+      ),
+      text("Source ID", "Stable source record or import application ID."),
+      text("Claimed User ID", "Optional D1 identity user ID claiming this participant."),
       text("User ID", "Optional D1 identity user ID."),
+      number("Version", "Optimistic-concurrency version.", 0),
       dateTime("Created At", "Creation timestamp in ISO 8601 format."),
       dateTime("Updated At", "Last update timestamp in ISO 8601 format."),
     ],
@@ -195,6 +223,8 @@ export const TABLE_DEFINITIONS = [
     description: "Speaker-facing profile and public biography data.",
     fields: [
       applicationId(),
+      ...organizationScopeFields(),
+      text("Event ID", "Owning event application ID."),
       link("Event", "Events", "Event in which this profile is used."),
       link("Participant", "Participants", "Participant represented by this profile."),
       longText("Biography", "Public speaker biography."),
@@ -214,13 +244,66 @@ export const TABLE_DEFINITIONS = [
     description: "Review plans, rounds, and rubric configuration.",
     fields: [
       applicationId(),
+      ...organizationScopeFields(),
+      text("Event ID", "Event application ID reviewed by this plan."),
       link("Event", "Events", "Event reviewed by this plan."),
       text("Name", "Review plan display name."),
       select("Status", ["draft", "active", "closed"], "Review plan lifecycle state."),
       json("Rounds JSON", "Ordered review rounds and rubric criteria."),
+      json("Frozen Grading JSON", "Grading policy snapshot frozen when the review plan opens."),
+      json("Frozen Rounds JSON", "Round definitions snapshot frozen when the review plan opens."),
+      number("Frozen Grading Version", "Frozen grading policy version.", 0),
+      number("Frozen Rounds Version", "Frozen round definitions version.", 0),
+      text("Frozen By User ID", "D1 identity user ID that froze the review plan."),
+      dateTime("Frozen At", "Timestamp when grading and round definitions were frozen."),
       number("Version", "Optimistic-concurrency version.", 0),
       dateTime("Created At", "Creation timestamp in ISO 8601 format."),
       dateTime("Updated At", "Last update timestamp in ISO 8601 format."),
+    ],
+  },
+  {
+    name: "Review Assignments",
+    description: "Versioned reviewer assignments and replacement lineage.",
+    fields: [
+      applicationId(),
+      ...organizationScopeFields(),
+      text("Event ID", "Event application ID receiving this assignment."),
+      link("Event", "Events", "Event receiving this assignment."),
+      text("Review Plan ID", "Review plan application ID."),
+      link("Review Plan", "Review Plans", "Plan governing this assignment."),
+      number("Plan Version", "Review plan source version captured by this assignment.", 0),
+      text("Round ID", "Review round application ID."),
+      number("Round Version", "Review round source version captured by this assignment.", 0),
+      text("Submission ID", "Submission application ID."),
+      link("Submission", "Submissions", "Submission assigned for review."),
+      text("Reviewer ID", "D1 identity user ID of the reviewer."),
+      select(
+        "Status",
+        ["assigned", "in_progress", "submitted", "abstained", "superseded"],
+        "Reviewer assignment lifecycle state.",
+      ),
+      number("Version", "Independent assignment optimistic-concurrency version.", 0),
+      text("Predecessor Assignment ID", "Superseded assignment this replacement follows."),
+      link(
+        "Predecessor Assignment",
+        "Review Assignments",
+        "Preceding assignment in replacement lineage.",
+      ),
+      text("Successor Assignment ID", "Replacement assignment created from this assignment."),
+      link(
+        "Successor Assignment",
+        "Review Assignments",
+        "Following assignment in replacement lineage.",
+      ),
+      longText("Superseded Reason", "Reason an assignment was replaced."),
+      dateTime("Superseded At", "Timestamp when this assignment became superseded."),
+      dateTime("Assigned At", "Assignment timestamp in ISO 8601 format."),
+      dateTime("Started At", "Timestamp when the reviewer began this assignment."),
+      dateTime("Submitted At", "Submission timestamp in ISO 8601 format."),
+      dateTime("Created At", "Creation timestamp in ISO 8601 format."),
+      dateTime("Updated At", "Last update timestamp in ISO 8601 format."),
+      json("Audit JSON", "Assignment replacement and state-transition audit metadata."),
+      json("Provenance JSON", "Assignment actor and request provenance metadata."),
     ],
   },
   {
@@ -228,10 +311,19 @@ export const TABLE_DEFINITIONS = [
     description: "Reviewer assignments, evaluations, scores, and comments.",
     fields: [
       applicationId(),
+      ...organizationScopeFields(),
+      text("Event ID", "Event application ID being evaluated."),
+      text("Assignment ID", "Review assignment application ID."),
+      link("Assignment", "Review Assignments", "Assignment governing this evaluation."),
+      text("Review Plan ID", "Review plan application ID governing this evaluation."),
       link("Event", "Events", "Event being evaluated."),
       link("Review Plan", "Review Plans", "Plan and round governing this evaluation."),
       link("Submission", "Submissions", "Submission being evaluated."),
+      text("Submission ID", "Submission application ID being evaluated."),
       text("Round ID", "Review round application ID."),
+      number("Plan Version", "Review plan source version captured by this evaluation.", 0),
+      number("Round Version", "Review round source version captured by this evaluation.", 0),
+      number("Submission Version", "Submission source version captured by this evaluation.", 0),
       text("Reviewer ID", "D1 identity user ID of the reviewer."),
       select("Status", ["assigned", "in_progress", "submitted", "abstained"], "Evaluation state."),
       json("Scores JSON", "Criterion scores and human-confirmation metadata."),
@@ -262,6 +354,14 @@ export const TABLE_DEFINITIONS = [
     description: "Actionable tasks assigned to speakers and organizers.",
     fields: [
       applicationId(),
+      ...organizationScopeFields(),
+      text("Event ID", "Owning event application ID."),
+      select("Subject Type", ["participant", "session"], "Task subject scope."),
+      text("Participant ID", "Canonical participant application ID for this task subject."),
+      text("Submission ID", "Optional accepted submission application ID for a session subject."),
+      link("Submission", "Submissions", "Optional submission associated with the session subject."),
+      text("Asset Family ID", "Task-owned asset family application ID."),
+      link("Asset Family", "Asset Families", "Task-owned logical asset family."),
       link("Event", "Events", "Event containing this task."),
       link("Participant", "Participants", "Participant responsible for the task."),
       text("Title", "Task title."),
@@ -422,6 +522,37 @@ export const TABLE_DEFINITIONS = [
     ],
   },
   {
+    name: "Embed Configurations",
+    description: "Business-authoritative event embed widget configurations.",
+    fields: [
+      applicationId(),
+      ...organizationScopeFields(),
+      ...eventScopeFields(),
+      text("Name", "Embed configuration display name."),
+      select(
+        "Widget Type",
+        ["sessions", "speakers", "agenda", "itinerary", "gallery"],
+        "Public widget type.",
+      ),
+      json("Track IDs JSON", "Stable track application IDs selected by this embed."),
+      json("Field Mask JSON", "Allow-listed public fields rendered by this embed."),
+      select(
+        "Layout",
+        ["comfortable", "compact", "list", "grid", "timeline"],
+        "Embed presentation layout.",
+      ),
+      select("Theme", ["auto", "light", "dark"], "Embed presentation theme."),
+      select(
+        "Output Format",
+        ["styled-html", "basic-html", "json", "xml", "ical"],
+        "Embed response format.",
+      ),
+      checkbox("Enabled", "Whether this embed configuration is served."),
+      number("Revision", "Monotonic embed configuration revision.", 0),
+      ...versionedAuditFields(),
+    ],
+  },
+  {
     name: "Agenda Entries",
     description: "Scheduled session entries within an agenda revision.",
     fields: [
@@ -460,6 +591,54 @@ export const TABLE_DEFINITIONS = [
       longText("Error Message", "Sanitized provider error message."),
       dateTime("Created At", "Creation timestamp in ISO 8601 format."),
       dateTime("Updated At", "Last reconciliation timestamp in ISO 8601 format."),
+    ],
+  },
+  {
+    name: "Program Releases",
+    description: "Immutable business-authoritative program release manifests for public surfaces.",
+    fields: [
+      applicationId(),
+      ...organizationScopeFields(),
+      ...eventScopeFields(),
+      text(
+        "Agenda Revision ID",
+        "Immutable agenda revision application ID served by this release.",
+      ),
+      link(
+        "Agenda Revision",
+        "Agenda Versions",
+        "Immutable agenda revision served by this release.",
+      ),
+      text(
+        "Speaker Revision ID",
+        "Immutable speaker projection revision application ID served by this release.",
+      ),
+      link(
+        "Speaker Revision",
+        "Published Speaker Projections",
+        "Immutable speaker projection revision served by this release.",
+      ),
+      text("Agenda Source Hash", "Hash of the immutable agenda source snapshot."),
+      text("Speaker Source Hash", "Hash of the immutable speaker source snapshot."),
+      text("Approved Agenda Revision ID", "Approved agenda revision application ID."),
+      link("Approved Agenda Revision", "Agenda Versions", "Approved agenda revision pointer."),
+      text("Approved Speaker Revision ID", "Approved speaker projection revision application ID."),
+      link(
+        "Approved Speaker Revision",
+        "Published Speaker Projections",
+        "Approved speaker projection revision pointer.",
+      ),
+      text("Actor User ID", "D1 identity user ID approving or serving this release."),
+      dateTime("Approved At", "Timestamp when the source revisions were approved."),
+      select("Status", ["pending", "served", "failed"], "Program release lifecycle state."),
+      text("Parent Release ID", "Optional predecessor program release application ID."),
+      link("Parent Release", "Program Releases", "Optional predecessor program release."),
+      json("Manifest JSON", "Immutable manifest consumed by public pages, embeds, and feeds."),
+      dateTime("Served At", "Timestamp when this release became the served public snapshot."),
+      dateTime("Failed At", "Timestamp when serving this release failed."),
+      longText("Failure Reason", "Sanitized release failure reason."),
+      number("Revision", "Monotonic program release revision.", 0),
+      ...versionedAuditFields(),
     ],
   },
   {
@@ -708,12 +887,41 @@ export const TABLE_DEFINITIONS = [
     ],
   },
   {
+    name: "Asset Families",
+    description: "Business-authoritative logical file families and immutable version pointers.",
+    fields: [
+      applicationId(),
+      ...organizationScopeFields(),
+      ...eventScopeFields(),
+      text("Task ID", "Task application ID owning this asset family."),
+      link("Task", "Speaker Tasks", "Task owning this asset family."),
+      text("Participant ID", "Canonical participant application ID in this asset scope."),
+      link("Participant", "Participants", "Participant owning this asset family."),
+      text("Session ID", "Optional session application ID in this asset scope."),
+      link("Session", "Sessions", "Optional session associated with this asset family."),
+      text("Submission ID", "Optional submission application ID in this asset scope."),
+      link("Submission", "Submissions", "Optional submission associated with this asset family."),
+      select("Kind", ["headshot", "slides", "supporting_file"], "Logical asset family kind."),
+      text("Latest Version ID", "Latest immutable file version application ID."),
+      link("Latest Version", "File Versions", "Latest immutable file version pointer."),
+      text("Current Version ID", "Current organizer-selected file version application ID."),
+      link("Current Version", "File Versions", "Current file version pointer."),
+      text("Approved Version ID", "Approved file version application ID."),
+      link("Approved Version", "File Versions", "Approved file version pointer."),
+      text("Released Version ID", "Released public file version application ID."),
+      link("Released Version", "File Versions", "Released file version pointer."),
+      ...versionedAuditFields(),
+    ],
+  },
+  {
     name: "File Versions",
     description: "Immutable version lineage for private participant files.",
     fields: [
       applicationId(),
       ...organizationScopeFields(),
       ...eventScopeFields(),
+      text("Asset Family ID", "Asset family application ID."),
+      link("Asset Family", "Asset Families", "Logical asset family containing this version."),
       link("File Asset", "File Assets", "File asset represented by this version."),
       link("Submission", "Submissions", "Submission owning the file version."),
       link("Participant", "Participants", "Participant owning the file version."),
@@ -780,15 +988,7 @@ export const TABLE_DEFINITIONS = [
         "Approved communication template purpose.",
       ),
       select("Status", ["draft", "approved", "archived"], "Template lifecycle state."),
-      select(
-        "Sender",
-        [
-          "auth@sessionboard.namuh.co",
-          "speakers@sessionboard.namuh.co",
-          "calendar@sessionboard.namuh.co",
-        ],
-        "Approved sender identity.",
-      ),
+      senderEmail("Validated sender identity email address."),
       text("Subject", "Rendered email subject template."),
       longText("HTML", "Sanitized HTML email template."),
       longText("Text", "Plain-text email template."),
@@ -811,15 +1011,7 @@ export const TABLE_DEFINITIONS = [
       number("Template Version", "Template version captured by this send.", 0),
       text("Purpose", "Communication purpose."),
       text("Audience", "Recipient audience discriminator."),
-      select(
-        "Sender",
-        [
-          "auth@sessionboard.namuh.co",
-          "speakers@sessionboard.namuh.co",
-          "calendar@sessionboard.namuh.co",
-        ],
-        "Sender identity captured by this send.",
-      ),
+      senderEmail("Sender identity captured by this send for delivery audit."),
       text("Idempotency Key", "Stable communication idempotency key."),
       text("Preview ID", "Optional preview application ID."),
       json("Data JSON", "Render data captured for this send."),
@@ -1324,7 +1516,11 @@ function buildPlan(existingTables) {
     }
     const fields = definition.fields.map((field) => {
       const matching = existingFields.get(field.name);
-      if (matching !== undefined && matching.type !== field.type) {
+      if (
+        matching !== undefined &&
+        matching.type !== field.type &&
+        !isSupportedFieldTypeTransition(matching.type, field)
+      ) {
         incompatible.push(
           `${definition.name}.${field.name} has Airtable type ${matching.type}; expected ${field.type}.`,
         );
@@ -1408,6 +1604,9 @@ function summarizePlan(plan, mode) {
 
 function reconcileFieldPatch(existing, desired, tableIds) {
   const patch = {};
+  if (existing.type !== desired.type && isSupportedFieldTypeTransition(existing.type, desired)) {
+    patch.type = desired.type;
+  }
   if (desired.description !== undefined && existing.description !== desired.description) {
     patch.description = desired.description;
   }
@@ -1421,6 +1620,10 @@ function reconcileFieldPatch(existing, desired, tableIds) {
     }
   }
   return patch;
+}
+
+function isSupportedFieldTypeTransition(existingType, desired) {
+  return existingType === desired.migrateFromType;
 }
 
 function fieldPayload(field, tableIds) {

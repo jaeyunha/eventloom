@@ -2,101 +2,37 @@
 
 import type { RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getPublishedAgenda } from "./api";
 import styles from "./embed.module.css";
 import {
+  type EmbedDisplayField,
+  type EmbedLayout,
   filterSpeakers,
-  formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
+  publicPhotoUrl,
+  publishedSpeakerSessions,
   speakerInitials,
   uniqueSorted,
 } from "./model";
 import type { PublishedAgendaEntry, PublishedSpeaker, PublishedSpeakerGallery } from "./types";
 
-type PublishedAgendaEntryWithSessionId = PublishedAgendaEntry & {
-  readonly sessionId?: string | null;
-};
-
 type SpeakerGalleryDetailView = PublishedSpeakerGallery & {
   readonly agenda?: {
-    readonly entries: readonly PublishedAgendaEntryWithSessionId[];
+    readonly entries: readonly PublishedAgendaEntry[];
   };
 };
-
-function safePhotoUrl(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
 
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
   const organization = speaker.organization?.trim() ?? "";
-  if (jobTitle && organization) {
-    return `${jobTitle} at ${organization}`;
-  }
+  if (jobTitle && organization) return `${jobTitle} at ${organization}`;
   return jobTitle || organization || "Title and company not published";
-}
-function normalizeSpeakerName(value: string): string {
-  return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase();
-}
-
-function agendaSessionId(entry: PublishedAgendaEntryWithSessionId): string {
-  const sessionId = typeof entry.sessionId === "string" ? entry.sessionId.trim() : "";
-  return sessionId || entry.id;
-}
-
-function speakerSessionsFromAgenda(
-  speaker: PublishedSpeaker,
-  entries: readonly PublishedAgendaEntryWithSessionId[],
-) {
-  const speakerSessionIds = new Set(speaker.sessionIds);
-  const normalizedDisplayName = normalizeSpeakerName(speaker.displayName);
-  const normalizedSpeakerId = normalizeSpeakerName(speaker.id);
-  return entries
-    .filter(
-      (entry) =>
-        speakerSessionIds.has(agendaSessionId(entry)) ||
-        entry.speakerNames.some((name) => {
-          const normalizedName = normalizeSpeakerName(name);
-          return normalizedName === normalizedDisplayName || normalizedName === normalizedSpeakerId;
-        }),
-    )
-    .map((entry) => ({
-      id: entry.id,
-      title: entry.title,
-      startsAt: entry.startsAt || null,
-      endsAt: entry.endsAt || null,
-      roomName: entry.roomName || null,
-    }));
-}
-
-function speakerSessionsFromTitles(speaker: PublishedSpeaker) {
-  return speaker.sessionTitles.map((title, index) => ({
-    id: speaker.sessionIds[index] ?? `session-${index}`,
-    title,
-    startsAt: null,
-    endsAt: null,
-    roomName: null,
-  }));
 }
 
 function speakerSessionsFromProjection(
   speaker: PublishedSpeaker,
   gallery: SpeakerGalleryDetailView,
 ) {
-  if (gallery.agenda !== undefined) {
-    const agendaSessions = speakerSessionsFromAgenda(speaker, gallery.agenda.entries);
-    if (agendaSessions.length > 0) {
-      return agendaSessions;
-    }
-  }
-  return speakerSessionsFromTitles(speaker);
+  return publishedSpeakerSessions(speaker, gallery.agenda?.entries ?? []);
 }
 
 export function SpeakerProfileDetail({
@@ -110,7 +46,7 @@ export function SpeakerProfileDetail({
   onBack: () => void;
   backButtonRef?: RefObject<HTMLButtonElement | null>;
 }>) {
-  const photoUrl = safePhotoUrl(speaker.photoUrl);
+  const photoUrl = publicPhotoUrl(speaker.photoUrl);
   const [biographyExpanded, setBiographyExpanded] = useState(false);
   const sessions = speakerSessionsFromProjection(speaker, gallery);
   const biography = speaker.biography.trim();
@@ -128,7 +64,7 @@ export function SpeakerProfileDetail({
           Back to speakers
         </button>
       </div>
-      <article className={styles.speakerCard}>
+      <article className={styles.speakerDetail}>
         <div className={styles.speakerPhoto}>
           {photoUrl ? (
             <span
@@ -176,19 +112,24 @@ export function SpeakerProfileDetail({
                   <li key={session.id}>
                     <strong>{session.title}</strong>
                     <br />
-                    {session.startsAt && session.endsAt ? (
-                      <time dateTime={session.startsAt}>
-                        {formatPublishedDateTimeRange(
+                    <time dateTime={session.startsAt}>
+                      {[
+                        formatPublishedSessionSchedule(
                           session.startsAt,
                           session.endsAt,
                           gallery.event.timeZone,
-                        )}
-                      </time>
-                    ) : (
-                      <span>Date and time not published</span>
-                    )}
+                        ).dateLabel,
+                        formatPublishedSessionSchedule(
+                          session.startsAt,
+                          session.endsAt,
+                          gallery.event.timeZone,
+                        ).timeLabel,
+                      ].join(" · ")}
+                    </time>
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
+                    <br />
+                    <span>Track: {session.trackNames.join(", ") || "Track not published"}</span>
                   </li>
                 ))}
               </ul>
@@ -204,22 +145,20 @@ export function SpeakerProfileDetail({
 
 export function SpeakerGallery({
   gallery,
-  apiBaseUrl,
   agenda,
+  tracks: configuredTracks = [],
+  layout = null,
+  displayFields = null,
 }: Readonly<{
   gallery: PublishedSpeakerGallery;
-  apiBaseUrl?: string;
   agenda?: SpeakerGalleryDetailView["agenda"];
+  tracks?: readonly string[];
+  layout?: EmbedLayout | null;
+  displayFields?: readonly EmbedDisplayField[] | null;
 }>) {
-  const initialAgenda = agenda ?? (gallery as SpeakerGalleryDetailView).agenda;
   const [query, setQuery] = useState("");
   const [track, setTrack] = useState("");
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string | null>(null);
-  const [publishedEntries, setPublishedEntries] = useState<readonly PublishedAgendaEntry[]>(
-    initialAgenda?.entries ?? [],
-  );
-  const [hasPublishedAgenda, setHasPublishedAgenda] = useState(initialAgenda !== undefined);
-  const [agendaLoadAttempted, setAgendaLoadAttempted] = useState(initialAgenda !== undefined);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const tracks = useMemo(
@@ -229,10 +168,18 @@ export function SpeakerGallery({
       ),
     [gallery.speakers],
   );
-  const speakers = useMemo(
-    () => filterSpeakers(gallery.speakers, query, track),
-    [gallery.speakers, query, track],
-  );
+  const speakers = useMemo(() => {
+    const configured = new Set(configuredTracks);
+    const knownTracks = new Set(gallery.speakers.flatMap((speaker) => speaker.trackNames));
+    const applicableTracks = new Set(
+      [...configured].filter((trackName) => knownTracks.has(trackName)),
+    );
+    return filterSpeakers(gallery.speakers, query, track).filter(
+      (speaker) =>
+        applicableTracks.size === 0 ||
+        speaker.trackNames.some((trackName) => applicableTracks.has(trackName)),
+    );
+  }, [configuredTracks, gallery.speakers, query, track]);
   const selectedSpeaker = selectedSpeakerId
     ? gallery.speakers.find((speaker) => speaker.id === selectedSpeakerId)
     : undefined;
@@ -251,31 +198,6 @@ export function SpeakerGallery({
     returnFocusRef.current = null;
   }, [selectedSpeaker]);
 
-  useEffect(() => {
-    const configuredApiBaseUrl =
-      apiBaseUrl?.trim() ||
-      process.env.NEXT_PUBLIC_API_URL?.trim() ||
-      (typeof window !== "undefined" ? window.location.origin : "");
-    if (!configuredApiBaseUrl || agendaLoadAttempted) {
-      return;
-    }
-    setAgendaLoadAttempted(true);
-    let cancelled = false;
-    getPublishedAgenda(configuredApiBaseUrl, gallery.event.slug)
-      .then((agenda) => {
-        if (!cancelled) {
-          setHasPublishedAgenda(true);
-          setPublishedEntries(agenda.entries);
-        }
-      })
-      .catch(() => {
-        // The speaker projection remains usable when its companion agenda is unavailable.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [apiBaseUrl, gallery.event.slug, agendaLoadAttempted]);
-
   const openSpeaker = (speakerId: string, target: HTMLElement) => {
     returnFocusRef.current = target;
     setSelectedSpeakerId(speakerId);
@@ -283,9 +205,8 @@ export function SpeakerGallery({
   const closeSpeaker = () => setSelectedSpeakerId(null);
 
   if (selectedSpeaker) {
-    const detailGallery: SpeakerGalleryDetailView = hasPublishedAgenda
-      ? { ...gallery, agenda: { entries: publishedEntries } }
-      : gallery;
+    const detailGallery: SpeakerGalleryDetailView =
+      agenda === undefined ? gallery : { ...gallery, agenda };
     return (
       <SpeakerProfileDetail
         speaker={selectedSpeaker}
@@ -297,7 +218,11 @@ export function SpeakerGallery({
   }
 
   return (
-    <section aria-labelledby="speakers-heading">
+    <section
+      aria-labelledby="speakers-heading"
+      data-layout={layout ?? undefined}
+      data-display-fields={displayFields?.join(",")}
+    >
       <div className={styles.viewHeading}>
         <div>
           <p className={styles.eyebrow}>Meet the people on stage</p>
@@ -354,8 +279,10 @@ export function SpeakerGallery({
       ) : (
         <ul className={styles.speakerGrid}>
           {speakers.map((speaker) => {
-            const photoUrl = safePhotoUrl(speaker.photoUrl);
+            const photoUrl = publicPhotoUrl(speaker.photoUrl);
             const biography = speaker.biography.trim();
+            const sessions =
+              agenda === undefined ? [] : publishedSpeakerSessions(speaker, agenda.entries);
             return (
               <li key={speaker.id}>
                 <button
@@ -391,12 +318,12 @@ export function SpeakerGallery({
                     ) : (
                       <p>Biography not published.</p>
                     )}
-                    {speaker.sessionTitles.length > 0 ? (
-                      <div className={styles.speakerSessions}>
+                    {sessions.length > 0 ? (
+                      <div className={`${styles.speakerSessions} ${styles.speakerGallerySessions}`}>
                         <h4>Sessions</h4>
                         <ul>
-                          {speaker.sessionTitles.map((title) => (
-                            <li key={title}>{title}</li>
+                          {sessions.map((session) => (
+                            <li key={session.id}>{session.title}</li>
                           ))}
                         </ul>
                       </div>

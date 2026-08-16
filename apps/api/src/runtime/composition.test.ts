@@ -1,56 +1,80 @@
-import { describe, expect, it } from "vitest";
-import { createApp } from "../app";
-import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
+import { describe, expect, it, vi } from "vitest";
+import { type ApiDependencies, createApp } from "../app";
+import type { AgendaState } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
-import type { CfpRepository } from "../features/cfp/service";
-import type {
-  PrivateAssetCapabilityBinding,
-  PrivateUploadGrant,
-  SpeakerAsset,
-} from "../features/speaker/types";
-import { CommunicationService } from "../features/communications/service";
+import {
+  CommunicationService,
+  InMemoryCommunicationRepository,
+  InMemoryReminderRepository,
+} from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { SessionService } from "../features/sessions/service";
+import { EvaluationService } from "../features/evaluations/service";
+import type {
+  EventRoleInvitation,
+  EventRoleInvitationRepository,
+} from "../features/event-invitations/types";
+
 import {
   type AirtableRequest,
+  type AirtableResponse,
   type AirtableTransport,
   FakeAirtableTransport,
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import {
-  AirtableCfpFileAssetGateway,
+  AirtableAgendaRepository,
   AirtableCfpRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
-  AirtableEvaluationAcceptanceHandoff,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
-  AirtableRemixContentGateway,
   AirtableEventRepository,
-  AirtableSessionRepository,
-  AirtableSpeakerReminderDeliveryAdapter,
-  AirtableSpeakerRepository,
+  AirtableRemixContentGateway,
+  AirtableSubmissionReviewSource,
   CloudflareCfpEffects,
-  createAirtableDependencies,
+  EVALUATION_REMINDER_ATTEMPTS_SQL,
+  evaluationReminderAttemptKey,
+  listProductionOrganizationsForUser,
 } from "./airtable";
-import { createLocalCfpService } from "./cfp";
+import { createLocalCfpService, seedLocalCfpForm } from "./cfp";
 import {
   D1ApiKeyAuthenticatorGateway,
   D1BetterAuthGateway,
   inspectProductionRuntime,
-  type OrganizerAutojoinConfiguration,
   type RuntimeBindings,
+  runtimeBindingsForEnvironment,
 } from "./cloudflare";
-import { createRuntimeApp, createRuntimeWorker } from "./composition";
-import { LOCAL_API_KEY, LOCAL_ORGANIZATION_ID, LOCAL_SESSION_TOKEN } from "./local";
+import { createRuntimeApp, createRuntimeWorker, runScheduledReminders } from "./composition";
+import { createRuntimeEventRoleInvitationAdapters } from "./d1";
+import {
+  createLocalDependencies,
+  LOCAL_API_KEY,
+  LOCAL_ORGANIZATION_ID,
+  LOCAL_ORGANIZER_ACCOUNT_ID,
+  LOCAL_ORGANIZER_EMAIL,
+  LOCAL_REVIEWER_EMAIL,
+  LOCAL_SESSION_TOKEN,
+  LOCAL_SPEAKER_EMAIL,
+  LOCAL_SPEAKER_SESSION_TOKEN,
+} from "./local";
+
+vi.setConfig({ testTimeout: 30_000 });
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",
-  WEB_ORIGIN: "http://localhost:3015",
+  RUNTIME_PROFILE: "fixture",
+  WEB_ORIGIN: "http://127.0.0.1:3015",
 };
+const testSenderAddresses = {
+  auth: "auth@sessionboard.namuh.co",
+  speakers: "speakers@sessionboard.namuh.co",
+  calendar: "calendar@sessionboard.namuh.co",
+} as const;
 class FormulaRecordingTransport implements AirtableTransport {
   readonly fake = new FakeAirtableTransport();
   readonly requests: AirtableRequest[] = [];
+
+  constructor(private readonly delayMs = 0) {}
 
   seed(record: Parameters<FakeAirtableTransport["seed"]>[0]): void {
     this.fake.seed(record);
@@ -61,12 +85,69 @@ class FormulaRecordingTransport implements AirtableTransport {
       ...request,
       ...(request.query === undefined ? {} : { query: { ...request.query } }),
     });
+    if (this.delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
+    }
+    const upsertRecords =
+      request.method === "PATCH" && request.recordId === undefined
+        ? (
+            request.body as
+              | {
+                  readonly records?: readonly {
+                    readonly fields?: Readonly<Record<string, unknown>>;
+                  }[];
+                }
+              | undefined
+          )?.records
+        : undefined;
+    if (upsertRecords !== undefined) {
+      const listed = await this.fake.request<{
+        readonly records: readonly {
+          readonly id: string;
+          readonly fields: Readonly<Record<string, unknown>>;
+        }[];
+      }>({
+        method: "GET",
+        baseId: request.baseId,
+        table: request.table,
+        query: { pageSize: 100 },
+      });
+      const mutations = upsertRecords.map((record) => {
+        const fields = record.fields;
+        const applicationId = fields?.["Application ID"];
+        if (
+          fields === undefined ||
+          typeof applicationId !== "string" ||
+          typeof fields["Scores JSON"] !== "string"
+        ) {
+          throw new TypeError("The evaluation batch upsert is invalid.");
+        }
+        return {
+          fields,
+          recordId: listed.body.records.find(
+            (existing) => existing.fields["Application ID"] === applicationId,
+          )?.id,
+        };
+      });
+      const records = [];
+      for (const mutation of mutations) {
+        const response = await this.fake.request({
+          method: mutation.recordId === undefined ? "POST" : "PATCH",
+          baseId: request.baseId,
+          table: request.table,
+          ...(mutation.recordId === undefined ? {} : { recordId: mutation.recordId }),
+          body: { fields: mutation.fields },
+        });
+        records.push(response.body);
+      }
+      return { status: 200, headers: {}, body: { records } as TBody };
+    }
     const formula = request.query?.filterByFormula;
     if (typeof formula !== "string") return this.fake.request<TBody>(request);
-    const delegatedFormula = formula.startsWith("AND(")
-      ? formula.slice(4, -1).split(",")[0]
-      : formula.startsWith("FIND(")
-        ? undefined
+    const delegatedFormula = formula.includes("FIND(")
+      ? undefined
+      : formula.startsWith("AND(")
+        ? formula.slice(4, -1).split(",")[0]
         : formula;
     return this.fake.request<TBody>({
       ...request,
@@ -77,9 +158,11 @@ class FormulaRecordingTransport implements AirtableTransport {
     });
   }
 }
-
 function organizerHeaders(): HeadersInit {
   return { cookie: `better-auth.session_token=${LOCAL_SESSION_TOKEN}` };
+}
+function speakerHeaders(): HeadersInit {
+  return { cookie: `better-auth.session_token=${LOCAL_SPEAKER_SESSION_TOKEN}` };
 }
 function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
   const row = {
@@ -115,7 +198,7 @@ function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
 }
 
 function productionBindings(
-  transport: AirtableTransport,
+  _transport: AirtableTransport,
   database: NonNullable<RuntimeBindings["DB"]>,
 ): RuntimeBindings {
   const coordinator = {
@@ -143,8 +226,8 @@ function productionBindings(
   } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
   return {
     APP_ENV: "production",
-    WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    API_ORIGIN: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+    WEB_ORIGIN: "https://web-production.example.test",
+    API_ORIGIN: "https://api-production.example.test",
     DB: database,
     AGENDA_COORDINATOR: coordinator,
     PRIVATE_FILES: bucket,
@@ -158,17 +241,16 @@ function productionBindings(
     AI_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8",
     AIRTABLE_BASE_ID: "base-test",
     BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
-    OPENSEND_API_URL: "https://opensend.namuh.co",
+    OPENSEND_API_URL: "https://mail.production.example.test",
     OPENSEND_API_KEY: "opensend-test-key",
-    AIRTABLE_TRANSPORT: transport,
-    ORGANIZER_AUTOJOIN_DOMAINS: "swyx.io",
-    ORGANIZER_AUTOJOIN_ORGANIZATION_ID: "ai-engineer",
+    AUTH_FROM_EMAIL: "login@production.example.test",
+    SPEAKERS_FROM_EMAIL: "program@production.example.test",
+    CALENDAR_FROM_EMAIL: "schedule@production.example.test",
+    CALENDAR_UID_DOMAIN: "calendar.production.example.test",
+    CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
+    CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
   };
 }
-const AUTOJOIN_CONFIGURATION: OrganizerAutojoinConfiguration = {
-  domains: ["swyx.io"],
-  organizationId: "ai-engineer",
-};
 
 interface AutojoinDatabaseState {
   readonly email: string;
@@ -178,6 +260,10 @@ interface AutojoinDatabaseState {
     organization_id: string;
     speaker_profile_id: string;
   }>;
+  readonly reviewerGrants: Array<{
+    organization_id: string;
+    event_id: string;
+  }>;
   readonly inserts: Array<{
     organization_id: string;
     user_id: string;
@@ -185,6 +271,8 @@ interface AutojoinDatabaseState {
     created_at: string;
     updated_at: string;
   }>;
+  readonly queries: string[];
+  operationCount: number;
 }
 
 function autojoinDatabase(input: {
@@ -196,6 +284,11 @@ function autojoinDatabase(input: {
     organization_id: string;
     speaker_profile_id: string;
   }[];
+  readonly reviewerGrants?: readonly {
+    organization_id: string;
+    event_id: string;
+  }[];
+  readonly delayMs?: number;
 }): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
   readonly state: AutojoinDatabaseState;
@@ -205,10 +298,21 @@ function autojoinDatabase(input: {
     emailVerified: input.emailVerified,
     memberships: [...(input.memberships ?? [])],
     speakerGrants: [...(input.speakerGrants ?? [])],
+    reviewerGrants: [...(input.reviewerGrants ?? [])],
     inserts: [],
+    queries: [],
+    operationCount: 0,
   };
+  const delayMs = input.delayMs ?? 0;
+  async function delayOperation(): Promise<void> {
+    state.operationCount += 1;
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
   const database = {
     prepare(query: string) {
+      state.queries.push(query);
       return {
         async all<T>() {
           return this.bind().all<T>();
@@ -216,6 +320,7 @@ function autojoinDatabase(input: {
         bind(...values: unknown[]) {
           return {
             async first<T>() {
+              await delayOperation();
               if (query.includes("FROM api_keys")) {
                 return {
                   id: "api-key-autojoin",
@@ -236,6 +341,65 @@ function autojoinDatabase(input: {
               } as T;
             },
             async all<T>() {
+              await delayOperation();
+              if (query.includes("FROM auth_sessions") && query.includes("scope_type")) {
+                return {
+                  results: [
+                    {
+                      session_id: "session-autojoin",
+                      user_id: "user-autojoin",
+                      email: state.email,
+                      email_verified: state.emailVerified ? 1 : 0,
+                      expires_at: "2099-01-01T00:00:00.000Z",
+                      scope_type: "session",
+                      scope_order: 0,
+                      organization_id: null,
+                      role: null,
+                      speaker_profile_id: null,
+                    },
+                    ...state.memberships.map((membership) => ({
+                      session_id: "session-autojoin",
+                      user_id: "user-autojoin",
+                      email: state.email,
+                      email_verified: state.emailVerified ? 1 : 0,
+                      expires_at: "2099-01-01T00:00:00.000Z",
+                      scope_type: "membership",
+                      scope_order: 1,
+                      organization_id: membership.organization_id,
+                      role: membership.role,
+                      speaker_profile_id: null,
+                    })),
+                    ...(state.emailVerified
+                      ? state.reviewerGrants.map((reviewerGrant) => ({
+                          session_id: "session-autojoin",
+                          user_id: "user-autojoin",
+                          email: state.email,
+                          email_verified: 1,
+                          expires_at: "2099-01-01T00:00:00.000Z",
+                          scope_type: "reviewer_grant",
+                          scope_order: 2,
+                          organization_id: reviewerGrant.organization_id,
+                          event_id: reviewerGrant.event_id,
+                          role: null,
+                          speaker_profile_id: null,
+                        }))
+                      : []),
+                    ...state.speakerGrants.map((speakerGrant) => ({
+                      session_id: "session-autojoin",
+                      user_id: "user-autojoin",
+                      email: state.email,
+                      email_verified: state.emailVerified ? 1 : 0,
+                      expires_at: "2099-01-01T00:00:00.000Z",
+                      scope_type: "speaker_grant",
+                      scope_order: 3,
+                      organization_id: speakerGrant.organization_id,
+                      event_id: null,
+                      role: null,
+                      speaker_profile_id: speakerGrant.speaker_profile_id,
+                    })),
+                  ] as T[],
+                };
+              }
               if (query.includes("FROM organization_memberships")) {
                 return { results: state.memberships as T[] };
               }
@@ -280,6 +444,7 @@ function autojoinDatabase(input: {
               return { results: [] as T[] };
             },
             async run() {
+              await delayOperation();
               if (query.includes("INSERT INTO organization_memberships")) {
                 const [organizationId, userId, createdAt, updatedAt] = values;
                 const row = {
@@ -387,229 +552,6 @@ function cfpReceiptDatabase(): {
   } as unknown as NonNullable<RuntimeBindings["DB"]>;
   return { database, rows };
 }
-function cfpFileAssetCompositionFixture(): {
-  readonly gateway: AirtableCfpFileAssetGateway;
-  readonly setUploaded: (uploaded: boolean) => void;
-  readonly binding: () => PrivateAssetCapabilityBinding | undefined;
-} {
-  const event: EventCfp = {
-    id: "event-file",
-    tenantId: "tenant-file",
-    version: 1,
-    slug: "event-file",
-    name: "File CFP",
-    timezone: "UTC",
-    opensAt: "2026-08-01T00:00:00.000Z",
-    closesAt: "2026-09-01T00:00:00.000Z",
-  };
-  const form: CfpForm = {
-    id: "form-file",
-    tenantId: event.tenantId,
-    eventId: event.id,
-    name: "File CFP",
-    version: 1,
-    status: "published",
-    welcomeContent: "",
-    settings: {
-      speakerLimit: 2,
-      maxSubmissionsPerAccount: 2,
-      remindersEnabled: false,
-      adminNotificationsEnabled: false,
-      confirmationMessage: "",
-      successContent: "",
-    },
-    sections: [{ id: "section", title: "Talk", description: "" }],
-    submissionFields: [
-      {
-        id: "slides",
-        sectionId: "section",
-        key: "slides",
-        label: "Slides",
-        kind: "file_request",
-        required: false,
-        options: [],
-        fileRequest: {
-          allowedMimeTypes: ["application/pdf"],
-          maxBytes: 1024,
-          required: false,
-          owner: "submission",
-        },
-      },
-    ],
-    participantFields: [],
-    rules: [],
-  };
-  const submission: Submission = {
-    id: "submission-file",
-    tenantId: event.tenantId,
-    eventId: event.id,
-    formId: form.id,
-    ownerAccountId: "owner-file",
-    formVersion: 1,
-    version: 1,
-    status: "draft",
-    completedSteps: ["welcome"],
-    answers: {},
-    participants: [],
-    secondaryContacts: [],
-    createdAt: "2026-08-08T00:00:00.000Z",
-    updatedAt: "2026-08-08T00:00:00.000Z",
-  };
-  const cfp = {
-    async getEvent(tenantId: string, eventId: string) {
-      return tenantId === event.tenantId && eventId === event.id ? event : null;
-    },
-    async getForm(tenantId: string, formId: string) {
-      return tenantId === form.tenantId && formId === form.id ? form : null;
-    },
-    async getSubmission(tenantId: string, submissionId: string) {
-      return tenantId === submission.tenantId && submissionId === submission.id ? submission : null;
-    },
-  } as unknown as CfpRepository;
-  const assets = new Map<string, SpeakerAsset>();
-  const speakers = {
-    async createPendingAsset(asset: SpeakerAsset) {
-      assets.set(asset.id, structuredClone(asset));
-      return structuredClone(asset);
-    },
-    async getAsset(eventId: string, assetId: string) {
-      const asset = assets.get(assetId);
-      return asset?.eventId === eventId ? structuredClone(asset) : null;
-    },
-    async finalizeAsset(command: {
-      eventId: string;
-      assetId: string;
-      state: "ready" | "rejected";
-      finalizedAt: string;
-      rejectionReason?: string;
-    }) {
-      const asset = assets.get(command.assetId);
-      if (asset === undefined || asset.eventId !== command.eventId) {
-        return { ok: false, reason: "not_found" } as const;
-      }
-      const finalized = {
-        ...asset,
-        state: command.state,
-        finalizedAt: command.finalizedAt,
-        ...(command.rejectionReason === undefined
-          ? {}
-          : { rejectionReason: command.rejectionReason }),
-      };
-      assets.set(asset.id, finalized);
-      return { ok: true, value: structuredClone(finalized) } as const;
-    },
-  };
-  let uploaded = false;
-  let latestBinding: PrivateAssetCapabilityBinding | undefined;
-  const privateAssets = {
-    async registerUploadCapability(
-      binding: PrivateAssetCapabilityBinding,
-    ): Promise<PrivateUploadGrant> {
-      latestBinding = structuredClone(binding);
-      return {
-        method: "PUT",
-        url: `/api/speaker/assets/capabilities/upload/${binding.capabilityId}/opaque-token`,
-        headers: {
-          "content-type": binding.contentType,
-          "content-length": String(binding.sizeBytes),
-        },
-        expiresAt: binding.expiresAt,
-      };
-    },
-    async verifyUploadCapability(binding: PrivateAssetCapabilityBinding) {
-      return (
-        uploaded &&
-        latestBinding !== undefined &&
-        latestBinding.capabilityId === binding.capabilityId
-      );
-    },
-    async invalidateUploadCapability() {
-      uploaded = false;
-    },
-  };
-  return {
-    gateway: new AirtableCfpFileAssetGateway({
-      cfp,
-      speakers,
-      privateAssets,
-      now: () => new Date("2026-08-08T12:00:00.000Z"),
-    }),
-    setUploaded(value) {
-      uploaded = value;
-    },
-    binding: () => latestBinding,
-  };
-}
-
-describe("production CFP file asset composition", () => {
-  it("binds upload capabilities, denies tenant mismatch, and finds finalized assets", async () => {
-    const fixture = cfpFileAssetCompositionFixture();
-    const authorization = await fixture.gateway.issueUpload({
-      tenantId: "tenant-file",
-      eventId: "event-file",
-      submissionId: "submission-file",
-      owner: "submission",
-      fieldKey: "slides",
-      fileName: "slides.pdf",
-      contentType: "application/pdf",
-      sizeBytes: 4,
-      idempotencyKey: "issue-file-1",
-    });
-
-    expect(authorization).toMatchObject({
-      asset: {
-        tenantId: "tenant-file",
-        eventId: "event-file",
-        submissionId: "submission-file",
-        owner: "submission",
-        state: "pending_upload",
-      },
-      grant: { method: "PUT", url: expect.stringContaining("opaque-token") },
-    });
-    expect(fixture.binding()).toMatchObject({
-      tenantId: "tenant-file",
-      eventId: "event-file",
-      submissionId: "submission-file",
-      objectKey: expect.stringContaining("cfp/"),
-    });
-    await expect(
-      fixture.gateway.getAsset({
-        tenantId: "tenant-other",
-        eventId: "event-file",
-        submissionId: "submission-file",
-        assetId: authorization.asset.assetId,
-        owner: "submission",
-      }),
-    ).resolves.toBeNull();
-
-    fixture.setUploaded(true);
-    const finalized = await fixture.gateway.finalizeUpload({
-      tenantId: "tenant-file",
-      eventId: "event-file",
-      submissionId: "submission-file",
-      fieldKey: "slides",
-      assetId: authorization.asset.assetId,
-      owner: "submission",
-      state: "ready",
-      idempotencyKey: "finalize-file-1",
-    });
-    expect(finalized).toMatchObject({
-      assetId: authorization.asset.assetId,
-      state: "ready",
-      tenantId: "tenant-file",
-    });
-    await expect(
-      fixture.gateway.getAsset({
-        tenantId: "tenant-file",
-        eventId: "event-file",
-        submissionId: "submission-file",
-        assetId: finalized.assetId,
-        owner: "submission",
-      }),
-    ).resolves.toEqual(finalized);
-  });
-});
-
 describe("production CFP receipt effects", () => {
   it("queues one verified submitter receipt per submission version without calling OpenSend", async () => {
     const queueMessages: CloudflareOutboxMessage[] = [];
@@ -619,7 +561,7 @@ describe("production CFP receipt effects", () => {
       },
     } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
     const { database, rows } = cfpReceiptDatabase();
-    const effects = new CloudflareCfpEffects(queue, database);
+    const effects = new CloudflareCfpEffects(queue, database, testSenderAddresses);
     const event: EventCfp = {
       id: "event-cfp",
       tenantId: "tenant-cfp",
@@ -698,6 +640,7 @@ describe("production CFP receipt effects", () => {
     const payload = JSON.parse(job.payloadJson) as Record<string, unknown>;
     expect(payload).toEqual({
       from: "speakers@sessionboard.namuh.co",
+      senderPurpose: "speakers",
       to: ["verified.submitter@example.test"],
       subject: "Submission received: Idempotent Receipts — Reliable Systems Summit",
       html: "<p>Your submission <strong>Idempotent Receipts</strong> for <strong>Reliable Systems Summit</strong> was received.</p>",
@@ -721,7 +664,42 @@ describe("production CFP receipt effects", () => {
     expect(JSON.stringify(payload)).not.toContain("unverified.form@example.test");
   });
 });
-describe("production organizer autojoin", () => {
+describe("production authenticated tenant scope", () => {
+  it("loads a valid session and scopes with one delayed D1 operation", async () => {
+    const { database, state } = autojoinDatabase({
+      email: "member@example.com",
+      emailVerified: true,
+      memberships: [{ organization_id: "org-membership", role: "reviewer" }],
+      speakerGrants: [{ organization_id: "org-speaker", speaker_profile_id: "speaker-1" }],
+      reviewerGrants: [],
+      delayMs: 300,
+    });
+    const gateway = new D1BetterAuthGateway(database);
+    const startedAt = Date.now();
+    const session = await gateway.resolveSession("session-token");
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(state.operationCount).toBe(1);
+    expect(elapsedMs).toBeLessThanOrEqual(500);
+    expect(session).toMatchObject({
+      sessionId: "session-autojoin",
+      userId: "user-autojoin",
+      email: "member@example.com",
+      emailVerified: true,
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      memberships: [{ organizationId: "org-membership", role: "reviewer" }],
+      speakerGrants: [{ organizationId: "org-speaker", speakerProfileId: "speaker-1" }],
+      reviewerGrants: [],
+    });
+    const scopeQuery = state.queries.find(
+      (query) => query.includes("FROM auth_sessions") && query.includes("'speaker_grant'"),
+    );
+    expect(scopeQuery).toContain("invitations.recipient_user_id = grants.user_id");
+    expect(scopeQuery).toContain("invitations.participant_id = grants.participant_id");
+    expect(scopeQuery).toContain("invitations.status = 'accepted'");
+    expect(scopeQuery).toContain("profiles.status <> 'revoked'");
+    expect(scopeQuery).toContain("base.email_verified = 1");
+  });
   async function resolveSession(input: {
     readonly email: string;
     readonly emailVerified: boolean;
@@ -731,41 +709,70 @@ describe("production organizer autojoin", () => {
       organization_id: string;
       speaker_profile_id: string;
     }[];
+    readonly reviewerGrants?: readonly {
+      organization_id: string;
+      event_id: string;
+    }[];
   }) {
     const { database, state } = autojoinDatabase(input);
-    const gateway = new D1BetterAuthGateway(database, undefined, AUTOJOIN_CONFIGURATION);
+    const gateway = new D1BetterAuthGateway(database);
     const session = await gateway.resolveSession("session-token");
     return { session, state };
   }
 
-  it("autojoin exact-domain verified sessions idempotently as admin without changing speaker grants", async () => {
+  it("retains accepted reviewer access after a verified account email change", async () => {
+    const { database, state } = autojoinDatabase({
+      email: "reviewer-new@example.test",
+      emailVerified: true,
+      reviewerGrants: [{ organization_id: "org-reviewer", event_id: "event-reviewer" }],
+    });
+    const gateway = new D1BetterAuthGateway(database);
+
+    await expect(gateway.resolveSession("session-token")).resolves.toMatchObject({
+      email: "reviewer-new@example.test",
+      reviewerGrants: [{ organizationId: "org-reviewer", eventId: "event-reviewer" }],
+    });
+    const scopeQuery = state.queries.find(
+      (query) => query.includes("FROM auth_sessions") && query.includes("'reviewer_grant'"),
+    );
+    expect(scopeQuery).toContain("invitations.recipient_user_id = base.user_id");
+    expect(scopeQuery).toContain("invitations.status = 'accepted'");
+    expect(scopeQuery).toContain("base.email_verified = 1");
+    expect(scopeQuery).not.toContain("invitations.normalized_email = base.email");
+  });
+
+  it("does not grant accepted reviewer access to a currently unverified account", async () => {
+    const { database } = autojoinDatabase({
+      email: "reviewer-new@example.test",
+      emailVerified: false,
+      reviewerGrants: [{ organization_id: "org-reviewer", event_id: "event-reviewer" }],
+    });
+
+    await expect(
+      new D1BetterAuthGateway(database).resolveSession("session-token"),
+    ).resolves.toMatchObject({
+      reviewerGrants: [],
+    });
+  });
+
+  it("does not derive an organization membership from the user's email domain", async () => {
     const input = {
       email: " Host@SWYX.IO ",
       emailVerified: true,
       speakerGrants: [{ organization_id: "ai-engineer", speaker_profile_id: "speaker-1" }],
+      reviewerGrants: [],
     } as const;
     const { database, state } = autojoinDatabase(input);
-    const gateway = new D1BetterAuthGateway(database, undefined, AUTOJOIN_CONFIGURATION);
+    const gateway = new D1BetterAuthGateway(database);
 
-    const first = await gateway.resolveSession("session-token");
-    const second = await gateway.resolveSession("session-token");
-
-    expect(first).toMatchObject({
+    await expect(gateway.resolveSession("session-token")).resolves.toMatchObject({
       email: input.email,
       emailVerified: true,
-      memberships: [{ organizationId: "ai-engineer", role: "admin" }],
+      memberships: [],
       speakerGrants: [{ organizationId: "ai-engineer", speakerProfileId: "speaker-1" }],
+      reviewerGrants: [],
     });
-    expect(first?.memberships.some(({ role }) => role === "owner")).toBe(false);
-    expect(second?.memberships).toEqual(first?.memberships);
-    expect(state.inserts).toHaveLength(1);
-    expect(state.inserts[0]).toMatchObject({
-      organization_id: "ai-engineer",
-      user_id: "user-autojoin",
-      role: "admin",
-    });
-    expect(state.inserts[0]?.created_at).toBe(state.inserts[0]?.updated_at);
-    expect(Number.isFinite(Date.parse(state.inserts[0]?.created_at ?? ""))).toBe(true);
+    expect(state.inserts).toHaveLength(0);
   });
 
   it("does not autojoin a verified evaluator while an invitation is unfinished", async () => {
@@ -837,43 +844,313 @@ describe("production organizer autojoin", () => {
     expect(state.inserts).toHaveLength(0);
   });
 
-  it("allows disabled autojoin but fails closed for partial or invalid configuration", () => {
+  it("accepts integrated runtime configuration without tenant autojoin settings", () => {
+    const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
+    expect(inspectProductionRuntime(bindings).success).toBe(true);
+    expect(() => createRuntimeApp(bindings)).not.toThrow();
+  });
+
+  it("boots production D1 authority without legacy Airtable business credentials", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
     const {
-      ORGANIZER_AUTOJOIN_DOMAINS: _withoutDomains,
-      ORGANIZER_AUTOJOIN_ORGANIZATION_ID: _withoutOrganization,
-      ...withoutAutojoin
+      AIRTABLE_ACCESS_TOKEN: _airtableAccessToken,
+      AIRTABLE_BASE_ID: _airtableBaseId,
+      ...d1Only
     } = bindings;
-    const { ORGANIZER_AUTOJOIN_DOMAINS: _domains, ...withoutDomains } = bindings;
-    const { ORGANIZER_AUTOJOIN_ORGANIZATION_ID: _organization, ...withoutOrganization } = bindings;
 
-    expect(inspectProductionRuntime(withoutAutojoin).success).toBe(true);
-    expect(() => createRuntimeApp(withoutAutojoin)).not.toThrow();
-    expect(inspectProductionRuntime(withoutDomains).success).toBe(false);
-    expect(inspectProductionRuntime(withoutOrganization).success).toBe(false);
-    expect(
-      inspectProductionRuntime({
-        ...bindings,
-        ORGANIZER_AUTOJOIN_DOMAINS: "swyx.io.attacker",
-      }).success,
-    ).toBe(false);
-    expect(
-      inspectProductionRuntime({
-        ...bindings,
-        ORGANIZER_AUTOJOIN_ORGANIZATION_ID: "another-org",
-      }).success,
-    ).toBe(false);
+    expect(inspectProductionRuntime(d1Only).success).toBe(true);
+    expect(() => createRuntimeApp(d1Only)).not.toThrow();
   });
 });
 
-describe("local runtime composition", () => {
+describe("integrated local runtime composition", () => {
+  function bindingsFor(transport: AirtableTransport): RuntimeBindings {
+    return {
+      ...productionBindings(transport, productionD1("unused")),
+      APP_ENV: "local",
+      RUNTIME_PROFILE: "integrated",
+      WEB_ORIGIN: "http://127.0.0.1:3015",
+      API_ORIGIN: "https://production-origin-must-be-ignored.example",
+      AIRTABLE_BASE_ID: "production-base-must-not-be-used",
+      AIRTABLE_BASE_DEV_ID: "development-base",
+      BETTER_AUTH_SECRET: "production-secret-must-not-be-used",
+      OPENSEND_API_URL: "http://127.0.0.1:8026",
+      OPENSEND_API_KEY: "local-development",
+      AUTH_FROM_EMAIL: "login@local.example.test",
+      SPEAKERS_FROM_EMAIL: "program@local.example.test",
+      CALENDAR_FROM_EMAIL: "schedule@local.example.test",
+      CALENDAR_UID_DOMAIN: "calendar.local.example.test",
+    };
+  }
+
+  it("keeps local OpenSend and identity values explicit instead of replacing them with provider defaults", () => {
+    const bindings = bindingsFor(new FakeAirtableTransport());
+    const effective = runtimeBindingsForEnvironment(bindings);
+
+    expect(effective).toMatchObject({
+      OPENSEND_API_URL: "http://127.0.0.1:8026",
+      OPENSEND_API_KEY: "local-development",
+      AUTH_FROM_EMAIL: "login@local.example.test",
+      SPEAKERS_FROM_EMAIL: "program@local.example.test",
+      CALENDAR_FROM_EMAIL: "schedule@local.example.test",
+      CALENDAR_UID_DOMAIN: "calendar.local.example.test",
+    });
+  });
+
+  it("boots local D1 authority without AIRTABLE_BASE_DEV_ID", () => {
+    const bindings = bindingsFor(new FakeAirtableTransport());
+    const { AIRTABLE_BASE_DEV_ID: _developmentBase, ...withoutDevelopmentBase } = bindings;
+    const inspection = inspectProductionRuntime(withoutDevelopmentBase);
+
+    expect(inspection.success).toBe(true);
+    expect(inspection.issues).not.toContain(
+      "AIRTABLE_BASE_DEV_ID is required for integrated local development",
+    );
+    expect(() => createRuntimeApp(withoutDevelopmentBase)).not.toThrow();
+  });
+});
+
+describe("event invitation runtime composition", () => {
+  it("persists pending reviewer invitations when a reviewer pool is saved", async () => {
+    const dependencies = createLocalDependencies();
+    const members = dependencies.members?.service;
+    const invitations = dependencies.eventInvitations?.service;
+    expect(members).toBeDefined();
+    expect(invitations).toBeDefined();
+    if (members === undefined || invitations === undefined) return;
+
+    await members.setReviewerPool(
+      {
+        kind: "user",
+        organizationId: LOCAL_ORGANIZATION_ID,
+        userId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        role: "owner",
+      },
+      {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "open-sessionboard-conf",
+        roundId: "runtime-composition-round",
+        reviewerIds: ["local-reviewer"],
+        maxAssignmentsPerReviewer: 2,
+      },
+    );
+
+    await expect(
+      invitations.list({
+        kind: "user",
+        userId: "local-reviewer",
+        email: LOCAL_REVIEWER_EMAIL,
+        emailVerified: true,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          organizationId: LOCAL_ORGANIZATION_ID,
+          eventId: "open-sessionboard-conf",
+          role: "reviewer",
+          status: "pending",
+        }),
+      ]),
+    );
+  });
+
+  it("persists a pending invitation before sending a speaker welcome message", async () => {
+    const dependencies = createLocalDependencies();
+    const speakers = dependencies.speaker?.service;
+    const invitations = dependencies.eventInvitations?.service;
+    expect(speakers).toBeDefined();
+    expect(invitations).toBeDefined();
+    if (speakers === undefined || invitations === undefined) return;
+
+    await speakers.createOrganizerSpeaker({
+      organizationId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      accountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      displayName: "Review Speaker",
+      email: LOCAL_REVIEWER_EMAIL,
+      jobTitle: "Reviewer",
+      company: "Runtime Test",
+      biography: "Validates runtime invitation composition.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "runtime-composition-speaker",
+      sourceType: "manual",
+      sourceId: "runtime-composition-speaker",
+      explicitParticipantId: "local-invitation-participant",
+    });
+    await speakers.sendOrganizerSpeakerInvitations({
+      organizationId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      accountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      participantIds: ["local-invitation-participant"],
+      templateId: "speaker-approved-welcome",
+      idempotencyKey: "runtime-composition-speaker-send",
+    });
+
+    await expect(
+      invitations.list({
+        kind: "user",
+        userId: "local-reviewer",
+        email: LOCAL_REVIEWER_EMAIL,
+        emailVerified: true,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventId: "demo-event",
+          role: "speaker",
+          status: "pending",
+        }),
+      ]),
+    );
+  });
+
+  it("reconciles late verification before listing through the runtime adapter", async () => {
+    let reconciled = false;
+    const invitation: EventRoleInvitation = {
+      id: "late-verification-invitation",
+      organizationId: "org-late",
+      organizationName: "Late Organization",
+      eventId: "event-late",
+      eventName: "Late Event",
+      role: "reviewer",
+      recipientUserId: "late-user",
+      recipientEmail: "verified-late@example.test",
+      normalizedEmail: "verified-late@example.test",
+      participantId: null,
+      status: "pending",
+      version: 1,
+      createdBy: null,
+      createdAt: "2026-08-16T00:00:00.000Z",
+      updatedAt: "2026-08-16T00:00:00.000Z",
+      acceptedAt: null,
+      declinedAt: null,
+      revokedAt: null,
+    };
+    const repository = {
+      async create() {
+        return invitation;
+      },
+      async reconcileForVerifiedAccount(input) {
+        expect(input).toMatchObject({
+          recipientUserId: "late-user",
+          normalizedEmail: "verified-late@example.test",
+        });
+        reconciled = true;
+      },
+      async listForVerifiedAccount() {
+        return reconciled ? [invitation] : [];
+      },
+      async findForVerifiedAccount() {
+        return null;
+      },
+      async accept() {
+        return null;
+      },
+      async decline() {
+        return null;
+      },
+      async listAcceptedReviewerEventIds() {
+        return [];
+      },
+      async revokeReviewerInvitationsForOrganizationUser() {
+        return 0;
+      },
+      async revokeEventReviewerInvitationIfNoPoolGrantsRemain() {
+        return false;
+      },
+    } satisfies EventRoleInvitationRepository;
+    const adapters = createRuntimeEventRoleInvitationAdapters(repository, {
+      clock: () => new Date("2026-08-16T01:00:00.000Z"),
+    });
+
+    await expect(
+      adapters.service.list({
+        kind: "user",
+        userId: "late-user",
+        email: "verified-late@example.test",
+        emailVerified: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        invitationId: "late-verification-invitation",
+        role: "reviewer",
+        status: "pending",
+      }),
+    ]);
+    expect(reconciled).toBe(true);
+  });
+
+  it("resolves accepted reviewer organizations after a verified email change", async () => {
+    let query = "";
+    let values: readonly unknown[] = [];
+    const database = {
+      prepare(statement: string) {
+        query = statement;
+        return {
+          bind(...bound: unknown[]) {
+            values = bound;
+            return {
+              async all<T>() {
+                return {
+                  results: [
+                    { organization_id: "org-accepted", name: "Accepted Organization" },
+                  ] as T[],
+                };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+
+    await expect(listProductionOrganizationsForUser(database, "reviewer-user")).resolves.toEqual([
+      { organizationId: "org-accepted", name: "Accepted Organization" },
+    ]);
+    expect(values).toEqual(["reviewer-user", "reviewer-user", "reviewer-user"]);
+    expect(query).toContain("invitation.recipient_user_id = ?");
+    expect(query).toContain("invitation.role = 'reviewer'");
+    expect(query).toContain("invitation.status = 'accepted'");
+    expect(query).toContain("account.email_verified = 1");
+    expect(query).not.toContain("account.email = invitation.normalized_email");
+  });
+
+  it("refuses to expose acceptance when the repository lacks an accept adapter", () => {
+    const incomplete = {
+      create: async () => {
+        throw new Error("unused");
+      },
+      reconcileForVerifiedAccount: async () => undefined,
+      listForVerifiedAccount: async () => [],
+      findForVerifiedAccount: async () => null,
+      decline: async () => null,
+      listAcceptedReviewerEventIds: async () => [],
+      revokeReviewerInvitationsForOrganizationUser: async () => 0,
+      revokeEventReviewerInvitationIfNoPoolGrantsRemain: async () => false,
+    } satisfies EventRoleInvitationRepository;
+
+    expect(() => createRuntimeEventRoleInvitationAdapters(incomplete)).toThrow(
+      "The event invitation repository is missing accept.",
+    );
+    const { reconcileForVerifiedAccount: _reconcileForVerifiedAccount, ...withoutReconciliation } =
+      {
+        ...incomplete,
+        accept: async () => null,
+      };
+    expect(() => createRuntimeEventRoleInvitationAdapters(withoutReconciliation)).toThrow(
+      "The event invitation repository is missing reconcileForVerifiedAccount.",
+    );
+  });
+});
+
+describe("fixture local runtime composition", () => {
   it("serves health and a seeded speaker portal without external credentials", async () => {
     const app = createRuntimeApp(localBindings);
 
     const health = await app.request("/api/health", undefined, localBindings);
     const portal = await app.request(
-      "/api/speaker/events/current/portal",
-      undefined,
+      "/api/speaker/events/demo-event/portal",
+      { headers: speakerHeaders() },
       localBindings,
     );
 
@@ -885,49 +1162,270 @@ describe("local runtime composition", () => {
     expect(portal.status).toBe(200);
     await expect(portal.json()).resolves.toMatchObject({
       data: {
-        outstandingTaskCount: 2,
-        submissions: [{ id: "local-submission", status: "accepted" }],
+        outstandingTaskCount: 1,
+        submissions: [{ id: "submission_local_1", status: "accepted" }],
         profiles: [{ participantId: "local-participant", displayName: "Alex Rivera" }],
       },
     });
+
+    const [contexts, accessContexts, speakerTasks] = await Promise.all([
+      app.request("/api/speaker/portal/contexts", { headers: speakerHeaders() }, localBindings),
+      app.request("/api/account/access-contexts", { headers: speakerHeaders() }, localBindings),
+      app.request(
+        `/api/account/speaker-tasks?organizationId=${LOCAL_ORGANIZATION_ID}&eventId=demo-event`,
+        { headers: speakerHeaders() },
+        localBindings,
+      ),
+    ]);
+    expect(contexts.status).toBe(200);
+    await expect(contexts.json()).resolves.toMatchObject({
+      data: [
+        {
+          eventId: "demo-event",
+          submissionIds: ["submission_local_1"],
+          participantIds: ["local-participant"],
+          primaryParticipantId: "local-participant",
+        },
+      ],
+    });
+    expect(accessContexts.status).toBe(200);
+    await expect(accessContexts.json()).resolves.toMatchObject({
+      data: [
+        { scope: "organization", organization: { id: LOCAL_ORGANIZATION_ID } },
+        {
+          scope: "event",
+          organization: { id: LOCAL_ORGANIZATION_ID },
+          event: { id: "demo-event" },
+          roles: ["speaker"],
+          capabilities: ["speaker.portal.read", "speaker.tasks.read"],
+        },
+      ],
+    });
+    expect(speakerTasks.status).toBe(200);
+    await expect(speakerTasks.json()).resolves.toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        tasks: [
+          {
+            taskId: "local-speaker-id-1",
+            title: "Upload your presentation slides",
+            status: "not_started",
+          },
+        ],
+      },
+    });
   });
-  it("serves the organizer overview from local repositories", async () => {
+  it("previews the approved invitation for the seeded roster participant", async () => {
+    const dependencies = createLocalDependencies();
+    const speaker = dependencies.speaker?.service;
+    expect(speaker).toBeDefined();
+    if (speaker === undefined) return;
+
+    await expect(
+      speaker.previewOrganizerSpeakerInvitations(
+        LOCAL_ORGANIZATION_ID,
+        "demo-event",
+        LOCAL_ORGANIZER_ACCOUNT_ID,
+        ["local-participant"],
+      ),
+    ).resolves.toEqual([
+      {
+        participantId: "local-participant",
+        recipientEmail: LOCAL_SPEAKER_EMAIL,
+        state: "ready",
+      },
+    ]);
+  });
+  it("projects submitted CFP proposals into the submitting account portal", async () => {
+    const dependencies = createLocalDependencies();
+    const cfp = dependencies.cfp?.service;
+    const speaker = dependencies.speaker?.service;
+    expect(cfp).toBeDefined();
+    expect(speaker).toBeDefined();
+    if (cfp === undefined || speaker === undefined) return;
+
+    const draft = await cfp.createDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      formId: "main-cfp",
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      idempotencyKey: "organizer-portal-draft",
+    });
+    let version = draft.version;
+    for (const [index, completedStep] of (
+      ["welcome", "account", "submission"] as const
+    ).entries()) {
+      const saved = await cfp.saveDraft({
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        submissionId: draft.id,
+        ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        expectedVersion: version,
+        completedStep,
+        ...(completedStep === "submission"
+          ? {
+              answers: {
+                title: "Testing submission",
+                abstract: "A proposal submitted through the public CFP.",
+                format: "Workshop",
+                level: "Intermediate",
+                track: "Platform & Infrastructure",
+              },
+            }
+          : {}),
+        idempotencyKey: `organizer-portal-step-${index}`,
+      });
+      version = saved.version;
+    }
+    const participantSaved = await cfp.saveDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: version,
+      completedStep: "participant",
+      participants: [
+        {
+          id: "organizer-cfp-participant",
+          firstName: "Speaker",
+          lastName: "Applicant",
+          email: LOCAL_ORGANIZER_EMAIL,
+          role: "primary",
+          biography: "",
+          answers: {},
+        },
+      ],
+      secondaryContacts: [],
+      idempotencyKey: "organizer-portal-participant",
+    });
+    const reviewSaved = await cfp.saveDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: participantSaved.version,
+      completedStep: "review",
+      idempotencyKey: "organizer-portal-review-step",
+    });
+    const submitted = await cfp.submit({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: reviewSaved.version,
+      idempotencyKey: "organizer-portal-submit",
+    });
+
+    const contexts = await speaker.listPortalContexts(LOCAL_ORGANIZER_ACCOUNT_ID);
+    expect(contexts).toMatchObject([
+      {
+        eventId: "demo-event",
+        submissionIds: [submitted.submission.id],
+        participantIds: ["organizer-cfp-participant"],
+      },
+    ]);
+    const portal = await speaker.getPortal("demo-event", LOCAL_ORGANIZER_ACCOUNT_ID);
+    expect(portal.submissions).toMatchObject([
+      {
+        id: submitted.submission.id,
+        title: "Testing submission",
+        status: "submitted",
+      },
+    ]);
+  });
+  it("serves the seeded canonical submission list to its organization organizer", async () => {
     const app = createRuntimeApp(localBindings);
     const response = await app.request(
-      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+      `/api/cfp/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/submissions`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: Array<{
+        submission: {
+          tenantId: string;
+          eventId: string;
+          ownerAccountId: string;
+        };
+      }>;
+    };
+    expect(body.data).toHaveLength(300);
+    expect(body.data[0]).toMatchObject({
+      submission: {
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        ownerAccountId: expect.any(String),
+      },
+    });
+  });
+  it("serves the organizer overview core and activity from local repositories", async () => {
+    const app = createRuntimeApp(localBindings);
+    const coreResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview/core`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    const activityResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview/activity`,
       { headers: organizerHeaders() },
       localBindings,
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    expect(coreResponse.status).toBe(200);
+    expect(activityResponse.status).toBe(200);
+    expect(coreResponse.headers.get("cache-control")).toBe("private, no-store");
+    expect(activityResponse.headers.get("cache-control")).toBe("private, no-store");
+
+    const coreBody = (await coreResponse.json()) as { data: Record<string, unknown> };
+    expect(coreBody).toMatchObject({
       data: {
         organizationId: LOCAL_ORGANIZATION_ID,
-        metrics: {
-          eventCount: 2,
-          submissionCount: 1,
-          pendingReviewCount: 0,
-          outstandingSpeakerTaskCount: 2,
-          publishedSessionCount: 0,
-        },
+        metrics: { eventCount: 2 },
         events: [
-          { id: "demo-event", name: "Open Sessionboard Demo" },
+          { id: "demo-event", name: "Open Sessionboard Conference" },
           {
             id: "open-sessionboard-conf",
-            name: "Open Sessionboard Conference",
+            name: "Eventloom Conference",
           },
-        ],
-        actionItems: [
-          { id: "speaker_tasks:demo-event", count: 2 },
-          { id: "agenda:demo-event", count: 2 },
         ],
       },
     });
+    expect(coreBody.data).not.toHaveProperty("actionItems");
+    expect(coreBody.data.metrics).not.toHaveProperty("submissionCount");
+
+    const activityBody = (await activityResponse.json()) as { data: Record<string, unknown> };
+    expect(activityBody).toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        metrics: {
+          submissionCount: 300,
+          pendingReviewCount: 1,
+          outstandingSpeakerTaskCount: 75,
+          publishedSessionCount: 2,
+        },
+        actionItems: [
+          { id: "reviews:demo-event", count: 1 },
+          { id: "speaker_tasks:demo-event", count: 75 },
+          { id: "agenda:demo-event", count: 73 },
+        ],
+      },
+    });
+    expect(activityBody.data).not.toHaveProperty("events");
+    expect(activityBody.data.metrics).not.toHaveProperty("eventCount");
+
+    const legacyResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(legacyResponse.status).toBe(404);
   });
   it("serves seeded integration admin data for the current organizer workspace", async () => {
     const app = createRuntimeApp(localBindings);
     const response = await app.request(
-      "/api/admin/events/demo-event/integrations",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations`,
       { headers: organizerHeaders() },
       localBindings,
     );
@@ -946,9 +1444,9 @@ describe("local runtime composition", () => {
     };
     expect(body.data.event).toEqual({
       id: "demo-event",
-      name: "Open Sessionboard Demo",
+      name: "Open Sessionboard Conference",
       timeZone: "America/Los_Angeles",
-      publishedAgendaRevisionId: "agenda-local-revision-2",
+      publishedAgendaRevisionId: expect.stringMatching(/^revision_local_/u),
     });
     expect(body.data.delivery).toMatchObject({
       openSend: { state: "connected", deliveredLast24Hours: 18 },
@@ -963,19 +1461,30 @@ describe("local runtime composition", () => {
     expect(body.data.webhooks).toEqual([
       expect.objectContaining({
         id: "local-webhook-demo",
-        endpointUrl: "https://hooks.local.open-sessionboard.test/demo",
+        endpointUrl: "https://hooks.local.eventloom.test/demo",
       }),
     ]);
     expect(body.data).not.toHaveProperty("accelevents");
 
     const anonymous = await app.request(
-      "/api/admin/events/demo-event/integrations",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations`,
       undefined,
       localBindings,
     );
     expect(anonymous.status).toBe(401);
+
+    const organizationKeys = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/api-keys`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(organizationKeys.status).toBe(200);
+    await expect(organizationKeys.json()).resolves.toMatchObject({
+      data: expect.arrayContaining([expect.objectContaining({ id: "local-key-demo-event" })]),
+    });
+
     const credential = await app.request(
-      "/api/admin/events/demo-event/integrations/opensend/credential",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations/opensend/credential`,
       {
         method: "PUT",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -986,7 +1495,7 @@ describe("local runtime composition", () => {
     expect(credential.status).toBe(204);
 
     const createdKey = await app.request(
-      "/api/admin/events/demo-event/api-keys",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/api-keys`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1006,19 +1515,19 @@ describe("local runtime composition", () => {
     expect(createdKeyBody.data.secret.length).toBeGreaterThan(32);
 
     const revokedKey = await app.request(
-      `/api/admin/events/demo-event/api-keys/${createdKeyBody.data.id}`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/api-keys/${createdKeyBody.data.id}`,
       { method: "DELETE", headers: organizerHeaders() },
       localBindings,
     );
     expect(revokedKey.status).toBe(204);
 
     const createdWebhook = await app.request(
-      "/api/admin/events/demo-event/webhooks",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({
-          endpointUrl: "https://hooks.local.open-sessionboard.test/qa",
+          endpointUrl: "https://hooks.local.eventloom.test/qa",
           events: ["agenda.published"],
         }),
       },
@@ -1031,7 +1540,7 @@ describe("local runtime composition", () => {
     expect(createdWebhookBody.data.secret.length).toBeGreaterThan(32);
 
     const pausedWebhook = await app.request(
-      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
       {
         method: "PATCH",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1042,7 +1551,7 @@ describe("local runtime composition", () => {
     expect(pausedWebhook.status).toBe(204);
 
     const rotatedWebhook = await app.request(
-      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}/rotate-secret`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks/${createdWebhookBody.data.id}/rotate-secret`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1053,14 +1562,14 @@ describe("local runtime composition", () => {
     expect(rotatedWebhook.status).toBe(200);
 
     const deletedWebhook = await app.request(
-      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
       { method: "DELETE", headers: organizerHeaders() },
       localBindings,
     );
     expect(deletedWebhook.status).toBe(204);
 
     const retry = await app.request(
-      "/api/admin/events/demo-event/integrations/calendar/deliveries/calendar-local-failure-demo-event/retry",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations/calendar/deliveries/calendar-local-failure-demo-event/retry`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1071,7 +1580,7 @@ describe("local runtime composition", () => {
     expect(retry.status).toBe(204);
 
     const refreshed = await app.request(
-      "/api/admin/events/demo-event/integrations",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations`,
       { headers: organizerHeaders() },
       localBindings,
     );
@@ -1093,14 +1602,41 @@ describe("local runtime composition", () => {
     });
   });
 
-  it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {
+  it("returns a private 404 for mismatched and legacy integration scopes", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
-    const anonymous = await app.request(path, undefined, localBindings);
-    const wrongTenant = await app.request(
-      "/api/admin/organizations/another-organization/overview",
+    const mismatched = await app.request(
+      "/api/admin/organizations/another-organization/events/demo-event/integrations",
       { headers: organizerHeaders() },
       localBindings,
+    );
+    expect(mismatched.status).toBe(404);
+    await expect(mismatched.json()).resolves.toMatchObject({
+      error: { code: "NOT_FOUND", message: "The event was not found." },
+    });
+
+    const legacy = await app.request(
+      "/api/admin/events/demo-event/integrations",
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(legacy.status).toBe(404);
+  });
+
+  it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {
+    const app = createRuntimeApp(localBindings);
+    const suffixes = ["core", "activity"] as const;
+    const basePath = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
+    const anonymous = await Promise.all(
+      suffixes.map((suffix) => app.request(`${basePath}/${suffix}`, undefined, localBindings)),
+    );
+    const wrongTenant = await Promise.all(
+      suffixes.map((suffix) =>
+        app.request(
+          `/api/admin/organizations/another-organization/overview/${suffix}`,
+          { headers: organizerHeaders() },
+          localBindings,
+        ),
+      ),
     );
     const reviewerApp = createApp({
       authenticator: {
@@ -1116,31 +1652,98 @@ describe("local runtime composition", () => {
             },
           ],
           speakerGrants: [],
+          reviewerGrants: [],
         }),
       },
       organizerOverview: {
-        getOverview: async (organizationId: string) => ({
+        getOverviewCore: async (organizationId: string) => ({
+          organizationId,
+          metrics: { eventCount: 0 },
+          events: [],
+        }),
+        getOverviewActivity: async (organizationId: string) => ({
           organizationId,
           metrics: {
-            eventCount: 0,
             submissionCount: 0,
             pendingReviewCount: 0,
             outstandingSpeakerTaskCount: 0,
             publishedSessionCount: 0,
           },
-          events: [],
           actionItems: [],
         }),
       },
     });
-    const reviewer = await reviewerApp.request(path, undefined, localBindings);
+    const reviewer = await Promise.all(
+      suffixes.map((suffix) =>
+        reviewerApp.request(`${basePath}/${suffix}`, undefined, localBindings),
+      ),
+    );
 
-    expect(anonymous.status).toBe(401);
-    expect(wrongTenant.status).toBe(403);
-    expect(reviewer.status).toBe(403);
+    expect(anonymous.map((response) => response.status)).toEqual([401, 401]);
+    expect(wrongTenant.map((response) => response.status)).toEqual([403, 403]);
+    expect(reviewer.map((response) => response.status)).toEqual([403, 403]);
   });
 
-  it("returns explicit empty overview data without repository fiction", async () => {
+  it("keeps core overview independent from activity failures", async () => {
+    let coreCalls = 0;
+    let activityCalls = 0;
+    const app = createApp({
+      authenticator: {
+        authenticate: async () => ({
+          kind: "user" as const,
+          sessionId: "overview-session",
+          userId: "owner",
+          email: "owner@example.test",
+          memberships: [{ organizationId: "organization-1", role: "owner" as const }],
+          speakerGrants: [],
+          reviewerGrants: [],
+        }),
+      },
+      organizerOverview: {
+        getOverviewCore: async (organizationId: string) => {
+          coreCalls += 1;
+          return {
+            organizationId,
+            metrics: { eventCount: 1 },
+            events: [
+              {
+                id: "event-1",
+                name: "Event",
+                slug: null,
+                status: "active",
+                startsAt: null,
+                endsAt: null,
+              },
+            ],
+          };
+        },
+        getOverviewActivity: async () => {
+          activityCalls += 1;
+          throw new Error("activity unavailable");
+        },
+      },
+    });
+
+    const core = await app.request(
+      "/api/admin/organizations/organization-1/overview/core",
+      undefined,
+      localBindings,
+    );
+    expect(core.status).toBe(200);
+    expect(coreCalls).toBe(1);
+    expect(activityCalls).toBe(0);
+
+    const activity = await app.request(
+      "/api/admin/organizations/organization-1/overview/activity",
+      undefined,
+      localBindings,
+    );
+    expect(activity.status).toBe(500);
+    expect(coreCalls).toBe(1);
+    expect(activityCalls).toBe(1);
+  });
+
+  it("returns explicit empty split overview data without repository fiction", async () => {
     const app = createApp({
       authenticator: {
         authenticate: async () => ({
@@ -1150,41 +1753,56 @@ describe("local runtime composition", () => {
           email: "owner@example.test",
           memberships: [{ organizationId: "empty-organization", role: "owner" as const }],
           speakerGrants: [],
+          reviewerGrants: [],
         }),
       },
       organizerOverview: {
-        getOverview: async (organizationId: string) => ({
+        getOverviewCore: async (organizationId: string) => ({
+          organizationId,
+          metrics: { eventCount: 0 },
+          events: [],
+        }),
+        getOverviewActivity: async (organizationId: string) => ({
           organizationId,
           metrics: {
-            eventCount: 0,
             submissionCount: 0,
             pendingReviewCount: 0,
             outstandingSpeakerTaskCount: 0,
             publishedSessionCount: 0,
           },
-          events: [],
           actionItems: [],
         }),
       },
     });
-    const response = await app.request(
-      "/api/admin/organizations/empty-organization/overview",
+    const core = await app.request(
+      "/api/admin/organizations/empty-organization/overview/core",
+      undefined,
+      localBindings,
+    );
+    const activity = await app.request(
+      "/api/admin/organizations/empty-organization/overview/activity",
       undefined,
       localBindings,
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    expect(core.status).toBe(200);
+    await expect(core.json()).resolves.toEqual({
+      data: {
+        organizationId: "empty-organization",
+        metrics: { eventCount: 0 },
+        events: [],
+      },
+    });
+    expect(activity.status).toBe(200);
+    await expect(activity.json()).resolves.toEqual({
       data: {
         organizationId: "empty-organization",
         metrics: {
-          eventCount: 0,
           submissionCount: 0,
           pendingReviewCount: 0,
           outstandingSpeakerTaskCount: 0,
           publishedSessionCount: 0,
         },
-        events: [],
         actionItems: [],
       },
     });
@@ -1192,16 +1810,28 @@ describe("local runtime composition", () => {
 
   it("keeps local speaker mutations stateful and version checked", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = "/api/speaker/events/current/profiles/local-participant";
+    const path = "/api/speaker/events/demo-event/profiles/local-participant";
 
+    const current = await app.request(
+      "/api/speaker/events/demo-event/portal",
+      { headers: speakerHeaders() },
+      localBindings,
+    );
+    const currentBody = (await current.json()) as {
+      data: { profiles: Array<{ participantId: string; version: number }> };
+    };
+    const currentVersion = currentBody.data.profiles.find(
+      ({ participantId }) => participantId === "local-participant",
+    )?.version;
+    if (currentVersion === undefined) throw new Error("Expected the local speaker profile.");
     const updated = await app.request(
       path,
       {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { ...speakerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({
           biography: "Updated local biography.",
-          expectedVersion: 1,
+          expectedVersion: currentVersion,
         }),
       },
       localBindings,
@@ -1210,18 +1840,22 @@ describe("local runtime composition", () => {
       path,
       {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { ...speakerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({
           biography: "Stale update.",
-          expectedVersion: 1,
+          expectedVersion: currentVersion,
         }),
       },
       localBindings,
     );
 
+    expect(current.status).toBe(200);
     expect(updated.status).toBe(200);
     await expect(updated.json()).resolves.toMatchObject({
-      data: { biography: "Updated local biography.", version: 2 },
+      data: {
+        biography: "Updated local biography.",
+        version: currentVersion + 1,
+      },
     });
     expect(stale.status).toBe(409);
     await expect(stale.json()).resolves.toMatchObject({
@@ -1284,48 +1918,60 @@ describe("local runtime composition", () => {
       data: { version: draftPayload.data.version },
     });
     expect(published.status).toBe(200);
+    const publication = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/publication`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(publication.status).toBe(200);
+    await expect(publication.json()).resolves.toMatchObject({
+      data: {
+        servedManifest: {
+          lifecycle: "served",
+          agendaRevisionNumber: 1,
+          speakerRevisionNumber: 1,
+        },
+      },
+    });
+    const speakers = await app.request(
+      "/api/public/events/demo-event/speakers",
+      undefined,
+      localBindings,
+    );
+    expect(speakers.status).toBe(200);
+    expect(speakers.headers.get("x-sessionboard-program-revision")).toBe("1");
     const publishedBody = (await published.json()) as {
       data: Record<string, unknown> & { revision: Record<string, unknown> };
     };
-    expect(publishedBody).toEqual({
+    expect(publishedBody).toMatchObject({
       data: {
         event: {
           slug: "demo-event",
-          name: "Demo Event",
+          name: "Open Sessionboard Conference",
           timeZone: "America/Los_Angeles",
           startsOn: "2026-09-18",
           endsOn: "2026-09-18",
-          venueName: null,
+          venueName: "Eventloom Hall",
         },
         revision: {
-          id: "revision_local_3",
           number: 1,
           publishedAt: "2026-08-08T12:00:00.000Z",
         },
         entries: [
           {
             id: "local-entry-keynote",
-            sessionId: "local-session-keynote",
-            title: "Opening keynote: Systems that earn trust",
-            summary: "",
-            format: "Session",
-            speakerNames: [],
+            sessionId: "session-submission_local_1",
+            title: "Designing reliable community systems",
+            speakerNames: ["Alex Rivera"],
             roomName: "Main Hall",
             trackNames: ["Main stage"],
-            startsAt: expect.any(String),
-            endsAt: expect.any(String),
           },
           {
             id: "local-entry-workshop",
-            sessionId: "local-session-workshop",
-            title: "A practical guide to resilient programs",
-            summary: "",
-            format: "Session",
-            speakerNames: [],
+            sessionId: "session-submission_local_2",
+            speakerNames: ["Taylor Silva"],
             roomName: "Workshop Studio",
             trackNames: ["Practice"],
-            startsAt: expect.any(String),
-            endsAt: expect.any(String),
           },
         ],
       },
@@ -1336,119 +1982,111 @@ describe("local runtime composition", () => {
     expect(publishedBody.data.revision).not.toHaveProperty("publishedBy");
   });
 
-  it("preserves authentication and tenant boundaries for scoped APIs", async () => {
+  it("withholds unsafe generic resources and advertises only mounted webhooks locally", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`;
-    const anonymous = await app.request(path, undefined, localBindings);
-    const authorized = await app.request(
-      path,
-      { headers: { authorization: `Bearer ${LOCAL_API_KEY}` } },
-      localBindings,
-    );
-    const wrongTenant = await app.request(
-      "/api/v1/organizations/another-organization/events",
-      { headers: { authorization: `Bearer ${LOCAL_API_KEY}` } },
-      localBindings,
-    );
-    const invalidSpeakerCredential = await app.request(
-      "/api/speaker/events/current/portal",
-      { headers: { authorization: "Bearer invalid-local-key" } },
-      localBindings,
-    );
-
-    expect(anonymous.status).toBe(401);
-    expect(authorized.status).toBe(200);
-    await expect(authorized.json()).resolves.toMatchObject({
-      data: [{ id: "demo-event" }, { id: "open-sessionboard-conf" }],
-    });
-    expect(wrongTenant.status).toBe(403);
-    expect(invalidSpeakerCredential.status).toBe(401);
-  });
-  it("mounts sessions with scoped list, get, create, and optimistic update access", async () => {
-    const app = createRuntimeApp(localBindings);
-    const base = `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`;
     const apiHeaders = { authorization: `Bearer ${LOCAL_API_KEY}` };
-    const anonymous = await app.request(base, undefined, localBindings);
-    const listed = await app.request(base, { headers: apiHeaders }, localBindings);
-    const fetched = await app.request(
-      `${base}/local-session-keynote`,
-      {
-        headers: apiHeaders,
-      },
-      localBindings,
-    );
-    const created = await app.request(
-      base,
+    const genericRequests = [
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/speakers`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/agenda`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions/local-session-keynote`,
+    ];
+
+    for (const path of genericRequests) {
+      const response = await app.request(path, { headers: apiHeaders }, localBindings);
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "NOT_FOUND", traceId: expect.any(String) },
+      });
+    }
+
+    const eventCreate = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
       {
         method: "POST",
-        headers: {
-          ...apiHeaders,
-          "content-type": "application/json",
-          "idempotency-key": "local-session-create-1",
-        },
-        body: JSON.stringify({
-          id: "local-session-created",
-          eventId: "demo-event",
-          title: "Created local session",
-        }),
+        headers: { ...apiHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Unsafe generic create" }),
       },
       localBindings,
     );
-    const updated = await app.request(
-      `${base}/local-session-created`,
+    const sessionUpdate = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions/local-session-keynote`,
       {
         method: "PATCH",
-        headers: {
-          ...apiHeaders,
-          "content-type": "application/json",
-          "idempotency-key": "local-session-update-1",
-        },
-        body: JSON.stringify({
-          expectedVersion: 1,
-          title: "Updated local session",
-        }),
+        headers: { ...apiHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ title: "Unsafe generic update" }),
       },
       localBindings,
     );
-    const wrongTenant = await app.request(
-      "/api/v1/organizations/another-organization/sessions",
+    expect(eventCreate.status).toBe(404);
+    expect(sessionUpdate.status).toBe(404);
+
+    const webhooks = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/webhooks`,
       { headers: apiHeaders },
       localBindings,
     );
+    expect(webhooks.status).toBe(200);
 
-    expect(anonymous.status).toBe(401);
-    expect(listed.status).toBe(200);
-    await expect(listed.json()).resolves.toMatchObject({
-      data: [
-        {
-          id: "local-session-keynote",
-          title: "Opening keynote: Systems that earn trust",
-        },
-        { id: "local-session-workshop" },
-      ],
+    const discovery = await app.request("/api/v1/openapi.json", undefined, localBindings);
+    expect(discovery.status).toBe(200);
+    const document = (await discovery.json()) as { paths: Record<string, Record<string, unknown>> };
+    expect(Object.keys(document.paths).sort()).toEqual([
+      "/api/v1/organizations/{organizationId}/webhooks",
+      "/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}",
+    ]);
+    expect(
+      Object.keys(document.paths["/api/v1/organizations/{organizationId}/webhooks"] ?? {}),
+    ).toEqual(expect.arrayContaining(["get", "post"]));
+    expect(document.paths["/api/v1/organizations/{organizationId}/webhooks"]).toMatchObject({
+      get: { security: [{ apiKey: ["webhooks:read"] }] },
+      post: { security: [{ apiKey: ["webhooks:write"] }] },
     });
-    expect(fetched.status).toBe(200);
-    await expect(fetched.json()).resolves.toMatchObject({
-      id: "local-session-keynote",
-      eventId: "demo-event",
-    });
-    expect(created.status).toBe(201);
-    await expect(created.json()).resolves.toMatchObject({
-      id: "local-session-created",
-      organizationId: LOCAL_ORGANIZATION_ID,
-      version: 1,
-    });
-    expect(updated.status).toBe(200);
-    await expect(updated.json()).resolves.toMatchObject({
-      id: "local-session-created",
-      title: "Updated local session",
-      version: 2,
-    });
-    expect(wrongTenant.status).toBe(403);
+    expect(
+      Object.keys(
+        document.paths["/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}"] ?? {},
+      ),
+    ).toEqual(expect.arrayContaining(["get", "patch", "put", "delete"]));
   });
 
   it("seeds an open CFP with deterministic draft creation", async () => {
-    const service = createLocalCfpService();
+    let authoritativeEvent: EventCfp = {
+      id: "demo-event",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      version: 1,
+      slug: "demo-event",
+      name: "Open Sessionboard Conference",
+      timezone: "America/Los_Angeles",
+      eventStartsAt: "2026-10-01T16:00:00.000Z",
+      opensAt: "2026-08-01T07:00:00.000Z",
+      closesAt: "2026-09-15T07:00:00.000Z",
+    };
+    const service = createLocalCfpService(undefined, undefined, {
+      async getEvent(tenantId, eventId) {
+        return authoritativeEvent.tenantId === tenantId && authoritativeEvent.id === eventId
+          ? structuredClone(authoritativeEvent)
+          : null;
+      },
+      async getEventBySlug(tenantId, eventSlug) {
+        return authoritativeEvent.tenantId === tenantId && authoritativeEvent.slug === eventSlug
+          ? structuredClone(authoritativeEvent)
+          : null;
+      },
+      async saveEvent(event, expectedVersion) {
+        if (authoritativeEvent.version !== expectedVersion) {
+          throw new Error("event version conflict");
+        }
+        authoritativeEvent = structuredClone(event);
+      },
+    });
+    await seedLocalCfpForm(service, {
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      formId: "main-cfp",
+      actorId: "local-organizer",
+    });
     const draft = await service.createDraft({
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId: "demo-event",
@@ -1476,7 +2114,7 @@ describe("local runtime composition", () => {
     expect(replay).toEqual(draft);
   });
 
-  it("mounts production Airtable reads and writes without exposing record ids", async () => {
+  it("does not query or mutate raw Airtable tables through generic public-v1 routes", async () => {
     const transport = new FormulaRecordingTransport();
     transport.seed({
       baseId: "base-test",
@@ -1487,26 +2125,19 @@ describe("local runtime composition", () => {
         "Settings JSON": JSON.stringify({
           id: "event-airtable",
           organizationId: LOCAL_ORGANIZATION_ID,
-          name: "Airtable Event",
+          name: "Private Airtable Event",
           version: 1,
-          updatedAt: "2026-08-09T00:00:00.000Z",
         }),
       },
     });
     transport.seed({
       baseId: "base-test",
-      table: "Sessions",
+      table: "Participants",
       recordId: "rec00000000000002",
       fields: {
-        "Application ID": "session-airtable",
-        "Metadata JSON": JSON.stringify({
-          id: "session-airtable",
-          organizationId: LOCAL_ORGANIZATION_ID,
-          eventId: "event-airtable",
-          title: "Airtable Session",
-          version: 1,
-          updatedAt: "2026-08-09T00:00:00.000Z",
-        }),
+        "Application ID": "participant-airtable",
+        "First Name": "Private",
+        Email: "private@example.test",
       },
     });
     const digestBytes = new Uint8Array(
@@ -1516,609 +2147,123 @@ describe("local runtime composition", () => {
     const database = productionD1(digest);
     const bindings = productionBindings(transport, database);
     const app = createRuntimeApp(bindings);
+    const headers = { authorization: "Bearer production-api-key" };
 
-    const listed = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
-      { headers: { authorization: "Bearer production-api-key" } },
-      bindings,
-    );
-    const created = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
-      {
-        method: "POST",
-        headers: {
-          authorization: "Bearer production-api-key",
-          "content-type": "application/json",
-          "idempotency-key": "production-create-1",
-        },
-        body: JSON.stringify({ id: "created-event", name: "Created Event" }),
-      },
-      bindings,
-    );
-    const sessionsListed = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
-      { headers: { authorization: "Bearer production-api-key" } },
-      bindings,
-    );
-    const sessionsCreated = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
-      {
-        method: "POST",
-        headers: {
-          authorization: "Bearer production-api-key",
-          "content-type": "application/json",
-          "idempotency-key": "production-session-create-1",
-        },
-        body: JSON.stringify({
-          id: "created-session",
-          eventId: "event-airtable",
-          title: "Created Session",
-        }),
-      },
-      bindings,
-    );
-
-    expect(listed.status).toBe(200);
-    await expect(listed.json()).resolves.toMatchObject({
-      data: [{ id: "event-airtable", name: "Airtable Event" }],
-    });
-    expect(created.status).toBe(201);
-    const createdPayload = await created.json();
-    expect(createdPayload).toMatchObject({
-      id: "created-event",
-      name: "Created Event",
-      organizationId: LOCAL_ORGANIZATION_ID,
-      version: 1,
-    });
-    expect(JSON.stringify(createdPayload)).not.toContain("rec00000000000001");
-    expect(
-      transport.requests.some((request) => request.method === "POST" && request.table === "Events"),
-    ).toBe(true);
-    expect(sessionsListed.status).toBe(200);
-    await expect(sessionsListed.json()).resolves.toMatchObject({
-      data: [{ id: "session-airtable", title: "Airtable Session" }],
-    });
-    expect(sessionsCreated.status).toBe(201);
-    await expect(sessionsCreated.json()).resolves.toMatchObject({
-      id: "created-session",
-      organizationId: LOCAL_ORGANIZATION_ID,
-      version: 1,
-    });
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.method === "POST" &&
-          request.table === "Sessions" &&
-          JSON.stringify(request.body).includes("Metadata JSON"),
-      ),
-    ).toBe(true);
-  });
-  it("persists CRM state in Airtable, queues outreach, and projects event speakers without sessions", async () => {
-    const transport = new FakeAirtableTransport();
-    const eventId = "crm-event";
-    const organizationId = "crm-organization";
-    transport.seed({
-      baseId: "base-test",
-      table: "Events",
-      fields: {
-        "Application ID": eventId,
-        "Settings JSON": JSON.stringify({
-          id: eventId,
-          organizationId,
-          name: "CRM Event",
-          slug: "crm-event",
-          timeZone: "UTC",
-          startsAt: "2026-08-09T00:00:00.000Z",
-          endsAt: "2026-08-10T00:00:00.000Z",
-        }),
-      },
-    });
-    const database = productionD1("unused");
-    const queueMessages: CloudflareOutboxMessage[] = [];
-    const queue = {
-      async send(message: CloudflareOutboxMessage) {
-        queueMessages.push(message);
-      },
-    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
-    const principal = {
-      kind: "user" as const,
-      sessionId: "crm-session",
-      userId: "crm-owner",
-      email: "owner@example.test",
-      memberships: [{ organizationId, role: "owner" as const }],
-      speakerGrants: [],
-    };
-    const bindings = productionBindings(transport, database);
-    if (bindings.AGENDA_COORDINATOR === undefined || bindings.PRIVATE_FILES === undefined) {
-      throw new Error("Expected production test bindings.");
-    }
-    const dependencies = createAirtableDependencies({
-      authenticator: { authenticate: async () => principal },
-      baseId: "base-test",
-      transport,
-      database,
-      agendaCoordinator: bindings.AGENDA_COORDINATOR,
-      privateFiles: bindings.PRIVATE_FILES,
-      outboxQueue: queue,
-      webOrigin: "https://example.test",
-    });
-    const app = createApp({
-      ...dependencies,
-      authenticator: { authenticate: async () => principal },
-    });
-    const base = `/api/admin/organizations/${organizationId}/crm`;
-    const created = await app.request(
-      `${base}/contacts`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": "crm-contact-create" },
-        body: JSON.stringify({
-          displayName: "CRM Speaker",
-          firstName: "CRM",
-          lastName: "Speaker",
-          email: "speaker@example.test",
-          title: "Principal Engineer",
-          company: "Example Systems",
-          notes: "A reliable speaker.",
-        }),
-      },
-      { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
-    );
-    expect(created.status).toBe(201);
-    const createdBody = (await created.json()) as { data: { id: string; version: number } };
-    expect(createdBody.data.version).toBe(1);
-
-    const projection = await app.request(
-      `${base}/contacts/${createdBody.data.id}/events`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": "crm-event-projection" },
-        body: JSON.stringify({ eventId, role: "speaker" }),
-      },
-      { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
-    );
-    expect(projection.status).toBe(200);
-    const outreach = await app.request(
-      `${base}/contacts/${createdBody.data.id}/outreach`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": "crm-outreach" },
-        body: JSON.stringify({ subject: "Hello", body: "Hi {{firstName}}" }),
-      },
-      { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
-    );
-    expect(outreach.status).toBe(202);
-    expect(queueMessages).toHaveLength(1);
-    expect(transport.requests.some((request) => request.table === "CRM Contacts")).toBe(true);
-    expect(transport.requests.some((request) => request.table === "CRM Event Projections")).toBe(
-      true,
-    );
-    expect(transport.requests.some((request) => request.table === "CRM Outreach")).toBe(true);
-    expect(transport.requests.some((request) => request.table === "Session Roster")).toBe(true);
-    expect(transport.requests.some((request) => request.table === "Sessions")).toBe(false);
-    expect(transport.requests.some((request) => request.table === "Submissions")).toBe(false);
-
-    const reloadedRepository = new AirtableCrmRepository({
-      baseId: "base-test",
-      transport,
-      events: new AirtableEventRepository({ baseId: "base-test", transport }),
-    });
-    await expect(
-      reloadedRepository.getContact(organizationId, createdBody.data.id),
-    ).resolves.toEqual(expect.objectContaining({ displayName: "CRM Speaker", version: 1 }));
-    const roster = new AirtableSpeakerRepository({ baseId: "base-test", transport, database });
-    await expect(
-      roster.listRoster(eventId, `speaker-submission:crm-contact:${createdBody.data.id}`),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        participantId: createdBody.data.id,
-        displayName: "CRM Speaker",
-      }),
-    ]);
-    await expect(roster.getProfile(eventId, createdBody.data.id)).resolves.toEqual(
-      expect.objectContaining({
-        participantId: createdBody.data.id,
-        displayName: "CRM Speaker",
-        status: "active",
-      }),
-    );
-  });
-  it("admits a projected CRM contact beside a same-name accepted speaker without granting speaker eligibility", async () => {
-    const transport = new FakeAirtableTransport();
-    const organizationId = "ai-engineer";
-    const eventId = "devflow-conf-2027";
-    const acceptedSubmissionId = "submission-marcus-accepted";
-    const acceptedParticipantId = "participant-marcus-accepted";
-    const updatedAt = "2026-08-09T00:00:00.000Z";
-    transport.seed({
-      baseId: "base-test",
-      table: "Events",
-      fields: {
-        "Application ID": eventId,
-        "Settings JSON": JSON.stringify({
-          id: eventId,
-          organizationId,
-          eventId,
-          slug: eventId,
-          name: "Devflow Conference",
-          timeZone: "UTC",
-          startsAt: "2026-08-09T00:00:00.000Z",
-          endsAt: "2026-08-10T00:00:00.000Z",
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Submissions",
-      fields: {
-        "Application ID": acceptedSubmissionId,
-        "Answers JSON": JSON.stringify({
-          id: acceptedSubmissionId,
-          organizationId,
-          tenantId: organizationId,
-          eventId,
-          formId: "form-devflow",
-          title: "Accepted Marcus session",
-          status: "accepted",
-          participants: [
-            {
-              id: acceptedParticipantId,
-              firstName: "Marcus",
-              lastName: "Chen",
-              email: "marcus.accepted@example.test",
-              role: "primary",
-            },
-          ],
-          version: 1,
-          updatedAt,
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Speaker Profiles",
-      fields: {
-        "Application ID": `speaker-profile:${eventId}:${acceptedParticipantId}`,
-        Biography: JSON.stringify({
-          id: `speaker-profile:${eventId}:${acceptedParticipantId}`,
-          eventId,
-          participantId: acceptedParticipantId,
-          displayName: "Marcus Chen",
-          email: "marcus.accepted@example.test",
-          jobTitle: "Staff Engineer",
-          company: "Accepted Systems",
-          biography: "Accepted event speaker.",
-          socialLinks: {},
-          status: "active",
-          version: 1,
-          updatedAt,
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Published Speaker Projections",
-      fields: {
-        "Application ID": `published:${eventId}`,
-        "Projection JSON": JSON.stringify({
-          id: `published:${eventId}`,
-          organizationId,
-          event: {
-            slug: eventId,
-            name: "Devflow Conference",
-            timeZone: "UTC",
-            startsOn: "2026-08-09",
-            endsOn: "2026-08-10",
-            venueName: null,
-          },
-          revision: {
-            id: "revision-devflow-1",
-            number: 1,
-            publishedAt: updatedAt,
-          },
-          speakers: [
-            {
-              id: acceptedParticipantId,
-              displayName: "Marcus Chen",
-              pronouns: null,
-              jobTitle: "Staff Engineer",
-              organization: "Accepted Systems",
-              biography: "Accepted event speaker.",
-              photoUrl: null,
-              sessionIds: ["session-accepted"],
-              sessionTitles: ["Accepted Marcus session"],
-              trackNames: [],
-            },
-          ],
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Speaker Tasks",
-      fields: {
-        "Application ID": "task-marcus-accepted",
-        "Owner JSON": JSON.stringify({
-          entityType: "speaker_task",
-          id: "task-marcus-accepted",
-          eventId,
-          submissionId: `speaker-submission:${acceptedSubmissionId}`,
-          participantId: acceptedParticipantId,
-          type: "action",
-          owner: "speaker",
-          title: "Accepted task",
-          status: "not_started",
-          dependencyIds: [],
-          reminderOffsetsMinutes: [],
-          assigneeIds: [acceptedParticipantId],
-          version: 1,
-          updatedAt,
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "File Assets",
-      fields: {
-        "Application ID": "asset-marcus-accepted",
-        "Settings JSON": JSON.stringify({
-          entityType: "speaker_asset",
-          id: "asset-marcus-accepted",
-          tenantId: organizationId,
-          eventId,
-          submissionId: `speaker-submission:${acceptedSubmissionId}`,
-          participantId: acceptedParticipantId,
-          kind: "slides",
-          objectKey: "assets/marcus-accepted.pdf",
-          fileName: "marcus-accepted.pdf",
-          contentType: "application/pdf",
-          sizeBytes: 256,
-          state: "ready",
-          createdAt: updatedAt,
-        }),
-      },
-    });
-    const { database } = speakerOrganizerDatabase({
-      memberships: [{ organization_id: organizationId, role: "owner" }],
-    });
-    const bindings = productionBindings(transport, database);
-    if (
-      bindings.AGENDA_COORDINATOR === undefined ||
-      bindings.PRIVATE_FILES === undefined ||
-      bindings.OUTBOX_QUEUE === undefined
-    ) {
-      throw new Error("Expected production speaker bindings.");
-    }
-    const principal = {
-      kind: "user" as const,
-      sessionId: "devflow-organizer-session",
-      userId: "devflow-organizer",
-      email: "organizer@example.test",
-      memberships: [{ organizationId, role: "owner" as const }],
-      speakerGrants: [],
-    };
-    const dependencies = createAirtableDependencies({
-      authenticator: { authenticate: async () => principal },
-      baseId: "base-test",
-      transport,
-      database,
-      agendaCoordinator: bindings.AGENDA_COORDINATOR,
-      privateFiles: bindings.PRIVATE_FILES,
-      outboxQueue: bindings.OUTBOX_QUEUE,
-      webOrigin: "https://example.test",
-    });
-    const app = createApp({
-      ...dependencies,
-      authenticator: { authenticate: async () => principal },
-    });
-    const env = { APP_ENV: "production", WEB_ORIGIN: "https://example.test" };
-    const crmBase = `/api/admin/organizations/${organizationId}/crm`;
-    const createContact = async (email: string, idempotencyKey: string) => {
+    for (const resource of ["events", "sessions", "speakers", "agenda"]) {
       const response = await app.request(
-        `${crmBase}/contacts`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json", "idempotency-key": idempotencyKey },
-          body: JSON.stringify({ displayName: "Marcus Chen", email }),
-        },
-        env,
+        `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/${resource}`,
+        { headers },
+        bindings,
       );
-      expect(response.status).toBe(201);
-      return (await response.json()) as { data: { id: string; email: string } };
-    };
-    const firstContact = await createContact("marcus.first@example.test", "crm-first");
-    const selectedContact = await createContact("marcus.selected@example.test", "crm-selected");
-    const projection = await app.request(
-      `${crmBase}/contacts/${selectedContact.data.id}/events`,
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "NOT_FOUND", traceId: expect.any(String) },
+      });
+    }
+
+    const create = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
       {
         method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": "crm-project-selected" },
-        body: JSON.stringify({ eventId, role: "prospect" }),
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Must not be written" }),
       },
-      env,
+      bindings,
     );
-    expect(projection.status).toBe(200);
-
+    expect(create.status).toBe(404);
+    expect(
+      transport.requests.some((request) =>
+        ["Events", "Sessions", "Participants", "Agenda Versions"].includes(request.table),
+      ),
+    ).toBe(false);
+  });
+  it("matches canonical email against mixed-case authoritative CRM rows", async () => {
+    const transport = new FakeAirtableTransport();
     transport.seed({
       baseId: "base-test",
-      table: "Speaker Tasks",
+      table: "CRM Contacts",
       fields: {
-        "Application ID": "task-marcus-crm",
-        "Owner JSON": JSON.stringify({
-          entityType: "speaker_task",
-          id: "task-marcus-crm",
-          eventId,
-          submissionId: `speaker-submission:crm-contact:${selectedContact.data.id}`,
-          participantId: selectedContact.data.id,
-          type: "action",
-          owner: "speaker",
-          title: "CRM task",
-          status: "not_started",
-          dependencyIds: [],
-          reminderOffsetsMinutes: [],
-          assigneeIds: [selectedContact.data.id],
-          version: 1,
-          updatedAt,
+        "Application ID": "mixed-case-contact",
+        "Contact JSON": JSON.stringify({
+          id: "mixed-case-contact",
+          organizationId: "crm-organization",
+          displayName: "Mixed Case",
+          email: "Mixed.Case@Example.Test",
+          status: "active",
         }),
       },
     });
-    transport.seed({
+    const repository = new AirtableCrmRepository({
       baseId: "base-test",
-      table: "File Assets",
-      fields: {
-        "Application ID": "asset-marcus-crm",
-        "Settings JSON": JSON.stringify({
-          entityType: "speaker_asset",
-          id: "asset-marcus-crm",
-          tenantId: organizationId,
-          eventId,
-          submissionId: `speaker-submission:crm-contact:${selectedContact.data.id}`,
-          participantId: selectedContact.data.id,
-          kind: "slides",
-          objectKey: "assets/marcus-crm.pdf",
-          fileName: "marcus-crm.pdf",
-          contentType: "application/pdf",
-          sizeBytes: 128,
-          state: "ready",
-          createdAt: updatedAt,
-        }),
-      },
+      transport,
     });
 
-    const speakerBase = `/api/admin/organizations/${organizationId}/events/${eventId}/speakers`;
-    const rosterResponse = await app.request(speakerBase, undefined, env);
-    expect(rosterResponse.status).toBe(200);
-    const rosterPayload = (await rosterResponse.json()) as {
-      data: {
-        speakers: readonly {
-          participantId: string;
-          displayName: string;
-          email: string;
-          status: string;
-          sessions: readonly unknown[];
-          taskSummary: { total: number };
-          assets: readonly { assetId: string }[];
-        }[];
-      };
-    };
-    expect(rosterPayload.data.speakers).toHaveLength(2);
-    expect(rosterPayload.data.speakers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          participantId: acceptedParticipantId,
-          displayName: "Marcus Chen",
-          email: "marcus.accepted@example.test",
-          sessions: [
-            {
-              submissionId: `speaker-submission:${acceptedSubmissionId}`,
-              title: "Accepted Marcus session",
-              status: "accepted",
-            },
-          ],
-          taskSummary: expect.objectContaining({ total: 1 }),
-          assets: [expect.objectContaining({ assetId: "asset-marcus-accepted" })],
-        }),
-        expect.objectContaining({
-          participantId: selectedContact.data.id,
-          displayName: "Marcus Chen",
-          email: "marcus.selected@example.test",
-          status: "crm-prospect",
-          sessions: [],
-          taskSummary: expect.objectContaining({ total: 0 }),
-          assets: [],
-        }),
-      ]),
-    );
-    expect(rosterPayload.data.speakers.map((speaker) => speaker.participantId)).not.toContain(
-      firstContact.data.id,
-    );
-
-    const tasksResponse = await app.request(
-      `/api/admin/organizations/${organizationId}/events/${eventId}/speaker-tasks`,
-      undefined,
-      env,
-    );
-    expect(tasksResponse.status).toBe(200);
-    const tasksPayload = (await tasksResponse.json()) as {
-      data: { tasks: readonly { taskId: string }[] };
-    };
-    expect(tasksPayload.data.tasks.map((task) => task.taskId)).toEqual(["task-marcus-accepted"]);
-    const crmTasksResponse = await app.request(
-      `/api/admin/organizations/${organizationId}/events/${eventId}/speaker-tasks?participantId=${encodeURIComponent(selectedContact.data.id)}`,
-      undefined,
-      env,
-    );
-    expect(crmTasksResponse.status).toBe(404);
-
-    const acceptedAssetsResponse = await app.request(
-      `${speakerBase}/${acceptedParticipantId}/assets`,
-      undefined,
-      env,
-    );
-    expect(acceptedAssetsResponse.status).toBe(200);
-    await expect(acceptedAssetsResponse.json()).resolves.toMatchObject({
-      data: [{ assetId: "asset-marcus-accepted" }],
-    });
-    const crmAssetsResponse = await app.request(
-      `${speakerBase}/${encodeURIComponent(selectedContact.data.id)}/assets`,
-      undefined,
-      env,
-    );
-    expect(crmAssetsResponse.status).toBe(404);
-
-    const acceptedSessionsResponse = await app.request(
-      `${speakerBase}/${acceptedParticipantId}/sessions`,
-      undefined,
-      env,
-    );
-    expect(acceptedSessionsResponse.status).toBe(200);
-    await expect(acceptedSessionsResponse.json()).resolves.toEqual({
-      data: [
-        {
-          submissionId: `speaker-submission:${acceptedSubmissionId}`,
-          title: "Accepted Marcus session",
-          status: "accepted",
-        },
-      ],
-    });
-    const crmSessionsResponse = await app.request(
-      `${speakerBase}/${encodeURIComponent(selectedContact.data.id)}/sessions`,
-      undefined,
-      env,
-    );
-    expect(crmSessionsResponse.status).toBe(404);
-
-    const publicationResponse = await app.request(
-      `/api/public/events/${eventId}/speakers`,
-      undefined,
-      env,
-    );
-    expect(publicationResponse.status).toBe(200);
-    const publicationPayload = (await publicationResponse.json()) as {
-      data: { speakers: readonly { id: string }[] };
-    };
-    expect(publicationPayload.data.speakers.map((speaker) => speaker.id)).toEqual([
-      acceptedParticipantId,
-    ]);
-    expect(publicationPayload.data.speakers.map((speaker) => speaker.id)).not.toContain(
-      selectedContact.data.id,
+    await expect(
+      repository.findContactByEmail("crm-organization", "mixed.case@example.test"),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: "mixed-case-contact",
+        email: "Mixed.Case@Example.Test",
+      }),
     );
   });
-  it("requires the fixed origin pair and OpenSend credentials", () => {
+  it("requires configured origins and OpenSend credentials", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
     expect(inspectProductionRuntime(bindings).success).toBe(true);
     const { API_ORIGIN: _apiOrigin, ...withoutApiOrigin } = bindings;
-    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(true);
+    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(false);
     const {
       OPENSEND_API_KEY: _openSendKey,
       OPENSEND_SENDING_API_KEY: _sendingKey,
       ...withoutOpenSendKey
     } = bindings;
     expect(inspectProductionRuntime(withoutOpenSendKey).success).toBe(false);
+    for (const key of [
+      "AUTH_FROM_EMAIL",
+      "SPEAKERS_FROM_EMAIL",
+      "CALENDAR_FROM_EMAIL",
+      "CALENDAR_UID_DOMAIN",
+    ] as const) {
+      const { [key]: _missing, ...withoutIdentity } = bindings;
+      expect(inspectProductionRuntime(withoutIdentity).success).toBe(false);
+    }
+    expect(
+      inspectProductionRuntime({ ...bindings, AUTH_FROM_EMAIL: "not-an-email" }).issues,
+    ).toContain("AUTH_FROM_EMAIL must be a valid email address.");
     expect(
       inspectProductionRuntime({
         ...bindings,
-        API_ORIGIN: "https://attacker.example",
+        CALENDAR_UID_DOMAIN: "https://calendar.example.test",
+      }).issues,
+    ).toContain("CALENDAR_UID_DOMAIN must be a valid domain name");
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test",
+      }).success,
+    ).toBe(true);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "http://api-production.example.test",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test/path",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "http://api-production.example.test",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test/path",
       }).success,
     ).toBe(false);
   });
@@ -2141,7 +2286,7 @@ describe("local runtime composition", () => {
     const worker = createRuntimeWorker();
     const bindings: RuntimeBindings = {
       APP_ENV: "production",
-      WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+      WEB_ORIGIN: "https://eventloom.pages.dev",
     };
     const response = await worker.fetch?.(
       new Request("https://api.example.com/api/health", {
@@ -2169,12 +2314,68 @@ describe("local runtime composition", () => {
     if (scheduled === undefined) throw new Error("The runtime worker did not expose scheduled.");
     const bindings: RuntimeBindings = {
       APP_ENV: "production",
-      WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+      WEB_ORIGIN: "https://eventloom.pages.dev",
     };
 
     await expect(
       scheduled({ scheduledTime: Date.now() } as never, bindings, {} as ExecutionContext),
     ).resolves.toBeUndefined();
+  });
+  it("records a failed automatic run when scheduled reminder delivery is misconfigured", async () => {
+    const reminders = new InMemoryReminderRepository();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      reminders: { repository: reminders },
+    });
+    const database = {
+      prepare() {
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  organization_id: "organization-reminders",
+                  user_id: "organizer-reminders",
+                  role: "owner",
+                },
+              ],
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const dependencies = {
+      communications: {
+        service,
+        actorFor: async () => null,
+      },
+      events: {
+        service: {
+          async listEvents() {
+            return [{ id: "event-reminders", organizationId: "organization-reminders" }];
+          },
+        },
+      },
+    } as unknown as ApiDependencies;
+
+    await runScheduledReminders(
+      dependencies,
+      {
+        APP_ENV: "production",
+        WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+        DB: database,
+      },
+      new Date("2026-08-12T12:30:00.000Z"),
+    );
+
+    await expect(
+      reminders.listRuns("organization-reminders", "event-reminders"),
+    ).resolves.toMatchObject([
+      {
+        triggerType: "automatic",
+        state: "failed",
+        configurationFailure: "The reminder candidate source is not configured.",
+      },
+    ]);
   });
 
   it("exposes the production outbox queue consumer and retries when bindings fail closed", async () => {
@@ -2203,7 +2404,7 @@ describe("local runtime composition", () => {
         { messages: [message] } as never,
         {
           APP_ENV: "production",
-          WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
+          WEB_ORIGIN: "https://web-production.example.test",
         },
         {} as ExecutionContext,
       ),
@@ -2224,11 +2425,33 @@ function acceptanceDatabase(
   options: { readonly speakerGrantAvailable?: boolean } = {},
 ): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
-  readonly outbox: Map<string, { state: string; topic: string; payload: unknown }>;
+  readonly outbox: Map<
+    string,
+    {
+      state: string;
+      topic: string;
+      payload: unknown;
+      createdAt?: string;
+      updatedAt?: string;
+      completedAt?: string | null;
+      lastErrorCode?: string | null;
+    }
+  >;
   readonly grants: string[];
 } {
   const idempotency = new Map<string, AcceptanceIdempotencyRow>();
-  const outbox = new Map<string, { state: string; topic: string; payload: unknown }>();
+  const outbox = new Map<
+    string,
+    {
+      state: string;
+      topic: string;
+      payload: unknown;
+      createdAt?: string;
+      updatedAt?: string;
+      completedAt?: string | null;
+      lastErrorCode?: string | null;
+    }
+  >();
   const grants: string[] = [];
   const database = {
     prepare(query: string) {
@@ -2267,6 +2490,30 @@ function acceptanceDatabase(
               return null;
             },
             async all<T>() {
+              if (query.includes("FROM outbox_jobs")) {
+                const tenantId = String(values[0]);
+                const planId = String(values[1]);
+                return {
+                  results: [...outbox.entries()]
+                    .filter(
+                      ([id, row]) =>
+                        id.includes(tenantId) &&
+                        typeof row.payload === "object" &&
+                        row.payload !== null &&
+                        "planId" in row.payload &&
+                        row.payload.planId === planId,
+                    )
+                    .map(([id, row]) => ({
+                      id,
+                      payload_json: JSON.stringify(row.payload),
+                      state: row.state,
+                      created_at: row.createdAt ?? "2026-08-13T12:00:00.000Z",
+                      updated_at: row.updatedAt ?? "2026-08-13T12:00:00.000Z",
+                      completed_at: row.completedAt ?? null,
+                      last_error_code: row.lastErrorCode ?? null,
+                    })) as T[],
+                };
+              }
               return { results: [] as T[] };
             },
             async run() {
@@ -2305,7 +2552,26 @@ function acceptanceDatabase(
                 const topic = String(values[2]);
                 const payload = JSON.parse(String(values[4])) as unknown;
                 const duplicate = outbox.has(id);
-                if (!duplicate) outbox.set(id, { state: "pending", topic, payload });
+                if (!duplicate) {
+                  const reminderPayload =
+                    typeof payload === "object" &&
+                    payload !== null &&
+                    "planId" in payload &&
+                    "reviewerId" in payload;
+                  outbox.set(id, {
+                    state: "pending",
+                    topic,
+                    payload,
+                    ...(reminderPayload
+                      ? {
+                          createdAt: String(values[6]),
+                          updatedAt: String(values[7]),
+                          completedAt: null,
+                          lastErrorCode: null,
+                        }
+                      : {}),
+                  });
+                }
                 return { success: true, meta: { changes: duplicate ? 0 : 1 } };
               }
               if (query.includes("UPDATE outbox_jobs SET state = 'queued'")) {
@@ -2347,689 +2613,119 @@ function acceptanceTransport(events: string[]): {
 }
 
 describe("production agenda, portal, acceptance, and reminder boundaries", () => {
-  it("initializes and synchronizes the production agenda on first session access without publishing", async () => {
-    const transport = new FakeAirtableTransport();
-    transport.seed({
-      baseId: "base-test",
-      table: "Events",
-      fields: {
-        "Application ID": "event-first-access",
-        "Settings JSON": JSON.stringify({
-          id: "event-first-access",
-          organizationId: LOCAL_ORGANIZATION_ID,
-          eventId: "event-first-access",
-          name: "First access event",
-          timeZone: "UTC",
-          startsAt: "2026-08-09T00:00:00.000Z",
-          endsAt: "2026-08-10T00:00:00.000Z",
-          version: 1,
-          updatedAt: "2026-08-09T00:00:00.000Z",
-        }),
-      },
-    });
-    const database = productionD1("unused");
-    const bindings = productionBindings(transport, database);
-    const agendaCoordinator = bindings.AGENDA_COORDINATOR;
-    const privateFiles = bindings.PRIVATE_FILES;
-    const outboxQueue = bindings.OUTBOX_QUEUE;
-    if (
-      agendaCoordinator === undefined ||
-      privateFiles === undefined ||
-      outboxQueue === undefined
-    ) {
-      throw new Error("Production Cloudflare bindings are not mounted.");
-    }
-    const dependencies = createAirtableDependencies({
-      authenticator: { authenticate: async () => null },
-      baseId: "base-test",
-      transport,
-      database,
-      agendaCoordinator,
-      privateFiles,
-      outboxQueue,
-      webOrigin: "https://example.test",
-    });
-    const actor = {
-      tenantId: LOCAL_ORGANIZATION_ID,
-      userId: "owner-first-access",
-      role: "owner" as const,
-    };
-    const sessions = dependencies.sessions;
-    if (sessions === undefined) throw new Error("Production sessions are not mounted.");
-    await expect(
-      sessions.service.listSessions(actor, { eventId: "event-first-access" }),
-    ).resolves.toEqual([]);
-    await sessions.service.createSession(actor, {
-      eventId: "event-first-access",
-      id: "session-first-access",
-      title: "First access session",
-      durationMinutes: 30,
-      status: "Accepted",
-    });
-    const agendaCreates = transport.requests.filter(
-      (request) => request.method === "POST" && request.table === "Agenda Versions",
-    );
-    expect(agendaCreates).toHaveLength(1);
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.method === "PATCH" &&
-          request.table === "Agenda Versions" &&
-          JSON.stringify(request.body).includes("session-first-access"),
-      ),
-    ).toBe(true);
-    expect(transport.requests.some((request) => request.table === "Published Agenda")).toBe(false);
-  });
-  it("queues cache invalidation after materializing an agenda publication", async () => {
-    const transport = new FakeAirtableTransport();
-    const eventId = "event-publish-cache";
-    const organizationId = "tenant-publish-cache";
-    const participantId = "participant-publish-cache";
-    const sessionId = "session-publish-cache";
-    const profileId = `speaker-profile:${eventId}:${participantId}`;
-    const entry = {
-      id: "entry-publish-cache",
-      sessionId,
-      roomId: "room-publish-cache",
-      trackIds: ["track-publish-cache"],
-      startsAt: "2027-05-12T17:00:00.000Z",
-      endsAt: "2027-05-12T17:30:00.000Z",
-      startsAtLocal: "2027-05-12T17:00:00",
-      endsAtLocal: "2027-05-12T17:30:00",
-      timeZone: "UTC",
-    };
-    const publishedAt = "2026-08-10T18:44:33.481Z";
-    const revision: PublishedAgendaRevision = {
-      id: "revision-publish-cache",
+  it("loads the authoritative agenda workspace with one Airtable request", async () => {
+    const eventId = "event-workspace-read";
+    const state: AgendaState = {
       eventId,
-      revisionNumber: 1,
-      sourceDraftVersion: 1,
-      timeZone: "UTC",
-      entries: [entry],
-      warningOverrides: [],
-      publishedAt,
-      publishedBy: "organizer-publish-cache",
-      rollbackOfRevisionId: null,
-    };
-    const agendaState: AgendaState = {
-      eventId,
-      stateVersion: 1,
+      stateVersion: 3,
       timeZone: "UTC",
       minimumTravelMinutes: 0,
-      sessions: [
-        {
-          id: sessionId,
-          title: "Published session",
-          status: "accepted",
-          participantIds: [participantId],
-          resourceIds: [],
-          capacityRequired: 1,
-          durationMinutes: 30,
-        },
-      ],
-      rooms: [
-        {
-          id: entry.roomId,
-          name: "Main Stage",
-          capacity: 500,
-        },
-      ],
-      tracks: [{ id: entry.trackIds[0] as string, name: "Platform" }],
+      sessions: [],
+      rooms: [],
+      tracks: [],
       draft: {
         eventId,
         timeZone: "UTC",
-        version: 1,
-        entries: [entry],
+        version: 2,
+        entries: [],
         warningOverrides: [],
-        updatedAt: publishedAt,
-        updatedBy: "organizer-publish-cache",
+        updatedAt: "2026-08-11T00:00:00.000Z",
+        updatedBy: "organizer-workspace-read",
       },
-      revisions: [revision],
-      currentPublishedRevisionId: revision.id,
+      revisions: [],
+      currentPublishedRevisionId: null,
       outbox: [],
       audit: [],
       suggestionRuns: [],
     };
-    transport.seed({
-      baseId: "base-test",
-      table: "Events",
-      fields: {
-        "Application ID": eventId,
-        "Settings JSON": JSON.stringify({
-          id: eventId,
-          organizationId,
-          tenantId: organizationId,
-          name: "Published cache event",
-          slug: "published-cache-event",
-          timeZone: "UTC",
-          startsAt: "2027-05-12T00:00:00.000Z",
-          endsAt: "2027-05-14T23:59:59.000Z",
-          venue: "Test venue",
-          version: 1,
-          updatedAt: publishedAt,
-        }),
-      },
-    });
+    const transport = new FakeAirtableTransport();
     transport.seed({
       baseId: "base-test",
       table: "Agenda Versions",
       fields: {
         "Application ID": eventId,
-        "Conflicts JSON": JSON.stringify(agendaState),
+        "Conflicts JSON": JSON.stringify(state),
       },
     });
-    transport.seed({
-      baseId: "base-test",
-      table: "Sessions",
-      fields: {
-        "Application ID": sessionId,
-        "Organization ID": organizationId,
-        "Event ID": eventId,
-        Title: "Published session",
-        Description: "A published session description.",
-        Status: "confirmed",
-        Version: 1,
-        "Duration Minutes": 30,
-        "Capacity Required": 1,
-        "Speaker IDs JSON": JSON.stringify([participantId]),
-        "Track IDs JSON": JSON.stringify(entry.trackIds),
-        "Settings JSON": JSON.stringify({
-          publicationStatus: "published",
-          roomId: entry.roomId,
-          trackId: entry.trackIds[0],
-        }),
-        "Metadata JSON": JSON.stringify({
-          id: sessionId,
-          title: "Published session",
-          status: "confirmed",
-          durationMinutes: 30,
-          capacityRequired: 1,
-          speakerProfileIds: [participantId],
-          history: [],
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Speaker Profiles",
-      fields: {
-        "Application ID": profileId,
-        Biography: JSON.stringify({
-          id: profileId,
-          eventId,
-          participantId,
-          displayName: "Priya Raman",
-          biography: "A reliable platform engineer.",
-          jobTitle: "Principal Engineer",
-          company: "Latticework Systems",
-          version: 1,
-          updatedAt: publishedAt,
-        }),
-      },
-    });
-    const { database, state } = speakerOrganizerDatabase({});
-    const queue = {
-      async send(message: CloudflareOutboxMessage) {
-        state.queueMessages.push(message);
-      },
-    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
-    const bindings = productionBindings(transport, database);
-    if (bindings.AGENDA_COORDINATOR === undefined || bindings.PRIVATE_FILES === undefined) {
-      throw new Error("Expected production test bindings.");
-    }
-    const dependencies = createAirtableDependencies({
-      authenticator: { authenticate: async () => null },
+    const repository = new AirtableAgendaRepository({
       baseId: "base-test",
       transport,
-      database,
-      agendaCoordinator: bindings.AGENDA_COORDINATOR,
-      privateFiles: bindings.PRIVATE_FILES,
-      outboxQueue: queue,
-      webOrigin: "https://example.test",
     });
-    if (dependencies.agenda?.afterPublish === undefined) {
-      throw new Error("Production agenda publication projection is not mounted.");
-    }
 
-    await dependencies.agenda.afterPublish(eventId, revision);
+    await expect(repository.load(eventId)).resolves.toEqual(state);
     expect(
-      transport.requests.some(
-        (request) =>
-          request.table === "Published Speaker Projections" &&
-          JSON.stringify(request.body ?? {}).includes("Priya Raman") &&
-          JSON.stringify(request.body ?? {}).includes(revision.id),
-      ),
-    ).toBe(true);
-
-    expect([...state.outbox.values()]).toContainEqual(
-      expect.objectContaining({
-        tenantId: organizationId,
-        topic: "cache-invalidation",
-        payload: {
-          eventId,
-          revisionId: revision.id,
-          revisionNumber: revision.revisionNumber,
-        },
-      }),
-    );
-    expect(state.queueMessages).toContainEqual(
-      expect.objectContaining({ tenantId: organizationId, topic: "cache-invalidation" }),
-    );
+      transport.requests.map((request) => ({
+        method: request.method,
+        table: request.table,
+      })),
+    ).toEqual([{ method: "GET", table: "Agenda Versions" }]);
   });
-  it("exposes every owner submission status while granting capabilities only for accepted records", async () => {
+
+  it("preserves Airtable open/closed physical status during embed-only event updates", async () => {
     const transport = new FakeAirtableTransport();
-    const eventId = "event-portal-statuses";
+    const eventId = "event-embed-status";
     transport.seed({
       baseId: "base-test",
       table: "Events",
       fields: {
         "Application ID": eventId,
+        Status: "open",
+        Version: 1,
         "Settings JSON": JSON.stringify({
           id: eventId,
-          organizationId: "tenant-portal",
-          name: "Portal statuses",
-          slug: "portal-statuses",
+          organizationId: LOCAL_ORGANIZATION_ID,
+          slug: eventId,
+          name: "Embed status event",
+          status: "active",
+          timeZone: "UTC",
+          startsAt: "2027-05-12T00:00:00.000Z",
+          endsAt: "2027-05-13T00:00:00.000Z",
+          cfpSettings: { enabled: true, opensAt: null, closesAt: null },
+          defaultCalendarSettings: { durationMinutes: 30, timeZone: "UTC", location: null },
+          embedConfigurations: [],
+          version: 1,
+          createdAt: "2026-08-10T00:00:00.000Z",
+          updatedAt: "2026-08-10T00:00:00.000Z",
+          createdBy: "owner",
+          updatedBy: "owner",
         }),
       },
     });
-    const participant = (id: string) => ({
-      id,
-      firstName: id,
-      lastName: "Speaker",
-      email: "portal-owner@example.test",
-      role: "primary",
-      biography: "",
-      answers: {},
-    });
-    for (const [id, status] of [
-      ["submission-accepted", "accepted"],
-      ["submission-submitted", "submitted"],
-      ["submission-declined", "submitted"],
-    ] as const) {
-      transport.seed({
-        baseId: "base-test",
-        table: "Submissions",
-        fields: {
-          "Application ID": id,
-          "Answers JSON": JSON.stringify({
-            id,
-            tenantId: "tenant-portal",
-            organizationId: "tenant-portal",
-            eventId,
-            formId: "form-portal",
-            ownerAccountId: "portal-owner",
-            title: id,
-            status,
-            participants: [participant(id)],
-            updatedAt: "2026-08-09T00:00:00.000Z",
-          }),
-        },
-      });
-    }
-    transport.seed({
-      baseId: "base-test",
-      table: "Decisions",
-      fields: {
-        "Application ID": "decision-submission-declined",
-        "Metadata JSON": JSON.stringify({
-          id: "decision-submission-declined",
-          tenantId: "tenant-portal",
-          eventId,
-          submissionId: "submission-declined",
-          status: "rejected",
-          reason: "Not a fit for this event.",
-        }),
-      },
-    });
-    const database = {
-      prepare() {
-        return {
-          bind() {
-            return {
-              async all<T>() {
-                return { results: [] as T[] };
-              },
-              async first<T>() {
-                return { email: "portal-owner@example.test" } as T;
-              },
-              async run() {
-                return { success: true, meta: { changes: 0 } };
-              },
-            };
+    const repository = new AirtableEventRepository({ baseId: "base-test", transport });
+    const current = await repository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+    if (current === null) throw new Error("Expected the event fixture.");
+    await repository.saveEvent(
+      {
+        ...current,
+        embedConfigurations: [
+          {
+            id: "embed-status",
+            name: "Agenda",
+            widgetId: "agenda",
+            enabled: true,
+            theme: "light",
+            outputFormat: "styled-html",
+            layout: "comfortable",
+            accent: "#4f5ee8",
+            backgroundColor: "#ffffff",
+            textColor: "#20232b",
+            customCss: "",
+            displayFields: ["title", "date-time"],
+            trackIds: [],
+            statuses: [],
+            revision: 1,
           },
-        };
+        ],
+        version: 2,
       },
-      async batch() {
-        return [];
-      },
-    } as unknown as NonNullable<RuntimeBindings["DB"]>;
-    const repository = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport,
-      database,
-    });
-    const contexts = await repository.listPortalContexts("portal-owner");
-    expect(contexts).toHaveLength(1);
-    expect(contexts[0]).toMatchObject({
-      eventId,
-      submissionIds: expect.arrayContaining([
-        "submission-accepted",
-        "submission-submitted",
-        "submission-declined",
-      ]),
-      capabilities: [
-        "profile-self",
-        "task-response",
-        "asset-read",
-        "asset-write",
-        "asset-comment",
-        "submission-edit",
-      ],
-    });
-    const submissionReadsBefore = transport.requests.length;
-    const submissions = await repository.listSubmissions(eventId, ["submission-declined"]);
-    const submissionReadRequests = transport.requests
-      .slice(submissionReadsBefore)
-      .filter((request) => request.method === "GET" && request.table === "Submissions");
-    expect(submissionReadRequests).toHaveLength(1);
-    expect(submissionReadRequests[0]?.query?.filterByFormula).toBe(
-      "{Application ID}='submission-declined'",
+      1,
     );
-    expect(submissions).toEqual([
-      expect.objectContaining({
-        id: "submission-declined",
-        status: "declined",
-        reason: "Not a fit for this event.",
-      }),
-    ]);
-    const pendingTransport = new FakeAirtableTransport();
-    pendingTransport.seed({
-      baseId: "base-test",
-      table: "Events",
-      fields: {
-        "Application ID": "event-pending-only",
-        "Settings JSON": JSON.stringify({
-          id: "event-pending-only",
-          organizationId: "tenant-portal",
-          name: "Pending only",
-        }),
-      },
-    });
-    pendingTransport.seed({
-      baseId: "base-test",
-      table: "Submissions",
-      fields: {
-        "Application ID": "submission-pending-only",
-        "Answers JSON": JSON.stringify({
-          id: "submission-pending-only",
-          tenantId: "tenant-portal",
-          eventId: "event-pending-only",
-          formId: "form-portal",
-          ownerAccountId: "portal-owner",
-          title: "Pending",
-          status: "submitted",
-          participants: [participant("pending-only")],
-          updatedAt: "2026-08-09T00:00:00.000Z",
-        }),
-      },
-    });
-    const pendingRepository = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport: pendingTransport,
-      database,
-    });
-    await expect(pendingRepository.listPortalContexts("portal-owner")).resolves.toMatchObject([
-      { eventId: "event-pending-only", capabilities: ["submission-edit"] },
-    ]);
+    const update = transport.requests.find(
+      (request) => request.method === "PATCH" && request.table === "Events",
+    );
+    expect(update?.body).toMatchObject({ fields: { Status: "open" } });
   });
-  it("writes the canonical accepted session idempotently before account grants and preserves taxonomy and participants", async () => {
-    const events: string[] = [];
-    const { fake, transport } = acceptanceTransport(events);
-    const submission: Submission = {
-      id: "submission-acceptance",
-      tenantId: "tenant-acceptance",
-      eventId: "event-acceptance",
-      formId: "form-acceptance",
-      ownerAccountId: "owner-acceptance",
-      formVersion: 1,
-      version: 4,
-      status: "submitted",
-      completedSteps: ["welcome", "account", "submission", "participant", "review"],
-      answers: {
-        title: "Canonical session",
-        abstract: "Preserve this taxonomy.",
-        formatId: "format-talk",
-        trackIds: ["track-main"],
-        tagIds: ["tag-systems"],
-      },
-      participants: [
-        {
-          id: "participant-primary",
-          firstName: "Primary",
-          lastName: "Speaker",
-          email: "primary@example.test",
-          role: "primary",
-          biography: "Primary bio",
-          answers: {},
-        },
-        {
-          id: "participant-co",
-          firstName: "Co",
-          lastName: "Speaker",
-          email: "co@example.test",
-          role: "co_speaker",
-          biography: "Co bio",
-          answers: {},
-        },
-      ],
-      secondaryContacts: [],
-      createdAt: "2026-08-08T00:00:00.000Z",
-      updatedAt: "2026-08-09T00:00:00.000Z",
-      submittedAt: "2026-08-08T01:00:00.000Z",
-    };
-    fake.seed({
-      baseId: "base-test",
-      table: "Submissions",
-      fields: {
-        "Application ID": submission.id,
-        "Answers JSON": JSON.stringify(submission),
-      },
-    });
-    const { database, outbox, grants } = acceptanceDatabase(events);
-    const cfp = new AirtableCfpRepository({ baseId: "base-test", transport });
-    const speakers = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport,
-      database,
-    });
-    const sessions = new AirtableSessionRepository({
-      baseId: "base-test",
-      transport,
-    });
-    const agendaSyncEvents: string[] = [];
-    const sessionService = new SessionService(sessions, {
-      clock: () => new Date("2026-08-09T02:00:00.000Z"),
-      agendaCatalogSynchronizer: {
-        async ensureInitialized(input) {
-          agendaSyncEvents.push(`ensure:${input.tenantId}:${input.eventId}`);
-          return undefined;
-        },
-        async synchronize(input) {
-          agendaSyncEvents.push(`synchronize:${input.tenantId}:${input.eventId}`);
-          return undefined;
-        },
-      },
-    });
-    const queueMessages: CloudflareOutboxMessage[] = [];
-    const queue = {
-      async send(message: CloudflareOutboxMessage) {
-        queueMessages.push(message);
-      },
-    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
-    const handoff = new AirtableEvaluationAcceptanceHandoff({
-      cfp,
-      speakers,
-      sessions,
-      sessionService,
-      database,
-      queue,
-    });
-    const input = {
-      tenantId: submission.tenantId,
-      eventId: submission.eventId,
-      planId: "plan-acceptance",
-      submissionId: submission.id,
-      decisionId: "decision-acceptance",
-      decidedBy: "organizer-acceptance",
-      decidedAt: "2026-08-09T02:00:00.000Z",
-      reason: "Accepted",
-      idempotencyKey: "acceptance-key",
-    };
-    await handoff.accept(input);
-    await handoff.accept(input);
-    const acceptedActor = {
-      tenantId: submission.tenantId,
-      userId: input.decidedBy,
-      role: "organizer" as const,
-      kind: "user" as const,
-    };
-    await expect(
-      sessionService.listSessions(acceptedActor, {
-        eventId: submission.eventId,
-      }),
-    ).resolves.toMatchObject([
-      expect.objectContaining({
-        id: "session-submission-acceptance",
-        title: "Canonical session",
-        status: "Accepted",
-        durationMinutes: 30,
-      }),
-    ]);
-    await expect(
-      sessionService.getAgendaCatalog(submission.tenantId, submission.eventId),
-    ).resolves.toMatchObject({
-      sessions: [
-        expect.objectContaining({
-          id: "session-submission-acceptance",
-          title: "Canonical session",
-          status: "accepted",
-        }),
-      ],
-    });
-    expect(agendaSyncEvents).toEqual([
-      "synchronize:tenant-acceptance:event-acceptance",
-      "ensure:tenant-acceptance:event-acceptance",
-    ]);
-    expect(fake.requests.some((request) => request.table === "Published Agenda")).toBe(false);
-    const sessionRequests = fake.requests.filter(
-      (request) => request.table === "Sessions" && request.method === "POST",
-    );
-    expect(sessionRequests).toHaveLength(1);
-    const sessionPayload = JSON.parse(
-      String(
-        (sessionRequests[0]?.body as { fields?: { "Metadata JSON"?: string } } | undefined)
-          ?.fields?.["Metadata JSON"],
-      ),
-    ) as Record<string, unknown>;
-    expect(sessionPayload).toMatchObject({
-      id: "session-submission-acceptance",
-      status: "Accepted",
-      formatId: "format-talk",
-      trackIds: ["track-main"],
-      tagIds: ["tag-systems"],
-      speakerIds: ["participant-primary", "participant-co"],
-      speakerRoster: [
-        { id: "participant-primary", role: "primary" },
-        { id: "participant-co", role: "co_speaker" },
-      ],
-    });
-    expect(events.indexOf("db:auth-users")).toBeGreaterThan(
-      events.indexOf("airtable:POST:Sessions"),
-    );
-    expect(grants).toEqual([
-      "account-speaker",
-      "account-speaker",
-      "account-speaker",
-      "account-speaker",
-    ]);
-    expect([...outbox.values()]).toContainEqual({
-      state: "queued",
-      topic: "cache-invalidation",
-      payload: { eventId: "event-acceptance" },
-    });
-    expect(queueMessages).toContainEqual(expect.objectContaining({ topic: "cache-invalidation" }));
-  });
-  it("fails acceptance observably when speaker grant provisioning returns false", async () => {
-    const events: string[] = [];
-    const { fake, transport } = acceptanceTransport(events);
-    const submission: Submission = {
-      id: "submission-grant-failure",
-      tenantId: "tenant-grant-failure",
-      eventId: "event-grant-failure",
-      formId: "form-grant-failure",
-      ownerAccountId: "owner-grant-failure",
-      formVersion: 1,
-      version: 1,
-      status: "submitted",
-      completedSteps: [],
-      answers: { title: "Grant failure" },
-      participants: [
-        {
-          id: "participant-grant-failure",
-          firstName: "Grant",
-          lastName: "Failure",
-          email: "grant-failure@example.test",
-          role: "primary",
-          biography: "Grant failure biography",
-          answers: {},
-        },
-      ],
-      secondaryContacts: [],
-      createdAt: "2026-08-09T00:00:00.000Z",
-      updatedAt: "2026-08-09T00:00:00.000Z",
-    };
-    fake.seed({
-      baseId: "base-test",
-      table: "Submissions",
-      fields: {
-        "Application ID": submission.id,
-        "Answers JSON": JSON.stringify(submission),
-      },
-    });
-    const { database } = acceptanceDatabase(events, { speakerGrantAvailable: false });
-    const cfp = new AirtableCfpRepository({ baseId: "base-test", transport });
-    const speakers = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport,
-      database,
-    });
-    const sessions = new AirtableSessionRepository({ baseId: "base-test", transport });
-    const queue = {
-      async send() {},
-    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
-    const handoff = new AirtableEvaluationAcceptanceHandoff({
-      cfp,
-      speakers,
-      sessions,
-      database,
-      queue,
-    });
 
-    await expect(
-      handoff.accept({
-        tenantId: submission.tenantId,
-        eventId: submission.eventId,
-        planId: "plan-grant-failure",
-        submissionId: submission.id,
-        decisionId: "decision-grant-failure",
-        decidedBy: "organizer-grant-failure",
-        decidedAt: "2026-08-09T01:00:00.000Z",
-        reason: "Accepted",
-        idempotencyKey: "grant-failure-key",
-      }),
-    ).rejects.toThrow("Speaker grant provisioning failed");
-    expect(events).toContain("db:auth-users");
-  });
   it("restricts remix speaker visibility and application to the event tenant", async () => {
     const tenantId = "tenant-remix-owner";
     const otherTenantId = "tenant-remix-other";
@@ -3139,11 +2835,20 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const profilePatch = fake.requests.find(
       (request) => request.method === "PATCH" && request.table === "Speaker Profiles",
     );
-    expect(profilePatch?.body).toEqual(
-      expect.objectContaining({
-        fields: expect.objectContaining({ "Organization ID": tenantId }),
-      }),
-    );
+    const profilePatchFields = (
+      profilePatch?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
+    )?.fields;
+    expect(profilePatchFields).toEqual({
+      "Application ID": `speaker-profile:${eventId}:organizer`,
+      Version: 2,
+      Biography: expect.any(String),
+    });
+    expect(JSON.parse(String(profilePatchFields?.Biography))).toMatchObject({
+      tenantId,
+      eventId,
+      version: 2,
+      biography: "Updated organizer biography",
+    });
     await expect(gateway.getSpeaker({ tenantId, eventId, sourceId: "organizer" })).resolves.toEqual(
       expect.objectContaining({ biography: "Updated organizer biography", revision: 2 }),
     );
@@ -3162,6 +2867,1033 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         appliedAt: "2026-08-09T01:00:00.000Z",
       }),
     ).rejects.toThrow("speaker content changed");
+  });
+  it("batches organizer workspace Airtable reads under the warm latency budget", async () => {
+    const tenantId = "tenant-organizer-workspace";
+    const eventId = "event-organizer-workspace";
+    const otherTenantId = "tenant-organizer-other";
+    const otherEventId = "event-organizer-other";
+    const planId = "plan-organizer-workspace";
+    const roundId = "round-organizer-workspace";
+    const now = "2026-08-10T12:00:00.000Z";
+    const later = "2026-08-10T12:05:00.000Z";
+    const transport = new FormulaRecordingTransport(700);
+    const reviewRound = {
+      id: roundId,
+      name: "Organizer review",
+      sequence: 1,
+      closesAt: null,
+      rubric: {
+        id: "rubric-organizer-workspace",
+        name: "Organizer rubric",
+        criteria: [
+          {
+            id: "quality",
+            label: "Quality",
+            description: "Proposal quality",
+            minimum: 1,
+            maximum: 5,
+            weight: 1,
+            required: true,
+          },
+        ],
+      },
+    };
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Organizer queue",
+      status: "open",
+      blindReview: true,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 10 },
+      rounds: [reviewRound],
+      reviewerProjection: { fieldIds: [], fileIds: [] },
+      gradingLockedAt: now,
+      version: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      fields: {
+        "Application ID": planId,
+        "Rounds JSON": JSON.stringify(plan),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      fields: {
+        "Application ID": "foreign-plan",
+        "Rounds JSON": JSON.stringify({
+          ...plan,
+          id: "foreign-plan",
+          tenantId: otherTenantId,
+          eventId: otherEventId,
+        }),
+      },
+    });
+    const assignmentSubmitted = {
+      id: "assignment-organizer-submitted",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId: "submission-organizer-alpha",
+      reviewerId: "reviewer-organizer-one",
+      status: "assigned",
+      planVersion: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      version: 2,
+      createdAt: now,
+      updatedAt: later,
+    };
+    const assignmentOutstanding = {
+      id: "assignment-organizer-outstanding",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId: "submission-organizer-zulu",
+      reviewerId: "reviewer-organizer-two",
+      status: "assigned",
+      planVersion: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const staleAssignment = { ...assignmentSubmitted, version: 1, updatedAt: now };
+    const reviewSubmitted = {
+      id: `review:${assignmentSubmitted.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: assignmentSubmitted.id,
+      submissionId: assignmentSubmitted.submissionId,
+      reviewerId: assignmentSubmitted.reviewerId,
+      scores: {
+        quality: {
+          criterionId: "quality",
+          value: 4,
+          origin: "human",
+          evidence: ["reviewer evidence"],
+          humanConfirmedBy: assignmentSubmitted.reviewerId,
+        },
+      },
+      comment: "Strong proposal",
+      submittedAt: later,
+      version: 2,
+      planRevision: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      createdAt: now,
+      updatedAt: later,
+    };
+    const staleReview = { ...reviewSubmitted, version: 1, updatedAt: now, submittedAt: null };
+    const reviewDraft = {
+      id: `review:${assignmentOutstanding.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: assignmentOutstanding.id,
+      submissionId: assignmentOutstanding.submissionId,
+      reviewerId: assignmentOutstanding.reviewerId,
+      scores: {},
+      comment: "Draft",
+      submittedAt: null,
+      version: 1,
+      planRevision: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    for (const evaluation of [
+      staleAssignment,
+      assignmentSubmitted,
+      assignmentOutstanding,
+      staleReview,
+      reviewSubmitted,
+      reviewDraft,
+      {
+        ...assignmentOutstanding,
+        id: "foreign-tenant-assignment",
+        tenantId: otherTenantId,
+      },
+      {
+        ...reviewDraft,
+        id: "review:foreign-tenant-assignment",
+        assignmentId: "foreign-tenant-assignment",
+        tenantId: otherTenantId,
+      },
+      {
+        ...assignmentOutstanding,
+        id: "foreign-event-assignment",
+        eventId: otherEventId,
+      },
+    ]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        fields: {
+          "Application ID": evaluation.id,
+          "Scores JSON": JSON.stringify({
+            ...evaluation,
+            entityType: "scores" in evaluation ? "evaluation_review" : "evaluation_assignment",
+          }),
+        },
+      });
+    }
+
+    const decisionAccepted = {
+      id: `decision:${planId}:${assignmentSubmitted.submissionId}`,
+      tenantId,
+      eventId,
+      planId,
+      submissionId: assignmentSubmitted.submissionId,
+      status: "accepted",
+      version: 2,
+      history: [
+        {
+          from: null,
+          to: "accepted",
+          reason: "Accepted",
+          decidedBy: "organizer-workspace",
+          decidedAt: later,
+          idempotencyKey: "decision-accepted",
+        },
+      ],
+      updatedAt: later,
+    };
+    const decisionWaitlisted = {
+      id: `decision:${planId}:${assignmentOutstanding.submissionId}`,
+      tenantId,
+      eventId,
+      planId,
+      submissionId: assignmentOutstanding.submissionId,
+      status: "waitlisted",
+      version: 1,
+      history: [
+        {
+          from: null,
+          to: "waitlisted",
+          reason: "Waitlisted",
+          decidedBy: "organizer-workspace",
+          decidedAt: now,
+          idempotencyKey: "decision-waitlisted",
+        },
+      ],
+      updatedAt: now,
+    };
+    const staleDecision = { ...decisionAccepted, version: 1, status: "waitlisted", updatedAt: now };
+    for (const decision of [
+      staleDecision,
+      decisionAccepted,
+      decisionWaitlisted,
+      {
+        ...decisionWaitlisted,
+        id: "decision:foreign-tenant",
+        tenantId: otherTenantId,
+        submissionId: "submission-foreign-tenant",
+      },
+      {
+        ...decisionWaitlisted,
+        id: "decision:foreign-event",
+        eventId: otherEventId,
+        submissionId: "submission-foreign-event",
+      },
+    ]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Decisions",
+        fields: {
+          "Application ID": decision.id,
+          "Metadata JSON": JSON.stringify({ ...decision, entityType: "evaluation_decision" }),
+        },
+      });
+    }
+
+    const seedSubmission = (input: {
+      readonly id: string;
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly title: string;
+      readonly version?: number;
+    }) => {
+      const version = input.version ?? 1;
+      transport.seed({
+        baseId: "base-test",
+        table: "Submissions",
+        fields: {
+          "Application ID": input.id,
+          "Answers JSON": JSON.stringify({
+            id: input.id,
+            tenantId: input.tenantId,
+            eventId: input.eventId,
+            formId: "form-organizer-workspace",
+            ownerAccountId: "speaker-organizer-workspace",
+            formVersion: 1,
+            version,
+            status: "submitted",
+            completedSteps: ["welcome"],
+            answers: { title: input.title, abstract: `${input.title} abstract` },
+            participants: [],
+            secondaryContacts: [],
+            createdAt: now,
+            updatedAt: version === 1 ? now : later,
+            submittedAt: now,
+            reopenedAt: null,
+          }),
+        },
+      });
+    };
+    seedSubmission({
+      id: "submission-organizer-alpha",
+      tenantId,
+      eventId,
+      title: "Alpha proposal",
+    });
+    seedSubmission({
+      id: "submission-organizer-zulu",
+      tenantId,
+      eventId,
+      title: "Zulu proposal",
+    });
+    seedSubmission({
+      id: "submission-foreign-tenant",
+      tenantId: otherTenantId,
+      eventId,
+      title: "Foreign tenant proposal",
+    });
+    seedSubmission({
+      id: "submission-foreign-event",
+      tenantId,
+      eventId: otherEventId,
+      title: "Foreign event proposal",
+    });
+
+    const service = new EvaluationService(
+      new AirtableEvaluationRepository({ baseId: "base-test", transport }),
+      new AirtableSubmissionReviewSource(
+        new AirtableCfpRepository({ baseId: "base-test", transport }),
+      ),
+      {
+        async getEventMetadata(_requestedTenantId, requestedEventId) {
+          return {
+            id: requestedEventId,
+            name: "Review event",
+            timeZone: "UTC",
+            startsAt: "2026-08-09T00:00:00.000Z",
+            endsAt: "2099-12-31T23:59:00.000Z",
+          };
+        },
+      },
+    );
+    transport.requests.length = 0;
+    const startedAt = performance.now();
+    const workspace = await service.getOrganizerWorkspace(
+      {
+        tenantId,
+        userId: "organizer-workspace",
+        kind: "human",
+        grants: [{ eventId, role: "organizer" }],
+      },
+      eventId,
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(1_100);
+    expect(workspace.plan).toMatchObject({ id: planId, tenantId, eventId });
+    expect(workspace.submissions.map((submission) => submission.id).sort()).toEqual([
+      "submission-organizer-alpha",
+      "submission-organizer-zulu",
+    ]);
+    expect(workspace.assignments.map((assignment) => assignment.id).sort()).toEqual([
+      assignmentOutstanding.id,
+      assignmentSubmitted.id,
+    ]);
+    expect(workspace.progress).toMatchObject({
+      planId,
+      total: 2,
+      assigned: 1,
+      inProgress: 0,
+      submitted: 1,
+      abstained: 0,
+      completionPercent: 50,
+    });
+    expect(workspace.progress.reviewers).toHaveLength(2);
+    expect(workspace.decisions).toEqual({
+      [assignmentSubmitted.submissionId]: expect.objectContaining({
+        id: decisionAccepted.id,
+        status: "accepted",
+        version: 2,
+      }),
+      [assignmentOutstanding.submissionId]: expect.objectContaining({
+        id: decisionWaitlisted.id,
+        status: "waitlisted",
+        version: 1,
+      }),
+    });
+    expect(workspace.aggregates).toHaveLength(2);
+    const reads = transport.requests.filter((request) => request.method === "GET");
+    expect(reads).toHaveLength(5);
+    expect(reads.map((request) => request.table).sort()).toEqual([
+      "Decisions",
+      "Evaluations",
+      "Review Plans",
+      "Review Plans",
+      "Submissions",
+    ]);
+    for (const table of ["Review Plans", "Evaluations", "Decisions"] as const) {
+      const read = reads.find((request) => request.table === table);
+      expect(read?.query?.filterByFormula).toContain("AND(");
+      expect(read?.query?.filterByFormula).toContain(tenantId);
+      expect(read?.query?.filterByFormula).toContain(eventId);
+    }
+    expect(JSON.stringify(workspace)).not.toContain("foreign");
+  });
+  it("atomically supersedes Airtable assignments while preserving lineage and reviews", async () => {
+    const tenantId = "tenant-replacement";
+    const eventId = "event-replacement";
+    const planId = "plan-replacement";
+    const roundId = "round-replacement";
+    const submissionId = "submission-replacement";
+    const now = "2026-08-10T12:00:00.000Z";
+    const replacedAt = "2026-08-10T12:10:00.000Z";
+    const transport = new FormulaRecordingTransport();
+    const assignmentA = {
+      id: "assignment-replacement-a",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId: "reviewer-a",
+      status: "assigned" as const,
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const assignmentB = {
+      ...assignmentA,
+      id: "assignment-replacement-b",
+      reviewerId: "reviewer-b",
+      status: "submitted" as const,
+      version: 2,
+      updatedAt: "2026-08-10T12:05:00.000Z",
+    };
+    const assignmentC = {
+      ...assignmentA,
+      id: "assignment-replacement-c",
+      reviewerId: "reviewer-c",
+      createdAt: replacedAt,
+      updatedAt: replacedAt,
+    };
+    const reviewA = {
+      id: `review:${assignmentA.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: assignmentA.id,
+      submissionId,
+      reviewerId: assignmentA.reviewerId,
+      scores: {},
+      comment: "Submitted review",
+      submittedAt: now,
+      version: 1,
+      planRevision: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Replacement plan",
+      status: "open" as const,
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 10 },
+      rounds: [],
+      version: 4,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      recordId: "rec00000000000100",
+      fields: {
+        "Application ID": plan.id,
+        "Rounds JSON": JSON.stringify(plan),
+      },
+    });
+    for (const [recordId, entity, entityType] of [
+      ["rec00000000000101", assignmentA, "evaluation_assignment"],
+      ["rec00000000000102", assignmentB, "evaluation_assignment"],
+      ["rec00000000000103", reviewA, "evaluation_review"],
+    ] as const) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        recordId,
+        fields: {
+          "Application ID": entity.id,
+          "Scores JSON": JSON.stringify({ ...entity, entityType }),
+        },
+      });
+    }
+
+    let rejectNextMutation = true;
+    const mutationTransport: AirtableTransport = {
+      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
+        if (
+          rejectNextMutation &&
+          request.method === "PATCH" &&
+          request.table === "Review Plans" &&
+          request.recordId === "rec00000000000100"
+        ) {
+          rejectNextMutation = false;
+          return { status: 503, headers: {}, body: {} as TBody };
+        }
+        return transport.request<TBody>(request);
+      },
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport: mutationTransport,
+    });
+    const scope = {
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      planVersion: assignmentA.planVersion,
+    };
+    const replacement = {
+      oldAssignmentId: assignmentA.id,
+      replacementReviewerId: assignmentC.reviewerId,
+      successorAssignment: assignmentC,
+      expectedAssignmentVersion: assignmentA.version,
+      reason: "Reviewer conflict disclosed after assignment.",
+    };
+
+    await expect(repository.replaceAssignment(scope, replacement)).rejects.toMatchObject({
+      status: 503,
+    });
+    await expect(repository.getAssignment(tenantId, assignmentA.id)).resolves.toMatchObject(
+      assignmentA,
+    );
+    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toBeNull();
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
+
+    const replaced = await repository.replaceAssignment(scope, replacement);
+    expect(replaced).toMatchObject({
+      scope,
+      replacedAssignment: {
+        ...assignmentA,
+        status: "superseded",
+        successorAssignmentId: assignmentC.id,
+        supersededReason: replacement.reason,
+        version: 2,
+        updatedAt: replacedAt,
+      },
+      successorAssignment: {
+        ...assignmentC,
+        predecessorAssignmentId: assignmentA.id,
+        successorAssignmentId: null,
+        supersededReason: null,
+      },
+      activeAssignments: [assignmentB, expect.objectContaining(assignmentC)],
+      history: [{ assignment: expect.objectContaining({ id: assignmentA.id }), review: reviewA }],
+    });
+    expect(replaced.successorAssignment).toMatchObject({
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+    });
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
+
+    await expect(
+      repository.applyAssignmentDistribution(scope, {
+        assignments: [replaced.successorAssignment],
+        expectedActiveVersions: [
+          { assignmentId: assignmentB.id, version: 1 },
+          { assignmentId: assignmentC.id, version: 1 },
+        ],
+        reason: "Organizer removed the completed reviewer.",
+      }),
+    ).rejects.toThrow("changed since the distribution was previewed");
+    await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
+      assignmentB,
+    );
+
+    const distributed = await repository.applyAssignmentDistribution(scope, {
+      assignments: [replaced.successorAssignment],
+      expectedActiveVersions: [
+        { assignmentId: assignmentB.id, version: assignmentB.version },
+        { assignmentId: assignmentC.id, version: assignmentC.version },
+      ],
+      reason: "Organizer removed the completed reviewer.",
+    });
+    expect(distributed.activeAssignments).toEqual([
+      expect.objectContaining({
+        id: assignmentC.id,
+        planVersion: 4,
+        rubricRevision: 7,
+        roundRevision: 3,
+      }),
+    ]);
+    expect(distributed.supersededAssignments).toEqual([
+      expect.objectContaining({
+        id: assignmentB.id,
+        status: "superseded",
+        supersededReason: "Organizer removed the completed reviewer.",
+        version: 3,
+      }),
+    ]);
+    await expect(
+      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
+    ).resolves.toMatchObject({
+      assignments: [expect.objectContaining({ id: assignmentC.id })],
+      reviews: [reviewA],
+    });
+    await expect(
+      repository.listReviewerWorkspaceRecords(tenantId, assignmentA.reviewerId, [eventId]),
+    ).resolves.toEqual({ assignments: [], reviews: [] });
+    await expect(repository.listAssignments(tenantId, planId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: assignmentA.id, status: "superseded" }),
+        expect.objectContaining({ id: assignmentB.id, status: "superseded" }),
+        expect.objectContaining({ id: assignmentC.id, status: "assigned" }),
+      ]),
+    );
+    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
+    const mutations = transport.requests.filter(
+      (request) =>
+        request.method === "PATCH" &&
+        request.table === "Evaluations" &&
+        request.recordId === undefined,
+    );
+    expect(mutations).toHaveLength(2);
+    expect(
+      mutations.every((request) => JSON.stringify(request.body).includes("performUpsert")),
+    ).toBe(true);
+  });
+
+  it("keeps a >10 assignment generation authoritative when the second materialization batch fails", async () => {
+    const tenantId = "tenant-generation";
+    const eventId = "event-generation";
+    const planId = "plan-generation";
+    const roundId = "round-generation";
+    const submissionId = "submission-generation";
+    const now = "2026-08-10T12:00:00.000Z";
+    const committedAt = "2026-08-10T12:15:00.000Z";
+    const transport = new FormulaRecordingTransport();
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Generation plan",
+      status: "open" as const,
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 20, maxAssignmentsPerReviewer: 20 },
+      rounds: [],
+      version: 3,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      recordId: "rec00000000000200",
+      fields: {
+        "Application ID": plan.id,
+        "Rounds JSON": JSON.stringify(plan),
+      },
+    });
+
+    const previousAssignments = Array.from({ length: 6 }, (_, index) => ({
+      id: `a-assignment-generation-${String(index).padStart(2, "0")}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId: `reviewer-old-${index}`,
+      status: "assigned" as const,
+      planVersion: 3,
+      rubricRevision: 5,
+      roundRevision: 2,
+      submissionRevision: 8,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    for (const [index, assignment] of previousAssignments.entries()) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        recordId: `rec${String(210 + index).padStart(14, "0")}`,
+        fields: {
+          "Application ID": assignment.id,
+          "Scores JSON": JSON.stringify({
+            ...assignment,
+            entityType: "evaluation_assignment",
+          }),
+        },
+      });
+    }
+    const historicalReview = {
+      id: `review:${previousAssignments[0]?.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: previousAssignments[0]?.id ?? "",
+      submissionId,
+      reviewerId: previousAssignments[0]?.reviewerId ?? "",
+      scores: {},
+      comment: "Historical review",
+      submittedAt: now,
+      version: 1,
+      planRevision: 3,
+      rubricRevision: 5,
+      roundRevision: 2,
+      submissionRevision: 8,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      recordId: "rec00000000000220",
+      fields: {
+        "Application ID": historicalReview.id,
+        "Scores JSON": JSON.stringify({
+          ...historicalReview,
+          entityType: "evaluation_review",
+        }),
+      },
+    });
+
+    const desiredAssignments = Array.from({ length: 5 }, (_, index) => ({
+      id: `z-assignment-generation-${String(index).padStart(2, "0")}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId: `reviewer-new-${index}`,
+      status: "assigned" as const,
+      planVersion: 3,
+      rubricRevision: 5,
+      roundRevision: 2,
+      submissionRevision: 8,
+      version: 1,
+      createdAt: committedAt,
+      updatedAt: committedAt,
+    }));
+    let materializationBatchCount = 0;
+    const secondBatchFailureTransport: AirtableTransport = {
+      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
+        if (
+          request.method === "PATCH" &&
+          request.table === "Evaluations" &&
+          request.recordId === undefined
+        ) {
+          materializationBatchCount += 1;
+          if (materializationBatchCount === 2) {
+            return { status: 503, headers: {}, body: {} as TBody };
+          }
+        }
+        return transport.request<TBody>(request);
+      },
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport: secondBatchFailureTransport,
+    });
+    const scope = {
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      planVersion: 3,
+    };
+
+    const result = await repository.applyAssignmentDistribution(scope, {
+      assignments: desiredAssignments,
+      expectedActiveVersions: previousAssignments.map((assignment) => ({
+        assignmentId: assignment.id,
+        version: assignment.version,
+      })),
+      reason: "Replace the full reviewer slate.",
+    });
+
+    expect(materializationBatchCount).toBe(2);
+    expect(result.activeAssignments).toEqual(desiredAssignments);
+    expect(result.supersededAssignments).toHaveLength(6);
+    expect(result.history).toEqual([
+      {
+        assignment: expect.objectContaining({
+          id: previousAssignments[0]?.id,
+          status: "superseded",
+        }),
+        review: historicalReview,
+      },
+    ]);
+
+    const listed = await repository.listAssignments(tenantId, planId);
+    expect(listed).toHaveLength(11);
+    expect(listed.filter((assignment) => assignment.status === "superseded")).toHaveLength(6);
+    expect(listed.filter((assignment) => assignment.status === "assigned")).toHaveLength(5);
+    await expect(
+      repository.getAssignment(tenantId, previousAssignments[0]?.id ?? ""),
+    ).resolves.toMatchObject({ status: "superseded", version: 2 });
+    await expect(
+      repository.getAssignment(tenantId, desiredAssignments[4]?.id ?? ""),
+    ).resolves.toEqual(desiredAssignments[4]);
+    await expect(
+      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
+    ).resolves.toMatchObject({
+      assignments: desiredAssignments,
+      reviews: [historicalReview],
+    });
+    await expect(
+      repository.listReviewerWorkspaceRecords(tenantId, desiredAssignments[4]?.reviewerId ?? "", [
+        eventId,
+      ]),
+    ).resolves.toEqual({
+      assignments: [desiredAssignments[4]],
+      reviews: [],
+    });
+    await expect(repository.getReview(tenantId, previousAssignments[0]?.id ?? "")).resolves.toEqual(
+      historicalReview,
+    );
+
+    const planPatch = transport.requests.find(
+      (request) =>
+        request.method === "PATCH" &&
+        request.table === "Review Plans" &&
+        request.recordId === "rec00000000000200",
+    );
+    const planFields = (
+      planPatch?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
+    )?.fields;
+    const storedPlan = JSON.parse(String(planFields?.["Rounds JSON"])) as {
+      readonly assignmentGenerationSnapshot?: {
+        readonly version: number;
+        readonly assignments: readonly unknown[];
+      };
+    };
+    expect(storedPlan.assignmentGenerationSnapshot).toMatchObject({
+      version: 1,
+      assignments: expect.arrayContaining([
+        expect.objectContaining({ id: desiredAssignments[4]?.id }),
+      ]),
+    });
+    expect(storedPlan.assignmentGenerationSnapshot?.assignments).toHaveLength(11);
+  });
+
+  it("persists tenant-scoped Airtable suggestions with atomic CAS resolution", async () => {
+    const tenantId = "tenant-suggestion";
+    const eventId = "event-suggestion";
+    const planId = "plan-suggestion";
+    const roundId = "round-suggestion";
+    const submissionId = "submission-suggestion";
+    const assignmentId = "assignment-suggestion";
+    const reviewerId = "reviewer-suggestion";
+    const now = "2026-08-10T12:00:00.000Z";
+    const later = "2026-08-10T12:10:00.000Z";
+    const transport = new FormulaRecordingTransport();
+    const assignment = {
+      id: assignmentId,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId,
+      status: "assigned" as const,
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      fields: {
+        "Application ID": assignment.id,
+        "Scores JSON": JSON.stringify({
+          ...assignment,
+          entityType: "evaluation_assignment",
+        }),
+      },
+    });
+    const candidate = {
+      id: "candidate-quality",
+      criterionId: "quality",
+      value: 4,
+      evidence: ["Clear problem statement"],
+      provenance: {
+        provider: "openai",
+        model: "gpt-5-mini",
+        generatedAt: now,
+        sourceReferences: ["submission:2", "rubric:7"],
+      },
+    };
+    const suggestion = {
+      id: "suggestion-quality",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId,
+      submissionId,
+      reviewerId,
+      rubricRevision: 7,
+      submissionRevision: 2,
+      planRevision: 4,
+      rubricId: "rubric-main",
+      candidates: { quality: [candidate] },
+      criterionCandidates: [candidate],
+      provenance: candidate.provenance,
+      status: "pending" as const,
+      version: 1,
+      history: [{ action: "generate" as const, actorId: null, at: now }],
+      audit: [{ action: "generate" as const, actorId: null, at: now }],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport,
+    });
+
+    await repository.putSuggestion(suggestion, null);
+    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(suggestion);
+    await expect(repository.getSuggestion("tenant-other", suggestion.id)).resolves.toBeNull();
+    await expect(repository.listSuggestions(tenantId, planId)).resolves.toEqual([suggestion]);
+
+    const resolvedSuggestion = {
+      ...suggestion,
+      status: "accepted" as const,
+      version: 2,
+      history: [
+        ...suggestion.history,
+        { action: "accept" as const, actorId: reviewerId, at: later },
+      ],
+      audit: [...suggestion.audit, { action: "accept" as const, actorId: reviewerId, at: later }],
+      updatedAt: later,
+    };
+    const resolvedAssignment = {
+      ...assignment,
+      status: "in_progress" as const,
+      version: 2,
+      updatedAt: later,
+    };
+    const review = {
+      id: `review:${assignmentId}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId,
+      submissionId,
+      reviewerId,
+      scores: {
+        quality: {
+          criterionId: "quality",
+          value: 4,
+          origin: "ai" as const,
+          evidence: candidate.evidence,
+          humanConfirmedBy: reviewerId,
+          suggestionId: suggestion.id,
+          suggestionStatus: "accepted" as const,
+          rubricRevision: 7,
+          submissionRevision: 2,
+          updatedAt: later,
+        },
+      },
+      comment: "",
+      submittedAt: null,
+      version: 1,
+      planRevision: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      createdAt: later,
+      updatedAt: later,
+    };
+
+    await expect(
+      repository.resolveSuggestion(
+        resolvedSuggestion,
+        suggestion.version,
+        resolvedAssignment,
+        assignment.version,
+        review,
+        null,
+      ),
+    ).resolves.toEqual({ suggestion: resolvedSuggestion, review });
+    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(
+      resolvedSuggestion,
+    );
+    await expect(repository.getAssignment(tenantId, assignmentId)).resolves.toEqual(
+      resolvedAssignment,
+    );
+    await expect(repository.getReview(tenantId, assignmentId)).resolves.toEqual(review);
+
+    await expect(
+      repository.resolveSuggestion(
+        resolvedSuggestion,
+        suggestion.version,
+        resolvedAssignment,
+        assignment.version,
+        review,
+        null,
+      ),
+    ).rejects.toThrow("Suggestion changed since it was loaded");
+    await expect(
+      repository.putSuggestion(
+        { ...resolvedSuggestion, eventId: "event-other", version: 3 },
+        resolvedSuggestion.version,
+      ),
+    ).rejects.toThrow("Suggestion changed since it was loaded");
+    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
+    const resolutionMutation = transport.requests.find(
+      (request) =>
+        request.method === "PATCH" &&
+        request.recordId === undefined &&
+        (request.body as { readonly records?: readonly unknown[] } | undefined)?.records?.length ===
+          3,
+    );
+    expect(resolutionMutation).toBeDefined();
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();
@@ -3193,6 +3925,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       new AirtableEvaluationRepository({ baseId: "base-test", transport }),
       database,
       queue,
+      testSenderAddresses,
     );
     const actor = {
       tenantId: "tenant-reminder",
@@ -3207,7 +3940,17 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         reviewerIds: ["reviewer-1"],
         assignmentIds: ["assignment-1"],
       }),
-    ).resolves.toEqual({ queued: 1, reviewerIds: ["reviewer-1"] });
+    ).resolves.toMatchObject({
+      queued: 1,
+      reviewerIds: ["reviewer-1"],
+      facts: [
+        {
+          reviewerId: "reviewer-1",
+          roundId: "round-1",
+          status: "queued",
+        },
+      ],
+    });
     await boundary.sendOutstandingReviewerReminders(actor, {
       planId: "plan-reminder",
       roundId: "round-1",
@@ -3219,633 +3962,56 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     expect([...outbox.values()][0]).toMatchObject({
       topic: "communications",
       state: "queued",
-    });
-  });
-});
-interface SpeakerOrganizerOutboxRow {
-  readonly id: string;
-  readonly tenantId: string;
-  readonly topic: string;
-  readonly deduplicationKey: string;
-  readonly payload: unknown;
-  state: string;
-}
-
-interface SpeakerOrganizerDatabaseState {
-  readonly memberships: Array<{ organization_id: string; role: string }>;
-  readonly verifiedEmails: Map<string, string>;
-  readonly outbox: Map<string, SpeakerOrganizerOutboxRow>;
-  readonly queueMessages: CloudflareOutboxMessage[];
-  readonly grants: Array<{
-    organization_id: string;
-    speaker_profile_id: string;
-    user_id: string;
-  }>;
-}
-
-function speakerOrganizerDatabase(input: {
-  readonly memberships?: readonly { organization_id: string; role: string }[];
-  readonly verifiedEmails?: readonly string[];
-}): {
-  readonly database: NonNullable<RuntimeBindings["DB"]>;
-  readonly state: SpeakerOrganizerDatabaseState;
-} {
-  const state: SpeakerOrganizerDatabaseState = {
-    memberships: [...(input.memberships ?? [])],
-    verifiedEmails: new Map(
-      (input.verifiedEmails ?? []).map((email) => [email.toLowerCase(), email]),
-    ),
-    outbox: new Map(),
-    queueMessages: [],
-    grants: [],
-  };
-  const database = {
-    prepare(query: string) {
-      return {
-        bind(...values: unknown[]) {
-          return {
-            async first<T>() {
-              if (query.includes("FROM organization_memberships")) {
-                const membership = state.memberships.find(
-                  (candidate) => candidate.organization_id === String(values[0]),
-                );
-                return (membership ?? null) as T | null;
-              }
-              if (query.includes("FROM auth_users")) {
-                const email = state.verifiedEmails.get(String(values[0]).toLowerCase());
-                if (query.includes("SELECT id")) {
-                  return (email === undefined ? null : { id: "account-speaker" }) as T | null;
-                }
-                return (email === undefined ? null : { email }) as T | null;
-              }
-              if (query.includes("SELECT state FROM outbox_jobs")) {
-                return (
-                  state.outbox.get(String(values[0]))?.state === undefined
-                    ? null
-                    : { state: state.outbox.get(String(values[0]))?.state }
-                ) as T | null;
-              }
-              return null;
-            },
-            async all<T>() {
-              if (query.includes("FROM auth_users") && query.includes("SELECT id")) {
-                const email = state.verifiedEmails.get(String(values[0]).toLowerCase());
-                return {
-                  results: email === undefined ? [] : [{ id: "account-speaker" }],
-                } as unknown as { results: T[] };
-              }
-              return { results: [] as T[] };
-            },
-            async run() {
-              if (query.includes("INSERT INTO speaker_grants")) {
-                const [organizationId, speakerProfileId, userId] = values;
-                state.grants.push({
-                  organization_id: String(organizationId),
-                  speaker_profile_id: String(speakerProfileId),
-                  user_id: String(userId),
-                });
-                return { success: true, meta: { changes: 1 } };
-              }
-              if (query.includes("INSERT INTO outbox_jobs")) {
-                const [id, tenantId, topic, deduplicationKey, payloadJson] = values;
-                const duplicate = [...state.outbox.values()].some(
-                  (row) =>
-                    row.tenantId === String(tenantId) &&
-                    row.topic === String(topic) &&
-                    row.deduplicationKey === String(deduplicationKey),
-                );
-                if (duplicate) return { success: true, meta: { changes: 0 } };
-                state.outbox.set(String(id), {
-                  id: String(id),
-                  tenantId: String(tenantId),
-                  topic: String(topic),
-                  deduplicationKey: String(deduplicationKey),
-                  payload: JSON.parse(String(payloadJson)) as unknown,
-                  state: "pending",
-                });
-                return { success: true, meta: { changes: 1 } };
-              }
-              if (query.includes("UPDATE outbox_jobs SET state = 'queued'")) {
-                const row = state.outbox.get(String(values[1]));
-                if (row !== undefined) row.state = "queued";
-                return {
-                  success: true,
-                  meta: { changes: row === undefined ? 0 : 1 },
-                };
-              }
-              return { success: true, meta: { changes: 1 } };
-            },
-          };
+      payload: {
+        effect: "send_email",
+        reviewerId: "reviewer-1",
+        planId: "plan-reminder",
+        roundId: "round-1",
+        payload: {
+          to: ["speaker@example.test"],
+          subject: "Review reminder: Review plan",
         },
-      };
-    },
-    async batch() {
-      return [];
-    },
-  } as unknown as NonNullable<RuntimeBindings["DB"]>;
-  return { database, state };
-}
-
-function seedSpeakerOrganizerFixture(transport: FakeAirtableTransport): void {
-  transport.seed({
-    baseId: "base-test",
-    table: "Events",
-    fields: {
-      "Application ID": "event-speaker",
-      "Settings JSON": JSON.stringify({
-        id: "event-speaker",
-        organizationId: "ai-engineer",
-        eventId: "event-speaker",
-        name: "Speaker Event",
-      }),
-    },
-  });
-  transport.seed({
-    baseId: "base-test",
-    table: "Submissions",
-    fields: {
-      "Application ID": "submission-speaker",
-      "Answers JSON": JSON.stringify({
-        id: "submission-speaker",
-        organizationId: "ai-engineer",
-        tenantId: "ai-engineer",
-        eventId: "event-speaker",
-        formId: "form-speaker",
-        title: "Reliable Systems",
-        status: "accepted",
-        participants: [
-          {
-            id: "participant-speaker",
-            firstName: "Verified",
-            lastName: "Speaker",
-            email: "speaker@example.test",
-            role: "primary",
-          },
-        ],
-        updatedAt: "2026-08-09T00:00:00.000Z",
-      }),
-    },
-  });
-  transport.seed({
-    baseId: "base-test",
-    table: "Submissions",
-    fields: {
-      "Application ID": "submission-cross-tenant",
-      "Answers JSON": JSON.stringify({
-        id: "submission-cross-tenant",
-        organizationId: "other-tenant",
-        tenantId: "other-tenant",
-        eventId: "event-speaker",
-        formId: "form-speaker",
-        title: "Cross tenant",
-        status: "accepted",
-        participants: [{ id: "participant-cross", firstName: "Cross", lastName: "Tenant" }],
-        updatedAt: "2026-08-09T00:00:00.000Z",
-      }),
-    },
-  });
-  transport.seed({
-    baseId: "base-test",
-    table: "Speaker Profiles",
-    fields: {
-      "Application ID": "speaker-profile:event-speaker:participant-speaker",
-      Biography: JSON.stringify({
-        id: "speaker-profile:event-speaker:participant-speaker",
-        eventId: "event-speaker",
-        participantId: "participant-speaker",
-        displayName: "Verified Speaker",
-        email: "speaker@example.test",
-        version: 1,
-        updatedAt: "2026-08-09T00:00:00.000Z",
-      }),
-    },
-  });
-}
-
-describe("production organizer speaker composition", () => {
-  function fixture() {
-    const transport = new FakeAirtableTransport();
-    seedSpeakerOrganizerFixture(transport);
-    const { database, state } = speakerOrganizerDatabase({
-      memberships: [{ organization_id: "ai-engineer", role: "owner" }],
-      verifiedEmails: ["speaker@example.test"],
-    });
-    const queue = {
-      async send(message: CloudflareOutboxMessage) {
-        state.queueMessages.push(message);
-      },
-    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
-    const repository = new AirtableSpeakerRepository({
-      baseId: "base-test",
-      transport,
-      database,
-    });
-    return { transport, database, state, queue, repository };
-  }
-
-  it("allows only event-bound owner/admin memberships and excludes reviewer and cross-tenant records", async () => {
-    const { state, repository } = fixture();
-    const membership = state.memberships[0];
-    if (membership === undefined) throw new Error("Speaker organizer membership fixture is empty.");
-    await expect(
-      repository.getOrganizerAccessScope("event-speaker", "organizer-speaker"),
-    ).resolves.toEqual({
-      tenantId: "ai-engineer",
-      eventId: "event-speaker",
-      role: "owner",
-      submissionIds: ["submission-speaker"],
-      participantIds: ["participant-speaker"],
-    });
-    membership.role = "admin";
-    await expect(
-      repository.getOrganizerAccessScope("event-speaker", "organizer-speaker"),
-    ).resolves.toMatchObject({
-      tenantId: "ai-engineer",
-      role: "admin",
-    });
-    membership.role = "reviewer";
-    await expect(
-      repository.getOrganizerAccessScope("event-speaker", "organizer-speaker"),
-    ).resolves.toBeNull();
-    state.memberships.splice(0, 1, {
-      organization_id: "other-tenant",
-      role: "owner",
-    });
-    await expect(
-      repository.getOrganizerAccessScope("event-speaker", "organizer-speaker"),
-    ).resolves.toBeNull();
-  });
-
-  it("persists organizer-created speaker tasks with optimistic updates", async () => {
-    const { repository } = fixture();
-    const task = {
-      id: "task-speaker-upload",
-      eventId: "event-speaker",
-      submissionId: "submission-speaker",
-      participantId: "participant-speaker",
-      type: "upload" as const,
-      owner: "speaker" as const,
-      title: "Upload presentation",
-      status: "not_started" as const,
-      dependencyIds: [],
-      reminderOffsetsMinutes: [],
-      allowedMimeTypes: ["application/pdf"],
-      maxBytes: 5_000_000,
-      assigneeIds: ["participant-speaker"],
-      version: 1,
-      updatedAt: "2026-08-09T00:00:00.000Z",
-    };
-    await expect(
-      repository.createTask({
-        task,
-        expectedVersion: null,
-        actorAccountId: "organizer-speaker",
-      }),
-    ).resolves.toEqual({ ok: true, value: task });
-    await expect(
-      repository.createTask({
-        task,
-        expectedVersion: null,
-        actorAccountId: "organizer-speaker",
-      }),
-    ).resolves.toEqual({ ok: false, reason: "version_conflict" });
-
-    const updated = {
-      ...task,
-      title: "Upload final presentation",
-      version: 2,
-      updatedAt: "2026-08-10T00:00:00.000Z",
-    };
-    await expect(
-      repository.updateTask({
-        task: updated,
-        expectedVersion: 1,
-        actorAccountId: "organizer-speaker",
-      }),
-    ).resolves.toEqual({ ok: true, value: updated });
-    await expect(repository.getTask(task.eventId, task.id)).resolves.toEqual(updated);
-  });
-
-  it("resolves public CFP submission IDs to canonical speaker roster records", async () => {
-    const { repository, transport } = fixture();
-    const rosterEntry = {
-      id: "roster-speaker",
-      tenantId: "ai-engineer",
-      eventId: "event-speaker",
-      submissionId: "speaker-submission:submission-speaker",
-      participantId: "participant-speaker",
-      displayName: "Verified Speaker",
-      role: "primary" as const,
-      status: "active" as const,
-      version: 1,
-      createdAt: "2026-08-09T00:00:00.000Z",
-      updatedAt: "2026-08-09T00:00:00.000Z",
-    };
-    transport.seed({
-      baseId: "base-test",
-      table: "Session Roster",
-      fields: {
-        "Application ID": rosterEntry.id,
-        "Members JSON": JSON.stringify(rosterEntry),
       },
     });
-
-    await expect(repository.listRoster("event-speaker", "submission-speaker")).resolves.toEqual([
+    const row = [...outbox.values()][0];
+    if (row === undefined) throw new Error("Expected a durable reminder outbox row.");
+    const reminderPayload = row.payload as {
+      payload?: { idempotencyKey?: string };
+    };
+    const reminderIdempotencyKey = reminderPayload.payload?.idempotencyKey;
+    expect(reminderIdempotencyKey).toMatch(/^evaluation-reminder:/);
+    expect(reminderIdempotencyKey?.length).toBeLessThanOrEqual(128);
+    expect(
+      evaluationReminderAttemptKey("evaluation-reminder:plan:round:reviewer", [
+        { state: "dead-letter" },
+      ]),
+    ).toBe("evaluation-reminder:plan:round:reviewer:retry-1");
+    expect(
+      evaluationReminderAttemptKey("evaluation-reminder:plan:round:reviewer", [
+        { state: "dead-letter" },
+        { state: "failed" },
+      ]),
+    ).toBe("evaluation-reminder:plan:round:reviewer:retry-2");
+    expect(
+      evaluationReminderAttemptKey("evaluation-reminder:plan:round:reviewer", [
+        { state: "delivered" },
+      ]),
+    ).toBe("evaluation-reminder:plan:round:reviewer");
+    expect(EVALUATION_REMINDER_ATTEMPTS_SQL).not.toContain(" LIKE ");
+    expect(EVALUATION_REMINDER_ATTEMPTS_SQL).toContain("instr(deduplication_key");
+    row.state = "delivered";
+    row.completedAt = "2026-08-13T12:00:01.000Z";
+    row.updatedAt = row.completedAt;
+    await expect(
+      boundary.listOutstandingReviewerReminderDeliveries(actor, { planId: "plan-reminder" }),
+    ).resolves.toMatchObject([
       {
-        id: rosterEntry.id,
-        organizationId: "ai-engineer",
-        eventId: rosterEntry.eventId,
-        submissionId: rosterEntry.submissionId,
-        participantId: rosterEntry.participantId,
-        displayName: rosterEntry.displayName,
-        role: rosterEntry.role,
-        status: rosterEntry.status,
-        version: rosterEntry.version,
-        createdAt: rosterEntry.createdAt,
-        updatedAt: rosterEntry.updatedAt,
+        reviewerId: "reviewer-1",
+        roundId: "round-1",
+        status: "delivered",
+        completedAt: "2026-08-13T12:00:01.000Z",
       },
     ]);
-  });
-
-  it("keeps invitation preview non-mutating, queues verified invitations once, and never uses host addresses", async () => {
-    const { database, queue, state, transport } = fixture();
-    const bindings = productionBindings(transport, database);
-    const agendaCoordinator = bindings.AGENDA_COORDINATOR;
-    const privateFiles = bindings.PRIVATE_FILES;
-    if (agendaCoordinator === undefined || privateFiles === undefined) {
-      throw new Error("Production Cloudflare bindings are not mounted.");
-    }
-    const dependencies = createAirtableDependencies({
-      authenticator: { authenticate: async () => null },
-      baseId: "base-test",
-      transport,
-      database,
-      agendaCoordinator,
-      privateFiles,
-      outboxQueue: queue,
-      webOrigin: "https://example.test",
-    });
-    const before = transport.requests.length;
-    const speaker = dependencies.speaker;
-    if (speaker === undefined) throw new Error("Production speaker dependencies are not mounted.");
-    await expect(
-      speaker.service.previewOrganizerSpeakerInvitations(
-        "ai-engineer",
-        "event-speaker",
-        "organizer-speaker",
-        ["participant-speaker"],
-      ),
-    ).resolves.toEqual([
-      {
-        participantId: "participant-speaker",
-        recipientEmail: "speaker@example.test",
-        state: "ready",
-      },
-    ]);
-    expect(transport.requests.slice(before).every((request) => request.method === "GET")).toBe(
-      true,
-    );
-    const first = await speaker.service.sendOrganizerSpeakerInvitations({
-      organizationId: "ai-engineer",
-      eventId: "event-speaker",
-      accountId: "organizer-speaker",
-      participantIds: ["participant-speaker"],
-      templateId: "speaker-invitation",
-      idempotencyKey: "speaker-invitation-key",
-    });
-    const second = await speaker.service.sendOrganizerSpeakerInvitations({
-      organizationId: "ai-engineer",
-      eventId: "event-speaker",
-      accountId: "organizer-speaker",
-      participantIds: ["participant-speaker"],
-      templateId: "speaker-invitation",
-      idempotencyKey: "speaker-invitation-key",
-    });
-    expect(first).toEqual(second);
-    expect(first).toMatchObject({
-      status: "queued",
-      recipientEmail: "speaker@example.test",
-    });
-    expect(state.outbox.size).toBe(1);
-    expect(state.queueMessages).toHaveLength(1);
-    const payload = [...state.outbox.values()][0]?.payload;
-    expect(payload).toMatchObject({
-      from: "speakers@sessionboard.namuh.co",
-      to: ["speaker@example.test"],
-    });
-    expect(JSON.stringify(payload)).not.toContain("foreverbrowsing.com");
-    const delivery = new AirtableSpeakerReminderDeliveryAdapter(database, queue);
-    await expect(
-      delivery.enqueueInvitation({
-        organizationId: "ai-engineer",
-        eventId: "event-speaker",
-        participantId: "participant-speaker",
-        recipientEmail: "host@foreverbrowsing.com",
-        templateId: "speaker-invitation",
-        idempotencyKey: "host-invitation-key",
-        actorAccountId: "organizer-speaker",
-      }),
-    ).resolves.toEqual({ status: "failed" });
-    expect(state.queueMessages).toHaveLength(1);
-  });
-  it("serves an empty canonical Airtable roster, creates Priya by participant email, and reloads scoped projections", async () => {
-    const transport = new FakeAirtableTransport();
-    const eventId = "event-priya";
-    const submissionId = "submission-priya";
-    const canonicalSubmissionId = `speaker-submission:${submissionId}`;
-    transport.seed({
-      baseId: "base-test",
-      table: "Events",
-      fields: {
-        "Application ID": eventId,
-        "Settings JSON": JSON.stringify({
-          id: eventId,
-          organizationId: "ai-engineer",
-          eventId,
-          name: "Priya event",
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Submissions",
-      fields: {
-        "Application ID": submissionId,
-        "Answers JSON": JSON.stringify({
-          id: submissionId,
-          organizationId: "ai-engineer",
-          tenantId: "ai-engineer",
-          eventId,
-          formId: "form-priya",
-          title: "Priya session",
-          status: "accepted",
-          participants: [
-            {
-              id: "participant-priya",
-              firstName: "Priya",
-              lastName: "Raman",
-              email: "priya@example.test",
-              role: "primary",
-              biography: "Platform engineer",
-              answers: {},
-            },
-          ],
-          updatedAt: "2026-08-09T00:00:00.000Z",
-        }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Submissions",
-      fields: {
-        "Application ID": canonicalSubmissionId,
-        "Answers JSON": JSON.stringify({
-          id: canonicalSubmissionId,
-          entityType: "speaker_submission",
-          eventId,
-          title: "Priya session",
-          status: "accepted",
-          participantIds: ["participant-priya"],
-          updatedAt: "2026-08-09T00:00:00.000Z",
-        }),
-      },
-    });
-    const { database, state } = speakerOrganizerDatabase({
-      memberships: [{ organization_id: "ai-engineer", role: "owner" }],
-      verifiedEmails: ["priya@example.test"],
-    });
-    const bindings = productionBindings(transport, database);
-    const agendaCoordinator = bindings.AGENDA_COORDINATOR;
-    const privateFiles = bindings.PRIVATE_FILES;
-    const outboxQueue = bindings.OUTBOX_QUEUE;
-    if (
-      agendaCoordinator === undefined ||
-      privateFiles === undefined ||
-      outboxQueue === undefined
-    ) {
-      throw new Error("Production Cloudflare bindings are not mounted.");
-    }
-    const principal = {
-      kind: "user" as const,
-      sessionId: "session-organizer",
-      userId: "organizer-speaker",
-      email: "organizer@example.test",
-      memberships: [{ organizationId: "ai-engineer", role: "owner" as const }],
-      speakerGrants: [],
-    };
-    const runtimeDependencies = createAirtableDependencies({
-      authenticator: { authenticate: async () => principal },
-      baseId: "base-test",
-      transport,
-      database,
-      agendaCoordinator,
-      privateFiles,
-      outboxQueue,
-      webOrigin: "https://example.test",
-    });
-    const speaker = runtimeDependencies.speaker;
-    if (speaker === undefined) {
-      throw new Error("Production speaker dependencies were not composed.");
-    }
-    const app = createApp({
-      authenticator: { authenticate: async () => principal },
-      speaker,
-    });
-    const env = { APP_ENV: "production", WEB_ORIGIN: "https://example.test" };
-    const path = `/api/admin/organizations/ai-engineer/events/${eventId}/speakers`;
-    const initial = await app.request(path, undefined, env);
-    expect(initial.status).toBe(200);
-    expect(await initial.json()).toEqual({
-      data: { organizationId: "ai-engineer", eventId, speakers: [] },
-    });
-
-    const created = await app.request(
-      path,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          displayName: "Priya Raman",
-          email: "PRIYA@example.test",
-          jobTitle: "Principal Engineer",
-          company: "Latticework Systems",
-          biography: "Builds reliable developer platforms.",
-          socialLinks: { linkedin: "https://linkedin.com/in/priya" },
-          status: "accepted",
-        }),
-      },
-      env,
-    );
-    expect(created.status).toBe(201);
-    const createdPayload = (await created.json()) as {
-      data: {
-        organizationId: string;
-        eventId: string;
-        speakers: readonly Record<string, unknown>[];
-      };
-    };
-    expect(createdPayload.data).toMatchObject({
-      organizationId: "ai-engineer",
-      eventId,
-    });
-    expect(createdPayload.data.speakers).toHaveLength(1);
-    expect(createdPayload.data.speakers[0]).toMatchObject({
-      participantId: "participant-priya",
-      email: "priya@example.test",
-      jobTitle: "Principal Engineer",
-      company: "Latticework Systems",
-      status: "accepted",
-      sessions: [
-        {
-          submissionId: canonicalSubmissionId,
-          title: "Priya session",
-          status: "accepted",
-        },
-      ],
-    });
-    expect(createdPayload.data.speakers[0]).not.toHaveProperty("objectKey");
-    expect(transport.requests.some((request) => request.table === "Session Roster")).toBe(true);
-    expect(transport.requests.some((request) => request.table === "Speaker Roster")).toBe(false);
-    expect(state.grants).toEqual([
-      {
-        organization_id: "ai-engineer",
-        speaker_profile_id: "speaker-profile:event-priya:participant-priya",
-        user_id: "account-speaker",
-      },
-    ]);
-
-    const reloaded = await app.request(path, undefined, env);
-    expect(reloaded.status).toBe(200);
-    const reloadedPayload = (await reloaded.json()) as {
-      data: { speakers: readonly Record<string, unknown>[] };
-    };
-    expect(reloadedPayload.data.speakers).toHaveLength(1);
-    expect(reloadedPayload.data.speakers[0]?.sessions).toEqual([
-      {
-        submissionId: canonicalSubmissionId,
-        title: "Priya session",
-        status: "accepted",
-      },
-    ]);
-    expect(reloadedPayload.data.speakers[0]).toMatchObject({
-      participantId: "participant-priya",
-      status: "accepted",
-      sessions: [{ submissionId: canonicalSubmissionId }],
-    });
-    expect(reloadedPayload.data.speakers[0]).not.toHaveProperty("objectKey");
-
-    const wrongTenant = await app.request(
-      `/api/admin/organizations/other-tenant/events/${eventId}/speakers`,
-      undefined,
-      env,
-    );
-    const wrongEvent = await app.request(
-      "/api/admin/organizations/ai-engineer/events/other-event/speakers",
-      undefined,
-      env,
-    );
-    expect(wrongTenant.status).toBe(404);
-    expect(wrongEvent.status).toBe(404);
   });
 });
 describe("production communication repository composition", () => {
@@ -3945,9 +4111,9 @@ describe("production communication repository composition", () => {
     const templateRequest = transport.requests.find(
       (request) => request.method === "GET" && request.table === "Email Templates",
     );
-    expect(String(templateRequest?.query?.filterByFormula)).toContain("FIND(");
-    expect(String(templateRequest?.query?.filterByFormula)).toContain("{Settings JSON}");
-    expect(String(templateRequest?.query?.filterByFormula)).toContain(eventId);
+    expect(String(templateRequest?.query?.filterByFormula)).toBe(
+      `AND({Organization ID}='${tenantId}',{Event ID}='${eventId}',{Purpose}='organizer_group_email')`,
+    );
 
     transport.requests.length = 0;
     const service = new CommunicationService(repository, undefined, {

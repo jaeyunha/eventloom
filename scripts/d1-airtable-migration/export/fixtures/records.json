@@ -1,0 +1,38 @@
+{
+  "tblOrganizations": [
+    {
+      "id": "recOrg",
+      "createdTime": "2026-01-01T00:00:00.000Z",
+      "fields": { "Name": "Acme", "Application ID": "org-acme" }
+    }
+  ],
+  "tblEvents": [
+    {
+      "id": "recEvent",
+      "createdTime": "2026-01-02T00:00:00.000Z",
+      "fields": { "Name": "Summit", "Organization": ["recOrg"], "Application ID": "event-summit" }
+    }
+  ],
+  "tblSessions": [
+    {
+      "id": "recSessionB",
+      "createdTime": "2026-01-04T00:00:00.000Z",
+      "fields": {
+        "Title": "Closing",
+        "Application ID": "session-b",
+        "Event": ["recEvent"],
+        "Organization ID": "org-acme"
+      }
+    },
+    {
+      "id": "recSessionA",
+      "createdTime": "2026-01-03T00:00:00.000Z",
+      "fields": {
+        "Title": "Opening",
+        "Application ID": "session-a",
+        "Event": ["recEvent"],
+        "Organization ID": "org-acme"
+      }
+    }
+  ]
+}

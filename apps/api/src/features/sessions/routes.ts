@@ -2,7 +2,12 @@ import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { AuthAccessError, type AuthPrincipal } from "../auth/types";
 import { type SessionService, SessionServiceError } from "./service";
-import type { RestoreSessionInput, SessionActor, SessionListQuery } from "./types";
+import {
+  type RestoreSessionInput,
+  type SessionActor,
+  type SessionListQuery,
+  sessionContentStatuses,
+} from "./types";
 
 export interface SessionRouteEnvironment {
   Variables: {
@@ -48,6 +53,7 @@ export type SessionRouteService = Pick<
   | "getSettings"
   | "updateSettings"
   | "listAudit"
+  | "getPublishedSessionContent"
   | "getAgendaCatalog"
 >;
 
@@ -61,7 +67,11 @@ type ErrorStatus = 400 | 401 | 403 | 404 | 409;
 const identifier = z.string().trim().min(1).max(128);
 const expectedVersion = z.number().int().positive();
 const speakerReference = z
-  .object({ id: identifier, role: z.string().trim().min(1).max(64).optional() })
+  .object({
+    id: identifier,
+    displayName: z.string().trim().min(1).max(200).optional(),
+    role: z.string().trim().min(1).max(64).optional(),
+  })
   .strict();
 const sessionCreate = z
   .object({
@@ -87,6 +97,7 @@ const sessionUpdate = sessionCreate
   .extend({
     expectedVersion,
     title: z.string().trim().min(1).max(300).optional(),
+    contentStatus: z.enum(sessionContentStatuses).optional(),
     durationMinutes: z.number().int().positive().max(1_440).optional(),
   })
   .strict();
@@ -338,6 +349,17 @@ export function createSessionAdminRoutes(
     organizer(context, organizationId);
     return context.json({
       data: await dependencies.service.getAgendaCatalog(
+        organizationId,
+        routeParam(context, "eventId"),
+      ),
+    });
+  });
+
+  routes.get("/published-content", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    organizer(context, organizationId);
+    return context.json({
+      data: await dependencies.service.getPublishedSessionContent(
         organizationId,
         routeParam(context, "eventId"),
       ),

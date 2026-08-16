@@ -1,85 +1,140 @@
 "use client";
 
+import { uploadMimeTypeLabels } from "@eventloom/contracts";
+import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  type CSSProperties,
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
+import { Textarea } from "@/components/ui/textarea";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import {
+  deadlineAfterEventWarning,
+  deadlineTemporalPolicy,
+  type SpeakerEventTemporalContext,
+} from "@/features/speakers/speaker-temporal-policy";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createDeliverablesApi,
   type DeliverableAsset,
   type DeliverableAssetHistoryEntry,
   type DeliverableAssetKind,
   type DeliverableComment,
+  type DeliverableContentHistoryEntry,
   type DeliverableDownloadGrant,
   type DeliverableExportDownload,
   type DeliverableExportInput,
+  type DeliverableMatrixItem,
+  type DeliverableMatrixStatus,
   type DeliverableReviewInput,
   type DeliverableReviewState,
   type DeliverableSession,
+  type DeliverableSpeakerContentHistoryEntry,
+  type DeliverableSpeakerContentRecord,
   type DeliverableSpeakerProfile,
   type DeliverablesApi,
   DeliverablesApiError,
   type DeliverableTask,
   type DeliverableTaskInput,
+  type DeliverableTaskMatrix,
   deliverableAssetKinds,
 } from "./api";
+import styles from "./deliverables-workspace.module.css";
+import { type FileFamilyProjection, projectFileFamilies } from "./file-family-model";
+import { FileLibrary } from "./file-library";
+import { FileReviewDrawer } from "./file-review-drawer";
+import {
+  type RequestFileFormat,
+  requestFilePolicyFor,
+  requestFilePolicyMimeTypes,
+} from "./request-file-policy";
 
-const pageStyle: CSSProperties = {
-  minHeight: "100dvh",
-  padding: "2rem 1rem 4rem",
-  background: "var(--color-canvas, #f5f6f9)",
-};
-const contentStyle: CSSProperties = { width: "min(100%, 86rem)", margin: "0 auto" };
-const cardStyle: CSSProperties = {
-  padding: "1.25rem",
-  border: "1px solid var(--color-border, #dfe2e8)",
-  borderRadius: "0.875rem",
-  background: "var(--color-surface, #fff)",
-  boxShadow: "var(--shadow-card, 0 8px 24px rgb(29 34 51 / 6%))",
-};
-const fieldStyle: CSSProperties = { display: "grid", gap: "0.35rem" };
-const inputStyle: CSSProperties = {
-  width: "100%",
-  padding: "0.6rem 0.7rem",
-  border: "1px solid var(--color-border-strong, #cdd1da)",
-  borderRadius: "0.5rem",
-  font: "inherit",
-};
-const buttonStyle: CSSProperties = {
-  padding: "0.62rem 0.9rem",
-  border: "1px solid var(--color-brand, #5065e8)",
-  borderRadius: "0.5rem",
-  background: "var(--color-brand, #5065e8)",
-  color: "white",
-  font: "inherit",
-  fontWeight: 700,
-  cursor: "pointer",
-};
-const secondaryButtonStyle: CSSProperties = {
-  ...buttonStyle,
-  borderColor: "var(--color-border-strong, #cdd1da)",
-  background: "var(--color-surface, #fff)",
-  color: "var(--color-ink, #25272d)",
-};
-const mutedStyle: CSSProperties = { color: "var(--color-muted, #697181)" };
-const rowStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.65rem",
-  alignItems: "center",
-};
-const gridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))",
-  gap: "0.9rem",
-};
-const dangerStyle: CSSProperties = { ...cardStyle, borderColor: "#b42318" };
+const pageClass = styles.workspace;
+const sectionClass = styles.section;
+const fieldClass = styles.field;
+const mutedClass = styles.muted;
+const stackClass = styles.stack;
+const clusterClass = styles.cluster;
+const gridClass = styles.grid;
+const dangerClass = styles.danger;
+const tableWrapClass = styles.tableWrap;
+const statusClass = styles.status;
+const bytesPerMegabyte = 1024 * 1024;
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
+export function deliverablesCoreCacheKey(
+  organizationId: string,
+  eventId: string,
+  mode: DeliverablesWorkspaceMode,
+): string {
+  return `organization:${organizationId.trim()}:event:${eventId.trim()}:deliverables:${mode}:core`;
+}
+
+export function deliverablesCoreCacheTags(
+  organizationId: string,
+  eventId: string,
+  mode: DeliverablesWorkspaceMode,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}:${mode}`,
+  ];
+}
+
+export function deliverablesCoreCacheInvalidationTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}`,
+  ];
+}
 
 export type DeliverablesExportUiStatus =
   | "idle"
@@ -92,19 +147,70 @@ export type DeliverablesExportUiStatus =
 export const deliverablesExportStatusLabels: Readonly<Record<DeliverablesExportUiStatus, string>> =
   {
     idle: "",
-    queued: "The authorized ZIP request is queued.",
-    preparing: "The server request is being prepared.",
-    generating: "The server is generating the ZIP from selected latest assets.",
-    ready: "The server returned a validated ZIP response.",
+    queued: "The browser queued the authorized ZIP request.",
+    preparing: "The browser is preparing the scoped export request.",
+    generating:
+      "The export request is generating no fabricated progress; the API exposes no server job ID.",
+    ready: "The server returned a ZIP with a validated authoritative manifest.",
     "download-started": "The browser download has started.",
     failure: "The authorized ZIP request failed.",
   };
+export const deliverablesExportActionLabels: Readonly<Record<DeliverablesExportUiStatus, string>> =
+  {
+    idle: "Download selected files ZIP",
+    queued: "ZIP export queued",
+    preparing: "Preparing ZIP…",
+    generating: "Generating ZIP…",
+    ready: "Inspect authoritative manifest",
+    "download-started": "Download started",
+    failure: "Retry ZIP export",
+  };
+
+export type DeliverablesOperationKey =
+  | "task-create"
+  | "asset-comment"
+  | "asset-download"
+  | "asset-review"
+  | "reminder-send"
+  | "biography-save"
+  | "speaker-content-restore"
+  | "headshot-replace"
+  | "deliverables-export"
+  | "files-export";
+export type DeliverablesOperationPhase = "pending" | "succeeded" | "failed";
+export interface DeliverablesOperationState {
+  readonly key: DeliverablesOperationKey;
+  readonly label: string;
+  readonly phase: DeliverablesOperationPhase;
+  readonly message: string;
+}
+
+export type DeliverableSpeakerContentHistoryStatus = "loading" | "empty" | "success" | "error";
+
+export interface DeliverableSpeakerContentHistoryState {
+  readonly status: DeliverableSpeakerContentHistoryStatus;
+  readonly entries: readonly DeliverableSpeakerContentHistoryEntry[];
+  readonly error?: string;
+}
 
 export interface DeliverablesSnapshot {
   readonly sessions: readonly DeliverableSession[];
   readonly tasks: readonly DeliverableTask[];
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly matrix?: DeliverableTaskMatrix;
+  readonly temporalContext?: SpeakerEventTemporalContext;
+  readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
+}
+
+export async function authorizeContentCollectionNavigationSnapshot(
+  api: Pick<DeliverablesApi, "listDeliverableMatrix">,
+  snapshot: DeliverablesSnapshot,
+  signal?: AbortSignal,
+): Promise<DeliverablesSnapshot | undefined> {
+  if (api.listDeliverableMatrix === undefined) return undefined;
+  await api.listDeliverableMatrix(signal === undefined ? {} : { signal });
+  return snapshot;
 }
 
 export interface DeliverablesWorkspaceProps {
@@ -123,6 +229,7 @@ export interface DeliverableRow {
   readonly speakerLabel: string;
   readonly assets: readonly DeliverableAsset[];
   readonly currentAsset: DeliverableAsset | undefined;
+  readonly status: DeliverableMatrixStatus;
 }
 
 export interface DeliverablesWorkspaceViewProps {
@@ -133,32 +240,40 @@ export interface DeliverablesWorkspaceViewProps {
   readonly tasks: readonly DeliverableTask[];
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
+  readonly matrixItems?: readonly DeliverableMatrixItem[];
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly loading?: boolean;
   readonly busy?: boolean;
   readonly error?: string | null;
   readonly statusMessage?: string | null;
   readonly capabilityMessages?: readonly string[];
-  readonly apiConfigured?: boolean;
+  readonly operationStates?: readonly DeliverablesOperationState[];
+  readonly selectedSessionId?: string;
+  readonly sessionHistory?: readonly DeliverableContentHistoryEntry[];
+  readonly sessionHistoryError?: string | null;
+  readonly onSelectSession?: (sessionId: string) => void;
   readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
   readonly onInspectAsset?: (assetId: string) => void;
+  readonly onCloseAsset?: () => void;
   readonly selectedAssetId?: string | null;
   readonly assetHistory?: readonly DeliverableAssetHistoryEntry[];
   readonly comments?: readonly DeliverableComment[];
   readonly loadingAssetDetails?: boolean;
+  readonly assetHistoryError?: string | null;
+  readonly commentsError?: string | null;
+  readonly loadingSessionHistories?: boolean;
   readonly onAddComment?: (input: {
     readonly assetId: string;
     readonly body: string;
+    readonly expectedVersion: number;
   }) => Promise<void>;
   readonly onDownloadVersion?: (assetId: string) => Promise<void>;
   readonly onExportDeliverables?: (input: DeliverableExportInput) => Promise<void>;
   readonly onExportFiles?: (
     input: DeliverableExportInput,
   ) => Promise<DeliverableExportDownload | undefined>;
-  readonly onReviewAsset?: (input: {
-    readonly assetId: string;
-    readonly state: DeliverableReviewState;
-    readonly note?: string;
-  }) => Promise<void>;
+  readonly onReviewAsset?: (input: DeliverableReviewInput) => Promise<void>;
   readonly onSendBulkReminder?: (input: {
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
@@ -169,9 +284,17 @@ export interface DeliverablesWorkspaceViewProps {
     readonly title: string;
     readonly description: string;
   }) => Promise<void>;
-  readonly onApproveSession?: (session: DeliverableSession, status: string) => Promise<void>;
+  readonly onApproveSession?: (
+    session: DeliverableSession,
+    contentStatus: "Approved" | "Needs changes",
+  ) => Promise<void>;
   readonly onRestoreSessionVersion?: (input: {
     readonly sessionId: string;
+    readonly version: number;
+    readonly expectedVersion: number;
+  }) => Promise<void>;
+  readonly onRestoreSpeakerContentVersion?: (input: {
+    readonly participantId: string;
     readonly version: number;
     readonly expectedVersion: number;
   }) => Promise<void>;
@@ -181,6 +304,7 @@ export interface DeliverablesWorkspaceViewProps {
     readonly expectedVersion: number;
   }) => Promise<void>;
   readonly onReplaceHeadshot?: (input: {
+    readonly submissionId: string;
     readonly participantId: string;
     readonly file: File;
     readonly supersedesAssetId?: string;
@@ -204,27 +328,172 @@ function formatStatus(status: string): string {
   return status.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
-function statusForTask(task: DeliverableTask, assets: readonly DeliverableAsset[]): string {
+function compareSpeakerContentHistoryEntries(
+  left: DeliverableSpeakerContentHistoryEntry,
+  right: DeliverableSpeakerContentHistoryEntry,
+): number {
+  return (
+    left.version - right.version ||
+    left.occurredAt.localeCompare(right.occurredAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function sortedSpeakerContentHistory(
+  entries: readonly DeliverableSpeakerContentHistoryEntry[],
+): readonly DeliverableSpeakerContentHistoryEntry[] {
+  return [...entries].sort(compareSpeakerContentHistoryEntries);
+}
+
+function speakerContentHistoryLoading(): DeliverableSpeakerContentHistoryState {
+  return { status: "loading", entries: [] };
+}
+
+function speakerContentHistoryEmpty(): DeliverableSpeakerContentHistoryState {
+  return { status: "empty", entries: [] };
+}
+
+function speakerContentHistorySuccess(
+  entries: readonly DeliverableSpeakerContentHistoryEntry[],
+): DeliverableSpeakerContentHistoryState {
+  const sorted = sortedSpeakerContentHistory(entries);
+  return sorted.length === 0
+    ? speakerContentHistoryEmpty()
+    : { status: "success", entries: sorted };
+}
+
+function speakerContentHistoryError(reason: unknown): DeliverableSpeakerContentHistoryState {
+  return {
+    status: "error",
+    entries: [],
+    error: messageFromError(reason),
+  };
+}
+function speakerContentHistoryStatesForProfiles(
+  profiles: readonly DeliverableSpeakerProfile[],
+  provided: Readonly<Record<string, DeliverableSpeakerContentHistoryState>> | undefined,
+): Readonly<Record<string, DeliverableSpeakerContentHistoryState>> {
+  return Object.fromEntries(
+    profiles.map((profile) => [
+      profile.participantId,
+      provided?.[profile.participantId] ?? speakerContentHistoryEmpty(),
+    ]),
+  );
+}
+function profileWithSpeakerContentRecord(
+  profile: DeliverableSpeakerProfile,
+  content: DeliverableSpeakerContentRecord,
+): DeliverableSpeakerProfile {
+  const {
+    socialLinks: _socialLinks,
+    social: _social,
+    status: _status,
+    headshotAssetId: _headshotAssetId,
+    ...profileWithoutContent
+  } = profile;
+  return {
+    ...profileWithoutContent,
+    biography: content.biography ?? "",
+    ...(content.socialLinks === undefined ? {} : { socialLinks: content.socialLinks }),
+    ...(content.status === undefined ? {} : { status: content.status }),
+    ...(content.headshotAssetId === undefined || content.headshotAssetId === null
+      ? {}
+      : { headshotAssetId: content.headshotAssetId }),
+    version: content.version,
+    updatedAt: content.updatedAt,
+  };
+}
+
+function statusForTask(
+  task: DeliverableTask,
+  assets: readonly DeliverableAsset[],
+): DeliverableMatrixStatus {
   const latest = assets.find((asset) => isCurrentAsset(asset, assets));
-  const reviewState = (latest as (DeliverableAsset & { reviewState?: string }) | undefined)
-    ?.reviewState;
-  if (reviewState === "needs_changes") return "needs_changes";
+  if (latest?.reviewState === "needs_changes") return "needs_changes";
   if (latest?.state === "ready") {
     return task.status === "completed" || task.status === "waived" ? task.status : "uploaded";
   }
   return task.status;
 }
 
-function statusMatches(
-  task: DeliverableTask,
-  assets: readonly DeliverableAsset[],
-  filter: string,
-): boolean {
+function isOutstanding(status: DeliverableMatrixStatus): boolean {
+  return !["completed", "waived", "uploaded"].includes(status);
+}
+
+export type ContentRequestStatusFilter =
+  | "all"
+  | "outstanding"
+  | "attention"
+  | "review"
+  | "complete"
+  | DeliverableMatrixStatus;
+
+export interface ContentRequestFilters {
+  readonly query: string;
+  readonly speakerId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly status: ContentRequestStatusFilter;
+}
+
+export interface ContentRequestMetrics {
+  readonly all: number;
+  readonly outstanding: number;
+  readonly attention: number;
+  readonly review: number;
+  readonly complete: number;
+}
+
+function statusMatches(status: DeliverableMatrixStatus, filter: string): boolean {
   if (filter === "all") return true;
-  const status = statusForTask(task, assets);
-  if (filter === "pending") return !["completed", "waived", "uploaded"].includes(status);
+  if (filter === "pending" || filter === "incomplete" || filter === "outstanding") {
+    return isOutstanding(status);
+  }
+  if (filter === "attention") return status === "overdue" || status === "needs_changes";
+  if (filter === "review") return status === "submitted" || status === "uploaded";
+  if (filter === "complete") return status === "completed" || status === "waived";
   if (filter === "uploaded") return ["uploaded", "completed", "waived"].includes(status);
   return status === filter;
+}
+
+export function contentRequestMetrics(rows: readonly DeliverableRow[]): ContentRequestMetrics {
+  return rows.reduce<ContentRequestMetrics>(
+    (metrics, row) => ({
+      all: metrics.all + 1,
+      outstanding: metrics.outstanding + (isOutstanding(row.status) ? 1 : 0),
+      attention:
+        metrics.attention + (row.status === "overdue" || row.status === "needs_changes" ? 1 : 0),
+      review: metrics.review + (row.status === "submitted" || row.status === "uploaded" ? 1 : 0),
+      complete: metrics.complete + (row.status === "completed" || row.status === "waived" ? 1 : 0),
+    }),
+    { all: 0, outstanding: 0, attention: 0, review: 0, complete: 0 },
+  );
+}
+
+export function filterContentRequestRows(
+  rows: readonly DeliverableRow[],
+  filters: ContentRequestFilters,
+): readonly DeliverableRow[] {
+  const query = filters.query.trim().toLocaleLowerCase();
+  return rows.filter((row) => {
+    const searchable = [
+      row.task.title,
+      row.task.description ?? row.task.instructions ?? "",
+      row.speakerLabel,
+      row.sessionLabel,
+      row.currentAsset?.fileName ?? "",
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    return (
+      (query.length === 0 || searchable.includes(query)) &&
+      (filters.speakerId === "all" || row.task.participantId === filters.speakerId) &&
+      (filters.sessionId === "all" ||
+        (row.task.submissionId ?? "participant") === filters.sessionId) &&
+      (filters.taskId === "all" || row.task.id === filters.taskId) &&
+      statusMatches(row.status, filters.status)
+    );
+  });
 }
 
 function assetFamily(asset: DeliverableAsset): string {
@@ -252,11 +521,32 @@ function reviewStateForAsset(asset: DeliverableAsset): string {
   return asset.state === "ready" ? "Pending review" : formatStatus(asset.state);
 }
 
-function assetSessionId(
-  asset: DeliverableAsset,
-  tasksById: ReadonlyMap<string, DeliverableTask>,
-): string {
-  return asset.submissionId ?? tasksById.get(asset.taskId ?? "")?.submissionId ?? "";
+export function eligibleSpeakerHeadshotSessions(
+  sessions: readonly DeliverableSession[],
+  eventId: string,
+  participantId: string,
+): readonly DeliverableSession[] {
+  return sessions.filter(
+    (session) =>
+      session.eventId === eventId &&
+      session.status.trim().toLowerCase() === "accepted" &&
+      session.speakerIds.includes(participantId),
+  );
+}
+
+export function resolveSpeakerHeadshotSubmissionId(
+  sessions: readonly DeliverableSession[],
+  eventId: string,
+  participantId: string,
+  requestedSubmissionId: string | null | undefined,
+): string | null {
+  const eligibleSessions = eligibleSpeakerHeadshotSessions(sessions, eventId, participantId);
+  if (eligibleSessions.length === 1) return eligibleSessions.at(0)?.id ?? null;
+  return requestedSubmissionId !== null &&
+    requestedSubmissionId !== undefined &&
+    eligibleSessions.some((session) => session.id === requestedSubmissionId)
+    ? requestedSubmissionId
+    : null;
 }
 
 function isCurrentAsset(asset: DeliverableAsset, assets: readonly DeliverableAsset[]): boolean {
@@ -274,7 +564,8 @@ function taskRows(
   const sessionBySubmission = new Map(sessions.map((session) => [session.id, session]));
   const profileByParticipant = new Map(profiles.map((profile) => [profile.participantId, profile]));
   return tasks.map((task) => {
-    const session = sessionBySubmission.get(task.submissionId);
+    const session =
+      task.submissionId === null ? undefined : sessionBySubmission.get(task.submissionId);
     const sessionLabel = session?.title ?? task.sessionTitle ?? "Session unavailable";
     const speaker = profileByParticipant.get(task.participantId);
     const relatedAssets = assets.filter(
@@ -291,6 +582,33 @@ function taskRows(
       speakerLabel: task.participantName ?? speaker?.displayName ?? "Speaker",
       assets: relatedAssets,
       currentAsset: relatedAssets.find((asset) => isCurrentAsset(asset, relatedAssets)),
+      status: statusForTask(task, relatedAssets),
+    };
+  });
+}
+
+function matrixRows(
+  items: readonly DeliverableMatrixItem[],
+  sessions: readonly DeliverableSession[],
+  profiles: readonly DeliverableSpeakerProfile[],
+): readonly DeliverableRow[] {
+  const sessionBySubmission = new Map(sessions.map((session) => [session.id, session]));
+  const profileByParticipant = new Map(profiles.map((profile) => [profile.participantId, profile]));
+  return items.map((item) => {
+    const task = item.task;
+    const session =
+      task.submissionId === null ? undefined : sessionBySubmission.get(task.submissionId);
+    const speaker = profileByParticipant.get(item.participantId);
+    return {
+      task,
+      session,
+      sessionLabel: session?.title ?? task.sessionTitle ?? "Session unavailable",
+      speaker,
+      speakerLabel:
+        item.participantName ?? task.participantName ?? speaker?.displayName ?? "Speaker",
+      assets: item.assets,
+      currentAsset: item.currentAsset,
+      status: item.status,
     };
   });
 }
@@ -348,37 +666,139 @@ export function triggerDeliverablesDownload(download: DeliverableExportDownload)
   }
 }
 
+interface DeliverableSubjectParticipant {
+  readonly id: string;
+  readonly label: string;
+  readonly sessions: readonly { readonly id: string; readonly label: string }[];
+}
+
+function DeliverablesSummary({
+  rows,
+  activeFilter,
+  onFilter,
+  participants,
+  busy,
+  temporalContext,
+  onCreateTask,
+}: {
+  readonly rows: readonly DeliverableRow[];
+  readonly activeFilter: ContentRequestStatusFilter;
+  readonly onFilter: (filter: ContentRequestStatusFilter) => void;
+  readonly participants: readonly DeliverableSubjectParticipant[];
+  readonly busy: boolean;
+  readonly temporalContext?: SpeakerEventTemporalContext;
+  readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
+}) {
+  const metrics = contentRequestMetrics(rows);
+  const items = [
+    ["All requests", metrics.all, "all"],
+    ["Outstanding", metrics.outstanding, "outstanding"],
+    ["Needs attention", metrics.attention, "attention"],
+    ["Ready for review", metrics.review, "review"],
+    ["Complete", metrics.complete, "complete"],
+  ] as const;
+
+  return (
+    <section className={styles.overviewPanel} aria-labelledby="content-requests-overview-heading">
+      <div className={styles.overviewHeader}>
+        <div>
+          <p className={styles.eyebrow}>Collection pulse</p>
+          <h2 id="content-requests-overview-heading">Request status</h2>
+          <p className={mutedClass}>Use a metric to focus the assignment collection.</p>
+        </div>
+        <TaskComposer
+          participants={participants}
+          busy={busy}
+          {...(temporalContext === undefined ? {} : { temporalContext })}
+          {...(onCreateTask === undefined ? {} : { onCreateTask })}
+        />
+      </div>
+      <div className={styles.summaryGrid}>
+        {items.map(([label, value, filter]) => (
+          <button
+            key={filter}
+            type="button"
+            className={styles.summaryMetric}
+            aria-pressed={activeFilter === filter}
+            onClick={() => onFilter(activeFilter === filter && filter !== "all" ? "all" : filter)}
+          >
+            <strong>{value}</strong>
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TaskComposer({
   participants,
   busy,
+  temporalContext,
   onCreateTask,
 }: Readonly<{
-  participants: readonly { readonly id: string; readonly label: string }[];
+  participants: readonly DeliverableSubjectParticipant[];
   busy: boolean;
+  temporalContext?: SpeakerEventTemporalContext;
   onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }>) {
+  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueAt, setDueAt] = useState("");
-  const [mimeTypes, setMimeTypes] = useState("application/pdf");
-  const [maxSizeMb, setMaxSizeMb] = useState("100");
-  const [acceptedAssetKinds, setAcceptedAssetKinds] = useState<readonly DeliverableAssetKind[]>([
-    "slides",
-  ]);
+  const [acceptedAssetKind, setAcceptedAssetKind] = useState<DeliverableAssetKind>("slides");
+  const [allowedMimeTypes, setAllowedMimeTypes] = useState<readonly string[]>(() =>
+    requestFilePolicyMimeTypes(requestFilePolicyFor("slides")),
+  );
+  const [maxSizeMb, setMaxSizeMb] = useState(() =>
+    String(requestFilePolicyFor("slides").maxBytes / bytesPerMegabyte),
+  );
+  const [subjectType, setSubjectType] = useState<"participant" | "session">("session");
   const [assigneeIds, setAssigneeIds] = useState<readonly string[]>([]);
+  const [sessionByParticipant, setSessionByParticipant] = useState<
+    Readonly<Record<string, string>>
+  >({});
   const [formError, setFormError] = useState<string | null>(null);
+  const assignmentCount = assigneeIds.length;
+  const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
+  const deadlinePolicy =
+    temporalContext === undefined ? null : deadlineTemporalPolicy(temporalContext);
+  const deadlineWarning =
+    temporalContext === undefined ? null : deadlineAfterEventWarning(dueAt, temporalContext);
 
   function toggleAssignee(id: string): void {
     setAssigneeIds((current) =>
       current.includes(id) ? current.filter((candidate) => candidate !== id) : [...current, id],
     );
   }
-  function toggleAssetKind(kind: DeliverableAssetKind): void {
-    setAcceptedAssetKinds((current) =>
-      current.includes(kind)
-        ? current.filter((candidate) => candidate !== kind)
-        : [...current, kind],
-    );
+
+  function selectAssetKind(kind: DeliverableAssetKind): void {
+    const policy = requestFilePolicyFor(kind);
+    setAcceptedAssetKind(kind);
+    setAllowedMimeTypes(requestFilePolicyMimeTypes(policy));
+    setMaxSizeMb(String(policy.maxBytes / bytesPerMegabyte));
+  }
+
+  function updateSelectedAssetKind(value: string): void {
+    const kind = deliverableAssetKinds.find((candidate) => candidate === value);
+    if (kind !== undefined) selectAssetKind(kind);
+  }
+
+  function fileFormatIsSelected(format: RequestFileFormat): boolean {
+    return format.mimeTypes.every((mimeType) => allowedMimeTypes.includes(mimeType));
+  }
+
+  function toggleFileFormat(format: RequestFileFormat, checked: boolean): void {
+    setAllowedMimeTypes((current) => {
+      const selected = new Set(current);
+      for (const mimeType of format.mimeTypes) {
+        if (checked) selected.add(mimeType);
+        else selected.delete(mimeType);
+      }
+      return requestFilePolicyMimeTypes(selectedFilePolicy).filter((mimeType) =>
+        selected.has(mimeType),
+      );
+    });
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -386,10 +806,6 @@ function TaskComposer({
     const normalizedTitle = title.trim();
     const normalizedDescription = description.trim();
     const normalizedDueAt = dueAt.trim();
-    const normalizedMimeTypes = mimeTypes
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean);
     const maxSize = Number(maxSizeMb);
     if (
       normalizedTitle.length === 0 ||
@@ -399,16 +815,19 @@ function TaskComposer({
       setFormError("Task name, instructions, and due date are required.");
       return;
     }
-    if (normalizedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
-      setFormError("Provide at least one MIME type and a positive maximum size in MB.");
-      return;
-    }
-    if (acceptedAssetKinds.length === 0) {
-      setFormError("Choose at least one accepted asset kind.");
+    if (allowedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
+      setFormError("Choose at least one file format and a positive maximum size in MB.");
       return;
     }
     if (assigneeIds.length === 0) {
       setFormError("Choose at least one speaker assignee.");
+      return;
+    }
+    if (
+      subjectType === "session" &&
+      assigneeIds.some((participantId) => !sessionByParticipant[participantId])
+    ) {
+      setFormError("Choose an explicit accepted session for every selected speaker.");
       return;
     }
     if (onCreateTask === undefined) {
@@ -418,1439 +837,928 @@ function TaskComposer({
       return;
     }
     setFormError(null);
-    await onCreateTask({
-      title: normalizedTitle,
-      description: normalizedDescription,
-      dueAt: normalizedDueAt,
-      allowedMimeTypes: normalizedMimeTypes,
-      maxSizeBytes: maxSize * 1024 * 1024,
-      assigneeIds,
-      acceptedAssetKinds,
-    });
+    try {
+      await onCreateTask({
+        title: normalizedTitle,
+        description: normalizedDescription,
+        dueAt: normalizedDueAt,
+        allowedMimeTypes,
+        maxSizeBytes: maxSize * bytesPerMegabyte,
+        assignments: assigneeIds.map((participantId) => ({
+          participantId,
+          submissionId:
+            subjectType === "participant" ? null : (sessionByParticipant[participantId] ?? null),
+        })),
+        acceptedAssetKinds: [acceptedAssetKind],
+      });
+    } catch (reason) {
+      setFormError(messageFromError(reason));
+      return;
+    }
     setTitle("");
     setDescription("");
     setDueAt("");
+    const defaultFilePolicy = requestFilePolicyFor("slides");
+    setAcceptedAssetKind(defaultFilePolicy.kind);
+    setAllowedMimeTypes(requestFilePolicyMimeTypes(defaultFilePolicy));
+    setMaxSizeMb(String(defaultFilePolicy.maxBytes / bytesPerMegabyte));
+    setSubjectType("session");
+    setAssigneeIds([]);
+    setSessionByParticipant({});
+    setOpen(false);
   }
 
   return (
-    <section style={cardStyle} aria-labelledby="create-task-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 28rem" }}>
-          <p style={mutedStyle}>Collection setup</p>
-          <h2 id="create-task-heading">Create a file-request task</h2>
-        </div>
-        <span style={mutedStyle}>Speaker assignments are event-scoped.</span>
-      </div>
-      <p style={mutedStyle}>
-        Define the request before saving. Speakers can upload only the selected asset kinds, MIME
-        types, and maximum size; the private asset service enforces this policy again at upload
-        time.
-      </p>
-      <form onSubmit={(event) => void submit(event)} style={{ display: "grid", gap: "0.9rem" }}>
-        <div style={gridStyle}>
-          <label style={fieldStyle}>
-            <span>Task name</span>
-            <input
-              style={inputStyle}
-              value={title}
-              onChange={(event) => setTitle(event.currentTarget.value)}
-              placeholder="Upload Session Presentation"
-              required
-            />
-          </label>
-          <label style={fieldStyle}>
-            <span>Due date</span>
-            <input
-              style={inputStyle}
-              type="date"
-              value={dueAt}
-              onChange={(event) => setDueAt(event.currentTarget.value)}
-              required
-            />
-          </label>
-        </div>
-        <label style={fieldStyle}>
-          <span>Instructions</span>
-          <textarea
-            style={inputStyle}
-            rows={3}
-            value={description}
-            onChange={(event) => setDescription(event.currentTarget.value)}
-            placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
-            required
-          />
-        </label>
-        <fieldset
-          style={{
-            border: "1px solid var(--color-border, #dfe2e8)",
-            borderRadius: "0.5rem",
-            padding: "0.75rem",
-          }}
-          aria-describedby="asset-kind-help"
-        >
-          <legend>Accepted asset kinds (required)</legend>
-          <div style={{ display: "grid", gap: "0.45rem" }}>
-            {deliverableAssetKinds.map((kind) => (
-              <label key={kind} style={rowStyle}>
-                <input
-                  type="checkbox"
-                  checked={acceptedAssetKinds.includes(kind)}
-                  onChange={() => toggleAssetKind(kind)}
-                />
-                <span>{formatStatus(kind)}</span>
-              </label>
-            ))}
-          </div>
-          <small id="asset-kind-help" style={mutedStyle}>
-            Select one or more kinds. Selected:{" "}
-            {acceptedAssetKinds.length === 0
-              ? "None — choose at least one."
-              : acceptedAssetKinds.map(formatStatus).join(", ")}
-            .
-          </small>
-        </fieldset>
-        <div style={gridStyle}>
-          <label style={fieldStyle}>
-            <span>Allowed MIME types</span>
-            <input
-              style={inputStyle}
-              value={mimeTypes}
-              onChange={(event) => setMimeTypes(event.currentTarget.value)}
-              aria-describedby="mime-help"
-            />
-            <small id="mime-help" style={mutedStyle}>
-              Comma-separated values, for example application/pdf.
-            </small>
-          </label>
-          <label style={fieldStyle}>
-            <span>Maximum file size (MB)</span>
-            <input
-              style={inputStyle}
-              type="number"
-              min={1}
-              step={1}
-              value={maxSizeMb}
-              onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
-            />
-          </label>
-        </div>
-        <fieldset
-          style={{
-            border: "1px solid var(--color-border, #dfe2e8)",
-            borderRadius: "0.5rem",
-            padding: "0.75rem",
-          }}
-        >
-          <legend>Assignees</legend>
-          {participants.length === 0 ? (
-            <p style={mutedStyle}>
-              No authorized speaker records were returned. Task creation cannot be assigned safely.
-            </p>
-          ) : (
-            <div style={{ display: "grid", gap: "0.45rem" }}>
-              {participants.map((participant) => (
-                <label key={participant.id} style={rowStyle}>
-                  <input
-                    type="checkbox"
-                    checked={assigneeIds.includes(participant.id)}
-                    onChange={() => toggleAssignee(participant.id)}
+    <div className={styles.createTaskAction}>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button type="button" disabled={onCreateTask === undefined}>
+            {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
+          </Button>
+        </DialogTrigger>
+        <DialogContent className={styles.composerDialog}>
+          <DialogHeader>
+            <DialogTitle>New content request</DialogTitle>
+            <DialogDescription>
+              Define the request, file policy, and exact speaker assignments.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(event) => void submit(event)} className={styles.composerForm}>
+            <section className={styles.composerSection} aria-labelledby="request-section-heading">
+              <div className={styles.composerSectionHeading}>
+                <span>1</span>
+                <div>
+                  <h3 id="request-section-heading">Request</h3>
+                  <p>Give speakers clear instructions and a deadline.</p>
+                </div>
+              </div>
+              <div className={gridClass}>
+                <div className={fieldClass}>
+                  <Label htmlFor="task-name">Task name</Label>
+                  <Input
+                    id="task-name"
+                    value={title}
+                    onChange={(event) => setTitle(event.currentTarget.value)}
+                    placeholder="Upload Session Presentation"
+                    required
                   />
-                  <span>{participant.label}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </fieldset>
-        {formError !== null ? <p role="alert">{formError}</p> : null}
-        <button style={buttonStyle} type="submit" disabled={busy || onCreateTask === undefined}>
-          {busy
-            ? "Saving task…"
-            : onCreateTask === undefined
-              ? "Task creation unavailable"
-              : "Save file-request task"}
-        </button>
-      </form>
-    </section>
+                </div>
+                <div className={fieldClass} style={{ gridColumn: "1 / -1" }}>
+                  <TemporalPicker
+                    id="task-due-date"
+                    mode="single"
+                    precision="date"
+                    value={dueAt}
+                    label="Due date"
+                    eyebrow="Request deadline"
+                    description="Choose the exact day this content is due."
+                    minimumDateTime={deadlinePolicy?.minimumDate}
+                    onChange={setDueAt}
+                  />
+                  {deadlineWarning ? (
+                    <p className={mutedClass} role="status">
+                      {deadlineWarning}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <div className={fieldClass}>
+                <Label htmlFor="task-instructions">Instructions</Label>
+                <Textarea
+                  id="task-instructions"
+                  rows={3}
+                  value={description}
+                  onChange={(event) => setDescription(event.currentTarget.value)}
+                  placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
+                  required
+                />
+              </div>
+            </section>
+
+            <section className={styles.composerSection} aria-labelledby="files-section-heading">
+              <div className={styles.composerSectionHeading}>
+                <span>2</span>
+                <div>
+                  <h3 id="files-section-heading">Files</h3>
+                  <p>Choose one deliverable type, then set its formats and size limit.</p>
+                </div>
+              </div>
+              <div className={fieldClass}>
+                <Label htmlFor="task-asset-kind">File type</Label>
+                <Select value={acceptedAssetKind} onValueChange={updateSelectedAssetKind}>
+                  <SelectTrigger id="task-asset-kind">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {deliverableAssetKinds.map((kind) => {
+                      const policy = requestFilePolicyFor(kind);
+                      return (
+                        <SelectItem key={kind} value={kind}>
+                          {policy.label}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                <small className={mutedClass}>
+                  {selectedFilePolicy.description} Create a separate request when you need a
+                  different file type or due date.
+                </small>
+              </div>
+              <div className={gridClass}>
+                <fieldset className={styles.fieldset} aria-describedby="file-format-help">
+                  <legend>File formats (required)</legend>
+                  <div className={styles.optionGrid}>
+                    {selectedFilePolicy.formats.map((format) => (
+                      <div key={format.id} className={styles.optionRow}>
+                        <Checkbox
+                          id={`task-file-format-${acceptedAssetKind}-${format.id}`}
+                          checked={fileFormatIsSelected(format)}
+                          onCheckedChange={(checked) => toggleFileFormat(format, checked === true)}
+                        />
+                        <Label htmlFor={`task-file-format-${acceptedAssetKind}-${format.id}`}>
+                          {format.label}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                  <small id="file-format-help" className={mutedClass}>
+                    Speakers will only be able to upload the selected formats.
+                  </small>
+                </fieldset>
+                <div className={fieldClass}>
+                  <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
+                  <Input
+                    id="task-max-size-mb"
+                    type="number"
+                    min={1}
+                    max={selectedFilePolicy.maxBytes / bytesPerMegabyte}
+                    step={1}
+                    value={maxSizeMb}
+                    onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
+                  />
+                  <small className={mutedClass}>
+                    Platform limit for {selectedFilePolicy.label.toLowerCase()}:{" "}
+                    {selectedFilePolicy.maxBytes / bytesPerMegabyte} MB.
+                  </small>
+                </div>
+              </div>
+            </section>
+
+            <section
+              className={styles.composerSection}
+              aria-labelledby="assignments-section-heading"
+            >
+              <div className={styles.composerSectionHeading}>
+                <span>3</span>
+                <div>
+                  <h3 id="assignments-section-heading">Assignments</h3>
+                  <p>Choose the speakers and the exact subject for each request.</p>
+                </div>
+              </div>
+              <div className={fieldClass}>
+                <Label htmlFor="task-subject-type">Request subject</Label>
+                <Select
+                  value={subjectType}
+                  onValueChange={(value) => setSubjectType(value as "participant" | "session")}
+                >
+                  <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="session">One accepted session per speaker</SelectItem>
+                    <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <small id="task-subject-help" className={mutedClass}>
+                  Session requests require an explicit accepted session for every assignee.
+                </small>
+              </div>
+              <fieldset className={styles.fieldset}>
+                <legend>Assignees and subjects</legend>
+                {participants.length === 0 ? (
+                  <p className={mutedClass}>
+                    No authorized speaker records were returned. Task creation cannot be assigned
+                    safely.
+                  </p>
+                ) : (
+                  <div className={styles.assigneeList}>
+                    {participants.map((participant) => {
+                      const selected = assigneeIds.includes(participant.id);
+                      return (
+                        <div key={participant.id} className={styles.assigneeRow}>
+                          <div className={styles.optionRow}>
+                            <Checkbox
+                              id={`task-assignee-${participant.id}`}
+                              checked={selected}
+                              onCheckedChange={() => toggleAssignee(participant.id)}
+                            />
+                            <Label htmlFor={`task-assignee-${participant.id}`}>
+                              {participant.label}
+                            </Label>
+                            {participant.sessions.length > 1 ? (
+                              <Badge variant="outline">
+                                {participant.sessions.length} accepted sessions
+                              </Badge>
+                            ) : null}
+                          </div>
+                          {selected && subjectType === "session" ? (
+                            participant.sessions.length === 0 ? (
+                              <Alert variant="destructive">
+                                <AlertDescription>
+                                  No accepted session is available for this participant.
+                                </AlertDescription>
+                              </Alert>
+                            ) : (
+                              <div className={fieldClass}>
+                                <Label htmlFor={`task-session-${participant.id}`}>
+                                  Accepted session for {participant.label}
+                                </Label>
+                                <Select
+                                  {...(sessionByParticipant[participant.id] === undefined
+                                    ? {}
+                                    : { value: sessionByParticipant[participant.id] })}
+                                  onValueChange={(submissionId) =>
+                                    setSessionByParticipant((current) => ({
+                                      ...current,
+                                      [participant.id]: submissionId,
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger id={`task-session-${participant.id}`}>
+                                    <SelectValue placeholder="Choose an accepted session" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {participant.sessions.map((session) => (
+                                      <SelectItem key={session.id} value={session.id}>
+                                        {session.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </fieldset>
+              <div className={styles.assignmentCount} role="status" aria-live="polite">
+                <strong>{assignmentCount}</strong> assignment{assignmentCount === 1 ? "" : "s"} will
+                be created.
+              </div>
+            </section>
+
+            {formError !== null ? (
+              <Alert variant="destructive">
+                <AlertTitle>Request not saved</AlertTitle>
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy || onCreateTask === undefined}>
+                {busy
+                  ? "Saving request…"
+                  : onCreateTask === undefined
+                    ? "Task creation unavailable"
+                    : `Create ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"}`}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
 function DeliverablesTable({
   rows,
   selectedTaskIds,
+  selectedAssignmentId,
   onToggleTask,
-  onInspectAsset,
-  onPreviewReminders,
-  speakerFilter,
-  taskFilter,
-  statusFilter,
-  onSpeakerFilter,
-  onTaskFilter,
-  onStatusFilter,
+  onSetVisibleSelection,
+  onOpenAssignment,
+  onPreviewSelectedReminders,
+  onPreviewAllReminders,
+  filters,
+  onFiltersChange,
   busy,
-  exportAvailable,
-  exportableCount,
-  onExport,
 }: Readonly<{
   rows: readonly DeliverableRow[];
   selectedTaskIds: readonly string[];
+  selectedAssignmentId: string | null;
   onToggleTask: (taskId: string) => void;
-  onInspectAsset: (assetId: string) => void;
-  onPreviewReminders: () => void;
-  speakerFilter: string;
-  taskFilter: string;
-  statusFilter: string;
-  onSpeakerFilter: (value: string) => void;
-  onTaskFilter: (value: string) => void;
-  onStatusFilter: (value: string) => void;
+  onSetVisibleSelection: (taskIds: readonly string[]) => void;
+  onOpenAssignment: (taskId: string) => void;
+  onPreviewSelectedReminders: () => void;
+  onPreviewAllReminders: () => void;
+  filters: ContentRequestFilters;
+  onFiltersChange: (filters: ContentRequestFilters) => void;
   busy: boolean;
-  exportAvailable: boolean;
-  exportableCount: number;
-  onExport?: () => void;
 }>) {
   const speakers = [
     ...new Map(rows.map((row) => [row.task.participantId, row.speakerLabel])).entries(),
-  ];
-  const tasks = [...new Map(rows.map((row) => [row.task.id, row.task.title])).entries()];
-  const visibleRows = rows.filter(
-    (row) =>
-      (speakerFilter === "all" || row.task.participantId === speakerFilter) &&
-      (taskFilter === "all" || row.task.id === taskFilter) &&
-      statusMatches(row.task, row.assets, statusFilter),
+  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const sessions = [
+    ...new Map(
+      rows.map((row) => [row.task.submissionId ?? "participant", row.sessionLabel]),
+    ).entries(),
+  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const tasks = [...new Map(rows.map((row) => [row.task.id, row.task.title])).entries()].sort(
+    (left, right) => left[1].localeCompare(right[1]),
   );
-  const incompleteCount = rows.filter((row) =>
-    statusMatches(row.task, row.assets, "pending"),
-  ).length;
+  const visibleRows = filterContentRequestRows(rows, filters);
+  const visibleOutstandingIds = visibleRows
+    .filter((row) => isOutstanding(row.status))
+    .map((row) => row.task.id);
+  const allOutstandingIds = rows
+    .filter((row) => isOutstanding(row.status))
+    .map((row) => row.task.id);
+  const selectedOutstandingIds = selectedTaskIds.filter((taskId) =>
+    allOutstandingIds.includes(taskId),
+  );
+  const allVisibleSelected =
+    visibleOutstandingIds.length > 0 &&
+    visibleOutstandingIds.every((taskId) => selectedTaskIds.includes(taskId));
+  const someVisibleSelected = visibleOutstandingIds.some((taskId) =>
+    selectedTaskIds.includes(taskId),
+  );
+  const hasActiveFilters =
+    filters.query.length > 0 ||
+    filters.speakerId !== "all" ||
+    filters.sessionId !== "all" ||
+    filters.taskId !== "all" ||
+    filters.status !== "all";
+
   return (
-    <section style={cardStyle} aria-labelledby="tracking-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 28rem" }}>
-          <p style={mutedStyle}>Organizer tracking</p>
-          <h2 id="tracking-heading">Deliverables dashboard</h2>
+    <Card className={sectionClass} aria-labelledby="tracking-heading">
+      <CardHeader className={clusterClass}>
+        <div>
+          <p className={mutedClass}>Speaker follow-up</p>
+          <CardTitle id="tracking-heading">Assignments</CardTitle>
+          <CardDescription>
+            One row per speaker request. Select outstanding rows for reminders or open any
+            assignment for detail.
+          </CardDescription>
         </div>
-        <span>{visibleRows.length} visible</span>
-      </div>
-      <div style={{ ...gridStyle, margin: "1rem 0" }}>
-        <label style={fieldStyle}>
-          <span>Filter by speaker</span>
-          <select
-            style={inputStyle}
-            value={speakerFilter}
-            onChange={(event) => onSpeakerFilter(event.currentTarget.value)}
+        <Badge variant="outline">
+          {visibleRows.length} of {rows.length}
+        </Badge>
+      </CardHeader>
+      <CardContent className={stackClass}>
+        <fieldset className={styles.collectionToolbar}>
+          <legend className="sr-only">Content request filters</legend>
+          <div className={styles.searchField}>
+            <Label className="sr-only" htmlFor="content-requests-search">
+              Search assignments
+            </Label>
+            <Input
+              id="content-requests-search"
+              type="search"
+              value={filters.query}
+              onChange={(event) =>
+                onFiltersChange({ ...filters, query: event.currentTarget.value })
+              }
+              placeholder="Search request, speaker, session, or file"
+            />
+          </div>
+          <Select
+            value={filters.status}
+            onValueChange={(status) =>
+              onFiltersChange({ ...filters, status: status as ContentRequestStatusFilter })
+            }
           >
-            <option value="all">All speakers</option>
-            {speakers.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={fieldStyle}>
-          <span>Filter by task</span>
-          <select
-            style={inputStyle}
-            value={taskFilter}
-            onChange={(event) => onTaskFilter(event.currentTarget.value)}
+            <SelectTrigger aria-label="Filter by status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="outstanding">Outstanding</SelectItem>
+              <SelectItem value="attention">Needs attention</SelectItem>
+              <SelectItem value="review">Ready for review</SelectItem>
+              <SelectItem value="complete">Complete</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={filters.speakerId}
+            onValueChange={(speakerId) => onFiltersChange({ ...filters, speakerId })}
           >
-            <option value="all">All tasks</option>
-            {tasks.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={fieldStyle}>
-          <span>Filter by status</span>
-          <select
-            style={inputStyle}
-            value={statusFilter}
-            onChange={(event) => onStatusFilter(event.currentTarget.value)}
+            <SelectTrigger aria-label="Filter by speaker">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All speakers</SelectItem>
+              {speakers.map(([id, label]) => (
+                <SelectItem key={id} value={id}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={filters.sessionId}
+            onValueChange={(sessionId) => onFiltersChange({ ...filters, sessionId })}
           >
-            <option value="all">All statuses</option>
-            <option value="pending">Incomplete / pending</option>
-            <option value="uploaded">Uploaded / complete</option>
-            <option value="needs_changes">Needs changes</option>
-            <option value="overdue">Overdue</option>
-          </select>
-        </label>
-      </div>
-      <div style={{ ...rowStyle, marginBottom: "0.8rem" }}>
-        <button
-          style={secondaryButtonStyle}
-          type="button"
-          onClick={onPreviewReminders}
-          disabled={incompleteCount === 0}
-        >
-          Preview reminder recipients ({incompleteCount})
-        </button>
-        <button
-          style={secondaryButtonStyle}
-          type="button"
-          aria-describedby="deliverables-export-help"
-          disabled={busy || onExport === undefined || !exportAvailable || exportableCount === 0}
-          onClick={onExport}
-        >
-          {busy ? "Preparing ZIP…" : "Download selected deliverables ZIP"}
-        </button>
-        <span id="deliverables-export-help" style={mutedStyle}>
-          {!exportAvailable
-            ? "ZIP export is unavailable because the organizer export capability is not provisioned."
-            : exportableCount === 0
-              ? "Select at least one uploaded deliverable to download a ZIP."
-              : `${exportableCount} selected deliverable${exportableCount === 1 ? "" : "s"} eligible for export.`}
-        </span>
-        <span style={mutedStyle}>Select rows below to narrow the preview.</span>
-      </div>
-      {visibleRows.length === 0 ? (
-        <p style={mutedStyle}>No speaker-task pairs match these filters.</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table>
-            <caption>Per-speaker file-request status and due dates</caption>
-            <thead>
-              <tr>
-                <th scope="col">
-                  <span className="sr-only">Select</span>
-                </th>
-                <th scope="col">Speaker</th>
-                <th scope="col">Session</th>
-                <th scope="col">Task</th>
-                <th scope="col">Due date</th>
-                <th scope="col">Status</th>
-                <th scope="col">Versions</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((row) => {
-                const status = statusForTask(row.task, row.assets);
-                const versionCount =
-                  row.currentAsset === undefined
-                    ? 0
-                    : row.assets.filter(
-                        (asset) =>
-                          assetFamily(asset) === assetFamily(row.currentAsset as DeliverableAsset),
-                      ).length;
-                return (
-                  <tr key={row.task.id}>
-                    <td>
-                      <input
-                        aria-label={`Select ${row.speakerLabel} ${row.task.title}`}
-                        type="checkbox"
-                        checked={selectedTaskIds.includes(row.task.id)}
-                        onChange={() => onToggleTask(row.task.id)}
-                      />
-                    </td>
-                    <th scope="row">{row.speakerLabel}</th>
-                    <td>{row.sessionLabel}</td>
-                    <td>
-                      {row.task.title}
-                      <br />
-                      <small style={mutedStyle}>
-                        {row.task.description ?? "No instructions returned"}
-                      </small>
-                    </td>
-                    <td>{formatDate(row.task.dueAt)}</td>
-                    <td>
-                      <span>{formatStatus(status)}</span>
-                    </td>
-                    <td>
-                      {versionCount === 0
-                        ? "—"
-                        : `${versionCount} version${versionCount === 1 ? "" : "s"}`}
-                    </td>
-                    <td>
-                      {row.currentAsset === undefined ? (
-                        <span style={mutedStyle}>No upload</span>
-                      ) : (
-                        <button
-                          style={{ ...secondaryButtonStyle, padding: "0.35rem 0.5rem" }}
-                          type="button"
-                          onClick={() => onInspectAsset(row.currentAsset?.id ?? "")}
+            <SelectTrigger aria-label="Filter by session">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All sessions</SelectItem>
+              {sessions.map(([id, label]) => (
+                <SelectItem key={id} value={id}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={filters.taskId}
+            onValueChange={(taskId) => onFiltersChange({ ...filters, taskId })}
+          >
+            <SelectTrigger aria-label="Filter by request">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All requests</SelectItem>
+              {tasks.map(([id, label]) => (
+                <SelectItem key={id} value={id}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {hasActiveFilters ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() =>
+                onFiltersChange({
+                  query: "",
+                  speakerId: "all",
+                  sessionId: "all",
+                  taskId: "all",
+                  status: "all",
+                })
+              }
+            >
+              Clear filters
+            </Button>
+          ) : null}
+        </fieldset>
+
+        {selectedOutstandingIds.length > 0 ? (
+          <div className={styles.bulkBar} role="status">
+            <strong>
+              {selectedOutstandingIds.length} outstanding assignment
+              {selectedOutstandingIds.length === 1 ? "" : "s"} selected
+            </strong>
+            <div className={styles.bulkActions}>
+              <Button type="button" onClick={onPreviewSelectedReminders} disabled={busy}>
+                Send reminders
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => onSetVisibleSelection([])}>
+                Clear selection
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className={styles.collectionActions}>
+            <span className={mutedClass}>
+              {allOutstandingIds.length} outstanding assignment
+              {allOutstandingIds.length === 1 ? "" : "s"}
+            </span>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={onPreviewAllReminders}
+              disabled={allOutstandingIds.length === 0 || busy}
+            >
+              Remind all outstanding ({allOutstandingIds.length})
+            </Button>
+          </div>
+        )}
+
+        {visibleRows.length === 0 ? (
+          <p className={mutedClass}>No assignments match these filters.</p>
+        ) : (
+          <div className={`${tableWrapClass} ${styles.assignmentTable}`}>
+            <Table>
+              <TableCaption>Per-speaker content request assignments and due dates</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">
+                    <Checkbox
+                      aria-label="Select all visible outstanding assignments"
+                      checked={
+                        allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false
+                      }
+                      disabled={visibleOutstandingIds.length === 0}
+                      onCheckedChange={(checked) =>
+                        onSetVisibleSelection(checked === true ? visibleOutstandingIds : [])
+                      }
+                    />
+                  </TableHead>
+                  <TableHead scope="col">Request</TableHead>
+                  <TableHead scope="col">Speaker</TableHead>
+                  <TableHead scope="col">Session</TableHead>
+                  <TableHead scope="col">Due</TableHead>
+                  <TableHead scope="col">Status</TableHead>
+                  <TableHead scope="col">Current file</TableHead>
+                  <TableHead scope="col">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleRows.map((row) => {
+                  const outstanding = isOutstanding(row.status);
+                  const versionCount =
+                    row.currentAsset === undefined
+                      ? 0
+                      : row.assets.filter(
+                          (asset) =>
+                            assetFamily(asset) ===
+                            assetFamily(row.currentAsset as DeliverableAsset),
+                        ).length;
+                  return (
+                    <TableRow
+                      key={row.task.id}
+                      data-selected={selectedAssignmentId === row.task.id || undefined}
+                    >
+                      <TableCell>
+                        <Checkbox
+                          id={`content-request-reminder-${row.task.id}`}
+                          checked={selectedTaskIds.includes(row.task.id)}
+                          disabled={!outstanding}
+                          onCheckedChange={() => onToggleTask(row.task.id)}
+                        />
+                        <Label
+                          className="sr-only"
+                          htmlFor={`content-request-reminder-${row.task.id}`}
                         >
-                          Inspect versions
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+                          {`Select outstanding assignment: ${row.speakerLabel} ${row.task.title}`}
+                        </Label>
+                      </TableCell>
+                      <TableHead scope="row">
+                        <strong>{row.task.title}</strong>
+                        <small className={mutedClass}>
+                          {row.task.description ??
+                            row.task.instructions ??
+                            "No instructions returned"}
+                        </small>
+                      </TableHead>
+                      <TableCell>{row.speakerLabel}</TableCell>
+                      <TableCell>{row.sessionLabel}</TableCell>
+                      <TableCell>{formatDate(row.task.dueAt)}</TableCell>
+                      <TableCell>
+                        <Badge variant={outstanding ? "secondary" : "outline"}>
+                          {formatStatus(row.status)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {row.currentAsset === undefined ? (
+                          <span className={mutedClass}>Waiting for upload</span>
+                        ) : (
+                          <span>
+                            {row.currentAsset.fileName}
+                            <small className={mutedClass}>
+                              v{row.currentAsset.version ?? 1} · {versionCount} version
+                              {versionCount === 1 ? "" : "s"}
+                            </small>
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => onOpenAssignment(row.task.id)}
+                        >
+                          Open request
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
-function FileLibrary({
-  assets,
-  sessions,
-  tasks,
-  profiles,
-  busy,
+export function ContentRequestInspector({
+  row,
   onInspectAsset,
-  onExport,
 }: Readonly<{
-  assets: readonly DeliverableAsset[];
-  sessions: readonly DeliverableSession[];
-  tasks: readonly DeliverableTask[];
-  profiles: readonly DeliverableSpeakerProfile[];
-  busy: boolean;
+  row: DeliverableRow;
   onInspectAsset?: (assetId: string) => void;
-  onExport?: (input: DeliverableExportInput) => Promise<DeliverableExportDownload | undefined>;
 }>) {
-  const [selectedAssetIds, setSelectedAssetIds] = useState<readonly string[]>([]);
-  const [search, setSearch] = useState("");
-  const [speakerFilter, setSpeakerFilter] = useState("all");
-  const [sessionFilter, setSessionFilter] = useState("all");
-  const [reviewFilter, setReviewFilter] = useState("all");
-  const [exportStatus, setExportStatus] = useState<DeliverablesExportUiStatus>("idle");
-  const [exportStatusHistory, setExportStatusHistory] = useState<
-    readonly DeliverablesExportUiStatus[]
-  >([]);
-  const [exportError, setExportError] = useState<string | null>(null);
-
-  const sessionsById = useMemo(
-    () => new Map(sessions.map((session) => [session.id, session])),
-    [sessions],
-  );
-  const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
-  const profilesById = useMemo(
-    () => new Map(profiles.map((profile) => [profile.participantId, profile])),
-    [profiles],
-  );
-  const families = useMemo(() => {
-    const grouped = new Map<string, DeliverableAsset[]>();
-    for (const asset of assets) {
-      const family = grouped.get(assetFamily(asset));
-      if (family === undefined) grouped.set(assetFamily(asset), [asset]);
-      else family.push(asset);
-    }
-    return [...grouped.values()]
-      .map((versions) => {
-        const current = latestAsset(versions);
-        return current === undefined ? null : { current, versions };
-      })
-      .filter((family): family is { current: DeliverableAsset; versions: DeliverableAsset[] } =>
-        Boolean(family),
-      )
-      .sort((left, right) => compareAssetVersions(left.current, right.current));
-  }, [assets]);
-  const rows = useMemo(
-    () =>
-      families.map(({ current, versions }) => {
-        const sessionId = assetSessionId(current, tasksById);
-        return {
-          current,
-          versions,
-          sessionId,
-          sessionTitle:
-            sessionsById.get(sessionId)?.title ??
-            current.sessionTitle ??
-            tasksById.get(current.taskId ?? "")?.sessionTitle ??
-            (current.kind === "headshot" ? "Speaker profile" : "Session unavailable"),
-          speaker:
-            current.participantName ??
-            profilesById.get(current.participantId)?.displayName ??
-            current.participantId,
-        };
-      }),
-    [families, profilesById, sessionsById, tasksById],
-  );
-  const visibleRows = useMemo(() => {
-    const normalizedSearch = search.trim().toLocaleLowerCase();
-    return rows.filter((row) => {
-      const reviewValue =
-        row.current.reviewState ?? (row.current.state === "ready" ? "pending" : row.current.state);
-      return (
-        (normalizedSearch.length === 0 ||
-          [row.current.fileName, row.speaker, row.sessionTitle].some((value) =>
-            value.toLocaleLowerCase().includes(normalizedSearch),
-          )) &&
-        (speakerFilter === "all" || row.current.participantId === speakerFilter) &&
-        (sessionFilter === "all" || row.sessionId === sessionFilter) &&
-        (reviewFilter === "all" || reviewValue === reviewFilter)
-      );
-    });
-  }, [reviewFilter, rows, search, sessionFilter, speakerFilter]);
-  const sessionGroups = useMemo(() => {
-    const grouped = new Map<string, typeof visibleRows>();
-    for (const row of visibleRows) {
-      const group = grouped.get(row.sessionId);
-      if (group === undefined) grouped.set(row.sessionId, [row]);
-      else group.push(row);
-    }
-    return [...grouped.entries()].sort((left, right) =>
-      (left[1][0]?.sessionTitle ?? "").localeCompare(right[1][0]?.sessionTitle ?? ""),
-    );
-  }, [visibleRows]);
-  const currentById = useMemo(() => new Map(rows.map((row) => [row.current.id, row])), [rows]);
-  const selectableVisibleIds = visibleRows
-    .filter((row) => row.current.state === "ready")
-    .map((row) => row.current.id);
-  const selectedReadyIds = selectedAssetIds.filter(
-    (assetId) => currentById.get(assetId)?.current.state === "ready",
-  );
-  const allVisibleSelected =
-    selectableVisibleIds.length > 0 &&
-    selectableVisibleIds.every((assetId) => selectedAssetIds.includes(assetId));
-  const exportInFlight =
-    exportStatus === "queued" || exportStatus === "preparing" || exportStatus === "generating";
-
-  useEffect(() => {
-    const currentIds = new Set(rows.map((row) => row.current.id));
-    setSelectedAssetIds((current) => current.filter((assetId) => currentIds.has(assetId)));
-  }, [rows]);
-
-  function setExportStage(stage: DeliverablesExportUiStatus, resetHistory = false): void {
-    setExportStatus(stage);
-    setExportStatusHistory((current) => (resetHistory ? [stage] : [...current, stage]));
-  }
-
-  function toggleAsset(assetId: string): void {
-    setSelectedAssetIds((current) =>
-      current.includes(assetId)
-        ? current.filter((candidate) => candidate !== assetId)
-        : [...current, assetId],
-    );
-  }
-
-  function toggleAssets(assetIds: readonly string[]): void {
-    if (assetIds.length === 0) return;
-    const allSelected = assetIds.every((assetId) => selectedAssetIds.includes(assetId));
-    setSelectedAssetIds((current) =>
-      allSelected
-        ? current.filter((assetId) => !assetIds.includes(assetId))
-        : [...new Set([...current, ...assetIds])],
-    );
-  }
-
-  async function exportSelected(): Promise<void> {
-    if (onExport === undefined || selectedReadyIds.length === 0 || exportInFlight) return;
-    setExportError(null);
-    setExportStage("queued", true);
-    await Promise.resolve();
-    setExportStage("preparing");
-    try {
-      setExportStage("generating");
-      const download = await onExport({ assetIds: [...selectedReadyIds] });
-      if (download === undefined) {
-        throw new Error("The ZIP export returned no download response.");
-      }
-      setExportStage("ready");
-      triggerDeliverablesDownload(download);
-      setExportStage("download-started");
-    } catch (reason) {
-      setExportError(messageFromError(reason));
-      setExportStage("failure");
-    }
-  }
-
-  const statusDescription: Record<DeliverablesExportUiStatus, string> = {
-    ...deliverablesExportStatusLabels,
-    failure: exportError ?? deliverablesExportStatusLabels.failure,
-  };
-
+  const task = row.task;
+  const policy = [
+    ...(task.acceptedAssetKinds ?? []).map(formatStatus),
+    ...uploadMimeTypeLabels(task.allowedMimeTypes ?? []),
+    ...(task.maxBytes === undefined
+      ? []
+      : [`Maximum ${Math.ceil(task.maxBytes / 1024 / 1024)} MB`]),
+  ];
   return (
-    <section style={cardStyle} aria-labelledby="file-library-heading" data-files-library>
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 28rem" }}>
-          <p style={mutedStyle}>Asset-centric Files library</p>
-          <h2 id="file-library-heading">All authorized speaker files</h2>
+    <div className={styles.assignmentInspector}>
+      <section>
+        <div className={styles.inspectorHeading}>
+          <div>
+            <p className={styles.eyebrow}>Content request</p>
+            <h2>{task.title}</h2>
+          </div>
+          <Badge variant={isOutstanding(row.status) ? "secondary" : "outline"}>
+            {formatStatus(row.status)}
+          </Badge>
         </div>
-        <span>{families.length} version families</span>
-      </div>
-      <p style={mutedStyle}>
-        Every row is the authoritative latest version of one immutable asset family. Filename,
-        session, speaker, upload date, review state, version history, authorized downloads, and
-        comments stay in this event-scoped library.
-      </p>
-      <p style={mutedStyle}>
-        Choose View version history to open authorized Download version controls for each immutable
-        version and the Add a comment thread for this asset family.
-      </p>
-      <div style={{ ...gridStyle, margin: "1rem 0" }}>
-        <label style={fieldStyle}>
-          <span>Filter files</span>
-          <input
-            style={inputStyle}
-            value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
-            placeholder="Filename, speaker, or session"
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span>Filter by speaker</span>
-          <select
-            style={inputStyle}
-            value={speakerFilter}
-            onChange={(event) => setSpeakerFilter(event.currentTarget.value)}
-          >
-            <option value="all">All speakers</option>
-            {[...new Map(rows.map((row) => [row.current.participantId, row.speaker])).entries()]
-              .sort((left, right) => left[1].localeCompare(right[1]))
-              .map(([id, label]) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label style={fieldStyle}>
-          <span>Filter by session</span>
-          <select
-            style={inputStyle}
-            value={sessionFilter}
-            onChange={(event) => setSessionFilter(event.currentTarget.value)}
-          >
-            <option value="all">All sessions</option>
-            {[...new Map(rows.map((row) => [row.sessionId, row.sessionTitle])).entries()]
-              .sort((left, right) => left[1].localeCompare(right[1]))
-              .map(([id, label]) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label style={fieldStyle}>
-          <span>Filter by review state</span>
-          <select
-            style={inputStyle}
-            value={reviewFilter}
-            onChange={(event) => setReviewFilter(event.currentTarget.value)}
-          >
-            <option value="all">All review states</option>
-            <option value="pending">Pending review</option>
-            <option value="approved">Approved</option>
-            <option value="needs_changes">Needs changes</option>
-          </select>
-        </label>
-      </div>
-      <section aria-labelledby="file-session-selection-heading" style={{ marginBottom: "1rem" }}>
-        <h3 id="file-session-selection-heading">Select sessions</h3>
-        {sessionGroups.length === 0 ? (
-          <p style={mutedStyle}>No sessions match the current file filters.</p>
+        <dl className={styles.inspectorFacts}>
+          <div>
+            <dt>Speaker</dt>
+            <dd>{row.speakerLabel}</dd>
+          </div>
+          <div>
+            <dt>Session</dt>
+            <dd>{row.sessionLabel}</dd>
+          </div>
+          <div>
+            <dt>Due</dt>
+            <dd>{formatDate(task.dueAt)}</dd>
+          </div>
+          <div>
+            <dt>Scope</dt>
+            <dd>
+              {task.subject?.type === "participant" ? "Participant profile" : "Accepted session"}
+            </dd>
+          </div>
+        </dl>
+      </section>
+      <section>
+        <h3>Instructions</h3>
+        <p>{task.description ?? task.instructions ?? "No instructions were returned."}</p>
+      </section>
+      <section>
+        <h3>File policy</h3>
+        {policy.length === 0 ? (
+          <p className={mutedClass}>No upload policy was returned.</p>
         ) : (
-          <div style={{ display: "grid", gap: "0.35rem" }}>
-            {sessionGroups.map(([sessionId, group]) => {
-              const selectableIds = group
-                .filter((row) => row.current.state === "ready")
-                .map((row) => row.current.id);
-              const checked =
-                selectableIds.length > 0 &&
-                selectableIds.every((assetId) => selectedAssetIds.includes(assetId));
-              return (
-                <label key={sessionId || `unassigned-${group[0]?.current.id}`} style={rowStyle}>
-                  <input
-                    type="checkbox"
-                    aria-label={`Select session ${group[0]?.sessionTitle ?? "Session unavailable"}`}
-                    checked={checked}
-                    disabled={selectableIds.length === 0}
-                    onChange={() => toggleAssets(selectableIds)}
-                  />
-                  <span>
-                    {group[0]?.sessionTitle ?? "Session unavailable"} · {selectableIds.length}{" "}
-                    latest ready asset{selectableIds.length === 1 ? "" : "s"}
-                  </span>
-                </label>
-              );
-            })}
+          <div className={styles.policyList}>
+            {policy.map((item) => (
+              <Badge key={item} variant="outline">
+                {item}
+              </Badge>
+            ))}
           </div>
         )}
       </section>
-      <div style={{ ...rowStyle, marginBottom: "0.8rem" }}>
-        <button
-          style={secondaryButtonStyle}
-          type="button"
-          disabled={selectableVisibleIds.length === 0}
-          onClick={() => toggleAssets(selectableVisibleIds)}
-        >
-          {allVisibleSelected ? "Clear visible selection" : "Select all visible latest files"}
-        </button>
-        <button
-          style={secondaryButtonStyle}
-          type="button"
-          disabled={
-            busy || exportInFlight || onExport === undefined || selectedReadyIds.length === 0
-          }
-          onClick={() => void exportSelected()}
-        >
-          {exportStatus === "queued"
-            ? "ZIP export queued"
-            : exportStatus === "preparing"
-              ? "Preparing ZIP…"
-              : exportStatus === "generating"
-                ? "Generating ZIP…"
-                : exportStatus === "ready"
-                  ? "ZIP ready"
-                  : exportStatus === "download-started"
-                    ? "Download started"
-                    : exportStatus === "failure"
-                      ? "Retry ZIP export"
-                      : "Download selected files ZIP"}
-        </button>
-        <span style={mutedStyle}>
-          {onExport === undefined
-            ? "Bulk ZIP export is unavailable because the authorized export capability is not provisioned."
-            : selectedReadyIds.length === 0
-              ? "Select at least one latest ready asset."
-              : `${selectedReadyIds.length} latest asset${selectedReadyIds.length === 1 ? "" : "s"} selected.`}
-        </span>
-      </div>
-      {exportStatus !== "idle" ? (
-        <div
-          role={exportStatus === "failure" ? "alert" : "status"}
-          aria-live="polite"
-          data-export-status={exportStatus}
-          style={{ ...cardStyle, marginBottom: "1rem" }}
-        >
-          <strong>ZIP export status: {exportStatus}</strong>
-          <p>{statusDescription[exportStatus]}</p>
-          {exportStatusHistory.length > 1 ? (
-            <small style={mutedStyle}>Progress: {exportStatusHistory.join(" → ")}</small>
-          ) : null}
-        </div>
-      ) : null}
-      {families.length === 0 ? (
-        <p style={mutedStyle}>No private speaker files have been uploaded.</p>
-      ) : visibleRows.length === 0 ? (
-        <p style={mutedStyle}>No files match these filters.</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table>
-            <caption>Latest authorized file metadata across every speaker</caption>
-            <thead>
-              <tr>
-                <th scope="col">
-                  <span className="sr-only">Select</span>
-                  <input
-                    type="checkbox"
-                    aria-label="Select all visible latest files"
-                    checked={allVisibleSelected}
-                    disabled={selectableVisibleIds.length === 0}
-                    onChange={() => toggleAssets(selectableVisibleIds)}
-                  />
-                </th>
-                <th scope="col">Filename</th>
-                <th scope="col">Speaker</th>
-                <th scope="col">Session</th>
-                <th scope="col">Upload date</th>
-                <th scope="col">Review state</th>
-                <th scope="col">Versions / history</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map(({ current, versions, sessionTitle, speaker }) => (
-                <tr key={assetFamily(current)}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${current.fileName}`}
-                      checked={selectedAssetIds.includes(current.id)}
-                      disabled={current.state !== "ready"}
-                      onChange={() => toggleAsset(current.id)}
-                    />
-                  </td>
-                  <th scope="row">
-                    {current.fileName}
-                    <br />
-                    <small style={mutedStyle}>{current.contentType}</small>
-                  </th>
-                  <td>{speaker}</td>
-                  <td>{sessionTitle}</td>
-                  <td>{formatTime(current.createdAt)}</td>
-                  <td>{reviewStateForAsset(current)}</td>
-                  <td>
-                    <strong>
-                      v{current.version ?? 1} · {versions.length} version
-                      {versions.length === 1 ? "" : "s"}
-                    </strong>
-                    <br />
-                    <button
-                      style={{ ...secondaryButtonStyle, padding: "0.35rem 0.5rem" }}
-                      type="button"
-                      disabled={onInspectAsset === undefined}
-                      onClick={() => onInspectAsset?.(current.id)}
-                    >
-                      {onInspectAsset === undefined
-                        ? "History unavailable"
-                        : "View version history"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+      <section>
+        <h3>Submission</h3>
+        {row.currentAsset === undefined ? (
+          <div className={styles.noUploadState}>
+            <strong>Waiting for upload</strong>
+            <p>The speaker has not submitted a current file for this assignment.</p>
+          </div>
+        ) : (
+          <div className={styles.currentSubmission}>
+            <div>
+              <strong>{row.currentAsset.fileName}</strong>
+              <p>
+                Version {row.currentAsset.version ?? 1} · uploaded{" "}
+                {formatTime(row.currentAsset.createdAt)} · {reviewStateForAsset(row.currentAsset)}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onInspectAsset?.(row.currentAsset?.id ?? "")}
+              disabled={onInspectAsset === undefined}
+            >
+              Inspect file versions
+            </Button>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
-function ReminderPreview({
+
+export function ReminderPreview({
   rows,
-  selectedTaskIds,
   busy,
   onSend,
   sendAvailable,
 }: Readonly<{
   rows: readonly DeliverableRow[];
-  selectedTaskIds: readonly string[];
   busy: boolean;
   onSend: () => void;
   sendAvailable: boolean;
 }>) {
-  const selected = rows.filter(
-    (row) =>
-      selectedTaskIds.includes(row.task.id) && statusMatches(row.task, row.assets, "pending"),
-  );
-  const effective =
-    selected.length > 0
-      ? selected
-      : rows.filter((row) => statusMatches(row.task, row.assets, "pending"));
+  const effective = rows.filter((row) => isOutstanding(row.status));
   const recipients = [
     ...new Map(effective.map((row) => [row.task.participantId, row.speakerLabel])).entries(),
   ];
+  const snapshotKey = effective
+    .map(
+      (row) =>
+        `${row.task.id}\u0000${row.task.version}\u0000${row.task.participantId}\u0000${row.task.dueAt ?? ""}\u0000${row.status}`,
+    )
+    .join("\u0001");
+  const [confirmedSnapshotKey, setConfirmedSnapshotKey] = useState<string | null>(null);
+  const confirmed = confirmedSnapshotKey === snapshotKey;
   return (
-    <section style={cardStyle} aria-labelledby="reminder-preview-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 28rem" }}>
-          <p style={mutedStyle}>Human review required</p>
-          <h2 id="reminder-preview-heading">Reminder recipient preview</h2>
+    <Card className={sectionClass} aria-labelledby="reminder-preview-heading">
+      <CardHeader className={clusterClass}>
+        <div>
+          <p className={mutedClass}>Human review required</p>
+          <CardTitle id="reminder-preview-heading">Reminder recipient preview</CardTitle>
+          <CardDescription>
+            Only the outstanding assignment snapshot below will be sent. No email is sent until you
+            confirm this recipient list.
+          </CardDescription>
         </div>
-        <span>
-          {recipients.length} recipient{recipients.length === 1 ? "" : "s"}
-        </span>
-      </div>
-      <p>
-        Only the outstanding task snapshot below will be sent. No email is sent until you confirm
-        this recipient list.
-      </p>
-      {recipients.length === 0 ? (
-        <p style={mutedStyle}>No outstanding tasks are available for a reminder.</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table>
-            <caption>Explicit reminder recipients and outstanding tasks</caption>
-            <thead>
-              <tr>
-                <th scope="col">Recipient</th>
-                <th scope="col">Outstanding task</th>
-                <th scope="col">Due date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {effective.map((row) => (
-                <tr key={`preview-${row.task.id}`}>
-                  <th scope="row">{row.speakerLabel}</th>
-                  <td>{row.task.title}</td>
-                  <td>{formatDate(row.task.dueAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className={styles.previewCounts}>
+          <Badge variant="outline">
+            {effective.length} assignment{effective.length === 1 ? "" : "s"}
+          </Badge>
+          <Badge variant="outline">
+            {recipients.length} recipient{recipients.length === 1 ? "" : "s"}
+          </Badge>
         </div>
-      )}
-      <div style={{ ...rowStyle, marginTop: "0.8rem" }}>
-        <button
-          style={buttonStyle}
-          type="button"
-          disabled={busy || !sendAvailable || effective.length === 0}
-          onClick={onSend}
-        >
-          {busy
-            ? "Sending reminders…"
-            : sendAvailable
-              ? "Confirm and send reminders"
-              : "Reminder sending unavailable"}
-        </button>
-        {!sendAvailable ? (
-          <span style={mutedStyle}>
-            The transactional reminder endpoint is not provisioned; no send was attempted.
-          </span>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-function AssetDetail({
-  asset,
-  allAssets,
-  history,
-  comments,
-  loading,
-  busy,
-  onDownload,
-  onAddComment,
-  onReview,
-  reviewAvailable,
-}: Readonly<{
-  asset: DeliverableAsset;
-  allAssets: readonly DeliverableAsset[];
-  history: readonly DeliverableAssetHistoryEntry[];
-  comments: readonly DeliverableComment[];
-  loading: boolean;
-  busy: boolean;
-  onDownload?: (assetId: string) => Promise<void>;
-  onAddComment?: (body: string) => Promise<void>;
-  onReview?: (state: DeliverableReviewState, note?: string) => Promise<void>;
-  reviewAvailable: boolean;
-}>) {
-  const family = assetFamily(asset);
-  const fallbackHistory = allAssets
-    .filter((candidate) => assetFamily(candidate) === family)
-    .sort((left, right) => (left.version ?? 0) - (right.version ?? 0));
-  const versions = history.length > 0 ? history : fallbackHistory;
-  const [commentBody, setCommentBody] = useState("");
-  const [reviewNote, setReviewNote] = useState("");
-  const [commentError, setCommentError] = useState<string | null>(null);
-
-  async function submitComment(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const body = commentBody.trim();
-    if (body.length === 0) {
-      setCommentError("Enter a comment before posting.");
-      return;
-    }
-    setCommentError(null);
-    if (onAddComment === undefined) {
-      setCommentError(
-        "Cross-role comments are unavailable because the private asset comment endpoint is not provisioned.",
-      );
-      return;
-    }
-    await onAddComment(body);
-    setCommentBody("");
-  }
-
-  return (
-    <section style={cardStyle} aria-labelledby="asset-detail-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 24rem" }}>
-          <p style={mutedStyle}>Private asset review</p>
-          <h2 id="asset-detail-heading">{asset.fileName}</h2>
-        </div>
-        <span>
-          {asset.contentType} · {Math.ceil(asset.sizeBytes / 1024)} KB
-        </span>
-      </div>
-      <p style={mutedStyle}>
-        Asset metadata is immutable. Each version remains independently accessible through a
-        short-lived server capability; object keys are never shown here.
-      </p>
-      <h3>Version history</h3>
-      {loading ? (
-        <p role="status">Loading immutable versions and comments…</p>
-      ) : versions.length === 0 ? (
-        <p style={mutedStyle}>No version history was returned.</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table>
-            <caption>Immutable asset versions</caption>
-            <thead>
-              <tr>
-                <th scope="col">Version</th>
-                <th scope="col">Uploaded</th>
-                <th scope="col">State</th>
-                <th scope="col">Review state</th>
-                <th scope="col">Current</th>
-                <th scope="col">Download</th>
-              </tr>
-            </thead>
-            <tbody>
-              {versions.map((version) => {
-                const current = isCurrentAsset(version, versions);
-                return (
-                  <tr key={version.id}>
-                    <th scope="row">v{version.version ?? 1}</th>
-                    <td>{formatTime(version.createdAt)}</td>
-                    <td>{formatStatus(version.state)}</td>
-                    <td>{reviewStateForAsset(version)}</td>
-                    <td>{current ? <strong>Current</strong> : "Previous"}</td>
-                    <td>
-                      <button
-                        style={{ ...secondaryButtonStyle, padding: "0.35rem 0.5rem" }}
-                        type="button"
-                        disabled={busy || onDownload === undefined}
-                        onClick={() =>
-                          onDownload === undefined ? undefined : void onDownload(version.id)
-                        }
-                      >
-                        {onDownload === undefined ? "Download unavailable" : "Download version"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <h3>Cross-role comments</h3>
-      {comments.length === 0 ? (
-        <p style={mutedStyle}>No comments have been returned for this asset.</p>
-      ) : (
-        <ol>
-          {comments.map((comment) => (
-            <li key={comment.id}>
-              <strong>{comment.authorLabel}</strong> ·{" "}
-              <time dateTime={comment.createdAt}>{formatTime(comment.createdAt)}</time>
-              <p>{comment.body}</p>
-            </li>
-          ))}
-        </ol>
-      )}
-      <form
-        onSubmit={(event) => void submitComment(event)}
-        style={{ display: "grid", gap: "0.55rem" }}
-      >
-        <label style={fieldStyle}>
-          <span>Add a comment</span>
-          <textarea
-            style={inputStyle}
-            rows={3}
-            value={commentBody}
-            onChange={(event) => setCommentBody(event.currentTarget.value)}
-            placeholder="Reply to the speaker…"
+      </CardHeader>
+      <CardContent className={stackClass}>
+        {recipients.length === 0 ? (
+          <p className={mutedClass}>No outstanding assignments are available for a reminder.</p>
+        ) : (
+          <div className={tableWrapClass}>
+            <Table>
+              <TableCaption>Recipient and assignment snapshot</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">Recipient</TableHead>
+                  <TableHead scope="col">Outstanding assignment</TableHead>
+                  <TableHead scope="col">Due date</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {effective.map((row) => (
+                  <TableRow key={`preview-${row.task.id}`}>
+                    <TableHead scope="row">{row.speakerLabel}</TableHead>
+                    <TableCell>{row.task.title}</TableCell>
+                    <TableCell>{formatDate(row.task.dueAt)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+        <div className={clusterClass}>
+          <Checkbox
+            id="reminder-confirm"
+            checked={confirmed}
+            disabled={effective.length === 0 || !sendAvailable || busy}
+            onCheckedChange={(checked) =>
+              setConfirmedSnapshotKey(checked === true ? snapshotKey : null)
+            }
           />
-        </label>
-        {commentError !== null ? <p role="alert">{commentError}</p> : null}
-        <button
-          style={secondaryButtonStyle}
-          type="submit"
-          disabled={busy || onAddComment === undefined}
-        >
-          {onAddComment === undefined ? "Comments unavailable" : "Post comment"}
-        </button>
-      </form>
-      <h3>Review decision</h3>
-      {reviewAvailable ? (
-        <div style={{ display: "grid", gap: "0.55rem" }}>
-          <label style={fieldStyle}>
-            <span>Review note (optional)</span>
-            <textarea
-              style={inputStyle}
-              rows={2}
-              value={reviewNote}
-              onChange={(event) => setReviewNote(event.currentTarget.value)}
-            />
-          </label>
-          <div style={rowStyle}>
-            <button
-              style={buttonStyle}
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                onReview === undefined
-                  ? undefined
-                  : void onReview("approved", reviewNote.trim() || undefined)
-              }
-            >
-              Approve
-            </button>
-            <button
-              style={secondaryButtonStyle}
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                onReview === undefined
-                  ? undefined
-                  : void onReview("needs_changes", reviewNote.trim() || undefined)
-              }
-            >
-              Needs changes
-            </button>
-          </div>
+          <Label htmlFor="reminder-confirm">
+            I confirm this exact outstanding recipient and assignment snapshot.
+          </Label>
         </div>
-      ) : (
-        <p style={mutedStyle}>
-          Organizer asset approval is unavailable because the private asset API exposes no review
-          endpoint. No decision was fabricated.
-        </p>
-      )}
-    </section>
-  );
-}
-
-function SessionEditor({
-  sessions,
-  busy,
-  onSave,
-  onApprove,
-  onRestore,
-}: Readonly<{
-  sessions: readonly DeliverableSession[];
-  busy: boolean;
-  onSave?: (input: {
-    readonly sessionId: string;
-    readonly expectedVersion: number;
-    readonly title: string;
-    readonly description: string;
-  }) => Promise<void>;
-  onApprove?: (session: DeliverableSession, status: string) => Promise<void>;
-  onRestore?: (input: {
-    readonly sessionId: string;
-    readonly version: number;
-    readonly expectedVersion: number;
-  }) => Promise<void>;
-}>) {
-  const [sessionId, setSessionId] = useState(sessions[0]?.id ?? "");
-  const selected = sessions.find((session) => session.id === sessionId) ?? sessions[0];
-  const [title, setTitle] = useState(selected?.title ?? "");
-  const [description, setDescription] = useState(selected?.description ?? "");
-  const [formError, setFormError] = useState<string | null>(null);
-  const history =
-    selected?.contentHistory !== undefined && selected.contentHistory.length > 0
-      ? selected.contentHistory
-      : (selected?.history ?? []);
-  const priorVersions = useMemo(
-    () =>
-      [...history]
-        .filter((entry) => selected !== undefined && entry.version < selected.version)
-        .sort((left, right) => right.version - left.version),
-    [history, selected],
-  );
-  const [restoreVersion, setRestoreVersion] = useState<number | null>(
-    priorVersions[0]?.version ?? null,
-  );
-
-  useEffect(() => {
-    setRestoreVersion(priorVersions[0]?.version ?? null);
-  }, [priorVersions]);
-
-  useEffect(() => {
-    setTitle(selected?.title ?? "");
-    setDescription(selected?.description ?? "");
-    setFormError(null);
-  }, [selected]);
-
-  async function save(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (selected === undefined || onSave === undefined) {
-      setFormError(
-        "Session editing is unavailable because the admin session API is not configured.",
-      );
-      return;
-    }
-    if (title.trim().length === 0) {
-      setFormError("A session title is required.");
-      return;
-    }
-    setFormError(null);
-    await onSave({
-      sessionId: selected.id,
-      expectedVersion: selected.version,
-      title: title.trim(),
-      description,
-    });
-  }
-
-  return (
-    <section style={cardStyle} aria-labelledby="session-content-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 28rem" }}>
-          <p style={mutedStyle}>Central content</p>
-          <h2 id="session-content-heading">Session title and abstract</h2>
-        </div>
-        <span style={mutedStyle}>Versioned admin session API</span>
-      </div>
-      {sessions.length === 0 ? (
-        <>
-          <p style={mutedStyle}>No sessions are available for this event.</p>
-          {onSave === undefined ? (
-            <p style={mutedStyle}>
-              Session editing unavailable until the admin session API returns an event-qualified
-              session.
-            </p>
+        <div className={clusterClass}>
+          <Button
+            type="button"
+            disabled={busy || !sendAvailable || effective.length === 0 || !confirmed}
+            onClick={() => {
+              onSend();
+              setConfirmedSnapshotKey(null);
+            }}
+          >
+            {busy
+              ? "Sending reminders…"
+              : sendAvailable
+                ? "Confirm and send reminders"
+                : "Reminder sending unavailable"}
+          </Button>
+          {!sendAvailable ? (
+            <span className={mutedClass}>
+              The transactional reminder endpoint is not provisioned; no send was attempted.
+            </span>
           ) : null}
-        </>
-      ) : (
-        <>
-          <div role="note" style={{ ...cardStyle, padding: "0.8rem" }}>
-            <strong>Public approval gate</strong>
-            <p style={{ margin: "0.35rem 0 0" }}>
-              Only content marked Approved is eligible for public publication. Unapproved content is
-              excluded from the public agenda and embeds.
-            </p>
-            <p style={{ margin: "0.35rem 0 0" }}>
-              Review status: <strong>{selected?.contentStatus ?? "Not approved"}</strong>
-            </p>
-          </div>
-          <label style={fieldStyle}>
-            <span>Session</span>
-            <select
-              style={inputStyle}
-              value={selected?.id ?? ""}
-              onChange={(event) => setSessionId(event.currentTarget.value)}
-            >
-              {sessions.map((session) => (
-                <option key={session.id} value={session.id}>
-                  {session.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <form
-            onSubmit={(event) => void save(event)}
-            style={{ display: "grid", gap: "0.8rem", marginTop: "0.8rem" }}
-          >
-            <label style={fieldStyle}>
-              <span>Title</span>
-              <input
-                style={inputStyle}
-                value={title}
-                onChange={(event) => setTitle(event.currentTarget.value)}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Abstract</span>
-              <textarea
-                style={inputStyle}
-                rows={6}
-                value={description}
-                onChange={(event) => setDescription(event.currentTarget.value)}
-              />
-            </label>
-            {formError !== null ? <p role="alert">{formError}</p> : null}
-            <div style={rowStyle}>
-              <button style={buttonStyle} type="submit" disabled={busy || onSave === undefined}>
-                {busy
-                  ? "Saving content…"
-                  : onSave === undefined
-                    ? "Session editing unavailable"
-                    : "Save session content"}
-              </button>
-              {selected !== undefined && onApprove !== undefined ? (
-                <>
-                  <button
-                    style={secondaryButtonStyle}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onApprove(selected, "Approved")}
-                  >
-                    Approve content
-                  </button>
-                  <button
-                    style={secondaryButtonStyle}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onApprove(selected, "Needs changes")}
-                  >
-                    Mark needs changes
-                  </button>
-                </>
-              ) : null}
-            </div>
-          </form>
-          <h3>Change history</h3>
-          {history.length === 0 ? (
-            <p style={mutedStyle}>
-              No session history was returned. Restore is unavailable without an immutable prior
-              version.
-            </p>
-          ) : (
-            <ol>
-              {history.map((entry) => (
-                <li key={entry.id}>
-                  {formatTime(entry.occurredAt)} · {entry.actorLabel ?? entry.actorId} · version{" "}
-                  {entry.version}
-                  {entry.action === undefined ? "" : ` · ${formatStatus(entry.action)}`}
-                  {entry.title === undefined ? "" : ` · ${entry.title}`}
-                </li>
-              ))}
-            </ol>
-          )}
-          <div style={rowStyle}>
-            {priorVersions.length > 0 ? (
-              <label style={fieldStyle}>
-                <span>Prior version to restore</span>
-                <select
-                  style={inputStyle}
-                  value={restoreVersion ?? ""}
-                  disabled={busy || onRestore === undefined}
-                  onChange={(event) => {
-                    const value = Number(event.currentTarget.value);
-                    setRestoreVersion(Number.isSafeInteger(value) ? value : null);
-                  }}
-                >
-                  {priorVersions.map((entry) => (
-                    <option key={`${entry.id}-${entry.version}`} value={entry.version}>
-                      Version {entry.version} · {formatTime(entry.occurredAt)} ·{" "}
-                      {entry.actorLabel ?? entry.actorId}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <button
-              style={secondaryButtonStyle}
-              type="button"
-              disabled={
-                busy || onRestore === undefined || selected === undefined || restoreVersion === null
-              }
-              onClick={() => {
-                if (selected !== undefined && restoreVersion !== null && onRestore !== undefined)
-                  void onRestore({
-                    sessionId: selected.id,
-                    version: restoreVersion,
-                    expectedVersion: selected.version,
-                  });
-              }}
-            >
-              Restore selected prior version
-            </button>
-            {onRestore === undefined ? (
-              <span style={mutedStyle}>Version restore is not supported by the current API.</span>
-            ) : null}
-          </div>
-        </>
-      )}
-    </section>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-function SpeakerEditor({
-  profiles,
-  assets,
-  busy,
-  onSaveBiography,
-  onReplaceHeadshot,
-}: Readonly<{
-  profiles: readonly DeliverableSpeakerProfile[];
-  assets: readonly DeliverableAsset[];
-  busy: boolean;
-  onSaveBiography?: (input: {
-    readonly participantId: string;
-    readonly biography: string;
-    readonly expectedVersion: number;
-  }) => Promise<void>;
-  onReplaceHeadshot?: (input: {
-    readonly participantId: string;
-    readonly file: File;
-    readonly supersedesAssetId?: string;
-  }) => Promise<void>;
-}>) {
-  const [participantId, setParticipantId] = useState(profiles[0]?.participantId ?? "");
-  const selected =
-    profiles.find((profile) => profile.participantId === participantId) ?? profiles[0];
-  const [biography, setBiography] = useState(selected?.biography ?? "");
-  const [formError, setFormError] = useState<string | null>(null);
+function SessionEditor(
+  props: Readonly<{
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly sessions: readonly DeliverableSession[];
+    readonly loadingHistory: boolean;
+    readonly busy: boolean;
+    readonly onSave?: (input: {
+      readonly sessionId: string;
+      readonly expectedVersion: number;
+      readonly title: string;
+      readonly description: string;
+    }) => Promise<void>;
+    readonly selectedSessionId?: string;
+    readonly sessionHistory?: readonly DeliverableContentHistoryEntry[];
+    readonly sessionHistoryError?: string | null;
+    readonly onSelectSession?: (sessionId: string) => void;
+    readonly onApprove?: (
+      session: DeliverableSession,
+      contentStatus: "Approved" | "Needs changes",
+    ) => Promise<void>;
+    readonly onRestore?: (input: {
+      readonly sessionId: string;
+      readonly version: number;
+      readonly expectedVersion: number;
+    }) => Promise<void>;
+  }>,
+) {
+  const selectedSessionId = props.selectedSessionId ?? props.sessions[0]?.id;
+  const href = `/admin/organizations/${encodeURIComponent(
+    props.organizationId,
+  )}/events/${encodeURIComponent(props.eventId)}/sessions${
+    selectedSessionId === undefined ? "" : `?session=${encodeURIComponent(selectedSessionId)}`
+  }`;
 
-  useEffect(() => {
-    setBiography(selected?.biography ?? "");
-    setFormError(null);
-  }, [selected]);
-
-  async function save(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (selected === undefined || onSaveBiography === undefined) {
-      setFormError(
-        "Speaker editing is unavailable because the private profile API does not grant organizer access.",
-      );
-      return;
-    }
-    setFormError(null);
-    await onSaveBiography({
-      participantId: selected.participantId,
-      biography,
-      expectedVersion: selected.version,
-    });
-  }
-
-  const headshot =
-    selected === undefined
-      ? undefined
-      : assets.find((asset) => asset.id === selected.headshotAssetId);
   return (
-    <section style={cardStyle} aria-labelledby="speaker-content-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 28rem" }}>
-          <p style={mutedStyle}>Central content</p>
-          <h2 id="speaker-content-heading">Speaker bio and headshot</h2>
-        </div>
-        <span style={mutedStyle}>Profile changes remain event-scoped</span>
-      </div>
-      {profiles.length === 0 ? (
-        <p style={mutedStyle}>No authorized speaker profiles were returned.</p>
-      ) : (
-        <>
-          <label style={fieldStyle}>
-            <span>Speaker</span>
-            <select
-              style={inputStyle}
-              value={selected?.participantId ?? ""}
-              onChange={(event) => setParticipantId(event.currentTarget.value)}
-            >
-              {profiles.map((profile) => (
-                <option key={profile.participantId} value={profile.participantId}>
-                  {profile.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <form
-            onSubmit={(event) => void save(event)}
-            style={{ display: "grid", gap: "0.8rem", marginTop: "0.8rem" }}
-          >
-            <label style={fieldStyle}>
-              <span>Biography</span>
-              <textarea
-                style={inputStyle}
-                rows={6}
-                value={biography}
-                onChange={(event) => setBiography(event.currentTarget.value)}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Replace headshot</span>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                disabled={onReplaceHeadshot === undefined || busy}
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  if (
-                    file !== undefined &&
-                    selected !== undefined &&
-                    onReplaceHeadshot !== undefined
-                  )
-                    void onReplaceHeadshot({
-                      participantId: selected.participantId,
-                      file,
-                      ...(headshot === undefined ? {} : { supersedesAssetId: headshot.id }),
-                    });
-                }}
-              />
-            </label>
-            <small style={mutedStyle}>
-              Accepted headshot types: JPEG, PNG, or WebP; maximum size 5 MB.{" "}
-              {onReplaceHeadshot === undefined
-                ? "Organizer headshot replacement is unavailable because the private staged-upload endpoint is not provisioned."
-                : "The replacement is staged through a private upload grant, uploaded, finalized as ready, and linked to this event-scoped speaker profile."}
-            </small>
-            {formError !== null ? <p role="alert">{formError}</p> : null}
-            <button
-              style={buttonStyle}
-              type="submit"
-              disabled={busy || onSaveBiography === undefined}
-            >
-              {busy
-                ? "Saving speaker…"
-                : onSaveBiography === undefined
-                  ? "Speaker editing unavailable"
-                  : "Save speaker biography"}
-            </button>
-          </form>
-          <p style={mutedStyle}>
-            Current headshot: {headshot?.fileName ?? "No headshot returned"}. Biography history and
-            restore are unavailable until the profile version-history endpoint is provisioned.
-          </p>
-        </>
-      )}
-    </section>
+    <Card className={styles.contentCard} aria-labelledby="session-content-heading">
+      <CardHeader>
+        <CardTitle id="session-content-heading">Session content lives in Sessions</CardTitle>
+        <CardDescription>
+          Edit titles and abstracts, review attributed history, restore prior versions, and approve
+          public content from the canonical session record.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button asChild>
+          <Link href={href}>Open Sessions</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SpeakerEditor(
+  props: Readonly<{
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly sessions: readonly DeliverableSession[];
+    readonly profiles: readonly DeliverableSpeakerProfile[];
+    readonly assets: readonly DeliverableAsset[];
+    readonly busy: boolean;
+    readonly speakerContentHistory?: Readonly<
+      Record<string, DeliverableSpeakerContentHistoryState>
+    >;
+    readonly onSaveBiography?: (input: {
+      readonly participantId: string;
+      readonly biography: string;
+      readonly expectedVersion: number;
+    }) => Promise<void>;
+    readonly onReplaceHeadshot?: (input: {
+      readonly submissionId: string;
+      readonly participantId: string;
+      readonly file: File;
+      readonly supersedesAssetId?: string;
+    }) => Promise<void>;
+    readonly onRestoreSpeakerContentVersion?: (input: {
+      readonly participantId: string;
+      readonly version: number;
+      readonly expectedVersion: number;
+    }) => Promise<void>;
+  }>,
+) {
+  const href = `/admin/organizations/${encodeURIComponent(
+    props.organizationId,
+  )}/events/${encodeURIComponent(props.eventId)}/speakers`;
+
+  return (
+    <Card className={styles.contentCard} aria-labelledby="speaker-content-heading">
+      <CardHeader>
+        <CardTitle id="speaker-content-heading">Speaker profiles live in Speakers</CardTitle>
+        <CardDescription>
+          Manage event biographies, selected headshots, onboarding, and speaker-specific
+          communication from the canonical speaker record.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button asChild>
+          <Link href={href}>Open Speakers</Link>
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1862,192 +1770,309 @@ export function DeliverablesWorkspaceView({
   tasks,
   assets,
   profiles,
+  speakerContentHistory,
+  matrixItems,
+  temporalContext,
   loading = false,
   busy = false,
   error = null,
   statusMessage = null,
   capabilityMessages = [],
-  apiConfigured = true,
+  operationStates = [],
   onCreateTask,
   onInspectAsset,
+  onCloseAsset,
   selectedAssetId = null,
+  selectedSessionId,
+  sessionHistory,
+  sessionHistoryError,
+  onSelectSession,
   assetHistory = [],
   comments = [],
   loadingAssetDetails = false,
+  assetHistoryError,
+  commentsError,
+  loadingSessionHistories = false,
   onAddComment,
   onDownloadVersion,
   onReviewAsset,
-  onExportDeliverables,
   onExportFiles,
   onSendBulkReminder,
   onSaveSession,
   onApproveSession,
   onRestoreSessionVersion,
+  onRestoreSpeakerContentVersion,
   onSaveBiography,
   onReplaceHeadshot,
   onRetry,
 }: DeliverablesWorkspaceViewProps) {
   const filesMode = mode === "files";
+  const matrixAssetsForView = useMemo(
+    () =>
+      filesMode || matrixItems === undefined
+        ? [...assets, ...(matrixItems === undefined ? [] : matrixAssetsFromItems(matrixItems))]
+        : matrixAssetsFromItems(matrixItems),
+    [assets, filesMode, matrixItems],
+  );
   const rows = useMemo(
-    () => taskRows(tasks, sessions, assets, profiles),
-    [assets, profiles, sessions, tasks],
+    () =>
+      matrixItems === undefined
+        ? taskRows(tasks, sessions, assets, profiles)
+        : matrixRows(matrixItems, sessions, profiles),
+    [assets, matrixItems, profiles, sessions, tasks],
   );
   const participants = useMemo(() => {
     const byId = new Map<string, string>();
-    for (const profile of profiles) {
-      byId.set(profile.participantId, profile.displayName);
-    }
-    for (const row of rows) {
-      byId.set(row.task.participantId, row.speakerLabel);
-    }
-    return [...byId.entries()].map(([id, label]) => ({ id, label }));
-  }, [profiles, rows]);
+    for (const profile of profiles) byId.set(profile.participantId, profile.displayName);
+    for (const row of rows) byId.set(row.task.participantId, row.speakerLabel);
+    return [...byId.entries()]
+      .map(([id, label]) => ({
+        id,
+        label,
+        sessions: sessions
+          .filter(
+            (session) =>
+              session.status.toLocaleLowerCase() === "accepted" &&
+              (session.speakerIds.includes(id) ||
+                session.speakerRoster.some((member) => member.id === id)),
+          )
+          .map((session) => ({ id: session.id, label: session.title }))
+          .sort((left, right) => left.label.localeCompare(right.label)),
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [profiles, rows, sessions]);
   const [selectedTaskIds, setSelectedTaskIds] = useState<readonly string[]>([]);
-  const [speakerFilter, setSpeakerFilter] = useState("all");
-  const [taskFilter, setTaskFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [reminderPreviewOpen, setReminderPreviewOpen] = useState(false);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<ContentRequestFilters>({
+    query: "",
+    speakerId: "all",
+    sessionId: "all",
+    taskId: "all",
+    status: "all",
+  });
+  const [reminderPreviewMode, setReminderPreviewMode] = useState<"selected" | "all" | null>(null);
+
   useEffect(() => {
-    const taskIds = new Set(rows.map((row) => row.task.id));
-    setSelectedTaskIds((current) => current.filter((taskId) => taskIds.has(taskId)));
+    const visibleOutstandingIds = new Set(
+      filterContentRequestRows(rows, filters)
+        .filter((row) => isOutstanding(row.status))
+        .map((row) => row.task.id),
+    );
+    setSelectedTaskIds((current) => current.filter((taskId) => visibleOutstandingIds.has(taskId)));
+    setSelectedAssignmentId((current) =>
+      current !== null && rows.some((row) => row.task.id === current) ? current : null,
+    );
+  }, [filters, rows]);
+
+  useEffect(() => {
+    setFilters((current) => ({
+      ...current,
+      speakerId:
+        current.speakerId !== "all" &&
+        !rows.some((row) => row.task.participantId === current.speakerId)
+          ? "all"
+          : current.speakerId,
+      sessionId:
+        current.sessionId !== "all" &&
+        !rows.some((row) => (row.task.submissionId ?? "participant") === current.sessionId)
+          ? "all"
+          : current.sessionId,
+      taskId:
+        current.taskId !== "all" && !rows.some((row) => row.task.id === current.taskId)
+          ? "all"
+          : current.taskId,
+    }));
   }, [rows]);
 
-  useEffect(() => {
-    if (speakerFilter !== "all" && !rows.some((row) => row.task.participantId === speakerFilter)) {
-      setSpeakerFilter("all");
-    }
-    if (taskFilter !== "all" && !rows.some((row) => row.task.id === taskFilter)) {
-      setTaskFilter("all");
-    }
-  }, [rows, speakerFilter, taskFilter]);
-  const exportableRows = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          selectedTaskIds.includes(row.task.id) &&
-          (speakerFilter === "all" || row.task.participantId === speakerFilter) &&
-          (taskFilter === "all" || row.task.id === taskFilter) &&
-          row.currentAsset?.state === "ready" &&
-          statusMatches(row.task, row.assets, statusFilter),
-      ),
-    [rows, selectedTaskIds, speakerFilter, statusFilter, taskFilter],
+  const selectedAssignment =
+    selectedAssignmentId === null
+      ? undefined
+      : rows.find((row) => row.task.id === selectedAssignmentId);
+  const reminderPreviewRows = rows.filter(
+    (row) =>
+      isOutstanding(row.status) &&
+      (reminderPreviewMode === "all" || selectedTaskIds.includes(row.task.id)),
   );
-  const exportStatus =
-    statusFilter === "all" ? undefined : (statusFilter as DeliverableExportInput["status"]);
-  const exportSelection = useMemo<DeliverableExportInput | null>(() => {
-    const assetIds = exportableRows.flatMap((row) =>
-      row.currentAsset === undefined ? [] : [row.currentAsset.id],
-    );
-    if (assetIds.length === 0) return null;
-    return {
-      assetIds,
-      taskIds: exportableRows.map((row) => row.task.id),
-      participantIds: [...new Set(exportableRows.map((row) => row.task.participantId))],
-      ...(exportStatus === undefined ? {} : { status: exportStatus }),
-    };
-  }, [exportableRows, exportStatus]);
+
+  const selectedAsset =
+    selectedAssetId === null
+      ? undefined
+      : matrixAssetsForView.find((asset) => asset.id === selectedAssetId);
+  const fileFamilies = useMemo(
+    () => projectFileFamilies([...matrixAssetsForView, ...assetHistory], matrixItems ?? []),
+    [assetHistory, matrixAssetsForView, matrixItems],
+  );
+  const activeFileFamily: FileFamilyProjection | undefined =
+    selectedAsset === undefined
+      ? undefined
+      : fileFamilies.find((family) =>
+          family.versions.some((version) => version.id === selectedAsset.id),
+        );
+  const authoritativeCurrentAsset =
+    selectedAsset === undefined
+      ? undefined
+      : matrixItems
+          ?.filter((item) =>
+            item.assets.some((candidate) => assetFamily(candidate) === assetFamily(selectedAsset)),
+          )
+          .flatMap((item) => (item.currentAsset === undefined ? [] : [item.currentAsset]))[0];
+  const selectedAssetVersions =
+    selectedAsset === undefined
+      ? []
+      : matrixAssetsForView.filter(
+          (candidate) => assetFamily(candidate) === assetFamily(selectedAsset),
+        );
+  const selectedAssetCurrentLabel =
+    selectedAsset === undefined
+      ? null
+      : authoritativeCurrentAsset !== undefined
+        ? authoritativeCurrentAsset.id === selectedAsset.id
+          ? "Current"
+          : "Not current"
+        : isCurrentAsset(selectedAsset, selectedAssetVersions)
+          ? "Current"
+          : "Previous";
+  const encodedOrganizationId = encodeURIComponent(organizationId);
+  const encodedEventId = encodeURIComponent(eventId);
+  const deliverablesHref = `/admin/organizations/${encodedOrganizationId}/events/${encodedEventId}/deliverables`;
+  const filesHref = `/admin/organizations/${encodedOrganizationId}/events/${encodedEventId}/files`;
 
   return (
-    <div style={pageStyle} data-workspace-mode={mode}>
-      <a
-        href={filesMode ? "#files-content" : "#deliverables-content"}
-        style={{ position: "absolute", left: "-10000px" }}
-      >
-        Skip to {filesMode ? "Files library" : "deliverables workspace"}
+    <div className={pageClass} data-workspace-mode={mode}>
+      <a href={filesMode ? "#files-content" : "#deliverables-content"} className={styles.skipLink}>
+        Skip to {filesMode ? "Files library" : "Content requests"}
       </a>
-      <div style={contentStyle}>
-        <header style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <div style={rowStyle}>
-            <div style={{ flex: "1 1 34rem" }}>
-              <p style={mutedStyle}>
-                Organizer · {organizationId} · event {eventId}
-              </p>
-              <h1>{filesMode ? "Files library" : "Content management and deliverables"}</h1>
-              <p style={mutedStyle}>
-                {filesMode
-                  ? "Aggregate the latest authorized asset family versions for this event. Inspect immutable history, review state, comments, and short-lived per-version downloads without opening task management."
-                  : "Collect speaker files, review immutable versions and comments, track every speaker-task pair, and edit approved session content from one event-qualified workspace."}
-              </p>
-            </div>
+      <div className={styles.content}>
+        <Card className={styles.header}>
+          <CardHeader className={clusterClass}>
             <div>
-              <strong>
+              <p className={styles.eyebrow}>
+                Speaker operations · {filesMode ? "Files library" : "Requests"}
+              </p>
+              <h1>Content collection</h1>
+              <p className={styles.lede}>
                 {filesMode
-                  ? `${assets.length} asset projection${assets.length === 1 ? "" : "s"}`
-                  : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
-              </strong>
-              <br />
-              <span style={mutedStyle}>
-                {filesMode
-                  ? `${new Set(assets.map(assetFamily)).size} version famil${new Set(assets.map(assetFamily)).size === 1 ? "y" : "ies"}`
-                  : `${assets.length} private asset projection${assets.length === 1 ? "" : "s"}`}
-              </span>
+                  ? "Review submitted files, manage versions, and download approved material."
+                  : "Define what speakers owe, assign recipients, and follow up."}
+              </p>
             </div>
-          </div>
-        </header>
+            <Badge variant="outline">
+              {filesMode
+                ? `${fileFamilies.length} uploaded file${fileFamilies.length === 1 ? "" : "s"}`
+                : `${rows.length} assignment${rows.length === 1 ? "" : "s"}`}
+            </Badge>
+          </CardHeader>
+          <CardContent className={styles.switcherWrap}>
+            <nav
+              className={styles.modeNav}
+              aria-label="Content collection sections"
+              data-mode-switcher
+            >
+              <Link href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
+                Requests <span>Assign &amp; track</span>
+              </Link>
+              <Link href={filesHref} aria-current={filesMode ? "page" : undefined}>
+                Files <span>Review &amp; download</span>
+              </Link>
+            </nav>
+            <details className={styles.mobileSwitcher}>
+              <summary>Switch section: {filesMode ? "Files" : "Requests"}</summary>
+              <nav aria-label="Mobile section switcher">
+                <Link href={deliverablesHref}>Requests — Assign &amp; track</Link>
+                <Link href={filesHref}>Files — Review &amp; download</Link>
+              </nav>
+            </details>
+          </CardContent>
+        </Card>
         <main
           id={filesMode ? "files-content" : "deliverables-content"}
           tabIndex={-1}
-          style={{ display: "grid", gap: "1rem" }}
+          className={styles.main}
         >
-          {!apiConfigured ? (
-            <div role="alert" style={dangerStyle}>
-              <strong>
-                {filesMode ? "Files API is not configured." : "Deliverables API is not configured."}
-              </strong>
-              <p>
-                Set the event-scoped API URL before organizer data can be loaded. No task or asset
-                action was attempted.
-              </p>
-            </div>
-          ) : null}
           {error !== null ? (
-            <div role="alert" style={dangerStyle}>
-              <strong>
+            <Alert variant="destructive" role="alert" className={dangerClass}>
+              <AlertTitle>
                 {filesMode
                   ? "Files action was not completed."
-                  : "Deliverables action was not completed."}
-              </strong>
-              <p>{error}</p>
-              {onRetry !== undefined ? (
-                <button style={secondaryButtonStyle} type="button" onClick={onRetry}>
-                  Retry
-                </button>
-              ) : null}
+                  : "Content requests action was not completed."}
+              </AlertTitle>
+              <AlertDescription>
+                {error}
+                {onRetry !== undefined ? (
+                  <Button variant="outline" type="button" onClick={onRetry}>
+                    Retry
+                  </Button>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {capabilityMessages.length > 0 && !filesMode ? (
+            <Card className={sectionClass} aria-labelledby="capability-heading">
+              <CardHeader>
+                <CardTitle id="capability-heading">Capability status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul>
+                  {capabilityMessages.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          ) : null}
+          {statusMessage !== null ? (
+            <div role="status" aria-live="polite" className={statusClass}>
+              {statusMessage}
             </div>
           ) : null}
-          {capabilityMessages.length > 0 ? (
-            <section style={cardStyle} aria-labelledby="capability-heading">
-              <h2 id="capability-heading">Capability status</h2>
-              <ul>
-                {capabilityMessages.map((message) => (
-                  <li key={message}>{message}</li>
-                ))}
-              </ul>
-            </section>
+          {operationStates.length > 0 ? (
+            <Card className={sectionClass} aria-labelledby="operation-status-heading">
+              <CardHeader>
+                <CardTitle id="operation-status-heading">Organizer operation status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul aria-live="polite">
+                  {operationStates.map((operation) => (
+                    <li key={operation.key} data-operation-phase={operation.phase}>
+                      <strong>{operation.label}</strong>: {formatStatus(operation.phase)} —{" "}
+                      {operation.message}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
           ) : null}
-          <div role="status" aria-live="polite">
-            {statusMessage}
-          </div>
           {loading ? (
-            <section style={cardStyle} role="status">
-              <h2>{filesMode ? "Loading Files library" : "Loading deliverables"}</h2>
-              <p>
-                {filesMode
-                  ? "Retrieving authorized event sessions, private asset projections, and speaker records."
-                  : "Retrieving organization- and event-qualified sessions, tasks, private asset projections, and speaker records."}
-              </p>
-            </section>
+            <Card className={sectionClass} role="status">
+              <CardHeader>
+                <CardTitle>
+                  {filesMode ? "Loading Files library" : "Loading content requests"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p>
+                  {filesMode
+                    ? "Retrieving authorized event sessions, private asset projections, and speaker records."
+                    : "Retrieving organization- and event-qualified sessions plus the authoritative deliverables matrix."}
+                </p>
+              </CardContent>
+            </Card>
           ) : null}
           {!filesMode ? (
             <>
-              <TaskComposer
+              <DeliverablesSummary
+                rows={rows}
+                activeFilter={filters.status}
+                onFilter={(status) => setFilters((current) => ({ ...current, status }))}
                 participants={participants}
                 busy={busy}
+                {...(temporalContext === undefined ? {} : { temporalContext })}
                 {...(onCreateTask === undefined ? {} : { onCreateTask })}
               />
               <DeliverablesTable
                 rows={rows}
                 selectedTaskIds={selectedTaskIds}
+                selectedAssignmentId={selectedAssignmentId}
                 onToggleTask={(taskId) =>
                   setSelectedTaskIds((current) =>
                     current.includes(taskId)
@@ -2055,241 +2080,976 @@ export function DeliverablesWorkspaceView({
                       : [...current, taskId],
                   )
                 }
-                onInspectAsset={(assetId) => onInspectAsset?.(assetId)}
-                onPreviewReminders={() => setReminderPreviewOpen(true)}
-                speakerFilter={speakerFilter}
-                taskFilter={taskFilter}
-                statusFilter={statusFilter}
-                onSpeakerFilter={setSpeakerFilter}
+                onSetVisibleSelection={(taskIds) => setSelectedTaskIds([...taskIds])}
+                onOpenAssignment={setSelectedAssignmentId}
+                onPreviewSelectedReminders={() => setReminderPreviewMode("selected")}
+                onPreviewAllReminders={() => setReminderPreviewMode("all")}
+                filters={filters}
+                onFiltersChange={setFilters}
                 busy={busy}
-                exportAvailable={onExportDeliverables !== undefined}
-                exportableCount={exportableRows.length}
-                onExport={() => {
-                  if (onExportDeliverables !== undefined && exportSelection !== null) {
-                    void onExportDeliverables(exportSelection);
-                  }
-                }}
-                onTaskFilter={setTaskFilter}
-                onStatusFilter={setStatusFilter}
               />
             </>
           ) : null}
           {filesMode ? (
             <FileLibrary
-              assets={assets}
+              organizationId={organizationId}
+              eventId={eventId}
+              families={fileFamilies}
               sessions={sessions}
               tasks={tasks}
               profiles={profiles}
               busy={busy}
+              loadFailed={error !== null}
+              onStartDownload={triggerDeliverablesDownload}
+              {...(activeFileFamily === undefined
+                ? {}
+                : { activeFamilyId: activeFileFamily.familyId })}
               {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
               {...(onExportFiles === undefined ? {} : { onExport: onExportFiles })}
+              {...(onRetry === undefined ? {} : { onRetry })}
             />
           ) : null}
-          {!filesMode && reminderPreviewOpen ? (
-            <ReminderPreview
-              rows={rows}
-              selectedTaskIds={selectedTaskIds}
-              busy={busy}
-              sendAvailable={onSendBulkReminder !== undefined}
-              onSend={() => {
-                const selected = rows.filter(
-                  (row) =>
-                    selectedTaskIds.includes(row.task.id) &&
-                    statusMatches(row.task, row.assets, "pending"),
-                );
-                const effective =
-                  selected.length > 0
-                    ? selected
-                    : rows.filter((row) => statusMatches(row.task, row.assets, "pending"));
-                const recipientIds = [...new Set(effective.map((row) => row.task.participantId))];
-                void onSendBulkReminder?.({
-                  taskIds: effective.map((row) => row.task.id),
-                  recipientIds,
-                });
-              }}
-            />
-          ) : null}
-          {selectedAssetId !== null
-            ? (() => {
-                const selectedAsset = assets.find((asset) => asset.id === selectedAssetId);
-                return selectedAsset === undefined ? (
-                  <section style={cardStyle} role="alert">
-                    <p>The selected private asset is no longer present in this event projection.</p>
-                  </section>
-                ) : (
-                  <AssetDetail
-                    asset={selectedAsset}
-                    allAssets={assets}
-                    history={assetHistory}
-                    comments={comments}
-                    loading={loadingAssetDetails}
-                    busy={busy}
-                    reviewAvailable={onReviewAsset !== undefined}
-                    {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
-                    {...(onAddComment === undefined
-                      ? {}
-                      : {
-                          onAddComment: async (body) =>
-                            onAddComment({ assetId: selectedAsset.id, body }),
-                        })}
-                    {...(onReviewAsset === undefined
-                      ? {}
-                      : {
-                          onReview: async (state, note) =>
-                            onReviewAsset({
-                              assetId: selectedAsset.id,
-                              state,
-                              ...(note === undefined ? {} : { note }),
-                            }),
-                        })}
-                  />
-                );
-              })()
-            : null}
           {!filesMode ? (
-            <>
-              <SessionEditor
-                sessions={sessions}
-                busy={busy}
-                {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
-                {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
-                {...(onRestoreSessionVersion === undefined
-                  ? {}
-                  : { onRestore: onRestoreSessionVersion })}
-              />
-              <SpeakerEditor
-                profiles={profiles}
-                assets={assets}
-                busy={busy}
-                {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
-                {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
-              />
-            </>
+            <Dialog
+              open={reminderPreviewMode !== null}
+              onOpenChange={(open) => {
+                if (!open) setReminderPreviewMode(null);
+              }}
+            >
+              <DialogContent className={styles.dialogContent}>
+                <DialogHeader>
+                  <DialogTitle>Reminder recipient preview</DialogTitle>
+                  <DialogDescription>
+                    Review the exact outstanding assignment snapshot before sending.
+                  </DialogDescription>
+                </DialogHeader>
+                <ReminderPreview
+                  rows={reminderPreviewRows}
+                  busy={busy}
+                  sendAvailable={onSendBulkReminder !== undefined}
+                  onSend={() => {
+                    const recipientIds = [
+                      ...new Set(reminderPreviewRows.map((row) => row.task.participantId)),
+                    ];
+                    void onSendBulkReminder?.({
+                      taskIds: reminderPreviewRows.map((row) => row.task.id),
+                      recipientIds,
+                    });
+                    setSelectedTaskIds([]);
+                    setReminderPreviewMode(null);
+                  }}
+                />
+              </DialogContent>
+            </Dialog>
+          ) : null}
+          {!filesMode ? (
+            <Sheet
+              open={selectedAssignment !== undefined}
+              onOpenChange={(open) => {
+                if (!open) setSelectedAssignmentId(null);
+              }}
+            >
+              <SheetContent className={styles.assignmentSheet}>
+                <SheetHeader>
+                  <SheetTitle>Request detail</SheetTitle>
+                  <SheetDescription>
+                    Assignment context, upload policy, and current submission state.
+                  </SheetDescription>
+                </SheetHeader>
+                <ScrollArea className={styles.assetScroll}>
+                  {selectedAssignment === undefined ? null : (
+                    <ContentRequestInspector
+                      row={selectedAssignment}
+                      {...(onInspectAsset === undefined
+                        ? {}
+                        : {
+                            onInspectAsset: (assetId) => {
+                              setSelectedAssignmentId(null);
+                              onInspectAsset(assetId);
+                            },
+                          })}
+                    />
+                  )}
+                </ScrollArea>
+              </SheetContent>
+            </Sheet>
+          ) : null}
+          <FileReviewDrawer
+            open={selectedAssetId !== null}
+            family={activeFileFamily}
+            asset={selectedAsset}
+            sessions={sessions}
+            tasks={tasks}
+            profiles={profiles}
+            history={assetHistory}
+            comments={comments}
+            loading={loadingAssetDetails}
+            busy={busy}
+            assetHistoryError={assetHistoryError ?? null}
+            commentsError={commentsError ?? null}
+            reviewAvailable={onReviewAsset !== undefined}
+            onOpenChange={(open) => {
+              if (!open) onCloseAsset?.();
+            }}
+            {...(onInspectAsset === undefined ? {} : { onSelectVersion: onInspectAsset })}
+            {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
+            {...(onAddComment === undefined || selectedAsset === undefined
+              ? {}
+              : {
+                  onAddComment: (body: string, expectedVersion: number) =>
+                    onAddComment({
+                      assetId: selectedAsset.id,
+                      body,
+                      expectedVersion,
+                    }),
+                })}
+            {...(onReviewAsset === undefined || selectedAsset === undefined
+              ? {}
+              : {
+                  onReview: (
+                    state: DeliverableReviewState,
+                    note: string | undefined,
+                    release: boolean,
+                  ) =>
+                    onReviewAsset({
+                      assetId: selectedAsset.id,
+                      state,
+                      expectedVersion: selectedAsset.reviewVersion ?? 0,
+                      release,
+                      ...(note === undefined ? {} : { note }),
+                    }),
+                })}
+          />
+          {!filesMode && selectedAssetId !== null ? (
+            <Card className={sectionClass} aria-label="Selected asset evidence">
+              <CardHeader>
+                <CardTitle>Selected file: {selectedAsset?.fileName ?? "Unavailable"}</CardTitle>
+                <CardDescription>
+                  Asset detail is open in the focus-managed detail sheet.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className={stackClass}>
+                {selectedAsset === undefined ? (
+                  <Alert variant="destructive" role="alert">
+                    <AlertDescription>
+                      The selected private asset is no longer present in this event projection.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <>
+                    <p className={mutedClass}>
+                      {selectedAssetCurrentLabel} · {selectedAssetVersions.length} version
+                      {selectedAssetVersions.length === 1 ? "" : "s"}
+                    </p>
+                    {assetHistoryError !== null && assetHistoryError !== undefined ? (
+                      <Alert variant="destructive" role="alert">
+                        <AlertTitle>Version history unavailable</AlertTitle>
+                        <AlertDescription>
+                          Version history unavailable: {assetHistoryError}
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
+                    {comments.length > 0 ? (
+                      <ul aria-label="Selected asset comment evidence">
+                        {comments.map((comment) => (
+                          <li key={comment.id}>{comment.body}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
+          {!filesMode ? (
+            <section className={styles.contentSection} aria-labelledby="secondary-content-heading">
+              <div className={styles.contentSectionHeader}>
+                <div>
+                  <p className={styles.eyebrow}>Related records</p>
+                  <h2 id="secondary-content-heading">Continue in Sessions or Speakers</h2>
+                </div>
+                <p className={mutedClass}>
+                  Requests tracks what speakers owe. Canonical content and profiles stay with their
+                  source records.
+                </p>
+              </div>
+              <div>
+                <SessionEditor
+                  organizationId={organizationId}
+                  eventId={eventId}
+                  {...(selectedSessionId === undefined ? {} : { selectedSessionId })}
+                  {...(sessionHistory === undefined ? {} : { sessionHistory })}
+                  {...(sessionHistoryError === undefined ? {} : { sessionHistoryError })}
+                  {...(onSelectSession === undefined ? {} : { onSelectSession })}
+                  sessions={sessions}
+                  loadingHistory={loadingSessionHistories}
+                  busy={busy}
+                  {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
+                  {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
+                  {...(onRestoreSessionVersion === undefined
+                    ? {}
+                    : { onRestore: onRestoreSessionVersion })}
+                />
+              </div>
+              <div>
+                <SpeakerEditor
+                  organizationId={organizationId}
+                  eventId={eventId}
+                  sessions={sessions}
+                  profiles={profiles}
+                  assets={assets}
+                  busy={busy}
+                  {...(speakerContentHistory === undefined ? {} : { speakerContentHistory })}
+                  {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
+                  {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
+                  {...(onRestoreSpeakerContentVersion === undefined
+                    ? {}
+                    : { onRestoreSpeakerContentVersion })}
+                />
+              </div>
+            </section>
           ) : null}
         </main>
       </div>
     </div>
   );
 }
+export interface DeliverablesCoreRequestHandles {
+  readonly sessions: Promise<readonly DeliverableSession[]>;
+  readonly matrix?: Promise<DeliverableTaskMatrix>;
+  readonly tasks?: Promise<readonly DeliverableTask[]>;
+  readonly assets?: Promise<readonly DeliverableAsset[]>;
+  readonly profiles?: Promise<readonly DeliverableSpeakerProfile[]>;
+}
+type MutableDeliverablesCoreRequestHandles = {
+  -readonly [Key in keyof DeliverablesCoreRequestHandles]: DeliverablesCoreRequestHandles[Key];
+};
+
+function startDeliverablesRequest<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return Promise.resolve(request());
+  } catch (reason) {
+    return Promise.reject(reason);
+  }
+}
+
+/**
+ * Start every independent core request synchronously. The workspace attaches
+ * settlement handlers after this function returns so one rejection cannot
+ * prevent the other resources from starting.
+ */
+export function startDeliverablesCoreRequests(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+  signal?: AbortSignal,
+): DeliverablesCoreRequestHandles {
+  const requests: MutableDeliverablesCoreRequestHandles = {
+    sessions: startDeliverablesRequest(() => api.listSessions(signal)),
+  };
+  const listDeliverableMatrix = api.listDeliverableMatrix;
+  if (listDeliverableMatrix !== undefined) {
+    requests.matrix = startDeliverablesRequest(() =>
+      listDeliverableMatrix(signal === undefined ? undefined : { signal }),
+    );
+  }
+
+  const needsProjectionFallback = listDeliverableMatrix === undefined;
+  if (needsProjectionFallback) {
+    const listTasks = api.listTasks;
+    if (listTasks !== undefined) {
+      requests.tasks = startDeliverablesRequest(() => listTasks(signal));
+    }
+  }
+
+  if (mode === "files" || needsProjectionFallback) {
+    const listAssets = api.listAssets;
+    if (listAssets !== undefined) {
+      requests.assets = startDeliverablesRequest(() =>
+        signal === undefined ? listAssets() : listAssets({ signal }),
+      );
+    }
+    const listProfiles = api.listProfiles;
+    if (listProfiles !== undefined) {
+      requests.profiles = startDeliverablesRequest(() => listProfiles(signal));
+    }
+  }
+  return requests;
+}
+
+type DeliverablesSettledResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: unknown };
+
+function settleDeliverablesRequest<T>(
+  request: Promise<T> | undefined,
+): Promise<DeliverablesSettledResult<T> | undefined> {
+  return request === undefined
+    ? Promise.resolve(undefined)
+    : request.then(
+        (value) => ({ ok: true as const, value }),
+        (reason: unknown) => ({ ok: false as const, reason }),
+      );
+}
+function requiredDeliverablesCoreValue<T>(
+  result: DeliverablesSettledResult<T> | undefined,
+  resource: string,
+): T {
+  if (result?.ok === true) return result.value;
+  throw result === undefined
+    ? new Error(`The ${resource} core projection was not provisioned.`)
+    : result.reason;
+}
+
+export async function loadDeliverablesCoreSnapshot(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+  signal?: AbortSignal,
+): Promise<DeliverablesSnapshot> {
+  const requests = startDeliverablesCoreRequests(api, mode, signal);
+  const listProfiles = api.listProfiles;
+  const profileRequest =
+    requests.profiles ??
+    (listProfiles === undefined ? undefined : startDeliverablesRequest(() => listProfiles(signal)));
+  const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
+    await Promise.all([
+      settleDeliverablesRequest(requests.sessions),
+      settleDeliverablesRequest(requests.matrix),
+      settleDeliverablesRequest(requests.tasks),
+      settleDeliverablesRequest(requests.assets),
+      settleDeliverablesRequest(profileRequest),
+    ]);
+
+  const sessions = requiredDeliverablesCoreValue(sessionsResult, "sessions");
+  const matrix =
+    requests.matrix === undefined
+      ? undefined
+      : requiredDeliverablesCoreValue(matrixResult, "deliverables matrix");
+  const tasks =
+    matrix === undefined
+      ? requiredDeliverablesCoreValue(tasksResult, "tasks")
+      : matrix.items.map((item) => item.task);
+  const assets =
+    matrix === undefined || mode === "files"
+      ? requiredDeliverablesCoreValue(assetsResult, "assets")
+      : matrixAssets(matrix);
+  const profiles = requiredDeliverablesCoreValue(profilesResult, "speaker profiles");
+
+  return {
+    sessions,
+    tasks,
+    assets,
+    profiles,
+    ...(matrix === undefined ? {} : { matrix }),
+    ...(matrix?.temporalContext === undefined ? {} : { temporalContext: matrix.temporalContext }),
+  };
+}
+export interface DeliverablesWorkspaceScope {
+  readonly api: DeliverablesApi;
+  readonly eventId: string;
+  readonly organizationId: string;
+  readonly mode?: DeliverablesWorkspaceMode;
+  readonly epoch: number;
+}
+
+export function isDeliverablesWorkspaceScopeCurrent(
+  expected: DeliverablesWorkspaceScope,
+  current: DeliverablesWorkspaceScope,
+): boolean {
+  return (
+    expected.epoch === current.epoch &&
+    expected.api === current.api &&
+    expected.eventId === current.eventId &&
+    expected.organizationId === current.organizationId &&
+    (expected.mode === undefined || current.mode === undefined || expected.mode === current.mode)
+  );
+}
+
+export function deliverablesSessionHistoryKey(sessionId: string, sessionVersion: number): string {
+  return `${sessionId}\u0000${sessionVersion}`;
+}
+
+export type DeliverablesSessionHistoryCacheEntry =
+  | {
+      readonly status: "pending";
+      readonly promise: Promise<readonly DeliverableContentHistoryEntry[]>;
+    }
+  | {
+      readonly status: "fulfilled";
+      readonly value: readonly DeliverableContentHistoryEntry[];
+    };
+
+export type DeliverablesSessionHistoryCache = Map<string, DeliverablesSessionHistoryCacheEntry>;
+
+export function loadDeliverablesSessionHistory(
+  api: DeliverablesApi,
+  session: DeliverableSession,
+  cache: DeliverablesSessionHistoryCache,
+  signal?: AbortSignal,
+): Promise<readonly DeliverableContentHistoryEntry[]> {
+  const key = deliverablesSessionHistoryKey(session.id, session.version);
+  if (session.contentHistory !== undefined) {
+    cache.set(key, { status: "fulfilled", value: session.contentHistory });
+    return Promise.resolve(session.contentHistory);
+  }
+
+  const cached = cache.get(key);
+  if (cached?.status === "fulfilled") return Promise.resolve(cached.value);
+  if (cached?.status === "pending") return cached.promise;
+
+  const request = startDeliverablesRequest(() => {
+    if (api.listSessionContentHistory === undefined) {
+      throw new Error("The session content history endpoint is not provisioned.");
+    }
+    return signal === undefined
+      ? api.listSessionContentHistory(session.id)
+      : api.listSessionContentHistory(session.id, signal);
+  });
+  let tracked!: Promise<readonly DeliverableContentHistoryEntry[]>;
+  tracked = request.then(
+    (value) => {
+      const current = cache.get(key);
+      if (current?.status === "pending" && current.promise === tracked) {
+        cache.set(key, { status: "fulfilled", value });
+      }
+      return value;
+    },
+    (reason: unknown) => {
+      const current = cache.get(key);
+      if (current?.status === "pending" && current.promise === tracked) {
+        cache.delete(key);
+      }
+      throw reason;
+    },
+  );
+  cache.set(key, { status: "pending", promise: tracked });
+  return tracked;
+}
+
+export interface DeliverablesAssetDetailSettled {
+  readonly history: DeliverablesSettledResult<readonly DeliverableAssetHistoryEntry[]>;
+  readonly comments: DeliverablesSettledResult<readonly DeliverableComment[]>;
+}
+
+export function settleDeliverablesAssetDetailRequests(
+  historyRequest: Promise<readonly DeliverableAssetHistoryEntry[]>,
+  commentsRequest: Promise<readonly DeliverableComment[]>,
+): Promise<DeliverablesAssetDetailSettled> {
+  return Promise.all([
+    settleDeliverablesRequest(historyRequest),
+    settleDeliverablesRequest(commentsRequest),
+  ]).then(([history, comments]) => ({
+    history: history as DeliverablesSettledResult<readonly DeliverableAssetHistoryEntry[]>,
+    comments: comments as DeliverablesSettledResult<readonly DeliverableComment[]>,
+  }));
+}
+
+function matrixAssetsFromItems(
+  items: readonly DeliverableMatrixItem[],
+): readonly DeliverableAsset[] {
+  const byId = new Map<string, DeliverableAsset>();
+  for (const item of items) {
+    for (const asset of item.assets) byId.set(asset.id, asset);
+    if (item.currentAsset !== undefined) byId.set(item.currentAsset.id, item.currentAsset);
+  }
+  return [...byId.values()];
+}
+
+function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
+  return matrixAssetsFromItems(matrixValue.items);
+}
+function deliverablesCapabilityMessages(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+): readonly string[] {
+  const messages: string[] = [];
+  if (mode === "deliverables") {
+    if (api.replaceHeadshot === undefined)
+      messages.push(
+        "Organizer headshot replacement is unavailable until the private staged-upload endpoint is provisioned.",
+      );
+    if (api.createTask === undefined)
+      messages.push(
+        "Create file-request task is unavailable until an organizer task-management endpoint is provisioned.",
+      );
+    if (api.listSpeakerContentHistory === undefined)
+      messages.push(
+        "Speaker content history is unavailable until the organizer content history endpoint is provisioned.",
+      );
+    if (api.sendBulkReminder === undefined)
+      messages.push(
+        "Bulk reminder sending is unavailable until a transactional reminder endpoint is provisioned.",
+      );
+    if (api.restoreSessionVersion === undefined)
+      messages.push(
+        "Session content restore is unavailable until the version restore endpoint is provisioned.",
+      );
+  }
+  if (api.reviewAsset === undefined)
+    messages.push(
+      "Asset approval and needs-changes decisions are unavailable until organizer asset review is provisioned.",
+    );
+  if (api.exportDeliverables === undefined)
+    messages.push(
+      `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
+    );
+  return messages;
+}
+
+function canLoadDeliverablesCoreSnapshot(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+): boolean {
+  if (api.listProfiles === undefined) return false;
+  if (api.listDeliverableMatrix !== undefined) {
+    return mode !== "files" || api.listAssets !== undefined;
+  }
+  return api.listTasks !== undefined && api.listAssets !== undefined;
+}
 
 export function DeliverablesWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
   mode = "deliverables",
   api: providedApi,
   initialData,
 }: DeliverablesWorkspaceProps) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+  const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(
-    () =>
-      providedApi ??
-      (apiBaseUrl === undefined || apiBaseUrl.length === 0
-        ? null
-        : createDeliverablesApi(apiBaseUrl, organizationId, eventId)),
-    [apiBaseUrl, eventId, organizationId, providedApi],
+    () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
+    [eventId, organizationId, providedApi],
   );
+  const navigationDataCache = useNavigationDataCache();
+  const coreCacheKey = useMemo(
+    () => deliverablesCoreCacheKey(organizationId, eventId, mode),
+    [eventId, mode, organizationId],
+  );
+  const coreCacheTags = useMemo(
+    () => deliverablesCoreCacheTags(organizationId, eventId, mode),
+    [eventId, mode, organizationId],
+  );
+  const cachedCoreDataAtRender =
+    initialData === undefined
+      ? navigationDataCache?.peek<DeliverablesSnapshot>(coreCacheKey)
+      : undefined;
+  const cachedCoreDataRef = useRef<{
+    readonly key: string;
+    readonly data: DeliverablesSnapshot | undefined;
+  }>({ key: coreCacheKey, data: cachedCoreDataAtRender });
+  if (cachedCoreDataRef.current.key !== coreCacheKey) {
+    cachedCoreDataRef.current = { key: coreCacheKey, data: cachedCoreDataAtRender };
+  }
+  const cachedCoreData = cachedCoreDataRef.current.data;
+  const seededCoreData = initialData;
+  const scopeRef = useRef<DeliverablesWorkspaceScope>({
+    api,
+    eventId,
+    organizationId,
+    mode,
+    epoch: 0,
+  });
+  if (
+    scopeRef.current.api !== api ||
+    scopeRef.current.eventId !== eventId ||
+    scopeRef.current.organizationId !== organizationId ||
+    scopeRef.current.mode !== mode
+  ) {
+    scopeRef.current = {
+      api,
+      eventId,
+      organizationId,
+      mode,
+      epoch: scopeRef.current.epoch + 1,
+    };
+  }
+  const currentScope = scopeRef.current;
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
-    initialData?.sessions ?? [],
+    seededCoreData?.sessions ?? [],
   );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(initialData?.tasks ?? []);
-  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(initialData?.assets ?? []);
+  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(seededCoreData?.tasks ?? []);
+  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(seededCoreData?.assets ?? []);
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
-    initialData?.profiles ?? [],
+    seededCoreData?.profiles ?? [],
   );
-  const [loading, setLoading] = useState(initialData === undefined && api !== null);
+  const [speakerContentHistory, setSpeakerContentHistory] = useState<
+    Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
+  >(() =>
+    speakerContentHistoryStatesForProfiles(
+      seededCoreData?.profiles ?? [],
+      initialData?.speakerContentHistory,
+    ),
+  );
+  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(seededCoreData?.matrix);
+  const [loading, setLoading] = useState(seededCoreData === undefined);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(
-    api === null
-      ? `The organizer ${mode === "files" ? "Files" : "deliverables"} API is not configured.`
-      : null,
-  );
+  const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
+  const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>(
+    cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
+  );
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    seededCoreData?.sessions[0]?.id ?? null,
+  );
+  const [sessionHistory, setSessionHistory] = useState<
+    readonly DeliverableContentHistoryEntry[] | undefined
+  >(undefined);
+  const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(null);
+  const [sessionHistoryKey, setSessionHistoryKey] = useState<string | null>(null);
+  const sessionHistoryCacheRef = useRef<DeliverablesSessionHistoryCache>(new Map());
+  const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
+  selectedAssetIdRef.current = selectedAssetId;
   const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
   const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
   const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
+  const [assetHistoryError, setAssetHistoryError] = useState<string | null>(null);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [loadingSessionHistories, setLoadingSessionHistories] = useState(false);
+  const [operationStates, setOperationStates] = useState<
+    Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>
+  >({});
+  const loadGenerationRef = useRef(0);
+  const stateScopeRef = useRef(currentScope);
+  useEffect(() => {
+    if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
+    stateScopeRef.current = currentScope;
+    setSessions(seededCoreData?.sessions ?? []);
+    setTasks(seededCoreData?.tasks ?? []);
+    setAssets(seededCoreData?.assets ?? []);
+    setProfiles(seededCoreData?.profiles ?? []);
+    setSpeakerContentHistory(
+      speakerContentHistoryStatesForProfiles(
+        seededCoreData?.profiles ?? [],
+        initialData?.speakerContentHistory,
+      ),
+    );
+    setMatrix(seededCoreData?.matrix);
+    setLoading(seededCoreData === undefined);
+    setError(null);
+    setCapabilityMessages(
+      cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
+    );
+    sessionHistoryCacheRef.current.clear();
+    setSelectedSessionId(null);
+    setSessionHistory(undefined);
+    setSessionHistoryError(null);
+    setSessionHistoryKey(null);
+    setLoadingSessionHistories(false);
+    setSelectedAssetId(null);
+    setAssetHistory([]);
+    setComments([]);
+    setAssetHistoryError(null);
+    setCommentsError(null);
+    setLoadingAssetDetails(false);
+    setBusy(false);
+    setStatusMessage(null);
+    setOperationStates({});
+  }, [api, cachedCoreData, currentScope, initialData, mode, seededCoreData]);
 
-  const load = useCallback(
-    async (signal?: AbortSignal) => {
-      if (api === null || initialData !== undefined) {
-        setLoading(false);
+  function recordOperation(
+    key: DeliverablesOperationKey,
+    label: string,
+    phase: DeliverablesOperationPhase,
+    message: string,
+  ): void {
+    setOperationStates((current) => ({
+      ...current,
+      [key]: { key, label, phase, message },
+    }));
+  }
+
+  const refreshSpeakerContentHistory = useCallback(
+    async (participantId: string, signal?: AbortSignal): Promise<void> => {
+      const scope = scopeRef.current;
+      const isCurrent = (): boolean =>
+        !signal?.aborted && isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
+      if (!isCurrent()) return;
+      setSpeakerContentHistory((current) => ({
+        ...current,
+        [participantId]: speakerContentHistoryLoading(),
+      }));
+      const listSpeakerContentHistory = api?.listSpeakerContentHistory;
+      if (listSpeakerContentHistory === undefined) {
+        if (!isCurrent()) return;
+        setSpeakerContentHistory((current) => ({
+          ...current,
+          [participantId]: speakerContentHistoryError(
+            new Error("The speaker content history endpoint is not provisioned."),
+          ),
+        }));
         return;
       }
+      try {
+        const entries = await listSpeakerContentHistory(participantId, signal);
+        if (!isCurrent()) return;
+        setSpeakerContentHistory((current) => ({
+          ...current,
+          [participantId]: speakerContentHistorySuccess(entries),
+        }));
+      } catch (reason) {
+        if (!isCurrent()) return;
+        setSpeakerContentHistory((current) => ({
+          ...current,
+          [participantId]: speakerContentHistoryError(reason),
+        }));
+      }
+    },
+    [api],
+  );
+
+  async function refreshMatrix(scope: DeliverablesWorkspaceScope = currentScope): Promise<boolean> {
+    if (api.listDeliverableMatrix === undefined) return true;
+    try {
+      const next = await api.listDeliverableMatrix();
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
+      invalidateDeliverablesCoreCache(scope);
+      setMatrix(next);
+      setTasks(next.items.map((item) => item.task));
+      if (mode === "deliverables") setAssets(matrixAssets(next));
+      return true;
+    } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
+      setError(
+        `The operation succeeded, but the exact deliverables matrix could not be refreshed. ${messageFromError(reason)}`,
+      );
+      return false;
+    }
+  }
+  const invalidateDeliverablesCoreCache = useCallback(
+    (scope: DeliverablesWorkspaceScope = currentScope): void => {
+      navigationDataCache?.invalidate(
+        deliverablesCoreCacheInvalidationTags(scope.organizationId, scope.eventId),
+      );
+      loadGenerationRef.current += 1;
+    },
+    [currentScope, navigationDataCache],
+  );
+
+  const load = useCallback(
+    async (signal?: AbortSignal, fresh = false) => {
+      const scope: DeliverablesWorkspaceScope = {
+        api,
+        eventId,
+        organizationId,
+        mode,
+        epoch: scopeRef.current.epoch,
+      };
+      const generation = loadGenerationRef.current + 1;
+      loadGenerationRef.current = generation;
+      const isCurrent = (): boolean =>
+        !signal?.aborted &&
+        loadGenerationRef.current === generation &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
+      if (initialData !== undefined && !fresh) {
+        if (isCurrent()) setLoading(false);
+        return;
+      }
+      if (!isCurrent()) return;
       setLoading(true);
       setError(null);
-      try {
-        const messages: string[] = [];
-        const sessionsResult = await api
-          .listSessions(signal)
-          .then((value) => ({ ok: true as const, value }))
-          .catch((reason: unknown) => ({ ok: false as const, reason }));
-        if (sessionsResult.ok) {
-          const listSessionContentHistory = api.listSessionContentHistory;
-          if (mode === "files" || listSessionContentHistory === undefined) {
-            setSessions(sessionsResult.value);
+      setLoadingSessionHistories(false);
+      const messages: string[] = [];
+      if (!fresh && cachedCoreData !== undefined) {
+        try {
+          const authorizedSnapshot = await authorizeContentCollectionNavigationSnapshot(
+            api,
+            cachedCoreData,
+            signal,
+          );
+          if (!isCurrent()) return;
+          if (authorizedSnapshot === undefined) {
+            invalidateDeliverablesCoreCache(scope);
           } else {
-            const sessionsWithHistory = await Promise.all(
-              sessionsResult.value.map(async (session) => {
-                try {
-                  const contentHistory = await listSessionContentHistory(session.id, signal);
-                  return { ...session, contentHistory };
-                } catch {
-                  return session;
-                }
-              }),
+            setSessions(authorizedSnapshot.sessions);
+            setTasks(authorizedSnapshot.tasks);
+            setAssets(authorizedSnapshot.assets);
+            setProfiles(authorizedSnapshot.profiles);
+            setSpeakerContentHistory(
+              speakerContentHistoryStatesForProfiles(
+                authorizedSnapshot.profiles,
+                authorizedSnapshot.speakerContentHistory,
+              ),
             );
-            if (!signal?.aborted) setSessions(sessionsWithHistory);
+            setMatrix(authorizedSnapshot.matrix);
+            setCapabilityMessages([]);
+            setLoading(false);
+            return;
           }
-        } else setError(messageFromError(sessionsResult.reason));
-        if (mode !== "files") {
-          if (api.listTasks === undefined)
-            messages.push(
-              "Task tracking and task creation are unavailable: the organizer task endpoint is not provisioned.",
-            );
-          else {
-            const result = await api
-              .listTasks(signal)
-              .then((value) => ({ ok: true as const, value }))
-              .catch((reason: unknown) => ({ ok: false as const, reason }));
-            if (result.ok) setTasks(result.value);
-            else messages.push(`Task tracking unavailable: ${messageFromError(result.reason)}`);
+        } catch (reason) {
+          invalidateDeliverablesCoreCache(scope);
+          if (isCurrent()) {
+            setError(messageFromError(reason));
+            setLoading(false);
           }
+          return;
         }
-        if (api.listAssets === undefined)
+      }
+      if (navigationDataCache !== null && canLoadDeliverablesCoreSnapshot(api, mode)) {
+        try {
+          const snapshot = await navigationDataCache.read<DeliverablesSnapshot>({
+            key: coreCacheKey,
+            tags: coreCacheTags,
+            fresh: true,
+            load: () => loadDeliverablesCoreSnapshot(api, mode),
+          });
+          if (!isCurrent()) return;
+          setSessions(snapshot.sessions);
+          setTasks(snapshot.tasks);
+          setAssets(snapshot.assets);
+          setProfiles(snapshot.profiles);
+          setMatrix(snapshot.matrix);
+          if (mode === "deliverables") {
+            setSpeakerContentHistory(
+              speakerContentHistoryStatesForProfiles(
+                snapshot.profiles,
+                Object.fromEntries(
+                  snapshot.profiles.map((profile) => [
+                    profile.participantId,
+                    speakerContentHistoryLoading(),
+                  ]),
+                ),
+              ),
+            );
+          } else {
+            setSpeakerContentHistory({});
+          }
+          setCapabilityMessages([...deliverablesCapabilityMessages(api, mode)]);
+          setLoading(false);
+          return;
+        } catch {
+          // The uncached path preserves partial projections and capability errors.
+        }
+      }
+      try {
+        const requests = startDeliverablesCoreRequests(api, mode, signal);
+        const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
+          await Promise.all([
+            settleDeliverablesRequest(requests.sessions),
+            settleDeliverablesRequest(requests.matrix),
+            settleDeliverablesRequest(requests.tasks),
+            settleDeliverablesRequest(requests.assets),
+            settleDeliverablesRequest(requests.profiles),
+          ]);
+        if (!isCurrent()) return;
+
+        if (sessionsResult?.ok === true) {
+          const coreSessions = sessionsResult.value;
+          setSessions(coreSessions);
+        } else if (sessionsResult !== undefined) {
+          setError(messageFromError(sessionsResult.reason));
+        }
+
+        if (requests.matrix === undefined) {
+          messages.push(
+            "Exact task status and current-version tracking are unavailable: the organizer deliverables matrix endpoint is not provisioned.",
+          );
+          if (mode !== "files" && requests.tasks === undefined) {
+            messages.push(
+              "Task tracking unavailable: no organizer task projection endpoint is provisioned.",
+            );
+          } else if (tasksResult?.ok === true) {
+            setTasks(tasksResult.value);
+          } else if (tasksResult !== undefined) {
+            messages.push(`Task tracking unavailable: ${messageFromError(tasksResult.reason)}`);
+          }
+        } else if (matrixResult?.ok === true) {
+          const nextMatrix = matrixResult.value;
+          setMatrix(nextMatrix);
+          setTasks(nextMatrix.items.map((item) => item.task));
+          if (mode === "deliverables") setAssets(matrixAssets(nextMatrix));
+        } else if (matrixResult !== undefined) {
+          messages.push(
+            `Exact deliverables matrix unavailable: ${messageFromError(matrixResult.reason)}`,
+          );
+        }
+
+        if (requests.assets !== undefined) {
+          if (assetsResult?.ok === true) {
+            setAssets(assetsResult.value);
+          } else if (assetsResult !== undefined) {
+            messages.push(
+              `Private asset library unavailable: ${messageFromError(assetsResult.reason)}`,
+            );
+          }
+        } else if (mode === "files" || requests.matrix === undefined) {
           messages.push(
             "Private asset library unavailable: no asset projection endpoint is provisioned.",
           );
-        else {
-          const result = await (signal === undefined
-            ? api.listAssets()
-            : api.listAssets({ signal })
-          )
-            .then((value) => ({ ok: true as const, value }))
-            .catch((reason: unknown) => ({ ok: false as const, reason }));
-          if (result.ok) setAssets(result.value);
-          else
-            messages.push(`Private asset library unavailable: ${messageFromError(result.reason)}`);
         }
-        if (api.listProfiles === undefined) {
+
+        if (requests.profiles !== undefined) {
+          if (profilesResult?.ok === true) {
+            const loadedProfiles = profilesResult.value;
+            setProfiles(loadedProfiles);
+            if (mode === "deliverables") {
+              setSpeakerContentHistory(
+                speakerContentHistoryStatesForProfiles(
+                  loadedProfiles,
+                  Object.fromEntries(
+                    loadedProfiles.map((profile) => [
+                      profile.participantId,
+                      speakerContentHistoryLoading(),
+                    ]),
+                  ),
+                ),
+              );
+              void Promise.all(
+                loadedProfiles.map((profile) =>
+                  refreshSpeakerContentHistory(profile.participantId, signal),
+                ),
+              );
+            }
+          } else if (profilesResult !== undefined) {
+            setSpeakerContentHistory({});
+            messages.push(
+              mode === "files"
+                ? `Speaker labels unavailable: ${messageFromError(profilesResult.reason)}`
+                : `Speaker profile editing unavailable: ${messageFromError(profilesResult.reason)}`,
+            );
+          }
+        } else if (mode === "files" || requests.matrix === undefined) {
+          setSpeakerContentHistory({});
           messages.push(
             mode === "files"
               ? "Speaker labels are unavailable: the private profile endpoint is not provisioned for organizer access."
               : "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
           );
-        } else {
-          const result = await api
-            .listProfiles(signal)
+        } else if (api.listProfiles !== undefined) {
+          const listProfiles = api.listProfiles;
+          const result = await startDeliverablesRequest(() => listProfiles(signal))
             .then((value) => ({ ok: true as const, value }))
             .catch((reason: unknown) => ({ ok: false as const, reason }));
-          if (result.ok) setProfiles(result.value);
-          else
-            messages.push(
-              mode === "files"
-                ? `Speaker labels unavailable: ${messageFromError(result.reason)}`
-                : `Speaker profile editing unavailable: ${messageFromError(result.reason)}`,
+          if (result.ok) {
+            const loadedProfiles = result.value;
+            setProfiles(loadedProfiles);
+            setSpeakerContentHistory(
+              speakerContentHistoryStatesForProfiles(
+                loadedProfiles,
+                Object.fromEntries(
+                  loadedProfiles.map((profile) => [
+                    profile.participantId,
+                    speakerContentHistoryLoading(),
+                  ]),
+                ),
+              ),
             );
+            void Promise.all(
+              loadedProfiles.map((profile) =>
+                refreshSpeakerContentHistory(profile.participantId, signal),
+              ),
+            );
+          } else {
+            setSpeakerContentHistory({});
+            messages.push(
+              `Speaker profile editing unavailable: ${messageFromError(result.reason)}`,
+            );
+          }
+        } else {
+          setSpeakerContentHistory({});
+          messages.push(
+            "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
+          );
         }
+
         if (mode === "deliverables") {
           if (api.replaceHeadshot === undefined)
             messages.push(
@@ -2298,6 +3058,10 @@ export function DeliverablesWorkspace({
           if (api.createTask === undefined)
             messages.push(
               "Create file-request task is unavailable until an organizer task-management endpoint is provisioned.",
+            );
+          if (api.listSpeakerContentHistory === undefined)
+            messages.push(
+              "Speaker content history is unavailable until the organizer content history endpoint is provisioned.",
             );
           if (api.sendBulkReminder === undefined)
             messages.push(
@@ -2317,11 +3081,24 @@ export function DeliverablesWorkspace({
             `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
           );
         setCapabilityMessages(messages);
+        setLoading(false);
       } finally {
-        if (!signal?.aborted) setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     },
-    [api, initialData, mode],
+    [
+      api,
+      cachedCoreData,
+      coreCacheKey,
+      coreCacheTags,
+      eventId,
+      initialData,
+      invalidateDeliverablesCoreCache,
+      mode,
+      navigationDataCache,
+      organizationId,
+      refreshSpeakerContentHistory,
+    ],
   );
 
   useEffect(() => {
@@ -2331,93 +3108,235 @@ export function DeliverablesWorkspace({
     return () => controller.abort();
   }, [initialData, load]);
 
+  const effectiveSelectedSessionId =
+    selectedSessionId ?? sessions.find((session) => session.eventId === eventId)?.id ?? null;
   useEffect(() => {
-    if (selectedAssetId === null || api === null) return;
+    if (mode === "files") return;
+    setSelectedSessionId((current) => {
+      if (
+        current !== null &&
+        sessions.some((session) => session.eventId === eventId && session.id === current)
+      ) {
+        return current;
+      }
+      return sessions.find((session) => session.eventId === eventId)?.id ?? null;
+    });
+  }, [eventId, mode, sessions]);
+
+  useEffect(() => {
+    if (mode === "files") {
+      setLoadingSessionHistories(false);
+      return;
+    }
+    const selected =
+      sessions.find(
+        (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
+      ) ?? sessions.find((session) => session.eventId === eventId);
+    if (selected === undefined) {
+      setSessionHistory(undefined);
+      setSessionHistoryError(null);
+      setSessionHistoryKey(null);
+      setLoadingSessionHistories(false);
+      return;
+    }
+    const key = deliverablesSessionHistoryKey(selected.id, selected.version);
+    setSessionHistoryKey(key);
+    const scope = scopeRef.current;
+    const controller = new AbortController();
+    setSessionHistoryError(null);
+    if (selected.contentHistory !== undefined) {
+      sessionHistoryCacheRef.current.set(key, {
+        status: "fulfilled",
+        value: selected.contentHistory,
+      });
+      setSessionHistory(selected.contentHistory);
+      setLoadingSessionHistories(false);
+      return;
+    }
+    setSessionHistory(undefined);
+    setLoadingSessionHistories(true);
+    void loadDeliverablesSessionHistory(
+      api,
+      selected,
+      sessionHistoryCacheRef.current,
+      controller.signal,
+    )
+      .then((history) => {
+        if (
+          controller.signal.aborted ||
+          !isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+        )
+          return;
+        setSessionHistory(history);
+      })
+      .catch((reason: unknown) => {
+        if (
+          controller.signal.aborted ||
+          !isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+        )
+          return;
+        setSessionHistoryError(messageFromError(reason));
+      })
+      .finally(() => {
+        if (
+          !controller.signal.aborted &&
+          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+        )
+          setLoadingSessionHistories(false);
+      });
+    return () => {
+      controller.abort();
+      const cached = sessionHistoryCacheRef.current.get(key);
+      if (cached?.status === "pending") sessionHistoryCacheRef.current.delete(key);
+    };
+  }, [api, eventId, mode, effectiveSelectedSessionId, sessions]);
+  useEffect(() => {
+    if (selectedAssetId === null) {
+      setLoadingAssetDetails(false);
+      return;
+    }
     const selected = assets.find((asset) => asset.id === selectedAssetId);
-    if (selected === undefined) return;
+    if (selected === undefined) {
+      setLoadingAssetDetails(false);
+      return;
+    }
+    if (selected.eventId !== eventId) {
+      setLoadingAssetDetails(false);
+      return;
+    }
     const controller = new AbortController();
     setLoadingAssetDetails(true);
     setAssetHistory([]);
     setComments([]);
+    setAssetHistoryError(null);
+    setCommentsError(null);
+    const getAssetHistory = api.getAssetHistory;
+    const listAssetComments = api.listAssetComments;
     const historyPromise =
-      api.getAssetHistory === undefined
+      getAssetHistory === undefined
         ? Promise.resolve<readonly DeliverableAssetHistoryEntry[]>([])
-        : api
-            .getAssetHistory(selected.id, controller.signal)
-            .catch(() => [] as readonly DeliverableAssetHistoryEntry[]);
+        : startDeliverablesRequest(() => getAssetHistory(selected.id, controller.signal));
     const commentsPromise =
-      api.listAssetComments === undefined
+      listAssetComments === undefined
         ? Promise.resolve<readonly DeliverableComment[]>([])
-        : api
-            .listAssetComments(selected.id, controller.signal)
-            .catch(() => [] as readonly DeliverableComment[]);
-    void Promise.all([historyPromise, commentsPromise])
-      .then(([history, nextComments]) => {
-        if (controller.signal.aborted) return;
-        setAssetHistory(history);
-        setComments(nextComments);
+        : startDeliverablesRequest(() => listAssetComments(selected.id, controller.signal));
+    let settledCount = 0;
+    const markSettled = (): void => {
+      settledCount += 1;
+      if (settledCount === 2 && !controller.signal.aborted) setLoadingAssetDetails(false);
+    };
+    void settleDeliverablesRequest(historyPromise)
+      .then((result) => {
+        if (controller.signal.aborted || result === undefined) return;
+        if (result.ok) setAssetHistory(result.value);
+        else setAssetHistoryError(messageFromError(result.reason));
       })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoadingAssetDetails(false);
-      });
+      .finally(markSettled);
+    void settleDeliverablesRequest(commentsPromise)
+      .then((result) => {
+        if (controller.signal.aborted || result === undefined) return;
+        if (result.ok) setComments(result.value);
+        else setCommentsError(messageFromError(result.reason));
+      })
+      .finally(markSettled);
     return () => controller.abort();
-  }, [api, assets, selectedAssetId]);
+  }, [api, assets, eventId, selectedAssetId]);
 
   async function createTask(input: DeliverableTaskInput): Promise<void> {
-    if (api?.createTask === undefined) {
+    if (api.createTask === undefined) {
       setError("Task creation is unavailable because no organizer task endpoint is provisioned.");
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("task-create", "Create file-request task", "pending", "Request in progress.");
     try {
       const next = await api.createTask(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setTasks((current) => [...current, next]);
+      await refreshMatrix(scope);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setStatusMessage(
-        `Task ${next.title} created for ${input.assigneeIds.length} speaker${input.assigneeIds.length === 1 ? "" : "s"}.`,
+        `Task ${next.title} created for ${input.assignments.length} speaker${input.assignments.length === 1 ? "" : "s"}.`,
+      );
+      recordOperation(
+        "task-create",
+        "Create file-request task",
+        "succeeded",
+        `Created ${next.title}.`,
       );
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("task-create", "Create file-request task", "failed", message);
+      throw reason;
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
   async function addComment(input: {
     readonly assetId: string;
     readonly body: string;
+    readonly expectedVersion: number;
   }): Promise<void> {
-    if (api?.addAssetComment === undefined) {
+    if (api.addAssetComment === undefined) {
       setError(
         "Cross-role comments are unavailable because the private asset comment endpoint is not provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
+    recordOperation("asset-comment", "Reply to asset version", "pending", "Reply in progress.");
     try {
       const next = await api.addAssetComment(input);
-      setComments((current) => [...current, next]);
-      setStatusMessage("Comment added to the immutable asset thread.");
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
+      if (selectedAssetIdRef.current === input.assetId) {
+        setComments((current) => [...current, next]);
+      }
+      setStatusMessage("Comment added to the immutable asset version.");
+      recordOperation(
+        "asset-comment",
+        "Reply to asset version",
+        "succeeded",
+        `Organizer reply added to asset version ${input.assetId}.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("asset-comment", "Reply to asset version", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
   async function downloadVersion(assetId: string): Promise<void> {
-    if (api?.getDownloadGrant === undefined) {
+    if (api.getDownloadGrant === undefined) {
       setError(
         "Asset download is unavailable because no private download capability endpoint is provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
+    recordOperation(
+      "asset-download",
+      "Download asset version",
+      "pending",
+      "Capability request in progress.",
+    );
     try {
       const grant: DeliverableDownloadGrant = await api.getDownloadGrant(assetId);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const safeUrl = safeDownloadUrl(grant.url);
       if (safeUrl === null)
         throw new Error(
@@ -2435,14 +3354,23 @@ export function DeliverablesWorkspace({
       setStatusMessage(
         "A short-lived private download capability was issued for the selected version.",
       );
+      recordOperation(
+        "asset-download",
+        "Download asset version",
+        "succeeded",
+        "Authorized version download started.",
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("asset-download", "Download asset version", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
   async function requestExport(input: DeliverableExportInput): Promise<DeliverableExportDownload> {
-    if (api?.exportDeliverables === undefined) {
+    if (api.exportDeliverables === undefined) {
       throw new Error("The authorized ZIP export capability is not provisioned for this event.");
     }
     const download = await api.exportDeliverables(input);
@@ -2453,35 +3381,64 @@ export function DeliverablesWorkspace({
   }
 
   async function exportDeliverables(input: DeliverableExportInput): Promise<void> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation(
+      "deliverables-export",
+      "Export deliverables ZIP",
+      "pending",
+      "ZIP request in progress.",
+    );
     try {
       const download = await requestExport(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       triggerDeliverablesDownload(download);
       setStatusMessage(`${download.fileName} is ready to download.`);
+      recordOperation(
+        "deliverables-export",
+        "Export deliverables ZIP",
+        "succeeded",
+        `${download.fileName} was validated and the browser download started.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("deliverables-export", "Export deliverables ZIP", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
   async function exportFiles(
     input: DeliverableExportInput,
   ): Promise<DeliverableExportDownload | undefined> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("files-export", "Export files ZIP", "pending", "ZIP request in progress.");
     try {
       const download = await requestExport(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return undefined;
       setStatusMessage(`${download.fileName} is ready for browser download.`);
+      recordOperation(
+        "files-export",
+        "Export files ZIP",
+        "succeeded",
+        `${download.fileName} is ready for browser download.`,
+      );
       return download;
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return undefined;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("files-export", "Export files ZIP", "failed", message);
       throw reason;
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2491,23 +3448,29 @@ export function DeliverablesWorkspace({
     readonly title: string;
     readonly description: string;
   }): Promise<void> {
-    if (api === null) return;
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const next = await api.updateSession(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content saved at version ${next.version}.`);
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
-  async function approveSession(session: DeliverableSession, status: string): Promise<void> {
-    if (api === null) return;
+  async function approveSession(
+    session: DeliverableSession,
+    contentStatus: "Approved" | "Needs changes",
+  ): Promise<void> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -2515,16 +3478,19 @@ export function DeliverablesWorkspace({
       const next = await api.updateSession({
         sessionId: session.id,
         expectedVersion: session.version,
-        status,
+        contentStatus,
       });
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setSessions((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      setStatusMessage(`Session status changed to ${status}.`);
+      setStatusMessage(`Session content status changed to ${contentStatus}.`);
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2533,33 +3499,53 @@ export function DeliverablesWorkspace({
     readonly biography: string;
     readonly expectedVersion: number;
   }): Promise<void> {
-    if (api?.updateBiography === undefined) {
+    if (api.updateBiography === undefined) {
       setError(
         "Speaker profile editing is unavailable because organizer profile access is not provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation(
+      "biography-save",
+      "Save speaker biography",
+      "pending",
+      "Profile update in progress.",
+    );
     try {
       const next = await api.updateBiography(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setProfiles((current) =>
         current.map((profile) => (profile.participantId === next.participantId ? next : profile)),
       );
       setStatusMessage(`Biography saved for ${next.displayName}.`);
+      recordOperation(
+        "biography-save",
+        "Save speaker biography",
+        "succeeded",
+        `Biography saved for ${next.displayName}.`,
+      );
+      void refreshSpeakerContentHistory(input.participantId);
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("biography-save", "Save speaker biography", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
   async function replaceHeadshot(input: {
     readonly participantId: string;
+    readonly submissionId: string;
     readonly file: File;
     readonly supersedesAssetId?: string;
   }): Promise<void> {
-    if (api?.replaceHeadshot === undefined) {
+    if (api.replaceHeadshot === undefined) {
       setError(
         "Headshot replacement is unavailable because organizer private upload access is not provisioned.",
       );
@@ -2572,14 +3558,32 @@ export function DeliverablesWorkspace({
       setError("The selected speaker profile is no longer available; reload before replacing it.");
       return;
     }
+    const eligibleSessions = eligibleSpeakerHeadshotSessions(
+      sessions,
+      eventId,
+      input.participantId,
+    );
+    if (!eligibleSessions.some((session) => session.id === input.submissionId)) {
+      setError("Choose an accepted session owned by this speaker before replacing the headshot.");
+      return;
+    }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation(
+      "headshot-replace",
+      "Replace speaker headshot",
+      "pending",
+      "Private upload in progress.",
+    );
     try {
       const next = await api.replaceHeadshot({
         ...input,
         expectedVersion: currentProfile.version,
       });
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setProfiles((current) =>
         current.map((profile) =>
           profile.participantId === next.profile.participantId ? next.profile : profile,
@@ -2592,10 +3596,20 @@ export function DeliverablesWorkspace({
           : [...current, next.asset];
       });
       setStatusMessage(`Headshot replaced for ${next.profile.displayName}.`);
+      recordOperation(
+        "headshot-replace",
+        "Replace speaker headshot",
+        "succeeded",
+        `Headshot replaced for ${next.profile.displayName}.`,
+      );
+      void refreshSpeakerContentHistory(input.participantId);
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("headshot-replace", "Replace speaker headshot", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2603,24 +3617,42 @@ export function DeliverablesWorkspace({
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
   }): Promise<void> {
-    if (api?.sendBulkReminder === undefined) {
+    if (api.sendBulkReminder === undefined) {
       setError(
         "Bulk reminder sending is unavailable because no transactional reminder endpoint is provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation(
+      "reminder-send",
+      "Send outstanding reminders",
+      "pending",
+      "Confirmed send in progress.",
+    );
     try {
       const result = await api.sendBulkReminder(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setStatusMessage(
         `Reminder send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
       );
+      recordOperation(
+        "reminder-send",
+        "Send outstanding reminders",
+        "succeeded",
+        `Send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2629,21 +3661,75 @@ export function DeliverablesWorkspace({
     readonly version: number;
     readonly expectedVersion: number;
   }): Promise<void> {
-    if (api?.restoreSessionVersion === undefined) {
+    if (api.restoreSessionVersion === undefined) {
       setError("Session restore is unavailable because no restore endpoint is provisioned.");
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const next = await api.restoreSessionVersion(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content restored to version ${input.version}.`);
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+    }
+  }
+  async function restoreSpeakerContentVersion(input: {
+    readonly participantId: string;
+    readonly version: number;
+    readonly expectedVersion: number;
+  }): Promise<void> {
+    if (api?.restoreSpeakerContentVersion === undefined) {
+      const message =
+        "Speaker content restore is unavailable because no restore endpoint is provisioned.";
+      setError(message);
+      recordOperation("speaker-content-restore", "Restore speaker content", "failed", message);
+      return;
+    }
+    const scope = scopeRef.current;
+    setBusy(true);
+    setError(null);
+    setStatusMessage(null);
+    recordOperation(
+      "speaker-content-restore",
+      "Restore speaker content",
+      "pending",
+      "Speaker content restore in progress.",
+    );
+    try {
+      const next = await api.restoreSpeakerContentVersion(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
+      setProfiles((current) =>
+        current.map((profile) =>
+          profile.participantId === input.participantId
+            ? profileWithSpeakerContentRecord(profile, next)
+            : profile,
+        ),
+      );
+      setStatusMessage(`Speaker content restored to version ${input.version}.`);
+      recordOperation(
+        "speaker-content-restore",
+        "Restore speaker content",
+        "succeeded",
+        `Speaker content restored to version ${input.version}.`,
+      );
+      void refreshSpeakerContentHistory(input.participantId);
+    } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("speaker-content-restore", "Restore speaker content", "failed", message);
+    } finally {
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2652,39 +3738,121 @@ export function DeliverablesWorkspace({
     reviewAsset === undefined
       ? undefined
       : async (input: DeliverableReviewInput): Promise<void> => {
+          const scope = scopeRef.current;
           setBusy(true);
           setError(null);
+          recordOperation(
+            "asset-review",
+            "Review current asset",
+            "pending",
+            "Review update in progress.",
+          );
           try {
             const next = await reviewAsset(input);
+            if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+            invalidateDeliverablesCoreCache(scope);
             setAssets((current) => current.map((asset) => (asset.id === next.id ? next : asset)));
+            await refreshMatrix(scope);
+            if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
             setStatusMessage(`Asset review recorded as ${input.state}.`);
+            recordOperation(
+              "asset-review",
+              "Review current asset",
+              "succeeded",
+              `Review recorded as ${formatStatus(input.state)}.`,
+            );
           } catch (reason) {
-            setError(messageFromError(reason));
+            if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+            const message = messageFromError(reason);
+            setError(message);
+            recordOperation("asset-review", "Review current asset", "failed", message);
           } finally {
-            setBusy(false);
+            if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
           }
         };
+  const renderedStateIsCurrent = isDeliverablesWorkspaceScopeCurrent(
+    stateScopeRef.current,
+    currentScope,
+  );
+  const renderedSessions = renderedStateIsCurrent ? sessions : (seededCoreData?.sessions ?? []);
+  const renderedTasks = renderedStateIsCurrent ? tasks : (seededCoreData?.tasks ?? []);
+  const renderedAssets = renderedStateIsCurrent ? assets : (seededCoreData?.assets ?? []);
+  const renderedProfiles = renderedStateIsCurrent ? profiles : (seededCoreData?.profiles ?? []);
+  const renderedSpeakerContentHistory = renderedStateIsCurrent
+    ? speakerContentHistory
+    : speakerContentHistoryStatesForProfiles(
+        seededCoreData?.profiles ?? [],
+        initialData?.speakerContentHistory,
+      );
+  const renderedMatrix = renderedStateIsCurrent ? matrix : seededCoreData?.matrix;
+  const selectedSessionForHistory =
+    renderedSessions.find(
+      (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
+    ) ?? renderedSessions.find((session) => session.eventId === eventId);
+  const visibleSessionHistoryKey =
+    selectedSessionForHistory === undefined
+      ? null
+      : deliverablesSessionHistoryKey(
+          selectedSessionForHistory.id,
+          selectedSessionForHistory.version,
+        );
+  const visibleSessionHistory =
+    renderedStateIsCurrent && sessionHistoryKey === visibleSessionHistoryKey
+      ? sessionHistory
+      : undefined;
+  const visibleSessionHistoryError =
+    renderedStateIsCurrent && sessionHistoryKey === visibleSessionHistoryKey
+      ? sessionHistoryError
+      : null;
   return (
     <DeliverablesWorkspaceView
       eventId={eventId}
       organizationId={organizationId}
       mode={mode}
-      sessions={sessions}
-      tasks={tasks}
-      assets={assets}
-      profiles={profiles}
-      loading={loading}
-      busy={busy}
-      error={error}
-      statusMessage={statusMessage}
-      capabilityMessages={capabilityMessages}
-      apiConfigured={api !== null}
+      sessions={renderedSessions}
+      tasks={renderedTasks}
+      assets={renderedAssets}
+      profiles={renderedProfiles}
+      {...(renderedMatrix === undefined ? {} : { matrixItems: renderedMatrix.items })}
+      {...(renderedMatrix?.temporalContext === undefined
+        ? {}
+        : { temporalContext: renderedMatrix.temporalContext })}
+      loading={renderedStateIsCurrent ? loading : seededCoreData === undefined}
+      loadingSessionHistories={renderedStateIsCurrent && loadingSessionHistories}
+      busy={renderedStateIsCurrent && busy}
+      error={renderedStateIsCurrent ? error : null}
+      statusMessage={renderedStateIsCurrent ? statusMessage : null}
+      capabilityMessages={renderedStateIsCurrent ? capabilityMessages : []}
+      operationStates={
+        renderedStateIsCurrent
+          ? Object.values(operationStates).filter(
+              (state): state is DeliverablesOperationState => state !== undefined,
+            )
+          : []
+      }
+      speakerContentHistory={renderedSpeakerContentHistory}
       {...(api?.createTask === undefined ? {} : { onCreateTask: createTask })}
-      onInspectAsset={setSelectedAssetId}
-      selectedAssetId={selectedAssetId}
-      assetHistory={assetHistory}
-      comments={comments}
-      loadingAssetDetails={loadingAssetDetails}
+      onInspectAsset={(assetId) => {
+        setAssetHistory([]);
+        setComments([]);
+        setAssetHistoryError(null);
+        setCommentsError(null);
+        setSelectedAssetId(assetId);
+      }}
+      {...(!renderedStateIsCurrent || selectedSessionId === null ? {} : { selectedSessionId })}
+      {...(visibleSessionHistory === undefined ? {} : { sessionHistory: visibleSessionHistory })}
+      {...(visibleSessionHistoryError === null
+        ? {}
+        : { sessionHistoryError: visibleSessionHistoryError })}
+      onSelectSession={setSelectedSessionId}
+      onRetry={() => void load(undefined, true)}
+      selectedAssetId={renderedStateIsCurrent ? selectedAssetId : null}
+      onCloseAsset={() => setSelectedAssetId(null)}
+      assetHistory={renderedStateIsCurrent ? assetHistory : []}
+      comments={renderedStateIsCurrent ? comments : []}
+      loadingAssetDetails={renderedStateIsCurrent && loadingAssetDetails}
+      assetHistoryError={renderedStateIsCurrent ? assetHistoryError : null}
+      commentsError={renderedStateIsCurrent ? commentsError : null}
       {...(api?.addAssetComment === undefined ? {} : { onAddComment: addComment })}
       {...(api?.getDownloadGrant === undefined ? {} : { onDownloadVersion: downloadVersion })}
       {...(api?.exportDeliverables === undefined
@@ -2694,10 +3862,14 @@ export function DeliverablesWorkspace({
           : { onExportDeliverables: exportDeliverables })}
       {...(reviewAssetHandler === undefined ? {} : { onReviewAsset: reviewAssetHandler })}
       {...(api?.sendBulkReminder === undefined ? {} : { onSendBulkReminder: sendBulkReminder })}
-      {...(api === null ? {} : { onSaveSession: saveSession, onApproveSession: approveSession })}
+      onSaveSession={saveSession}
+      onApproveSession={approveSession}
       {...(api?.restoreSessionVersion === undefined
         ? {}
         : { onRestoreSessionVersion: restoreSessionVersion })}
+      {...(api?.restoreSpeakerContentVersion === undefined
+        ? {}
+        : { onRestoreSpeakerContentVersion: restoreSpeakerContentVersion })}
       {...(api?.updateBiography === undefined ? {} : { onSaveBiography: saveBiography })}
       {...(api?.replaceHeadshot === undefined ? {} : { onReplaceHeadshot: replaceHeadshot })}
     />

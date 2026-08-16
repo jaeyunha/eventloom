@@ -1,7 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { AgendaState } from "../features/agenda/types";
+import { describe, expect, it, vi } from "vitest";
 import type { RemixProviderInput } from "../features/remix/types";
-import { FakeAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareAiBinding,
   CloudflareAiProviderError,
@@ -12,9 +10,14 @@ import {
   inspectProductionRuntime,
   type RuntimeBindings,
 } from "./cloudflare";
+import { createRuntimeDependencies } from "./composition";
+
+vi.setConfig({ testTimeout: 15_000 });
 
 const BASE_ID = "base-runtime-ai";
 const MODEL = "@cf/meta/test-runtime-model";
+const AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
+  "airtable-credential-key-that-is-at-least-32-characters-long";
 
 function database(): NonNullable<RuntimeBindings["DB"]> {
   return {
@@ -65,22 +68,26 @@ function productionBindings(ai: CloudflareAiBinding): RuntimeBindings {
   } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
   return {
     APP_ENV: "production",
-    WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    API_ORIGIN: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+    WEB_ORIGIN: "https://web-production.example.test",
+    API_ORIGIN: "https://api-production.example.test",
     DB: database(),
     AGENDA_COORDINATOR: coordinator,
     PRIVATE_FILES: privateFiles,
     OUTBOX_QUEUE: outboxQueue,
-    AIRTABLE_ACCESS_TOKEN: "airtable-token",
     AIRTABLE_BASE_ID: BASE_ID,
+    AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
     BETTER_AUTH_SECRET: "runtime-secret-that-is-at-least-32-characters-long",
     OPENSEND_API_URL: "https://opensend.namuh.co",
     OPENSEND_API_KEY: "opensend-api-key",
+    CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
+    CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
     AUTH_FROM_EMAIL: "auth@sessionboard.namuh.co",
-    ORGANIZER_AUTOJOIN_DOMAINS: "swyx.io,ai.engineer",
-    ORGANIZER_AUTOJOIN_ORGANIZATION_ID: "ai-engineer",
+    SPEAKERS_FROM_EMAIL: "speakers@sessionboard.namuh.co",
+    CALENDAR_FROM_EMAIL: "calendar@sessionboard.namuh.co",
+    CALENDAR_UID_DOMAIN: "calendar.sessionboard.namuh.co",
     AI: ai,
     AI_MODEL: MODEL,
+    AI_PROVIDER: "cloudflare",
   };
 }
 
@@ -104,91 +111,33 @@ function remixInput(): RemixProviderInput {
   };
 }
 
-function agendaState(): AgendaState {
-  return {
-    eventId: "event-1",
-    stateVersion: 0,
-    timeZone: "UTC",
-    minimumTravelMinutes: 0,
-    sessions: [
-      {
-        id: "session-1",
-        title: "A useful session",
-        status: "accepted",
-        participantIds: [],
-        resourceIds: [],
-        capacityRequired: 1,
-      },
+async function generateLocalSuggestion(
+  dependencies: ReturnType<typeof createRuntimeDependencies>,
+  eventId = "demo-event",
+) {
+  const draft = await dependencies.agenda?.engine.getDraft(eventId);
+  if (!draft) throw new Error("Local agenda is unavailable.");
+  return dependencies.agenda?.engine.generateSuggestion({
+    eventId,
+    actorId: "local-speaker",
+    baseDraftVersion: draft.version,
+    dates: ["2026-09-18"],
+    eligibleStatuses: ["accepted"],
+    rooms: [
+      { id: "local-room-main", name: "Main Hall", capacity: 200 },
+      { id: "local-room-studio", name: "Workshop Studio", capacity: 48 },
     ],
-    rooms: [{ id: "room-1", name: "Main room", capacity: 100 }],
-    tracks: [],
-    draft: {
-      eventId: "event-1",
-      version: 1,
-      timeZone: "UTC",
-      entries: [],
-      warningOverrides: [],
-      updatedAt: "2026-08-09T00:00:00.000Z",
-      updatedBy: "seed",
-    },
-    revisions: [],
-    currentPublishedRevisionId: null,
-    outbox: [],
-    audit: [],
-    suggestionRuns: [],
-  };
+    roomIds: ["local-room-main", "local-room-studio"],
+    dayWindows: [{ date: "2026-09-18", startLocal: "09:00", endLocal: "17:00" }],
+    orderedRules: [],
+    ignoreExistingTimes: false,
+    ignoreExistingRooms: false,
+    ignoreExistingSchedule: { times: false, rooms: false },
+  });
 }
 
 describe("Cloudflare runtime AI composition", () => {
-  it("injects all configured providers into the Airtable runtime and propagates AI_MODEL", async () => {
-    const calls: Array<{ model: string; inputs: Record<string, unknown> }> = [];
-    const ai: CloudflareAiBinding = {
-      async run(model, inputs) {
-        calls.push({ model, inputs });
-        return { response: JSON.stringify({ placements: [] }) };
-      },
-    };
-    const bindings = productionBindings(ai);
-    const transport = new FakeAirtableTransport();
-    transport.seed({
-      baseId: BASE_ID,
-      table: "Agenda Versions",
-      fields: {
-        "Application ID": "event-1",
-        "Conflicts JSON": JSON.stringify(agendaState()),
-      },
-    });
-
-    const dependencies = createCloudflareDependencies({
-      ...bindings,
-      AIRTABLE_TRANSPORT: transport,
-    });
-    expect(dependencies.authenticator).toBeDefined();
-    expect(dependencies.agenda?.engine).toBeDefined();
-    expect(dependencies.evaluations?.service).toBeDefined();
-    expect(dependencies.remix?.service).toBeDefined();
-
-    const run = await dependencies.agenda?.engine.generateSuggestion({
-      eventId: "event-1",
-      actorId: "organizer-1",
-      baseDraftVersion: 1,
-      dates: ["2026-08-09"],
-      eligibleStatuses: ["accepted"],
-      rooms: [{ id: "room-1", name: "Main room", capacity: 100 }],
-      roomIds: ["room-1"],
-      dayWindows: [{ date: "2026-08-09", startLocal: "09:00", endLocal: "17:00" }],
-      orderedRules: [],
-      ignoreExistingTimes: false,
-      ignoreExistingRooms: false,
-      ignoreExistingSchedule: { times: false, rooms: false },
-    });
-
-    expect(run?.eventId).toBe("event-1");
-    expect(calls[0]?.model).toBe(MODEL);
-    expect(calls[0]?.inputs).toMatchObject({ response_format: { type: "json_object" } });
-  });
-
-  it("fails closed for missing AI binding or model outside local", () => {
+  it("requires the configured provider's explicit credentials", () => {
     const ai: CloudflareAiBinding = {
       async run() {
         return { response: "{}" };
@@ -208,11 +157,116 @@ describe("Cloudflare runtime AI composition", () => {
     );
   });
 
+  it("wires OAuth without a global base and enables PAT only through its explicit binding", () => {
+    const ai: CloudflareAiBinding = {
+      async run() {
+        return { response: "{}" };
+      },
+    };
+    const { AIRTABLE_BASE_ID: _legacyBaseId, ...oauthOnlyBindings } = productionBindings(ai);
+
+    const oauthOnly = createCloudflareDependencies({
+      ...oauthOnlyBindings,
+      AIRTABLE_OAUTH_CLIENT_ID: "airtable-oauth-client",
+    });
+    const patEnabled = createCloudflareDependencies({
+      ...oauthOnlyBindings,
+      AIRTABLE_OAUTH_CLIENT_ID: "airtable-oauth-client",
+      AIRTABLE_PAT_CONNECTION_ENABLED: "true",
+    });
+
+    expect(oauthOnly.airtableIntegration?.completeOAuth).toEqual(expect.any(Function));
+    expect(oauthOnly.airtableIntegration?.connectPat).toBeUndefined();
+    expect(patEnabled.airtableIntegration?.connectPat).toEqual(expect.any(Function));
+  });
+
+  it("requires a dedicated credential key when OAuth is configured outside local development", () => {
+    const ai: CloudflareAiBinding = {
+      async run() {
+        return { response: "{}" };
+      },
+    };
+    const { AIRTABLE_CREDENTIAL_ENCRYPTION_KEY: _credentialKey, ...withoutCredentialKey } =
+      productionBindings(ai);
+
+    expect(
+      inspectProductionRuntime({
+        ...withoutCredentialKey,
+        AIRTABLE_OAUTH_CLIENT_ID: "airtable-oauth-client",
+      }).issues,
+    ).toContain(
+      "AIRTABLE_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters when Airtable OAuth is configured",
+    );
+  });
+
+  it("boots non-AI workflows with AI disabled or unconfigured", () => {
+    const ai: CloudflareAiBinding = {
+      async run() {
+        return { response: "{}" };
+      },
+    };
+    const bindings = productionBindings(ai);
+    const { AI: _ai, AI_MODEL: _model, ...withoutCloudflare } = bindings;
+
+    expect(
+      inspectProductionRuntime({ ...withoutCloudflare, AI_PROVIDER: "disabled" }).success,
+    ).toBe(true);
+    expect(inspectProductionRuntime({ ...withoutCloudflare, AI_PROVIDER: "auto" }).success).toBe(
+      true,
+    );
+    expect(
+      inspectProductionRuntime({ ...withoutCloudflare, AI_PROVIDER: "openai" }).issues,
+    ).toContain("AI_PROVIDER=openai requires OPENAI_API_KEY");
+    expect(
+      inspectProductionRuntime({ ...withoutCloudflare, AI_PROVIDER: "unknown" }).issues,
+    ).toContain("AI_PROVIDER must be auto, cloudflare, openai, or disabled");
+  });
+
+  it("injects OpenAI from local backend bindings into the real agenda suggestion lifecycle", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      return Response.json({
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({ placements: [], removeEntryIds: [] }),
+              },
+            ],
+          },
+        ],
+      });
+    });
+    try {
+      const dependencies = createRuntimeDependencies({
+        APP_ENV: "local",
+        RUNTIME_PROFILE: "fixture",
+        WEB_ORIGIN: "http://127.0.0.1:3015",
+        AI_PROVIDER: "openai",
+        OPENAI_API_KEY: "local-openai-secret",
+        OPENAI_MODEL: "gpt-test",
+      });
+      await expect(generateLocalSuggestion(dependencies)).resolves.toMatchObject({
+        eventId: "demo-event",
+        status: "pending",
+      });
+      expect(calls).toHaveLength(1);
+      expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe(
+        "Bearer local-openai-secret",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("allows local omission and reports unavailable providers without leaking upstream errors", async () => {
     const unavailable = createCloudflareAiProviders(undefined, { model: MODEL });
     await expect(unavailable.remix.generate(remixInput())).rejects.toMatchObject({
       code: "AI_UNAVAILABLE",
-      message: "Cloudflare Workers AI is unavailable.",
+      message: "AI provider is unavailable.",
     });
 
     const secret = "upstream-secret-that-must-never-be-returned";
@@ -228,3 +282,27 @@ describe("Cloudflare runtime AI composition", () => {
     await expect(failure).rejects.not.toThrow(secret);
   });
 });
+
+const liveRuntimeTest = process.env.RUN_OPENAI_LIVE === "1" ? it : it.skip;
+liveRuntimeTest(
+  "runs a real OpenAI proposal through the local agenda lifecycle",
+  async () => {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error("OPENAI_API_KEY is required when RUN_OPENAI_LIVE=1.");
+    const dependencies = createRuntimeDependencies({
+      APP_ENV: "local",
+      RUNTIME_PROFILE: "fixture",
+      WEB_ORIGIN: "http://127.0.0.1:3015",
+      AI_PROVIDER: "openai",
+      OPENAI_API_KEY: apiKey,
+      OPENAI_AGENDA_MODEL: process.env.OPENAI_AGENDA_MODEL?.trim() || "gpt-5.6-sol",
+      OPENAI_AGENDA_REASONING_EFFORT:
+        process.env.OPENAI_AGENDA_REASONING_EFFORT?.trim() || "medium",
+    });
+    await expect(generateLocalSuggestion(dependencies)).resolves.toMatchObject({
+      eventId: "demo-event",
+      status: "pending",
+    });
+  },
+  30_000,
+);

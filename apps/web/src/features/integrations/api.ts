@@ -1,5 +1,10 @@
-import type { ApiScope, WebhookEventType } from "@open-sessionboard/contracts";
-import type { IntegrationAdminSnapshot, IntegrationErrorBody, OneTimeSecret } from "./types";
+import type { ApiScope, WebhookEventType } from "@eventloom/contracts";
+import type {
+  ApiKeySummary,
+  IntegrationAdminSnapshot,
+  IntegrationErrorBody,
+  OneTimeSecret,
+} from "./types";
 
 export class IntegrationAdminApiError extends Error {
   readonly code: string;
@@ -16,24 +21,46 @@ export class IntegrationAdminApiError extends Error {
 }
 
 export interface IntegrationAdminApi {
-  getSnapshot(eventId: string, signal?: AbortSignal): Promise<IntegrationAdminSnapshot>;
-  saveCredential(input: { eventId: string; provider: "opensend"; secret: string }): Promise<void>;
-  createApiKey(input: {
+  getSnapshot(
+    organizationId: string,
+    eventId: string,
+    signal?: AbortSignal,
+  ): Promise<IntegrationAdminSnapshot>;
+  saveCredential(input: {
+    organizationId: string;
     eventId: string;
+    provider: "opensend";
+    secret: string;
+  }): Promise<void>;
+  listApiKeys(organizationId: string, signal?: AbortSignal): Promise<readonly ApiKeySummary[]>;
+  createApiKey(input: {
+    organizationId: string;
+    eventId?: string | null;
     label: string;
     scopes: readonly ApiScope[];
     expiresAt: string | null;
   }): Promise<OneTimeSecret>;
-  revokeApiKey(eventId: string, apiKeyId: string): Promise<void>;
+  revokeApiKey(organizationId: string, apiKeyId: string): Promise<void>;
+  revokeApiKey(organizationId: string, eventId: string, apiKeyId: string): Promise<void>;
   createWebhook(input: {
+    organizationId: string;
     eventId: string;
     endpointUrl: string;
     events: readonly WebhookEventType[];
   }): Promise<OneTimeSecret>;
-  setWebhookActive(eventId: string, subscriptionId: string, active: boolean): Promise<void>;
-  rotateWebhookSecret(eventId: string, subscriptionId: string): Promise<OneTimeSecret>;
-  deleteWebhook(eventId: string, subscriptionId: string): Promise<void>;
-  retryCalendarDelivery(eventId: string, deliveryId: string): Promise<void>;
+  setWebhookActive(
+    organizationId: string,
+    eventId: string,
+    subscriptionId: string,
+    active: boolean,
+  ): Promise<void>;
+  rotateWebhookSecret(
+    organizationId: string,
+    eventId: string,
+    subscriptionId: string,
+  ): Promise<OneTimeSecret>;
+  deleteWebhook(organizationId: string, eventId: string, subscriptionId: string): Promise<void>;
+  retryCalendarDelivery(organizationId: string, eventId: string, deliveryId: string): Promise<void>;
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -64,7 +91,7 @@ export function createIntegrationAdminApi(
   baseUrl: string,
   fetcher: Fetcher = fetch,
 ): IntegrationAdminApi {
-  const adminBaseUrl = `${trimTrailingSlash(baseUrl)}/api/admin/events`;
+  const adminBaseUrl = `${trimTrailingSlash(baseUrl)}/api/admin/organizations`;
 
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
@@ -88,16 +115,23 @@ export function createIntegrationAdminApi(
     return body.data;
   }
 
-  function eventPath(eventId: string): string {
-    return `/${segment(eventId)}`;
+  function organizationPath(organizationId: string): string {
+    return `/${segment(organizationId)}`;
+  }
+
+  function eventPath(organizationId: string, eventId: string): string {
+    return `/${segment(organizationId)}/events/${segment(eventId)}`;
   }
 
   return {
-    getSnapshot(eventId, signal) {
-      return request<IntegrationAdminSnapshot>(`${eventPath(eventId)}/integrations`, {
-        cache: "no-store",
-        ...(signal === undefined ? {} : { signal }),
-      });
+    getSnapshot(organizationId, eventId, signal) {
+      return request<IntegrationAdminSnapshot>(
+        `${eventPath(organizationId, eventId)}/integrations`,
+        {
+          cache: "no-store",
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
     },
 
     saveCredential(input) {
@@ -108,7 +142,7 @@ export function createIntegrationAdminApi(
         );
       }
       return request<void>(
-        `${eventPath(input.eventId)}/integrations/${segment(input.provider)}/credential`,
+        `${eventPath(input.organizationId, input.eventId)}/integrations/${segment(input.provider)}/credential`,
         {
           method: "PUT",
           headers: { "idempotency-key": idempotencyKey() },
@@ -117,27 +151,36 @@ export function createIntegrationAdminApi(
       );
     },
 
+    listApiKeys(organizationId, signal) {
+      return request<readonly ApiKeySummary[]>(`${organizationPath(organizationId)}/api-keys`, {
+        cache: "no-store",
+        ...(signal === undefined ? {} : { signal }),
+      });
+    },
+
     createApiKey(input) {
-      return request<OneTimeSecret>(`${eventPath(input.eventId)}/api-keys`, {
+      return request<OneTimeSecret>(`${organizationPath(input.organizationId)}/api-keys`, {
         method: "POST",
         headers: { "idempotency-key": idempotencyKey() },
         body: JSON.stringify({
           label: input.label.trim(),
           scopes: input.scopes,
           expiresAt: input.expiresAt,
+          eventId: input.eventId ?? null,
         }),
       });
     },
 
-    revokeApiKey(eventId, apiKeyId) {
-      return request<void>(`${eventPath(eventId)}/api-keys/${segment(apiKeyId)}`, {
+    revokeApiKey(organizationId: string, eventIdOrApiKeyId: string, apiKeyId?: string) {
+      const keyId = apiKeyId ?? eventIdOrApiKeyId;
+      return request<void>(`${organizationPath(organizationId)}/api-keys/${segment(keyId)}`, {
         method: "DELETE",
         headers: { "idempotency-key": idempotencyKey() },
       });
     },
 
     createWebhook(input) {
-      return request<OneTimeSecret>(`${eventPath(input.eventId)}/webhooks`, {
+      return request<OneTimeSecret>(`${eventPath(input.organizationId, input.eventId)}/webhooks`, {
         method: "POST",
         headers: { "idempotency-key": idempotencyKey() },
         body: JSON.stringify({
@@ -147,17 +190,20 @@ export function createIntegrationAdminApi(
       });
     },
 
-    setWebhookActive(eventId, subscriptionId, active) {
-      return request<void>(`${eventPath(eventId)}/webhooks/${segment(subscriptionId)}`, {
-        method: "PATCH",
-        headers: { "idempotency-key": idempotencyKey() },
-        body: JSON.stringify({ active }),
-      });
+    setWebhookActive(organizationId, eventId, subscriptionId, active) {
+      return request<void>(
+        `${eventPath(organizationId, eventId)}/webhooks/${segment(subscriptionId)}`,
+        {
+          method: "PATCH",
+          headers: { "idempotency-key": idempotencyKey() },
+          body: JSON.stringify({ active }),
+        },
+      );
     },
 
-    rotateWebhookSecret(eventId, subscriptionId) {
+    rotateWebhookSecret(organizationId, eventId, subscriptionId) {
       return request<OneTimeSecret>(
-        `${eventPath(eventId)}/webhooks/${segment(subscriptionId)}/rotate-secret`,
+        `${eventPath(organizationId, eventId)}/webhooks/${segment(subscriptionId)}/rotate-secret`,
         {
           method: "POST",
           headers: { "idempotency-key": idempotencyKey() },
@@ -166,16 +212,19 @@ export function createIntegrationAdminApi(
       );
     },
 
-    deleteWebhook(eventId, subscriptionId) {
-      return request<void>(`${eventPath(eventId)}/webhooks/${segment(subscriptionId)}`, {
-        method: "DELETE",
-        headers: { "idempotency-key": idempotencyKey() },
-      });
+    deleteWebhook(organizationId, eventId, subscriptionId) {
+      return request<void>(
+        `${eventPath(organizationId, eventId)}/webhooks/${segment(subscriptionId)}`,
+        {
+          method: "DELETE",
+          headers: { "idempotency-key": idempotencyKey() },
+        },
+      );
     },
 
-    retryCalendarDelivery(eventId, deliveryId) {
+    retryCalendarDelivery(organizationId, eventId, deliveryId) {
       return request<void>(
-        `${eventPath(eventId)}/integrations/calendar/deliveries/${segment(deliveryId)}/retry`,
+        `${eventPath(organizationId, eventId)}/integrations/calendar/deliveries/${segment(deliveryId)}/retry`,
         {
           method: "POST",
           headers: { "idempotency-key": idempotencyKey() },

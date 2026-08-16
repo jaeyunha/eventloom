@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import { formatPublishedTime, publicAgendaDays } from "./model";
+import {
+  formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
+  publicAgendaDays,
+  publishedEntryPresenters,
+} from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -32,18 +37,6 @@ function eventDateKey(value: string, timeZone: string): string {
   return `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`;
 }
 
-function formatDateTimeRange(entry: PublishedAgendaEntry, timeZone: string): string {
-  const instant = new Date(entry.startsAt);
-  if (Number.isNaN(instant.valueOf())) return `${entry.startsAt} – ${entry.endsAt}`;
-  const date = new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone,
-  }).format(instant);
-  return `${date} · ${formatPublishedTime(entry.startsAt, timeZone)} – ${formatPublishedTime(entry.endsAt, timeZone)}`;
-}
 function eventBoundaryTimestamp(value: string): number | null {
   const normalized = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return null;
@@ -103,38 +96,10 @@ function publicEventDays(
   return days.sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function speakerForName(
-  name: string,
-  speakers: readonly PublishedSpeaker[],
-): PublishedSpeaker | undefined {
-  const normalizedName = name.trim().toLocaleLowerCase();
-  return speakers.find(
-    (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
-  );
-}
-
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
   const organization = speaker.organization?.trim() ?? "";
   return [jobTitle, organization].filter(Boolean).join(" · ") || "Speaker";
-}
-
-function speakerNames(
-  entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
-): readonly string[] {
-  const publishedNames = entry.speakerNames
-    .filter((name) => name.trim().length > 0)
-    .filter((name, index, names) => names.indexOf(name) === index)
-    .map((name) => {
-      const speaker =
-        speakerForName(name, speakers) ?? speakers.find((candidate) => candidate.id === name);
-      return speaker?.displayName ?? name;
-    });
-  if (publishedNames.length > 0) return publishedNames;
-  return speakers
-    .filter((speaker) => speaker.sessionIds.includes(entry.id))
-    .map((speaker) => speaker.displayName);
 }
 
 function entryMatchesQuery(
@@ -143,12 +108,12 @@ function entryMatchesQuery(
   query: string,
 ): boolean {
   if (!query) return true;
-  const names = speakerNames(entry, speakers);
-  const speakerDetails = names.flatMap((name) => {
-    const speaker = speakerForName(name, speakers);
+  const presenters = publishedEntryPresenters(entry, speakers);
+  const speakerDetails = presenters.flatMap((presenter) => {
+    const speaker = presenter.speaker;
     return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
   });
-  return [entry.title, ...names, ...speakerDetails]
+  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase()
@@ -172,12 +137,16 @@ function icsTimestamp(value: string): string {
     .replace(/\.\d{3}Z$/u, "Z");
 }
 
-function createCalendar(eventName: string, entries: readonly PublishedAgendaEntry[]): string {
+function createCalendar(
+  eventName: string,
+  eventSlug: string,
+  entries: readonly PublishedAgendaEntry[],
+): string {
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "METHOD:PUBLISH",
-    "PRODID:-//Open Sessionboard//Public Schedule//EN",
+    "PRODID:-//Eventloom//Public Schedule//EN",
     "CALSCALE:GREGORIAN",
     `X-WR-CALNAME:${icsEscape(eventName)}`,
   ];
@@ -187,7 +156,7 @@ function createCalendar(eventName: string, entries: readonly PublishedAgendaEntr
     if (!startsAt || !endsAt) continue;
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${icsEscape(`${entry.id}@${eventName}`)}`,
+      `UID:${icsEscape(`${entry.sessionId}@${eventSlug}`)}`,
       `DTSTAMP:${icsTimestamp(new Date().toISOString())}`,
       `DTSTART:${startsAt}`,
       `DTEND:${endsAt}`,
@@ -201,22 +170,10 @@ function createCalendar(eventName: string, entries: readonly PublishedAgendaEntr
   return `${lines.join("\r\n")}\r\n`;
 }
 
-function WidgetLinks({ eventSlug }: Readonly<{ eventSlug: string }>) {
-  const encodedSlug = encodeURIComponent(eventSlug);
-  return (
-    <nav className={styles.feedLinks} aria-label="Published program views">
-      <a href={`/embed/${encodedSlug}/sessions`}>Sessions</a>
-      <a href={`/embed/${encodedSlug}/itinerary`} aria-current="page">
-        Itinerary
-      </a>
-      <a href={`/embed/${encodedSlug}/agenda`}>Agenda</a>
-      <a href={`/embed/${encodedSlug}/speakers`}>Speakers</a>
-    </nav>
-  );
-}
 export function PublicItineraryView({ program }: Readonly<{ program: PublishedProgram }>) {
   const { agenda, speakers } = program;
-  const storageKey = `open-sessionboard:public-schedule:${agenda.event.slug}`;
+  const storageKey = `eventloom:public-schedule:${agenda.event.slug}`;
+  const legacyStorageKey = `open-sessionboard:public-schedule:${agenda.event.slug}`;
   const days = useMemo(
     () => publicEventDays(agenda.entries, agenda.event),
     [agenda.entries, agenda.event],
@@ -243,23 +200,27 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(storageKey);
+      const current = window.localStorage.getItem(storageKey);
+      const stored = current ?? window.localStorage.getItem(legacyStorageKey);
       const parsed: unknown = stored ? JSON.parse(stored) : [];
       const availableIds = new Set(agenda.entries.map((entry) => entry.id));
-      setSelectedIds(
-        Array.isArray(parsed)
-          ? parsed.filter(
-              (value): value is string => typeof value === "string" && availableIds.has(value),
-            )
-          : [],
-      );
+      const selected = Array.isArray(parsed)
+        ? parsed.filter(
+            (value): value is string => typeof value === "string" && availableIds.has(value),
+          )
+        : [];
+      setSelectedIds(selected);
+      if (current === null && stored !== null) {
+        window.localStorage.setItem(storageKey, JSON.stringify(selected));
+        window.localStorage.removeItem(legacyStorageKey);
+      }
     } catch {
       setSelectedIds([]);
     } finally {
       setLoadedStorageKey(storageKey);
       setStorageReady(true);
     }
-  }, [agenda.entries, storageKey]);
+  }, [agenda.entries, legacyStorageKey, storageKey]);
 
   useEffect(() => {
     if (!storageReady || loadedStorageKey !== storageKey) return;
@@ -347,7 +308,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
       setExportMessage("Calendar downloads are not supported in this browser.");
       return;
     }
-    const blob = new Blob([createCalendar(agenda.event.name, entries)], {
+    const blob = new Blob([createCalendar(agenda.event.name, agenda.event.slug, entries)], {
       type: "text/calendar;charset=utf-8",
     });
     const url = URL.createObjectURL(blob);
@@ -373,7 +334,6 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
           <h2 id="itinerary-heading">Itinerary</h2>
           <p>Chronological sessions from the immutable published agenda.</p>
         </div>
-        <WidgetLinks eventSlug={agenda.event.slug} />
       </div>
 
       <search>
@@ -397,7 +357,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
             {filtersOpen ? "Hide filters" : "Filters"}
           </button>
           <button
-            className={styles.clearButton}
+            className={`${styles.clearButton} ${styles.scheduleToggle}`}
             type="button"
             aria-pressed={personalOnly}
             onClick={togglePersonalView}
@@ -406,7 +366,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
               ? `All sessions (${agenda.entries.length})`
               : `My schedule (${selectedIds.length})`}
           </button>
-          <button className={styles.clearButton} type="button" onClick={downloadCalendar}>
+          <button
+            className={`${styles.clearButton} ${styles.exportButton}`}
+            type="button"
+            onClick={downloadCalendar}
+          >
             Download calendar (.ics)
           </button>
           {hasFilters ? (
@@ -466,12 +430,12 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
         <span>{selectedIds.length} saved</span>
       </div>
       {exportMessage ? (
-        <p role="status" aria-live="polite">
+        <p className={styles.exportMessage} role="status" aria-live="polite">
           {exportMessage}
         </p>
       ) : null}
 
-      <div role="tablist" aria-label="Event days" className={styles.feedLinks}>
+      <div role="tablist" aria-label="Event days" className={styles.itineraryTabs}>
         {days.map((day) => {
           const panelId = `itinerary-panel-${day.date}`;
           const tabId = `itinerary-tab-${day.date}`;
@@ -530,179 +494,162 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
         </div>
       ) : (
         <div className={styles.publicDays}>
-          {visibleDays.map((day) => {
-            const byTime = new Map<string, PublishedAgendaEntry[]>();
-            const sortedEntries = [...day.entries].sort((left, right) => {
-              const leftStart = Date.parse(left.startsAt);
-              const rightStart = Date.parse(right.startsAt);
-              if (!Number.isNaN(leftStart) && !Number.isNaN(rightStart)) {
-                return leftStart - rightStart;
-              }
-              return left.startsAt.localeCompare(right.startsAt);
-            });
-            for (const entry of sortedEntries) {
-              const time = formatPublishedTime(entry.startsAt, agenda.event.timeZone);
-              const group = byTime.get(time) ?? [];
-              group.push(entry);
-              byTime.set(time, group);
-            }
-            return (
-              <section
-                key={day.date}
-                id={`itinerary-panel-${day.date}`}
-                role="tabpanel"
-                aria-labelledby={`itinerary-tab-${day.date}`}
-              >
-                <header className={styles.publicDayHeading}>
-                  <h3 id={`itinerary-day-${day.date}`}>{day.label}</h3>
-                </header>
-                <div className={styles.publicSessionList}>
-                  {[...byTime].map(([time, entries]) => (
-                    <section
-                      key={`${day.date}-${time}`}
-                      aria-labelledby={`itinerary-time-${day.date}-${time}`}
-                    >
-                      <h4 id={`itinerary-time-${day.date}-${time}`}>{time}</h4>
-                      <ol className={styles.publicSessionList}>
-                        {entries.map((entry) => {
-                          const names = speakerNames(entry, program.speakers.speakers);
-                          const isDescriptionExpanded = expandedDescriptions.has(entry.id);
-                          const isDetailsExpanded = expandedDetails.has(entry.id);
-                          const isSelected = selectedSet.has(entry.id);
-                          const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
-                          const hasDescription = entry.summary.trim().length > 0;
-                          return (
-                            <li key={entry.id}>
-                              <article className={styles.publicSessionCard}>
-                                <div className={styles.publicSessionTime}>
-                                  <time dateTime={entry.startsAt}>
-                                    {formatDateTimeRange(entry, agenda.event.timeZone)}
-                                  </time>
-                                </div>
-                                <div className={styles.publicSessionCopy}>
-                                  <div className={styles.publicSessionMeta}>
-                                    {entry.trackNames
-                                      .filter((trackName) => trackName.trim().length > 0)
-                                      .map((trackName) => (
-                                        <span key={trackName}>Track: {trackName}</span>
-                                      ))}
-                                    {entry.format.trim() ? (
-                                      <span>Format: {entry.format}</span>
-                                    ) : null}
-                                  </div>
-                                  <h4>{entry.title}</h4>
-                                  {hasDescription ? (
-                                    <p id={`itinerary-summary-${entry.id}`}>
-                                      {isDescriptionExpanded || !hasLongDescription
-                                        ? entry.summary
-                                        : truncateDescription(entry.summary)}
-                                    </p>
-                                  ) : (
-                                    <p>No description was published.</p>
-                                  )}
-                                  {hasLongDescription ? (
-                                    <button
-                                      className={styles.clearButton}
-                                      type="button"
-                                      aria-expanded={isDescriptionExpanded}
-                                      aria-controls={`itinerary-summary-${entry.id}`}
-                                      onClick={() =>
-                                        setExpandedDescriptions((current) => {
-                                          const next = new Set(current);
-                                          if (next.has(entry.id)) next.delete(entry.id);
-                                          else next.add(entry.id);
-                                          return next;
-                                        })
-                                      }
-                                    >
-                                      {isDescriptionExpanded ? "Show less" : "Show more"}
-                                    </button>
-                                  ) : null}
-                                  <p className={styles.publicSpeakers}>
-                                    <strong>Speakers</strong>
-                                  </p>
-                                  {names.length > 0 ? (
-                                    <ul>
-                                      {names.map((name) => {
-                                        const speaker = speakerForName(name, speakers.speakers);
-                                        return (
-                                          <li key={name}>
-                                            {speaker
-                                              ? `${speaker.displayName} (${speakerRole(speaker)})`
-                                              : name}
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  ) : (
-                                    <p>No speakers listed</p>
-                                  )}
-                                  <p>
-                                    <strong>Format:</strong>{" "}
-                                    {entry.format || "Format not published"}
-                                    {entry.trackNames.length > 0 ? (
-                                      <>
-                                        {" · "}
-                                        <strong>Track:</strong> {entry.trackNames.join(", ")}
-                                      </>
-                                    ) : null}
-                                  </p>
-                                  <div
-                                    id={`itinerary-details-${entry.id}`}
-                                    hidden={!isDetailsExpanded}
-                                  >
-                                    <p>
-                                      <strong>Session details:</strong>{" "}
-                                      {formatDateTimeRange(entry, agenda.event.timeZone)}
-                                    </p>
-                                    <p>
-                                      <strong>Room:</strong>{" "}
-                                      {entry.roomName || "Room not published"}
-                                    </p>
-                                    <p>
-                                      {entry.summary || "No additional description was published."}
-                                    </p>
-                                  </div>
-                                  <button
-                                    className={styles.clearButton}
-                                    type="button"
-                                    aria-expanded={isDetailsExpanded}
-                                    aria-controls={`itinerary-details-${entry.id}`}
-                                    onClick={() =>
-                                      setExpandedDetails((current) => {
-                                        const next = new Set(current);
-                                        if (next.has(entry.id)) next.delete(entry.id);
-                                        else next.add(entry.id);
-                                        return next;
-                                      })
-                                    }
-                                  >
-                                    {isDetailsExpanded ? "Hide Details" : "View Details"}
-                                  </button>
-                                </div>
-                                <div className={styles.publicRoom}>
-                                  <span>Location</span>
-                                  <strong>{entry.roomName || "Location to be announced"}</strong>
-                                  <button
-                                    className={styles.clearButton}
-                                    type="button"
-                                    aria-pressed={isSelected}
-                                    onClick={() => toggleSelected(entry.id)}
-                                  >
-                                    {isSelected ? "Remove from my schedule" : "Add to my schedule"}
-                                  </button>
-                                </div>
-                              </article>
-                            </li>
-                          );
-                        })}
-                      </ol>
-                    </section>
-                  ))}
-                </div>
-              </section>
-            );
-          })}
+          {visibleDays.map((day) => (
+            <section
+              key={day.date}
+              id={`itinerary-panel-${day.date}`}
+              role="tabpanel"
+              aria-labelledby={`itinerary-tab-${day.date}`}
+            >
+              <ol className={styles.publicSessionList}>
+                {[...day.entries]
+                  .sort((left, right) => {
+                    const leftStart = Date.parse(left.startsAt);
+                    const rightStart = Date.parse(right.startsAt);
+                    if (!Number.isNaN(leftStart) && !Number.isNaN(rightStart)) {
+                      return leftStart - rightStart;
+                    }
+                    return left.startsAt.localeCompare(right.startsAt);
+                  })
+                  .map((entry) => {
+                    const presenters = publishedEntryPresenters(entry, program.speakers.speakers);
+                    const schedule = formatPublishedSessionSchedule(
+                      entry.startsAt,
+                      entry.endsAt,
+                      agenda.event.timeZone,
+                    );
+                    const isDescriptionExpanded = expandedDescriptions.has(entry.id);
+                    const isDetailsExpanded = expandedDetails.has(entry.id);
+                    const isSelected = selectedSet.has(entry.id);
+                    const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
+                    const hasDescription = entry.summary.trim().length > 0;
+                    return (
+                      <li key={entry.id}>
+                        <article className={styles.publicSessionCard}>
+                          <div className={styles.publicSessionTime}>
+                            <time dateTime={entry.startsAt} className={styles.sessionDate}>
+                              {schedule.dateLabel}
+                            </time>
+                            <time dateTime={entry.endsAt} className={styles.sessionClock}>
+                              <span>{schedule.startTimeLabel}</span>
+                              <span aria-hidden="true">–</span>
+                              <span>{schedule.endTimeLabel}</span>
+                            </time>
+                          </div>
+                          <div className={styles.publicSessionCopy}>
+                            <div className={styles.publicSessionMeta}>
+                              {entry.trackNames
+                                .filter((trackName) => trackName.trim().length > 0)
+                                .map((trackName) => (
+                                  <span key={trackName}>Track: {trackName}</span>
+                                ))}
+                              {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
+                            </div>
+                            <h4>{entry.title}</h4>
+                            {hasDescription ? (
+                              <p id={`itinerary-summary-${entry.id}`}>
+                                {isDescriptionExpanded || !hasLongDescription
+                                  ? entry.summary
+                                  : truncateDescription(entry.summary)}
+                              </p>
+                            ) : (
+                              <p>No description was published.</p>
+                            )}
+                            {hasLongDescription ? (
+                              <button
+                                className={styles.clearButton}
+                                type="button"
+                                aria-expanded={isDescriptionExpanded}
+                                aria-controls={`itinerary-summary-${entry.id}`}
+                                onClick={() =>
+                                  setExpandedDescriptions((current) => {
+                                    const next = new Set(current);
+                                    if (next.has(entry.id)) next.delete(entry.id);
+                                    else next.add(entry.id);
+                                    return next;
+                                  })
+                                }
+                              >
+                                {isDescriptionExpanded ? "Show less" : "Show more"}
+                              </button>
+                            ) : null}
+                            <p className={styles.publicSpeakers}>
+                              <strong>Speakers</strong>
+                            </p>
+                            {presenters.length > 0 ? (
+                              <ul>
+                                {presenters.map((presenter) => (
+                                  <li key={presenter.key}>
+                                    {presenter.speaker
+                                      ? `${presenter.displayName} (${speakerRole(
+                                          presenter.speaker,
+                                        )})`
+                                      : presenter.displayName}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p>No speakers listed</p>
+                            )}
+                            <p>
+                              <strong>Format:</strong> {entry.format || "Format not published"}
+                              {entry.trackNames.length > 0 ? (
+                                <>
+                                  {" · "}
+                                  <strong>Track:</strong> {entry.trackNames.join(", ")}
+                                </>
+                              ) : null}
+                            </p>
+                            <div id={`itinerary-details-${entry.id}`} hidden={!isDetailsExpanded}>
+                              <p>
+                                <strong>Session details:</strong>{" "}
+                                {formatPublishedDateTimeRange(
+                                  entry.startsAt,
+                                  entry.endsAt,
+                                  agenda.event.timeZone,
+                                )}
+                              </p>
+                              <p>
+                                <strong>Room:</strong> {entry.roomName || "Room not published"}
+                              </p>
+                              <p>{entry.summary || "No additional description was published."}</p>
+                            </div>
+                            <button
+                              className={styles.clearButton}
+                              type="button"
+                              aria-expanded={isDetailsExpanded}
+                              aria-controls={`itinerary-details-${entry.id}`}
+                              onClick={() =>
+                                setExpandedDetails((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(entry.id)) next.delete(entry.id);
+                                  else next.add(entry.id);
+                                  return next;
+                                })
+                              }
+                            >
+                              {isDetailsExpanded ? "Hide Details" : "View Details"}
+                            </button>
+                          </div>
+                          <div className={styles.publicRoom}>
+                            <span>Location</span>
+                            <strong>{entry.roomName || "Location to be announced"}</strong>
+                            <button
+                              className={styles.clearButton}
+                              type="button"
+                              aria-pressed={isSelected}
+                              onClick={() => toggleSelected(entry.id)}
+                            >
+                              {isSelected ? "Remove from my schedule" : "Add to my schedule"}
+                            </button>
+                          </div>
+                        </article>
+                      </li>
+                    );
+                  })}
+              </ol>
+            </section>
+          ))}
         </div>
       )}
     </section>

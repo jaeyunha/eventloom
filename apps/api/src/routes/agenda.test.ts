@@ -10,12 +10,13 @@ import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda";
-import type { PublishedAgendaRevision } from "../features/agenda/types";
+import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { AuthPrincipal } from "../features/auth/types";
 import type { AgendaRouteDependencies, AgendaRouteEnvironment } from "./agenda";
 import { createAgendaAdminRoutes, createPublishedAgendaRoutes } from "./agenda";
 
 const traceId = "00000000-0000-4000-8000-000000000001";
+const calendarUidDomain = "calendar.example.test";
 const catalog: AgendaCatalog = {
   sessions: [
     {
@@ -69,10 +70,23 @@ function principal(organizationId = "org-a"): AuthPrincipal {
     email: "organizer@example.com",
     memberships: [{ organizationId, role: "admin" }],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 
-function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
+function createEngine(
+  provider?: AgendaSuggestionProvider,
+  eventSchedule: {
+    startsAt: string;
+    endsAt: string;
+    timeZone: string;
+    scheduleDates?: readonly string[];
+  } = {
+    startsAt: "2026-01-01T00:00:00.000Z",
+    endsAt: "2028-01-01T00:00:00.000Z",
+    timeZone: "UTC",
+  },
+): AgendaEngine {
   let sequence = 0;
   const idGenerator: AgendaIdGenerator = {
     nextId: (prefix) => `${prefix}-${++sequence}`,
@@ -80,6 +94,7 @@ function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
   return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
     idGenerator,
     ...(provider === undefined ? {} : { suggestionProvider: provider }),
+    eventScheduleForEvent: async () => eventSchedule,
   });
 }
 
@@ -90,10 +105,17 @@ async function initialize(
   await engine.createAgenda({
     eventId: "event-a",
     actorId: "organizer-1",
-    timeZone: "UTC",
     minimumTravelMinutes: 0,
     ...agendaCatalog,
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function providerWithPlacements(
@@ -120,6 +142,7 @@ function appFor(
   authenticatedPrincipal: AuthPrincipal | null = principal(),
   eventOrganizationId = "org-a",
   afterPublish?: AgendaRouteDependencies["afterPublish"],
+  eventMetadataForEvent?: AgendaRouteDependencies["eventMetadataForEvent"],
 ): Hono<AgendaRouteEnvironment> {
   const app = new Hono<AgendaRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -133,7 +156,26 @@ function appFor(
       engine,
       organizationIdForEvent: async () => eventOrganizationId,
       ...(afterPublish === undefined ? {} : { afterPublish }),
+      ...(eventMetadataForEvent === undefined ? {} : { eventMetadataForEvent }),
     }),
+  );
+  return app;
+}
+
+function appForReadProfile(
+  engine: AgendaEngine,
+  organizationIdForEvent: AgendaRouteDependencies["organizationIdForEvent"],
+  authenticatedPrincipal: AuthPrincipal | null = principal(),
+): Hono<AgendaRouteEnvironment> {
+  const app = new Hono<AgendaRouteEnvironment>();
+  app.use("*", async (context, next) => {
+    context.set("authPrincipal", authenticatedPrincipal);
+    context.set("traceId", traceId);
+    await next();
+  });
+  app.route(
+    "/api/admin/organizations/:organizationId/events/:eventId/agenda",
+    createAgendaAdminRoutes({ engine, organizationIdForEvent }),
   );
   return app;
 }
@@ -149,6 +191,7 @@ function appForWithPublic(
     "/api/public/events/:eventSlug",
     createPublishedAgendaRoutes({
       engine,
+      calendarUidDomain,
       ...(eventMetadataForEvent === undefined ? {} : { eventMetadataForEvent }),
     }),
   );
@@ -157,6 +200,7 @@ function appForWithPublic(
 function publicAppFor(
   engine: AgendaEngine,
   eventMetadataForEvent?: AgendaRouteDependencies["eventMetadataForEvent"],
+  publicRevisionNumberForEventSlug?: AgendaRouteDependencies["publicRevisionNumberForEventSlug"],
 ): Hono<AgendaRouteEnvironment> {
   const app = new Hono<AgendaRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -168,7 +212,11 @@ function publicAppFor(
     "/api/public/events/:eventSlug",
     createPublishedAgendaRoutes({
       engine,
+      calendarUidDomain,
       ...(eventMetadataForEvent === undefined ? {} : { eventMetadataForEvent }),
+      ...(publicRevisionNumberForEventSlug === undefined
+        ? {}
+        : { publicRevisionNumberForEventSlug }),
     }),
   );
   return app;
@@ -240,16 +288,352 @@ async function responseData<T>(response: Response): Promise<T> {
 
 async function responseError(response: Response): Promise<{
   code: string;
-  details?: readonly { message: string }[];
+  details?: readonly {
+    path?: readonly (string | number)[];
+    code?: string;
+    message: string;
+  }[];
 }> {
   return (
     (await response.json()) as {
-      error: { code: string; details?: readonly { message: string }[] };
+      error: {
+        code: string;
+        details?: readonly {
+          path?: readonly (string | number)[];
+          code?: string;
+          message: string;
+        }[];
+      };
     }
   ).error;
 }
 
 describe("canonical agenda draft routes", () => {
+  it("overlaps the successful ownership and agenda reads exactly once", async () => {
+    const sourceEngine = createEngine();
+    await initialize(sourceEngine);
+    const state = await sourceEngine.repository.load("event-a");
+    if (state === null) throw new Error("Expected agenda state.");
+
+    const ownershipRead = deferred<string | null>();
+    const agendaRead = deferred<AgendaState | null>();
+    const started: string[] = [];
+    const organizationIdForEvent = vi.fn(() => {
+      started.push("event-ownership");
+      return ownershipRead.promise;
+    });
+    const load = vi.fn(() => {
+      started.push("agenda-state");
+      return agendaRead.promise;
+    });
+    const engine = { repository: { load } } as unknown as AgendaEngine;
+    const app = appForReadProfile(engine, organizationIdForEvent);
+    let settled = false;
+    const responsePromise = Promise.resolve(
+      app.request("/api/admin/organizations/org-a/events/event-a/agenda"),
+    ).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await vi.waitFor(() => expect(started).toEqual(["event-ownership", "agenda-state"]));
+    expect(organizationIdForEvent).toHaveBeenCalledTimes(1);
+    expect(organizationIdForEvent).toHaveBeenCalledWith("event-a");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledWith("event-a");
+
+    agendaRead.resolve(state);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    ownershipRead.resolve("org-a");
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+  });
+
+  it("does not start workspace reads before organization membership is authorized", async () => {
+    const organizationIdForEvent = vi.fn(async () => "org-a");
+    const load = vi.fn(async () => null);
+    const engine = { repository: { load } } as unknown as AgendaEngine;
+    const app = appForReadProfile(engine, organizationIdForEvent, principal("org-b"));
+
+    const response = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
+
+    expect(response.status).toBe(403);
+    expect(organizationIdForEvent).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("preserves event-tenant not-found precedence over a failed agenda read", async () => {
+    const organizationIdForEvent = vi.fn(async () => "org-b");
+    const load = vi.fn(async () => {
+      throw new Error("Airtable agenda read failed");
+    });
+    const engine = { repository: { load } } as unknown as AgendaEngine;
+    const app = appForReadProfile(engine, organizationIdForEvent);
+
+    const response = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
+
+    expect(response.status).toBe(404);
+    expect(await responseError(response)).toMatchObject({ code: "NOT_FOUND" });
+    expect(organizationIdForEvent).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+  it("does not accept a caller-selected timezone when creating an agenda", async () => {
+    const eventSchedule = {
+      startsAt: "2026-08-10T16:00:00.000Z",
+      endsAt: "2026-08-10T23:00:00.000Z",
+      timeZone: "America/Los_Angeles",
+    };
+    const injectedEngine = createEngine(undefined, eventSchedule);
+    const injectedApp = appFor(injectedEngine);
+    const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+    const injected = await injectedApp.request(root, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...catalog,
+        timeZone: "UTC",
+        minimumTravelMinutes: 0,
+      }),
+    });
+    expect(injected.status).toBe(400);
+
+    const engine = createEngine(undefined, eventSchedule);
+    const app = appFor(engine);
+    const created = await app.request(root, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...catalog, minimumTravelMinutes: 0 }),
+    });
+    expect(created.status).toBe(201);
+    expect(await responseData<AgendaDraft>(created)).toMatchObject({
+      timeZone: "America/Los_Angeles",
+    });
+  });
+
+  it("uses authoritative event metadata for an empty organizer workspace", async () => {
+    const eventMetadata = {
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conf 2027",
+      timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:30:00.000Z",
+      endsAt: "2027-05-15T00:30:00.000Z",
+      startsOn: "2027-05-12",
+      endsOn: "2027-05-14",
+      scheduleDates: ["2027-05-12", "2027-05-14"],
+      venueName: "DevFlow venue",
+    } as const;
+    const engine = createEngine(undefined, eventMetadata);
+    await initialize(engine);
+    const eventMetadataForEvent = vi.fn(async () => eventMetadata);
+    const app = appFor(engine, principal(), "org-a", undefined, eventMetadataForEvent);
+
+    const response = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
+
+    expect(response.status).toBe(200);
+    const data = await responseData<{
+      event: {
+        id: string;
+        name: string;
+        timeZone: string;
+        startsAt: string;
+        endsAt: string;
+        startsOn: string;
+        endsOn: string;
+        scheduleDates: readonly string[];
+      };
+      draft: { entries: readonly unknown[] };
+    }>(response);
+    expect(data.event).toEqual({
+      id: "event-a",
+      name: "DevFlow Conf 2027",
+      timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:30:00.000Z",
+      endsAt: "2027-05-15T00:30:00.000Z",
+      startsOn: "2027-05-12",
+      endsOn: "2027-05-14",
+      scheduleDates: ["2027-05-12", "2027-05-14"],
+    });
+    expect(data.draft.entries).toHaveLength(0);
+    expect(eventMetadataForEvent).toHaveBeenCalledTimes(1);
+    expect(eventMetadataForEvent).toHaveBeenCalledWith("event-a");
+  });
+
+  it("falls back to draft dates when event metadata is unavailable", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const eventMetadataForEvent = vi.fn(async () => null);
+    const app = appFor(engine, principal(), "org-a", undefined, eventMetadataForEvent);
+    const response = await app.request(
+      "/api/admin/organizations/org-a/events/event-a/agenda/draft",
+      { method: "GET" },
+    );
+    expect(response.status).toBe(200);
+
+    const draft = await responseData<AgendaDraft>(response);
+    const updated = await app.request(
+      "/api/admin/organizations/org-a/events/event-a/agenda/draft",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedVersion: draft.version,
+          entries: [
+            {
+              id: "entry-fallback",
+              sessionId: "session-1",
+              roomId: "room-large",
+              trackIds: [],
+              startsAtLocal: "2026-08-10T09:00",
+              endsAtLocal: "2026-08-10T10:00",
+            },
+          ],
+        }),
+      },
+    );
+    expect(updated.status).toBe(200);
+
+    const workspace = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
+    expect(workspace.status).toBe(200);
+    const data = await responseData<{
+      event: { startsOn: string; endsOn: string; timeZone: string };
+    }>(workspace);
+    expect(data.event).toMatchObject({
+      startsOn: "2026-08-10",
+      endsOn: "2026-08-10",
+      timeZone: "UTC",
+    });
+    expect(eventMetadataForEvent).toHaveBeenCalledTimes(2);
+  });
+  it("enforces authoritative event instants and sparse dates with field-level DST errors", async () => {
+    const metadata = async () => ({
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conf 2027",
+      timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:30:00.000Z",
+      endsAt: "2027-05-15T00:30:00.000Z",
+      startsOn: "2027-05-12",
+      endsOn: "2027-05-14",
+      scheduleDates: ["2027-05-12", "2027-05-14"],
+      venueName: "DevFlow venue",
+    });
+    const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+    const entry = (startsAtLocal: string, endsAtLocal: string) => ({
+      id: "entry-date-range",
+      sessionId: "session-1",
+      roomId: "room-large",
+      trackIds: [],
+      startsAtLocal,
+      endsAtLocal,
+    });
+
+    const engine = createEngine(undefined, await metadata());
+    await initialize(engine);
+    const app = appFor(engine, principal(), "org-a", undefined, metadata);
+    const valid = await app.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [entry("2027-05-14T09:00", "2027-05-14T10:00")],
+      }),
+    });
+    expect(valid.status).toBe(200);
+
+    for (const invalidEntry of [
+      entry("2026-08-12T09:00", "2026-08-12T10:00"),
+      entry("2027-05-12T09:00", "2027-05-12T10:00"),
+      entry("2027-05-13T09:00", "2027-05-13T10:00"),
+      entry("2027-05-14T17:00", "2027-05-14T18:00"),
+      entry("2027-05-12T23:30", "2027-05-13T00:30"),
+    ]) {
+      const response = await app.request(`${root}/draft`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedVersion: 2, entries: [invalidEntry] }),
+      });
+      expect(response.status).toBe(400);
+      expect(await responseError(response)).toMatchObject({ code: "VALIDATION_FAILED" });
+    }
+
+    const legacyEngine = createEngine();
+    await initialize(legacyEngine);
+    const legacyApp = appFor(legacyEngine);
+    const legacyWrite = await legacyApp.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [entry("2026-08-12T09:00", "2026-08-12T10:00")],
+      }),
+    });
+    expect(legacyWrite.status).toBe(200);
+
+    const guardedApp = appFor(legacyEngine, principal(), "org-a", undefined, metadata);
+    const publish = await guardedApp.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(publish.status).toBe(400);
+    expect(await responseError(publish)).toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const foldMetadata = async () => ({
+      slug: "fall-back",
+      name: "Fall Back",
+      timeZone: "America/Los_Angeles",
+      startsAt: "2026-11-01T07:00:00.000Z",
+      endsAt: "2026-11-01T12:00:00.000Z",
+      startsOn: "2026-11-01",
+      endsOn: "2026-11-01",
+      scheduleDates: ["2026-11-01"],
+      venueName: null,
+    });
+    const foldEngine = createEngine(undefined, await foldMetadata());
+    await initialize(foldEngine);
+    const foldApp = appFor(foldEngine, principal(), "org-a", undefined, foldMetadata);
+    const ambiguous = await foldApp.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [entry("2026-11-01T01:30", "2026-11-01T02:15")],
+      }),
+    });
+    expect(ambiguous.status).toBe(400);
+    expect(await responseError(ambiguous)).toMatchObject({
+      code: "VALIDATION_FAILED",
+      details: [
+        {
+          path: ["entries", 0, "startsAtLocal"],
+          code: "agenda.ambiguous_local_time",
+        },
+      ],
+    });
+
+    const resolved = await foldApp.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [
+          {
+            ...entry("2026-11-01T01:30", "2026-11-01T02:15"),
+            startDisambiguation: "later",
+          },
+        ],
+      }),
+    });
+    expect(resolved.status).toBe(200);
+    const foldWorkspace = await foldApp.request(root);
+    expect(foldWorkspace.status).toBe(200);
+    expect(
+      await responseData<{ draft: { entries: readonly Record<string, unknown>[] } }>(foldWorkspace),
+    ).toMatchObject({
+      draft: { entries: [{ startDisambiguation: "later" }] },
+    });
+  });
   it("projects the root workspace and supports full-draft create/update/remove, preview, and publish", async () => {
     const engine = createEngine();
     await initialize(engine);
@@ -337,6 +721,16 @@ describe("canonical agenda draft routes", () => {
       version: 3,
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
+    const unchanged = await app.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3, entries: [updatedEntry] }),
+    });
+    expect(unchanged.status).toBe(200);
+    expect(await responseData<AgendaDraft>(unchanged)).toMatchObject({
+      version: 3,
+      entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
+    });
 
     const published = await app.request(`${root}/publish`, {
       method: "POST",
@@ -369,7 +763,16 @@ describe("canonical agenda draft routes", () => {
       body: JSON.stringify({ expectedVersion: 1, entries: [] }),
     });
     expect(stale.status).toBe(409);
-    expect(await responseError(stale)).toMatchObject({ code: "CONFLICT" });
+    expect(await responseError(stale)).toMatchObject({
+      code: "CONFLICT",
+      details: [
+        {
+          path: ["expectedVersion"],
+          code: "stale",
+          message: "Expected draft version 1; current draft version is 4.",
+        },
+      ],
+    });
 
     const publicationAlias = await app.request(`${root}/publications`, {
       method: "POST",
@@ -484,7 +887,12 @@ describe("canonical agenda draft routes", () => {
       ...state,
       stateVersion: state.stateVersion + 1,
       sessions: state.sessions.map((session) =>
-        session.id === "session-1" ? { ...session, status: "ineligible" } : session,
+        session.id === "session-1"
+          ? { ...session, status: "ineligible", title: "Mutable replacement title" }
+          : session,
+      ),
+      rooms: state.rooms.map((room) =>
+        room.id === "room-large" ? { ...room, name: "Mutable replacement room" } : room,
       ),
     });
 
@@ -492,11 +900,11 @@ describe("canonical agenda draft routes", () => {
     expect(publicResponse.status).toBe(200);
     expect(
       await responseData<{
-        entries: readonly { sessionId?: string }[];
+        entries: readonly { sessionId?: string; title: string; roomName: string }[];
         revision: { number: number };
       }>(publicResponse),
     ).toMatchObject({
-      entries: [{ sessionId: "session-1" }],
+      entries: [{ sessionId: "session-1", title: "Opening", roomName: "Large room" }],
       revision: { number: 1 },
     });
   });
@@ -547,6 +955,79 @@ describe("canonical agenda draft routes", () => {
     expect((await engine.repository.load("event-a"))?.revisions).toHaveLength(1);
   });
 
+  it("returns active released speaker commitments separately and blocks publication", async () => {
+    const engine = createEngine();
+    await initialize(engine, {
+      ...catalog,
+      sessions: catalog.sessions.map((session) =>
+        session.id === "session-3" ? { ...session, participantIds: ["participant-1"] } : session,
+      ),
+    });
+    const app = appFor(engine);
+    const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+    const releasedEntry = {
+      id: "entry-1",
+      sessionId: "session-1",
+      roomId: "room-large",
+      trackIds: [],
+      startsAtLocal: "2026-08-10T09:00",
+      endsAtLocal: "2026-08-10T10:00",
+    };
+    expect(
+      (
+        await app.request(`${root}/draft`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: 1, entries: [releasedEntry] }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request(`${root}/publish`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: 2 }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const candidate = await app.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 2,
+        entries: [
+          {
+            ...releasedEntry,
+            id: "entry-3",
+            sessionId: "session-3",
+            startsAtLocal: "2026-08-10T09:15",
+            endsAtLocal: "2026-08-10T09:45",
+          },
+        ],
+      }),
+    });
+    expect(candidate.status).toBe(200);
+
+    const preview = await app.request(`${root}/preview`);
+    expect(
+      await responseData<{
+        conflicts: readonly unknown[];
+        releaseConflicts: readonly { kind: string; entryIds: readonly string[] }[];
+      }>(preview),
+    ).toMatchObject({
+      conflicts: [],
+      releaseConflicts: [{ kind: "participant", entryIds: ["entry-3", "entry-1"] }],
+    });
+    const blocked = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3 }),
+    });
+    expect(blocked.status).toBe(409);
+    expect((await engine.getPublishedAgenda("event-a"))?.entries[0]?.sessionId).toBe("session-1");
+  });
   it("maps full-draft hard conflicts to 409 without changing the version", async () => {
     const engine = createEngine();
     await initialize(engine);
@@ -661,6 +1142,20 @@ describe("canonical agenda draft routes", () => {
     });
     expect(moved.status).toBe(200);
     expect((await responseData<AgendaDraft>(moved)).version).toBe(2);
+    const staleSpeakerState = await engine.repository.load("event-a");
+    if (staleSpeakerState === null) throw new Error("Expected agenda state.");
+    await engine.repository.compareAndSwap("event-a", staleSpeakerState.stateVersion, {
+      ...staleSpeakerState,
+      stateVersion: staleSpeakerState.stateVersion + 1,
+      draft: {
+        ...staleSpeakerState.draft,
+        entries: staleSpeakerState.draft.entries.map((entry) =>
+          entry.id === "entry-2"
+            ? ({ ...entry, speakerNames: ["participant-1"] } as typeof entry)
+            : entry,
+        ),
+      },
+    });
 
     const preview = await app.request(`${root}/preview`);
     expect(preview.status).toBe(200);
@@ -668,20 +1163,28 @@ describe("canonical agenda draft routes", () => {
       conflicts: [],
     });
     const workspace = await app.request(root);
-    expect(
-      (
-        await responseData<{
-          unscheduledSessions: readonly {
-            id: string;
-            title: string;
-            durationMinutes: number;
-            format: string;
-            speakerNames: readonly string[];
-            capacityRequired: number;
-          }[];
-        }>(workspace)
-      ).unscheduledSessions,
-    ).toEqual([
+    const workspaceData = await responseData<{
+      draft: {
+        entries: readonly {
+          id: string;
+          speakerNames: readonly string[];
+        }[];
+      };
+      unscheduledSessions: readonly {
+        id: string;
+        title: string;
+        durationMinutes: number;
+        format: string;
+        speakerNames: readonly string[];
+        capacityRequired: number;
+        trackIds: readonly string[];
+        trackNames: readonly string[];
+      }[];
+    }>(workspace);
+    expect(workspaceData.draft.entries.find((entry) => entry.id === "entry-2")).toMatchObject({
+      speakerNames: ["Grace Hopper"],
+    });
+    expect(workspaceData.unscheduledSessions).toEqual([
       {
         id: "session-3",
         title: "Deep dive",
@@ -689,6 +1192,8 @@ describe("canonical agenda draft routes", () => {
         format: "Session",
         speakerNames: ["participant-3"],
         capacityRequired: 40,
+        trackIds: [],
+        trackNames: [],
       },
     ]);
     const state = await engine.repository.load("event-a");
@@ -752,6 +1257,8 @@ describe("agenda suggestion admin routes", () => {
         orderedRules: suggestionRequest.orderedRules,
       },
     });
+    expect(run.candidateDiagnostics).toEqual({ conflicts: [], warnings: [] });
+    expect(run).not.toHaveProperty("validation");
     expect(await engine.getDraft("event-a")).toEqual(before);
     expect(await engine.getPublishedAgenda("event-a")).toBeNull();
 
@@ -898,6 +1405,18 @@ describe("agenda suggestion admin routes", () => {
       { ...suggestionRequest, baseDraftVersion: 2, roomIds: ["room-small"] },
     );
     const conflictRun = await responseData<AgendaSuggestionRun>(conflictGenerated);
+    expect(conflictRun.candidateDiagnostics.conflicts).toEqual([
+      expect.objectContaining({ kind: "room" }),
+    ]);
+    const savedPreview = await conflictApp.request(
+      "/api/admin/organizations/org-a/events/event-a/agenda/preview",
+    );
+    expect(savedPreview.status).toBe(200);
+    expect(
+      await responseData<{ conflicts: readonly unknown[]; releaseConflicts: readonly unknown[] }>(
+        savedPreview,
+      ),
+    ).toMatchObject({ conflicts: [], releaseConflicts: [] });
     const conflict = await postSuggestion(
       conflictApp,
       `/api/admin/organizations/org-a/events/event-a/agenda/suggestions/${conflictRun.id}/apply`,
@@ -942,12 +1461,23 @@ describe("agenda suggestion admin routes", () => {
   });
 });
 describe("anonymous published agenda feeds", () => {
+  it("rejects an invalid configured calendar UID domain", () => {
+    expect(() =>
+      createPublishedAgendaRoutes({
+        engine: publicEngine(publicRevision()),
+        calendarUidDomain: "https://calendar.example.test/path",
+      }),
+    ).toThrow();
+  });
+
   it("serves the public JSON projection with cache validators and excludes private fields", async () => {
     const app = publicAppFor(publicEngine(publicRevision()));
     const response = await app.request("/api/public/events/open-systems/agenda.json");
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/^application\/json/u);
-    expect(response.headers.get("cache-control")).toContain("public");
+    expect(response.headers.get("cache-control")).toBe(
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate",
+    );
     const etag = response.headers.get("etag");
     expect(etag).toMatch(/^"[a-f0-9]{64}"$/u);
     const body = (await response.json()) as {
@@ -991,6 +1521,75 @@ describe("anonymous published agenda feeds", () => {
     expect((await app.request("/api/public/events/open-systems/agenda.ics")).status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(2);
   });
+  it("serves the agenda revision matching the authoritative public speaker projection", async () => {
+    const publicRevisionFour = publicRevision();
+    const publicRevisionFive = {
+      ...publicRevisionFour,
+      id: "revision-public-5",
+      revisionNumber: 5,
+      entries: publicRevisionFour.entries.map((entry) => ({
+        ...entry,
+        metadata: {
+          ...entry.metadata,
+          title: "A newer agenda that is not public yet",
+        },
+      })),
+    } as PublishedAgendaRevision;
+    const getPublishedAgenda = vi.fn(async () => publicRevisionFive);
+    const getPublishedAgendaRevision = vi.fn(async (_eventSlug: string, revisionNumber: number) =>
+      revisionNumber === 4 ? publicRevisionFour : null,
+    );
+    const publicRevisionNumberForEventSlug = vi.fn(async () => 4);
+    const app = publicAppFor(
+      { getPublishedAgenda, getPublishedAgendaRevision } as unknown as AgendaEngine,
+      undefined,
+      publicRevisionNumberForEventSlug,
+    );
+
+    const response = await app.request("/api/public/events/open-systems/agenda.json");
+
+    expect(response.status).toBe(200);
+    await expect(responseData(response)).resolves.toMatchObject({
+      revision: { number: 4 },
+      entries: [{ title: "A session, with; punctuation \\\\" }],
+    });
+    expect(getPublishedAgendaRevision).toHaveBeenCalledWith("open-systems", 4);
+  });
+  it("withholds the agenda when no authoritative public speaker revision exists", async () => {
+    const getPublishedAgendaRevision = vi.fn();
+    const app = publicAppFor(
+      {
+        getPublishedAgenda: async () => publicRevision(),
+        getPublishedAgendaRevision,
+      } as unknown as AgendaEngine,
+      undefined,
+      async () => null,
+    );
+
+    const response = await app.request("/api/public/events/open-systems/agenda.json");
+
+    expect(response.status).toBe(404);
+    expect(getPublishedAgendaRevision).not.toHaveBeenCalled();
+  });
+  it("never reads mutable agenda state while serving the published projection", async () => {
+    const revision = publicRevision();
+    const load = vi.fn(async () => {
+      throw new Error("draft state must not be read");
+    });
+    const getPublishedAgenda = vi.fn(async () => revision);
+    const engine = {
+      repository: { load },
+      getPublishedAgenda,
+    } as unknown as AgendaEngine;
+
+    const response = await publicAppFor(engine).request(
+      "/api/public/events/open-systems/agenda.json",
+    );
+
+    expect(response.status).toBe(200);
+    expect(load).not.toHaveBeenCalled();
+    expect(getPublishedAgenda).toHaveBeenCalledWith("open-systems");
+  });
   it("avoids repeated repository reads for the same anonymous format and slug", async () => {
     const revision = publicRevision();
     const getPublishedAgenda = vi.fn(async (eventSlug: string) =>
@@ -1005,7 +1604,131 @@ describe("anonymous published agenda feeds", () => {
     expect(second.status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(1);
   });
+  it("prefers an unexpired isolate-memory agenda entry before consulting Cache API", async () => {
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(async () => undefined);
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+    let releaseMatch: ((value: Response | undefined) => void) | undefined;
+    const blockedMatch = new Promise<Response | undefined>((resolve) => {
+      releaseMatch = resolve;
+    });
 
+    try {
+      const getPublishedAgenda = vi.fn(async () => publicRevision());
+      const app = publicAppFor({ getPublishedAgenda } as unknown as AgendaEngine);
+      const path = "/api/public/events/open-systems/agenda.json";
+
+      const first = await app.request(path);
+      expect(first.status).toBe(200);
+
+      match.mockImplementation(() => blockedMatch);
+      const second = await Promise.race([
+        app.request(path),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 100);
+        }),
+      ]);
+
+      expect(second).not.toBe("timed-out");
+      if (second !== "timed-out") expect(second.status).toBe(200);
+      expect(match).toHaveBeenCalledTimes(1);
+      expect(getPublishedAgenda).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseMatch?.(undefined);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not wait for a pending agenda Cache API put before responding", async () => {
+    const putDeferred = deferred<void>();
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(() => putDeferred.promise);
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    try {
+      const app = publicAppFor(publicEngine(publicRevision()));
+      const response = await Promise.race([
+        app.request("/api/public/events/open-systems/agenda.json"),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 100);
+        }),
+      ]);
+
+      expect(response).not.toBe("timed-out");
+      if (response !== "timed-out") expect(response.status).toBe(200);
+      await Promise.resolve();
+      expect(put).toHaveBeenCalledTimes(1);
+    } finally {
+      putDeferred.resolve();
+      vi.unstubAllGlobals();
+    }
+  });
+  it("removes a deferred old agenda put that completes after publication invalidation", async () => {
+    const oldPut = deferred<void>();
+    let cachedResponse: Response | undefined;
+    let putCount = 0;
+    const match = vi.fn(async () => cachedResponse?.clone());
+    const put = vi.fn(async (_request: Request, response: Response) => {
+      putCount += 1;
+      if (putCount === 1) await oldPut.promise;
+      cachedResponse = response.clone();
+    });
+    const deleteCache = vi.fn(async () => {
+      cachedResponse = undefined;
+      return true;
+    });
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    try {
+      const engine = createEngine();
+      await initialize(engine);
+      const adminApp = appFor(engine);
+      const publicApp = publicAppFor(engine);
+      const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+      const publicPath = "/api/public/events/event-a/agenda.json";
+      const entry = {
+        id: "entry-1",
+        sessionId: "session-1",
+        roomId: "room-large",
+        trackIds: [],
+        startsAtLocal: "2026-08-10T09:00",
+        endsAtLocal: "2026-08-10T10:00",
+      };
+      const update = (expectedVersion: number, roomId: string) =>
+        adminApp.request(`${root}/draft`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion, entries: [{ ...entry, roomId }] }),
+        });
+      const publish = (expectedVersion: number) =>
+        adminApp.request(`${root}/publish`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion }),
+        });
+
+      expect((await update(1, "room-large")).status).toBe(200);
+      expect((await publish(2)).status).toBe(200);
+      expect((await publicApp.request(publicPath)).status).toBe(200);
+      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+
+      expect((await update(2, "room-small")).status).toBe(200);
+      expect((await publish(3)).status).toBe(200);
+      expect(cachedResponse).toBeUndefined();
+      const deletesBeforeOldPutSettles = deleteCache.mock.calls.length;
+
+      oldPut.resolve();
+      await vi.waitFor(() =>
+        expect(deleteCache.mock.calls.length).toBeGreaterThan(deletesBeforeOldPutSettles),
+      );
+      expect(cachedResponse).toBeUndefined();
+    } finally {
+      oldPut.resolve();
+      vi.unstubAllGlobals();
+    }
+  });
   it("keeps different public agenda slugs isolated", async () => {
     const first = publicRevision();
     const second = {
@@ -1059,7 +1782,9 @@ describe("anonymous published agenda feeds", () => {
     expect(ical).toContain("DESCRIPTION:Description with a long speaker");
     expect(ical).toContain("LOCATION:Main hall\\, level 2");
     expect(ical).toContain("Morgan Lee");
-    expect(ical).toContain("@calendar.sessionboard.namuh.co");
+    expect(ical).toContain(`@${calendarUidDomain}`);
+    expect(ical).toContain(`UID:open-systems.session-public-1@${calendarUidDomain}`);
+    expect(ical).not.toContain("open-systems.entry-public-1@");
     expect(ical).not.toContain("private@example.test");
     expect(ical).not.toContain("Private event metadata.");
     expect(ical).not.toMatch(/(^|\r\n)(participantEmails|privateNote):/u);

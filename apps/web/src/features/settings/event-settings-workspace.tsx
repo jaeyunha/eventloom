@@ -1,20 +1,63 @@
 "use client";
 
+import { ChevronRight, MoreHorizontal, Pencil, Search, Trash2, Undo2 } from "lucide-react";
+import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  type CSSProperties,
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import styles from "../admin/admin-shell.module.css";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Textarea } from "@/components/ui/textarea";
+import { SettingGroup, SettingRow, SettingsShell } from "@/components/workspace/settings-ui";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import {
   createEventSettingsApi,
-  defaultAgendaEligibleStatuses,
-  defaultSessionStatuses,
+  type EventIdentity,
   type EventRoom,
   type EventSettingsApi,
   EventSettingsApiError,
@@ -26,61 +69,41 @@ import {
   type SessionSettingsRecord,
   type TaxonomyInput,
 } from "./api";
+import {
+  type EventSettingsAuditPresentation,
+  eventSettingsAuditDiff,
+  eventSettingsAuditPresentation,
+  settingsOnlyAuditEntries,
+} from "./event-settings-audit";
+import { useEventSettingsNavigationCache } from "./event-settings-navigation-cache";
+import { isCompleteEventSettingsNavigationCacheSnapshot } from "./event-settings-navigation-cache-model";
+import {
+  type EventSettingsSection,
+  eventSettingsSectionDefinition,
+  eventSettingsSectionHref,
+} from "./event-settings-sections";
+import styles from "./event-settings-workspace.module.css";
+import {
+  canCommitEventSettingsAsyncCompletion,
+  eventSettingsSectionNavigation,
+  eventSettingsWorkspaceScopeKey,
+  loadEventSettingsProgressively,
+  normalizeData,
+  persistEventSettingsMutation,
+  validateRoomForm,
+} from "./event-settings-workspace-model";
 
-const stackStyle: CSSProperties = { display: "grid", gap: "1rem" };
-const twoColumnStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(16rem, 1fr))",
-  gap: "1rem",
-};
-const fieldStyle: CSSProperties = { display: "grid", gap: "0.35rem" };
-const fieldLabelStyle: CSSProperties = {
-  color: "var(--admin-ink)",
-  fontSize: "0.78rem",
-  fontWeight: 750,
-};
-const inputStyle: CSSProperties = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-};
-const inlineActionsStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.55rem",
-  alignItems: "center",
-};
-const listStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.65rem",
-  padding: 0,
-  margin: 0,
-  listStyle: "none",
-};
-const cardStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.75rem",
-  padding: "0.95rem 1rem",
-  border: "1px solid var(--admin-border)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-canvas)",
-};
-const subtleTextStyle: CSSProperties = {
-  color: "var(--admin-muted)",
-  fontSize: "0.78rem",
-  lineHeight: 1.5,
-};
+export type EventSettingsDetailsStatus = "loading" | "loaded" | "error";
 
 export type EventSettingsWorkspaceState =
   | { readonly status: "loading" }
   | { readonly status: "error" | "config-error"; readonly message: string }
-  | { readonly status: "loaded"; readonly data: EventSettingsData };
+  | {
+      readonly status: "loaded";
+      readonly data: EventSettingsData;
+      readonly detailsStatus?: EventSettingsDetailsStatus;
+      readonly detailsMessage?: string;
+    };
 
 export interface EventSettingsWorkspaceActions {
   updateSettings(input: {
@@ -117,6 +140,8 @@ export interface EventSettingsWorkspaceActions {
 export interface EventSettingsWorkspaceViewProps {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly eventIdentity?: EventIdentity;
+  readonly section?: EventSettingsSection;
   readonly state: EventSettingsWorkspaceState;
   readonly busy?: boolean;
   readonly notice?: string | null;
@@ -124,62 +149,15 @@ export interface EventSettingsWorkspaceViewProps {
   readonly onRetry?: () => void;
 }
 
-function contextLabel(organizationId: string, eventId: string): string {
-  return `Organization ${organizationId} · Event ${eventId}`;
-}
-
-function normalizedSettings(settings: SessionSettingsRecord): SessionSettingsRecord {
-  return {
-    ...settings,
-    statuses: settings.statuses.length > 0 ? settings.statuses : [...defaultSessionStatuses],
-    agendaEligibleStatuses:
-      settings.agendaEligibleStatuses.length > 0
-        ? settings.agendaEligibleStatuses
-        : [...defaultAgendaEligibleStatuses],
-  };
-}
-
-function normalizeData(
-  data: EventSettingsData,
-  organizationId: string,
-  eventId: string,
-): EventSettingsData {
-  if (data.organizationId && data.organizationId !== organizationId) {
-    throw new TypeError("The settings response belongs to a different organization.");
-  }
-  if (data.eventId && data.eventId !== eventId) {
-    throw new TypeError("The settings response belongs to a different event.");
-  }
-  return {
-    ...data,
-    organizationId,
-    eventId,
-    settings: normalizedSettings(data.settings),
-    rooms: data.rooms ?? [],
-    tracks: data.tracks ?? [],
-    formats: data.formats ?? [],
-    levels: data.levels ?? [],
-    tags: data.tags ?? [],
-    audit: data.audit ?? [],
-  };
+function contextLabel(organizationId: string, eventIdentity?: EventIdentity): string {
+  return eventIdentity === undefined
+    ? `Organization ${organizationId} · Loading public identity…`
+    : `Organization ${organizationId} · Public slug ${eventIdentity.slug}`;
 }
 
 function messageFrom(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "The event settings request could not be completed.";
-}
-
-export async function persistEventSettingsMutation(
-  operation: () => Promise<void>,
-  refresh: () => Promise<void>,
-): Promise<"refreshed" | "refresh-failed"> {
-  await operation();
-  try {
-    await refresh();
-    return "refreshed";
-  } catch {
-    return "refresh-failed";
-  }
 }
 
 function resourceTitle(kind: EventSettingsResourceKind): string {
@@ -189,89 +167,134 @@ function resourceTitle(kind: EventSettingsResourceKind): string {
 function resourceDescription(kind: EventSettingsResourceKind): string {
   switch (kind) {
     case "track":
-      return "Group sessions for agenda views and filtering.";
+      return "Primary topic or program stream. Use one track per session.";
     case "format":
-      return "Describe how a session is delivered, such as a workshop or panel.";
+      return "How the session is delivered, such as a workshop or panel.";
     case "level":
-      return "Help participants find sessions by experience level.";
+      return "The experience level participants should expect.";
     case "tag":
-      return "Add flexible labels without changing the session status workflow.";
+      return "Optional labels for flexible filtering, such as Hands-on or Remote.";
   }
 }
 
-function auditSummary(entry: EventSettingsAuditEntry): string {
-  if (entry.entityType === "settings" && entry.action === "settings.updated") {
-    return `Agenda eligibility and status settings updated to version ${entry.version}.`;
+function resourceGuidance(kind: EventSettingsResourceKind): string {
+  switch (kind) {
+    case "track":
+      return "Recommended";
+    case "format":
+      return "Recommended";
+    case "level":
+      return "Recommended";
+    case "tag":
+      return "Optional";
   }
-  return `${entry.entityType} ${entry.action} at version ${entry.version}.`;
 }
+function navigationGroupId(prefix: string, group: string): string {
+  return `${prefix}-${group.toLowerCase().replaceAll(" ", "-")}`;
+}
+function SettingsSectionNavigation({
+  organizationId,
+  eventId,
+  section = "workflow",
+}: Readonly<{
+  organizationId: string;
+  eventId: string;
+  section: EventSettingsSection;
+}>) {
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-function SettingsGroupedNavigation(): ReactNode {
-  return (
-    <nav
-      aria-label="Event settings sections"
-      style={{ ...cardStyle, gap: "1.1rem", alignSelf: "start" }}
-    >
-      <h2 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 800 }}>Event settings</h2>
-      <SettingsNavGroup
-        title="Event setup"
-        links={[
-          { href: "#session-settings", label: "Sessions and statuses" },
-          { href: "#rooms", label: "Rooms and capacity" },
-        ]}
-      />
-      <SettingsNavGroup
-        title="Library"
-        links={[{ href: "#library", label: "Tracks, formats, levels, and tags" }]}
-      />
-      <SettingsNavGroup
-        title="Communications"
-        links={[{ href: "#communications", label: "Email and message settings" }]}
-      />
-      <SettingsNavGroup
-        title="Calendar"
-        links={[{ href: "#calendar", label: "Calendar delivery" }]}
-      />
-    </nav>
+  const groups = useMemo(() => {
+    const grouped = new Map<string, (typeof eventSettingsSectionNavigation)[number][]>();
+    for (const item of eventSettingsSectionNavigation) {
+      const current = grouped.get(item.group) ?? [];
+      current.push(item);
+      grouped.set(item.group, current);
+    }
+    return [...grouped.entries()];
+  }, []);
+  const active = eventSettingsSectionDefinition(section);
+
+  const links = (items: readonly (typeof eventSettingsSectionNavigation)[number][]) => (
+    <ul className={styles.navigationList}>
+      {items.map((item) => (
+        <li key={item.id}>
+          <Link
+            className={`${styles.navigationLink} ${section === item.id ? styles.navigationLinkActive : ""}`}
+            href={eventSettingsSectionHref(organizationId, eventId, item.id)}
+            aria-current={section === item.id ? "page" : undefined}
+            title={item.description}
+            onClick={() => setMobileOpen(false)}
+          >
+            <item.icon className={styles.navigationIcon} aria-hidden />
+            <span className={styles.navigationLinkCopy}>
+              <strong>{item.label}</strong>
+              <span>{item.description}</span>
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
-}
 
-function SettingsNavGroup({
-  title,
-  links,
-}: Readonly<{ title: string; links: readonly { href: string; label: string }[] }>) {
   return (
-    <section aria-labelledby={`settings-nav-${title.toLowerCase().replaceAll(" ", "-")}`}>
-      <h3
-        id={`settings-nav-${title.toLowerCase().replaceAll(" ", "-")}`}
-        style={{
-          margin: "0 0 0.35rem",
-          color: "var(--admin-subtle)",
-          fontSize: "0.68rem",
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-        }}
-      >
-        {title}
-      </h3>
-      <ul style={{ display: "grid", gap: "0.25rem", padding: 0, margin: 0, listStyle: "none" }}>
-        {links.map((link) => (
-          <li key={link.href}>
-            <a
-              href={link.href}
-              style={{
-                color: "var(--admin-brand-strong)",
-                fontSize: "0.78rem",
-                fontWeight: 700,
-                textDecoration: "none",
-              }}
+    <div className={styles.navigationWrapper}>
+      <aside className={styles.desktopNavigation} aria-label="Event settings sections">
+        <div className={styles.navigationHeader}>
+          <p className={styles.navigationEyebrow}>Event settings</p>
+          <h2 className={styles.navigationTitle}>Configure this event</h2>
+        </div>
+        {groups.map(([group, items]) => (
+          <section
+            key={group}
+            className={styles.navigationGroup}
+            aria-labelledby={navigationGroupId("settings-nav", group)}
+          >
+            <h2
+              id={navigationGroupId("settings-nav", group)}
+              className={styles.navigationGroupTitle}
             >
-              {link.label}
-            </a>
-          </li>
+              {group}
+            </h2>
+            {links(items)}
+          </section>
         ))}
-      </ul>
-    </section>
+      </aside>
+      <Collapsible
+        className={styles.mobileNavigation}
+        open={mobileOpen}
+        onOpenChange={setMobileOpen}
+      >
+        <CollapsibleTrigger asChild>
+          <Button
+            className={styles.mobileNavigationTrigger}
+            variant="ghost"
+            type="button"
+            aria-label="Choose event settings section"
+          >
+            <span className={styles.mobileNavigationLabel}>Event settings</span>
+            <strong>{active.shortLabel}</strong>
+            <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className={styles.mobileNavigationContent}>
+          {groups.map(([group, items]) => (
+            <section
+              key={group}
+              className={styles.navigationGroup}
+              aria-labelledby={navigationGroupId("mobile-settings-nav", group)}
+            >
+              <h2
+                id={navigationGroupId("mobile-settings-nav", group)}
+                className={styles.navigationGroupTitle}
+              >
+                {group}
+              </h2>
+              {links(items)}
+            </section>
+          ))}
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -279,15 +302,19 @@ interface StatusRow {
   readonly id: string;
   readonly value: string;
 }
+
 function StatusSettingsForm({
   settings,
   busy,
   onSave,
+  readOnly = false,
 }: Readonly<{
   settings: SessionSettingsRecord;
   busy: boolean;
-  onSave: EventSettingsWorkspaceActions["updateSettings"];
+  onSave?: EventSettingsWorkspaceActions["updateSettings"];
+  readOnly?: boolean;
 }>) {
+  const disabled = busy || readOnly;
   const nextStatusRowId = useRef(0);
   const createStatusRows = useCallback(
     (values: readonly string[]): StatusRow[] =>
@@ -298,6 +325,13 @@ function StatusSettingsForm({
   const [eligible, setEligible] = useState<string[]>([...settings.agendaEligibleStatuses]);
   const [newStatus, setNewStatus] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const cleanedStatuses = statuses.map(({ value }) => value.trim());
+  const normalizedEligible = cleanedStatuses.filter((status) => eligible.includes(status));
+  const normalizedEligibleSet = new Set(normalizedEligible);
+  const dirty =
+    cleanedStatuses.join("\u0000") !== settings.statuses.join("\u0000") ||
+    normalizedEligible.length !== settings.agendaEligibleStatuses.length ||
+    settings.agendaEligibleStatuses.some((status) => !normalizedEligibleSet.has(status));
 
   useEffect(() => {
     setStatuses(createStatusRows(settings.statuses));
@@ -337,17 +371,26 @@ function StatusSettingsForm({
     setEligible((current) => current.filter((candidate) => candidate !== status));
   }
 
-  function toggleEligibility(status: string) {
+  function toggleEligibility(status: string, checked: boolean) {
     setEligible((current) =>
-      current.includes(status)
-        ? current.filter((candidate) => candidate !== status)
-        : [...current, status],
+      checked
+        ? current.includes(status)
+          ? current
+          : [...current, status]
+        : current.filter((candidate) => candidate !== status),
     );
+  }
+
+  function resetChanges() {
+    setStatuses(createStatusRows(settings.statuses));
+    setEligible([...settings.agendaEligibleStatuses]);
+    setNewStatus("");
+    setFormError(null);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const cleaned = statuses.map((status) => status.value.trim());
+    const cleaned = cleanedStatuses;
     if (cleaned.some((status) => status.length === 0)) {
       setFormError("Status names cannot be empty.");
       return;
@@ -362,10 +405,11 @@ function StatusSettingsForm({
     }
     setFormError(null);
     try {
+      if (!onSave) return;
       await onSave({
         expectedVersion: settings.version,
         statuses: cleaned,
-        agendaEligibleStatuses: eligible,
+        agendaEligibleStatuses: normalizedEligible,
       });
     } catch (error) {
       setFormError(messageFrom(error));
@@ -373,142 +417,117 @@ function StatusSettingsForm({
   }
 
   return (
-    <form onSubmit={(event) => void submit(event)} style={stackStyle}>
-      <div style={twoColumnStyle}>
-        <div style={stackStyle}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: "0.98rem" }}>Session statuses</h3>
-            <p style={subtleTextStyle}>
-              Statuses are event-scoped. Changes are versioned and audited.
-            </p>
-          </div>
-          <ul aria-label="Configured session statuses" style={listStyle}>
-            {statuses.map((status, index) => (
-              <li
-                key={status.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  gap: "0.5rem",
-                  alignItems: "center",
-                }}
-              >
-                <label style={fieldStyle}>
-                  <span className={styles.srOnly}>Status {index + 1}</span>
-                  <input
-                    style={inputStyle}
+    <form className={styles.settingsForm} onSubmit={(event) => void submit(event)}>
+      {readOnly ? (
+        <p className={styles.capabilityNote}>
+          Session status editing is unavailable until the organizer API capability is connected.
+        </p>
+      ) : null}
+      <p className="sr-only">Configured session statuses and agenda eligibility</p>
+      <ul className={styles.settingRows} aria-label="Configured session statuses">
+        {statuses.map((status, index) => {
+          const statusInputId = `${status.id}-value`;
+          const checkboxId = `${status.id}-agenda`;
+          const statusLabel = status.value || `Status ${index + 1}`;
+          return (
+            <SettingRow
+              key={status.id}
+              label={
+                <>
+                  <Label className="sr-only" htmlFor={statusInputId}>
+                    Status {index + 1}
+                  </Label>
+                  <Input
+                    className={styles.statusNameInput}
+                    id={statusInputId}
                     value={status.value}
                     maxLength={64}
+                    disabled={disabled}
                     onChange={(event) => changeStatus(status.id, event.target.value)}
                   />
-                </label>
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  onClick={() => removeStatus(status.value)}
-                  disabled={busy}
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div style={{ display: "flex", gap: "0.45rem", alignItems: "end" }}>
-            <label style={{ ...fieldStyle, flex: 1 }}>
-              <span style={fieldLabelStyle}>Add status</span>
-              <input
-                style={inputStyle}
-                value={newStatus}
-                maxLength={64}
-                onChange={(event) => setNewStatus(event.target.value)}
-              />
-            </label>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={addStatus}
-              disabled={busy}
-            >
-              Add
-            </button>
-          </div>
-        </div>
-        <fieldset style={{ ...cardStyle, gap: "0.65rem", margin: 0 }}>
-          <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
-            Agenda eligibility
-          </legend>
-          <p style={{ ...subtleTextStyle, margin: 0 }}>
-            Eligible sessions can be scheduled in the private agenda. Accepted is the default.
-          </p>
-          {statuses.map((status) => (
-            <label
-              key={status.id}
-              style={{
-                display: "flex",
-                gap: "0.55rem",
-                alignItems: "center",
-                color: "var(--admin-ink)",
-                fontSize: "0.82rem",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={eligible.includes(status.value)}
-                onChange={() => toggleEligibility(status.value)}
-                disabled={busy}
-              />
-              <span>{status.value}</span>
-            </label>
-          ))}
-        </fieldset>
+                </>
+              }
+              description="Used to organize sessions through the review and scheduling workflow."
+              controls={
+                <>
+                  <Label className={styles.checkboxLabel} htmlFor={checkboxId}>
+                    <Checkbox
+                      id={checkboxId}
+                      checked={eligible.includes(status.value)}
+                      disabled={disabled}
+                      aria-label={`Can ${statusLabel} appear on the private agenda`}
+                      onCheckedChange={(checked) =>
+                        toggleEligibility(status.value, checked === true)
+                      }
+                    />
+                    <span>Private agenda</span>
+                  </Label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        disabled={disabled}
+                        aria-label={`More actions for ${statusLabel}`}
+                      >
+                        <MoreHorizontal aria-hidden />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => removeStatus(status.value)}
+                      >
+                        <Trash2 aria-hidden />
+                        Remove status
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              }
+            />
+          );
+        })}
+      </ul>
+      <div className={styles.addStatusRow}>
+        <Label className={styles.formField} htmlFor="new-status">
+          <span>Status name</span>
+          <Input
+            id="new-status"
+            value={newStatus}
+            maxLength={64}
+            disabled={disabled}
+            onChange={(event) => setNewStatus(event.target.value)}
+            placeholder="Add a status"
+          />
+        </Label>
+        <Button type="button" variant="outline" disabled={disabled} onClick={addStatus}>
+          Add status
+        </Button>
       </div>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
+        <p className={styles.formError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={inlineActionsStyle}>
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
-          {busy ? "Saving settings…" : "Save session settings"}
-        </button>
-        <span style={subtleTextStyle}>Version {settings.version}</span>
+      <div className={styles.formActions}>
+        {dirty ? (
+          <Button type="button" variant="ghost" disabled={disabled} onClick={resetChanges}>
+            <Undo2 aria-hidden />
+            Cancel changes
+          </Button>
+        ) : null}
+        <Button type="submit" disabled={busy || readOnly || !onSave || !dirty}>
+          {readOnly
+            ? "Session settings are read-only."
+            : busy
+              ? "Saving settings…"
+              : "Save changes"}
+        </Button>
       </div>
     </form>
   );
-}
-
-export function parseRoomResources(value: string): { resources: string[]; error?: string } {
-  if (value.trim() === "") return { resources: [] };
-  const parts = value.split(",").map((part) => part.trim());
-  if (parts.some((part) => part.length === 0))
-    return { resources: [], error: "Resource names cannot be empty." };
-  const seen = new Set<string>();
-  for (const resource of parts) {
-    const key = resource.toLowerCase();
-    if (seen.has(key)) return { resources: [], error: "Resource names must be unique." };
-    seen.add(key);
-  }
-  return { resources: parts };
-}
-
-export function validateRoomForm(
-  name: string,
-  capacity: string,
-  resourcesText: string,
-): { input?: RoomInput; error?: string } {
-  const normalizedName = name.trim();
-  if (!normalizedName) return { error: "Room name is required." };
-  const parsedCapacity = Number(capacity);
-  if (!Number.isSafeInteger(parsedCapacity) || parsedCapacity < 1 || parsedCapacity > 1_000_000)
-    return { error: "Room capacity must be between 1 and 1000000." };
-  const parsedResources = parseRoomResources(resourcesText);
-  if (parsedResources.error) return { error: parsedResources.error };
-  return {
-    input: { name: normalizedName, capacity: parsedCapacity, resources: parsedResources.resources },
-  };
 }
 function roomRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID;
@@ -564,65 +583,124 @@ function RoomForm({
   }
 
   return (
-    <form
-      onSubmit={(event) => void submit(event)}
-      style={{ ...cardStyle, background: "var(--admin-surface)" }}
-    >
-      <div style={twoColumnStyle}>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Room name</span>
-          <input
-            style={inputStyle}
+    <form className={styles.dialogForm} onSubmit={(event) => void submit(event)}>
+      <div className={styles.formGrid}>
+        <Label className={styles.formField} htmlFor="room-name">
+          <span>Room name</span>
+          <Input
+            id="room-name"
             value={name}
             maxLength={200}
             required
+            disabled={busy}
             onChange={(event) => setName(event.target.value)}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Capacity</span>
-          <input
-            style={inputStyle}
+        </Label>
+        <Label className={styles.formField} htmlFor="room-capacity">
+          <span>Capacity</span>
+          <Input
+            id="room-capacity"
             type="number"
             min={1}
+            max={1_000_000}
             step={1}
             value={capacity}
             required
+            disabled={busy}
             onChange={(event) => setCapacity(event.target.value)}
           />
-        </label>
+        </Label>
       </div>
-      <label style={fieldStyle}>
-        <span style={fieldLabelStyle}>Resources</span>
-        <input
-          style={inputStyle}
+      <Label className={styles.formField} htmlFor="room-resources">
+        <span>Resources</span>
+        <Input
+          id="room-resources"
           value={resourcesText}
           placeholder="Projector, microphones"
+          disabled={busy}
           onChange={(event) => setResourcesText(event.target.value)}
         />
-        <span style={subtleTextStyle}>
+        <span className={styles.mutedText}>
           Comma-separated resource names. Duplicate or blank names are rejected.
         </span>
-      </label>
+      </Label>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
+        <p className={styles.formError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={inlineActionsStyle}>
+      <DialogFooter className={styles.dialogActions}>
         {onCancel ? (
-          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
+          </Button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? "Saving room…" : room ? "Save room" : "Add room"}
-        </button>
-      </div>
+        </Button>
+      </DialogFooter>
     </form>
+  );
+}
+
+function DeleteConfirmationDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  busy,
+  onConfirm,
+}: Readonly<{
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  title: string;
+  description: string;
+  busy: boolean;
+  onConfirm(): Promise<void>;
+}>) {
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) setError(null);
+  }, [open]);
+
+  async function confirm() {
+    setError(null);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } catch (reason) {
+      setError(messageFrom(reason));
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {error ? (
+          <p className={styles.formError} role="alert">
+            Delete was not completed. {error}
+          </p>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={busy}
+            onClick={(event) => {
+              event.preventDefault();
+              void confirm();
+            }}
+          >
+            {busy ? "Deleting…" : "Delete"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -637,128 +715,173 @@ function RoomsSection({
 }>) {
   const [showForm, setShowForm] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EventRoom | null>(null);
   const editingRoom = rooms.find((room) => room.id === editingRoomId);
+  const canCreate = Boolean(actions.createRoom);
+  const canUpdate = Boolean(actions.updateRoom);
+  const canDelete = Boolean(actions.deleteRoom);
 
   return (
-    <section id="rooms" className={styles.panel} aria-labelledby="rooms-heading">
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Event setup</p>
-          <h2 id="rooms-heading" className={styles.panelTitle}>
-            Rooms, capacity, and resources
-          </h2>
-        </div>
-        <button
-          className={styles.secondaryButton}
+    <SettingGroup
+      id="rooms"
+      aria-labelledby="rooms-heading"
+      title="Rooms and venues"
+      description="Define capacity and resources before assigning sessions to the agenda."
+      action={
+        <Button
           type="button"
+          variant="outline"
+          disabled={busy || !canCreate}
+          aria-expanded={showForm}
+          aria-controls="room-form-dialog"
+          title={canCreate ? "Add a room" : "Adding rooms is unavailable"}
           onClick={() => {
             setEditingRoomId(null);
-            setShowForm((current) => !current);
+            setShowForm(true);
           }}
-          aria-expanded={showForm}
-          aria-controls="room-form"
         >
-          {showForm ? "Close form" : "Add room"}
-        </button>
-      </header>
-      <div className={styles.panelContent} style={stackStyle}>
-        {showForm ? (
-          <div id="room-form">
-            {actions.createRoom ? (
-              <RoomForm
-                busy={busy}
-                onCancel={() => setShowForm(false)}
-                onSave={async (input) => {
-                  await actions.createRoom?.(input);
-                  setShowForm(false);
-                }}
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {editingRoom ? (
-          <div id={`room-edit-${editingRoom.id}`}>
-            {actions.updateRoom ? (
-              <RoomForm
-                room={editingRoom}
-                busy={busy}
-                onCancel={() => setEditingRoomId(null)}
-                onSave={async (input) => {
-                  await actions.updateRoom?.({
-                    roomId: editingRoom.id,
-                    expectedVersion: editingRoom.version,
-                    ...input,
-                    resources: input.resources ?? [],
-                  });
-                  setEditingRoomId(null);
-                }}
-              />
-            ) : null}
-          </div>
-        ) : null}
+          Add room
+        </Button>
+      }
+    >
+      {!canCreate || !canUpdate || !canDelete ? (
+        <p className={styles.capabilityNote}>
+          Room editing controls are read-only until the organizer API capabilities are connected.
+        </p>
+      ) : null}
+      <ul className={styles.resourceList} aria-label="Event rooms">
         {rooms.length === 0 ? (
-          <div style={{ ...cardStyle, textAlign: "center" }}>
+          <li className={styles.emptyState}>
             <strong>No rooms configured yet.</strong>
-            <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-              Add a room with a capacity before scheduling accepted sessions.
-            </p>
-          </div>
+            <span>Add a room with a capacity before scheduling accepted sessions.</span>
+          </li>
         ) : (
-          <ul aria-label="Event rooms" style={listStyle}>
-            {rooms.map((room) => (
-              <li key={room.id} style={cardStyle}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    alignItems: "start",
-                  }}
-                >
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "0.94rem" }}>{room.name}</h3>
-                    <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-                      {room.capacity} seats · Version {room.version}
-                    </p>
-                  </div>
-                  <div style={inlineActionsStyle}>
-                    <button
-                      className={styles.secondaryButton}
+          rooms.map((room) => (
+            <SettingRow
+              key={room.id}
+              label={room.name}
+              description={`${room.capacity} seats · ${
+                room.resources?.length || room.resourceIds?.length
+                  ? (room.resources ?? room.resourceIds ?? []).join(", ")
+                  : "No resources configured"
+              }`}
+              controls={
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
                       type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setShowForm(false);
-                        setEditingRoomId((current) => (current === room.id ? null : room.id));
-                      }}
-                      aria-expanded={editingRoomId === room.id}
-                      aria-controls={`room-edit-${room.id}`}
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={busy || (!canUpdate && !canDelete)}
+                      aria-label={`More actions for ${room.name}`}
                     >
-                      Edit
-                    </button>
-                    {actions.deleteRoom ? (
-                      <button
-                        className={styles.secondaryButton}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void actions.deleteRoom?.(room.id, room.version)}
-                      >
-                        Delete
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-                <p style={{ ...subtleTextStyle, margin: 0 }}>
-                  <strong>Resources:</strong>{" "}
-                  {room.resources?.length || room.resourceIds?.length
-                    ? (room.resources ?? room.resourceIds ?? []).join(", ")
-                    : "None configured"}
-                </p>
-              </li>
-            ))}
-          </ul>
+                      <MoreHorizontal aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      disabled={!canUpdate}
+                      onSelect={() => {
+                        setShowForm(false);
+                        setEditingRoomId(room.id);
+                      }}
+                    >
+                      <Pencil aria-hidden />
+                      Edit room
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      disabled={!canDelete}
+                      onSelect={() => setDeleteTarget(room)}
+                    >
+                      <Trash2 aria-hidden />
+                      Delete room
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              }
+            />
+          ))
         )}
-      </div>
-    </section>
+      </ul>
+      <Dialog
+        open={showForm && canCreate}
+        onOpenChange={(open) => {
+          if (!open) setShowForm(false);
+        }}
+      >
+        <DialogContent id="room-form-dialog">
+          <DialogHeader>
+            <DialogTitle>Add room</DialogTitle>
+            <DialogDescription>
+              Add an event-scoped room with the capacity and resources used by scheduling.
+            </DialogDescription>
+          </DialogHeader>
+          <RoomForm
+            busy={busy}
+            onCancel={() => setShowForm(false)}
+            onSave={async (input) => {
+              await actions.createRoom?.(input);
+              setShowForm(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editingRoom !== undefined && canUpdate}
+        onOpenChange={(open) => {
+          if (!open) setEditingRoomId(null);
+        }}
+      >
+        <DialogContent id={editingRoom ? `room-edit-${editingRoom.id}` : undefined}>
+          <DialogHeader>
+            <DialogTitle>Edit room</DialogTitle>
+            <DialogDescription>
+              Save changes against the room version shown in this form.
+            </DialogDescription>
+          </DialogHeader>
+          {editingRoom ? (
+            <RoomForm
+              room={editingRoom}
+              busy={busy}
+              onCancel={() => setEditingRoomId(null)}
+              onSave={async (input) => {
+                await actions.updateRoom?.({
+                  roomId: editingRoom.id,
+                  expectedVersion: editingRoom.version,
+                  ...input,
+                  resources: input.resources ?? [],
+                });
+                setEditingRoomId(null);
+              }}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <DeleteConfirmationDialog
+        open={deleteTarget !== null && canDelete}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Delete this room?"
+        description={
+          deleteTarget
+            ? `${deleteTarget.name} will be removed from this event. This cannot be undone.`
+            : "This room will be removed from this event."
+        }
+        busy={busy}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          const currentTarget = rooms.find((room) => room.id === deleteTarget.id);
+          if (!currentTarget) {
+            setDeleteTarget(null);
+            return;
+          }
+          await actions.deleteRoom?.(currentTarget.id, currentTarget.version);
+          setDeleteTarget(null);
+        }}
+      />
+    </SettingGroup>
   );
 }
 
@@ -798,49 +921,43 @@ function TaxonomyForm({
   }
 
   return (
-    <form
-      onSubmit={(event) => void submit(event)}
-      style={{ ...cardStyle, background: "var(--admin-surface)" }}
-    >
-      <div style={twoColumnStyle}>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Name</span>
-          <input
-            style={inputStyle}
-            value={name}
-            maxLength={200}
-            required
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Description</span>
-          <input
-            style={inputStyle}
-            value={description}
-            maxLength={2_000}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-        </label>
-      </div>
+    <form className={styles.dialogForm} onSubmit={(event) => void submit(event)}>
+      <Label className={styles.formField} htmlFor="taxonomy-name">
+        <span>Name</span>
+        <Input
+          id="taxonomy-name"
+          value={name}
+          maxLength={200}
+          required
+          disabled={busy}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Label>
+      <Label className={styles.formField} htmlFor="taxonomy-description">
+        <span>Description</span>
+        <Textarea
+          id="taxonomy-description"
+          value={description}
+          maxLength={2_000}
+          disabled={busy}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </Label>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
+        <p className={styles.formError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={inlineActionsStyle}>
+      <DialogFooter className={styles.dialogActions}>
         {onCancel ? (
-          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
+          </Button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? "Saving…" : resource ? "Save changes" : "Add"}
-        </button>
-      </div>
+        </Button>
+      </DialogFooter>
     </form>
   );
 }
@@ -859,46 +976,164 @@ function TaxonomySection({
   const title = resourceTitle(kind);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EventTaxonomyResource | null>(null);
   const editing = resources.find((resource) => resource.id === editingId);
+  const canCreate = Boolean(actions.createResource);
+  const canUpdate = Boolean(actions.updateResource);
+  const canDelete = Boolean(actions.deleteResource);
+  const capabilityNoteId = `${kind}-capability-note`;
+  const guidance = resourceGuidance(kind);
+  const emptyAction = kind === "tag" ? "Add a tag" : `Add your first ${kind}`;
 
   return (
-    <section className={styles.panel} aria-labelledby={`${kind}-heading`}>
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Library</p>
-          <h3 id={`${kind}-heading`} className={styles.panelTitle}>
-            {title}
-          </h3>
-          <p style={{ ...subtleTextStyle, margin: "0.3rem 0 0" }}>{resourceDescription(kind)}</p>
+    <article className={styles.taxonomyCard} aria-labelledby={`${kind}-heading`}>
+      <header className={styles.taxonomyHeader}>
+        <div className={styles.taxonomyHeading}>
+          <div className={styles.taxonomyTitleRow}>
+            <h3 id={`${kind}-heading`} className={styles.subheading}>
+              {title}
+            </h3>
+            <span
+              className={`${styles.guidanceBadge} ${
+                guidance === "Optional" ? styles.guidanceBadgeOptional : ""
+              }`}
+            >
+              {guidance}
+            </span>
+          </div>
+          <p className={styles.mutedText}>{resourceDescription(kind)}</p>
         </div>
-        <button
-          className={styles.secondaryButton}
+        <Button
           type="button"
+          variant="outline"
+          disabled={busy || !canCreate}
+          aria-expanded={showForm}
+          aria-controls={`${kind}-form-dialog`}
+          aria-describedby={!canCreate ? capabilityNoteId : undefined}
+          title={canCreate ? `Add ${kind}` : `${title} are read-only`}
           onClick={() => {
             setEditingId(null);
-            setShowForm((current) => !current);
+            setShowForm(true);
           }}
-          aria-expanded={showForm}
-          aria-controls={`${kind}-form`}
         >
-          {showForm ? "Close form" : `Add ${kind}`}
-        </button>
+          Add {kind}
+        </Button>
       </header>
-      <div className={styles.panelContent} style={stackStyle}>
-        {showForm && actions.createResource ? (
-          <div id={`${kind}-form`}>
-            <TaxonomyForm
-              busy={busy}
-              onCancel={() => setShowForm(false)}
-              onSave={async (input) => {
-                await actions.createResource?.(kind, input);
-                setShowForm(false);
-              }}
+      {!canCreate || !canUpdate || !canDelete ? (
+        <p id={capabilityNoteId} className={styles.capabilityNote}>
+          {title} editing is unavailable until the organizer API capability is connected; existing
+          values remain visible.
+        </p>
+      ) : null}
+      <ul className={styles.resourceList} aria-label={`Event ${title.toLowerCase()}`}>
+        {resources.length === 0 ? (
+          <li className={styles.emptyState}>
+            <strong>{kind === "tag" ? "No tags yet" : `No ${kind}s configured`}</strong>
+            <span>
+              {canCreate
+                ? kind === "track"
+                  ? "Start with broad topics such as Engineering, Product, or Leadership."
+                  : kind === "format"
+                    ? "Common formats include Talk, Workshop, Panel, and Roundtable."
+                    : kind === "level"
+                      ? "A simple set is Introductory, Intermediate, and Advanced."
+                      : "Add tags only when you need labels that cut across tracks."
+                : "Adding values is unavailable in this view."}
+            </span>
+            {canCreate ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setEditingId(null);
+                  setShowForm(true);
+                }}
+              >
+                {emptyAction}
+              </Button>
+            ) : null}
+          </li>
+        ) : (
+          resources.map((resource) => (
+            <SettingRow
+              key={resource.id}
+              label={resource.name}
+              description={resource.description || `No ${kind} description`}
+              controls={
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={busy || (!canUpdate && !canDelete)}
+                      aria-label={`More actions for ${resource.name}`}
+                    >
+                      <MoreHorizontal aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      disabled={!canUpdate}
+                      onSelect={() => {
+                        setShowForm(false);
+                        setEditingId(resource.id);
+                      }}
+                    >
+                      <Pencil aria-hidden />
+                      Edit {kind}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      disabled={!canDelete}
+                      onSelect={() => setDeleteTarget(resource)}
+                    >
+                      <Trash2 aria-hidden />
+                      Delete {kind}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              }
             />
-          </div>
-        ) : null}
-        {editing && actions.updateResource ? (
-          <div id={`${kind}-edit-${editing.id}`}>
+          ))
+        )}
+      </ul>
+      <Dialog
+        open={showForm && canCreate}
+        onOpenChange={(open) => {
+          if (!open) setShowForm(false);
+        }}
+      >
+        <DialogContent id={`${kind}-form-dialog`}>
+          <DialogHeader>
+            <DialogTitle>Add {kind}</DialogTitle>
+            <DialogDescription>{resourceDescription(kind)}</DialogDescription>
+          </DialogHeader>
+          <TaxonomyForm
+            busy={busy}
+            onCancel={() => setShowForm(false)}
+            onSave={async (input) => {
+              await actions.createResource?.(kind, input);
+              setShowForm(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editing !== undefined && canUpdate}
+        onOpenChange={(open) => {
+          if (!open) setEditingId(null);
+        }}
+      >
+        <DialogContent id={editing ? `${kind}-edit-${editing.id}` : undefined}>
+          <DialogHeader>
+            <DialogTitle>Edit {kind}</DialogTitle>
+            <DialogDescription>
+              Save changes against the current version of this value.
+            </DialogDescription>
+          </DialogHeader>
+          {editing ? (
             <TaxonomyForm
               resource={editing}
               busy={busy}
@@ -913,152 +1148,270 @@ function TaxonomySection({
                 setEditingId(null);
               }}
             />
-          </div>
-        ) : null}
-        {resources.length === 0 ? (
-          <div style={{ ...cardStyle, textAlign: "center" }}>
-            <strong>No {kind}s configured yet.</strong>
-            <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-              Use the add button to create the first event-scoped {kind}.
-            </p>
-          </div>
-        ) : (
-          <ul aria-label={`Event ${title.toLowerCase()}`} style={listStyle}>
-            {resources.map((resource) => (
-              <li key={resource.id} style={cardStyle}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    alignItems: "start",
-                  }}
-                >
-                  <div>
-                    <h4 style={{ margin: 0, fontSize: "0.9rem" }}>{resource.name}</h4>
-                    {resource.description ? (
-                      <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-                        {resource.description}
-                      </p>
-                    ) : null}
-                    <small style={{ ...subtleTextStyle, display: "block", marginTop: "0.25rem" }}>
-                      Version {resource.version}
-                    </small>
-                  </div>
-                  <div style={inlineActionsStyle}>
-                    {actions.updateResource ? (
-                      <button
-                        className={styles.secondaryButton}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setShowForm(false);
-                          setEditingId((current) => (current === resource.id ? null : resource.id));
-                        }}
-                        aria-expanded={editingId === resource.id}
-                        aria-controls={`${kind}-edit-${resource.id}`}
-                      >
-                        Edit
-                      </button>
-                    ) : null}
-                    {actions.deleteResource ? (
-                      <button
-                        className={styles.secondaryButton}
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void actions.deleteResource?.(kind, resource.id, resource.version)
-                        }
-                      >
-                        Delete
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <DeleteConfirmationDialog
+        open={deleteTarget !== null && canDelete}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete this ${kind}?`}
+        description={
+          deleteTarget
+            ? `${deleteTarget.name} will be removed from this event. This cannot be undone.`
+            : `This ${kind} will be removed from this event.`
+        }
+        busy={busy}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          const currentTarget = resources.find((resource) => resource.id === deleteTarget.id);
+          if (!currentTarget) {
+            setDeleteTarget(null);
+            return;
+          }
+          await actions.deleteResource?.(kind, currentTarget.id, currentTarget.version);
+          setDeleteTarget(null);
+        }}
+      />
+    </article>
   );
+}
+
+function actorLabel(actorId: string): string {
+  return actorId
+    .split(/[-_]/u)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function auditTimestamp(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function auditChangeLabel(
+  changeKind: EventSettingsAuditPresentation["changeKind"],
+): "Created" | "Updated" | "Deleted" {
+  if (changeKind === "created") return "Created";
+  if (changeKind === "deleted") return "Deleted";
+  return "Updated";
+}
+
+function auditChangeSymbol(
+  changeKind: EventSettingsAuditPresentation["changeKind"],
+): "+" | "−" | "•" {
+  if (changeKind === "created") return "+";
+  if (changeKind === "deleted") return "−";
+  return "•";
 }
 
 function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEntry[] }>) {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const entries = settingsOnlyAuditEntries(audit);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredEntries = entries.filter((entry) => {
+    if (scope !== "all" && entry.entityType !== scope) return false;
+    if (!normalizedQuery) return true;
+    const presentation = eventSettingsAuditPresentation(entry);
+    return [
+      presentation.domain,
+      presentation.entityLabel,
+      presentation.summary,
+      actorLabel(entry.actorId),
+      entry.entityId,
+    ].some((value) => value.toLowerCase().includes(normalizedQuery));
+  });
+  const selectedEntry = entries.find(({ id }) => id === selectedId) ?? null;
+  const selectedPresentation = selectedEntry ? eventSettingsAuditPresentation(selectedEntry) : null;
+  const selectedDiff = selectedEntry ? eventSettingsAuditDiff(selectedEntry) : [];
+
   return (
-    <section className={styles.panel} aria-labelledby="audit-heading">
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Safety and history</p>
-          <h2 id="audit-heading" className={styles.panelTitle}>
-            Settings audit history
-          </h2>
-        </div>
-      </header>
-      <div className={styles.panelContent}>
-        {audit.length === 0 ? (
-          <p style={{ ...subtleTextStyle, margin: 0 }}>
-            No settings changes have been audited for this event yet.
-          </p>
-        ) : (
-          <ol aria-label="Settings audit history" style={{ ...listStyle, listStyleType: "none" }}>
-            {audit.map((entry) => (
+    <SettingGroup
+      id="history"
+      aria-labelledby="history-heading"
+      title="Change history"
+      description="Review audited configuration changes without mixing in ordinary session activity."
+      metadata={
+        entries.length === filteredEntries.length
+          ? `${entries.length} changes`
+          : `${filteredEntries.length} of ${entries.length} changes`
+      }
+    >
+      <div className={styles.historyToolbar}>
+        <Label className={styles.historySearch} htmlFor="settings-history-search">
+          <Search aria-hidden />
+          <span className="sr-only">Search change history</span>
+          <Input
+            id="settings-history-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search changes or entities"
+          />
+        </Label>
+        <Select value={scope} onValueChange={setScope}>
+          <SelectTrigger aria-label="Filter change history by configuration type">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All configuration</SelectItem>
+            <SelectItem value="settings">Session workflow</SelectItem>
+            <SelectItem value="room">Rooms and venues</SelectItem>
+            <SelectItem value="track">Tracks</SelectItem>
+            <SelectItem value="format">Formats</SelectItem>
+            <SelectItem value="level">Levels</SelectItem>
+            <SelectItem value="tag">Tags</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {entries.length === 0 ? (
+        <p className={styles.mutedText}>
+          No configuration changes have been audited for this event yet.
+        </p>
+      ) : filteredEntries.length === 0 ? (
+        <p className={styles.mutedText}>No changes match the current search and scope.</p>
+      ) : (
+        <ol className={styles.auditList} aria-label="Configuration change history">
+          {filteredEntries.map((entry) => {
+            const presentation = eventSettingsAuditPresentation(entry);
+            return (
               <li
                 key={entry.id}
-                style={{ ...cardStyle, gridTemplateColumns: "minmax(0, 1fr) auto" }}
+                className={styles.auditEntry}
+                data-change-kind={presentation.changeKind}
               >
-                <div>
-                  <strong style={{ display: "block", fontSize: "0.8rem" }}>
-                    {auditSummary(entry)}
-                  </strong>
-                  <span style={subtleTextStyle}>
-                    {entry.entityId} · actor {entry.actorId}
-                  </span>
-                </div>
-                <time
-                  dateTime={entry.occurredAt}
-                  style={{ ...subtleTextStyle, whiteSpace: "nowrap" }}
+                <button
+                  type="button"
+                  aria-label={`View ${presentation.entityLabel} ${auditChangeLabel(
+                    presentation.changeKind,
+                  ).toLowerCase()} revision`}
+                  onClick={() => setSelectedId(entry.id)}
                 >
-                  {new Date(entry.occurredAt).toLocaleString()}
-                </time>
+                  <span className={styles.auditEntryMain}>
+                    <span className={styles.auditChangeMarker} aria-hidden>
+                      {auditChangeSymbol(presentation.changeKind)}
+                    </span>
+                    <span className={styles.auditEntryCopy}>
+                      <span className={styles.auditEntryHeading}>
+                        <strong>{presentation.entityLabel}</strong>
+                        <span className={styles.auditDomain}>{presentation.domain}</span>
+                      </span>
+                      <span className={styles.auditEntrySummary}>{presentation.summary}</span>
+                    </span>
+                  </span>
+                  <span className={styles.auditEntryMeta}>
+                    <span className={styles.auditEntryActor}>{actorLabel(entry.actorId)}</span>
+                    <time className={styles.auditEntryTime} dateTime={entry.occurredAt}>
+                      {auditTimestamp(entry.occurredAt)}
+                    </time>
+                    <span className={styles.auditEntryVersion}>{presentation.versionLabel}</span>
+                    <ChevronRight aria-hidden />
+                  </span>
+                </button>
               </li>
-            ))}
-          </ol>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function InformationalGroup({
-  id,
-  title,
-  description,
-  detail,
-}: Readonly<{ id: string; title: string; description: string; detail: string }>) {
-  return (
-    <section id={id} className={styles.panel} aria-labelledby={`${id}-heading`}>
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Event settings</p>
-          <h2 id={`${id}-heading`} className={styles.panelTitle}>
-            {title}
-          </h2>
-        </div>
-      </header>
-      <div className={styles.panelContent}>
-        <p style={{ margin: 0, color: "var(--admin-ink)", fontSize: "0.86rem", lineHeight: 1.55 }}>
-          {description}
-        </p>
-        <p style={{ ...subtleTextStyle, margin: "0.55rem 0 0" }}>{detail}</p>
-      </div>
-    </section>
+            );
+          })}
+        </ol>
+      )}
+      <Sheet
+        open={selectedEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedId(null);
+        }}
+      >
+        <SheetContent className={styles.revisionSheet}>
+          {selectedEntry && selectedPresentation ? (
+            <>
+              <SheetHeader>
+                <SheetTitle>
+                  {selectedPresentation.entityLabel}{" "}
+                  {auditChangeLabel(selectedPresentation.changeKind).toLowerCase()}
+                </SheetTitle>
+                <SheetDescription>
+                  {selectedPresentation.domain} · {actorLabel(selectedEntry.actorId)} ·{" "}
+                  {auditTimestamp(selectedEntry.occurredAt)}
+                </SheetDescription>
+              </SheetHeader>
+              <div
+                className={styles.revisionSummary}
+                data-change-kind={selectedPresentation.changeKind}
+              >
+                <span className={styles.revisionSummaryStatus}>
+                  <span className={styles.auditChangeMarker} aria-hidden>
+                    {auditChangeSymbol(selectedPresentation.changeKind)}
+                  </span>
+                  <span>{selectedPresentation.summary}</span>
+                </span>
+                <strong>{selectedPresentation.versionLabel}</strong>
+              </div>
+              <div className={styles.revisionDiff}>
+                <h3>Changes</h3>
+                {selectedDiff.length === 0 ? (
+                  <p>No field-level difference is available for this revision.</p>
+                ) : (
+                  <dl>
+                    {selectedDiff.map((change) => (
+                      <div key={change.field}>
+                        <dt>{change.field}</dt>
+                        <dd>
+                          <span className={styles.revisionBefore}>
+                            <span className={styles.revisionValueLabel}>
+                              <span aria-hidden>−</span>
+                              Before
+                            </span>
+                            <span className={styles.revisionValueText}>{change.before}</span>
+                          </span>
+                          <span className={styles.revisionAfter}>
+                            <span className={styles.revisionValueLabel}>
+                              <span aria-hidden>+</span>
+                              After
+                            </span>
+                            <span className={styles.revisionValueText}>{change.after}</span>
+                          </span>
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </div>
+              <details className={styles.revisionTechnical}>
+                <summary>Technical details</summary>
+                <dl>
+                  <div>
+                    <dt>Audit ID</dt>
+                    <dd>{selectedEntry.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Entity ID</dt>
+                    <dd>{selectedEntry.entityId}</dd>
+                  </div>
+                  <div>
+                    <dt>Actor ID</dt>
+                    <dd>{selectedEntry.actorId}</dd>
+                  </div>
+                </dl>
+              </details>
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+    </SettingGroup>
   );
 }
 
 export function EventSettingsWorkspaceView({
   organizationId,
   eventId,
+  eventIdentity,
+  section = "workflow",
   state,
   busy = false,
   notice = null,
@@ -1066,130 +1419,132 @@ export function EventSettingsWorkspaceView({
   onRetry,
 }: EventSettingsWorkspaceViewProps) {
   const data = state.status === "loaded" ? state.data : null;
+  const detailsStatus = state.status === "loaded" ? (state.detailsStatus ?? "loaded") : "loaded";
+  const detailsMessage =
+    state.status === "loaded"
+      ? (state.detailsMessage ?? "The event library and audit history could not be loaded.")
+      : null;
+  const sectionDefinition = eventSettingsSectionDefinition(section);
+  const header = (
+    <WorkspaceHeader
+      className={data ? (styles.destinationHeader ?? "") : (styles.stateHeader ?? "")}
+      breadcrumb={
+        <WorkspaceBreadcrumb>
+          <Link href="/admin/events">Events</Link>
+          <span aria-hidden="true">/</span>
+          <span>{eventIdentity?.name ?? "Event settings"}</span>
+          <span aria-hidden="true">/</span>
+          <span>Settings</span>
+        </WorkspaceBreadcrumb>
+      }
+      title={sectionDefinition.label}
+      description={sectionDefinition.description}
+      metadata={
+        <WorkspaceMetaItem>{contextLabel(organizationId, eventIdentity)}</WorkspaceMetaItem>
+      }
+    />
+  );
+
   return (
-    <main id="event-settings-content" tabIndex={-1}>
-      <header className={styles.pageHeader}>
-        <div className={styles.pageHeaderCopy}>
-          <p className={styles.eyebrow}>Event setup</p>
-          <h1 className={styles.pageTitle}>Event settings</h1>
-          <p className={styles.pageDescription}>
-            Configure the program vocabulary, scheduling rules, and operational groups for this
-            event.
-          </p>
-          <p style={{ ...subtleTextStyle, margin: "0.7rem 0 0" }}>
-            {contextLabel(organizationId, eventId)}
-          </p>
-        </div>
-      </header>
+    <main id="event-settings-content" className={styles.workspace} tabIndex={-1}>
       {state.status === "error" || state.status === "config-error" ? (
-        <div
-          role="alert"
-          className={styles.callout}
-          style={{
-            marginBottom: "1.25rem",
-            borderColor: "#f2c9c7",
-            background: "var(--admin-danger-soft)",
-          }}
+        <>
+          {header}
+          <Card className={styles.fullWidthState} role="alert">
+            <CardHeader>
+              <CardTitle>Event settings unavailable</CardTitle>
+              <CardDescription>{state.message}</CardDescription>
+            </CardHeader>
+            <CardContent className={styles.stateActions}>
+              <p className={styles.mutedText}>
+                Core event settings were not loaded, so section navigation is unavailable.
+              </p>
+              {onRetry ? (
+                <Button type="button" variant="outline" onClick={onRetry}>
+                  Try again
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
+        </>
+      ) : state.status === "loading" && !data ? (
+        <>
+          {header}
+          <Card className={styles.fullWidthState} aria-live="polite" aria-busy="true">
+            <CardHeader>
+              <CardTitle>Loading event settings</CardTitle>
+              <CardDescription>Retrieving event-scoped statuses and rooms.</CardDescription>
+            </CardHeader>
+          </Card>
+        </>
+      ) : data ? (
+        <SettingsShell
+          className={styles.contentCenteredShell}
+          navigation={
+            <SettingsSectionNavigation
+              organizationId={organizationId}
+              eventId={eventId}
+              section={section}
+            />
+          }
         >
-          <div>
-            <strong>Event settings unavailable</strong>
-            <p>{state.message}</p>
-            {onRetry ? (
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={onRetry}
-                style={{ marginTop: "0.7rem" }}
-              >
-                Try again
-              </button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-      <div
-        className={styles.dashboardGrid}
-        style={{ gridTemplateColumns: "minmax(13rem, 0.34fr) minmax(0, 1fr)" }}
-      >
-        <SettingsGroupedNavigation />
-        <div style={stackStyle}>
-          <div className={styles.srOnly} role="status" aria-live="polite">
+          {header}
+          <div className="sr-only" role="status" aria-live="polite">
             {notice}
           </div>
           {notice ? (
-            <div
-              role="status"
-              aria-live="polite"
-              className={styles.callout}
-              style={{ marginBottom: "1rem" }}
-            >
+            <div className={styles.notice} role="status" aria-live="polite">
               {notice}
             </div>
           ) : null}
-          {state.status === "loading" && !data ? (
-            <section className={styles.panel} aria-live="polite" aria-busy="true">
-              <div className={styles.panelContent}>
-                <h2 className={styles.panelTitle}>Loading event settings</h2>
-                <p style={subtleTextStyle}>
-                  Retrieving event-scoped statuses, rooms, and library values.
-                </p>
-              </div>
-            </section>
+          {section === "workflow" ? (
+            <SettingGroup
+              id="workflow"
+              aria-labelledby="workflow-heading"
+              title="Session statuses"
+              description="Define the statuses organizers use and which ones can appear on the private agenda."
+              metadata={`Version ${data.settings.version}`}
+            >
+              <StatusSettingsForm
+                settings={data.settings}
+                busy={busy}
+                {...(actions.updateSettings === undefined
+                  ? {}
+                  : { onSave: actions.updateSettings })}
+                readOnly={!actions.updateSettings}
+              />
+            </SettingGroup>
           ) : null}
-          {data ? (
-            <>
-              <section
-                id="session-settings"
-                className={styles.panel}
-                aria-labelledby="session-settings-heading"
-              >
-                <header className={styles.panelHeader}>
-                  <div className={styles.panelHeading}>
-                    <p className={styles.panelEyebrow}>Event setup</p>
-                    <h2 id="session-settings-heading" className={styles.panelTitle}>
-                      Session settings
-                    </h2>
-                    <p style={{ ...subtleTextStyle, margin: "0.3rem 0 0" }}>
-                      Set statuses and decide which statuses are eligible for the private agenda.
-                    </p>
-                  </div>
-                </header>
-                <div className={styles.panelContent}>
-                  {actions.updateSettings ? (
-                    <StatusSettingsForm
-                      settings={data.settings}
-                      busy={busy}
-                      onSave={actions.updateSettings}
-                    />
-                  ) : (
-                    <div style={stackStyle}>
-                      <p style={{ ...subtleTextStyle, margin: 0 }}>
-                        Settings are read-only until the organizer API is connected.
-                      </p>
-                      <p style={{ ...subtleTextStyle, margin: 0 }}>
-                        <strong>Configured statuses:</strong> {data.settings.statuses.join(", ")}
-                      </p>
-                      <p style={{ ...subtleTextStyle, margin: 0 }}>
-                        <strong>Agenda-eligible:</strong>{" "}
-                        {data.settings.agendaEligibleStatuses.join(", ")}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </section>
-              <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
-              <section id="library" aria-labelledby="library-heading" style={stackStyle}>
-                <div>
-                  <p className={styles.eyebrow}>Library</p>
-                  <h2 id="library-heading" className={styles.sectionTitle}>
-                    Program library
-                  </h2>
-                  <p style={{ ...subtleTextStyle, margin: "0.35rem 0 0" }}>
-                    Event-scoped values keep the event vocabulary predictable without crossing
-                    organization boundaries.
-                  </p>
-                </div>
-                <div style={twoColumnStyle}>
+          {section === "rooms" ? (
+            <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
+          ) : null}
+          {section === "classification" ? (
+            <SettingGroup
+              id="classification"
+              className={styles.librarySection}
+              aria-labelledby="classification-heading"
+              title="Classification library"
+              description="Define how sessions are organized and discovered. These options appear in submissions, session editing, agenda filters, and the public program."
+              contentClassName={styles.classificationContent}
+            >
+              <p className={styles.sectionNote}>
+                Tracks, formats, and levels are recommended. Tags are optional and can be added
+                later.
+              </p>
+              {detailsStatus === "loading" ? (
+                <Card className={styles.detailsState} role="status" aria-live="polite">
+                  <CardContent>
+                    <p>Loading session classification and audit history…</p>
+                  </CardContent>
+                </Card>
+              ) : detailsStatus === "error" ? (
+                <Card className={styles.detailsState} role="alert">
+                  <CardContent>
+                    <p>Session classification unavailable. {detailsMessage}</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className={styles.taxonomyGrid}>
                   <TaxonomySection
                     kind="track"
                     resources={data.tracks}
@@ -1210,24 +1565,26 @@ export function EventSettingsWorkspaceView({
                   />
                   <TaxonomySection kind="tag" resources={data.tags} busy={busy} actions={actions} />
                 </div>
-              </section>
-              <InformationalGroup
-                id="communications"
-                title="Communications"
-                description="Keep event communications organized around approved, event-scoped messages."
-                detail="Transactional templates and recipient groups are managed in the Communications workspace. This settings page does not send messages."
-              />
-              <InformationalGroup
-                id="calendar"
-                title="Calendar"
-                description="Calendar delivery follows the published agenda and the event timezone."
-                detail="Calendar invitations are generated only from published agenda changes. Draft settings never leak to public or participant calendar feeds."
-              />
-              <AuditSection audit={data.audit} />
-            </>
+              )}
+            </SettingGroup>
           ) : null}
-        </div>
-      </div>
+          {section === "history" && detailsStatus === "loaded" ? (
+            <AuditSection audit={data.audit} />
+          ) : section === "history" ? (
+            <SettingGroup id="history" aria-labelledby="history-heading" title="Change history">
+              <p
+                className={styles.mutedText}
+                role={detailsStatus === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {detailsStatus === "loading"
+                  ? "Loading change history…"
+                  : `Change history unavailable. ${detailsMessage}`}
+              </p>
+            </SettingGroup>
+          ) : null}
+        </SettingsShell>
+      ) : null}
     </main>
   );
 }
@@ -1235,17 +1592,52 @@ export function EventSettingsWorkspaceView({
 export interface EventSettingsWorkspaceProps {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly section: EventSettingsSection;
   readonly api?: EventSettingsApi;
   readonly initialData?: EventSettingsData;
 }
+export function EventSettingsWorkspace(props: Readonly<EventSettingsWorkspaceProps>) {
+  const eventId = useOrganizerEventId(props.eventId);
+  const scopeKey = eventSettingsWorkspaceScopeKey(props.organizationId, eventId);
+  return <ScopedEventSettingsWorkspace key={scopeKey} {...props} eventId={eventId} />;
+}
 
-export function EventSettingsWorkspace({
+function ScopedEventSettingsWorkspace({
   organizationId,
   eventId,
+  section,
   api: providedApi,
   initialData,
-}: EventSettingsWorkspaceProps) {
+}: Readonly<EventSettingsWorkspaceProps>) {
+  const navigationCache = useEventSettingsNavigationCache();
+  const cacheScope = useMemo(() => ({ organizationId, eventId }), [eventId, organizationId]);
+  const initialCacheSnapshot = useMemo(
+    () => navigationCache?.get(cacheScope),
+    [cacheScope, navigationCache],
+  );
+  const initialCachedData = useMemo(() => {
+    if (initialCacheSnapshot?.state.status !== "loaded") return undefined;
+    try {
+      return normalizeData(initialCacheSnapshot.state.data, organizationId, eventId);
+    } catch {
+      return undefined;
+    }
+  }, [eventId, initialCacheSnapshot, organizationId]);
+  const initialCacheIdentity = initialCacheSnapshot?.eventIdentity;
+  const initialCacheIdentityMatchesScope =
+    initialCacheIdentity === undefined || initialCacheIdentity.id === eventId;
   const [state, setState] = useState<EventSettingsWorkspaceState>(() => {
+    const cachedState = initialCacheSnapshot?.state;
+    if (cachedState !== undefined) {
+      if (cachedState.status !== "loaded") return cachedState;
+      if (initialCachedData !== undefined) {
+        return { ...cachedState, data: initialCachedData };
+      }
+      return {
+        status: "config-error",
+        message: "The cached event settings response belongs to a different scope.",
+      };
+    }
     if (initialData) {
       try {
         return { status: "loaded", data: normalizeData(initialData, organizationId, eventId) };
@@ -1255,9 +1647,20 @@ export function EventSettingsWorkspace({
     }
     return { status: "loading" };
   });
+  const [eventIdentity, setEventIdentity] = useState<EventIdentity | undefined>(() =>
+    initialCacheIdentityMatchesScope && initialCachedData !== undefined
+      ? initialCacheIdentity
+      : undefined,
+  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const requestVersion = useRef(0);
+  const mountedRef = useRef(true);
+  const reuseInitialCache =
+    initialCacheIdentity !== undefined &&
+    initialCacheIdentityMatchesScope &&
+    initialCachedData !== undefined &&
+    isCompleteEventSettingsNavigationCacheSnapshot(initialCacheSnapshot);
 
   const api = useMemo(() => {
     if (providedApi) return providedApi;
@@ -1268,66 +1671,175 @@ export function EventSettingsWorkspace({
     }
   }, [organizationId, providedApi]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestVersion.current += 1;
+    };
+  }, []);
+
   const load = useCallback(
     async (signal?: AbortSignal) => {
       const requestId = ++requestVersion.current;
+      const requestIsCurrent = () =>
+        canCommitEventSettingsAsyncCompletion(
+          requestId,
+          requestVersion.current,
+          mountedRef.current,
+          signal?.aborted ?? false,
+        );
+      const writeCache = (
+        nextState: EventSettingsWorkspaceState,
+        identity = !initialCacheIdentityMatchesScope || initialCachedData === undefined
+          ? undefined
+          : initialCacheIdentity,
+      ) => {
+        if (!navigationCache) return;
+        navigationCache.set(cacheScope, {
+          state: nextState,
+          ...(identity === undefined ? {} : { eventIdentity: identity }),
+        });
+      };
       if (!organizationId.trim() || !eventId.trim()) {
-        if (requestId === requestVersion.current) {
-          setState({
+        if (requestIsCurrent()) {
+          const nextState: EventSettingsWorkspaceState = {
             status: "config-error",
             message: "An organization and event context are required.",
-          });
+          };
+          setState(nextState);
+          writeCache(nextState);
         }
         return;
       }
       if (!api) {
-        if (requestId === requestVersion.current) {
-          setState({
+        if (requestIsCurrent()) {
+          const nextState: EventSettingsWorkspaceState = {
             status: "config-error",
             message: "The organizer API URL is not configured for event settings.",
-          });
+          };
+          setState(nextState);
+          writeCache(nextState);
         }
         return;
       }
       setState((current) => (current.status === "loaded" ? current : { status: "loading" }));
+      setEventIdentity(undefined);
       setNotice(null);
+      let coreData: EventSettingsData | undefined;
       try {
-        const loaded = await api.getOverview(eventId, signal);
-        if (!signal?.aborted && requestId === requestVersion.current) {
-          setState({ status: "loaded", data: normalizeData(loaded, organizationId, eventId) });
+        const [identity, loaded] = await Promise.all([
+          api.getEventIdentity(eventId, signal),
+          loadEventSettingsProgressively(
+            api,
+            organizationId,
+            eventId,
+            (core) => {
+              if (!requestIsCurrent()) return;
+              coreData = core;
+              const nextState: EventSettingsWorkspaceState = {
+                status: "loaded",
+                data: core,
+                detailsStatus: "loading",
+              };
+              setState(nextState);
+              writeCache(nextState);
+            },
+            signal,
+          ),
+        ]);
+        if (requestIsCurrent()) {
+          const nextState: EventSettingsWorkspaceState = {
+            status: "loaded",
+            data: loaded,
+            detailsStatus: "loaded",
+          };
+          setEventIdentity(identity);
+          setState(nextState);
+          writeCache(nextState, identity);
         }
       } catch (error) {
-        if (
-          !(error instanceof DOMException && error.name === "AbortError") &&
-          !signal?.aborted &&
-          requestId === requestVersion.current
-        ) {
-          setState({ status: "error", message: messageFrom(error) });
+        if (!requestIsCurrent() || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
+        }
+        const preservedData = coreData ?? initialCachedData;
+        if (preservedData !== undefined) {
+          const nextState: EventSettingsWorkspaceState = {
+            status: "loaded",
+            data: preservedData,
+            detailsStatus: "error",
+            detailsMessage: messageFrom(error),
+          };
+          setState(nextState);
+          writeCache(nextState);
+        } else {
+          const nextState: EventSettingsWorkspaceState = {
+            status: "error",
+            message: messageFrom(error),
+          };
+          setState(nextState);
+          writeCache(nextState);
         }
       }
     },
-    [api, eventId, organizationId],
+    [
+      api,
+      cacheScope,
+      eventId,
+      initialCacheIdentity,
+      initialCacheIdentityMatchesScope,
+      initialCachedData,
+      navigationCache,
+      organizationId,
+    ],
   );
 
   useEffect(() => {
+    if (reuseInitialCache && navigationCache?.get(cacheScope) === initialCacheSnapshot) {
+      return;
+    }
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [cacheScope, initialCacheSnapshot, load, navigationCache, reuseInitialCache]);
 
   const currentData = state.status === "loaded" ? state.data : null;
 
   const refresh = useCallback(async () => {
+    if (!mountedRef.current) return;
     const requestId = ++requestVersion.current;
     if (!api) throw new TypeError("The organizer API URL is not configured for event settings.");
     const loaded = await api.getOverview(eventId);
-    if (requestId === requestVersion.current) {
-      setState({ status: "loaded", data: normalizeData(loaded, organizationId, eventId) });
+    if (
+      canCommitEventSettingsAsyncCompletion(requestId, requestVersion.current, mountedRef.current)
+    ) {
+      const nextState: EventSettingsWorkspaceState = {
+        status: "loaded",
+        data: normalizeData(loaded, organizationId, eventId),
+        detailsStatus: "loaded",
+      };
+      const refreshedIdentity =
+        eventIdentity ?? (initialCacheIdentityMatchesScope ? initialCacheIdentity : undefined);
+      setState(nextState);
+      navigationCache?.set(cacheScope, {
+        state: nextState,
+        ...(refreshedIdentity === undefined ? {} : { eventIdentity: refreshedIdentity }),
+      });
     }
-  }, [api, eventId, organizationId]);
+  }, [
+    api,
+    cacheScope,
+    eventId,
+    eventIdentity,
+    initialCacheIdentity,
+    initialCacheIdentityMatchesScope,
+    navigationCache,
+    organizationId,
+  ]);
 
   async function mutate(operation: () => Promise<void>, successMessage: string): Promise<void> {
-    if (!currentData) return;
+    if (!currentData || !mountedRef.current) return;
+    navigationCache?.invalidate(cacheScope);
     if (!api) {
       const error = new TypeError("The organizer API URL is not configured for event settings.");
       setNotice(`Unable to complete this change. ${error.message}`);
@@ -1338,25 +1850,22 @@ export function EventSettingsWorkspace({
     setNotice(null);
     try {
       const outcome = await persistEventSettingsMutation(operation, refresh);
+      if (!mountedRef.current) return;
       setNotice(
         outcome === "refreshed"
           ? successMessage
           : `${successMessage} The saved change could not be refreshed; reload to see the latest settings.`,
       );
     } catch (error) {
+      if (!mountedRef.current) throw error;
       const message =
         error instanceof EventSettingsApiError && error.code === "VERSION_CONFLICT"
           ? "This event settings record changed in another organizer session. Reload before saving again."
           : messageFrom(error);
-      try {
-        await refresh();
-      } catch {
-        // Keep the loaded state and original mutation error when the recovery read is unavailable.
-      }
-      setNotice(`Unable to complete this change. ${message}`);
+      if (mountedRef.current) setNotice(`Unable to complete this change. ${message}`);
       throw error;
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
@@ -1418,6 +1927,8 @@ export function EventSettingsWorkspace({
     <EventSettingsWorkspaceView
       organizationId={organizationId}
       eventId={eventId}
+      {...(eventIdentity === undefined ? {} : { eventIdentity })}
+      section={section}
       state={state}
       busy={busy}
       notice={notice}

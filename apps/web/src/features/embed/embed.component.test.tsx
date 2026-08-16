@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -20,6 +21,32 @@ import type {
   PublishedSpeakerGallery,
 } from "./types";
 
+const sessionsRouteSource = readFileSync(
+  new URL("../../app/events/[eventSlug]/page.tsx", import.meta.url),
+  "utf8",
+);
+const agendaRouteSource = readFileSync(
+  new URL("../../app/events/[eventSlug]/agenda/page.tsx", import.meta.url),
+  "utf8",
+);
+const embedAgendaRouteSource = readFileSync(
+  new URL("../../app/embed/[eventSlug]/agenda/page.tsx", import.meta.url),
+  "utf8",
+);
+const embedSpeakersRouteSource = readFileSync(
+  new URL("../../app/embed/[eventSlug]/speakers/page.tsx", import.meta.url),
+  "utf8",
+);
+const embedViewRouteSource = readFileSync(
+  new URL("../../app/embed/[eventSlug]/[view]/page.tsx", import.meta.url),
+  "utf8",
+);
+const speakerGallerySource = readFileSync(
+  new URL("./speaker-gallery.tsx", import.meta.url),
+  "utf8",
+);
+const embedStylesSource = readFileSync(new URL("./embed.module.css", import.meta.url), "utf8");
+
 const event = {
   slug: "open-systems",
   name: "Open Systems Summit",
@@ -39,6 +66,7 @@ const agenda: PublishedAgenda = {
   entries: [
     {
       id: "entry_keynote",
+      sessionId: "session_keynote",
       title: "Systems that stay understandable",
       summary: "Build operations that teams can reason about.",
       format: "Keynote",
@@ -69,9 +97,6 @@ const gallery: PublishedSpeakerGallery = {
     },
   ],
 };
-type PublishedAgendaEntryWithSessionId = PublishedAgenda["entries"][number] & {
-  readonly sessionId?: string;
-};
 
 const priyaSpeaker: PublishedSpeaker = {
   id: "speaker_priya",
@@ -86,7 +111,7 @@ const priyaSpeaker: PublishedSpeaker = {
   trackNames: ["Main stage"],
 };
 
-const priyaAgendaEntries: readonly PublishedAgendaEntryWithSessionId[] = [
+const priyaAgendaEntries: PublishedAgenda["entries"] = [
   {
     id: "entry_priya",
     sessionId: "session_priya",
@@ -186,6 +211,7 @@ const multiDayAgenda: PublishedAgenda = {
     ...agenda.entries,
     {
       id: "entry_second_day",
+      sessionId: "session_zoe",
       title: "Reliable systems in practice",
       summary: "A second-day session for testing day navigation.",
       format: "Workshop",
@@ -219,6 +245,33 @@ const emptyFinalDayAgenda: PublishedAgenda = {
 };
 
 describe("public embeds", () => {
+  it("keeps anonymous event entry routes dynamic and backed only by canonical public programs", () => {
+    for (const [source, view, component] of [
+      [sessionsRouteSource, "sessions", "PublicSessionsView"],
+      [agendaRouteSource, "agenda", "PublicAgendaView"],
+      [embedAgendaRouteSource, "agenda", "PublicAgendaView"],
+      [embedSpeakersRouteSource, "speakers", "SpeakerGallery"],
+      [embedViewRouteSource, undefined, undefined],
+    ] as const) {
+      expect(source).toContain("params: Promise<{ eventSlug");
+      expect(source).toContain(
+        "searchParams: Promise<Record<string, string | string[] | undefined>>",
+      );
+      expect(source).toContain('from "@/features/embed/api"');
+      expect(source).toContain("getPublishedProgram(");
+      expect(source).not.toContain("getPublishedProgramOrLocalDemo");
+      expect(source).not.toContain("/demo/projections");
+      expect(source).toContain("parseEmbedQuery(query)");
+      if (view !== undefined && component !== undefined) {
+        expect(source).toContain(`view="${view}"`);
+        expect(source).toContain(`<${component}`);
+      }
+      expect(source).toContain("EmbedUnavailable");
+      expect(source).not.toContain("devflow-conf-2027");
+      expect(source).not.toContain("/admin/");
+      expect(source).not.toContain("redirect(");
+    }
+  });
   it("renders accessible agenda navigation, filters, times, and feeds", () => {
     const markup = renderToStaticMarkup(
       createElement(
@@ -230,8 +283,7 @@ describe("public embeds", () => {
           view: "agenda",
         },
         createElement(PublicAgendaView, {
-          agenda,
-          apiBaseUrl: "https://api.example.com",
+          program: { agenda, speakers: gallery },
         }),
       ),
     );
@@ -243,12 +295,23 @@ describe("public embeds", () => {
     expect(markup).toContain('dateTime="2026-09-18T16:00:00.000Z"');
     expect(markup).toContain("agenda.json");
     expect(markup).toContain("agenda.ics");
-    expect(markup).toContain(
-      'href="https://api.example.com/api/public/events/open-systems/agenda.json"',
+    expect(markup).toContain('href="/api/public/events/open-systems/agenda.json"');
+    expect(markup).toContain('href="/api/public/events/open-systems/agenda.ics"');
+  });
+  it("allows distinct child revisions selected by one served program release", () => {
+    const independentlyVersionedGallery: PublishedSpeakerGallery = {
+      ...gallery,
+      revision: { ...gallery.revision, id: "speaker_revision_2", number: 2 },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(PublicAgendaView, {
+        program: { agenda, speakers: independentlyVersionedGallery },
+      }),
     );
-    expect(markup).toContain(
-      'href="https://api.example.com/api/public/events/open-systems/agenda.ics"',
-    );
+
+    expect(markup).toContain("Morgan Lee");
+    expect(markup).toContain("Staff Engineer");
+    expect(markup).toContain("Open Works");
   });
   it("hides feed links that the published projection marks unavailable", () => {
     const unavailableAgenda = {
@@ -257,8 +320,7 @@ describe("public embeds", () => {
     } as PublishedAgenda & { readonly feeds: { json: boolean; ics: boolean } };
     const markup = renderToStaticMarkup(
       createElement(PublicAgendaView, {
-        agenda: unavailableAgenda,
-        apiBaseUrl: "https://api.example.com",
+        program: { agenda: unavailableAgenda, speakers: gallery },
       }),
     );
 
@@ -296,7 +358,9 @@ describe("public embeds", () => {
   });
 
   it("renders speaker information with text alternatives to photos and color", () => {
-    const markup = renderToStaticMarkup(createElement(SpeakerGallery, { gallery }));
+    const markup = renderToStaticMarkup(
+      createElement(SpeakerGallery, { gallery, agenda: { entries: agenda.entries } }),
+    );
 
     expect(markup).toContain("<search>");
     expect(markup).toContain("Search speakers or sessions");
@@ -304,6 +368,8 @@ describe("public embeds", () => {
     expect(markup).toContain("ML");
     expect(markup).toContain("Systems that stay understandable");
     expect(markup).toContain('aria-live="polite"');
+    expect(speakerGallerySource).toContain("styles.speakerGallerySessions");
+    expect(embedStylesSource).toContain(".speakerGallerySessions >");
   });
   it("renders the distinct speakers list with name search, session details, and fallbacks", () => {
     const markup = renderToStaticMarkup(
@@ -323,11 +389,13 @@ describe("public embeds", () => {
     expect(markup).toContain("Search speakers by name");
     expect(markup).toContain('placeholder="Search speakers and sessions"');
     expect(markup).toContain("Roles: speaker");
-    expect(markup).toContain("Friday, September 18, 2026");
+    expect(markup).toContain("Fri, Sep 18");
     expect(markup).toContain("Room: Main hall");
     expect(markup).toContain("<strong>Company:</strong> Open Works");
     expect(markup).toContain("Title not published");
-    expect(markup).toContain("border-radius:50%");
+    expect(markup).toContain('role="img"');
+    expect(markup).toContain('aria-label="Morgan Lee headshot"');
+    expect(markup).toContain('id="speaker-list-trigger-speaker_morgan"');
     expect(markup).not.toContain("private@example.test");
     expect(markup).toContain('href="/embed/open-systems/speakers-list?theme=light"');
     expect(markup).toContain('href="/embed/open-systems/speakers?theme=light"');
@@ -337,6 +405,57 @@ describe("public embeds", () => {
     expect(firstAdams).toBeGreaterThanOrEqual(0);
     expect(firstBrown).toBeGreaterThan(firstAdams);
     expect(firstLee).toBeGreaterThan(firstBrown);
+  });
+  it("connects long biographies to an accessible expansion control", () => {
+    const firstSpeaker = gallery.speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first published speaker fixture.");
+    }
+    const longBiography = "Published biography details. ".repeat(20);
+    const longBiographyProgram: PublishedProgram = {
+      agenda,
+      speakers: {
+        ...gallery,
+        speakers: [{ ...firstSpeaker, biography: longBiography }],
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(PublicSpeakersListView, { program: longBiographyProgram }),
+    );
+
+    expect(markup).toContain('id="speaker-list-biography-speaker_morgan"');
+    expect(markup).toContain('aria-controls="speaker-list-biography-speaker_morgan"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Show more");
+  });
+  it("renders distinct canonical speakers that share a display name", () => {
+    const firstSpeaker = gallery.speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first published speaker fixture.");
+    }
+    const duplicateNameProgram: PublishedProgram = {
+      agenda,
+      speakers: {
+        ...gallery,
+        speakers: [
+          firstSpeaker,
+          {
+            ...firstSpeaker,
+            id: "speaker_morgan_2",
+            jobTitle: "Principal Engineer",
+          },
+        ],
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(PublicSessionsView, { program: duplicateNameProgram }),
+    );
+
+    expect(markup).toContain("Staff Engineer");
+    expect(markup).toContain("Principal Engineer");
+    expect(markup.match(/Morgan Lee/gu)).toHaveLength(2);
   });
   it("sorts speakers by surname, narrows search, and keeps detail controls keyboard accessible", () => {
     const orderedNames = sortSpeakersBySurname(galleryWithDetails.speakers).map(
@@ -355,16 +474,42 @@ describe("public embeds", () => {
     expect(markup).not.toContain('tabindex="0"');
     expect(markup).not.toContain("private@example.test");
 
+    const incompatibleTrackMarkup = renderToStaticMarkup(
+      createElement(SpeakerGallery, {
+        gallery: galleryWithDetails,
+        tracks: ["local-track-main"],
+      }),
+    );
+    expect(incompatibleTrackMarkup).toContain("Zoe Adams");
+    expect(incompatibleTrackMarkup).not.toContain("No speakers match these filters");
+
     const speaker = galleryWithDetails.speakers[0];
     if (!speaker) {
       throw new Error("Expected a speaker with session details");
     }
-    expect(publishedSpeakerSessions(speaker, galleryWithDetails)).toMatchObject([
+    expect(
+      publishedSpeakerSessions(speaker, [
+        {
+          id: "entry_zoe",
+          sessionId: "session_zoe",
+          title: "Reliable systems for scientific teams",
+          summary: "A published session.",
+          format: "Talk",
+          speakerNames: ["A different speaker"],
+          roomName: "Room 306",
+          trackNames: ["Main stage"],
+          startsAt: "2026-09-18T18:00:00.000Z",
+          endsAt: "2026-09-18T19:00:00.000Z",
+        },
+      ]),
+    ).toMatchObject([
       {
+        id: "session_zoe",
         title: "Reliable systems for scientific teams",
         startsAt: "2026-09-18T18:00:00.000Z",
         endsAt: "2026-09-18T19:00:00.000Z",
         roomName: "Room 306",
+        trackNames: ["Main stage"],
       },
     ]);
 
@@ -377,6 +522,7 @@ describe("public embeds", () => {
             entries: [
               {
                 id: "entry_zoe",
+                sessionId: "session_zoe",
                 title: "Reliable systems for scientific teams",
                 summary: "A published session.",
                 format: "Talk",
@@ -394,7 +540,7 @@ describe("public embeds", () => {
     );
     expect(detailMarkup).toContain("Back to speakers");
     expect(detailMarkup).toContain("Sessions (1)");
-    expect(detailMarkup).toContain("Friday, September 18, 2026");
+    expect(detailMarkup).toContain("Fri, Sep 18");
     expect(detailMarkup).toContain("Room: Room 306");
     expect(detailMarkup).not.toContain("private@example.test");
   });
@@ -412,11 +558,11 @@ describe("public embeds", () => {
     );
 
     expect(detailMarkup).toContain("Priya Shah");
-    expect(detailMarkup).toContain("Sessions (2)");
-    expect(detailMarkup).toContain("Friday, September 18, 2026");
+    expect(detailMarkup).toContain("Sessions (1)");
+    expect(detailMarkup).toContain("Fri, Sep 18");
     expect(detailMarkup).toContain("11:00 AM");
     expect(detailMarkup).toContain("Room: Room 201");
-    expect(detailMarkup).toContain("Room: Room 202");
+    expect(detailMarkup).not.toContain("Room: Room 202");
     expect(detailMarkup).not.toContain("Date and time not published");
     expect(detailMarkup).not.toContain("Room not published");
   });
@@ -434,9 +580,8 @@ describe("public embeds", () => {
       }),
     );
 
-    expect(detailMarkup).toContain("Date and time not published");
-    expect(detailMarkup).toContain("Room: Room not published");
-    expect(detailMarkup).not.toContain("Friday, September 18, 2026");
+    expect(detailMarkup).toContain("Sessions (0)");
+    expect(detailMarkup).not.toContain("Date and time not published");
     expect(detailMarkup).not.toContain("Room: Room 306");
     expect(detailMarkup).not.toContain("private@example.test");
   });
@@ -444,8 +589,7 @@ describe("public embeds", () => {
   it("opens agenda blocks with complete details and exposes a back control", () => {
     const markup = renderToStaticMarkup(
       createElement(PublicAgendaView, {
-        agenda: multiDayAgenda,
-        apiBaseUrl: "https://api.example.com",
+        program: { agenda: multiDayAgenda, speakers: gallery },
       }),
     );
     expect(
@@ -499,6 +643,8 @@ describe("public embeds", () => {
     expect(sessionsMarkup).toContain("Track: Main stage");
     expect(sessionsMarkup).toContain("Staff Engineer");
     expect(sessionsMarkup).toContain("Open Works");
+    expect(sessionsMarkup).not.toContain("10:00 AM · 9:00 AM");
+    expect(sessionsMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(4);
     expect(sessionsMarkup).not.toContain("private@example.test");
 
     const itineraryMarkup = renderToStaticMarkup(createElement(PublicItineraryView, { program }));
@@ -509,6 +655,7 @@ describe("public embeds", () => {
     expect(itineraryMarkup).toContain("View Details");
     expect(itineraryMarkup).toContain("Main hall");
     expect(itineraryMarkup).toContain("Staff Engineer");
+    expect(itineraryMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(2);
     const emptyFinalDayMarkup = renderToStaticMarkup(
       createElement(PublicItineraryView, {
         program: { agenda: emptyFinalDayAgenda, speakers: gallery },
@@ -516,5 +663,75 @@ describe("public embeds", () => {
     );
     expect(emptyFinalDayMarkup.match(/role="tab"/gu) ?? []).toHaveLength(3);
     expect(emptyFinalDayMarkup).toContain("Thursday, May 14");
+  });
+});
+
+describe("published program shell", () => {
+  it("renders a single document heading equal to the event name", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedFrame, {
+        event,
+        eventSlug: event.slug,
+        theme: "light",
+        view: "sessions",
+      }),
+    );
+
+    expect(markup.match(/<h1\b/gu) ?? []).toHaveLength(1);
+    expect(markup).toContain(`>${event.name}<`);
+  });
+
+  it("propagates the requested theme onto the root data-theme attribute", () => {
+    for (const theme of ["auto", "light", "dark"] as const) {
+      const markup = renderToStaticMarkup(
+        createElement(EmbedFrame, {
+          event,
+          eventSlug: event.slug,
+          theme,
+          view: "sessions",
+        }),
+      );
+      expect(markup).toContain(`data-theme="${theme}"`);
+    }
+  });
+
+  it("applies safe color options and preserves them across public view navigation", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedFrame, {
+        event,
+        eventSlug: event.slug,
+        theme: "light",
+        view: "sessions",
+        layout: "compact",
+        accent: "#d45573",
+        backgroundColor: "#fff4e6",
+        textColor: "#123456",
+        tracks: ["Main stage"],
+        displayFields: ["title", "date-time", "room"],
+      }),
+    );
+
+    expect(markup).toContain("--pub-accent:#d45573");
+    expect(markup).toContain("--pub-canvas:#fff4e6");
+    expect(markup).toContain("--pub-ink:#123456");
+    expect(markup).toContain("accent=%23d45573");
+    expect(markup).toContain("backgroundColor=%23fff4e6");
+    expect(markup).toContain("textColor=%23123456");
+    expect(markup).toContain("layout=compact");
+    expect(markup).toContain("trackIds=Main+stage");
+    expect(markup).toContain("displayFields=title%2Cdate-time%2Croom");
+  });
+
+  it("exposes itinerary days as a tablist with exactly one selected tab", () => {
+    const markup = renderToStaticMarkup(
+      createElement(PublicItineraryView, {
+        program: { agenda: multiDayAgenda, speakers: gallery },
+      }),
+    );
+
+    expect(markup).toContain('role="tablist"');
+    expect(markup.match(/role="tab"/gu) ?? []).toHaveLength(2);
+    expect(markup.match(/aria-selected="true"/gu) ?? []).toHaveLength(1);
+    expect(markup).toContain('aria-controls="itinerary-panel-2026-09-18"');
   });
 });

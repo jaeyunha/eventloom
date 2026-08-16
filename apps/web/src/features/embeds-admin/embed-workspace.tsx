@@ -1,499 +1,79 @@
 "use client";
 
-import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import styles from "@/features/admin/admin-shell.module.css";
+import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
-  createOrganizerEventsApi,
-  type OrganizerEventEmbedConfiguration,
-  type OrganizerEventRecord,
-  type OrganizerEventsApi,
-} from "@/features/admin/organizer-overview";
-
-export type EmbedWidgetId = "sessions" | "speakers" | "agenda" | "itinerary" | "gallery";
-export type EmbedTheme = "auto" | "light" | "dark";
-export type EmbedAccent = string;
-export type EmbedLayout = "comfortable" | "compact" | "list" | "grid" | "timeline";
-export type EmbedOutputFormat = "styled-html" | "basic-html" | "json" | "xml" | "ical";
-export type EmbedFieldId =
-  | "title"
-  | "date-time"
-  | "room"
-  | "speakers"
-  | "format"
-  | "track"
-  | "summary"
-  | "company"
-  | "bio";
-
-export const EMBED_OUTPUT_FORMATS: readonly {
-  readonly value: EmbedOutputFormat;
-  readonly label: string;
-  readonly description: string;
-}[] = [
-  {
-    value: "styled-html",
-    label: "Styled HTML",
-    description: "Responsive iframe markup using the published public view.",
-  },
-  {
-    value: "basic-html",
-    label: "Basic HTML",
-    description: "A plain link to the published public view.",
-  },
-  {
-    value: "json",
-    label: "JSON",
-    description: "Configuration preview for the published public URL.",
-  },
-  {
-    value: "xml",
-    label: "XML",
-    description: "Configuration preview for the published public URL.",
-  },
-  {
-    value: "ical",
-    label: "iCal",
-    description: "Link to the published calendar source when available.",
-  },
-] as const;
-
-export interface EmbedFieldDefinition {
-  readonly id: EmbedFieldId;
-  readonly label: string;
-  readonly required: boolean;
-}
-
-export const EMBED_DISPLAY_FIELDS: readonly EmbedFieldDefinition[] = [
-  { id: "title", label: "Title", required: true },
-  { id: "date-time", label: "Date and time", required: true },
-  { id: "room", label: "Room", required: false },
-  { id: "speakers", label: "Speakers", required: false },
-  { id: "format", label: "Format", required: false },
-  { id: "track", label: "Track", required: false },
-  { id: "summary", label: "Description", required: false },
-  { id: "company", label: "Company", required: false },
-  { id: "bio", label: "Biography", required: false },
-] as const;
-
-export const DEFAULT_EMBED_DISPLAY_FIELDS: readonly EmbedFieldId[] = [
-  "title",
-  "date-time",
-  "room",
-  "speakers",
-  "format",
-  "track",
-  "summary",
-  "company",
-  "bio",
-];
-
-export interface EmbedWidgetDefinition {
-  readonly id: EmbedWidgetId;
-  readonly label: string;
-  readonly description: string;
-  /** The anonymous public route. */
-  readonly publicView: "sessions" | "speakers-list" | "speakers" | "agenda" | "itinerary";
-  /** The existing script route only supports the Agenda and Speaker Gallery views. */
-  readonly scriptView: "agenda" | "speakers" | null;
-  readonly layouts: readonly EmbedLayout[];
-  readonly defaultLayout: EmbedLayout;
-  readonly minHeight: string;
-}
-
-export const EMBED_WIDGETS: readonly EmbedWidgetDefinition[] = [
-  {
-    id: "sessions",
-    label: "Sessions List",
-    description: "A searchable list of published sessions and speakers.",
-    publicView: "sessions",
-    scriptView: null,
-    layouts: ["comfortable", "compact"],
-    defaultLayout: "comfortable",
-    minHeight: "720px",
-  },
-  {
-    id: "speakers",
-    label: "Speakers List",
-    description: "A directory pairing published speakers with their sessions.",
-    publicView: "speakers-list",
-    scriptView: null,
-    layouts: ["list"],
-    defaultLayout: "list",
-    minHeight: "720px",
-  },
-  {
-    id: "agenda",
-    label: "Agenda",
-    description: "The published agenda with day and track filters.",
-    publicView: "agenda",
-    scriptView: "agenda",
-    layouts: ["timeline", "list"],
-    defaultLayout: "timeline",
-    minHeight: "720px",
-  },
-  {
-    id: "itinerary",
-    label: "Schedule Itinerary",
-    description: "A schedule view visitors can personalize and download.",
-    publicView: "itinerary",
-    scriptView: null,
-    layouts: ["timeline", "compact"],
-    defaultLayout: "timeline",
-    minHeight: "720px",
-  },
-  {
-    id: "gallery",
-    label: "Speaker Gallery",
-    description: "A visual gallery of the published speaker roster.",
-    publicView: "speakers",
-    scriptView: "speakers",
-    layouts: ["grid", "list"],
-    defaultLayout: "grid",
-    minHeight: "760px",
-  },
-] as const;
-
-export const EMBED_THEMES: readonly { readonly value: EmbedTheme; readonly label: string }[] = [
-  { value: "auto", label: "Match visitor preference" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-] as const;
-
-export const DEFAULT_EMBED_ACCENT = "#4f5ee8";
-
-export interface EmbedConfiguration {
-  readonly id: string;
-  readonly name: string;
-  readonly widgetId: EmbedWidgetId;
-  readonly enabled: boolean;
-  readonly theme: EmbedTheme;
-  readonly outputFormat: EmbedOutputFormat;
-  readonly layout: EmbedLayout;
-  readonly accent: EmbedAccent;
-  readonly backgroundColor: string;
-  readonly textColor: string;
-  readonly customCss: string;
-  readonly displayFields: readonly EmbedFieldId[];
-  readonly tracks: readonly string[];
-  readonly statuses: readonly string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const candidate = value.trim();
-  return candidate ? candidate : null;
-}
-
-function isEmbedWidgetId(value: unknown): value is EmbedWidgetId {
-  return typeof value === "string" && EMBED_WIDGETS.some((widget) => widget.id === value);
-}
-
-function isEmbedTheme(value: unknown): value is EmbedTheme {
-  return value === "auto" || value === "light" || value === "dark";
-}
-
-function isEmbedOutputFormat(value: unknown): value is EmbedOutputFormat {
-  return EMBED_OUTPUT_FORMATS.some((format) => format.value === value);
-}
-
-function isEmbedLayout(value: unknown): value is EmbedLayout {
-  return (
-    value === "comfortable" ||
-    value === "compact" ||
-    value === "list" ||
-    value === "grid" ||
-    value === "timeline"
-  );
-}
-
-function isEmbedFieldId(value: unknown): value is EmbedFieldId {
-  return EMBED_DISPLAY_FIELDS.some((field) => field.id === value);
-}
-
-function normalizeStringList(value: unknown): readonly string[] | null {
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return null;
-  const unique: string[] = [];
-  for (const item of value) {
-    const normalized = item.trim();
-    if (normalized && !unique.includes(normalized)) unique.push(normalized);
-  }
-  return unique;
-}
-
-function normalizeDisplayFields(value: unknown): readonly EmbedFieldId[] | null {
-  if (!Array.isArray(value) || !value.every(isEmbedFieldId)) return null;
-  const unique = [...new Set(value)];
-  const required = EMBED_DISPLAY_FIELDS.filter((field) => field.required).map((field) => field.id);
-  return [...required, ...unique.filter((field) => !required.includes(field))];
-}
-
-function normalizeHexColor(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const candidate = value.trim().toLowerCase();
-  return /^#[0-9a-f]{6}$/u.test(candidate) ? candidate : null;
-}
-
-function normalizeEmbedConfiguration(value: unknown): EmbedConfiguration | null {
-  if (!isRecord(value)) return null;
-  const id = nonEmptyString(value.id);
-  const name = nonEmptyString(value.name);
-  const accent = normalizeHexColor(value.accent);
-  const backgroundColor = normalizeHexColor(value.backgroundColor);
-  const textColor = normalizeHexColor(value.textColor);
-  const tracks = normalizeStringList(value.tracks);
-  const statuses = normalizeStringList(value.statuses);
-  const displayFields = normalizeDisplayFields(value.displayFields);
-
-  if (
-    !id ||
-    !name ||
-    !isEmbedWidgetId(value.widgetId) ||
-    typeof value.enabled !== "boolean" ||
-    !isEmbedTheme(value.theme) ||
-    !isEmbedOutputFormat(value.outputFormat) ||
-    !isEmbedLayout(value.layout) ||
-    !accent ||
-    !backgroundColor ||
-    !textColor ||
-    typeof value.customCss !== "string" ||
-    !tracks ||
-    !statuses ||
-    !displayFields
-  ) {
-    return null;
-  }
-
-  return {
-    id,
-    name,
-    widgetId: value.widgetId,
-    enabled: value.enabled,
-    theme: value.theme,
-    outputFormat: value.outputFormat,
-    layout: value.layout,
-    accent,
-    backgroundColor,
-    textColor,
-    customCss: value.customCss,
-    displayFields,
-    tracks,
-    statuses,
-  };
-}
-
-const compactCardStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.7rem",
-  padding: "1rem",
-  border: "1px solid var(--admin-border)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-canvas)",
-};
-const fieldStyle: CSSProperties = { display: "grid", gap: "0.35rem" };
-const fieldLabelStyle: CSSProperties = {
-  color: "var(--admin-ink)",
-  fontSize: "0.78rem",
-  fontWeight: 750,
-};
-const inputStyle: CSSProperties = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-};
-const subtleTextStyle: CSSProperties = {
-  margin: 0,
-  color: "var(--admin-muted)",
-  fontSize: "0.78rem",
-  lineHeight: 1.5,
-};
-
-export type EmbedSnippetSettings = Readonly<{
-  widget: EmbedWidgetDefinition;
-  eventSlug: string;
-  publicOrigin: string;
-  theme: EmbedTheme;
-  outputFormat?: EmbedOutputFormat;
-  displayFields?: readonly EmbedFieldId[];
-  accent?: EmbedAccent;
-  backgroundColor?: string;
-  textColor?: string;
-  customCss?: string;
-  tracks?: readonly string[];
-  statuses?: readonly string[];
-  layout?: EmbedLayout;
-}>;
-
-function widgetFor(id: EmbedWidgetId): EmbedWidgetDefinition {
-  const widget = EMBED_WIDGETS.find((candidate) => candidate.id === id);
-  if (widget) return widget;
-  const first = EMBED_WIDGETS[0];
-  if (!first) throw new Error("At least one public embed widget is required.");
-  return first;
-}
-
-function normalizeOrigin(value: string): string {
-  const candidate = value.trim().replace(/\/+$/u, "");
-  if (!candidate) return "";
-  try {
-    const origin = new URL(candidate);
-    if (
-      (origin.protocol !== "https:" && origin.protocol !== "http:") ||
-      origin.username ||
-      origin.password ||
-      origin.search ||
-      origin.hash ||
-      (origin.pathname !== "/" && origin.pathname !== "")
-    ) {
-      return "";
-    }
-    return origin.origin;
-  } catch {
-    return "";
-  }
-}
-
-function configuredPublicOrigin(explicit?: string): string {
-  return normalizeOrigin(explicit ?? process.env.NEXT_PUBLIC_APP_URL ?? "");
-}
-
-function queryForSettings(settings: EmbedSnippetSettings): string {
-  const query = new URLSearchParams();
-  query.set("theme", settings.theme);
-  query.set("outputFormat", settings.outputFormat ?? "styled-html");
-  query.set("layout", settings.layout ?? settings.widget.defaultLayout);
-  query.set("displayFields", (settings.displayFields ?? DEFAULT_EMBED_DISPLAY_FIELDS).join(","));
-
-  const accent = normalizeHexColor(settings.accent ?? DEFAULT_EMBED_ACCENT);
-  const backgroundColor = normalizeHexColor(settings.backgroundColor ?? "#ffffff");
-  const textColor = normalizeHexColor(settings.textColor ?? "#20232b");
-  if (accent) query.set("accent", accent);
-  if (backgroundColor) query.set("backgroundColor", backgroundColor);
-  if (textColor) query.set("textColor", textColor);
-
-  const tracks = normalizeStringList(settings.tracks ?? []);
-  const statuses = normalizeStringList(settings.statuses ?? []);
-  if (tracks?.length) query.set("tracks", tracks.join(","));
-  if (statuses?.length) query.set("statuses", statuses.join(","));
-
-  const encoded = query.toString();
-  return encoded ? `?${encoded}` : "";
-}
-
-export function publicEmbedUrl(settings: EmbedSnippetSettings): string {
-  const origin = configuredPublicOrigin(settings.publicOrigin);
-  const slug = encodeURIComponent(settings.eventSlug.trim());
-  if (!origin || !slug) return "";
-  return `${origin}/embed/${slug}/${settings.widget.publicView}${queryForSettings(settings)}`;
-}
-
-export function iframeSnippet(settings: EmbedSnippetSettings): string {
-  const src = publicEmbedUrl(settings);
-  if (!src) return "";
-  const widget = settings.widget;
-  return [
-    "<iframe",
-    `  src="${src}"`,
-    `  title="Open Sessionboard ${widget.label}"`,
-    '  loading="lazy"',
-    '  referrerpolicy="no-referrer"',
-    '  sandbox="allow-scripts"',
-    '  style="width:100%;min-height:720px;border:0;display:block"',
-    "></iframe>",
-  ].join("\n");
-}
-
-export function scriptSnippet(settings: EmbedSnippetSettings): string {
-  if (!settings.widget.scriptView) return "";
-  const origin = configuredPublicOrigin(settings.publicOrigin);
-  const slug = encodeURIComponent(settings.eventSlug.trim());
-  if (!origin || !slug) return "";
-  return [
-    `<script src="${origin}/embed/${slug}/script${queryForSettings(settings)}"`,
-    `  data-view="${settings.widget.scriptView}"`,
-    `  data-theme="${settings.theme}"`,
-    "  defer>",
-    "</script>",
-  ].join("\n");
-}
-
-function outputFormatLabel(value: EmbedOutputFormat): string {
-  return EMBED_OUTPUT_FORMATS.find((option) => option.value === value)?.label ?? "Styled HTML";
-}
-
-function embedCodePreview(settings: EmbedSnippetSettings): string {
-  const source = publicEmbedUrl(settings);
-  if (!source) return "";
-  const format = settings.outputFormat ?? "styled-html";
-  const fields = settings.displayFields ?? DEFAULT_EMBED_DISPLAY_FIELDS;
-  const metadata = [
-    `<!-- ${outputFormatLabel(format)} preview for ${settings.widget.label}. -->`,
-    "<!-- Selected safe options are encoded in the live URL. Custom CSS is not sent to the public URL. -->",
-    `<!-- Display fields: ${fields.join(", ")} -->`,
-    `<!-- Tracks: ${settings.tracks?.join(", ") || "all"}; statuses: ${settings.statuses?.join(", ") || "all"} -->`,
-    `<!-- Accent: ${settings.accent ?? DEFAULT_EMBED_ACCENT}; custom CSS: ${settings.customCss?.trim() ? "provided for host markup" : "none"} -->`,
-    `<!-- Surface: ${settings.backgroundColor ?? "#ffffff"}; text: ${settings.textColor ?? "#20232b"} -->`,
-  ].join("\n");
-
-  switch (format) {
-    case "styled-html":
-      return [
-        metadata,
-        settings.widget.scriptView ? scriptSnippet(settings) : iframeSnippet(settings),
-      ]
-        .filter(Boolean)
-        .join("\n");
-    case "basic-html":
-      return [metadata, `<a href="${source}">Open ${settings.widget.label}</a>`].join("\n");
-    case "json":
-      return JSON.stringify(
-        {
-          source,
-          theme: settings.theme,
-          format,
-          widget: settings.widget.id,
-          layout: settings.layout ?? settings.widget.defaultLayout,
-          displayFields: fields,
-          tracks: settings.tracks ?? [],
-          accent: settings.accent ?? DEFAULT_EMBED_ACCENT,
-          backgroundColor: settings.backgroundColor ?? "#ffffff",
-          textColor: settings.textColor ?? "#20232b",
-          customCss: settings.customCss ?? "",
-          statuses: settings.statuses ?? [],
-        },
-        null,
-        2,
-      );
-    case "xml":
-      return [
-        `<!-- ${outputFormatLabel(format)} configuration preview. -->`,
-        `<embed widget="${settings.widget.id}" source="${source}" format="${format}">`,
-        `  <display-fields>${fields.join(", ")}</display-fields>`,
-        "</embed>",
-      ].join("\n");
-    case "ical":
-      return [
-        `# ${outputFormatLabel(format)} source preview`,
-        "# Use the published agenda calendar link when that feed is enabled.",
-        source,
-      ].join("\n");
-  }
-}
-
-export function normalizeEmbedSlug(value: string | undefined, fallback?: string): string | null {
-  const candidate = value?.trim() || fallback?.trim() || "";
-  return candidate ? candidate : null;
-}
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import styles from "@/features/admin/admin-shell.module.css";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import type { NavigationDataCache } from "@/lib/navigation-data-cache";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
+import workspaceStyles from "./embed-workspace.module.css";
+import type {
+  EmbedAccent,
+  EmbedConfiguration,
+  EmbedEventRecord,
+  EmbedExpectedPublishedRevision,
+  EmbedFieldId,
+  EmbedLayout,
+  EmbedOutputFormat,
+  EmbedPublicationMetadata,
+  EmbedSnippetSettings,
+  EmbedTheme,
+  EmbedWidgetDefinition,
+  EmbedWidgetId,
+  EmbedWorkspaceApi,
+} from "./embed-workspace-model";
+import {
+  builderConfiguration,
+  configuredPublicOrigin,
+  createEmbedConfigurationId,
+  createEmbedWorkspaceApi,
+  DEFAULT_EMBED_ACCENT,
+  DEFAULT_EMBED_DISPLAY_FIELDS,
+  EMBED_DISPLAY_FIELDS,
+  EMBED_OUTPUT_FORMATS,
+  EMBED_THEMES,
+  EMBED_WIDGETS,
+  EMPTY_EMBED_CONFIGURATIONS,
+  embedCodePreview,
+  eventEmbedConfigurations,
+  iframeSandbox,
+  iframeSnippet,
+  loadEmbedPublication,
+  messageFrom,
+  normalizeEmbedSlug,
+  outputFormatLabel,
+  publicAgendaCalendarUrl,
+  publicAgendaJsonUrl,
+  publicationMetadataFromState,
+  publicEmbedUrl,
+  scriptSnippet,
+  widgetFor,
+  workspaceScopeKey,
+} from "./embed-workspace-model";
 
 export interface EmbedWorkspaceViewProps {
   readonly organizationId: string;
@@ -502,10 +82,15 @@ export interface EmbedWorkspaceViewProps {
   readonly publicOrigin?: string;
   readonly eventName?: string;
   readonly eventVersion?: number | null;
-  readonly initialConfigurations?: readonly OrganizerEventEmbedConfiguration[];
-  readonly api?: Pick<OrganizerEventsApi, "updateEvent">;
+  readonly expectedPublishedRevision?: EmbedExpectedPublishedRevision | null;
+  readonly initialConfigurations?: readonly EmbedConfiguration[];
+  readonly api?: Pick<EmbedWorkspaceApi, "updateEvent">;
+  readonly publication?: EmbedPublicationMetadata;
+  readonly publicationFresh?: boolean;
   readonly loading?: boolean;
   readonly errorMessage?: string | null;
+  readonly onRetry?: () => void;
+  readonly onEmbedMutation?: () => void;
 }
 
 function CopyButton({ label, value }: Readonly<{ label: string; value: string }>) {
@@ -529,16 +114,17 @@ function CopyButton({ label, value }: Readonly<{ label: string; value: string }>
   }
 
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", alignItems: "center" }}>
-      <button
-        className={styles.secondaryButton}
+    <div className={workspaceStyles.copyRow}>
+      <Button
+        variant="outline"
+        size="sm"
         type="button"
         onClick={() => void copy()}
         disabled={!value}
       >
         {copied ? "Copied" : `Copy ${label}`}
-      </button>
-      <span role="status" aria-live="polite" style={subtleTextStyle}>
+      </Button>
+      <span role="status" aria-live="polite" className={workspaceStyles.muted}>
         {copied
           ? `${label} copied to clipboard.`
           : error
@@ -553,43 +139,39 @@ function WidgetChooser({
   selected,
   onChange,
 }: Readonly<{ selected: EmbedWidgetId; onChange: (value: EmbedWidgetId) => void }>) {
+  const selectedWidget = widgetFor(selected);
   return (
-    <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-      <legend
-        style={{
-          padding: "0 0.35rem",
-          color: "var(--admin-ink)",
-          fontSize: "0.86rem",
-          fontWeight: 800,
-        }}
-      >
-        Public widget
-      </legend>
-      <div style={{ display: "grid", gap: "0.45rem" }}>
-        {EMBED_WIDGETS.map((widget) => (
-          <label
-            key={widget.id}
-            style={{ display: "flex", gap: "0.55rem", alignItems: "flex-start", cursor: "pointer" }}
-          >
-            <input
-              type="radio"
-              name="embed-widget"
-              value={widget.id}
-              checked={selected === widget.id}
-              onChange={() => onChange(widget.id)}
-            />
-            <span>
-              <strong style={{ display: "block", color: "var(--admin-ink)", fontSize: "0.82rem" }}>
-                {widget.label}
-              </strong>
-              <span style={subtleTextStyle}>{widget.description}</span>
-            </span>
-          </label>
-        ))}
+    <div className={workspaceStyles.widgetMenu}>
+      <div>
+        <p className={workspaceStyles.label}>Preview widget</p>
+        <p className={workspaceStyles.muted}>{selectedWidget.description}</p>
       </div>
-    </fieldset>
+      <ToggleGroup
+        type="single"
+        value={selected}
+        variant="outline"
+        size="sm"
+        onValueChange={(value) => {
+          if (value) onChange(value as EmbedWidgetId);
+        }}
+        className={workspaceStyles.widgetMenuOptions}
+        aria-label="Public widget"
+      >
+        {EMBED_WIDGETS.map((widget) => (
+          <ToggleGroupItem
+            key={widget.id}
+            value={widget.id}
+            className={workspaceStyles.widgetMenuOption}
+            aria-label={widget.label}
+          >
+            {widget.label}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   );
 }
+
 function EmbedConfigurationLibrary({
   configurations,
   selectedConfigurationId,
@@ -600,7 +182,6 @@ function EmbedConfigurationLibrary({
   onSelectConfiguration,
   onNewConfiguration,
   onSaveConfiguration,
-  onDeleteConfiguration,
   onToggleConfiguration,
 }: Readonly<{
   configurations: readonly EmbedConfiguration[];
@@ -612,106 +193,119 @@ function EmbedConfigurationLibrary({
   onSelectConfiguration: (value: string) => void;
   onNewConfiguration: () => void;
   onSaveConfiguration: () => void;
-  onDeleteConfiguration: () => void;
   onToggleConfiguration: (id: string, enabled: boolean) => void;
 }>) {
   return (
-    <section
-      style={{ ...compactCardStyle, margin: 0 }}
-      aria-labelledby="embed-configurations-heading"
-    >
-      <div>
-        <h2
-          id="embed-configurations-heading"
-          style={{ margin: 0, color: "var(--admin-ink)", fontSize: "0.92rem" }}
-        >
-          Widget configurations
-        </h2>
-        <p style={{ ...subtleTextStyle, marginTop: "0.35rem" }}>
-          Save named widget setups to this event so the whole organizer team can use the same
-          configuration. Generated links and snippets contain the selected safe options.
-        </p>
-      </div>
-
-      <label style={fieldStyle} htmlFor="embed-saved-configurations">
-        <span style={fieldLabelStyle}>Saved configurations</span>
-        <select
-          id="embed-saved-configurations"
-          aria-label="Saved widget configurations"
-          style={inputStyle}
-          value={selectedConfigurationId ?? ""}
-          onChange={(event) => onSelectConfiguration(event.target.value)}
-        >
-          <option value="">New widget configuration</option>
-          {configurations.map((configuration) => (
-            <option key={configuration.id} value={configuration.id}>
-              {configuration.name} · {widgetFor(configuration.widgetId).label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.7rem" }}>
-        {configurations.map((configuration) => (
-          <label
-            key={`${configuration.id}-enabled`}
-            style={{ display: "flex", gap: "0.5rem", alignItems: "center", cursor: "pointer" }}
-          >
-            <input
-              type="checkbox"
-              aria-label={`${configuration.enabled ? "Disable" : "Enable"} ${configuration.name}`}
-              checked={configuration.enabled}
-              disabled={!persistenceReady}
-              onChange={(event) => onToggleConfiguration(configuration.id, event.target.checked)}
-            />
-            <span style={fieldLabelStyle}>
-              {configuration.enabled ? "Enabled" : "Disabled"} · {configuration.name}
-            </span>
+    <Card className={workspaceStyles.setupPanel}>
+      <CardHeader>
+        <div className={workspaceStyles.cardHeadingRow}>
+          <div>
+            <CardTitle>Saved configuration</CardTitle>
+            <CardDescription>
+              Load an existing widget or name this one before saving.
+            </CardDescription>
+          </div>
+          <Badge variant={persistenceReady ? "outline" : "secondary"}>
+            {persistenceReady ? "Ready" : "Read-only"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className={workspaceStyles.sectionStack}>
+        <div className={workspaceStyles.field}>
+          <label htmlFor="embed-saved-configurations" className={workspaceStyles.label}>
+            Saved configurations
           </label>
-        ))}
-      </div>
+          <Select
+            {...(selectedConfigurationId === null ? {} : { value: selectedConfigurationId })}
+            onValueChange={onSelectConfiguration}
+          >
+            <SelectTrigger id="embed-saved-configurations" aria-label="Saved widget configurations">
+              <SelectValue placeholder="New widget configuration" />
+            </SelectTrigger>
+            <SelectContent>
+              {configurations.map((configuration) => (
+                <SelectItem key={configuration.id} value={configuration.id}>
+                  {configuration.name} · {widgetFor(configuration.widgetId).label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
-      <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-configuration-name">
-        <span style={fieldLabelStyle}>Configuration name</span>
-        <input
-          id="embed-configuration-name"
-          aria-label="Configuration name"
-          style={inputStyle}
-          value={configurationName}
-          onChange={(event) => onConfigurationName(event.target.value)}
-          placeholder="e.g. Main schedule"
-          maxLength={120}
-        />
-      </label>
+        {configurations.length > 0 ? (
+          <fieldset className={workspaceStyles.savedList}>
+            <legend className="sr-only">Saved configuration availability</legend>
+            {configurations.map((configuration) => {
+              const checkboxId = `embed-configuration-enabled-${configuration.id}`;
+              return (
+                <div key={`${configuration.id}-enabled`} className={workspaceStyles.checkRow}>
+                  <Checkbox
+                    id={checkboxId}
+                    aria-label={`${configuration.enabled ? "Disable" : "Enable"} ${configuration.name}`}
+                    checked={configuration.enabled}
+                    disabled={!persistenceReady}
+                    onCheckedChange={(checked) =>
+                      onToggleConfiguration(configuration.id, checked === true)
+                    }
+                  />
+                  <Label htmlFor={checkboxId}>
+                    <strong>{configuration.name}</strong>
+                    <span className={workspaceStyles.muted}>
+                      {configuration.enabled ? "Enabled" : "Disabled"} ·{" "}
+                      {widgetFor(configuration.widgetId).label}
+                    </span>
+                  </Label>
+                </div>
+              );
+            })}
+          </fieldset>
+        ) : (
+          <p className={workspaceStyles.emptyNote}>
+            Your saved widgets will appear here after you create the first one.
+          </p>
+        )}
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", marginTop: "0.7rem" }}>
-        <button className={styles.primaryButton} type="button" onClick={onNewConfiguration}>
-          New Widget
-        </button>
-        <button
-          className={styles.secondaryButton}
-          type="button"
-          onClick={onSaveConfiguration}
-          disabled={!persistenceReady}
-        >
-          {selectedConfigurationId ? "Update configuration" : "Save configuration"}
-        </button>
-        <button
-          className={styles.dangerButton}
-          type="button"
-          onClick={onDeleteConfiguration}
-          disabled={!persistenceReady || !selectedConfigurationId}
-        >
-          Delete configuration
-        </button>
-      </div>
+        <div className={workspaceStyles.field}>
+          <label htmlFor="embed-configuration-name" className={workspaceStyles.label}>
+            Configuration name
+          </label>
+          <Input
+            id="embed-configuration-name"
+            aria-label="Configuration name"
+            value={configurationName}
+            onChange={(event) => onConfigurationName(event.target.value)}
+            placeholder="e.g. Main schedule"
+            maxLength={120}
+          />
+        </div>
 
-      <p role="status" aria-live="polite" style={{ ...subtleTextStyle, marginTop: "0.55rem" }}>
-        {statusMessage ||
-          (persistenceReady
-            ? "Choose New Widget to start another saved setup. Save creates a configuration; selecting one changes the action to Update configuration."
-            : "Loading event configurations…")}
-      </p>
-    </section>
+        <div className={workspaceStyles.actionRow}>
+          <Button type="button" onClick={onNewConfiguration}>
+            New widget
+          </Button>
+          <Button
+            variant="secondary"
+            type="button"
+            onClick={onSaveConfiguration}
+            disabled={!persistenceReady}
+          >
+            {selectedConfigurationId ? "Update configuration" : "Save configuration"}
+          </Button>
+          <span className={workspaceStyles.muted}>
+            {selectedConfigurationId
+              ? "Saving updates the selected widget without changing its public link."
+              : "Save once to create a verified preview and sharing links."}
+          </span>
+        </div>
+
+        <p role="status" aria-live="polite" className={workspaceStyles.statusMessage}>
+          {statusMessage ||
+            (persistenceReady
+              ? "Choose a saved widget or create a new one."
+              : "Loading saved widgets…")}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -725,9 +319,11 @@ function EmbedControls({
   textColor,
   customCss,
   displayFields,
-  tracks,
+  trackIds,
   statuses,
   cacheRefreshMessage,
+  cacheRefreshBusy: _cacheRefreshBusy,
+  cacheRefreshError: _cacheRefreshError,
   onTheme,
   onOutputFormat,
   onLayout,
@@ -749,9 +345,11 @@ function EmbedControls({
   textColor: string;
   customCss: string;
   displayFields: readonly EmbedFieldId[];
-  tracks: readonly string[];
+  trackIds: readonly string[];
   statuses: readonly string[];
   cacheRefreshMessage: string;
+  cacheRefreshBusy: boolean;
+  cacheRefreshError: boolean;
   onTheme: (value: EmbedTheme) => void;
   onOutputFormat: (value: EmbedOutputFormat) => void;
   onLayout: (value: EmbedLayout) => void;
@@ -764,6 +362,7 @@ function EmbedControls({
   onStatuses: (value: readonly string[]) => void;
   onRefresh: () => void;
 }>) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const setListValue = (value: string, onChange: (next: readonly string[]) => void): void => {
     onChange(
       value
@@ -774,435 +373,688 @@ function EmbedControls({
   };
 
   return (
-    <>
-      <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-        <legend
-          style={{
-            padding: "0 0.35rem",
-            color: "var(--admin-ink)",
-            fontSize: "0.86rem",
-            fontWeight: 800,
-          }}
-        >
-          Output format
-        </legend>
-        <div style={{ display: "grid", gap: "0.45rem" }}>
-          {EMBED_OUTPUT_FORMATS.map((option) => (
-            <label
-              key={option.value}
-              style={{
-                display: "flex",
-                gap: "0.55rem",
-                alignItems: "flex-start",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="radio"
-                name="embed-output-format"
-                value={option.value}
-                checked={outputFormat === option.value}
-                onChange={() => onOutputFormat(option.value)}
-              />
-              <span>
-                <strong
-                  style={{ display: "block", color: "var(--admin-ink)", fontSize: "0.82rem" }}
-                >
-                  {option.label}
-                </strong>
-                <span style={subtleTextStyle}>{option.description}</span>
-              </span>
+    <div className={workspaceStyles.setupControls}>
+      <Card className={workspaceStyles.setupPanel}>
+        <CardHeader>
+          <CardTitle>Appearance and output</CardTitle>
+          <CardDescription>
+            Choose how this widget looks and which public format visitors can use.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className={workspaceStyles.fieldGrid}>
+          <div className={workspaceStyles.field}>
+            <label htmlFor="embed-output-format" className={workspaceStyles.label}>
+              Output format
             </label>
-          ))}
-        </div>
-      </fieldset>
-      <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-        <legend
-          style={{
-            padding: "0 0.35rem",
-            color: "var(--admin-ink)",
-            fontSize: "0.86rem",
-            fontWeight: 800,
-          }}
-        >
-          Layout
-        </legend>
-        <label style={fieldStyle} htmlFor="embed-layout">
-          <span style={fieldLabelStyle}>Layout</span>
-          <select
-            id="embed-layout"
-            style={inputStyle}
-            value={layout}
-            onChange={(event) => onLayout(event.target.value as EmbedLayout)}
-          >
-            {widget.layouts.map((option) => (
-              <option key={option} value={option}>
-                {option.charAt(0).toUpperCase() + option.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </fieldset>
+            <Select
+              value={outputFormat}
+              onValueChange={(value) => onOutputFormat(value as EmbedOutputFormat)}
+            >
+              <SelectTrigger id="embed-output-format" aria-label="Output format">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EMBED_OUTPUT_FORMATS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className={workspaceStyles.muted}>
+              {EMBED_OUTPUT_FORMATS.find((option) => option.value === outputFormat)?.description}
+            </p>
+          </div>
 
-      <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-        <legend
-          style={{
-            padding: "0 0.35rem",
-            color: "var(--admin-ink)",
-            fontSize: "0.86rem",
-            fontWeight: 800,
-          }}
-        >
-          Appearance and colors
-        </legend>
-        <label style={fieldStyle} htmlFor="embed-theme">
-          <span style={fieldLabelStyle}>Theme</span>
-          <select
-            id="embed-theme"
-            style={inputStyle}
-            value={theme}
-            onChange={(event) => onTheme(event.target.value as EmbedTheme)}
-          >
-            {EMBED_THEMES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-accent">
-          <span style={fieldLabelStyle}>Accent color</span>
-          <input
-            id="embed-accent"
-            aria-label="Accent color"
-            type="color"
-            value={accent}
-            onChange={(event) => onAccent(event.target.value)}
-            style={{ ...inputStyle, width: "5rem", padding: "0.2rem" }}
-          />
-        </label>
-        <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-background-color">
-          <span style={fieldLabelStyle}>Background color</span>
-          <input
-            id="embed-background-color"
-            aria-label="Background color"
-            type="color"
-            value={backgroundColor}
-            onChange={(event) => onBackgroundColor(event.target.value)}
-            style={{ ...inputStyle, width: "5rem", padding: "0.2rem" }}
-          />
-        </label>
-        <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-text-color">
-          <span style={fieldLabelStyle}>Text color</span>
-          <input
-            id="embed-text-color"
-            aria-label="Text color"
-            type="color"
-            value={textColor}
-            onChange={(event) => onTextColor(event.target.value)}
-            style={{ ...inputStyle, width: "5rem", padding: "0.2rem" }}
-          />
-        </label>
-        <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-custom-css">
-          <span style={fieldLabelStyle}>Custom CSS</span>
-          <textarea
-            id="embed-custom-css"
-            aria-label="Custom CSS"
-            value={customCss}
-            onChange={(event) => onCustomCss(event.target.value)}
-            placeholder="Optional CSS for your host page"
-            rows={4}
-            style={{ ...inputStyle, minHeight: "6rem", resize: "vertical" }}
-          />
-        </label>
-        <p style={{ ...subtleTextStyle, marginTop: "0.7rem" }}>
-          Safe theme, layout, output, field, filter, and color choices are encoded in copied live
-          URLs. Custom CSS stays in the host markup and is never sent as executable URL content.
-        </p>
-        <p style={{ ...subtleTextStyle, marginTop: "0.4rem" }}>
-          {widget.label} uses its documented public presentation.
-        </p>
-      </fieldset>
+          <div className={workspaceStyles.field}>
+            <label htmlFor="embed-layout" className={workspaceStyles.label}>
+              Layout
+            </label>
+            <Select value={layout} onValueChange={(value) => onLayout(value as EmbedLayout)}>
+              <SelectTrigger id="embed-layout">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {widget.layouts.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option.charAt(0).toUpperCase() + option.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-      <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-        <legend
-          style={{
-            padding: "0 0.35rem",
-            color: "var(--admin-ink)",
-            fontSize: "0.86rem",
-            fontWeight: 800,
-          }}
-        >
-          Display fields
-        </legend>
-        <p style={subtleTextStyle}>
-          Required fields stay enabled; optional fields are included in the copied live URL.
-        </p>
-        <div style={{ display: "grid", gap: "0.45rem" }}>
-          {EMBED_DISPLAY_FIELDS.map((field) => {
-            const checked = field.required || displayFields.includes(field.id);
-            return (
-              <label
-                key={field.id}
-                style={{
-                  display: "flex",
-                  gap: "0.55rem",
-                  alignItems: "center",
-                  cursor: field.required ? "not-allowed" : "pointer",
-                  opacity: field.required ? 0.7 : 1,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  name={`embed-field-${field.id}`}
-                  value={field.id}
-                  checked={checked}
-                  disabled={field.required}
-                  onChange={(event) => {
-                    const next = displayFields.filter((value) => value !== field.id);
-                    onDisplayFields(event.target.checked ? [...next, field.id] : next);
-                  }}
+          <div className={workspaceStyles.field}>
+            <label htmlFor="embed-theme" className={workspaceStyles.label}>
+              Theme
+            </label>
+            <Select value={theme} onValueChange={(value) => onTheme(value as EmbedTheme)}>
+              <SelectTrigger id="embed-theme">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EMBED_THEMES.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className={workspaceStyles.colorGrid}>
+            <label htmlFor="embed-accent" className={workspaceStyles.field}>
+              <span className={workspaceStyles.label}>Accent color</span>
+              <Input
+                id="embed-accent"
+                aria-label="Accent color"
+                type="color"
+                value={accent}
+                onChange={(event) => onAccent(event.target.value)}
+              />
+            </label>
+            <label htmlFor="embed-background-color" className={workspaceStyles.field}>
+              <span className={workspaceStyles.label}>Background color</span>
+              <Input
+                id="embed-background-color"
+                aria-label="Background color"
+                type="color"
+                value={backgroundColor}
+                onChange={(event) => onBackgroundColor(event.target.value)}
+              />
+            </label>
+            <label htmlFor="embed-text-color" className={workspaceStyles.field}>
+              <span className={workspaceStyles.label}>Text color</span>
+              <Input
+                id="embed-text-color"
+                aria-label="Text color"
+                type="color"
+                value={textColor}
+                onChange={(event) => onTextColor(event.target.value)}
+              />
+            </label>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <Card className={`${workspaceStyles.setupPanel} ${workspaceStyles.advancedPanel}`}>
+          <CardHeader>
+            <div className={workspaceStyles.cardHeadingRow}>
+              <div>
+                <CardTitle>Content and developer options</CardTitle>
+                <CardDescription>
+                  Fine-tune visible fields, filters, host CSS, and the local preview.
+                </CardDescription>
+              </div>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" type="button">
+                  {advancedOpen ? "Collapse" : "Expand"}
+                </Button>
+              </CollapsibleTrigger>
+            </div>
+          </CardHeader>
+          <CollapsibleContent>
+            <CardContent className={workspaceStyles.sectionStack}>
+              <fieldset className={workspaceStyles.fieldset}>
+                <legend className={workspaceStyles.label}>Display fields</legend>
+                <p className={workspaceStyles.muted}>
+                  Required fields stay enabled; optional fields are included in copied links.
+                </p>
+                <div className={workspaceStyles.checkGrid}>
+                  {EMBED_DISPLAY_FIELDS.map((field) => {
+                    const checked = field.required || displayFields.includes(field.id);
+                    return (
+                      <div
+                        key={field.id}
+                        className={workspaceStyles.checkRow}
+                        data-disabled={field.required ? "true" : undefined}
+                      >
+                        <Checkbox
+                          id={`embed-field-${field.id}`}
+                          name={`embed-field-${field.id}`}
+                          checked={checked}
+                          disabled={field.required}
+                          onCheckedChange={(value) => {
+                            const next = displayFields.filter((item) => item !== field.id);
+                            onDisplayFields(value === true ? [...next, field.id] : next);
+                          }}
+                        />
+                        <Label htmlFor={`embed-field-${field.id}`}>
+                          {field.label}
+                          {field.required ? " (required)" : ""}
+                        </Label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
+              <div className={workspaceStyles.fieldGrid}>
+                <div className={workspaceStyles.field}>
+                  <label htmlFor="embed-track-filter" className={workspaceStyles.label}>
+                    Track filters
+                  </label>
+                  <Input
+                    id="embed-track-filter"
+                    aria-label="Track filters"
+                    value={trackIds.join(", ")}
+                    placeholder="All tracks"
+                    onChange={(event) => setListValue(event.target.value, onTracks)}
+                  />
+                </div>
+                <div className={workspaceStyles.field}>
+                  <label htmlFor="embed-status-filter" className={workspaceStyles.label}>
+                    Session status filters
+                  </label>
+                  <Input
+                    id="embed-status-filter"
+                    aria-label="Session status filters"
+                    value={statuses.join(", ")}
+                    placeholder="Approved"
+                    onChange={(event) => setListValue(event.target.value, onStatuses)}
+                  />
+                </div>
+              </div>
+
+              <label htmlFor="embed-custom-css" className={workspaceStyles.field}>
+                <span className={workspaceStyles.label}>Custom CSS for the host page</span>
+                <textarea
+                  id="embed-custom-css"
+                  aria-label="Custom CSS"
+                  value={customCss}
+                  onChange={(event) => onCustomCss(event.target.value)}
+                  placeholder="Optional CSS for your host page"
+                  rows={4}
+                  className={workspaceStyles.textarea}
                 />
-                <span style={fieldLabelStyle}>
-                  {field.label}
-                  {field.required ? " (required)" : ""}
-                </span>
               </label>
-            );
-          })}
-        </div>
-      </fieldset>
 
-      <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-        <legend
-          style={{
-            padding: "0 0.35rem",
-            color: "var(--admin-ink)",
-            fontSize: "0.86rem",
-            fontWeight: 800,
-          }}
-        >
-          Content filters
-        </legend>
-        <label style={fieldStyle} htmlFor="embed-track-filter">
-          <span style={fieldLabelStyle}>Track filters</span>
-          <input
-            id="embed-track-filter"
-            aria-label="Track filters"
-            style={inputStyle}
-            value={tracks.join(", ")}
-            placeholder="All tracks"
-            onChange={(event) => setListValue(event.target.value, onTracks)}
-          />
-        </label>
-        <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-status-filter">
-          <span style={fieldLabelStyle}>Session status filters</span>
-          <input
-            id="embed-status-filter"
-            aria-label="Session status filters"
-            style={inputStyle}
-            value={statuses.join(", ")}
-            placeholder="Approved"
-            onChange={(event) => setListValue(event.target.value, onStatuses)}
-          />
-        </label>
-        <p style={{ ...subtleTextStyle, marginTop: "0.7rem" }}>
-          Track and status filters are included in copied live URLs and remain within the public
-          event projection boundary.
-        </p>
-      </fieldset>
+              <Alert>
+                <AlertTitle>Boundary and cache rules</AlertTitle>
+                <AlertDescription>
+                  Safe theme, layout, output, field, filter, and color choices are encoded in copied
+                  URLs. Custom CSS stays in host markup and is never sent as executable URL content.
+                  Refresh only updates this local preview; no remote cache mutation is claimed.
+                </AlertDescription>
+              </Alert>
 
-      <fieldset style={{ ...compactCardStyle, margin: 0 }}>
-        <legend
-          style={{
-            padding: "0 0.35rem",
-            color: "var(--admin-ink)",
-            fontSize: "0.86rem",
-            fontWeight: 800,
-          }}
-        >
-          Cache and preview
-        </legend>
-        <button className={styles.secondaryButton} type="button" onClick={onRefresh}>
-          Refresh cache
-        </button>
-        <p role="status" aria-live="polite" style={{ ...subtleTextStyle, marginTop: "0.55rem" }}>
-          {cacheRefreshMessage ||
-            "Manual cache refresh is available for this preview; no remote cache mutation is claimed."}
-        </p>
-      </fieldset>
-    </>
+              <Button variant="outline" type="button" onClick={onRefresh}>
+                Refresh local preview
+              </Button>
+              <p role="status" aria-live="polite" className={workspaceStyles.muted}>
+                {cacheRefreshMessage ||
+                  "Manual cache refresh is available for this preview; no remote cache mutation is claimed."}
+              </p>
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
+    </div>
   );
 }
 
-function CodePanel({ settings }: Readonly<{ settings: EmbedSnippetSettings }>) {
+function PublicationStatus({
+  eventVersion,
+  publication,
+}: Readonly<{
+  eventVersion: number | null | undefined;
+  publication: EmbedPublicationMetadata;
+}>) {
+  const statusLabel =
+    publication.status === "served"
+      ? `Live · revision ${publication.servedRevision ?? "unknown"}`
+      : publication.status === "pending"
+        ? "Publishing update"
+        : publication.status === "failed"
+          ? "Update failed"
+          : publication.status === "loading"
+            ? "Checking publication"
+            : publication.status === "unavailable"
+              ? "Status unavailable"
+              : "Not published";
+  const servedRevision = publication.servedRevision;
+  const headline =
+    publication.status === "served"
+      ? "Published preview ready"
+      : publication.status === "pending"
+        ? "Your previous version remains live"
+        : publication.status === "failed" && servedRevision !== null
+          ? "Your previous version remains live"
+          : publication.status === "failed"
+            ? "Publishing failed"
+            : publication.status === "loading"
+              ? "Checking publishing status"
+              : publication.status === "unavailable"
+                ? "Publishing status unavailable"
+                : "Publish your agenda to preview";
+  const summary =
+    publication.status === "served"
+      ? "This preview matches the program visitors can currently see."
+      : publication.status === "pending"
+        ? `Revision ${servedRevision ?? "none"} stays live while revision ${publication.pendingRevision ?? "the next revision"} is prepared.`
+        : publication.status === "failed" && servedRevision !== null
+          ? `Visitors still see revision ${servedRevision}. Review the agenda before publishing again.`
+          : publication.status === "failed"
+            ? "The latest program update could not be published."
+            : publication.status === "loading"
+              ? "Eventloom is confirming which program revision is live."
+              : publication.status === "unavailable"
+                ? "Preview and sharing are paused until the live revision can be confirmed."
+                : "Publish the agenda to create a live preview and sharing links.";
+  return (
+    <Collapsible className={workspaceStyles.publicationSummary}>
+      <div className={workspaceStyles.publicationSummaryRow}>
+        <div
+          className={workspaceStyles.publicationSummaryCopy}
+          role="status"
+          aria-label="Publication status"
+        >
+          <Badge variant={publication.status === "served" ? "default" : "secondary"}>
+            {statusLabel}
+          </Badge>
+          <div>
+            <strong>{headline}</strong>
+            <p className={workspaceStyles.muted}>{summary}</p>
+          </div>
+        </div>
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" size="sm" type="button">
+            Publication details
+          </Button>
+        </CollapsibleTrigger>
+      </div>
+      <CollapsibleContent forceMount className={workspaceStyles.publicationDetailsContent}>
+        <div className={workspaceStyles.statusGrid}>
+          <div className={workspaceStyles.statusItem}>
+            <span className={workspaceStyles.statusLabel}>Draft event</span>
+            <strong>
+              {eventVersion === null || eventVersion === undefined
+                ? "Version not loaded"
+                : `Event version ${eventVersion}`}
+            </strong>
+            <span className={workspaceStyles.muted}>Private organizer record.</span>
+          </div>
+          <div className={workspaceStyles.statusItem}>
+            <span className={workspaceStyles.statusLabel}>Served program revision</span>
+            <strong>
+              {servedRevision === null ? "No served revision" : `Revision ${servedRevision}`}
+            </strong>
+            <span className={workspaceStyles.muted}>
+              {publication.status === "pending"
+                ? `Rebuild ${publication.pendingRevision ?? "pending"} is in progress; revision ${servedRevision ?? "none"} remains served.`
+                : publication.status === "failed"
+                  ? `${publication.failedReason ?? "The latest rebuild failed."} Previously served revision remains active.`
+                  : (publication.message ?? "Public outputs use this served program release.")}
+            </span>
+          </div>
+          <div className={workspaceStyles.statusItem}>
+            <span className={workspaceStyles.statusLabel}>Publication state</span>
+            <strong>{statusLabel}</strong>
+            <span className={workspaceStyles.muted}>
+              {publication.pendingRevision === null
+                ? "No pending rebuild."
+                : `Pending rebuild revision ${publication.pendingRevision}.`}
+            </span>
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function CodePanel({
+  settings,
+  publication,
+}: Readonly<{
+  settings: EmbedSnippetSettings;
+  publication: EmbedPublicationMetadata;
+}>) {
   const iframe = iframeSnippet(settings);
   const script = scriptSnippet(settings);
   const preview = embedCodePreview(settings);
   const format = outputFormatLabel(settings.outputFormat ?? "styled-html");
-  const codeAreaStyle: CSSProperties = {
-    ...inputStyle,
-    minHeight: "10rem",
-    resize: "vertical",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "0.72rem",
-    lineHeight: 1.45,
-  };
+  const revision = publication.servedRevision;
+  const publicUrl = publicEmbedUrl(settings);
+  const jsonUrl = publicAgendaJsonUrl(settings);
+  const calendarUrl = publicAgendaCalendarUrl(settings);
 
   return (
-    <section className={styles.panel} aria-labelledby="embed-code-heading">
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Distribution</p>
-          <h2 id="embed-code-heading" className={styles.panelTitle}>
-            Embed code
-          </h2>
-        </div>
-      </header>
-      <div className={styles.panelContent} style={{ display: "grid", gap: "1rem" }}>
-        <div style={compactCardStyle}>
+    <Card aria-labelledby="embed-code-heading">
+      <CardHeader>
+        <div className={workspaceStyles.cardHeadingRow}>
           <div>
-            <h3 style={{ margin: 0, fontSize: "0.92rem" }}>Live public URL</h3>
-            <p style={{ ...subtleTextStyle, marginTop: "0.25rem" }}>
-              Share this URL when a host cannot accept embed markup. It always reads the current
-              published event projection.
-            </p>
+            <p className={styles.panelEyebrow}>Sharing and exports</p>
+            <CardTitle id="embed-code-heading">Share or embed</CardTitle>
+            <CardDescription>
+              Copy the public link, calendar feeds, or website embed code for this widget.
+            </CardDescription>
           </div>
-          <input
-            aria-label="Live public embed URL"
-            readOnly
-            value={publicEmbedUrl(settings)}
-            style={inputStyle}
-          />
-          <CopyButton label="live URL" value={publicEmbedUrl(settings)} />
-        </div>
-
-        <div style={compactCardStyle}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: "0.92rem" }}>Code preview · {format}</h3>
-            <p style={{ ...subtleTextStyle, marginTop: "0.25rem" }}>
-              Preview uses the live published event projection URL with the selected safe options.
-              Custom CSS is kept out of executable URLs and must be applied by the host page.
+          {revision !== null ? <Badge variant="outline">Program revision {revision}</Badge> : null}
+          {revision !== null ? (
+            <p className={workspaceStyles.muted}>
+              Served program revision {revision} is used by every output.
             </p>
-          </div>
-          <textarea
-            aria-label="Embed code preview"
-            readOnly
-            value={preview}
-            rows={10}
-            style={codeAreaStyle}
-          />
-          <CopyButton label="code preview" value={preview} />
+          ) : null}
         </div>
-
-        <div style={compactCardStyle}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: "0.92rem" }}>Iframe snippet</h3>
-            <p style={{ ...subtleTextStyle, marginTop: "0.25rem" }}>
-              Paste this safe, responsive iframe into a page that accepts HTML.
-            </p>
-          </div>
-          <textarea
-            aria-label="Iframe embed snippet"
-            readOnly
-            value={iframe}
-            rows={7}
-            style={codeAreaStyle}
-          />
-          <CopyButton label="iframe code" value={iframe} />
-        </div>
-
-        {settings.widget.scriptView ? (
-          <div style={compactCardStyle}>
+      </CardHeader>
+      <CardContent className={workspaceStyles.sectionStack}>
+        <div className={workspaceStyles.shareBlock}>
+          <div className={workspaceStyles.cardHeadingRow}>
             <div>
-              <h3 style={{ margin: 0, fontSize: "0.92rem" }}>Script snippet</h3>
-              <p style={{ ...subtleTextStyle, marginTop: "0.25rem" }}>
-                Use the fixed Open Sessionboard loader when your host does not allow inline iframe
-                markup.
+              <h3 className={workspaceStyles.subheading}>Live public URL</h3>
+              <p className={workspaceStyles.muted}>
+                Anyone with this link can open the confirmed public revision.
               </p>
             </div>
-            <textarea
-              aria-label="Script embed snippet"
-              readOnly
-              value={script}
-              rows={7}
-              style={codeAreaStyle}
-            />
-            <CopyButton label="script code" value={script} />
+            <Badge variant="secondary">Revision {revision}</Badge>
           </div>
-        ) : (
-          <div
-            role="note"
-            style={{
-              ...compactCardStyle,
-              borderColor: "#f2d7a0",
-              background: "var(--admin-warning-soft)",
-            }}
-          >
-            <strong style={{ color: "var(--admin-ink)", fontSize: "0.82rem" }}>
-              Iframe mode is the supported option for this widget.
-            </strong>
-            <p style={subtleTextStyle}>
-              The fixed script loader currently supports the Agenda and Speaker Gallery widgets. Use
-              the generated iframe for this view instead of adding an arbitrary script source.
+          <Input aria-label="Live public embed URL" readOnly value={publicUrl} />
+          <div className={workspaceStyles.actionRow}>
+            <CopyButton label="public URL" value={publicUrl} />
+            <Button asChild variant="outline">
+              <a href={publicUrl} target="_blank" rel="noreferrer">
+                Open public view ↗
+              </a>
+            </Button>
+          </div>
+        </div>
+
+        <div className={workspaceStyles.codeBlock}>
+          <div>
+            <h3 className={workspaceStyles.subheading}>JSON feed</h3>
+            <p className={workspaceStyles.muted}>
+              Machine-readable published agenda using this configuration and program revision.
             </p>
           </div>
-        )}
-      </div>
-    </section>
+          <Input aria-label="JSON feed URL" readOnly value={jsonUrl} />
+          <CopyButton label="JSON feed URL" value={jsonUrl} />
+        </div>
+
+        <div className={workspaceStyles.codeBlock}>
+          <div>
+            <h3 className={workspaceStyles.subheading}>iCal feed</h3>
+            <p className={workspaceStyles.muted}>
+              Calendar output using this configuration and program revision.
+            </p>
+          </div>
+          <Input aria-label="iCal feed URL" readOnly value={calendarUrl} />
+          <CopyButton label="iCal feed URL" value={calendarUrl} />
+        </div>
+
+        <Collapsible>
+          <div className={workspaceStyles.developerDisclosure}>
+            <div>
+              <h3 className={workspaceStyles.subheading}>Developer embed code</h3>
+              <p className={workspaceStyles.muted}>
+                Iframe, script, and {format} output for websites that accept embed markup.
+              </p>
+            </div>
+            <CollapsibleTrigger asChild>
+              <Button variant="outline">Show code</Button>
+            </CollapsibleTrigger>
+          </div>
+          <CollapsibleContent forceMount className={workspaceStyles.developerContent}>
+            <div className={workspaceStyles.codeBlock}>
+              <div>
+                <h3 className={workspaceStyles.subheading}>Code preview · {format}</h3>
+                <p className={workspaceStyles.muted}>
+                  Safe options are encoded in the public URL; no private fields or executable custom
+                  CSS are copied.
+                </p>
+              </div>
+              <ScrollArea className={workspaceStyles.codeScroll}>
+                <textarea
+                  aria-label="Embed code preview"
+                  readOnly
+                  value={preview}
+                  rows={8}
+                  className={workspaceStyles.codeArea}
+                />
+              </ScrollArea>
+              <CopyButton label="code preview" value={preview} />
+            </div>
+
+            <div className={workspaceStyles.codeBlock}>
+              <div>
+                <h3 className={workspaceStyles.subheading}>Iframe snippet</h3>
+                <p className={workspaceStyles.muted}>
+                  Paste this sandboxed, responsive iframe into a page that accepts HTML.
+                </p>
+              </div>
+              <textarea
+                aria-label="Iframe embed snippet"
+                readOnly
+                value={iframe}
+                rows={6}
+                className={workspaceStyles.codeArea}
+              />
+              <CopyButton label="iframe code" value={iframe} />
+            </div>
+
+            {settings.widget.scriptView ? (
+              <div className={workspaceStyles.codeBlock}>
+                <div>
+                  <h3 className={workspaceStyles.subheading}>Script snippet</h3>
+                  <p className={workspaceStyles.muted}>
+                    Use the fixed loader for supported Agenda and Speaker Gallery views.
+                  </p>
+                </div>
+                <textarea
+                  aria-label="Script embed snippet"
+                  readOnly
+                  value={script}
+                  rows={6}
+                  className={workspaceStyles.codeArea}
+                />
+                <CopyButton label="script code" value={script} />
+              </div>
+            ) : (
+              <Alert>
+                <AlertTitle>Iframe mode is the supported option for this widget.</AlertTitle>
+                <AlertDescription>
+                  The script loader supports Agenda and Speaker Gallery. Use the generated iframe
+                  for this view.
+                </AlertDescription>
+              </Alert>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+      </CardContent>
+    </Card>
   );
 }
 
-function createEmbedConfigurationId(): string {
-  const browserCrypto = typeof globalThis.crypto !== "undefined" ? globalThis.crypto : undefined;
-  if (browserCrypto?.randomUUID) return browserCrypto.randomUUID();
-  return `embed-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+export type EmbedWorkspaceEventSnapshot = Pick<
+  EmbedEventRecord,
+  "id" | "organizationId" | "slug" | "name" | "version" | "embedConfigurations"
+>;
+
+export interface EmbedWorkspaceCacheSnapshot {
+  readonly event: EmbedWorkspaceEventSnapshot;
+  readonly publication?: EmbedPublicationMetadata;
 }
 
-function eventEmbedConfigurations(
-  configurations: readonly OrganizerEventEmbedConfiguration[] | undefined,
-): readonly EmbedConfiguration[] {
-  if (!configurations) return [];
-  return configurations
-    .map((configuration) => normalizeEmbedConfiguration(configuration))
-    .filter((configuration): configuration is EmbedConfiguration => configuration !== null);
+type EmbedWorkspaceLoadState =
+  | { readonly status: "loading"; readonly scopeKey: string }
+  | {
+      readonly status: "loaded";
+      readonly scopeKey: string;
+      readonly event: EmbedWorkspaceEventSnapshot;
+      readonly eventSlug: string;
+      readonly eventName: string;
+    }
+  | { readonly status: "error"; readonly scopeKey: string; readonly message: string };
+type EmbedWorkspaceLoadedState = Extract<EmbedWorkspaceLoadState, { readonly status: "loaded" }>;
+
+interface EmbedWorkspaceCacheScope {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly key: string;
+  readonly tags: readonly string[];
+  readonly invalidationTags: readonly string[];
 }
 
-function builderConfiguration(
-  id: string,
-  name: string,
-  values: Readonly<{
-    widgetId: EmbedWidgetId;
-    enabled: boolean;
-    theme: EmbedTheme;
-    outputFormat: EmbedOutputFormat;
-    layout: EmbedLayout;
-    accent: EmbedAccent;
-    backgroundColor: string;
-    textColor: string;
-    customCss: string;
-    displayFields: readonly EmbedFieldId[];
-    tracks: readonly string[];
-    statuses: readonly string[];
-  }>,
-): EmbedConfiguration {
+export function embedWorkspaceCacheKey(organizationId: string, eventId: string): string {
+  return `embeds:workspace:${organizationId.trim()}:${eventId.trim()}`;
+}
+
+export function embedWorkspaceCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `embeds:${normalizedEventId}`,
+  ];
+}
+
+function embedWorkspaceCacheScope(
+  organizationId: string,
+  eventId: string,
+): EmbedWorkspaceCacheScope | null {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  if (!normalizedOrganizationId || !normalizedEventId) return null;
+  const tags = embedWorkspaceCacheTags(normalizedOrganizationId, normalizedEventId);
   return {
-    id,
-    name,
-    widgetId: values.widgetId,
-    enabled: values.enabled,
-    theme: values.theme,
-    outputFormat: values.outputFormat,
-    layout: values.layout,
-    accent: values.accent,
-    backgroundColor: values.backgroundColor,
-    textColor: values.textColor,
-    customCss: values.customCss,
-    displayFields: values.displayFields,
-    tracks: values.tracks,
-    statuses: values.statuses,
+    organizationId: normalizedOrganizationId,
+    eventId: normalizedEventId,
+    key: embedWorkspaceCacheKey(normalizedOrganizationId, normalizedEventId),
+    tags,
+    invalidationTags: tags.slice(1),
   };
 }
+
+function embedWorkspaceEventSnapshot(event: EmbedEventRecord): EmbedWorkspaceEventSnapshot {
+  return {
+    id: event.id,
+    organizationId: event.organizationId,
+    slug: event.slug,
+    name: event.name,
+    version: event.version,
+    embedConfigurations: eventEmbedConfigurations(event.embedConfigurations),
+  };
+}
+
+function embedWorkspaceLoadedState(
+  scopeKey: string,
+  snapshot: EmbedWorkspaceCacheSnapshot,
+): EmbedWorkspaceLoadedState | null {
+  const eventSlug = normalizeEmbedSlug(snapshot.event.slug);
+  if (
+    snapshot.event.id.trim().length === 0 ||
+    snapshot.event.organizationId.trim().length === 0 ||
+    eventSlug === null
+  ) {
+    return null;
+  }
+  return {
+    status: "loaded",
+    scopeKey,
+    event: snapshot.event,
+    eventSlug,
+    eventName: snapshot.event.name,
+  };
+}
+
+function cachedEmbedWorkspaceSnapshot(
+  cache: NavigationDataCache | null,
+  scope: EmbedWorkspaceCacheScope | null,
+): EmbedWorkspaceCacheSnapshot | undefined {
+  if (cache === null || scope === null) return undefined;
+  const snapshot = cache.peek<EmbedWorkspaceCacheSnapshot>(scope.key);
+  if (
+    snapshot === undefined ||
+    snapshot.event.id.trim() !== scope.eventId ||
+    snapshot.event.organizationId.trim() !== scope.organizationId ||
+    embedWorkspaceLoadedState(scope.key, snapshot) === null
+  ) {
+    return undefined;
+  }
+  return snapshot;
+}
+function agendaValidationHref(organizationId: string, eventId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`;
+}
+
+function MissingPublicProjection({
+  organizationId,
+  eventId,
+  publication,
+  settingsAvailable = true,
+}: Readonly<{
+  organizationId: string;
+  eventId: string;
+  publication: EmbedPublicationMetadata;
+  settingsAvailable?: boolean;
+}>) {
+  const checking = publication.status === "loading";
+  const needsConfiguration =
+    (publication.status === "served" ||
+      publication.status === "pending" ||
+      publication.status === "failed") &&
+    !settingsAvailable;
+  const title = checking
+    ? "Checking publishing status"
+    : needsConfiguration
+      ? "Save and enable this widget to preview it"
+      : publication.status === "failed"
+        ? "The latest update could not be published"
+        : publication.status === "pending"
+          ? "Your previous version is still live"
+          : publication.status === "unavailable"
+            ? "Couldn’t check publishing status"
+            : publication.status === "none"
+              ? "Publish your agenda to preview this widget"
+              : "Preview is not ready yet";
+  const description = needsConfiguration
+    ? "The public program is ready. Save this configuration and keep it enabled to generate its verified preview and embed code."
+    : publication.status === "none"
+      ? "Embeds use your published program, not the organizer draft. Review the agenda and publish it to create the public preview."
+      : checking
+        ? "Eventloom is confirming which program revision is live."
+        : (publication.message ??
+          publication.failedReason ??
+          "Preview and sharing remain unavailable until the live program revision is confirmed.");
+  const exceptional =
+    !needsConfiguration &&
+    (publication.status === "failed" || publication.status === "unavailable");
+
+  if (exceptional) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>{title}</AlertTitle>
+        <AlertDescription>{description}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  return (
+    <Empty className={workspaceStyles.previewEmpty}>
+      <EmptyHeader>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{description}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        {!checking && !needsConfiguration ? (
+          <Button asChild size="sm">
+            <Link href={agendaValidationHref(organizationId, eventId)}>
+              Review and publish agenda
+            </Link>
+          </Button>
+        ) : null}
+        <p className={workspaceStyles.muted}>
+          Sharing links and embed code will appear here when the widget is ready.
+        </p>
+      </EmptyContent>
+    </Empty>
+  );
+}
+
 export function EmbedWorkspaceView({
   organizationId,
   eventId,
@@ -1210,15 +1062,29 @@ export function EmbedWorkspaceView({
   publicOrigin,
   eventName,
   eventVersion,
+  expectedPublishedRevision: _expectedPublishedRevision = null,
   initialConfigurations,
   api,
+  publication,
+  publicationFresh = true,
   loading = false,
   errorMessage = null,
+  onRetry,
+  onEmbedMutation,
 }: EmbedWorkspaceViewProps) {
-  const initialServerConfigurations = eventEmbedConfigurations(initialConfigurations);
+  const scopeKey = workspaceScopeKey(organizationId, eventId);
+  const navigationCache = useNavigationDataCache();
+  const cacheScope = useMemo(
+    () => embedWorkspaceCacheScope(organizationId, eventId),
+    [eventId, organizationId],
+  );
+  const serverConfigurationList = useMemo(
+    () => eventEmbedConfigurations(initialConfigurations),
+    [initialConfigurations],
+  );
   const initialConfiguration =
-    initialServerConfigurations.find((configuration) => configuration.enabled) ??
-    initialServerConfigurations[0];
+    serverConfigurationList.find((configuration) => configuration.enabled) ??
+    serverConfigurationList[0];
   const initialWidget = widgetFor(initialConfiguration?.widgetId ?? "sessions");
   const initialLayout =
     initialConfiguration && initialWidget.layouts.includes(initialConfiguration.layout)
@@ -1243,15 +1109,14 @@ export function EmbedWorkspaceView({
   const [displayFields, setDisplayFields] = useState<readonly EmbedFieldId[]>(
     initialConfiguration?.displayFields ?? DEFAULT_EMBED_DISPLAY_FIELDS,
   );
-  const [tracks, setTracks] = useState<readonly string[]>(initialConfiguration?.tracks ?? []);
+  const [trackIds, setTrackIds] = useState<readonly string[]>(initialConfiguration?.trackIds ?? []);
   const [statuses, setStatuses] = useState<readonly string[]>(
     initialConfiguration?.statuses ?? ["Approved"],
   );
   const [cacheRefreshMessage, setCacheRefreshMessage] = useState("");
   const [previewNonce, setPreviewNonce] = useState(0);
-  const [configurations, setConfigurations] = useState<readonly EmbedConfiguration[]>(
-    initialServerConfigurations,
-  );
+  const [configurations, setConfigurations] =
+    useState<readonly EmbedConfiguration[]>(serverConfigurationList);
   const [selectedConfigurationId, setSelectedConfigurationId] = useState<string | null>(
     initialConfiguration?.id ?? null,
   );
@@ -1259,6 +1124,17 @@ export function EmbedWorkspaceView({
   const [configurationStatusMessage, setConfigurationStatusMessage] = useState("");
   const [eventVersionState, setEventVersionState] = useState<number | null>(eventVersion ?? null);
   const [persistenceBusy, setPersistenceBusy] = useState(false);
+  const [snapshotScopeKey, setSnapshotScopeKey] = useState<string | null>(
+    initialConfigurations === undefined ? null : scopeKey,
+  );
+  const activeScopeRef = useRef(scopeKey);
+  const installedConfigurationScopeRef = useRef<string | null>(
+    initialConfigurations === undefined ? null : scopeKey,
+  );
+  const currentScopeRef = useRef(scopeKey);
+  useLayoutEffect(() => {
+    currentScopeRef.current = scopeKey;
+  }, [scopeKey]);
 
   const resetBuilder = useCallback((message = "") => {
     setSelectedConfigurationId(null);
@@ -1272,7 +1148,7 @@ export function EmbedWorkspaceView({
     setTextColor("#20232b");
     setCustomCss("");
     setDisplayFields(DEFAULT_EMBED_DISPLAY_FIELDS);
-    setTracks([]);
+    setTrackIds([]);
     setStatuses(["Approved"]);
     setConfigurationStatusMessage(message);
   }, []);
@@ -1294,17 +1170,31 @@ export function EmbedWorkspaceView({
     setTextColor(configuration.textColor);
     setCustomCss(configuration.customCss);
     setDisplayFields(configuration.displayFields);
-    setTracks(configuration.tracks);
+    setTrackIds(configuration.trackIds);
     setStatuses(configuration.statuses);
   }, []);
 
-  const serverConfigurationList = useMemo(
-    () => eventEmbedConfigurations(initialConfigurations),
-    [initialConfigurations],
-  );
-
   useEffect(() => {
-    if (initialConfigurations === undefined) return;
+    if (activeScopeRef.current !== scopeKey) {
+      activeScopeRef.current = scopeKey;
+      installedConfigurationScopeRef.current = null;
+      setConfigurations(EMPTY_EMBED_CONFIGURATIONS);
+      setEventVersionState(null);
+      setPersistenceBusy(false);
+      setPreviewNonce(0);
+      setCacheRefreshMessage("");
+      setSnapshotScopeKey(null);
+      resetBuilder();
+      return;
+    }
+    if (
+      initialConfigurations === undefined ||
+      installedConfigurationScopeRef.current === scopeKey
+    ) {
+      return;
+    }
+
+    installedConfigurationScopeRef.current = scopeKey;
     setConfigurations(serverConfigurationList);
     setEventVersionState(eventVersion ?? null);
     const activeConfiguration =
@@ -1316,28 +1206,41 @@ export function EmbedWorkspaceView({
     } else {
       resetBuilder();
     }
+    setSnapshotScopeKey(scopeKey);
   }, [
     applyConfiguration,
     eventVersion,
     initialConfigurations,
     resetBuilder,
+    scopeKey,
     serverConfigurationList,
   ]);
 
   const persistConfigurations = useCallback(
     async (nextConfigurations: readonly EmbedConfiguration[]): Promise<boolean> => {
-      if (!api || eventVersionState === null) {
+      const requestScopeKey = scopeKey;
+      const expectedVersion = eventVersionState;
+      if (
+        !api ||
+        expectedVersion === null ||
+        snapshotScopeKey !== requestScopeKey ||
+        loading ||
+        errorMessage
+      ) {
         setConfigurationStatusMessage("Event configuration transport is unavailable.");
         return false;
       }
+      navigationCache?.invalidate(cacheScope?.invalidationTags ?? []);
+      onEmbedMutation?.();
 
       setPersistenceBusy(true);
       setConfigurationStatusMessage("Saving event configuration…");
       try {
         const updatedEvent = await api.updateEvent(eventId, {
-          expectedVersion: eventVersionState,
+          expectedVersion,
           embedConfigurations: nextConfigurations,
         });
+        if (currentScopeRef.current !== requestScopeKey) return false;
         if (
           updatedEvent.organizationId !== organizationId ||
           updatedEvent.id !== eventId ||
@@ -1345,17 +1248,43 @@ export function EmbedWorkspaceView({
         ) {
           throw new Error("The event configuration response does not match this event context.");
         }
-        setConfigurations(eventEmbedConfigurations(updatedEvent.embedConfigurations));
+        const authoritativeConfigurations = eventEmbedConfigurations(
+          updatedEvent.embedConfigurations,
+        );
+        installedConfigurationScopeRef.current = requestScopeKey;
+        setConfigurations(authoritativeConfigurations);
         setEventVersionState(updatedEvent.version);
+        if (navigationCache !== null && cacheScope !== null) {
+          navigationCache.write(
+            cacheScope.key,
+            { event: embedWorkspaceEventSnapshot(updatedEvent) },
+            cacheScope.tags,
+          );
+        }
+        setSnapshotScopeKey(requestScopeKey);
         return true;
       } catch (error) {
-        setConfigurationStatusMessage(messageFrom(error));
+        if (currentScopeRef.current === requestScopeKey) {
+          setConfigurationStatusMessage(messageFrom(error));
+        }
         return false;
       } finally {
         setPersistenceBusy(false);
       }
     },
-    [api, eventId, eventVersionState, organizationId],
+    [
+      api,
+      cacheScope,
+      errorMessage,
+      eventId,
+      eventVersionState,
+      loading,
+      organizationId,
+      navigationCache,
+      onEmbedMutation,
+      scopeKey,
+      snapshotScopeKey,
+    ],
   );
 
   const startNewConfiguration = useCallback(() => {
@@ -1401,8 +1330,9 @@ export function EmbedWorkspaceView({
       textColor,
       customCss,
       displayFields,
-      tracks,
+      trackIds,
       statuses,
+      revision: existing?.revision ?? null,
     });
     const nextConfigurations = existing
       ? configurations.map((configuration) =>
@@ -1430,28 +1360,9 @@ export function EmbedWorkspaceView({
     statuses,
     textColor,
     theme,
-    tracks,
+    trackIds,
     widgetId,
   ]);
-
-  const deleteConfiguration = useCallback(async () => {
-    if (!selectedConfigurationId) {
-      setConfigurationStatusMessage("Select a saved configuration before deleting.");
-      return;
-    }
-    const configuration = configurations.find(
-      (candidate) => candidate.id === selectedConfigurationId,
-    );
-    if (!configuration) {
-      resetBuilder("That saved configuration is no longer available.");
-      return;
-    }
-    const nextConfigurations = configurations.filter(
-      (candidate) => candidate.id !== selectedConfigurationId,
-    );
-    if (!(await persistConfigurations(nextConfigurations))) return;
-    resetBuilder(`Deleted "${configuration.name}" successfully.`);
-  }, [configurations, persistConfigurations, resetBuilder, selectedConfigurationId]);
 
   const toggleConfiguration = useCallback(
     async (id: string, enabled: boolean) => {
@@ -1476,8 +1387,15 @@ export function EmbedWorkspaceView({
   const widget = widgetFor(widgetId);
   const origin = configuredPublicOrigin(publicOrigin);
   const normalizedSlug = normalizeEmbedSlug(eventSlug ?? undefined);
+  const selectedConfiguration =
+    snapshotScopeKey === scopeKey && selectedConfigurationId !== null
+      ? (configurations.find((configuration) => configuration.id === selectedConfigurationId) ??
+        null)
+      : null;
   const settings = useMemo<EmbedSnippetSettings | null>(() => {
-    if (!normalizedSlug || !origin) return null;
+    if (loading || errorMessage || snapshotScopeKey !== scopeKey || !normalizedSlug || !origin) {
+      return null;
+    }
     return {
       widget,
       eventSlug: normalizedSlug,
@@ -1490,7 +1408,7 @@ export function EmbedWorkspaceView({
       textColor,
       customCss,
       displayFields,
-      tracks,
+      trackIds,
       statuses,
     };
   }, [
@@ -1498,128 +1416,142 @@ export function EmbedWorkspaceView({
     backgroundColor,
     customCss,
     displayFields,
+    errorMessage,
     layout,
+    loading,
     normalizedSlug,
     origin,
     outputFormat,
+    scopeKey,
+    snapshotScopeKey,
     statuses,
     textColor,
     theme,
-    tracks,
+    trackIds,
     widget,
   ]);
-  const previewUrl = settings ? publicEmbedUrl(settings) : "";
+  const publicationIsChecking = loading || !publicationFresh;
+  const authoritativePublication =
+    snapshotScopeKey === scopeKey && !loading && !errorMessage && publicationFresh
+      ? publication
+      : undefined;
+  const publicationState: EmbedPublicationMetadata = authoritativePublication ?? {
+    state: null,
+    status: publicationIsChecking ? "loading" : "none",
+    servedRevision: null,
+    pendingRevision: null,
+    failedReason: null,
+    agendaDraftVersion: null,
+    publicRevision: null,
+    previewAvailability: publicationIsChecking ? "checking" : "unavailable",
+    message: publicationIsChecking
+      ? "Loading the current organizer publication state."
+      : "No publication has been confirmed for this event.",
+  };
+  const settingsWithIdentity =
+    settings !== null &&
+    selectedConfiguration !== null &&
+    selectedConfiguration.revision !== null &&
+    publicationState.servedRevision !== null
+      ? {
+          ...settings,
+          configurationId: selectedConfiguration.id,
+          configurationRevision: selectedConfiguration.revision,
+          programRevision: publicationState.servedRevision,
+        }
+      : null;
+  const canDistribute = settingsWithIdentity !== null && selectedConfiguration?.enabled === true;
+  const previewUrl = canDistribute ? publicEmbedUrl(settingsWithIdentity) : "";
   const refreshPreview = () => {
     setPreviewNonce((value) => value + 1);
     setCacheRefreshMessage(
       `Local preview refreshed at ${new Date().toLocaleTimeString()}. No remote cache was changed.`,
     );
   };
-  const persistenceReady = api !== undefined && eventVersionState !== null && !persistenceBusy;
+  const persistenceReady =
+    api !== undefined &&
+    eventVersionState !== null &&
+    snapshotScopeKey === scopeKey &&
+    !loading &&
+    !errorMessage &&
+    !persistenceBusy;
+  const scopedConfigurations =
+    snapshotScopeKey === scopeKey && !loading && !errorMessage
+      ? configurations
+      : EMPTY_EMBED_CONFIGURATIONS;
+  const scopedEventVersion =
+    snapshotScopeKey === scopeKey && !loading && !errorMessage ? eventVersionState : null;
 
   return (
-    <main id="embeds-content" tabIndex={-1}>
+    <main id="embeds-content" tabIndex={-1} className={workspaceStyles.root}>
       <header className={styles.pageHeader}>
         <div className={styles.pageHeaderCopy}>
           <p className={styles.eyebrow}>Public distribution</p>
           <h1 className={styles.pageTitle}>Embed widgets</h1>
           <p className={styles.pageDescription}>
-            Generate an accessible public widget for your event without exposing organizer-only data
-            or adding custom JavaScript.
-          </p>
-          <p style={{ ...subtleTextStyle, marginTop: "0.7rem" }}>
-            Organization {organizationId} · Event {eventId}
-            {eventName ? ` · ${eventName}` : ""}
+            Create and preview public widgets from {eventName ? `${eventName}’s` : "this event’s"}{" "}
+            latest published program.
           </p>
         </div>
       </header>
 
-      <div className={styles.callout} style={{ marginBottom: "1.25rem" }}>
-        <span className={styles.calloutIcon} aria-hidden="true">
-          ↗
-        </span>
-        <div>
-          <strong>Public and self-updating</strong>
-          <p>
-            These widgets read the current published event projection and refresh roughly every 60
-            minutes. The manual refresh control updates this local preview only because no remote
-            cache mutation endpoint is available. Draft sessions, reviewer notes, speaker contact
-            details, private files, and other organizer-only fields never cross this boundary.
-          </p>
-        </div>
-      </div>
+      <Alert className={workspaceStyles.boundaryAlert}>
+        <AlertTitle>Published data only</AlertTitle>
+        <AlertDescription>
+          Embeds include the published agenda and speaker information you choose. Draft sessions,
+          reviews, contact details, and private files stay private.
+        </AlertDescription>
+      </Alert>
 
       {loading ? (
-        <div role="status" className={styles.callout}>
-          <div>
-            <strong>Loading event slug</strong>
-            <p>
-              Embed code is generated only after the organizer event record confirms the public
-              slug.
-            </p>
-          </div>
-        </div>
+        <Alert>
+          <AlertTitle>Loading event context</AlertTitle>
+          <AlertDescription>
+            Embed configuration and publication metadata are loaded from the organizer event record
+            and public projection.
+          </AlertDescription>
+        </Alert>
       ) : null}
       {errorMessage ? (
-        <div
-          role="alert"
-          className={styles.callout}
-          style={{
-            borderColor: "#f2c9c7",
-            background: "var(--admin-danger-soft)",
-            marginBottom: "1.25rem",
-          }}
-        >
-          <div>
-            <strong>Embed generation unavailable</strong>
-            <p>{errorMessage}</p>
-          </div>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Embed workspace unavailable</AlertTitle>
+          <AlertDescription>{errorMessage}</AlertDescription>
+          {onRetry !== undefined ? (
+            <Button type="button" variant="outline" onClick={onRetry}>
+              Retry loading event
+            </Button>
+          ) : null}
+        </Alert>
       ) : null}
-
       {!loading && !errorMessage && !normalizedSlug ? (
-        <div
-          role="alert"
-          className={styles.callout}
-          style={{
-            borderColor: "#f2c9c7",
-            background: "var(--admin-danger-soft)",
-            marginBottom: "1.25rem",
-          }}
-        >
-          <div>
-            <strong>No public event slug</strong>
-            <p>
-              Publish or configure an event slug before generating public embed code. The event ID
-              is not used as a guessed public URL.
-            </p>
-          </div>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>No public event slug</AlertTitle>
+          <AlertDescription>
+            Configure a public event slug before generating a public URL. The event ID is never used
+            as a guessed public path.
+          </AlertDescription>
+        </Alert>
       ) : null}
       {!loading && !errorMessage && normalizedSlug && !origin ? (
-        <div
-          role="alert"
-          className={styles.callout}
-          style={{
-            borderColor: "#f2c9c7",
-            background: "var(--admin-danger-soft)",
-            marginBottom: "1.25rem",
-          }}
-        >
-          <div>
-            <strong>Public app URL is not configured</strong>
-            <p>Set NEXT_PUBLIC_APP_URL to the approved web origin before copying embed code.</p>
-          </div>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Public app URL is not configured</AlertTitle>
+          <AlertDescription>
+            Set NEXT_PUBLIC_APP_URL to the approved web origin before copying embed code.
+          </AlertDescription>
+        </Alert>
       ) : null}
 
-      <div
-        className={styles.dashboardGrid}
-        style={{ gridTemplateColumns: "minmax(14rem, 0.38fr) minmax(0, 1fr)" }}
-      >
-        <div style={{ display: "grid", gap: "1rem", alignSelf: "start" }}>
+      <Card aria-label="Widget setup">
+        <CardHeader>
+          <CardTitle>Widget setup</CardTitle>
+          <CardDescription>
+            Choose a saved configuration, adjust its public appearance, and save when you are ready
+            to preview it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className={workspaceStyles.setupGrid}>
           <EmbedConfigurationLibrary
-            configurations={configurations}
+            configurations={scopedConfigurations}
             selectedConfigurationId={selectedConfigurationId}
             configurationName={configurationName}
             statusMessage={configurationStatusMessage}
@@ -1628,10 +1560,8 @@ export function EmbedWorkspaceView({
             onSelectConfiguration={selectConfiguration}
             onNewConfiguration={startNewConfiguration}
             onSaveConfiguration={saveConfiguration}
-            onDeleteConfiguration={deleteConfiguration}
             onToggleConfiguration={toggleConfiguration}
           />
-          <WidgetChooser selected={widgetId} onChange={changeWidget} />
           <EmbedControls
             widget={widget}
             theme={theme}
@@ -1642,67 +1572,87 @@ export function EmbedWorkspaceView({
             textColor={textColor}
             customCss={customCss}
             displayFields={displayFields}
-            tracks={tracks}
+            trackIds={trackIds}
             statuses={statuses}
             cacheRefreshMessage={cacheRefreshMessage}
+            cacheRefreshBusy={false}
+            cacheRefreshError={false}
             onTheme={setTheme}
             onOutputFormat={setOutputFormat}
-            onAccent={setAccent}
             onLayout={setLayout}
+            onAccent={setAccent}
             onBackgroundColor={setBackgroundColor}
             onTextColor={setTextColor}
             onCustomCss={setCustomCss}
             onDisplayFields={setDisplayFields}
-            onTracks={setTracks}
+            onTracks={setTrackIds}
             onStatuses={setStatuses}
             onRefresh={refreshPreview}
           />
-        </div>
+        </CardContent>
+      </Card>
 
-        <div style={{ display: "grid", gap: "1.5rem" }}>
-          <section className={styles.panel} aria-labelledby="embed-preview-heading">
-            <header className={styles.panelHeader}>
-              <div className={styles.panelHeading}>
-                <p className={styles.panelEyebrow}>Preview</p>
-                <h2 id="embed-preview-heading" className={styles.panelTitle}>
-                  Live public preview
-                </h2>
+      <section className={workspaceStyles.widgetStudio} aria-label="Widget preview studio">
+        <Card aria-labelledby="embed-preview-heading">
+          <CardHeader className={workspaceStyles.previewHeader}>
+            <div className={workspaceStyles.cardHeadingRow}>
+              <div>
+                <p className={styles.panelEyebrow}>Public widget preview</p>
+                <CardTitle id="embed-preview-heading">{widget.label}</CardTitle>
+                <CardDescription>
+                  Select a widget below to use the full page width for its verified public preview.
+                </CardDescription>
               </div>
-              {settings ? (
-                <a className={styles.panelLink} href={previewUrl} target="_blank" rel="noreferrer">
-                  Open public view ↗
-                </a>
-              ) : null}
-            </header>
-            <div className={styles.panelContent}>
-              {settings ? (
-                <iframe
-                  key={`${previewUrl}-${previewNonce}`}
-                  src={previewUrl}
-                  title={`Live preview: ${widget.label}`}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  sandbox="allow-scripts"
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    minHeight: widget.minHeight,
-                    border: "1px solid var(--admin-border)",
-                    borderRadius: "var(--admin-radius-sm)",
-                    background: "var(--admin-surface)",
-                  }}
-                />
-              ) : (
-                <p style={subtleTextStyle}>
-                  A preview appears after a valid public event slug and approved public app URL are
-                  available.
-                </p>
-              )}
+              <fieldset className={workspaceStyles.previewActions} aria-label="Preview actions">
+                <CopyButton label="public URL" value={previewUrl} />
+                {canDistribute && previewUrl ? (
+                  <>
+                    <Button asChild variant="outline">
+                      <a href={previewUrl} target="_blank" rel="noreferrer">
+                        Open public view ↗
+                      </a>
+                    </Button>
+                    <Button asChild variant="secondary">
+                      <a href="#embed-code-heading">Get embed code</a>
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="secondary" type="button" disabled>
+                    Get embed code
+                  </Button>
+                )}
+              </fieldset>
             </div>
-          </section>
-          {settings ? <CodePanel settings={settings} /> : null}
-        </div>
-      </div>
+
+            <PublicationStatus eventVersion={scopedEventVersion} publication={publicationState} />
+            <WidgetChooser selected={widgetId} onChange={changeWidget} />
+          </CardHeader>
+          <CardContent>
+            {canDistribute && settingsWithIdentity ? (
+              <iframe
+                key={`${previewUrl}-${previewNonce}`}
+                src={previewUrl}
+                title={`Live preview: ${widget.label}`}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                sandbox={iframeSandbox(widget)}
+                className={workspaceStyles.previewFrame}
+              />
+            ) : (
+              <MissingPublicProjection
+                organizationId={organizationId}
+                eventId={eventId}
+                publication={publicationState}
+                settingsAvailable={canDistribute}
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        {canDistribute && settings ? (
+          <CodePanel settings={settings} publication={publicationState} />
+        ) : null}
+      </section>
     </main>
   );
 }
@@ -1711,104 +1661,288 @@ export interface EmbedWorkspaceProps {
   readonly organizationId: string;
   readonly eventId: string;
   readonly eventSlug?: string;
-  readonly initialEvent?: Pick<OrganizerEventRecord, "id" | "organizationId" | "slug" | "name">;
-  readonly api?: Pick<OrganizerEventsApi, "getEvent" | "updateEvent">;
+  readonly initialEvent?: Pick<EmbedEventRecord, "id" | "organizationId" | "slug" | "name">;
+  readonly api?: Pick<EmbedWorkspaceApi, "getEvent" | "updateEvent" | "getPublication">;
   readonly publicOrigin?: string;
-}
-
-type EmbedLoadState =
-  | { readonly status: "loading" }
-  | {
-      readonly status: "loaded";
-      readonly event: OrganizerEventRecord;
-      readonly eventSlug: string;
-      readonly eventName: string;
-    }
-  | { readonly status: "error"; readonly message: string };
-
-function messageFrom(error: unknown): string {
-  return error instanceof Error ? error.message : "The organizer event could not be loaded.";
 }
 
 export function EmbedWorkspace({
   organizationId,
-  eventId,
-  eventSlug,
-  initialEvent,
+  eventId: fallbackEventId,
   api: providedApi,
   publicOrigin,
 }: EmbedWorkspaceProps) {
-  const suppliedSlug = normalizeEmbedSlug(initialEvent?.slug ?? eventSlug);
-  const [state, setState] = useState<EmbedLoadState>({ status: "loading" });
+  const eventId = useOrganizerEventId(fallbackEventId);
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  const scopeKey = workspaceScopeKey(normalizedOrganizationId, normalizedEventId);
+  const navigationCache = useNavigationDataCache();
+  const cacheScope = useMemo(
+    () => embedWorkspaceCacheScope(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const cachedSnapshot = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
+  const [state, setState] = useState<EmbedWorkspaceLoadState>(() => {
+    const cachedState =
+      cachedSnapshot === undefined ? null : embedWorkspaceLoadedState(scopeKey, cachedSnapshot);
+    return cachedState ?? { status: "loading", scopeKey };
+  });
   const [loadedApi, setLoadedApi] = useState<Pick<
-    OrganizerEventsApi,
-    "getEvent" | "updateEvent"
+    EmbedWorkspaceApi,
+    "getEvent" | "updateEvent" | "getPublication"
   > | null>(providedApi ?? null);
+  const [publication, setPublication] = useState<EmbedPublicationMetadata | undefined>(
+    () => cachedSnapshot?.publication,
+  );
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [publicationFresh, setPublicationFresh] = useState(false);
+  const [publicationRefreshNonce, setPublicationRefreshNonce] = useState(0);
+  const publicationCacheGenerationRef = useRef(0);
+  const currentScopeRef = useRef(scopeKey);
+  useLayoutEffect(() => {
+    currentScopeRef.current = scopeKey;
+  }, [scopeKey]);
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!organizationId.trim() || !eventId.trim()) {
-        setState({ status: "error", message: "An organization and event context are required." });
+    async (signal?: AbortSignal, fresh = false) => {
+      const requestScopeKey = scopeKey;
+      if (!normalizedOrganizationId || !normalizedEventId) {
+        setState({
+          status: "error",
+          scopeKey: requestScopeKey,
+          message: "An organization and event context are required.",
+        });
         return;
       }
+
       let api = providedApi;
       if (!api) {
-        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-        if (!apiBaseUrl) {
-          setState({
-            status: "error",
-            message: "The organizer API URL is not configured for event metadata.",
-          });
-          return;
-        }
         try {
-          api = createOrganizerEventsApi(apiBaseUrl, organizationId);
+          api = createEmbedWorkspaceApi(normalizedOrganizationId);
         } catch (error) {
-          setState({ status: "error", message: messageFrom(error) });
+          if (!signal?.aborted && currentScopeRef.current === requestScopeKey) {
+            setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
+          }
           return;
         }
       }
       setLoadedApi(api);
-      setState({ status: "loading" });
-      try {
-        const event = await api.getEvent(eventId, signal);
-        if (signal?.aborted) return;
-        if (event.organizationId !== organizationId || event.id !== eventId) {
+
+      const cachedAtStart = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
+      if (fresh && navigationCache !== null && cacheScope !== null) {
+        navigationCache.invalidate(cacheScope.invalidationTags);
+      }
+      if (fresh) {
+        setPublicationFresh(false);
+        setPublication(
+          publicationMetadataFromState(
+            null,
+            "loading",
+            "Loading the current organizer publication state.",
+          ),
+        );
+      }
+      if (fresh || cachedAtStart === undefined) {
+        setState({ status: "loading", scopeKey: requestScopeKey });
+      }
+
+      const loadEvent = async (
+        requestSignal?: AbortSignal,
+      ): Promise<EmbedWorkspaceCacheSnapshot> => {
+        const event = await api.getEvent(normalizedEventId, requestSignal);
+        if (requestSignal?.aborted) {
+          throw new DOMException("The request was aborted.", "AbortError");
+        }
+        if (event.organizationId !== normalizedOrganizationId || event.id !== normalizedEventId) {
           throw new Error(
             "The organizer event response does not match this organization and event context.",
           );
         }
-        const resolvedSlug = normalizeEmbedSlug(event.slug, suppliedSlug ?? eventId);
-        if (!resolvedSlug) throw new Error("The organizer event has no public slug.");
-        setState({ status: "loaded", event, eventSlug: resolvedSlug, eventName: event.name });
+        const eventSnapshot = embedWorkspaceEventSnapshot(event);
+        const cachedPublication = fresh ? undefined : cachedAtStart?.publication;
+        return cachedPublication === undefined
+          ? { event: eventSnapshot }
+          : { event: eventSnapshot, publication: cachedPublication };
+      };
+
+      try {
+        const snapshot =
+          navigationCache !== null && cacheScope !== null
+            ? await navigationCache.read<EmbedWorkspaceCacheSnapshot>({
+                key: cacheScope.key,
+                tags: cacheScope.tags,
+                load: () => loadEvent(),
+                ...(fresh ? { fresh: true } : {}),
+              })
+            : await loadEvent(signal);
+        if (signal?.aborted || currentScopeRef.current !== requestScopeKey) return;
+        if (
+          snapshot.event.organizationId !== normalizedOrganizationId ||
+          snapshot.event.id !== normalizedEventId
+        ) {
+          throw new Error("The cached organizer event response does not match this context.");
+        }
+        const loadedState = embedWorkspaceLoadedState(requestScopeKey, snapshot);
+        if (loadedState === null) {
+          throw new Error("The organizer event has no public slug.");
+        }
+        setState(loadedState);
+        if (snapshot.publication !== undefined) setPublication(snapshot.publication);
       } catch (error) {
-        if (signal?.aborted) return;
-        setState({ status: "error", message: messageFrom(error) });
+        if (signal?.aborted || currentScopeRef.current !== requestScopeKey) return;
+        setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
       }
     },
-    [eventId, organizationId, providedApi, suppliedSlug],
+    [
+      cacheScope,
+      navigationCache,
+      normalizedEventId,
+      normalizedOrganizationId,
+      providedApi,
+      scopeKey,
+    ],
   );
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
+    void load(controller.signal, reloadNonce > 0);
     return () => controller.abort();
-  }, [load]);
+  }, [load, reloadNonce]);
+
+  const retry = useCallback(() => {
+    setReloadNonce((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    void publicationRefreshNonce;
+    if (state.scopeKey !== scopeKey) {
+      setPublicationFresh(false);
+      setPublication(undefined);
+      return;
+    }
+    if (state.status !== "loaded") {
+      setPublicationFresh(false);
+      if (state.status === "loading") {
+        setPublication(
+          publicationMetadataFromState(
+            null,
+            "loading",
+            "Loading the current organizer publication state.",
+          ),
+        );
+      } else {
+        setPublication(undefined);
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    const cacheGeneration = publicationCacheGenerationRef.current;
+    setPublicationFresh(false);
+    setPublication(
+      publicationMetadataFromState(
+        null,
+        "loading",
+        "Loading the current organizer publication state.",
+      ),
+    );
+    if (loadedApi === null) return () => controller.abort();
+    void loadEmbedPublication(loadedApi, normalizedEventId, controller.signal).then(
+      (nextPublication) => {
+        if (
+          controller.signal.aborted ||
+          currentScopeRef.current !== scopeKey ||
+          publicationCacheGenerationRef.current !== cacheGeneration
+        ) {
+          return;
+        }
+        setPublication(nextPublication);
+        setPublicationFresh(true);
+        if (
+          navigationCache !== null &&
+          cacheScope !== null &&
+          nextPublication.status !== "unavailable"
+        ) {
+          navigationCache.write(
+            cacheScope.key,
+            {
+              event:
+                cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope)?.event ?? state.event,
+              publication: nextPublication,
+            },
+            cacheScope.tags,
+          );
+        }
+      },
+      () => {
+        if (
+          !controller.signal.aborted &&
+          currentScopeRef.current === scopeKey &&
+          publicationCacheGenerationRef.current === cacheGeneration
+        ) {
+          setPublicationFresh(true);
+          setPublication(
+            publicationMetadataFromState(
+              null,
+              "unavailable",
+              "The publication API could not be checked.",
+            ),
+          );
+        }
+      },
+    );
+    return () => controller.abort();
+  }, [
+    cacheScope,
+    loadedApi,
+    navigationCache,
+    normalizedEventId,
+    publicationRefreshNonce,
+    scopeKey,
+    state,
+  ]);
+
+  const eventLoaded =
+    state.scopeKey === scopeKey && state.status === "loaded"
+      ? state
+      : cachedSnapshot === undefined
+        ? null
+        : embedWorkspaceLoadedState(scopeKey, cachedSnapshot);
+  const scopedPublication = state.scopeKey === scopeKey ? publication : cachedSnapshot?.publication;
+  const isLoading =
+    eventLoaded === null && state.scopeKey === scopeKey
+      ? true
+      : state.scopeKey !== scopeKey
+        ? cachedSnapshot === undefined
+        : state.status === "loading";
+  const errorMessage =
+    state.scopeKey === scopeKey && state.status === "error" ? state.message : null;
+  const onEmbedMutation = useCallback(() => {
+    publicationCacheGenerationRef.current += 1;
+    setPublicationRefreshNonce((value) => value + 1);
+  }, []);
 
   return (
     <EmbedWorkspaceView
-      organizationId={organizationId}
-      eventId={eventId}
-      eventSlug={state.status === "loaded" ? state.eventSlug : null}
-      eventName={state.status === "loaded" ? state.eventName : ""}
-      eventVersion={state.status === "loaded" ? state.event.version : null}
-      {...(state.status === "loaded"
-        ? { initialConfigurations: state.event.embedConfigurations ?? [] }
+      key={scopeKey}
+      organizationId={normalizedOrganizationId}
+      eventId={normalizedEventId}
+      eventSlug={eventLoaded?.eventSlug ?? null}
+      eventName={eventLoaded?.eventName ?? ""}
+      eventVersion={eventLoaded?.event.version ?? null}
+      {...(eventLoaded
+        ? {
+            initialConfigurations: eventLoaded.event.embedConfigurations,
+          }
         : {})}
+      publicationFresh={publicationFresh}
+      {...(scopedPublication !== undefined ? { publication: scopedPublication } : {})}
       {...(loadedApi === null ? {} : { api: loadedApi })}
       {...(publicOrigin === undefined ? {} : { publicOrigin })}
-      loading={state.status === "loading"}
-      errorMessage={state.status === "error" ? state.message : null}
+      loading={isLoading}
+      errorMessage={errorMessage}
+      onRetry={retry}
+      onEmbedMutation={onEmbedMutation}
     />
   );
 }

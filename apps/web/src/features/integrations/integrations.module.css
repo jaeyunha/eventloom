@@ -1,11 +1,37 @@
 @import "../../styles/tokens.css";
 
 .integrationPage {
-  width: min(calc(100% - 2rem), var(--sb-content-width));
-  padding-block: clamp(1.25rem, 3vw, 2.5rem) 4rem;
-  margin-inline: auto;
-  color: var(--sb-color-ink);
-  font-family: var(--sb-font-sans);
+  display: grid;
+  width: 100%;
+  gap: var(--space-6);
+  color: var(--foreground);
+  font-family: inherit;
+}
+
+.settingsNavigation {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.settingsNavigation a {
+  border-radius: var(--admin-radius-control, 0.375rem);
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  font-weight: 550;
+  padding: var(--space-2) var(--space-3);
+  text-decoration: none;
+}
+
+.settingsNavigation a:hover,
+.settingsNavigation a:focus-visible {
+  background: var(--muted);
+  color: var(--foreground);
+  outline: none;
+}
+
+.settingsNavigation a[aria-current="page"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .skipLink {
@@ -536,6 +562,20 @@
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 64rem) {
+  .settingsNavigation {
+    display: flex;
+    gap: var(--sb-space-2);
+    overflow-x: auto;
+    padding-block: var(--sb-space-2);
+    background: var(--sb-color-surface);
+  }
+
+  .settingsNavigation a {
+    flex: 0 0 auto;
   }
 }
 

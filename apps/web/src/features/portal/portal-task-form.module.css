@@ -1,0 +1,132 @@
+.form {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
+}
+
+.required {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.select[multiple] {
+  min-height: 8rem;
+}
+
+.select:focus-visible {
+  border-color: var(--ring);
+  outline: 3px solid color-mix(in srgb, var(--ring) 22%, transparent);
+  outline-offset: 0;
+}
+
+.select[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+.checkbox {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 550;
+}
+
+.checkbox input {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  margin-top: var(--space-1);
+  accent-color: var(--primary);
+}
+
+.checkbox span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.feedback,
+.unavailable {
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--warning-surface);
+  color: var(--foreground);
+}
+
+.feedback {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.feedback strong {
+  color: var(--warning);
+  font-size: 0.75rem;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.feedback p,
+.loading,
+.unavailable,
+.history {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.loading {
+  color: var(--muted-foreground);
+}
+
+.history {
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.history summary {
+  color: var(--foreground);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.history ol {
+  display: grid;
+  gap: var(--space-2);
+  padding-left: var(--space-5);
+  margin: var(--space-3) 0 0;
+}
+
+@media (max-width: 48rem) {
+  .form {
+    gap: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select {
+    scroll-behavior: auto;
+  }
+}

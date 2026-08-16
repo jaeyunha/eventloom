@@ -2,11 +2,11 @@ import { type Context, Hono } from "hono";
 import { ZodError, type ZodType } from "zod";
 import { type ApiKeyScope, AuthAccessError, type AuthPrincipal } from "../auth/types";
 import {
-  publicApiResourceContract,
-  publicApiV1Contract,
   type PublicApiOperation,
   type PublicApiResourceContract,
   type PublicApiV1Contract,
+  publicApiResourceContract,
+  publicApiV1Contract,
 } from "./contract";
 import {
   type CursorDirection,
@@ -58,7 +58,6 @@ export type PublicApiAuthorizationHook = (
 ) => void | Promise<void>;
 
 export interface PublicApiListInput {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly limit: number;
@@ -72,7 +71,6 @@ export interface PublicApiListInput {
 }
 
 export interface PublicApiGetInput {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly id: string;
@@ -80,7 +78,6 @@ export interface PublicApiGetInput {
 }
 
 export interface PublicApiCreateInput<TCreate> {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly data: TCreate;
@@ -89,7 +86,6 @@ export interface PublicApiCreateInput<TCreate> {
 }
 
 export interface PublicApiUpdateInput<TUpdate> {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly id: string;
@@ -160,6 +156,7 @@ export interface PublicApiOpenApiOptions {
   readonly title?: string;
   readonly version?: string;
   readonly description?: string;
+  readonly paths?: Readonly<Record<string, unknown>>;
 }
 
 export interface PublicApiRoutesOptions<
@@ -345,23 +342,35 @@ function parsePositiveInteger(
   return parsed;
 }
 
-function filterValues(query: Record<string, string | undefined>): Record<string, string> {
+function filterValues(
+  query: Record<string, string | undefined>,
+  contractResource?: PublicApiResourceContract,
+): Record<string, string> {
   const filters: Record<string, string> = {};
+  const allowedFields = new Set(contractResource?.filters.fields ?? []);
+  const addFilter = (key: string, value: string): void => {
+    if (!allowedFields.has(key)) {
+      throw validationError("The filter field is not supported.");
+    }
+    filters[key] = value;
+  };
+
   const encoded = query.filter;
   if (encoded !== undefined && encoded.trim().length > 0) {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(encoded);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("not an object");
-      }
-      for (const [key, value] of Object.entries(parsed)) {
-        if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
-          throw new Error("invalid filter");
-        }
-        filters[key] = String(value);
-      }
+      parsed = JSON.parse(encoded);
     } catch {
       throw validationError("The filter query parameter is invalid.");
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw validationError("The filter query parameter is invalid.");
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+        throw validationError("The filter query parameter is invalid.");
+      }
+      addFilter(key, String(value));
     }
   }
 
@@ -371,10 +380,11 @@ function filterValues(query: Record<string, string | undefined>): Record<string,
     }
     const dotted = key.startsWith("filter.") ? key.slice("filter.".length) : undefined;
     const bracketed = /^filter\[([^\]]+)\]$/u.exec(key)?.[1];
-    const filterKey = dotted ?? bracketed ?? key;
-    if (filterKey.length > 0) {
-      filters[filterKey] = value;
+    const filterKey = dotted ?? bracketed;
+    if (filterKey === undefined || filterKey.length === 0) {
+      throw validationError("The query parameter is not supported.");
     }
+    addFilter(filterKey, value);
   }
   return filters;
 }
@@ -386,7 +396,7 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
 ): ListQuery {
   const query = context.req.query();
   const cursor = query.cursor;
-  if (cursor !== undefined && cursor.trim().length === 0) {
+  if (cursor !== undefined && (cursor.trim().length === 0 || cursor.length > 2_048)) {
     throw validationError("The cursor is invalid.");
   }
 
@@ -404,7 +414,7 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
     throw validationError("The sort field is not supported.");
   }
 
-  const filters = filterValues(query);
+  const filters = filterValues(query, contractResource);
   const filterHash = stableStringify(filters);
   const pagination = contractResource?.pagination;
   return {
@@ -423,7 +433,7 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
 
 function requiredRouteParam(context: Context<PublicApiRouteEnvironment>, name: string): string {
   const value = context.req.param(name);
-  if (value === undefined || value.trim().length === 0) {
+  if (value === undefined || value.trim().length === 0 || value.length > 200) {
     throw validationError(`The ${name} path parameter is required.`);
   }
   return value;
@@ -491,7 +501,7 @@ function sortItems<TRecord>(
 function cursorForItem(
   item: unknown,
   input: {
-    readonly tenantId: string;
+    readonly organizationId: string;
     readonly resource: string;
     readonly sort: string;
     readonly direction: CursorDirection;
@@ -507,7 +517,7 @@ function cursorForItem(
   ];
   return encodeCursor({
     version: 1,
-    tenantId: input.tenantId,
+    organizationId: input.organizationId,
     resource: input.resource,
     sort: input.sort,
     direction: input.direction,
@@ -520,7 +530,7 @@ function cursorForItem(
 function validateCursor(
   cursor: CursorPayload,
   input: {
-    readonly tenantId: string;
+    readonly organizationId: string;
     readonly resource: string;
     readonly sort: string;
     readonly direction: CursorDirection;
@@ -528,7 +538,7 @@ function validateCursor(
   },
 ): void {
   if (
-    cursor.tenantId !== input.tenantId ||
+    cursor.organizationId !== input.organizationId ||
     cursor.resource !== input.resource ||
     cursor.sort !== input.sort ||
     cursor.direction !== input.direction ||
@@ -572,7 +582,7 @@ function nextCursorFromResult<TRecord>(
   nextCursor: string | CursorPayload | null | undefined,
   last: TRecord | undefined,
   input: {
-    readonly tenantId: string;
+    readonly organizationId: string;
     readonly resource: string;
     readonly sort: string;
     readonly direction: CursorDirection;
@@ -580,10 +590,7 @@ function nextCursorFromResult<TRecord>(
     readonly filterHash: string;
   },
 ): string | null {
-  if (nextCursor === null) {
-    return null;
-  }
-  if (typeof nextCursor === "object") {
+  if (nextCursor !== null && typeof nextCursor === "object") {
     const candidate = nextCursor as Partial<CursorPayload>;
     const id =
       candidate.id ?? (last === undefined ? undefined : String(recordValue(last, input.idField)));
@@ -592,7 +599,7 @@ function nextCursorFromResult<TRecord>(
     }
     return encodeCursor({
       version: 1,
-      tenantId: candidate.tenantId ?? input.tenantId,
+      organizationId: candidate.organizationId ?? input.organizationId,
       resource: candidate.resource ?? input.resource,
       sort: candidate.sort ?? input.sort,
       direction: candidate.direction ?? input.direction,
@@ -612,7 +619,7 @@ function nextCursorFromResult<TRecord>(
       }
       return encodeCursor({
         version: 1,
-        tenantId: input.tenantId,
+        organizationId: input.organizationId,
         resource: input.resource,
         sort: input.sort,
         direction: input.direction,
@@ -633,22 +640,13 @@ function parseExpectedVersion(
   body: unknown,
 ): { readonly expectedVersion: number; readonly data: unknown } {
   const header = context.req.header("if-match");
-  let raw: string | undefined = header;
-  if (raw !== undefined) {
-    raw = raw.trim().replace(/^W\//u, "").replace(/^"|"$/gu, "");
-  }
-  if (raw === undefined && typeof body === "object" && body !== null) {
-    const bodyVersion = (body as Record<string, unknown>).expectedVersion;
-    if (typeof bodyVersion === "number" && Number.isInteger(bodyVersion)) {
-      raw = String(bodyVersion);
-    }
-  }
+  const raw = header?.trim().replace(/^W\//u, "").replace(/^"|"$/gu, "");
   if (raw === undefined || !/^\d+$/u.test(raw)) {
     throw new PublicApiError("PRECONDITION_FAILED", "An If-Match version is required for updates.");
   }
   const expectedVersion = Number(raw);
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
-    throw validationError("The If-Match version is invalid.");
+    throw new PublicApiError("PRECONDITION_FAILED", "The If-Match version is invalid.");
   }
 
   if (typeof body === "object" && body !== null && !Array.isArray(body)) {
@@ -773,7 +771,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
   options: PublicApiOpenApiOptions | undefined,
   contract: PublicApiV1Contract,
 ): Record<string, unknown> {
-  const paths: Record<string, unknown> = {};
+  const paths: Record<string, unknown> = { ...options?.paths };
   const resourceSchemas: Record<string, unknown> = {};
   const errorSchemaName = "PublicApiError";
   const rateLimitSchemaName = "PublicApiRateLimit";
@@ -836,7 +834,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         in: "query",
         required: false,
         description: "Opaque cursor returned by the previous page.",
-        schema: { type: "string", minLength: 1 },
+        schema: { type: "string", minLength: 1, maxLength: 2_048 },
       },
       {
         name: "limit",
@@ -855,6 +853,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         required: false,
         schema: {
           type: "string",
+          default: defaultSortFor(resource, descriptor),
           ...(descriptor === undefined
             ? {}
             : { enum: [...(descriptor.allowedSorts as readonly string[])] }),
@@ -864,7 +863,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         name: "direction",
         in: "query",
         required: false,
-        schema: { type: "string", enum: ["asc", "desc"] },
+        schema: { type: "string", enum: ["asc", "desc"], default: "asc" },
       },
       {
         name: "filter",
@@ -872,8 +871,8 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         required: false,
         description:
           filter === undefined
-            ? "JSON object filter. Dotted and bracketed filter keys are also accepted."
-            : `JSON object filter; dotted (filter.field) and bracketed (filter[field]) forms are accepted for ${filter.fields.join(", ")}.`,
+            ? "Filtering is not supported for this resource."
+            : `JSON object filter; dotted (filter.field) and bracketed (filter[field]) forms are accepted for ${filter.fields.join(", ")}; unsupported fields and unrelated query parameters are rejected.`,
         schema: { type: "string" },
       },
     ];
@@ -955,7 +954,12 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         security: [readSecurity],
         parameters: [
           ...pathParameters,
-          { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1 } },
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", minLength: 1, maxLength: 200 },
+          },
         ],
         responses: {
           ...commonResponses,
@@ -971,7 +975,12 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
       const mutation = descriptor?.mutations?.update;
       const mutationParameters = [
         ...pathParameters,
-        { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1 } },
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", minLength: 1, maxLength: 200 },
+        },
         ...(mutation?.idempotencyKey === false
           ? []
           : [
@@ -989,6 +998,8 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
                 name: "If-Match",
                 in: "header",
                 required: true,
+                description:
+                  "Required header-only resource version; a body expectedVersion value is not a substitute.",
                 schema: { type: "string", pattern: '^(W/)?"?[1-9][0-9]*"?$' },
               },
             ]),
@@ -1016,9 +1027,6 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
       itemOperations.patch = updateOperation(
         `update${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
       );
-      itemOperations.put = updateOperation(
-        `replace${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
-      );
     }
     if (Object.keys(itemOperations).length > 0) {
       paths[item] = itemOperations;
@@ -1027,7 +1035,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
   return {
     openapi: "3.1.0",
     info: {
-      title: options?.title ?? "Open Sessionboard Public API",
+      title: options?.title ?? "Eventloom Public API",
       version: options?.version ?? "1.0.0",
       description:
         options?.description ??
@@ -1151,7 +1159,7 @@ export function createPublicApiV1Routes<
             throw validationError("The cursor is invalid.");
           }
           validateCursor(cursorData, {
-            tenantId: organizationId,
+            organizationId,
             resource: segment,
             sort: query.sort,
             direction: query.direction,
@@ -1159,7 +1167,6 @@ export function createPublicApiV1Routes<
           });
         }
         const listInput: PublicApiListInput = {
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           limit: query.limit,
@@ -1181,7 +1188,7 @@ export function createPublicApiV1Routes<
           hasOverflow;
         const nextCursor = hasMore
           ? nextCursorFromResult(listed.nextCursor, data[data.length - 1], {
-              tenantId: organizationId,
+              organizationId,
               resource: segment,
               sort: query.sort,
               direction: query.direction,
@@ -1199,7 +1206,6 @@ export function createPublicApiV1Routes<
         const principal = await authorize(context, resource, organizationId, "read");
         const id = requiredRouteParam(context, "id");
         const record = await resource.repository.get({
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           id,
@@ -1228,7 +1234,6 @@ export function createPublicApiV1Routes<
         const operation = async (): Promise<MutationResult> => ({
           status: 201,
           body: await resource.repository.create({
-            tenantId: organizationId,
             organizationId,
             resource: segment,
             data,
@@ -1267,7 +1272,6 @@ export function createPublicApiV1Routes<
       const id = requiredRouteParam(context, "id");
       const operation = async (): Promise<MutationResult> => {
         const current = await resource.repository.get({
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           id,
@@ -1287,7 +1291,6 @@ export function createPublicApiV1Routes<
           );
         }
         const updated = await resource.repository.update({
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           id,
@@ -1320,7 +1323,6 @@ export function createPublicApiV1Routes<
 
     if (operationEnabled(resource, "update", contract)) {
       routes.patch(itemPath, updateHandler);
-      routes.put(itemPath, updateHandler);
     }
   }
 

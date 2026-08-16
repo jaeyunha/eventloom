@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderApiWrangler } from "../cloudflare/config.mjs";
 import {
   ENVIRONMENTS,
   inspectOrganizationIdMigrationReadiness,
@@ -22,7 +23,7 @@ function usage() {
   return [
     "Usage: node scripts/release/preflight.mjs --environment <local|staging|production>",
     "  --env local=<path|-> --env staging=<path|-> --env production=<path|->",
-    "  [--require-providers accelevents] [--migration-report <path|->] [--offline]",
+    "  [--migration-report <path|->] [--offline]",
     "",
     'Use "-" for exactly one environment to read that environment from the current process.',
   ].join("\n");
@@ -33,7 +34,6 @@ function parseArguments(argv) {
     environment: "",
     environmentSources: {},
     offline: false,
-    requiredProviders: [],
     migrationReportSource: "",
   };
 
@@ -60,12 +60,6 @@ function parseArguments(argv) {
         throw new PreflightError("INVALID_ARGUMENT", `Duplicate --env for ${environment}`);
       }
       options.environmentSources[environment] = path;
-    } else if (argument === "--require-providers") {
-      options.requiredProviders = (argv[index + 1] ?? "")
-        .split(",")
-        .map((provider) => provider.trim())
-        .filter(Boolean);
-      index += 1;
     } else if (argument === "--migration-report") {
       const source = argv[index + 1] ?? "";
       index += 1;
@@ -162,11 +156,16 @@ async function run() {
     ]),
   );
   const migrationReport = loadMigrationReport(options.migrationReportSource);
-  const wranglerInventory = parseWranglerInventory(readFileSync(wranglerPath, "utf8"));
-  const validation = validateReleaseConfiguration({
+  const wranglerTemplate = readFileSync(wranglerPath, "utf8");
+  const renderedWrangler = renderApiWrangler(
+    renderApiWrangler(wranglerTemplate, "staging", configurations.staging),
+    "production",
+    configurations.production,
+  );
+  const wranglerInventory = parseWranglerInventory(renderedWrangler);
+  validateReleaseConfiguration({
     configurations,
     targetEnvironment: options.environment,
-    requiredProviders: options.requiredProviders,
     wranglerInventory,
   });
   const migrationReadiness = inspectOrganizationIdMigrationReadiness({
@@ -185,14 +184,13 @@ async function run() {
   if (options.offline) {
     checks.push(
       { name: "cloudflare-token-and-resources", status: "skipped" },
-      { name: "forge-privacy", status: "skipped" },
+      { name: "forge-repository", status: "skipped" },
     );
     return {
       ready: false,
       configurationValid: true,
       environment: options.environment,
       online: false,
-      providerStates: validation.providerStates[options.environment],
       migrationReadiness,
       checks,
     };
@@ -205,14 +203,13 @@ async function run() {
   });
   checks.push({ name: "cloudflare-token-and-resources", status: "passed" });
   await verifyForgePrivacy({ configuration: targetConfiguration });
-  checks.push({ name: "forge-privacy", status: "passed" });
+  checks.push({ name: "forge-repository", status: "passed" });
 
   return {
     ready: migrationReadiness.ready,
     configurationValid: true,
     environment: options.environment,
     online: true,
-    providerStates: validation.providerStates[options.environment],
     migrationReadiness,
     checks,
   };

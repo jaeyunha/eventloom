@@ -40,6 +40,10 @@ export function eventDates(startsOn: string, endsOn: string): readonly string[] 
   return dates;
 }
 
+export function resolveAgendaPlacementDate(selectedDay: string, eventStart: string): string {
+  return selectedDay === "" ? eventStart : selectedDay;
+}
+
 function parseLocalDateTime(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
   if (!match) {
@@ -79,9 +83,13 @@ export function formatLocalTime(value: string): string {
 
 export function agendaDays(
   entries: readonly AgendaEntry[],
-  event?: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn">,
+  event?: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn" | "scheduleDates">,
 ): readonly AgendaDay[] {
-  const dates = event ? eventDates(event.startsOn, event.endsOn) : null;
+  const dates = event
+    ? event.scheduleDates?.length
+      ? event.scheduleDates
+      : eventDates(event.startsOn, event.endsOn)
+    : null;
   const eventDateSet = dates === null ? null : new Set(dates);
   const byDate = new Map<string, AgendaEntry[]>();
   for (const entry of [...entries].sort((left, right) => {
@@ -101,6 +109,12 @@ export function agendaDays(
     label: formatLocalDate(`${date}T12:00`),
     entries: byDate.get(date) ?? [],
   }));
+}
+
+export function acceptedSessionCount(
+  data: Pick<AgendaWorkspaceData, "acceptedSessionIds">,
+): number {
+  return new Set(data.acceptedSessionIds).size;
 }
 
 export function conflictsForEntry(
@@ -138,6 +152,11 @@ export function publicationReadiness(
         `Resolve ${preview.conflicts.length} hard conflict${preview.conflicts.length === 1 ? "" : "s"}.`,
       );
     }
+    if (preview.releaseConflicts.length > 0) {
+      reasons.push(
+        `Resolve ${preview.releaseConflicts.length} released commitment conflict${preview.releaseConflicts.length === 1 ? "" : "s"}.`,
+      );
+    }
     const unoverriddenWarnings = preview.warnings.filter((warning) => !warning.overridden);
     if (unoverriddenWarnings.length > 0) {
       reasons.push(
@@ -151,7 +170,7 @@ export function publicationReadiness(
 export function formatRevisionTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) {
-    return value;
+    return "recently";
   }
   return new Intl.DateTimeFormat("en", {
     dateStyle: "medium",

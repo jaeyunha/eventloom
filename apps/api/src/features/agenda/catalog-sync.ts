@@ -14,13 +14,10 @@ import type {
   AgendaTrack,
 } from "./types";
 
-export type AgendaCatalogSyncValue<T> = T | PromiseLike<T>;
-
 export interface AgendaCatalogSyncInput {
   readonly tenantId: string;
   readonly eventId: string;
   readonly actorId?: string;
-  readonly timeZone?: string;
   readonly minimumTravelMinutes?: number;
 }
 
@@ -35,10 +32,6 @@ export interface AgendaCatalogEngine {
   updateCatalog(input: UpdateAgendaCatalogInput): Promise<AgendaDraft>;
 }
 
-export type AgendaEventTimeZone =
-  | string
-  | ((eventId: string) => AgendaCatalogSyncValue<string>)
-  | ((tenantId: string, eventId: string) => AgendaCatalogSyncValue<string>);
 export type AgendaActorId = string | ((input: AgendaCatalogSyncInput) => string);
 
 export interface AgendaCatalogSynchronizerOptions {
@@ -46,10 +39,6 @@ export interface AgendaCatalogSynchronizerOptions {
   readonly agendaEngine?: AgendaCatalogEngine;
   readonly catalogReader?: AgendaCatalogReader;
   readonly sessionService?: AgendaCatalogReader;
-  readonly eventTimeZone?: AgendaEventTimeZone;
-  readonly timeZone?: AgendaEventTimeZone;
-  readonly timeZoneForEvent?: AgendaEventTimeZone;
-  readonly getEventTimeZone?: AgendaEventTimeZone;
   readonly minimumTravelMinutes?: number;
   readonly actorId?: AgendaActorId;
   readonly maxRetries?: number;
@@ -83,7 +72,6 @@ const DEFAULT_MAX_RETRIES = 3;
 export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContract {
   readonly #engine: AgendaCatalogEngine;
   readonly #catalogReader: AgendaCatalogReader;
-  readonly #eventTimeZone: AgendaEventTimeZone | undefined;
   readonly #minimumTravelMinutes: number;
   readonly #actorId: AgendaActorId | undefined;
   readonly #maxRetries: number;
@@ -135,11 +123,6 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     }
     this.#engine = engine;
     this.#catalogReader = catalogReader;
-    this.#eventTimeZone =
-      options.eventTimeZone ??
-      options.timeZone ??
-      options.timeZoneForEvent ??
-      options.getEventTimeZone;
     this.#minimumTravelMinutes = options.minimumTravelMinutes ?? DEFAULT_MINIMUM_TRAVEL_MINUTES;
     this.#actorId = options.actorId;
     this.#maxRetries = maxRetries;
@@ -150,48 +133,36 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     tenantId: string,
     eventId: string,
     actorId?: string,
-    timeZone?: string,
   ): Promise<AgendaDraft>;
   async ensureInitialized(
     inputOrTenantId: AgendaCatalogSyncInput | string,
     positionalEventId?: string,
     positionalActorId?: string,
-    positionalTimeZone?: string,
   ): Promise<AgendaDraft> {
-    const input = normalizeInput(
-      inputOrTenantId,
-      positionalEventId,
-      positionalActorId,
-      positionalTimeZone,
-    );
+    const input = normalizeInput(inputOrTenantId, positionalEventId, positionalActorId);
     return (await this.initialize(input)).draft;
   }
 
   async synchronize(input: AgendaCatalogSyncInput): Promise<AgendaDraft>;
-  async synchronize(
-    tenantId: string,
-    eventId: string,
-    actorId?: string,
-    timeZone?: string,
-  ): Promise<AgendaDraft>;
+  async synchronize(tenantId: string, eventId: string, actorId?: string): Promise<AgendaDraft>;
   async synchronize(
     inputOrTenantId: AgendaCatalogSyncInput | string,
     positionalEventId?: string,
     positionalActorId?: string,
-    positionalTimeZone?: string,
   ): Promise<AgendaDraft> {
-    const input = normalizeInput(
-      inputOrTenantId,
-      positionalEventId,
-      positionalActorId,
-      positionalTimeZone,
-    );
+    const input = normalizeInput(inputOrTenantId, positionalEventId, positionalActorId);
     const initialized = await this.initialize(input);
-    if (initialized.created) return initialized.draft;
     let draft = initialized.draft;
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
       const catalog = await this.readCatalog(input);
       assertScheduledReferencesRemain(draft.entries, catalog);
+      if (
+        attempt === 0 &&
+        initialized.createdFromCatalog !== null &&
+        catalogsEqual(initialized.createdFromCatalog, catalog)
+      ) {
+        return draft;
+      }
       try {
         return await this.#engine.updateCatalog({
           eventId: input.eventId,
@@ -214,51 +185,44 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
       `Agenda changed while synchronizing event ${input.eventId}`,
     );
   }
-  private async initialize(
-    input: AgendaCatalogSyncInput,
-  ): Promise<{ draft: AgendaDraft; created: boolean }> {
+  private async initialize(input: AgendaCatalogSyncInput): Promise<{
+    draft: AgendaDraft;
+    createdFromCatalog: AgendaCatalog | null;
+  }> {
     try {
-      return { draft: await this.#engine.getDraft(input.eventId), created: false };
+      return {
+        draft: await this.#engine.getDraft(input.eventId),
+        createdFromCatalog: null,
+      };
     } catch (error) {
       if (!isAgendaCode(error, "AGENDA_NOT_FOUND")) throw error;
     }
 
     const catalog = await this.readCatalog(input);
-    const timeZone = await this.resolveTimeZone(input);
     const createInput: CreateAgendaInput = {
       eventId: input.eventId,
-      timeZone,
       minimumTravelMinutes: this.resolveMinimumTravelMinutes(input),
       actorId: this.resolveActorId(input),
       ...catalog,
     };
     try {
-      return { draft: await this.#engine.createAgenda(createInput), created: true };
+      return {
+        draft: await this.#engine.createAgenda(createInput),
+        createdFromCatalog: catalog,
+      };
     } catch (error) {
       // Another initializer may have won the race between getDraft and createAgenda.
       if (!isAgendaCode(error, "AGENDA_ALREADY_EXISTS")) throw error;
-      return { draft: await this.#engine.getDraft(input.eventId), created: false };
+      return {
+        draft: await this.#engine.getDraft(input.eventId),
+        createdFromCatalog: null,
+      };
     }
   }
 
   private async readCatalog(input: AgendaCatalogSyncInput): Promise<AgendaCatalog> {
     return structuredClone(
       await this.#catalogReader.getAgendaCatalog(input.tenantId, input.eventId),
-    );
-  }
-
-  private async resolveTimeZone(input: AgendaCatalogSyncInput): Promise<string> {
-    if (input.timeZone !== undefined) return input.timeZone;
-    const source = this.#eventTimeZone;
-    if (typeof source === "string") return source;
-    if (typeof source === "function") {
-      const resolver = source as (...args: string[]) => AgendaCatalogSyncValue<string>;
-      return await (source.length < 2
-        ? resolver(input.eventId)
-        : resolver(input.tenantId, input.eventId));
-    }
-    throw new Error(
-      `An event time zone is required to initialize the agenda for event ${input.eventId}.`,
     );
   }
 
@@ -277,7 +241,6 @@ function normalizeInput(
   inputOrTenantId: AgendaCatalogSyncInput | string,
   positionalEventId?: string,
   positionalActorId?: string,
-  positionalTimeZone?: string,
 ): AgendaCatalogSyncInput {
   if (typeof inputOrTenantId !== "string") return inputOrTenantId;
   if (positionalEventId === undefined) {
@@ -287,7 +250,6 @@ function normalizeInput(
     tenantId: inputOrTenantId,
     eventId: positionalEventId,
     ...(positionalActorId === undefined ? {} : { actorId: positionalActorId }),
-    ...(positionalTimeZone === undefined ? {} : { timeZone: positionalTimeZone }),
   };
 }
 
@@ -314,6 +276,24 @@ function assertScheduledReferencesRemain(
       }
     }
   }
+}
+
+function catalogsEqual(left: AgendaCatalog, right: AgendaCatalog): boolean {
+  return (
+    catalogValuesEqual(left.sessions, right.sessions) &&
+    catalogValuesEqual(left.rooms, right.rooms) &&
+    catalogValuesEqual(left.tracks, right.tracks)
+  );
+}
+
+function catalogValuesEqual<T extends { readonly id: string }>(
+  left: readonly T[],
+  right: readonly T[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const ordered = (values: readonly T[]) =>
+    [...values].sort((first, second) => first.id.localeCompare(second.id));
+  return JSON.stringify(ordered(left)) === JSON.stringify(ordered(right));
 }
 
 export type { AgendaCatalog, AgendaDraft, AgendaRoom, AgendaSession, AgendaTrack };

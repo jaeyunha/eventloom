@@ -107,6 +107,7 @@ export class RequestAuthenticator {
       userId: session.userId,
       email: session.email,
       memberships: session.memberships,
+      reviewerGrants: session.reviewerGrants,
       speakerGrants: session.speakerGrants,
     };
   }

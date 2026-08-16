@@ -1,3 +1,5 @@
+import type { TimeDisambiguation } from "@eventloom/contracts";
+
 export type AgendaConflictKind = "participant" | "resource" | "room";
 export type AgendaWarningKind = "capacity" | "custom" | "track" | "travel";
 
@@ -5,8 +7,11 @@ export interface AgendaEventSummary {
   id: string;
   name: string;
   timeZone: string;
+  startsAt?: string;
+  endsAt?: string;
   startsOn: string;
   endsOn: string;
+  scheduleDates?: readonly string[];
 }
 
 export interface AgendaRoom {
@@ -28,6 +33,8 @@ export interface AgendaSession {
   durationMinutes: number;
   speakerNames: readonly string[];
   capacityRequired: number;
+  trackIds: readonly string[];
+  trackNames: readonly string[];
 }
 
 export interface AgendaEntry {
@@ -42,6 +49,8 @@ export interface AgendaEntry {
   trackNames: readonly string[];
   startsAtLocal: string;
   endsAtLocal: string;
+  startDisambiguation?: TimeDisambiguation;
+  endDisambiguation?: TimeDisambiguation;
 }
 
 export interface AgendaConflict {
@@ -59,10 +68,34 @@ export interface AgendaWarning {
   overridden: boolean;
   overrideReason?: string;
 }
+export interface AgendaValidationReport {
+  conflicts: readonly AgendaConflict[];
+  warnings: readonly AgendaWarning[];
+}
+export interface AgendaCandidateDiagnostics {
+  evaluated: boolean;
+  report: AgendaValidationReport | null;
+}
+
+export type AgendaCalendarConnectionState = "connected" | "degraded" | "not_configured";
+
+export interface AgendaCalendarDeliveryState {
+  state: AgendaCalendarConnectionState;
+  sentLast24Hours: number;
+  failedLast24Hours: number;
+  lastInvitationAt: string | null;
+  lastFailure: {
+    deliveryId: string;
+    summary: string;
+    occurredAt: string;
+    retryable: boolean;
+  } | null;
+}
 
 export interface AgendaPreview {
   draftVersion: number;
   conflicts: readonly AgendaConflict[];
+  releaseConflicts: readonly AgendaConflict[];
   warnings: readonly AgendaWarning[];
   diff: {
     added: number;
@@ -70,6 +103,9 @@ export interface AgendaPreview {
     removed: number;
   };
   validatedAt: string;
+}
+export interface AgendaPlacementFailureData extends AgendaCandidateDiagnostics {
+  authoritativeSavedPreview: AgendaPreview;
 }
 
 export interface AgendaRevision {
@@ -91,6 +127,7 @@ export interface AgendaWorkspaceData {
   };
   rooms: readonly AgendaRoom[];
   tracks: readonly AgendaTrack[];
+  acceptedSessionIds: readonly string[];
   unscheduledSessions: readonly AgendaSession[];
   revisions: readonly AgendaRevision[];
   currentPublishedRevision: AgendaRevision | null;
@@ -103,6 +140,8 @@ export interface AgendaEntryInput {
   trackIds: readonly string[];
   startsAtLocal: string;
   endsAtLocal: string;
+  startDisambiguation?: TimeDisambiguation;
+  endDisambiguation?: TimeDisambiguation;
 }
 
 export interface AgendaErrorResponse {
@@ -114,5 +153,12 @@ export interface AgendaErrorResponse {
       conflicts?: readonly AgendaConflict[];
       warnings?: readonly AgendaWarning[];
     };
+  };
+  data?: {
+    candidateDiagnostics?: {
+      evaluated?: boolean;
+      report?: AgendaValidationReport | null;
+    };
+    authoritativeSavedPreview?: AgendaPreview;
   };
 }

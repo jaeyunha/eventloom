@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, PortalApiError } from "./api";
-import type { PortalTask, PortalView } from "./types";
+import type { PortalAsset, PortalTask, PortalView } from "./types";
 
 const emptyPortal: PortalView = {
   submissions: [],
@@ -33,6 +33,20 @@ function task(): PortalTask {
   };
 }
 
+function uploadAuthorizationResponse(url: string): Response {
+  return jsonResponse({
+    data: {
+      asset: { id: "asset-1" },
+      grant: {
+        method: "PUT",
+        url,
+        headers: {},
+        expiresAt: "2026-08-08T12:05:00.000Z",
+      },
+    },
+  });
+}
+
 describe("speaker portal API adapter", () => {
   it("loads the event-scoped portal with authenticated credentials", async () => {
     const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
@@ -48,6 +62,20 @@ describe("speaker portal API adapter", () => {
       "https://api.example.com/api/speaker/events/event%20one/portal",
     );
     expect(calls[0]?.init).toMatchObject({ credentials: "include" });
+  });
+
+  it("uses the same-origin gateway without a browser API origin", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createPortalApi("", async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return jsonResponse({ data: emptyPortal });
+    });
+
+    await expect(api.getPortal("event-1")).resolves.toEqual(emptyPortal);
+    expect(requestedUrl).toBe("/api/speaker/events/event-1/portal");
+    expect(requestInit).toMatchObject({ credentials: "include" });
   });
 
   it("sends optimistic profile versions and preserves structured API errors", async () => {
@@ -149,6 +177,148 @@ describe("speaker portal API adapter", () => {
     });
   });
 
+  it("re-authorizes and uploads an existing pending asset without sending mutable metadata", async () => {
+    const pending: PortalAsset = {
+      id: "asset-pending",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 6,
+      state: "pending_upload",
+      createdAt: "2026-08-08T12:00:00.000Z",
+    };
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const api = createPortalApi("https://api.example.com", async (input, init) => {
+      calls.push({ input, init });
+      return calls.length === 1
+        ? jsonResponse({
+            data: {
+              asset: pending,
+              grant: {
+                method: "PUT",
+                url: "/api/speaker/assets/capabilities/upload/asset-pending/fresh-token",
+                headers: { "content-type": "application/pdf" },
+                expiresAt: "2026-08-08T12:05:00.000Z",
+              },
+            },
+          })
+        : new Response(null, { status: 204 });
+    });
+    const file = new File(["slides"], "slides.pdf", { type: "application/pdf" });
+
+    await expect(
+      api.retryAssetUpload?.({ eventId: "event-1", assetId: pending.id, file }),
+    ).resolves.toEqual(pending);
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.com/api/speaker/events/event-1/assets/asset-pending/upload-authorization",
+    );
+    expect(calls[0]?.init).toMatchObject({ method: "POST", credentials: "include" });
+    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(calls[1]?.init).toMatchObject({ method: "PUT", credentials: "omit", body: file });
+  });
+
+  it("resolves a relative upload grant against window.location.origin", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://portal.example.com" } });
+    try {
+      const calls: string[] = [];
+      const api = createPortalApi("", async (input) => {
+        calls.push(String(input));
+        return calls.length === 1
+          ? uploadAuthorizationResponse("/api/uploads/private/object")
+          : new Response(null, { status: 204 });
+      });
+
+      await expect(
+        api.uploadTaskFile({
+          eventId: "event-1",
+          participantId: "participant-1",
+          taskId: "task-1",
+          kind: "slides",
+          file: new File(["slides"], "session.pdf", { type: "application/pdf" }),
+        }),
+      ).resolves.toEqual({ assetId: "asset-1" });
+      expect(calls).toEqual([
+        "/api/speaker/events/event-1/uploads",
+        "https://portal.example.com/api/uploads/private/object",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("allows local HTTP upload grants", async () => {
+    const calls: string[] = [];
+    const api = createPortalApi("https://api.example.com", async (input) => {
+      calls.push(String(input));
+      return calls.length === 1
+        ? uploadAuthorizationResponse("http://127.0.0.1:8787/private/object")
+        : new Response(null, { status: 204 });
+    });
+
+    await expect(
+      api.uploadTaskFile({
+        eventId: "event-1",
+        participantId: "participant-1",
+        taskId: "task-1",
+        kind: "slides",
+        file: new File(["slides"], "session.pdf", { type: "application/pdf" }),
+      }),
+    ).resolves.toEqual({ assetId: "asset-1" });
+    expect(calls[1]).toBe("http://127.0.0.1:8787/private/object");
+  });
+
+  it.each(["javascript:alert('upload')", "ftp://uploads.example.com/private/object"])(
+    "rejects the unsafe upload grant URL %s",
+    async (grantUrl) => {
+      let callCount = 0;
+      const api = createPortalApi("https://api.example.com", async () => {
+        callCount += 1;
+        return uploadAuthorizationResponse(grantUrl);
+      });
+
+      await expect(
+        api.uploadTaskFile({
+          eventId: "event-1",
+          participantId: "participant-1",
+          taskId: "task-1",
+          kind: "slides",
+          file: new File(["slides"], "session.pdf", { type: "application/pdf" }),
+        }),
+      ).rejects.toThrow("The upload grant URL must use HTTPS.");
+      expect(callCount).toBe(1);
+    },
+  );
+
+  it("uses relative upload capabilities through the same-origin gateway", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const capabilityUrl = "/api/speaker/assets/capabilities/upload/capability-1/token-1";
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      return calls.length === 1
+        ? uploadAuthorizationResponse(capabilityUrl)
+        : new Response(null, { status: 204 });
+    };
+    const api = createPortalApi("", fetcher);
+
+    await expect(
+      api.uploadTaskFile({
+        eventId: "event-1",
+        participantId: "participant-1",
+        taskId: "task-1",
+        kind: "slides",
+        file: new File(["slides"], "session.pdf", { type: "application/pdf" }),
+      }),
+    ).resolves.toEqual({ assetId: "asset-1" });
+
+    expect(calls.map(({ input }) => String(input))).toEqual([
+      "/api/speaker/events/event-1/uploads",
+      capabilityUrl,
+    ]);
+    expect(calls[1]?.init).toMatchObject({ credentials: "omit", method: "PUT" });
+  });
   it("reports failed object storage uploads without submitting the task", async () => {
     let callCount = 0;
     const fetcher = async () => {

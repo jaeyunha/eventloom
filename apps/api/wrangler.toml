@@ -1,6 +1,5 @@
 name = "open-sessionboard-api-local"
 main = "src/infrastructure/cloudflare/worker.ts"
-account_id = "7bcb73282d45e4294cc70dd3e2671bfb"
 compatibility_date = "2026-08-08"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
@@ -12,6 +11,11 @@ enabled = true
 [vars]
 APP_ENV = "local"
 WEB_ORIGIN = "http://127.0.0.1:3015"
+OPENSEND_API_URL = "http://127.0.0.1:8026"
+AUTH_FROM_EMAIL = "login@local.example.test"
+SPEAKERS_FROM_EMAIL = "program@local.example.test"
+CALENDAR_FROM_EMAIL = "schedule@local.example.test"
+CALENDAR_UID_DOMAIN = "calendar.local.example.test"
 
 [[d1_databases]]
 binding = "DB"
@@ -48,25 +52,31 @@ workers_dev = true
 
 [env.staging.observability]
 enabled = true
-[env.staging.ai]
-binding = "AI"
-
-
 [env.staging.vars]
 APP_ENV = "staging"
-AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
-API_ORIGIN = "https://open-sessionboard-api-staging.ashleyha0317.workers.dev"
-WEB_ORIGIN = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev"
-CACHE_INVALIDATION_URL = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/api/internal/cache-invalidation"
-OPENSEND_API_URL = "https://opensend.namuh.co"
-AUTH_FROM_EMAIL = "auth@sessionboard.namuh.co"
-SPEAKERS_FROM_EMAIL = "speakers@sessionboard.namuh.co"
-CALENDAR_FROM_EMAIL = "calendar@sessionboard.namuh.co"
+AI_PROVIDER = "disabled"
+OPENAI_MODEL = "staging-openai-model-placeholder"
+OPENAI_AGENDA_MODEL = "staging-openai-agenda-model-placeholder"
+OPENAI_EVALUATION_MODEL = "staging-openai-evaluation-model-placeholder"
+OPENAI_REMIX_MODEL = "staging-openai-remix-model-placeholder"
+OPENAI_AGENDA_REASONING_EFFORT = "medium"
+OPENAI_EVALUATION_REASONING_EFFORT = "medium"
+OPENAI_REMIX_REASONING_EFFORT = "low"
+API_ORIGIN = "https://api-staging.example.invalid"
+WEB_ORIGIN = "https://web-staging.example.invalid"
+CACHE_INVALIDATION_URL = "https://web-staging.example.invalid/api/internal/cache-invalidation"
+OPENSEND_API_URL = "https://opensend-staging.example.invalid"
+AUTH_FROM_EMAIL = "auth@staging.example.invalid"
+SPEAKERS_FROM_EMAIL = "speakers@staging.example.invalid"
+CALENDAR_FROM_EMAIL = "calendar@staging.example.invalid"
+CALENDAR_UID_DOMAIN = "calendar.staging.example.invalid"
+AIRTABLE_OAUTH_CLIENT_ID = "staging-airtable-oauth-client-placeholder"
+AIRTABLE_PAT_CONNECTION_ENABLED = "false"
 
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "open-sessionboard-staging"
-database_id = "2e219e9b-05e4-45de-b49b-a7f823e28db8"
+database_id = "00000000-0000-0000-0000-000000000002"
 migrations_dir = "migrations"
 
 [[env.staging.durable_objects.bindings]]
@@ -90,32 +100,43 @@ dead_letter_queue = "open-sessionboard-outbox-staging-dlq"
 
 [env.production]
 name = "open-sessionboard-api-production"
-workers_dev = true
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "api-production.example.invalid"
+zone_name = "production.example.invalid"
+custom_domain = true
 
 [env.production.triggers]
 crons = ["0 * * * *"]
 
 [env.production.observability]
 enabled = true
-[env.production.ai]
-binding = "AI"
-
-
 [env.production.vars]
 APP_ENV = "production"
-AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
-API_ORIGIN = "https://open-sessionboard-api-production.ashleyha0317.workers.dev"
-WEB_ORIGIN = "https://open-sessionboard-web-production.ashleyha0317.workers.dev"
-CACHE_INVALIDATION_URL = "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation"
-OPENSEND_API_URL = "https://opensend.namuh.co"
-AUTH_FROM_EMAIL = "auth@sessionboard.namuh.co"
-SPEAKERS_FROM_EMAIL = "speakers@sessionboard.namuh.co"
-CALENDAR_FROM_EMAIL = "calendar@sessionboard.namuh.co"
+AI_PROVIDER = "disabled"
+OPENAI_MODEL = "production-openai-model-placeholder"
+OPENAI_AGENDA_MODEL = "production-openai-agenda-model-placeholder"
+OPENAI_EVALUATION_MODEL = "production-openai-evaluation-model-placeholder"
+OPENAI_REMIX_MODEL = "production-openai-remix-model-placeholder"
+OPENAI_AGENDA_REASONING_EFFORT = "medium"
+OPENAI_EVALUATION_REASONING_EFFORT = "medium"
+OPENAI_REMIX_REASONING_EFFORT = "low"
+API_ORIGIN = "https://api-production.example.invalid"
+WEB_ORIGIN = "https://web-production.example.invalid"
+CACHE_INVALIDATION_URL = "https://web-production.example.invalid/api/internal/cache-invalidation"
+OPENSEND_API_URL = "https://opensend-production.example.invalid"
+AUTH_FROM_EMAIL = "auth@production.example.invalid"
+SPEAKERS_FROM_EMAIL = "speakers@production.example.invalid"
+CALENDAR_FROM_EMAIL = "calendar@production.example.invalid"
+CALENDAR_UID_DOMAIN = "calendar.production.example.invalid"
+AIRTABLE_OAUTH_CLIENT_ID = "production-airtable-oauth-client-placeholder"
+AIRTABLE_PAT_CONNECTION_ENABLED = "false"
 
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "open-sessionboard-production"
-database_id = "d7b70fee-52cb-4548-ace9-41375016640f"
+database_id = "00000000-0000-0000-0000-000000000003"
 migrations_dir = "migrations"
 
 [[env.production.durable_objects.bindings]]

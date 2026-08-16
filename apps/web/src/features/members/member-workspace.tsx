@@ -1,8 +1,44 @@
 "use client";
 
-import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import styles from "../admin/admin-shell.module.css";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
   createMemberApi,
   type MemberApi,
@@ -10,26 +46,28 @@ import {
   type MemberRole,
   memberRoles,
   type OrganizationMember,
-  type ReviewerPool,
-  type SetReviewerPoolInput,
 } from "./api";
+import styles from "./member-workspace.module.css";
+import { inviteRolesForOrganization } from "./member-workspace-model";
 
 export interface MemberWorkspaceProps {
   readonly organizationId: string;
-  readonly eventId?: string;
-  readonly roundId?: string;
   readonly baseUrl?: string;
   readonly api?: MemberApi;
+  readonly view?: "members" | "settings";
+  readonly initialTab?: "people" | "invite";
 }
 
 type MemberFilter = "all" | MemberRole;
 type MemberStatusFilter = "all" | "pending" | "active";
+type WorkspaceTab = "people" | "invite" | "settings";
 
 interface InviteDraft {
   readonly email: string;
   readonly name: string;
   readonly role: MemberRole;
 }
+
 interface WorkspaceOrganization {
   readonly organizationId: string;
   readonly slug: string;
@@ -95,6 +133,7 @@ async function organizationResponse(response: Response): Promise<readonly Worksp
   if (!Array.isArray(payload?.data)) throw new TypeError("The organization response is invalid.");
   return payload.data.map((value) => parseWorkspaceOrganization(value));
 }
+
 async function organizationMutationResponse(
   response: Response,
   fallbackRole: MemberRole,
@@ -112,72 +151,8 @@ async function organizationMutationResponse(
   return parseWorkspaceOrganization(payload?.data, fallbackRole);
 }
 
-const panelStyle = {
-  display: "grid",
-  gap: "1rem",
-  padding: "1.2rem",
-  border: "1px solid var(--admin-border)",
-  borderRadius: "var(--admin-radius-md)",
-  background: "var(--admin-surface)",
-  boxShadow: "var(--admin-shadow)",
-} as const;
-
-const fieldGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
-  gap: "0.85rem",
-} as const;
-
-const fieldStyle = { display: "grid", gap: "0.35rem" } as const;
-const labelStyle = {
-  color: "var(--admin-ink)",
-  fontSize: "0.76rem",
-  fontWeight: 760,
-} as const;
-const inputStyle = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-} as const;
-const mutedStyle = {
-  margin: 0,
-  color: "var(--admin-muted)",
-  fontSize: "0.79rem",
-  lineHeight: 1.55,
-} as const;
-const inlineStyle = {
-  display: "flex",
-  flexWrap: "wrap" as const,
-  gap: "0.55rem",
-  alignItems: "center",
-} as const;
-const badgeStyle = {
-  display: "inline-flex",
-  alignItems: "center",
-  width: "fit-content",
-  padding: "0.2rem 0.5rem",
-  borderRadius: 999,
-  background: "var(--admin-brand-soft)",
-  color: "var(--admin-brand-strong)",
-  fontSize: "0.7rem",
-  fontWeight: 800,
-} as const;
-const tableCellStyle = {
-  padding: "0.72rem 0.65rem",
-  borderBottom: "1px solid var(--admin-border)",
-  verticalAlign: "top" as const,
-} as const;
-
-function apiBaseUrl(explicit: string | undefined): string | null {
-  const value = explicit ?? process.env.NEXT_PUBLIC_API_URL;
-  const normalized = value?.trim().replace(/\/+$/u, "");
-  return normalized && normalized.length > 0 ? normalized : null;
+function apiBaseUrl(explicit: string | undefined): string {
+  return (explicit ?? "").trim().replace(/\/+$/u, "");
 }
 
 function statusLabel(value: string): string {
@@ -190,188 +165,133 @@ function roleLabel(role: MemberRole): string {
   return "Organization owner";
 }
 
-const reviewerOnlyInviteRoles = ["reviewer"] as const;
-
-export function inviteRolesForOrganization(role: MemberRole | undefined): readonly MemberRole[] {
-  return role === "owner" ? memberRoles : reviewerOnlyInviteRoles;
-}
-
 function errorMessage(reason: unknown): string {
   if (reason instanceof MemberApiError) {
     if (reason.code === "LAST_OWNER")
       return "The final organization owner is protected and cannot be changed or revoked.";
     if (reason.code === "ACCESS_DENIED" || reason.status === 403)
       return "Your organization role cannot perform that member change.";
-    if (reason.code === "REVIEWER_NOT_ACTIVE")
-      return "The evaluator must finish one-time setup before joining an evaluation plan.";
-    if (reason.code === "ASSIGNMENT_CAP_REACHED")
-      return "This evaluator has reached the assignment cap for the round.";
-    return reason.message;
+    if (reason.status === 404)
+      return "We could not find that organization. Check the workspace and try again.";
+    if (reason.status === 401)
+      return "Your session has expired. Sign in again and retry this action.";
+    return "We could not complete that member request. Check your access and try again.";
   }
+  if (reason instanceof TypeError)
+    return "We could not load the workspace data. Refresh the page and try again.";
   return reason instanceof Error && reason.message.trim().length > 0
     ? reason.message
-    : "The organization member request could not be completed.";
+    : "We could not complete that request. Try again.";
 }
 
-function FormMessage({ message, error = false }: Readonly<{ message: string; error?: boolean }>) {
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "Date unavailable";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Date unavailable";
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date);
+}
+
+function StatusMessage({ message, error = false }: Readonly<{ message: string; error?: boolean }>) {
+  if (error) {
+    return (
+      <Alert variant="destructive" className={styles.alert}>
+        <AlertTitle>Action needed</AlertTitle>
+        <AlertDescription>{message}</AlertDescription>
+      </Alert>
+    );
+  }
   return (
-    <p
-      role={error ? "alert" : "status"}
-      aria-live="polite"
-      style={{ ...mutedStyle, color: error ? "var(--admin-danger)" : undefined }}
-    >
+    <p className={styles.statusMessage} role="status" aria-live="polite">
       {message}
     </p>
   );
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date);
-}
-
-function dashboardHref(
-  eventId: string | undefined,
-  roundId: string | undefined,
-  reviewerId: string,
-): string {
-  if (!eventId) return "/admin/events";
-  const query = new URLSearchParams({ reviewerId, ...(roundId ? { roundId } : {}) });
-  return `/admin/events/${encodeURIComponent(eventId)}/reviews/evaluate?${query.toString()}`;
-}
-
-function poolFromGrants(pool: ReviewerPool | null): Record<string, number> {
-  if (!pool) return {};
-  return Object.fromEntries(pool.grants.map((grant) => [grant.reviewerId, grant.maxAssignments]));
-}
-
-function reviewersForPool(members: readonly OrganizationMember[]): readonly OrganizationMember[] {
-  return members.filter((member) => member.role === "reviewer");
-}
-
 function MemberRow({
   member,
-  eventId,
-  roundId,
   busy,
   onRoleChange,
   onRevoke,
 }: Readonly<{
   readonly member: OrganizationMember;
-  readonly eventId?: string;
-  readonly roundId?: string;
   readonly busy: boolean;
   readonly onRoleChange: (member: OrganizationMember, role: MemberRole) => void;
   readonly onRevoke: (member: OrganizationMember) => void;
 }>) {
   const ownerProtected = member.role === "owner";
   return (
-    <tr>
-      <th scope="row" style={tableCellStyle}>
-        <strong>{member.name || "Unnamed member"}</strong>
-        <span
-          style={{
-            display: "block",
-            marginTop: "0.2rem",
-            color: "var(--admin-muted)",
-            fontSize: "0.75rem",
-            fontWeight: 500,
-          }}
-        >
-          {member.email}
-        </span>
-        {!member.emailVerified ? (
-          <span
-            style={{
-              display: "block",
-              marginTop: "0.2rem",
-              color: "var(--admin-warning)",
-              fontSize: "0.72rem",
-            }}
-          >
-            Setup pending
-          </span>
-        ) : null}
-      </th>
-      <td style={tableCellStyle}>
-        <span style={badgeStyle}>{roleLabel(member.role)}</span>
+    <TableRow>
+      <TableHead scope="row" className={styles.memberCell}>
+        <strong className={styles.memberName}>{member.name || "Unnamed member"}</strong>
+        <span className={styles.memberMeta}>{member.email}</span>
+        {!member.emailVerified ? <span className={styles.pendingText}>Setup pending</span> : null}
+      </TableHead>
+      <TableCell>
+        <Badge variant="secondary">{roleLabel(member.role)}</Badge>
         {member.role === "reviewer" ? (
-          <span
-            style={{
-              display: "block",
-              marginTop: "0.25rem",
-              color: "var(--admin-muted)",
-              fontSize: "0.72rem",
-            }}
-          >
-            Separate from admin access
-          </span>
+          <span className={styles.cellHint}>Review access only</span>
         ) : null}
-      </td>
-      <td style={tableCellStyle}>
-        <span style={badgeStyle}>{statusLabel(member.status)}</span>
-      </td>
-      <td style={tableCellStyle}>{formatDate(member.updatedAt)}</td>
-      <td style={tableCellStyle}>
-        <div style={{ display: "grid", gap: "0.45rem", minWidth: "12rem" }}>
-          <label style={fieldStyle}>
-            <span className={styles.srOnly}>Change role for {member.email}</span>
-            <select
+      </TableCell>
+      <TableCell>
+        <Badge variant={member.status === "active" ? "default" : "outline"}>
+          {statusLabel(member.status)}
+        </Badge>
+      </TableCell>
+      <TableCell className={styles.dateCell}>{formatDate(member.updatedAt)}</TableCell>
+      <TableCell>
+        <div className={styles.rowActions}>
+          <Select
+            value={member.role}
+            onValueChange={(value) => onRoleChange(member, value as MemberRole)}
+            disabled={busy || ownerProtected}
+          >
+            <SelectTrigger
+              className={styles.compactControl}
               aria-label={`Change role for ${member.email}`}
-              style={inputStyle}
-              value={member.role}
-              disabled={busy || ownerProtected}
-              onChange={(event) => onRoleChange(member, event.target.value as MemberRole)}
             >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
               {memberRoles.map((role) => (
-                <option value={role} key={role}>
+                <SelectItem value={role} key={role}>
                   {roleLabel(role)}
-                </option>
+                </SelectItem>
               ))}
-            </select>
-          </label>
+            </SelectContent>
+          </Select>
           {ownerProtected ? (
-            <span style={{ color: "var(--admin-muted)", fontSize: "0.7rem" }}>
-              Owner protected; only the server can authorize owner changes.
-            </span>
+            <span className={styles.cellHint}>Owner access is protected</span>
           ) : null}
-          {member.role === "reviewer" ? (
-            <Link
-              className={styles.outlineButton}
-              href={dashboardHref(eventId, roundId, member.userId)}
-            >
-              Open assigned review dashboard
-            </Link>
-          ) : null}
-          <button
-            className={styles.secondaryButton}
+          <Button
+            variant="outline"
+            size="sm"
             type="button"
             onClick={() => onRevoke(member)}
             disabled={busy || ownerProtected}
           >
-            {busy ? "Updating…" : "Revoke membership"}
-          </button>
+            {busy ? "Updating…" : "Revoke access"}
+          </Button>
         </div>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
 export function MemberWorkspace({
   organizationId,
-  eventId,
-  roundId,
   baseUrl: explicitBaseUrl,
   api: providedApi,
+  view = "members",
+  initialTab = "people",
 }: MemberWorkspaceProps) {
+  const settingsOnly = view === "settings";
   const baseUrl = apiBaseUrl(explicitBaseUrl);
   const [api, setApi] = useState<MemberApi | null>(providedApi ?? null);
   const [members, setMembers] = useState<readonly OrganizationMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(settingsOnly ? "settings" : initialTab);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<MemberFilter>("all");
   const [statusFilter, setStatusFilter] = useState<MemberStatusFilter>("all");
@@ -382,14 +302,6 @@ export function MemberWorkspace({
   });
   const [inviteBusy, setInviteBusy] = useState(false);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
-  const [poolEventId, setPoolEventId] = useState(eventId ?? "");
-  const [poolRoundId, setPoolRoundId] = useState(roundId ?? "");
-  const [pool, setPool] = useState<ReviewerPool | null>(null);
-  const [poolLoading, setPoolLoading] = useState(false);
-  const [poolError, setPoolError] = useState<string | null>(null);
-  const [poolNotice, setPoolNotice] = useState<string | null>(null);
-  const [poolSaving, setPoolSaving] = useState(false);
-  const [poolSelections, setPoolSelections] = useState<Readonly<Record<string, number>>>({});
   const [organizations, setOrganizations] = useState<readonly WorkspaceOrganization[]>([]);
   const [organizationsLoading, setOrganizationsLoading] = useState(false);
   const [organizationsError, setOrganizationsError] = useState<string | null>(null);
@@ -407,6 +319,7 @@ export function MemberWorkspace({
     [organizationId, organizations],
   );
   const inviteRoles = inviteRolesForOrganization(currentOrganization?.role);
+
   useEffect(() => {
     setInviteDraft((current) => {
       const allowedRoles = inviteRolesForOrganization(currentOrganization?.role);
@@ -419,10 +332,6 @@ export function MemberWorkspace({
       setApi(providedApi);
       return;
     }
-    if (baseUrl === null) {
-      setApi(null);
-      return;
-    }
     try {
       setApi(createMemberApi(baseUrl, organizationId));
     } catch (reason: unknown) {
@@ -430,13 +339,9 @@ export function MemberWorkspace({
       setError(errorMessage(reason));
     }
   }, [baseUrl, organizationId, providedApi]);
+
   const loadOrganizations = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (baseUrl === null) {
-        setOrganizations([]);
-        setOrganizationsError(null);
-        return;
-      }
       setOrganizationsLoading(true);
       setOrganizationsError(null);
       try {
@@ -477,11 +382,7 @@ export function MemberWorkspace({
     async (signal?: AbortSignal): Promise<void> => {
       if (api === null) {
         setLoading(false);
-        setError(
-          baseUrl === null
-            ? "The organization member API is not configured."
-            : "The organization member API is unavailable.",
-        );
+        setError("The people service is unavailable. Refresh the page and try again.");
         return;
       }
       setLoading(true);
@@ -498,68 +399,18 @@ export function MemberWorkspace({
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [api, baseUrl, organizationId],
+    [api, organizationId],
   );
 
   useEffect(() => {
     const controller = new AbortController();
+    if (settingsOnly) {
+      setLoading(false);
+      return () => controller.abort();
+    }
     void loadMembers(controller.signal);
     return () => controller.abort();
-  }, [loadMembers]);
-
-  useEffect(() => {
-    setPoolEventId(eventId ?? "");
-    setPoolRoundId(roundId ?? "");
-    setPool(null);
-    setPoolSelections({});
-    setPoolError(null);
-  }, [eventId, roundId]);
-
-  const loadPool = useCallback(
-    async (eventValue: string, roundValue: string): Promise<void> => {
-      const eventScope = eventValue.trim();
-      const roundScope = roundValue.trim();
-      if (api === null) {
-        setPoolError(
-          baseUrl === null
-            ? "The organization member API is not configured."
-            : "The reviewer pool API is unavailable.",
-        );
-        return;
-      }
-      if (!eventScope || !roundScope) {
-        setPoolError(
-          "Enter both an event ID and a round ID to load a round-specific reviewer pool.",
-        );
-        return;
-      }
-      setPoolLoading(true);
-      setPoolError(null);
-      setPoolNotice(null);
-      try {
-        const nextPool = await api.getReviewerPool(eventScope, roundScope);
-        setPool(nextPool);
-        setPoolSelections(poolFromGrants(nextPool));
-        setPoolEventId(eventScope);
-        setPoolRoundId(roundScope);
-        setPoolNotice(
-          nextPool === null
-            ? "No reviewer pool is configured for this event and round yet."
-            : "Reviewer pool loaded.",
-        );
-      } catch (reason: unknown) {
-        setPoolError(errorMessage(reason));
-      } finally {
-        setPoolLoading(false);
-      }
-    },
-    [api, baseUrl],
-  );
-
-  useEffect(() => {
-    if (api === null || !eventId?.trim() || !roundId?.trim()) return;
-    void loadPool(eventId, roundId);
-  }, [api, eventId, roundId, loadPool]);
+  }, [loadMembers, settingsOnly]);
 
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filteredMembers = useMemo(
@@ -577,18 +428,6 @@ export function MemberWorkspace({
       }),
     [members, normalizedQuery, roleFilter, statusFilter],
   );
-  const reviewers = useMemo(() => reviewersForPool(members), [members]);
-  const activeReviewers = reviewers.filter(
-    (member) => member.status === "active" && member.emailVerified,
-  );
-  const pendingReviewers = reviewers.filter(
-    (member) => !activeReviewers.some((active) => active.userId === member.userId),
-  );
-  const selectedReviewerIds = Object.keys(poolSelections);
-
-  const memberCardEventId = poolEventId.trim() || eventId;
-  const memberCardRoundId = poolRoundId.trim() || roundId;
-
   function updateInvite(field: "email" | "name", value: string): void {
     setInviteDraft((current) => ({ ...current, [field]: value }));
     setNotice(null);
@@ -597,22 +436,18 @@ export function MemberWorkspace({
   async function inviteMember(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (api === null) {
-      setNotice(
-        baseUrl === null
-          ? "The organization member API is not configured."
-          : "The organization member invitation API is unavailable.",
-      );
+      setNotice("The people service is unavailable. Refresh the page and try again.");
       return;
     }
     const email = inviteDraft.email.trim();
     const name = inviteDraft.name.trim();
     const allowedRoles = inviteRolesForOrganization(currentOrganization?.role);
     if (!email) {
-      setNotice("Member email is required.");
+      setNotice("Enter an email address to send an invitation.");
       return;
     }
     if (!allowedRoles.includes(inviteDraft.role)) {
-      setNotice("Your organization role cannot invite that member role.");
+      setNotice("Your organization role can invite evaluators only.");
       return;
     }
     setInviteBusy(true);
@@ -633,8 +468,8 @@ export function MemberWorkspace({
       );
       setNotice(
         result.created
-          ? "Invitation emailed. The evaluator completes setup from their email."
-          : "No duplicate invitation was created. The evaluator can complete setup from their existing email invitation.",
+          ? "Invitation sent. The new member can finish setup from the email."
+          : "That member already has an invitation. No duplicate was sent.",
       );
     } catch (reason: unknown) {
       setNotice(errorMessage(reason));
@@ -645,9 +480,7 @@ export function MemberWorkspace({
 
   async function changeRole(member: OrganizationMember, role: MemberRole): Promise<void> {
     if (member.role === "owner") {
-      setNotice(
-        "Owner membership is protected. Only an authorized owner can change it on the server.",
-      );
+      setNotice("Owner access is protected. An authorized owner must change it.");
       return;
     }
     if (api === null) return;
@@ -668,7 +501,7 @@ export function MemberWorkspace({
 
   async function revokeMember(member: OrganizationMember): Promise<void> {
     if (member.role === "owner") {
-      setNotice("Owner membership is protected and cannot be revoked from this workspace.");
+      setNotice("Owner access is protected and cannot be revoked here.");
       return;
     }
     if (api === null) return;
@@ -682,86 +515,12 @@ export function MemberWorkspace({
     try {
       await api.revokeMember(member.userId);
       setMembers((current) => current.filter((candidate) => candidate.userId !== member.userId));
-      setPoolSelections((current) => {
-        const next = { ...current };
-        delete next[member.userId];
-        return next;
-      });
-      setNotice(`${member.email} was revoked from this organization.`);
+      setNotice(`${member.email} was removed from this organization.`);
     } catch (reason: unknown) {
       setNotice(errorMessage(reason));
     } finally {
       setBusyUserId(null);
     }
-  }
-
-  function toggleReviewer(reviewerId: string): void {
-    setPoolSelections((current) => {
-      if (current[reviewerId] !== undefined) {
-        const next = { ...current };
-        delete next[reviewerId];
-        return next;
-      }
-      const previous =
-        pool?.grants.find((grant) => grant.reviewerId === reviewerId)?.maxAssignments ?? 1;
-      return { ...current, [reviewerId]: previous };
-    });
-    setPoolNotice(null);
-  }
-
-  function updateReviewerCap(reviewerId: string, rawValue: string): void {
-    const value = Number(rawValue);
-    setPoolSelections((current) => ({
-      ...current,
-      [reviewerId]: Number.isSafeInteger(value) && value > 0 ? value : 1,
-    }));
-    setPoolNotice(null);
-  }
-
-  async function savePool(): Promise<void> {
-    if (api === null) {
-      setPoolError(
-        baseUrl === null
-          ? "The organization member API is not configured."
-          : "The reviewer pool API is unavailable.",
-      );
-      return;
-    }
-    const eventScope = poolEventId.trim();
-    const roundScope = poolRoundId.trim();
-    if (!eventScope || !roundScope) {
-      setPoolError("Enter both an event ID and a round ID before saving a reviewer pool.");
-      return;
-    }
-    const reviewersInput = selectedReviewerIds.map((reviewerId) => ({
-      reviewerId,
-      maxAssignments: poolSelections[reviewerId] ?? 1,
-    }));
-    setPoolSaving(true);
-    setPoolError(null);
-    setPoolNotice(null);
-    try {
-      const input: SetReviewerPoolInput = {
-        reviewers: reviewersInput,
-        ...(pool?.version === undefined ? {} : { expectedVersion: pool.version }),
-      };
-      const nextPool = await api.setReviewerPool(eventScope, roundScope, input);
-      setPool(nextPool);
-      setPoolSelections(poolFromGrants(nextPool));
-      setPoolNotice(
-        `Reviewer pool saved for event ${eventScope}, round ${roundScope}. Assignment caps are enforced by the server.`,
-      );
-    } catch (reason: unknown) {
-      setPoolError(errorMessage(reason));
-    } finally {
-      setPoolSaving(false);
-    }
-  }
-
-  function switchOrganization(targetOrganizationId: string): void {
-    const target = targetOrganizationId.trim();
-    if (!target || typeof window === "undefined") return;
-    window.location.assign(`/admin/organizations/${encodeURIComponent(target)}/members`);
   }
 
   function parseOrganizationConfigDraft(): Readonly<Record<string, unknown>> | null {
@@ -776,20 +535,16 @@ export function MemberWorkspace({
 
   async function createOrganization(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (baseUrl === null) {
-      setOrganizationNotice("The organization API is not configured.");
-      return;
-    }
     const nextOrganizationId = organizationDraft.organizationId.trim();
     const nextSlug = organizationDraft.slug.trim();
     const nextName = organizationDraft.name.trim();
     const config = parseOrganizationConfigDraft();
     if (!nextOrganizationId || !nextSlug || !nextName) {
-      setOrganizationNotice("Organization ID, slug, and name are required.");
+      setOrganizationNotice("Enter an organization identifier, slug, and display name.");
       return;
     }
     if (config === null) {
-      setOrganizationNotice("Organization configuration must be a JSON object.");
+      setOrganizationNotice("Advanced configuration must be a JSON object.");
       return;
     }
     setOrganizationBusy(true);
@@ -823,22 +578,18 @@ export function MemberWorkspace({
 
   async function updateOrganization(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (baseUrl === null) {
-      setOrganizationNotice("The organization API is not configured.");
-      return;
-    }
     const current = organizations.find(
       (organization) => organization.organizationId === organizationId.trim(),
     );
     if (current === undefined || current.role !== "owner") {
-      setOrganizationNotice("Only an organization owner can update this configuration.");
+      setOrganizationNotice("Only an organization owner can update these settings.");
       return;
     }
     const nextSlug = organizationDraft.slug.trim();
     const nextName = organizationDraft.name.trim();
     const config = parseOrganizationConfigDraft();
     if (!nextSlug || !nextName || config === null) {
-      setOrganizationNotice("Slug, name, and a JSON object configuration are required.");
+      setOrganizationNotice("Enter a slug, display name, and valid advanced configuration.");
       return;
     }
     setOrganizationBusy(true);
@@ -860,7 +611,7 @@ export function MemberWorkspace({
           organization.organizationId === updated.organizationId ? updated : organization,
         ),
       );
-      setOrganizationNotice("Organization configuration updated.");
+      setOrganizationNotice("Organization settings updated.");
     } catch (reason: unknown) {
       setOrganizationNotice(errorMessage(reason));
     } finally {
@@ -869,581 +620,423 @@ export function MemberWorkspace({
   }
 
   return (
-    <div>
-      <header className={styles.pageHeader}>
-        <div className={styles.pageHeaderCopy}>
-          <p className={styles.eyebrow}>Organization operations · Members</p>
-          <h1 className={styles.pageTitle}>Members and evaluators</h1>
-          <p className={styles.pageDescription}>
-            Invite organization members, keep admin access separate, and configure each event
-            round&apos;s evaluator pool and assignment cap.
+    <main className={styles.workspace}>
+      <header className={styles.header}>
+        <div className={styles.headerCopy}>
+          <p className={styles.eyebrow}>Organization workspace</p>
+          <h1 className={styles.title}>{settingsOnly ? "Settings" : "People"}</h1>
+          <p className={styles.description}>
+            {settingsOnly
+              ? "Manage details and configuration for this organization."
+              : "Manage who can access this organization and invite teammates for organizer or reviewer work."}
           </p>
-          <p style={mutedStyle}>
-            Organization <strong>{organizationId}</strong>
+          <p className={styles.contextLine}>
+            {currentOrganization?.name ?? "Your organization"}
+            {currentOrganization ? ` · ${roleLabel(currentOrganization.role)}` : ""}
           </p>
         </div>
         <div className={styles.headerActions}>
-          <button
-            className={styles.secondaryButton}
+          <Button
+            variant="outline"
             type="button"
-            onClick={() => void loadMembers()}
-            disabled={loading}
+            onClick={() => void (settingsOnly ? loadOrganizations() : loadMembers())}
+            disabled={settingsOnly ? organizationsLoading : loading}
           >
-            {loading ? "Loading members…" : "Refresh members"}
-          </button>
+            {settingsOnly
+              ? organizationsLoading
+                ? "Refreshing…"
+                : "Refresh settings"
+              : loading
+                ? "Refreshing…"
+                : "Refresh people"}
+          </Button>
         </div>
       </header>
 
-      {error ? <FormMessage message={error} error /> : null}
-      {notice ? (
-        <FormMessage
-          message={notice}
-          error={notice.includes("could not") || notice.includes("unavailable")}
-        />
+      {error ? <StatusMessage message={error} error /> : null}
+      {notice ? <StatusMessage message={notice} /> : null}
+      {settingsOnly && organizationsError ? (
+        <StatusMessage message={organizationsError} error />
       ) : null}
-      <section
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="organizations-heading"
-      >
-        <div>
-          <p className={styles.panelEyebrow}>Tenant context</p>
-          <h2 className={styles.panelTitle} id="organizations-heading">
-            Organizations
-          </h2>
-          <p style={mutedStyle}>
-            Switch between organizations you belong to without changing environment configuration.
-            Each destination remains organization-qualified.
-          </p>
-        </div>
-        <div style={fieldGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Switch organization</span>
-            <select
-              aria-label="Switch organization"
-              style={inputStyle}
-              value={organizationId}
-              onChange={(event) => switchOrganization(event.target.value)}
-              disabled={organizationsLoading}
-            >
-              <option value={organizationId}>Current: {organizationId}</option>
-              {organizations
-                .filter((organization) => organization.organizationId !== organizationId.trim())
-                .map((organization) => (
-                  <option value={organization.organizationId} key={organization.organizationId}>
-                    {organization.name} ({organization.role})
-                  </option>
-                ))}
-            </select>
-          </label>
-          <nav aria-label="Organization workspaces" style={{ display: "grid", gap: "0.35rem" }}>
-            {organizations.map((organization) => (
-              <Link
-                href={`/admin/organizations/${encodeURIComponent(organization.organizationId)}/members`}
-                key={organization.organizationId}
-              >
-                {organization.name} · {organization.role}
-              </Link>
-            ))}
-          </nav>
-        </div>
-        {organizationsLoading ? <FormMessage message="Loading your organizations…" /> : null}
-        {organizationsError ? <FormMessage message={organizationsError} error /> : null}
-        {organizationNotice ? <FormMessage message={organizationNotice} /> : null}
-        <form
-          onSubmit={(event) => void createOrganization(event)}
-          style={{ display: "grid", gap: "0.85rem" }}
-        >
-          <div>
-            <p className={styles.panelEyebrow}>Owner self-service</p>
-            <h3 className={styles.panelTitle}>Create organization</h3>
-            <p style={mutedStyle}>
-              The authenticated owner becomes an owner atomically; IDs and slugs are validated by
-              the server and are never selected from a compile-time allowlist.
-            </p>
-          </div>
-          <div style={fieldGridStyle}>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Organization ID</span>
-              <input
-                style={inputStyle}
-                value={organizationDraft.organizationId}
-                onChange={(event) =>
-                  setOrganizationDraft((current) => ({
-                    ...current,
-                    organizationId: event.target.value,
-                  }))
-                }
-                maxLength={128}
-                placeholder="org-secondary"
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Organization slug</span>
-              <input
-                style={inputStyle}
-                value={organizationDraft.slug}
-                onChange={(event) =>
-                  setOrganizationDraft((current) => ({ ...current, slug: event.target.value }))
-                }
-                maxLength={64}
-                placeholder="secondary-team"
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Display name</span>
-              <input
-                style={inputStyle}
-                value={organizationDraft.name}
-                onChange={(event) =>
-                  setOrganizationDraft((current) => ({ ...current, name: event.target.value }))
-                }
-                maxLength={200}
-                placeholder="Secondary team"
-              />
-            </label>
-          </div>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Organization configuration (JSON)</span>
-            <textarea
-              style={{ ...inputStyle, minHeight: "5rem", fontFamily: "monospace" }}
-              value={organizationDraft.config}
-              onChange={(event) =>
-                setOrganizationDraft((current) => ({ ...current, config: event.target.value }))
-              }
-              spellCheck={false}
-            />
-          </label>
-          <div style={inlineStyle}>
-            <button className={styles.primaryButton} type="submit" disabled={organizationBusy}>
-              {organizationBusy ? "Saving organization…" : "Create organization"}
-            </button>
-          </div>
-        </form>
-        <form
-          onSubmit={(event) => void updateOrganization(event)}
-          style={{ display: "grid", gap: "0.85rem" }}
-        >
-          <div>
-            <p className={styles.panelEyebrow}>Owner-only settings</p>
-            <h3 className={styles.panelTitle}>Update current organization</h3>
-            <p style={mutedStyle}>
-              Update the current tenant&apos;s display name, safe slug, or configuration. Server
-              authorization is required.
-            </p>
-          </div>
-          <div style={inlineStyle}>
-            <button className={styles.secondaryButton} type="submit" disabled={organizationBusy}>
-              {organizationBusy ? "Updating organization…" : "Update organization"}
-            </button>
-          </div>
-        </form>
-      </section>
 
-      <section
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="invite-member-heading"
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
+        className={styles.tabs}
       >
-        <div>
-          <p className={styles.panelEyebrow}>CFP-10 · one-time setup</p>
-          <h2 className={styles.panelTitle} id="invite-member-heading">
-            Invite an organization member
-          </h2>
-          <p style={mutedStyle}>
-            Send a secure setup invitation to a member&apos;s email. This workspace never creates or
-            displays credentials.
-          </p>
-        </div>
-        <form
-          onSubmit={(event) => void inviteMember(event)}
-          style={{ display: "grid", gap: "0.85rem" }}
-        >
-          <div style={fieldGridStyle}>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Member name</span>
-              <input
-                style={inputStyle}
-                type="text"
-                value={inviteDraft.name}
-                onChange={(event) => updateInvite("name", event.target.value)}
-                maxLength={200}
-                autoComplete="name"
-                placeholder="Taylor Member"
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Member email</span>
-              <input
-                style={inputStyle}
-                type="email"
-                value={inviteDraft.email}
-                onChange={(event) => updateInvite("email", event.target.value)}
-                maxLength={320}
-                autoComplete="email"
-                required
-                placeholder="member@example.com"
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Member role</span>
-              <select
-                style={inputStyle}
-                value={inviteDraft.role}
-                onChange={(event) => {
-                  setInviteDraft((current) => ({
-                    ...current,
-                    role: event.target.value as MemberRole,
-                  }));
-                  setNotice(null);
-                }}
-                disabled={inviteBusy || api === null}
-              >
-                {inviteRoles.map((role) => (
-                  <option value={role} key={role}>
-                    {roleLabel(role)}
-                  </option>
-                ))}
-              </select>
-              <span style={mutedStyle}>
-                {currentOrganization?.role === "owner"
-                  ? "Owners may invite owners, admins, or evaluators."
-                  : "Your organization role may invite evaluators only."}
-              </span>
-            </label>
-          </div>
-          <div style={inlineStyle}>
-            <button
-              className={styles.primaryButton}
-              type="submit"
-              disabled={inviteBusy || api === null}
-            >
-              {inviteBusy ? "Sending invitation…" : "Invite member"}
-            </button>
-            <span style={mutedStyle}>
-              The evaluator completes setup from their email; this client never creates tokens.
-            </span>
-          </div>
-        </form>
-      </section>
+        {!settingsOnly ? (
+          <TabsList className={styles.tabList} aria-label="People workspace sections">
+            <TabsTrigger value="people">People</TabsTrigger>
+            <TabsTrigger value="invite">Invite member</TabsTrigger>
+          </TabsList>
+        ) : null}
 
-      <section
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="member-list-heading"
-      >
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "space-between",
-            gap: "0.8rem",
-            alignItems: "end",
-          }}
-        >
-          <div>
-            <p className={styles.panelEyebrow}>Organization identity and membership</p>
-            <h2 className={styles.panelTitle} id="member-list-heading">
-              Members {loading ? "" : `(${filteredMembers.length} of ${members.length})`}
-            </h2>
-            <p style={mutedStyle}>
-              Search by name, email, or user ID. Evaluator membership is distinct from organization
-              admin access.
-            </p>
-          </div>
-          <div style={inlineStyle}>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Search members</span>
-              <input
-                style={{ ...inputStyle, minWidth: "15rem" }}
-                aria-label="Search members"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search members"
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Filter members by role</span>
-              <select
-                aria-label="Filter members by role"
-                style={inputStyle}
-                value={roleFilter}
-                onChange={(event) => setRoleFilter(event.target.value as MemberFilter)}
-              >
-                <option value="all">All roles</option>
-                {memberRoles.map((role) => (
-                  <option value={role} key={role}>
-                    {roleLabel(role)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Filter members by status</span>
-              <select
-                aria-label="Filter members by status"
-                style={inputStyle}
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as MemberStatusFilter)}
-              >
-                <option value="all">All statuses</option>
-                <option value="active">Active</option>
-                <option value="pending">Pending setup</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        {loading ? <FormMessage message="Loading organization members…" /> : null}
-        {!loading && error === null && members.length === 0 ? (
-          <div
-            role="status"
-            style={{
-              padding: "1rem",
-              border: "1px dashed var(--admin-border-strong)",
-              borderRadius: "var(--admin-radius-sm)",
-            }}
-          >
-            <strong>No organization members yet.</strong>
-            <p style={mutedStyle}>
-              Invite an evaluator to begin a least-privilege evaluation team.
-            </p>
-          </div>
-        ) : null}
-        {!loading && members.length > 0 && filteredMembers.length === 0 ? (
-          <FormMessage message="No members match the current search and filters." />
-        ) : null}
-        {filteredMembers.length > 0 ? (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-              <caption
-                style={{
-                  position: "absolute",
-                  width: 1,
-                  height: 1,
-                  overflow: "hidden",
-                  clip: "rect(0 0 0 0)",
-                }}
-              >
-                Organization members and evaluator access
-              </caption>
-              <thead>
-                <tr>
-                  {["Member", "Organization role", "Status", "Updated", "Actions"].map(
-                    (heading) => (
-                      <th
-                        key={heading}
-                        scope="col"
-                        style={{
-                          ...tableCellStyle,
-                          color: "var(--admin-muted)",
-                          fontSize: "0.7rem",
-                          textAlign: "left",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
-                        }}
-                      >
-                        {heading}
-                      </th>
-                    ),
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredMembers.map((member) => (
-                  <MemberRow
-                    key={member.userId}
-                    member={member}
-                    {...(memberCardEventId ? { eventId: memberCardEventId } : {})}
-                    {...(memberCardRoundId ? { roundId: memberCardRoundId } : {})}
-                    busy={busyUserId === member.userId}
-                    onRoleChange={(candidate, role) => void changeRole(candidate, role)}
-                    onRevoke={(candidate) => void revokeMember(candidate)}
+        <TabsContent value="people" className={styles.tabContent}>
+          <Card>
+            <CardHeader className={styles.cardHeader}>
+              <div>
+                <CardTitle>People directory</CardTitle>
+                <CardDescription>
+                  Search everyone in this organization and keep administrative access separate from
+                  review access.
+                </CardDescription>
+              </div>
+              <CardAction>
+                <Button type="button" onClick={() => setActiveTab("invite")}>
+                  Invite member
+                </Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent className={styles.cardContent}>
+              <div className={styles.filters}>
+                <div className={styles.searchField}>
+                  <Label htmlFor="member-search">Search people</Label>
+                  <Input
+                    id="member-search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search by name or email"
                   />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
-
-      <section style={{ ...panelStyle, marginBottom: "1rem" }} aria-labelledby="pool-heading">
-        <div>
-          <p className={styles.panelEyebrow}>ABS-02 · event-round business data</p>
-          <h2 className={styles.panelTitle} id="pool-heading">
-            Evaluator pool and assignment caps
-          </h2>
-          <p style={mutedStyle}>
-            Pools are isolated by organization, event, and round. Only active evaluators can receive
-            assignments; caps are checked by the server.
-          </p>
-        </div>
-        <div style={fieldGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Event ID</span>
-            <input
-              style={inputStyle}
-              value={poolEventId}
-              onChange={(event) => setPoolEventId(event.target.value)}
-              placeholder="event-2026"
-            />
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Round ID</span>
-            <input
-              style={inputStyle}
-              value={poolRoundId}
-              onChange={(event) => setPoolRoundId(event.target.value)}
-              placeholder="round-initial"
-            />
-          </label>
-        </div>
-        <div style={inlineStyle}>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => void loadPool(poolEventId, poolRoundId)}
-            disabled={poolLoading || api === null}
-          >
-            {poolLoading ? "Loading pool…" : "Load evaluator pool"}
-          </button>
-          {pool ? (
-            <span style={mutedStyle}>
-              Server version {pool.version} · last updated {formatDate(pool.updatedAt)}
-            </span>
-          ) : null}
-        </div>
-        {poolError ? <FormMessage message={poolError} error /> : null}
-        {poolNotice ? <FormMessage message={poolNotice} /> : null}
-        {!poolLoading && !poolError && !poolEventId.trim() && !poolRoundId.trim() ? (
-          <FormMessage message="Enter an event ID and round ID to configure a round-specific evaluator pool." />
-        ) : null}
-        {!poolLoading && !poolError && pool !== null && activeReviewers.length === 0 ? (
-          <FormMessage message="No active evaluators are available for this pool. Complete evaluator setup first." />
-        ) : null}
-        {!poolLoading &&
-        !poolError &&
-        pool === null &&
-        poolEventId.trim() &&
-        poolRoundId.trim() &&
-        poolNotice === null ? (
-          <FormMessage message="No evaluator pool is configured for this event and round." />
-        ) : null}
-        {activeReviewers.length > 0 ? (
-          <fieldset
-            style={{
-              display: "grid",
-              gap: "0.7rem",
-              margin: 0,
-              padding: "0.85rem",
-              border: "1px solid var(--admin-border)",
-              borderRadius: "var(--admin-radius-sm)",
-            }}
-          >
-            <legend style={{ padding: "0 0.35rem", ...labelStyle }}>
-              Active evaluators for this round
-            </legend>
-            {activeReviewers.map((reviewer) => {
-              const selected = poolSelections[reviewer.userId] !== undefined;
-              return (
-                <div
-                  key={reviewer.userId}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(13rem, 1fr) minmax(8rem, 10rem) auto",
-                    gap: "0.55rem",
-                    alignItems: "end",
-                  }}
-                >
-                  <label
-                    style={{
-                      display: "flex",
-                      gap: "0.45rem",
-                      alignItems: "center",
-                      minHeight: "2.55rem",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() => toggleReviewer(reviewer.userId)}
-                    />
-                    <span>
-                      <strong>{reviewer.name || reviewer.email}</strong>
-                      <span
-                        style={{
-                          display: "block",
-                          color: "var(--admin-muted)",
-                          fontSize: "0.72rem",
-                        }}
-                      >
-                        {reviewer.email}
-                      </span>
-                    </span>
-                  </label>
-                  <label style={fieldStyle}>
-                    <span className={styles.srOnly}>Maximum assignments for {reviewer.email}</span>
-                    <input
-                      style={inputStyle}
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={poolSelections[reviewer.userId] ?? 1}
-                      disabled={!selected || poolSaving}
-                      onChange={(event) => updateReviewerCap(reviewer.userId, event.target.value)}
-                      aria-label={`Maximum assignments for ${reviewer.email}`}
-                    />
-                  </label>
-                  {selected ? (
-                    <span style={{ ...mutedStyle, paddingBottom: "0.65rem" }}>
-                      {pool?.grants.find((grant) => grant.reviewerId === reviewer.userId)
-                        ?.assignedCount ?? 0}{" "}
-                      reserved
-                    </span>
-                  ) : (
-                    <span style={{ ...mutedStyle, paddingBottom: "0.65rem" }}>Not assigned</span>
-                  )}
                 </div>
-              );
-            })}
-          </fieldset>
-        ) : null}
-        {pendingReviewers.length > 0 ? (
-          <p
-            style={{
-              ...mutedStyle,
-              padding: "0.7rem",
-              border: "1px solid var(--admin-border)",
-              borderRadius: "var(--admin-radius-sm)",
-            }}
-          >
-            <strong>Setup required:</strong>{" "}
-            {pendingReviewers.map((reviewer) => reviewer.email).join(", ")} cannot enter a pool
-            until the one-time invitation is completed.
-          </p>
-        ) : null}
-        {activeReviewers.length > 0 ? (
-          <div style={inlineStyle}>
-            <button
-              className={styles.primaryButton}
-              type="button"
-              onClick={() => void savePool()}
-              disabled={poolSaving || api === null}
-            >
-              {poolSaving ? "Saving pool…" : "Save evaluator pool"}
-            </button>
-            <span style={mutedStyle}>
-              {selectedReviewerIds.length} evaluator{selectedReviewerIds.length === 1 ? "" : "s"}{" "}
-              selected · remove all selections to clear this round&apos;s pool.
-            </span>
-          </div>
-        ) : null}
-        {poolEventId.trim() ? (
-          <p style={mutedStyle}>
-            My Evaluations access:{" "}
-            <Link href={dashboardHref(poolEventId.trim(), poolRoundId.trim() || undefined, "pool")}>
-              open the assigned review dashboard
-            </Link>
-            . Evaluator projections never include member administration controls.
-          </p>
-        ) : null}
-      </section>
-    </div>
+                <div className={styles.filterField}>
+                  <Label htmlFor="member-role-filter">Role</Label>
+                  <Select
+                    value={roleFilter}
+                    onValueChange={(value) => setRoleFilter(value as MemberFilter)}
+                  >
+                    <SelectTrigger id="member-role-filter" aria-label="Filter people by role">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All roles</SelectItem>
+                      {memberRoles.map((role) => (
+                        <SelectItem value={role} key={role}>
+                          {roleLabel(role)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className={styles.filterField}>
+                  <Label htmlFor="member-status-filter">Status</Label>
+                  <Select
+                    value={statusFilter}
+                    onValueChange={(value) => setStatusFilter(value as MemberStatusFilter)}
+                  >
+                    <SelectTrigger id="member-status-filter" aria-label="Filter people by status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="pending">Pending setup</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {loading ? <p className={styles.statusMessage}>Loading people…</p> : null}
+              {!loading && error === null && members.length === 0 ? (
+                <Empty className={styles.empty}>
+                  <EmptyHeader>
+                    <EmptyTitle>No one has been added yet</EmptyTitle>
+                    <EmptyDescription>
+                      Invite a teammate to give them organization access. Evaluators can finish
+                      setup from their email.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button type="button" onClick={() => setActiveTab("invite")}>
+                      Invite your first member
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              ) : null}
+              {!loading && members.length > 0 && filteredMembers.length === 0 ? (
+                <p className={styles.statusMessage} role="status" aria-live="polite">
+                  No people match the current search and filters.
+                </p>
+              ) : null}
+              {filteredMembers.length > 0 ? (
+                <Table>
+                  <caption className={styles.srOnly}>People and organization access</caption>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Person</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Last updated</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredMembers.map((member) => (
+                      <MemberRow
+                        key={member.userId}
+                        member={member}
+                        busy={busyUserId === member.userId}
+                        onRoleChange={(candidate, role) => void changeRole(candidate, role)}
+                        onRevoke={(candidate) => void revokeMember(candidate)}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : null}
+            </CardContent>
+            <CardFooter className={styles.cardFooter}>
+              <span>
+                {loading ? "" : `${filteredMembers.length} of ${members.length} people shown`}
+              </span>
+              <span>Owners are protected from accidental removal.</span>
+            </CardFooter>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="invite" className={styles.tabContent}>
+          <Card>
+            <CardHeader>
+              <CardTitle>Invite member</CardTitle>
+              <CardDescription>
+                Send a secure email invitation. The recipient creates their own sign-in details
+                during setup.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className={styles.cardContent}>
+              <form onSubmit={(event) => void inviteMember(event)} className={styles.formStack}>
+                <div className={styles.fieldGrid}>
+                  <div className={styles.field}>
+                    <Label htmlFor="invite-name">Name</Label>
+                    <Input
+                      id="invite-name"
+                      type="text"
+                      value={inviteDraft.name}
+                      onChange={(event) => updateInvite("name", event.target.value)}
+                      maxLength={200}
+                      autoComplete="name"
+                      placeholder="Taylor Member"
+                    />
+                  </div>
+                  <div className={styles.field}>
+                    <Label htmlFor="invite-email">Email</Label>
+                    <Input
+                      id="invite-email"
+                      type="email"
+                      value={inviteDraft.email}
+                      onChange={(event) => updateInvite("email", event.target.value)}
+                      maxLength={320}
+                      autoComplete="email"
+                      required
+                      placeholder="member@example.com"
+                    />
+                  </div>
+                  <div className={styles.field}>
+                    <Label htmlFor="invite-role">Access level</Label>
+                    <Select
+                      value={inviteDraft.role}
+                      onValueChange={(value) => {
+                        setInviteDraft((current) => ({ ...current, role: value as MemberRole }));
+                        setNotice(null);
+                      }}
+                      disabled={inviteBusy || api === null}
+                    >
+                      <SelectTrigger id="invite-role" aria-label="Choose an access level">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {inviteRoles.map((role) => (
+                          <SelectItem value={role} key={role}>
+                            {roleLabel(role)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className={styles.fieldHint}>
+                      {currentOrganization?.role === "owner"
+                        ? "Owners can invite owners, admins, or evaluators."
+                        : "Your organization role can invite evaluators only."}
+                    </p>
+                  </div>
+                </div>
+                <div className={styles.formActions}>
+                  <Button type="submit" disabled={inviteBusy || api === null}>
+                    {inviteBusy ? "Sending invitation…" : "Send invitation"}
+                  </Button>
+                  <span className={styles.fieldHint}>
+                    No credentials are created or shown here.
+                  </span>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="settings" className={styles.tabContent} aria-label="Settings">
+          <Card>
+            <CardHeader>
+              <CardTitle>Organization settings</CardTitle>
+              <CardDescription>
+                Update the current organization. Owner-only changes are checked on the server.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className={styles.cardContent}>
+              <section
+                className={styles.settingsSection}
+                aria-labelledby="current-settings-heading"
+              >
+                <div>
+                  <h2 id="current-settings-heading" className={styles.sectionTitle}>
+                    Current organization
+                  </h2>
+                  <p className={styles.fieldHint}>
+                    Update the display name or slug for this workspace.
+                  </p>
+                </div>
+                <form
+                  onSubmit={(event) => void updateOrganization(event)}
+                  className={styles.formStack}
+                >
+                  <div className={styles.fieldGrid}>
+                    <div className={styles.field}>
+                      <Label htmlFor="current-organization-name">Display name</Label>
+                      <Input
+                        id="current-organization-name"
+                        value={organizationDraft.name}
+                        onChange={(event) =>
+                          setOrganizationDraft((current) => ({
+                            ...current,
+                            name: event.target.value,
+                          }))
+                        }
+                        maxLength={200}
+                        placeholder="Your organization"
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <Label htmlFor="current-organization-slug">Workspace slug</Label>
+                      <Input
+                        id="current-organization-slug"
+                        value={organizationDraft.slug}
+                        onChange={(event) =>
+                          setOrganizationDraft((current) => ({
+                            ...current,
+                            slug: event.target.value,
+                          }))
+                        }
+                        maxLength={64}
+                        placeholder="your-team"
+                      />
+                    </div>
+                  </div>
+                  <details className={styles.advanced}>
+                    <summary>Advanced configuration (JSON)</summary>
+                    <div className={styles.field}>
+                      <Label htmlFor="organization-config">Configuration object</Label>
+                      <Textarea
+                        id="organization-config"
+                        value={organizationDraft.config}
+                        onChange={(event) =>
+                          setOrganizationDraft((current) => ({
+                            ...current,
+                            config: event.target.value,
+                          }))
+                        }
+                        spellCheck={false}
+                        className={styles.configInput}
+                      />
+                    </div>
+                  </details>
+                  <div className={styles.formActions}>
+                    <Button type="submit" variant="outline" disabled={organizationBusy}>
+                      {organizationBusy ? "Saving settings…" : "Save organization settings"}
+                    </Button>
+                  </div>
+                </form>
+              </section>
+
+              <details className={styles.advanced}>
+                <summary>Create another organization (advanced)</summary>
+                <form
+                  onSubmit={(event) => void createOrganization(event)}
+                  className={styles.formStack}
+                >
+                  <p className={styles.fieldHint}>
+                    The authenticated owner becomes an owner of the new organization. Use this only
+                    when you need a separate workspace.
+                  </p>
+                  <div className={styles.fieldGrid}>
+                    <div className={styles.field}>
+                      <Label htmlFor="new-organization-id">Organization identifier</Label>
+                      <Input
+                        id="new-organization-id"
+                        value={organizationDraft.organizationId}
+                        onChange={(event) =>
+                          setOrganizationDraft((current) => ({
+                            ...current,
+                            organizationId: event.target.value,
+                          }))
+                        }
+                        maxLength={128}
+                        placeholder="org-secondary"
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <Label htmlFor="new-organization-slug">Workspace slug</Label>
+                      <Input
+                        id="new-organization-slug"
+                        value={organizationDraft.slug}
+                        onChange={(event) =>
+                          setOrganizationDraft((current) => ({
+                            ...current,
+                            slug: event.target.value,
+                          }))
+                        }
+                        maxLength={64}
+                        placeholder="secondary-team"
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <Label htmlFor="new-organization-name">Display name</Label>
+                      <Input
+                        id="new-organization-name"
+                        value={organizationDraft.name}
+                        onChange={(event) =>
+                          setOrganizationDraft((current) => ({
+                            ...current,
+                            name: event.target.value,
+                          }))
+                        }
+                        maxLength={200}
+                        placeholder="Secondary team"
+                      />
+                    </div>
+                  </div>
+                  <div className={styles.field}>
+                    <Label htmlFor="new-organization-config">Configuration object (JSON)</Label>
+                    <Textarea
+                      id="new-organization-config"
+                      value={organizationDraft.config}
+                      onChange={(event) =>
+                        setOrganizationDraft((current) => ({
+                          ...current,
+                          config: event.target.value,
+                        }))
+                      }
+                      spellCheck={false}
+                      className={styles.configInput}
+                    />
+                  </div>
+                  <div className={styles.formActions}>
+                    <Button type="submit" disabled={organizationBusy}>
+                      {organizationBusy ? "Creating organization…" : "Create organization"}
+                    </Button>
+                  </div>
+                </form>
+              </details>
+              {organizationNotice ? <StatusMessage message={organizationNotice} /> : null}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </main>
   );
 }

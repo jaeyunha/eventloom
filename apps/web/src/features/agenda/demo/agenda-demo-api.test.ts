@@ -78,7 +78,10 @@ describe("local agenda demo API", () => {
       status: "pending",
       baseDraftVersion: 3,
       acceptedChangeIds: [],
-      validation: { conflicts: [] },
+      candidateDiagnostics: {
+        conflicts: [],
+        warnings: [expect.objectContaining({ kind: "capacity" })],
+      },
     });
     expect(generated.diff.changes).toHaveLength(1);
     expect((await api.getWorkspace("evt_demo")).draft).toEqual(initial.draft);
@@ -179,6 +182,7 @@ describe("local agenda demo API", () => {
       draftVersion: resolved.draft.version,
       conflicts: [],
       warnings: [],
+      releaseConflicts: [],
       diff: { added: 2, changed: 0, removed: 0 },
     });
 

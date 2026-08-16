@@ -1,7 +1,4 @@
-import {
-  type DeploymentEnvironment,
-  deploymentEnvironmentSchema,
-} from "@open-sessionboard/contracts";
+import { type DeploymentEnvironment, deploymentEnvironmentSchema } from "@eventloom/contracts";
 import type { OpenSendMessage } from "../../integrations/opensend/types";
 
 export const cloudflareBindingNames = {
@@ -37,6 +34,7 @@ export interface CloudflareOutboxMessage {
 export interface CloudflareBindings {
   readonly APP_ENV: string;
   readonly WEB_ORIGIN: string;
+  readonly CALENDAR_UID_DOMAIN: string;
   readonly DB: D1Database;
   readonly AGENDA_COORDINATOR: DurableObjectNamespace;
   readonly PRIVATE_FILES: R2Bucket;
@@ -77,6 +75,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasFunction(value: unknown, property: string): boolean {
   return isRecord(value) && typeof value[property] === "function";
+}
+
+const domainLabelPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/u;
+
+function validDomainName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 253 &&
+    !value.endsWith(".") &&
+    value.includes(".") &&
+    value.split(".").every((label) => domainLabelPattern.test(label))
+  );
 }
 
 function inspectWebOrigin(
@@ -129,6 +139,9 @@ export function inspectCloudflareBindings(source: unknown): CloudflareBindingIns
   const webOriginIssue = inspectWebOrigin(source.WEB_ORIGIN, environment);
   if (webOriginIssue) {
     issues.push(webOriginIssue);
+  }
+  if (!validDomainName(source.CALENDAR_UID_DOMAIN)) {
+    issues.push("CALENDAR_UID_DOMAIN must be a valid domain name");
   }
 
   if (!hasFunction(source.DB, "prepare") || !hasFunction(source.DB, "batch")) {

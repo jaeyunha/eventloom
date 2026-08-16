@@ -7,6 +7,7 @@ import type {
   CommunicationActor,
   CommunicationAudience,
   CommunicationTemplatePurpose,
+  ReminderSubject,
 } from "./types";
 import { COMMUNICATION_AUDIENCES, COMMUNICATION_TEMPLATE_PURPOSES } from "./types";
 
@@ -18,11 +19,7 @@ export interface CommunicationRouteEnvironment {
 
 const purposeSchema = z.enum(COMMUNICATION_TEMPLATE_PURPOSES);
 const audienceSchema = z.enum(COMMUNICATION_AUDIENCES);
-const senderSchema = z.enum([
-  "auth@sessionboard.namuh.co",
-  "speakers@sessionboard.namuh.co",
-  "calendar@sessionboard.namuh.co",
-]);
+const senderSchema = z.email().max(320);
 const dataSchema = z.record(z.string(), z.unknown()).optional();
 
 const createTemplateSchema = z.object({
@@ -45,12 +42,19 @@ const createTemplateVersionSchema = z.object({
 });
 
 const approveTemplateSchema = z.object({ version: z.number().int().positive() });
+const recipientIdsSchema = z
+  .array(z.string().min(1).max(200))
+  .min(1)
+  .refine((recipientIds) => new Set(recipientIds).size === recipientIds.length, {
+    message: "Recipient ids must be unique.",
+  });
 const previewSchema = z.object({
   eventId: z.string().min(1).optional(),
   purpose: purposeSchema,
   templateId: z.string().min(1),
   templateVersion: z.number().int().positive().optional(),
   audience: audienceSchema,
+  recipientIds: recipientIdsSchema.optional(),
   data: dataSchema,
 });
 const sendSchema = z.object({
@@ -71,6 +75,21 @@ const deliverySchema = z.object({
   reason: z.string().optional(),
   occurredAt: z.string().optional(),
 });
+
+const reminderTriggerSchema = z.enum(["automatic", "manual"]);
+const reminderPreviewSchema = z.object({
+  triggerType: reminderTriggerSchema.optional(),
+  scheduledAt: z.iso.datetime().optional(),
+});
+const createReminderRunSchema = z.object({
+  idempotencyKey: z.string().min(1).max(300),
+  expectedAudienceRevision: z.string().min(1).max(300),
+  scheduledAt: z.iso.datetime().optional(),
+});
+const reminderSubjectSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("task"), taskId: z.string().min(1) }),
+  z.object({ type: z.literal("review"), reviewAssignmentId: z.string().min(1) }),
+]);
 
 interface ScopedBody {
   eventId?: string | undefined;
@@ -227,6 +246,7 @@ export function createCommunicationRoutes(
         templateId: body.templateId,
         audience: body.audience,
         ...(body.templateVersion === undefined ? {} : { templateVersion: body.templateVersion }),
+        ...(body.recipientIds === undefined ? {} : { recipientIds: body.recipientIds }),
         ...(body.data === undefined ? {} : { data: body.data }),
       }),
     );
@@ -279,6 +299,12 @@ export function createCommunicationRoutes(
     return context.json(await service.sendTransactional(current, transactional), 201);
   });
 
+  routes.get("/sends", async (context) => {
+    const current = actor(context);
+    const eventId = eventIdFor(context, {});
+    return context.json({ sends: await service.listSends(current, eventId) });
+  });
+
   routes.get("/sends/:sendId", async (context) => {
     const current = actor(context);
     const eventId = eventIdFor(context, {});
@@ -288,9 +314,9 @@ export function createCommunicationRoutes(
   routes.get("/sends/:sendId/history", async (context) => {
     const current = actor(context);
     const eventId = eventIdFor(context, {});
-    return context.json({
-      history: await service.listDeliveryHistory(current, eventId, context.req.param("sendId")),
-    });
+    return context.json(
+      await service.listDeliveryHistory(current, eventId, context.req.param("sendId")),
+    );
   });
 
   routes.post("/sends/:sendId/retry", async (context) => {
@@ -313,6 +339,110 @@ export function createCommunicationRoutes(
           : { providerMessageId: body.providerMessageId }),
         ...(body.reason === undefined ? {} : { reason: body.reason }),
         ...(body.occurredAt === undefined ? {} : { occurredAt: body.occurredAt }),
+      }),
+    );
+  });
+
+  routes.post("/reminders/preview", async (context) => {
+    const current = actor(context);
+    const body = reminderPreviewSchema.parse(await context.req.json());
+    const eventId = eventIdFor(context, {});
+    return context.json(
+      await service.previewReminders(current, {
+        organizationId: current.tenantId,
+        eventId,
+        ...(body.triggerType === undefined ? {} : { triggerType: body.triggerType }),
+        ...(body.scheduledAt === undefined ? {} : { scheduledAt: body.scheduledAt }),
+      }),
+    );
+  });
+
+  routes.post("/reminders/runs", async (context) => {
+    const current = actor(context);
+    const body = createReminderRunSchema.parse(await context.req.json());
+    const eventId = eventIdFor(context, {});
+    return context.json(
+      await service.runManualReminders(current, {
+        organizationId: current.tenantId,
+        eventId,
+        idempotencyKey: body.idempotencyKey,
+        expectedAudienceRevision: body.expectedAudienceRevision,
+        ...(body.scheduledAt === undefined ? {} : { scheduledAt: body.scheduledAt }),
+      }),
+      201,
+    );
+  });
+
+  routes.get("/reminders/runs", async (context) => {
+    const current = actor(context);
+    const eventId = eventIdFor(context, {});
+    const triggerTypeValue = context.req.query("triggerType");
+    const triggerType =
+      triggerTypeValue === undefined ? undefined : reminderTriggerSchema.parse(triggerTypeValue);
+    const runs = await service.listReminderRuns(current, {
+      organizationId: current.tenantId,
+      eventId,
+    });
+    return context.json({
+      runs:
+        triggerType === undefined
+          ? runs
+          : runs.filter((candidate) => candidate.triggerType === triggerType),
+    });
+  });
+
+  routes.get("/reminders/dispatches", async (context) => {
+    const current = actor(context);
+    const eventId = eventIdFor(context, {});
+    const runId = context.req.query("runId");
+    return context.json({
+      dispatches: await service.listReminderDispatches(current, {
+        organizationId: current.tenantId,
+        eventId,
+        ...(runId === undefined ? {} : { runId }),
+      }),
+    });
+  });
+
+  routes.get("/reminders/runs/:runId/dispatches", async (context) => {
+    const current = actor(context);
+    const eventId = eventIdFor(context, {});
+    return context.json({
+      dispatches: await service.listReminderDispatches(current, {
+        organizationId: current.tenantId,
+        eventId,
+        runId: requiredParam(context, "runId"),
+      }),
+    });
+  });
+
+  routes.get("/reminders/facts", async (context) => {
+    const current = actor(context);
+    const eventId = eventIdFor(context, {});
+    const recipientApplicationId = context.req.query("recipientApplicationId");
+    const subjectValue: unknown =
+      context.req.query("subjectType") === "task"
+        ? { type: "task", taskId: context.req.query("taskId") }
+        : context.req.query("subjectType") === "review"
+          ? {
+              type: "review",
+              reviewAssignmentId: context.req.query("reviewAssignmentId"),
+            }
+          : { type: context.req.query("subjectType") };
+    const subject = reminderSubjectSchema.parse(subjectValue) as ReminderSubject;
+    if (recipientApplicationId === undefined || recipientApplicationId.length === 0) {
+      throw new CommunicationError(
+        "COMMUNICATION_INVALID_INPUT",
+        400,
+        "recipientApplicationId is required.",
+      );
+    }
+    return context.json(
+      await service.getReminderFacts(current, {
+        organizationId: current.tenantId,
+        eventId,
+        recipientApplicationId,
+        subject,
       }),
     );
   });

@@ -1,3 +1,4 @@
+import { standardPresentationUploadMimeTypes } from "@eventloom/contracts";
 import type {
   AuditEntry,
   CfpForm,
@@ -6,6 +7,7 @@ import type {
   SubmissionVersion,
 } from "../features/cfp/model";
 import {
+  type CfpEffects,
   CfpError,
   type CfpFileAsset,
   type CfpFileAssetGateway,
@@ -14,7 +16,11 @@ import {
   type CfpRepository,
   CfpService,
 } from "../features/cfp/service";
-import { LOCAL_ORGANIZATION_ID } from "./constants";
+import type {
+  PrivateAssetCapabilityBinding,
+  PrivateAssetGateway,
+  PrivateUploadGrant,
+} from "../features/speaker/types";
 
 const LOCAL_CFP_NOW = "2026-08-08T12:00:00.000Z";
 
@@ -26,27 +32,16 @@ function key(tenantId: string, id: string): string {
   return `${tenantId}\u0000${id}`;
 }
 
-function seededEvent(tenantId: string, eventId: string, name: string): EventCfp {
-  return {
-    id: eventId,
-    tenantId,
-    version: 1,
-    slug: eventId,
-    name,
-    timezone: "America/Los_Angeles",
-    opensAt: "2026-08-01T07:00:00.000Z",
-    closesAt: "2026-09-15T07:00:00.000Z",
-  };
-}
+type LocalCfpEventRepository = Pick<CfpRepository, "getEvent" | "getEventBySlug" | "saveEvent">;
 
-function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): CfpForm {
+function localFixtureForm(tenantId: string, eventId: string, formId = "main-cfp"): CfpForm {
   return {
     id: formId,
     tenantId,
     eventId,
     name: "Main call for speakers",
     version: 1,
-    status: "published",
+    status: "draft",
     welcomeContent: "Share the session you want to bring to our community.",
     settings: {
       speakerLimit: 3,
@@ -55,7 +50,7 @@ function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): Cfp
       adminNotificationsEnabled: true,
       confirmationMessage: "Your proposal has been received.",
       successContent: "Thank you for contributing to the program.",
-      redirectUrl: "http://localhost:3015/portal",
+      redirectUrl: "http://127.0.0.1:3015/portal",
     },
     sections: [
       { id: "session", title: "Session", description: "Tell us about the proposed session." },
@@ -90,6 +85,30 @@ function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): Cfp
         options: ["Featured Keynote", "Keynote", "Breakout Session", "Workshop"],
       },
       {
+        id: "field-level",
+        sectionId: "session",
+        key: "level",
+        label: "Audience level",
+        kind: "select",
+        required: true,
+        options: ["Introductory", "Intermediate", "Advanced", "All levels"],
+      },
+      {
+        id: "field-track",
+        sectionId: "session",
+        key: "track",
+        label: "Program track",
+        kind: "select",
+        required: true,
+        options: [
+          "Platform & Infrastructure",
+          "Product & Design",
+          "Leadership & Teams",
+          "Data & AI",
+          "Community & Ecosystems",
+        ],
+      },
+      {
         id: "field-slides",
         sectionId: "session",
         key: "slides",
@@ -98,7 +117,7 @@ function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): Cfp
         required: false,
         options: [],
         fileRequest: {
-          allowedMimeTypes: ["application/pdf"],
+          allowedMimeTypes: [...standardPresentationUploadMimeTypes],
           maxBytes: 10 * 1024 * 1024,
           required: false,
           owner: "submission",
@@ -139,45 +158,30 @@ function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): Cfp
 }
 
 class LocalCfpRepository implements CfpRepository {
-  readonly #events = new Map<string, EventCfp>();
   readonly #forms = new Map<string, CfpForm>();
   readonly #submissions = new Map<string, Submission>();
+  readonly #sharedEvents: LocalCfpEventRepository | undefined;
   readonly versions: SubmissionVersion[] = [];
   readonly audits: AuditEntry[] = [];
 
-  constructor() {
-    for (const [event, formId] of [
-      [seededEvent(LOCAL_ORGANIZATION_ID, "demo-event", "Open Sessionboard Demo"), "main-cfp"],
-      [
-        seededEvent(LOCAL_ORGANIZATION_ID, "evaluator-2026", "Welcome to our event!"),
-        "evaluator-2026-cfp",
-      ],
-      [
-        seededEvent(LOCAL_ORGANIZATION_ID, "resume-check", "Resume Draft Test Event"),
-        "resume-check-cfp",
-      ],
-      [
-        seededEvent(LOCAL_ORGANIZATION_ID, "validation-check", "Validation Test Event"),
-        "validation-check-cfp",
-      ],
-      [seededEvent("organization-1", "summit-2026", "Open Sessionboard Summit 2026"), "main-cfp"],
-    ] as const) {
-      this.#events.set(key(event.tenantId, event.id), event);
-      const form = seededForm(event.tenantId, event.id, formId);
-      this.#forms.set(key(form.tenantId, form.id), form);
-    }
+  constructor(sharedEvents?: LocalCfpEventRepository) {
+    this.#sharedEvents = sharedEvents;
   }
 
   async getEvent(tenantId: string, eventId: string) {
-    return clone(this.#events.get(key(tenantId, eventId)) ?? null);
+    return clone((await this.#sharedEvents?.getEvent(tenantId, eventId)) ?? null);
+  }
+
+  async getEventBySlug(tenantId: string, eventSlug: string) {
+    return clone((await this.#sharedEvents?.getEventBySlug(tenantId, eventSlug)) ?? null);
   }
 
   async saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void> {
-    const storageKey = key(event.tenantId, event.id);
-    if ((this.#events.get(storageKey)?.version ?? null) !== expectedVersion) {
-      throw new CfpError("CONFLICT", "The event CFP configuration has changed.");
+    const shared = await this.#sharedEvents?.getEvent(event.tenantId, event.id);
+    if (shared === undefined || shared === null || this.#sharedEvents === undefined) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
     }
-    this.#events.set(storageKey, clone(event));
+    await this.#sharedEvents.saveEvent(event, expectedVersion);
   }
 
   async getForm(tenantId: string, formId: string) {
@@ -200,6 +204,12 @@ class LocalCfpRepository implements CfpRepository {
 
   async getSubmission(tenantId: string, submissionId: string) {
     return clone(this.#submissions.get(key(tenantId, submissionId)) ?? null);
+  }
+
+  async listSubmissionsForEvent(tenantId: string, eventId: string) {
+    return [...this.#submissions.values()]
+      .filter((submission) => submission.tenantId === tenantId && submission.eventId === eventId)
+      .map(clone);
   }
 
   async countOwnedSubmissions(input: {
@@ -235,8 +245,11 @@ class LocalCfpRepository implements CfpRepository {
 type LocalFileCapability = {
   readonly assetId: string;
   readonly fieldKey: string;
+  readonly objectKey: string;
+  readonly fileName: string;
   readonly token: string;
   readonly expiresAt: string;
+  grant?: PrivateUploadGrant;
   used: boolean;
   uploaded?: {
     readonly contentType: string;
@@ -258,10 +271,18 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
   readonly #capabilities = new Map<string, LocalFileCapability>();
   readonly #requestIds = new Map<string, string>();
   readonly #now: () => Date;
+  readonly #privateAssets:
+    | Pick<PrivateAssetGateway, "registerUploadCapability" | "inspectObject">
+    | undefined;
 
-  constructor(repository: LocalCfpRepository, now: () => Date) {
+  constructor(
+    repository: LocalCfpRepository,
+    now: () => Date,
+    privateAssets?: Pick<PrivateAssetGateway, "registerUploadCapability" | "inspectObject">,
+  ) {
     this.#repository = repository;
     this.#now = now;
+    this.#privateAssets = privateAssets;
   }
 
   private async context(input: {
@@ -376,6 +397,15 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     const assetId = `cfp-file-local-${digest.slice(0, 32)}`;
     const token = `local-upload-${(await localDigest(`${requestKey}:token`)).slice(0, 40)}`;
     const expiresAt = new Date(this.#now().getTime() + 15 * 60 * 1000).toISOString();
+    const objectKey = [
+      "cfp",
+      encodeURIComponent(input.tenantId),
+      encodeURIComponent(input.eventId),
+      encodeURIComponent(submission.id),
+      input.owner,
+      encodeURIComponent(input.fieldKey),
+      assetId,
+    ].join("/");
     const asset: CfpFileAsset = {
       assetId,
       tenantId: input.tenantId,
@@ -392,10 +422,27 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     const capability: LocalFileCapability = {
       assetId,
       fieldKey: input.fieldKey,
+      objectKey,
+      fileName,
       token,
       expiresAt,
       used: false,
     };
+    if (this.#privateAssets?.registerUploadCapability !== undefined) {
+      const binding: PrivateAssetCapabilityBinding = {
+        capabilityId: assetId,
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        submissionId: submission.id,
+        participantId: input.participantId ?? "cfp-submission",
+        objectKey,
+        contentType,
+        sizeBytes: input.sizeBytes,
+        fileName,
+        expiresAt,
+      };
+      capability.grant = await this.#privateAssets.registerUploadCapability(binding);
+    }
     this.#capabilities.set(assetId, capability);
     return this.authorization(asset, capability);
   }
@@ -407,7 +454,7 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     return {
       authorizationId: asset.assetId,
       asset: clone(asset),
-      grant: {
+      grant: capability.grant ?? {
         method: "PUT",
         url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(asset.assetId)}/${capability.token}`,
         headers: {
@@ -502,7 +549,20 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
       throw new CfpError("VALIDATION_FAILED", "The private upload asset is no longer available.");
     }
     if (input.state === "ready") {
-      if (capability.uploaded === undefined || capability.uploaded.sizeBytes !== asset.sizeBytes) {
+      const uploaded =
+        this.#privateAssets?.inspectObject === undefined
+          ? capability.uploaded
+          : await this.#privateAssets.inspectObject({
+              objectKey: capability.objectKey,
+              contentType: asset.contentType,
+              sizeBytes: asset.sizeBytes,
+            });
+      if (
+        uploaded === undefined ||
+        uploaded === null ||
+        uploaded.sizeBytes !== asset.sizeBytes ||
+        uploaded.contentType.trim().toLowerCase() !== asset.contentType.trim().toLowerCase()
+      ) {
         throw new CfpError("VALIDATION_FAILED", "The private upload has not been uploaded.");
       }
     }
@@ -567,16 +627,53 @@ class LocalCfpIdempotency implements CfpIdempotencyCoordinator {
   }
 }
 
-export function createLocalCfpService(): CfpService {
+export function createLocalCfpService(
+  privateAssets?: Pick<PrivateAssetGateway, "registerUploadCapability" | "inspectObject">,
+  effects?: CfpEffects,
+  sharedEvents?: LocalCfpEventRepository,
+): CfpService {
   let sequence = 0;
   const now = () => new Date(LOCAL_CFP_NOW);
-  const repository = new LocalCfpRepository();
+  const repository = new LocalCfpRepository(sharedEvents);
   return new CfpService({
     repository,
+    organization: {
+      getPublicOrganization: async (tenantId) => ({
+        id: tenantId,
+        slug: tenantId,
+        name: "Eventloom",
+      }),
+    },
     idempotency: new LocalCfpIdempotency(),
-    effects: { async enqueueSubmissionConfirmation() {} },
+    effects: effects ?? { async enqueueSubmissionConfirmation() {} },
     clock: { now },
     ids: { next: (prefix) => `${prefix}_local_${++sequence}` },
-    fileAssets: new LocalCfpFileAssetGateway(repository, now),
+    fileAssets: new LocalCfpFileAssetGateway(repository, () => new Date(), privateAssets),
+  });
+}
+
+export async function seedLocalCfpForm(
+  service: CfpService,
+  input: {
+    tenantId: string;
+    eventId: string;
+    formId?: string;
+    actorId: string;
+  },
+): Promise<CfpForm> {
+  const formId = input.formId ?? "main-cfp";
+  const draft = await service.createForm({
+    tenantId: input.tenantId,
+    form: localFixtureForm(input.tenantId, input.eventId, formId),
+    expectedVersion: null,
+    idempotencyKey: `local-cfp-form:${input.eventId}:${formId}`,
+  });
+  return service.publishForm({
+    tenantId: input.tenantId,
+    eventId: input.eventId,
+    formId: draft.id,
+    organizerId: input.actorId,
+    expectedVersion: draft.version,
+    idempotencyKey: `local-cfp-form-publish:${input.eventId}:${formId}`,
   });
 }

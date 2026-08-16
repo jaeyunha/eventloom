@@ -23,6 +23,25 @@ export interface SpeakerRouteDependencies {
   authenticate(request: Request): Promise<{ accountId: string } | null>;
 }
 
+const calendarDatePattern = /^\d{4}-\d{2}-\d{2}$/u;
+const calendarDateSchema = z.string().superRefine((value, context) => {
+  if (!calendarDatePattern.test(value)) {
+    context.addIssue({ code: "custom", message: "Expected YYYY-MM-DD." });
+    return;
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  const roundTrip = new Date(0);
+  roundTrip.setUTCFullYear(year ?? 0, (month ?? 0) - 1, day ?? 0);
+  roundTrip.setUTCHours(0, 0, 0, 0);
+  if (
+    roundTrip.getUTCFullYear() !== year ||
+    roundTrip.getUTCMonth() + 1 !== month ||
+    roundTrip.getUTCDate() !== day
+  ) {
+    context.addIssue({ code: "custom", message: "Expected a real calendar date." });
+  }
+});
+
 const transitionTaskSchema = z.object({
   toStatus: z.enum(speakerTaskStatuses),
   expectedVersion: z.number().int().nonnegative(),
@@ -74,31 +93,36 @@ const organizerTaskCreateSchema = z.object({
   title: z.string().trim().min(1).max(200),
   instructions: z.string().max(10_000).optional(),
   description: z.string().max(10_000).optional(),
-  dueAt: z.string().trim().min(1).optional(),
-  dueDate: z.string().trim().min(1).optional(),
+  dueAt: calendarDateSchema.optional(),
+  dueDate: calendarDateSchema.optional(),
   allowedMimeTypes: z.array(z.string().trim().min(1).max(120)).default([]),
   maxBytes: z.number().int().positive().optional(),
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
   reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
-  assigneeIds: z.array(z.string().trim().min(1)).min(1),
-  submissionId: z.string().trim().min(1).optional(),
+  assignments: z
+    .array(
+      z.object({
+        participantId: z.string().trim().min(1),
+        submissionId: z.string().trim().min(1).nullable(),
+      }),
+    )
+    .min(1),
 });
 
 const organizerTaskUpdateSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   instructions: z.string().max(10_000).optional(),
   description: z.string().max(10_000).optional(),
-  dueDate: z.string().trim().min(1).optional(),
-  dueAt: z.string().trim().min(1).optional(),
+  dueDate: calendarDateSchema.optional(),
+  dueAt: calendarDateSchema.optional(),
   allowedMimeTypes: z.array(z.string().trim().min(1).max(120)).optional(),
   maxBytes: z.number().int().positive().optional(),
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
   reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
-  assigneeIds: z.array(z.string().trim().min(1)).optional(),
   status: z.enum(speakerTaskStatuses).optional(),
   expectedVersion: z.number().int().nonnegative(),
 });
@@ -106,7 +130,8 @@ const organizerTaskUpdateSchema = z.object({
 const organizerAssetReviewSchema = z.object({
   state: z.enum(["approved", "needs_changes"]),
   note: z.string().max(2_000).optional(),
-  expectedVersion: z.number().int().nonnegative().optional(),
+  expectedVersion: z.number().int().nonnegative(),
+  release: z.boolean().optional(),
 });
 const organizerDeliverablesExportStatuses = [
   "all",
@@ -360,8 +385,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.reminderOffsetsMinutes === undefined
         ? {}
         : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
-      assigneeIds: body.assigneeIds,
-      ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
+      assignments: body.assignments,
     });
     const task = tasks[0];
     return context.json({ data: task, items: tasks }, 201);
@@ -394,7 +418,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.acceptedAssetKinds === undefined
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
-      ...(body.assigneeIds === undefined ? {} : { assigneeIds: body.assigneeIds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
       ...(body.reminderOffsetsMinutes === undefined
         ? {}
@@ -533,7 +556,8 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       assetId: context.req.param("assetId"),
       state: body.state,
       ...(body.note === undefined ? {} : { note: body.note }),
-      ...(body.expectedVersion === undefined ? {} : { expectedVersion: body.expectedVersion }),
+      expectedVersion: body.expectedVersion,
+      ...(body.release === undefined ? {} : { release: body.release }),
     });
     return context.json({ data: publicAsset(asset) });
   });
@@ -747,8 +771,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.reminderOffsetsMinutes === undefined
         ? {}
         : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
-      assigneeIds: body.assigneeIds,
-      ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
+      assignments: body.assignments,
     });
     return context.json({ data: tasks[0], items: tasks }, 201);
   });
@@ -777,7 +800,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
           ? {}
           : { maxBytes: body.maxSizeBytes }
         : { maxBytes: body.maxBytes }),
-      ...(body.assigneeIds === undefined ? {} : { assigneeIds: body.assigneeIds }),
       ...(body.acceptedAssetKinds === undefined
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
@@ -820,7 +842,8 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       assetId: context.req.param("assetId"),
       state: body.state,
       ...(body.note === undefined ? {} : { note: body.note }),
-      ...(body.expectedVersion === undefined ? {} : { expectedVersion: body.expectedVersion }),
+      expectedVersion: body.expectedVersion,
+      ...(body.release === undefined ? {} : { release: body.release }),
     });
     return context.json({ data: publicAsset(asset) });
   });
@@ -1098,10 +1121,11 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
-    const result = await dependencies.service.issueOrganizerUploadGrant({
+    const result = await dependencies.service.issueUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
       participantId: context.req.param("participantId"),
+      organizer: false,
       ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
       ...(body.supersedesAssetId === undefined
         ? {}
@@ -1308,6 +1332,15 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
     return context.json({ data: publicAsset(asset) });
   });
 
+  app.post("/events/:eventId/assets/:assetId/upload-authorization", async (context) => {
+    const data = await dependencies.service.reauthorizePendingUpload({
+      eventId: context.req.param("eventId"),
+      accountId: context.get("speakerAccountId"),
+      assetId: context.req.param("assetId"),
+    });
+    return context.json({ data: { ...data, asset: publicAsset(data.asset) } });
+  });
+
   app.post("/events/:eventId/assets/:assetId/download", async (context) => {
     const data = await dependencies.service.issueDownloadGrant({
       eventId: context.req.param("eventId"),
@@ -1362,7 +1395,10 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
   return app;
 }
 const canonicalSpeakerSchema = z.object({
-  idempotencyKey: z.string().trim().min(1).max(300).optional(),
+  idempotencyKey: z.string().trim().min(1).max(300),
+  sourceType: z.enum(["cfp", "manual", "csv", "crm"]).default("manual"),
+  sourceId: z.string().trim().min(1).max(300).optional(),
+  participantId: z.string().trim().min(1).max(300).optional(),
   displayName: z.string().trim().min(1).max(200),
   email: z.string().trim().min(1).max(320),
   jobTitle: z.string().max(160),
@@ -1383,31 +1419,38 @@ const canonicalSpeakerSchema = z.object({
   status: z.string().trim().min(1).max(80),
 });
 
-const canonicalSpeakerUpdateSchema = canonicalSpeakerSchema.extend({
-  expectedVersion: z.number().int().nonnegative(),
-});
+const canonicalSpeakerUpdateSchema = canonicalSpeakerSchema
+  .omit({
+    idempotencyKey: true,
+    sourceType: true,
+    sourceId: true,
+    participantId: true,
+  })
+  .extend({
+    expectedVersion: z.number().int().nonnegative(),
+  });
 
-const canonicalImportRowSchema = z.object({
-  rowNumber: z.number().int().positive(),
-  displayName: z.string().max(200),
-  email: z.string().max(320),
-  jobTitle: z.string().max(160),
-  company: z.string().max(200),
-  biography: z.string().max(20_000),
-  socialLinks: z.record(z.string(), z.string()).default({}),
-  status: z.string().max(80).optional(),
-});
-
-const canonicalImportCommitSchema = z.object({
-  rows: z.array(canonicalImportRowSchema).min(1).max(500),
-  idempotencyKey: z.string().trim().min(1).max(300),
-});
+const canonicalImportCommitSchema = z
+  .object({
+    previewId: z.string().trim().min(1).max(200),
+    sourceDigest: z.string().trim().min(1).max(200).optional(),
+    idempotencyKey: z.string().trim().min(1).max(300),
+  })
+  .strict();
 
 const canonicalTaskSchema = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().max(10_000),
-  dueAt: z.string().trim().min(1),
-  participantIds: z.array(z.string().trim().min(1)).min(1).max(500),
+  dueAt: calendarDateSchema,
+  assignments: z
+    .array(
+      z.object({
+        participantId: z.string().trim().min(1),
+        submissionId: z.string().trim().min(1).nullable(),
+      }),
+    )
+    .min(1)
+    .max(500),
 });
 
 const canonicalInvitationPreviewSchema = z.object({
@@ -1606,7 +1649,10 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       organizationId: organizationId(context),
       eventId: eventId(context),
       accountId: accountId(context),
-      ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
+      idempotencyKey: body.idempotencyKey,
+      sourceType: body.sourceType,
+      ...(body.sourceId === undefined ? {} : { sourceId: body.sourceId }),
+      ...(body.participantId === undefined ? {} : { explicitParticipantId: body.participantId }),
       displayName: body.displayName,
       email: body.email,
       jobTitle: body.jobTitle,
@@ -1633,7 +1679,6 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       eventId: eventId(context),
       accountId: accountId(context),
       participantId: requiredSpeakerParam(context, "participantId"),
-      ...(body.idempotencyKey === undefined ? {} : { idempotencyKey: body.idempotencyKey }),
       expectedVersion: body.expectedVersion,
       displayName: body.displayName,
       email: body.email,
@@ -1695,16 +1740,8 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       organizationId: organizationId(context),
       eventId: eventId(context),
       accountId: accountId(context),
-      rows: body.rows.map((row) => ({
-        rowNumber: row.rowNumber,
-        displayName: row.displayName,
-        email: row.email,
-        jobTitle: row.jobTitle,
-        company: row.company,
-        biography: row.biography,
-        socialLinks: row.socialLinks,
-        ...(row.status === undefined ? {} : { status: row.status }),
-      })),
+      previewId: body.previewId,
+      ...(body.sourceDigest === undefined ? {} : { sourceDigest: body.sourceDigest }),
       idempotencyKey: body.idempotencyKey,
     });
     return context.json({ data }, 201);
@@ -1832,6 +1869,42 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
       ...body,
     });
     return context.json({ data }, 201);
+  });
+  app.patch("/:taskId", async (context) => {
+    const body = await parseBody(context, organizerTaskUpdateSchema);
+    if (!body) {
+      return context.json(
+        errorBody(context, "VALIDATION_ERROR", "The speaker task update payload is invalid."),
+        400,
+      );
+    }
+    const data = await dependencies.service.updateOrganizerSpeakerTask({
+      organizationId: requiredSpeakerParam(context, "organizationId"),
+      eventId: requiredSpeakerParam(context, "eventId"),
+      accountId: context.get("speakerAccountId"),
+      taskId: requiredSpeakerParam(context, "taskId"),
+      expectedVersion: body.expectedVersion,
+      ...(body.title === undefined ? {} : { title: body.title }),
+      ...(body.instructions === undefined ? {} : { instructions: body.instructions }),
+      ...(body.description === undefined ? {} : { description: body.description }),
+      ...(body.dueAt === undefined ? {} : { dueAt: body.dueAt }),
+      ...(body.dueDate === undefined ? {} : { dueDate: body.dueDate }),
+      ...(body.allowedMimeTypes === undefined ? {} : { allowedMimeTypes: body.allowedMimeTypes }),
+      ...(body.maxBytes === undefined
+        ? body.maxSizeBytes === undefined
+          ? {}
+          : { maxBytes: body.maxSizeBytes }
+        : { maxBytes: body.maxBytes }),
+      ...(body.acceptedAssetKinds === undefined
+        ? {}
+        : { acceptedAssetKinds: body.acceptedAssetKinds }),
+      ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
+      ...(body.reminderOffsetsMinutes === undefined
+        ? {}
+        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
+      ...(body.status === undefined ? {} : { status: body.status }),
+    });
+    return context.json({ data });
   });
 
   app.onError((error, context) => {

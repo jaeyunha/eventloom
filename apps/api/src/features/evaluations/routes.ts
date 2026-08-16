@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ZodError, z } from "zod";
-import { EvaluationError, forbidden } from "./errors";
+import { EvaluationError, forbidden, notFound } from "./errors";
 import type { EvaluationService } from "./service";
 import type { EvaluationActor } from "./types";
 
@@ -8,6 +8,16 @@ export interface EvaluationRouteEnvironment {
   Variables: {
     evaluationActor: EvaluationActor;
   };
+}
+export interface EvaluationReminderDeliveryFact {
+  readonly outboxId: string;
+  readonly reviewerId: string;
+  readonly roundId: string | null;
+  readonly status: "pending" | "queued" | "processing" | "delivered" | "failed" | "dead-letter";
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+  readonly lastErrorCode: string | null;
 }
 export interface EvaluationReminderBoundary {
   sendOutstandingReviewerReminders(
@@ -21,7 +31,12 @@ export interface EvaluationReminderBoundary {
   ): Promise<{
     readonly queued: number;
     readonly reviewerIds: readonly string[];
+    readonly facts: readonly EvaluationReminderDeliveryFact[];
   }>;
+  listOutstandingReviewerReminderDeliveries(
+    actor: EvaluationActor,
+    input: { readonly planId: string },
+  ): Promise<readonly EvaluationReminderDeliveryFact[]>;
 }
 export interface EvaluationReviewerIdentityBoundary {
   resolveReviewerIds(
@@ -42,6 +57,7 @@ export interface EvaluationRouteOptions {
 
 const criterionInputTypeSchema = z.enum(["numeric", "dropdown", "free_text"]);
 const anonymizationSchema = z.enum(["none", "single", "double"]);
+const evaluationInstantSchema = z.iso.datetime({ offset: true });
 const criterionOptionSchema = z.object({
   id: z.string().optional(),
   label: z.string(),
@@ -71,8 +87,8 @@ const roundSchema = z.object({
   id: z.string(),
   name: z.string(),
   sequence: z.number(),
-  opensAt: z.string().nullable().optional(),
-  closesAt: z.string().nullable().default(null),
+  opensAt: evaluationInstantSchema.nullable().optional(),
+  closesAt: evaluationInstantSchema.nullable().default(null),
   blindReview: z.boolean().optional(),
   anonymization: anonymizationSchema.optional(),
   reviewerPool: reviewerPoolSchema.optional(),
@@ -97,7 +113,7 @@ const createPlanSchema = z.object({
   eventId: z.string(),
   name: z.string(),
   blindReview: z.boolean(),
-  closesAt: z.string().nullable().default(null),
+  closesAt: evaluationInstantSchema.nullable().default(null),
   assignmentRule: assignmentRuleSchema,
   rounds: z.array(roundSchema),
   reviewerProjection: projectionSchema.optional(),
@@ -108,7 +124,7 @@ const updatePlanSchema = z.object({
   expectedVersion: z.number().int().positive(),
   name: z.string().optional(),
   blindReview: z.boolean().optional(),
-  closesAt: z.string().nullable().optional(),
+  closesAt: evaluationInstantSchema.nullable().optional(),
   assignmentRule: assignmentRuleSchema.optional(),
   rounds: z.array(roundSchema).optional(),
   reviewerProjection: projectionSchema.optional(),
@@ -117,6 +133,26 @@ const updatePlanSchema = z.object({
 });
 
 const versionSchema = z.object({ expectedVersion: z.number().int().positive() });
+const updatePlanScheduleSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    closesAt: evaluationInstantSchema.nullable(),
+  })
+  .strict();
+const distributionPreviewSchema = z.object({
+  roundId: z.string().min(1),
+  submissionIds: z.array(z.string().min(1)).min(1),
+  reviewerIds: z.array(z.string().min(1)).min(1).optional(),
+  expectedVersion: z.number().int().positive(),
+});
+const distributionApplySchema = distributionPreviewSchema.extend({
+  fingerprint: z.string().min(1),
+});
+const replacementSchema = z.object({
+  replacementReviewerId: z.string().min(1),
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().min(1),
+});
 
 const assignmentSchema = z.object({
   roundId: z.string(),
@@ -145,7 +181,7 @@ const confirmScoresSchema = z.object({
 const generateSuggestionsSchema = z.object({});
 const resolveSuggestionSchema = z.object({
   action: z.enum(["accept", "edit", "reject"]),
-  expectedVersion: z.number().int().positive().optional(),
+  expectedVersion: z.number().int().positive(),
   reason: z.string().optional(),
   scores: z.record(z.string(), z.number()).optional(),
   criterionScores: z.record(z.string(), z.number()).optional(),
@@ -223,7 +259,9 @@ async function canonicalizeRoundPools(
 }
 function csvCell(value: unknown): string {
   const text = value === null || value === undefined ? "" : String(value);
-  return /[",\r\n]/u.test(text) ? `"${text.replace(/"/gu, '""')}"` : text;
+  const safeText =
+    typeof value === "string" && /^[\t\r\n ]*[=+\-@]/u.test(text) ? `'${text}` : text;
+  return /[",\r\n]/u.test(safeText) ? `"${safeText.replace(/"/gu, '""')}"` : safeText;
 }
 
 function reviewerScoreValue(
@@ -273,6 +311,17 @@ async function evaluationPlanCsv(
       ),
     ),
   );
+  const aggregatesByRound = new Map(
+    await Promise.all(
+      plan.rounds.map(async (round) => {
+        const aggregates = await service.listAggregates(currentActor, plan.id, round.id);
+        return [
+          round.id,
+          new Map(aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const)),
+        ] as const;
+      }),
+    ),
+  );
   const roundColumns = plan.rounds.flatMap((round) => [
     `round_${round.id}_submitted_reviews`,
     `round_${round.id}_expected_reviews`,
@@ -301,10 +350,18 @@ async function evaluationPlanCsv(
         const roundValues = (
           await Promise.all(
             plan.rounds.map(async (round) => {
-              const [aggregate, reviews] = await Promise.all([
-                service.getAggregate(currentActor, plan.id, round.id, submission.id),
-                service.listSubmittedReviews(currentActor, plan.id, round.id, submission.id),
-              ]);
+              const aggregate = aggregatesByRound.get(round.id)?.get(submission.id);
+              if (aggregate === undefined) {
+                throw new Error(
+                  `The aggregate for submission ${submission.id} and round ${round.id} is unavailable.`,
+                );
+              }
+              const reviews = await service.listSubmittedReviews(
+                currentActor,
+                plan.id,
+                round.id,
+                submission.id,
+              );
               const criterionValues = round.rubric.criteria.map((criterion) => {
                 const values = reviews
                   .flatMap((review) => {
@@ -385,10 +442,22 @@ export function createEvaluationRoutes(
   });
   routes.get("/reviewer/workspace", async (context) => {
     const eventId = context.req.query("eventId");
+    const organizationId = context.req.query("organizationId");
     return context.json({
       data: await service.listReviewerWorkspace(
         actor(context),
         eventId === undefined ? undefined : eventId,
+        organizationId === undefined ? undefined : organizationId,
+      ),
+    });
+  });
+  routes.get("/organizer/workspace", async (context) => {
+    const eventId = context.req.query("eventId");
+    return context.json({
+      data: await service.getOrganizerWorkspace(
+        actor(context),
+        eventId ?? "",
+        context.req.query("planId"),
       ),
     });
   });
@@ -513,6 +582,14 @@ export function createEvaluationRoutes(
     );
   });
 
+  routes.post("/plans/:planId/revise", async (context) => {
+    const body = versionSchema.parse(await context.req.json());
+    return context.json(
+      await service.revisePlanToDraft(actor(context), context.req.param("planId"), body),
+      201,
+    );
+  });
+
   routes.post("/plans/:planId/open", async (context) => {
     const body = versionSchema.parse(await context.req.json());
     return context.json(
@@ -525,6 +602,138 @@ export function createEvaluationRoutes(
     return context.json(
       await service.closePlan(actor(context), context.req.param("planId"), body.expectedVersion),
     );
+  });
+
+  routes.patch("/plans/:planId/schedule", async (context) => {
+    const body = updatePlanScheduleSchema.parse(await context.req.json());
+    return context.json(
+      await service.updatePlanSchedule(actor(context), context.req.param("planId"), body),
+    );
+  });
+
+  routes.post("/plans/:planId/distribution/preview", async (context) => {
+    const body = distributionPreviewSchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const reviewerIds =
+      body.reviewerIds === undefined || options.reviewerIdentity === undefined
+        ? body.reviewerIds
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: body.reviewerIds,
+          });
+    if (reviewerIds === null) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "Every reviewer must be a verified member of this organization.",
+          },
+        },
+        403,
+      );
+    }
+    return context.json(
+      await service.previewDistribution(currentActor, {
+        planId,
+        ...body,
+        ...(reviewerIds === undefined ? {} : { reviewerIds }),
+      }),
+    );
+  });
+
+  routes.post("/plans/:planId/distribution/apply", async (context) => {
+    const body = distributionApplySchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const reviewerIds =
+      body.reviewerIds === undefined || options.reviewerIdentity === undefined
+        ? body.reviewerIds
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: body.reviewerIds,
+          });
+    if (reviewerIds === null) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "Every reviewer must be a verified member of this organization.",
+          },
+        },
+        403,
+      );
+    }
+    return context.json(
+      await service.applyDistribution(currentActor, {
+        planId,
+        ...body,
+        ...(reviewerIds === undefined ? {} : { reviewerIds }),
+      }),
+    );
+  });
+
+  routes.post("/plans/:planId/assignments/:assignmentId/replace", async (context) => {
+    const body = replacementSchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const assignmentId = context.req.param("assignmentId");
+    const assignment = (await service.listOrganizerAssignments(currentActor, planId)).find(
+      (candidate) => candidate.id === assignmentId,
+    );
+    if (assignment === undefined) {
+      throw notFound("The evaluation assignment was not found.");
+    }
+    const replacementReviewerIds =
+      options.reviewerIdentity === undefined
+        ? [body.replacementReviewerId]
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: [body.replacementReviewerId],
+          });
+    const replacementReviewerId = replacementReviewerIds?.[0];
+    if (replacementReviewerId === undefined) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "The replacement reviewer must be a verified organization member.",
+          },
+        },
+        403,
+      );
+    }
+    return context.json(
+      await service.replaceAssignment(currentActor, assignmentId, {
+        replacementReviewerId,
+        expectedVersion: body.expectedVersion,
+        reason: body.reason,
+      }),
+    );
+  });
+
+  routes.get("/plans/:planId/reminders", async (context) => {
+    if (options.reminders === undefined) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REMINDERS_UNAVAILABLE",
+            message: "Reviewer reminders are not connected to the communications boundary.",
+          },
+        },
+        503,
+      );
+    }
+    const currentActor = actor(context);
+    const plan = await service.getPlan(currentActor, context.req.param("planId"));
+    return context.json({
+      facts: await options.reminders.listOutstandingReviewerReminderDeliveries(currentActor, {
+        planId: plan.id,
+      }),
+    });
   });
 
   routes.post("/plans/:planId/reminders", async (context) => {
@@ -541,9 +750,11 @@ export function createEvaluationRoutes(
       );
     }
     const currentActor = actor(context);
-    const [plan, assignments] = await Promise.all([
-      service.getPlan(currentActor, context.req.param("planId")),
-      service.listOrganizerAssignments(currentActor, context.req.param("planId")),
+    const planId = context.req.param("planId");
+    const [plan, assignments, existingFacts] = await Promise.all([
+      service.getPlan(currentActor, planId),
+      service.listOrganizerAssignments(currentActor, planId),
+      options.reminders.listOutstandingReviewerReminderDeliveries(currentActor, { planId }),
     ]);
     const selected = assignments.filter(
       (assignment) =>
@@ -562,10 +773,31 @@ export function createEvaluationRoutes(
         400,
       );
     }
+    const reviewerIds = [...new Set(selected.map((assignment) => assignment.reviewerId))].sort();
+    const reusableStatuses = new Set(["queued", "processing", "delivered"]);
+    const reusableFacts = reviewerIds.flatMap((reviewerId) => {
+      const fact = existingFacts.find(
+        (candidate) =>
+          candidate.reviewerId === reviewerId &&
+          candidate.roundId === (body.roundId ?? null) &&
+          reusableStatuses.has(candidate.status),
+      );
+      return fact === undefined ? [] : [fact];
+    });
+    if (reusableFacts.length === reviewerIds.length) {
+      return context.json(
+        {
+          queued: 0,
+          reviewerIds,
+          facts: reusableFacts,
+        },
+        200,
+      );
+    }
     const result = await options.reminders.sendOutstandingReviewerReminders(currentActor, {
       planId: plan.id,
       ...(body.roundId === undefined ? {} : { roundId: body.roundId }),
-      reviewerIds: [...new Set(selected.map((assignment) => assignment.reviewerId))].sort(),
+      reviewerIds,
       assignmentIds: selected.map((assignment) => assignment.id).sort(),
     });
     return context.json(result, 202);
@@ -623,6 +855,14 @@ export function createEvaluationRoutes(
     });
     return context.json({ assignments }, 201);
   });
+  routes.delete("/plans/:planId/assignments/:assignmentId", async (context) => {
+    await service.unassignAssignment(
+      actor(context),
+      context.req.param("planId"),
+      context.req.param("assignmentId"),
+    );
+    return context.body(null, 204);
+  });
 
   routes.get("/plans/:planId/assignments", async (context) =>
     context.json({
@@ -630,6 +870,14 @@ export function createEvaluationRoutes(
         actor(context),
         context.req.param("planId"),
       ),
+    }),
+  );
+  routes.get("/plans/:planId/assignment-history", async (context) =>
+    context.json({
+      history: await service.listAssignmentHistory(actor(context), context.req.param("planId"), {
+        roundId: context.req.query("roundId"),
+        submissionId: context.req.query("submissionId"),
+      }),
     }),
   );
 

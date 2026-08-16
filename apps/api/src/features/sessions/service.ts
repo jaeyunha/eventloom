@@ -5,6 +5,7 @@ import type {
   CreateTaxonomyInput,
   Format,
   Level,
+  PublishedSessionContentHandoff,
   RestoreSessionInput,
   Room,
   Session,
@@ -63,6 +64,10 @@ export interface AcceptedSessionProjectionInput {
   readonly session: Session;
   readonly actorId: string;
 }
+type SessionListItem = Omit<Session, "history">;
+type SessionListPageProjection = Omit<SessionListPage, "items"> & {
+  readonly items: readonly SessionListItem[];
+};
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -194,6 +199,15 @@ function status(value: unknown): string {
   return requiredText(value, "status", 64);
 }
 
+function contentReviewStatus(value: unknown): SessionContentStatus {
+  if (value === "Approved" || value === "Needs changes") return value;
+  throw new SessionServiceError(
+    "VALIDATION_ERROR",
+    400,
+    "contentStatus must be Approved or Needs changes.",
+  );
+}
+
 function normaliseStatusSet(values: readonly string[] | undefined, field: string): string[] {
   const result = uniqueIds(values, field, 64);
   if (result.length === 0) {
@@ -246,14 +260,41 @@ function normalizeRoster(
       );
     }
     const id = resourceId(reference.id, "speakerRoster id");
+    const existing = refs.get(id);
     const role =
       reference.role === undefined
-        ? undefined
+        ? existing?.role
         : optionalText(reference.role, "speakerRoster role", 64);
-    if (refs.has(id) && role === undefined) continue;
-    refs.set(id, role === undefined ? { id } : { id, role });
+    const displayName =
+      reference.displayName === undefined
+        ? existing?.displayName
+        : optionalText(reference.displayName, "speakerRoster displayName", 200);
+    refs.set(id, {
+      id,
+      ...(role === undefined ? {} : { role }),
+      ...(displayName === undefined ? {} : { displayName }),
+    });
   }
   return { speakerIds: [...refs.keys()], speakerRoster: [...refs.values()] };
+}
+function sessionSpeakerNames(session: Session): string[] {
+  const rosterNames = new Map(
+    session.speakerRoster.flatMap((reference) => {
+      const displayName = reference.displayName?.trim();
+      return displayName ? [[reference.id, displayName] as const] : [];
+    }),
+  );
+  const storedNames = Array.isArray((session as Session & { speakerNames?: unknown }).speakerNames)
+    ? (session as Session & { speakerNames: unknown[] }).speakerNames.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
+  return session.speakerIds.map((participantId, index) => {
+    const rosterName = rosterNames.get(participantId);
+    if (rosterName !== undefined && rosterName !== participantId) return rosterName;
+    const storedName = storedNames[index]?.trim();
+    return storedName && storedName !== participantId ? storedName : "Speaker";
+  });
 }
 
 function normalizeResources(
@@ -309,13 +350,6 @@ type SessionContentHistory = Partial<
 
 function sessionContentStatus(session: Session): SessionContentStatus | undefined {
   return session.contentStatus;
-}
-
-function reviewStatus(value: string | undefined): SessionContentStatus | undefined {
-  if (value === undefined) return undefined;
-  if (sameStatus(value, "Approved")) return "Approved";
-  if (sameStatus(value, "Needs changes")) return "Needs changes";
-  return undefined;
 }
 
 function sessionIsPubliclyApproved(session: Session): boolean {
@@ -388,6 +422,10 @@ function sessionProjection(session: Session): Session {
     history: orderedSessionHistory(session.history),
   };
 }
+function sessionListProjection(session: Session): SessionListItem {
+  const { history: _history, ...projection } = session;
+  return clone(projection);
+}
 
 function auditEntry(
   id: string,
@@ -437,51 +475,6 @@ function acceptedSessionFieldsEqual(left: Session, right: Session): boolean {
     JSON.stringify(left.speakerRoster) === JSON.stringify(right.speakerRoster) &&
     JSON.stringify(left.resourceIds) === JSON.stringify(right.resourceIds)
   );
-}
-function sessionAgendaMetadata(session: Session): {
-  readonly format: string;
-  readonly summary: string;
-  readonly speakerNames: readonly string[];
-} {
-  const record = session as unknown as Record<string, unknown>;
-  const format =
-    typeof record.format === "string" && record.format.trim().length > 0
-      ? record.format.trim()
-      : (session.formatId ?? "Session");
-  const summary =
-    typeof record.summary === "string" && record.summary.trim().length > 0
-      ? record.summary.trim()
-      : session.description;
-  const directSpeakerNames = Array.isArray(record.speakerNames)
-    ? record.speakerNames.filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
-      )
-    : [];
-  const presenterNames = Array.isArray(record.presenters)
-    ? record.presenters
-        .map((value) => {
-          if (typeof value === "string") return value.trim();
-          if (typeof value !== "object" || value === null) return "";
-          const presenter = value as Record<string, unknown>;
-          return typeof presenter.name === "string"
-            ? presenter.name.trim()
-            : typeof presenter.displayName === "string"
-              ? presenter.displayName.trim()
-              : "";
-        })
-        .filter((value) => value.length > 0)
-    : [];
-  const speakerNames =
-    directSpeakerNames.length > 0
-      ? directSpeakerNames
-      : presenterNames.length > 0
-        ? presenterNames
-        : [...session.speakerIds];
-  return {
-    format,
-    summary,
-    speakerNames,
-  };
 }
 
 function repositoryConflict(error: unknown): boolean {
@@ -640,8 +633,31 @@ export class SessionService {
           ),
         ],
       };
+      const audit = auditEntry(
+        auditId,
+        tenantId,
+        eventId,
+        "session",
+        sessionId,
+        current === null ? "created" : "updated",
+        nextVersion,
+        actorId,
+        updatedAt,
+        current === null ? undefined : current,
+        next,
+      );
       try {
-        await this.#repository.putSession(next, current?.version ?? null);
+        if (this.#repository.commit !== undefined) {
+          await this.#repository.commit({
+            operation: "putSession",
+            value: next,
+            expectedVersion: current?.version ?? null,
+            audit,
+          });
+        } else {
+          await this.#repository.putSession(next, current?.version ?? null);
+          await this.recordAudit(audit);
+        }
       } catch (error) {
         if (repositoryConflict(error)) {
           if (attempt < 2) continue;
@@ -649,21 +665,6 @@ export class SessionService {
         }
         throw error;
       }
-      await this.recordAudit(
-        auditEntry(
-          auditId,
-          tenantId,
-          eventId,
-          "session",
-          sessionId,
-          current === null ? "created" : "updated",
-          nextVersion,
-          actorId,
-          updatedAt,
-          current === null ? undefined : current,
-          next,
-        ),
-      );
       await this.synchronizeAgenda(projectionActor, eventId);
       return sessionProjection(next);
     }
@@ -680,7 +681,9 @@ export class SessionService {
     const settings = await this.ensureSettings(actor.tenantId, eventId, actor.userId);
     const sessionStatus = input.status === undefined ? "Draft" : status(input.status);
     this.assertConfiguredStatus(sessionStatus, settings);
-    const initialContentStatus = sameStatus(sessionStatus, "Accepted") ? "Approved" : undefined;
+    const initialContentStatus = sameStatus(sessionStatus, "Accepted")
+      ? "Needs changes"
+      : undefined;
     const now = this.instant();
     const auditId = this.#generateId();
     const normalized = await this.normalizeSessionReferences(actor.tenantId, eventId, input);
@@ -724,27 +727,35 @@ export class SessionService {
         }),
       ],
     };
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      id,
+      "created",
+      1,
+      actor.userId,
+      now,
+      undefined,
+      session,
+    );
     try {
-      await this.#repository.putSession(session, null);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "putSession",
+          value: session,
+          expectedVersion: null,
+          audit,
+        });
+      } else {
+        await this.#repository.putSession(session, null);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw conflict("A session with this id already exists.");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        id,
-        "created",
-        1,
-        actor.userId,
-        now,
-        undefined,
-        session,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(session);
   }
@@ -754,12 +765,11 @@ export class SessionService {
     input: { tenantId?: string; eventId: string; sessionId: string },
   ): Promise<Session> {
     this.assertActor(actor, input.tenantId, input.eventId);
-    await this.ensureAgendaInitialized(actor, this.event(input.eventId));
-    const session = await this.#repository.getSession(
-      actor.tenantId,
-      this.event(input.eventId),
-      resourceId(input.sessionId, "session id"),
-    );
+    const eventId = this.event(input.eventId);
+    const sessionId = resourceId(input.sessionId, "session id");
+    const agendaInitialization = this.ensureAgendaInitialized(actor, eventId);
+    const sessionRead = this.#repository.getSession(actor.tenantId, eventId, sessionId);
+    const [session] = await Promise.all([sessionRead, agendaInitialization]);
     if (!session || !this.inScope(session, actor.tenantId, input.eventId))
       throw notFound("session");
     return sessionProjection(session);
@@ -795,7 +805,6 @@ export class SessionService {
     if (current === null || !this.inScope(current, actor.tenantId, eventId)) {
       throw notFound("session");
     }
-    const currentContentStatus = sessionContentStatus(current);
     if (current.version !== expected) throw versionConflict("session");
     const target = orderedSessionHistory(current.history).find(
       (entry) => entry.version === targetVersion,
@@ -809,6 +818,16 @@ export class SessionService {
     ) {
       throw notFound("session history");
     }
+
+    const currentContentStatus = sessionContentStatus(current);
+    if (
+      current.title === snapshot.title &&
+      current.description === snapshot.description &&
+      currentContentStatus === "Needs changes"
+    ) {
+      return sessionProjection(current);
+    }
+
     const now = this.instant();
     const auditId = this.#generateId();
     const nextVersion = current.version + 1;
@@ -816,29 +835,12 @@ export class SessionService {
       ...current,
       title: snapshot.title,
       description: snapshot.description,
-      status: snapshot.status,
-      ...(snapshot.contentStatus === undefined ? {} : { contentStatus: snapshot.contentStatus }),
-      durationMinutes: snapshot.durationMinutes,
-      capacityRequired: snapshot.capacityRequired,
-      ...(snapshot.roomId === undefined ? {} : { roomId: snapshot.roomId }),
-      ...(snapshot.trackId === undefined ? {} : { trackId: snapshot.trackId }),
-      trackIds: [...snapshot.trackIds],
-      ...(snapshot.formatId === undefined ? {} : { formatId: snapshot.formatId }),
-      ...(snapshot.levelId === undefined ? {} : { levelId: snapshot.levelId }),
-      tagIds: [...snapshot.tagIds],
-      speakerIds: [...snapshot.speakerIds],
-      speakerRoster: snapshot.speakerRoster.map((reference) => ({ ...reference })),
-      resourceIds: [...snapshot.resourceIds],
+      contentStatus: "Needs changes",
       version: nextVersion,
       updatedAt: now,
       updatedBy: actor.userId,
       history: orderedSessionHistory(current.history),
     };
-    if (snapshot.contentStatus === undefined) delete restoredBase.contentStatus;
-    if (snapshot.roomId === undefined) delete restoredBase.roomId;
-    if (snapshot.formatId === undefined) delete restoredBase.formatId;
-    if (snapshot.levelId === undefined) delete restoredBase.levelId;
-    if (snapshot.trackId === undefined) delete restoredBase.trackId;
     const next: Session = {
       ...restoredBase,
       history: [
@@ -848,41 +850,45 @@ export class SessionService {
           description: restoredBase.description,
           actorLabel: actorLabel(actor),
           priorStatus: current.status,
-          newStatus: restoredBase.status,
+          newStatus: current.status,
           ...(currentContentStatus === undefined
             ? {}
             : { priorContentStatus: currentContentStatus }),
-          ...(snapshot.contentStatus === undefined
-            ? {}
-            : {
-                contentStatus: snapshot.contentStatus,
-                newContentStatus: snapshot.contentStatus,
-              }),
+          contentStatus: "Needs changes",
+          newContentStatus: "Needs changes",
           snapshot: sessionContentSnapshot(restoredBase),
         }),
       ],
     };
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      sessionId,
+      "restored",
+      nextVersion,
+      actor.userId,
+      now,
+      current,
+      next,
+    );
     try {
-      await this.#repository.putSession(next, expected);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "putSession",
+          value: next,
+          expectedVersion: expected,
+          audit,
+        });
+      } else {
+        await this.#repository.putSession(next, expected);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw versionConflict("session");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        sessionId,
-        "restored",
-        nextVersion,
-        actor.userId,
-        now,
-        current,
-        next,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(next);
   }
@@ -894,22 +900,28 @@ export class SessionService {
   async listSessions(
     actor: SessionActor,
     input: { tenantId?: string; eventId: string } & SessionListQuery,
-  ): Promise<readonly Session[]> {
+  ): Promise<readonly SessionListItem[]> {
     return (await this.listSessionsPage(actor, input)).items;
   }
 
   async listSessionsPage(
     actor: SessionActor,
     input: { tenantId?: string; eventId: string } & SessionListQuery,
-  ): Promise<SessionListPage> {
+  ): Promise<SessionListPageProjection> {
     this.assertActor(actor, input.tenantId, input.eventId);
     const eventId = this.event(input.eventId);
-    await this.ensureAgendaInitialized(actor, eventId);
-    let sessions = (await this.#repository.listSessions(actor.tenantId, eventId)).filter(
-      (session) => this.inScope(session, actor.tenantId, eventId),
+    const agendaInitialization = this.ensureAgendaInitialized(actor, eventId);
+    const sessionsRead = this.#repository.listSessions(actor.tenantId, eventId);
+    const settingsRead =
+      input.agendaEligible === undefined ? null : this.readSettings(actor.tenantId, eventId);
+    const [, sessionsResult, settings] = await Promise.all([
+      agendaInitialization,
+      sessionsRead,
+      settingsRead,
+    ]);
+    let sessions = sessionsResult.filter((session) =>
+      this.inScope(session, actor.tenantId, eventId),
     );
-    const settings =
-      input.agendaEligible === undefined ? null : await this.readSettings(actor.tenantId, eventId);
     const eligibleStatuses = settings?.agendaEligibleStatuses ?? defaultAgendaEligibleStatuses;
     const requestedStatuses =
       input.statuses ?? (input.status === undefined ? undefined : [input.status]);
@@ -971,7 +983,7 @@ export class SessionService {
       );
     }
     return {
-      items: sessions.slice(offset, offset + limit).map(sessionProjection),
+      items: sessions.slice(offset, offset + limit).map(sessionListProjection),
       total,
       limit,
       offset,
@@ -986,59 +998,63 @@ export class SessionService {
     if (!current || !this.inScope(current, actor.tenantId, eventId)) throw notFound("session");
     const expected = expectedVersion(input.expectedVersion);
     if (current.version !== expected) throw versionConflict("session");
-    const currentContentStatus = sessionContentStatus(current);
+
     const settings = await this.ensureSettings(actor.tenantId, eventId, actor.userId);
-    const requestedStatus = input.status === undefined ? undefined : status(input.status);
-    const requestedContentStatus = reviewStatus(requestedStatus);
-    const nextStatus =
-      requestedContentStatus === undefined ? (requestedStatus ?? current.status) : current.status;
-    if (requestedContentStatus === undefined) this.assertConfiguredStatus(nextStatus, settings);
-    const nextContentStatus =
-      requestedContentStatus ??
-      sessionContentStatus(current) ??
-      (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined);
+    const nextStatus = input.status === undefined ? current.status : status(input.status);
+    this.assertConfiguredStatus(nextStatus, settings);
+    const requestedContentStatus =
+      input.contentStatus === undefined ? undefined : contentReviewStatus(input.contentStatus);
+    const currentContentStatus = sessionContentStatus(current);
     const nextTitle =
       input.title === undefined ? current.title : requiredText(input.title, "title", 300);
     const nextDescription =
       input.description === undefined
         ? current.description
         : optionalText(input.description, "description", 20_000);
-    const normalized = await this.normalizeSessionReferences(actor.tenantId, eventId, {
+    const contentChanged = nextTitle !== current.title || nextDescription !== current.description;
+    const nextContentStatus =
+      requestedContentStatus ??
+      (contentChanged
+        ? "Needs changes"
+        : (currentContentStatus ?? (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined)));
+    const referenceInput: Partial<CreateSessionInput> & { eventId: string } = { eventId };
+    if (input.roomId !== undefined) referenceInput.roomId = input.roomId;
+    if (input.trackId !== undefined) referenceInput.trackId = input.trackId;
+    if (input.trackIds !== undefined) referenceInput.trackIds = input.trackIds;
+    if (input.formatId !== undefined) referenceInput.formatId = input.formatId;
+    if (input.levelId !== undefined) referenceInput.levelId = input.levelId;
+    if (input.tagIds !== undefined) referenceInput.tagIds = input.tagIds;
+    if (input.speakerIds !== undefined) referenceInput.speakerIds = input.speakerIds;
+    if (input.speakerRoster !== undefined) referenceInput.speakerRoster = input.speakerRoster;
+    if (input.resourceIds !== undefined) referenceInput.resourceIds = input.resourceIds;
+    const normalized = await this.normalizeSessionReferences(
+      actor.tenantId,
       eventId,
-      ...(input.roomId === undefined ? { roomId: current.roomId } : { roomId: input.roomId }),
-      ...(input.trackId === undefined ? { trackId: current.trackId } : { trackId: input.trackId }),
-      ...(input.trackIds === undefined
-        ? input.trackId === null
-          ? { trackIds: [] }
-          : input.trackId === undefined
-            ? { trackIds: current.trackIds }
-            : { trackIds: [input.trackId] }
-        : { trackIds: input.trackIds }),
-      ...(input.formatId === undefined
-        ? { formatId: current.formatId }
-        : { formatId: input.formatId }),
-      ...(input.levelId === undefined ? { levelId: current.levelId } : { levelId: input.levelId }),
-      ...(input.tagIds === undefined ? { tagIds: current.tagIds } : { tagIds: input.tagIds }),
-      ...(input.speakerIds === undefined
-        ? { speakerIds: current.speakerIds }
-        : { speakerIds: input.speakerIds }),
-      ...(input.speakerRoster === undefined
-        ? { speakerRoster: current.speakerRoster }
-        : { speakerRoster: input.speakerRoster }),
-      ...(input.resourceIds === undefined
-        ? { resourceIds: current.resourceIds }
-        : { resourceIds: input.resourceIds }),
-    } as unknown as Partial<CreateSessionInput> & { eventId: string });
-    const now = this.instant();
-    const auditId = this.#generateId();
-    const nextVersion = current.version + 1;
-    const contentAction: SessionHistoryEntry["action"] =
-      requestedContentStatus === undefined
-        ? "updated"
-        : requestedContentStatus === "Approved"
-          ? "approved"
-          : "needs_changes";
-    const nextBase: Session = {
+      referenceInput,
+    );
+    const trackReferencesSupplied = input.trackId !== undefined || input.trackIds !== undefined;
+    const speakerReferencesSupplied =
+      input.speakerIds !== undefined || input.speakerRoster !== undefined;
+    const nextTrackIds = trackReferencesSupplied ? normalized.trackIds : [...current.trackIds];
+    const nextTrackId = trackReferencesSupplied ? nextTrackIds[0] : current.trackId;
+    const nextSpeakerIds = speakerReferencesSupplied
+      ? normalized.speakerIds
+      : [...current.speakerIds];
+    const nextSpeakerRoster = !speakerReferencesSupplied
+      ? current.speakerRoster.map((reference) => ({ ...reference }))
+      : input.speakerRoster === undefined
+        ? nextSpeakerIds.map((id) => {
+            const currentReference = current.speakerRoster.find((reference) => reference.id === id);
+            return currentReference === undefined ? { id } : { ...currentReference };
+          })
+        : normalized.speakerRoster;
+    const nextRoomId = input.roomId === undefined ? current.roomId : normalized.roomId;
+    const nextFormatId = input.formatId === undefined ? current.formatId : normalized.formatId;
+    const nextLevelId = input.levelId === undefined ? current.levelId : normalized.levelId;
+    const nextTagIds = input.tagIds === undefined ? [...current.tagIds] : normalized.tagIds;
+    const nextResourceIds =
+      input.resourceIds === undefined ? [...current.resourceIds] : normalized.resourceIds;
+    const candidate: Session = {
       ...current,
       title: nextTitle,
       description: nextDescription,
@@ -1051,26 +1067,42 @@ export class SessionService {
         input.capacityRequired === undefined
           ? current.capacityRequired
           : capacity(input.capacityRequired),
-      ...(normalized.roomId === undefined ? {} : { roomId: normalized.roomId }),
-      ...(normalized.trackIds[0] === undefined ? {} : { trackId: normalized.trackIds[0] }),
-      trackIds: normalized.trackIds,
-      ...(normalized.formatId === undefined ? {} : { formatId: normalized.formatId }),
-      ...(normalized.levelId === undefined ? {} : { levelId: normalized.levelId }),
-      tagIds: normalized.tagIds,
-      speakerIds: normalized.speakerIds,
-      speakerRoster: normalized.speakerRoster,
-      resourceIds: normalized.resourceIds,
+      ...(nextRoomId === undefined ? {} : { roomId: nextRoomId }),
+      ...(nextTrackId === undefined ? {} : { trackId: nextTrackId }),
+      trackIds: nextTrackIds,
+      ...(nextFormatId === undefined ? {} : { formatId: nextFormatId }),
+      ...(nextLevelId === undefined ? {} : { levelId: nextLevelId }),
+      tagIds: nextTagIds,
+      speakerIds: nextSpeakerIds,
+      speakerRoster: nextSpeakerRoster,
+      resourceIds: nextResourceIds,
       ...(nextContentStatus === undefined ? {} : { contentStatus: nextContentStatus }),
+      history: orderedSessionHistory(current.history),
+    };
+    if (candidate.contentStatus === undefined) delete candidate.contentStatus;
+    if (nextRoomId === undefined) delete candidate.roomId;
+    if (nextFormatId === undefined) delete candidate.formatId;
+    if (nextLevelId === undefined) delete candidate.levelId;
+    if (nextTrackId === undefined) delete candidate.trackId;
+    if (acceptedSessionFieldsEqual(current, candidate)) return sessionProjection(current);
+
+    const now = this.instant();
+    const auditId = this.#generateId();
+    const nextVersion = current.version + 1;
+    const contentAction: SessionHistoryEntry["action"] =
+      nextContentStatus !== currentContentStatus
+        ? nextContentStatus === "Approved"
+          ? "approved"
+          : nextContentStatus === "Needs changes"
+            ? "needs_changes"
+            : "updated"
+        : "updated";
+    const nextBase: Session = {
+      ...candidate,
       version: nextVersion,
       updatedAt: now,
       updatedBy: actor.userId,
-      history: orderedSessionHistory(current.history),
     };
-    if (nextBase.contentStatus === undefined) delete nextBase.contentStatus;
-    if (nextBase.roomId === undefined) delete nextBase.roomId;
-    if (nextBase.formatId === undefined) delete nextBase.formatId;
-    if (nextBase.levelId === undefined) delete nextBase.levelId;
-    if (nextBase.trackId === undefined) delete nextBase.trackId;
     const next: Session = {
       ...nextBase,
       history: [
@@ -1090,27 +1122,35 @@ export class SessionService {
         }),
       ],
     };
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      sessionId,
+      contentAction,
+      nextVersion,
+      actor.userId,
+      now,
+      current,
+      next,
+    );
     try {
-      await this.#repository.putSession(next, expected);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "putSession",
+          value: next,
+          expectedVersion: expected,
+          audit,
+        });
+      } else {
+        await this.#repository.putSession(next, expected);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw versionConflict("session");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        sessionId,
-        contentAction,
-        nextVersion,
-        actor.userId,
-        now,
-        current,
-        next,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(next);
   }
@@ -1128,27 +1168,37 @@ export class SessionService {
     if (current.version !== expected) throw versionConflict("session");
     const now = this.instant();
     const auditId = this.#generateId();
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      sessionId,
+      "deleted",
+      expected,
+      actor.userId,
+      now,
+      current,
+      undefined,
+    );
     try {
-      await this.#repository.deleteSession(actor.tenantId, eventId, sessionId, expected);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "deleteSession",
+          tenantId: actor.tenantId,
+          eventId,
+          id: sessionId,
+          expectedVersion: expected,
+          audit,
+        });
+      } else {
+        await this.#repository.deleteSession(actor.tenantId, eventId, sessionId, expected);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw versionConflict("session");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        sessionId,
-        "deleted",
-        expected,
-        actor.userId,
-        now,
-        current,
-        undefined,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(current);
   }
@@ -1553,16 +1603,63 @@ export class SessionService {
     );
   }
 
-  /** Explicit read-only handoff consumed by the agenda service; it never publishes. */
-  async getAgendaCatalog(tenantId: string, eventId: string) {
+  /**
+   * Authoritative approval-gated content handoff for agenda and deliverables consumers.
+   * The session lifecycle must also be configured as agenda eligible.
+   */
+  async getPublishedSessionContent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<PublishedSessionContentHandoff> {
     const organizationId = resourceId(tenantId, "tenant id");
     const scopedEventId = this.event(eventId);
     const settings = await this.readSettings(organizationId, scopedEventId);
     const eligibleStatuses = settings?.agendaEligibleStatuses ?? defaultAgendaEligibleStatuses;
-    const [sessions, rooms, tracks] = await Promise.all([
-      this.#repository.listSessions(organizationId, scopedEventId),
+    const sessions = await this.#repository.listSessions(organizationId, scopedEventId);
+    return {
+      tenantId: organizationId,
+      eventId: scopedEventId,
+      sessions: sessions
+        .filter(
+          (session) =>
+            this.inScope(session, organizationId, scopedEventId) &&
+            hasStatus(session.status, eligibleStatuses) &&
+            sessionIsPubliclyApproved(session),
+        )
+        .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+        .map((session) => ({
+          id: session.id,
+          title: session.title,
+          abstract: session.description,
+          contentStatus: "Approved" as const,
+          durationMinutes: session.durationMinutes,
+          capacityRequired: session.capacityRequired,
+          ...(session.roomId === undefined ? {} : { roomId: session.roomId }),
+          trackIds: [
+            ...new Set([
+              ...(session.trackIds ?? []),
+              ...(session.trackId === undefined ? [] : [session.trackId]),
+            ]),
+          ],
+          ...(session.formatId === undefined ? {} : { formatId: session.formatId }),
+          speakerIds: [...session.speakerIds],
+          speakerNames: sessionSpeakerNames(session),
+          resourceIds: [...session.resourceIds],
+          version: session.version,
+          updatedAt: session.updatedAt,
+        })),
+    };
+  }
+
+  /** Existing agenda adapter, projected from the authoritative published-content handoff. */
+  async getAgendaCatalog(tenantId: string, eventId: string) {
+    const organizationId = resourceId(tenantId, "tenant id");
+    const scopedEventId = this.event(eventId);
+    const [content, rooms, tracks, formats] = await Promise.all([
+      this.getPublishedSessionContent(organizationId, scopedEventId),
       this.#repository.listRooms(organizationId, scopedEventId),
       this.#repository.listTracks(organizationId, scopedEventId),
+      this.#repository.listFormats(organizationId, scopedEventId),
     ]);
     const roomById = new Map(
       rooms
@@ -1574,37 +1671,34 @@ export class SessionService {
         .filter((track) => this.inScope(track, organizationId, scopedEventId))
         .map((track) => [track.id, track]),
     );
+    const formatById = new Map(
+      formats
+        .filter((format) => this.inScope(format, organizationId, scopedEventId))
+        .map((format) => [format.id, format]),
+    );
     return {
-      sessions: sessions
-        .filter(
-          (session) =>
-            this.inScope(session, organizationId, scopedEventId) &&
-            hasStatus(session.status, eligibleStatuses) &&
-            sessionIsPubliclyApproved(session),
-        )
-        .map((session) => {
-          const metadata = sessionAgendaMetadata(session);
-          const trackIds = [
-            ...new Set([
-              ...(session.trackIds ?? []),
-              ...(session.trackId === undefined ? [] : [session.trackId]),
-            ]),
-          ];
-          return {
-            id: session.id,
-            title: session.title,
-            status: "accepted" as const,
-            participantIds: [...session.speakerIds],
-            resourceIds: [...session.resourceIds],
-            capacityRequired: session.capacityRequired,
-            durationMinutes: session.durationMinutes,
-            ...metadata,
-            ...(session.roomId === undefined
-              ? {}
-              : { roomName: roomById.get(session.roomId)?.name ?? session.roomId }),
-            trackNames: trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
-          };
+      sessions: content.sessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        status: "accepted" as const,
+        participantIds: [...session.speakerIds],
+        resourceIds: [...session.resourceIds],
+        capacityRequired: session.capacityRequired,
+        durationMinutes: session.durationMinutes,
+        summary: session.abstract,
+        format:
+          session.formatId === undefined
+            ? "Session"
+            : (formatById.get(session.formatId)?.name ?? "Session"),
+        speakerNames: [...session.speakerNames],
+        ...(session.roomId === undefined
+          ? {}
+          : { roomName: roomById.get(session.roomId)?.name ?? "Room to be announced" }),
+        trackNames: session.trackIds.flatMap((trackId) => {
+          const name = trackById.get(trackId)?.name;
+          return name === undefined ? [] : [name];
         }),
+      })),
       rooms: [...roomById.values()].map((room) => ({
         id: room.id,
         name: room.name,

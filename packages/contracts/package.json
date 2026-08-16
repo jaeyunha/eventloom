@@ -1,7 +1,8 @@
 {
-  "name": "@open-sessionboard/contracts",
+  "name": "@eventloom/contracts",
   "version": "0.1.0",
   "private": true,
+  "license": "Elastic-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

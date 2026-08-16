@@ -1,3 +1,15 @@
+import {
+  createDeliverablesApi,
+  type DeliverableHeadshotReplacement,
+  type DeliverableHeadshotReplacementInput,
+} from "../deliverables/api";
+
+export type SpeakerHeadshotReplacementInput = DeliverableHeadshotReplacementInput;
+export type SpeakerHeadshotReplacement = DeliverableHeadshotReplacement;
+
+export const ORGANIZER_HEADSHOT_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const ORGANIZER_HEADSHOT_MAX_BYTES = 5 * 1024 * 1024;
+
 export type SpeakerStatus =
   | "pending"
   | "invited"
@@ -13,6 +25,14 @@ export interface SpeakerSocialLinks {
   readonly linkedin?: string;
   readonly website?: string;
 }
+export interface SpeakerEventTemporalContext {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly timeZone: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
 export interface SpeakerTravelLogistics {
   readonly travelRequired: boolean;
   readonly arrivalAt: string | null;
@@ -142,6 +162,7 @@ export interface SpeakerSession {
 
 export interface SpeakerTask {
   readonly taskId: string;
+  readonly definitionId: string;
   readonly participantId: string;
   readonly title: string;
   readonly description: string;
@@ -154,6 +175,7 @@ export interface SpeakerTask {
 }
 
 export interface SpeakerRecord {
+  readonly eventId: string;
   readonly participantId: string;
   readonly displayName: string;
   readonly email: string;
@@ -174,6 +196,7 @@ export interface SpeakerRecord {
 export interface SpeakerRosterEnvelope {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly speakers: readonly SpeakerRecord[];
 }
 
@@ -195,14 +218,24 @@ export interface SpeakerImportIssue {
 }
 
 export interface SpeakerImportPreview {
+  readonly previewId: string;
+  readonly sourceDigest: string;
   readonly validRows: readonly SpeakerImportRow[];
   readonly invalidRows: readonly SpeakerImportIssue[];
 }
 
 export interface SpeakerImportCommitInput {
-  readonly rows: readonly SpeakerImportRow[];
+  readonly previewId: string;
+  readonly sourceDigest: string;
   readonly idempotencyKey: string;
 }
+
+type SpeakerImportCommitRequest =
+  | SpeakerImportCommitInput
+  | {
+      readonly rows: SpeakerImportPreview["validRows"];
+      readonly idempotencyKey: string;
+    };
 
 export interface SpeakerInvitationPreview {
   readonly participantId: string;
@@ -210,9 +243,22 @@ export interface SpeakerInvitationPreview {
   readonly state: "ready" | "blocked" | string;
 }
 
-export interface SpeakerInvitationResult {
-  readonly status: "queued" | "sent" | "failed" | string;
+export type SpeakerInvitationDeliveryStatus = "queued" | "sent" | "failed" | "duplicate";
+
+export interface SpeakerInvitationRecipientResult {
+  readonly participantId: string;
   readonly recipientEmail: string;
+  readonly status: SpeakerInvitationDeliveryStatus;
+  readonly receiptId: string | null;
+}
+
+export interface SpeakerInvitationResult {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly status: SpeakerInvitationDeliveryStatus;
+  readonly duplicate: boolean;
+  readonly recipients: readonly SpeakerInvitationRecipientResult[];
 }
 
 export interface SpeakerProgressRow {
@@ -297,6 +343,125 @@ export class SpeakerApiError extends Error {
   }
 }
 
+export type SpeakerMutationStatus =
+  | "idle"
+  | "saving"
+  | "pending"
+  | "saved"
+  | "conflict"
+  | "failure";
+
+export class SpeakerAuthoritativeDataError extends Error {
+  readonly code = "AUTHORITATIVE_DATA_INVALID";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SpeakerAuthoritativeDataError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function assertSpeakerRosterScope(
+  value: SpeakerRosterEnvelope,
+  organizationId: string,
+  eventId: string,
+): SpeakerRosterEnvelope {
+  if (
+    !isRecord(value) ||
+    value.organizationId !== organizationId ||
+    value.eventId !== eventId ||
+    !Array.isArray(value.speakers)
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker roster response belongs to a different organization or event.",
+    );
+  }
+  const participantIds = new Set<string>();
+  for (const speaker of value.speakers) {
+    if (
+      !isRecord(speaker) ||
+      speaker.eventId !== eventId ||
+      typeof speaker.participantId !== "string" ||
+      speaker.participantId.trim().length === 0 ||
+      participantIds.has(speaker.participantId)
+    ) {
+      throw new SpeakerAuthoritativeDataError(
+        "The speaker roster response contains an invalid or duplicate participant.",
+      );
+    }
+    participantIds.add(speaker.participantId);
+  }
+  return { ...value, speakers: [...value.speakers] };
+}
+
+export function assertSpeakerParticipant(
+  value: SpeakerRecord,
+  participantId: string,
+  eventId?: string,
+): SpeakerRecord {
+  if (
+    !isRecord(value) ||
+    value.participantId !== participantId ||
+    (eventId !== undefined && value.eventId !== eventId) ||
+    typeof value.version !== "number" ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 1
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker response does not match the selected participant or event.",
+    );
+  }
+  return value;
+}
+
+export function assertAdvancedSpeakerRevision(
+  value: SpeakerRecord,
+  participantId: string,
+  expectedVersion: number,
+  eventId?: string,
+): SpeakerRecord {
+  const record = assertSpeakerParticipant(value, participantId, eventId);
+  if (record.version <= expectedVersion) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker response did not include an advanced authoritative revision.",
+    );
+  }
+  return record;
+}
+
+export function assertSpeakerHeadshotReplacement(
+  replacement: SpeakerHeadshotReplacement,
+  eventId: string,
+  participantId: string,
+  expectedVersion: number,
+): SpeakerHeadshotReplacement {
+  const asset = replacement?.asset;
+  const profile = replacement?.profile;
+  if (
+    !isRecord(asset) ||
+    !isRecord(profile) ||
+    asset.eventId !== eventId ||
+    asset.participantId !== participantId ||
+    asset.state !== "ready" ||
+    typeof asset.id !== "string" ||
+    asset.id.trim().length === 0 ||
+    profile.eventId !== eventId ||
+    profile.participantId !== participantId ||
+    profile.headshotAssetId !== asset.id ||
+    typeof profile.version !== "number" ||
+    !Number.isSafeInteger(profile.version) ||
+    profile.version <= expectedVersion
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The headshot replacement response did not match the selected participant, event, pointer, or revision.",
+    );
+  }
+  return replacement;
+}
+
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 function baseWithoutTrailingSlash(value: string): string {
@@ -307,30 +472,131 @@ function pathSegment(value: string): string {
   return encodeURIComponent(value);
 }
 
+function parseSpeakerInvitationResult(value: unknown): SpeakerInvitationResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("The invitation result is invalid.");
+  }
+  const record = value as Record<string, unknown>;
+  const statuses = new Set<SpeakerInvitationDeliveryStatus>([
+    "queued",
+    "sent",
+    "failed",
+    "duplicate",
+  ]);
+  if (
+    typeof record.organizationId !== "string" ||
+    record.organizationId.trim().length === 0 ||
+    typeof record.eventId !== "string" ||
+    record.eventId.trim().length === 0 ||
+    typeof record.idempotencyKey !== "string" ||
+    record.idempotencyKey.trim().length === 0 ||
+    typeof record.status !== "string" ||
+    !statuses.has(record.status as SpeakerInvitationDeliveryStatus) ||
+    typeof record.duplicate !== "boolean" ||
+    !Array.isArray(record.recipients) ||
+    record.recipients.length === 0
+  ) {
+    throw new TypeError("The invitation result is invalid.");
+  }
+  const recipients = record.recipients.map((value): SpeakerInvitationRecipientResult => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypeError("The invitation recipient result is invalid.");
+    }
+    const recipient = value as Record<string, unknown>;
+    if (
+      typeof recipient.participantId !== "string" ||
+      recipient.participantId.trim().length === 0 ||
+      typeof recipient.recipientEmail !== "string" ||
+      recipient.recipientEmail.trim().length === 0 ||
+      typeof recipient.status !== "string" ||
+      !statuses.has(recipient.status as SpeakerInvitationDeliveryStatus) ||
+      (recipient.receiptId !== null && typeof recipient.receiptId !== "string")
+    ) {
+      throw new TypeError("The invitation recipient result is invalid.");
+    }
+    return {
+      participantId: recipient.participantId,
+      recipientEmail: recipient.recipientEmail,
+      status: recipient.status as SpeakerInvitationDeliveryStatus,
+      receiptId: recipient.receiptId,
+    };
+  });
+  return {
+    organizationId: record.organizationId,
+    eventId: record.eventId,
+    idempotencyKey: record.idempotencyKey,
+    status: record.status as SpeakerInvitationDeliveryStatus,
+    duplicate: record.duplicate,
+    recipients,
+  };
+}
+
+const SPEAKER_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+function safeSpeakerErrorCode(value: unknown): string {
+  return typeof value === "string" && SPEAKER_ERROR_CODE_PATTERN.test(value)
+    ? value
+    : "SPEAKER_REQUEST_FAILED";
+}
+
+function safeSpeakerTraceId(value: unknown): string | undefined {
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
+}
+
+function parseSpeakerImportPreview(value: unknown): SpeakerImportPreview {
+  if (!isRecord(value)) {
+    throw new SpeakerAuthoritativeDataError("The speaker import preview is invalid.");
+  }
+  if (
+    typeof value.previewId !== "string" ||
+    value.previewId.trim().length === 0 ||
+    typeof value.sourceDigest !== "string" ||
+    value.sourceDigest.trim().length === 0 ||
+    !Array.isArray(value.validRows) ||
+    !Array.isArray(value.invalidRows)
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker import preview is missing its durable preview artifact.",
+    );
+  }
+  return {
+    previewId: value.previewId,
+    sourceDigest: value.sourceDigest,
+    validRows: value.validRows as readonly SpeakerImportRow[],
+    invalidRows: value.invalidRows as readonly SpeakerImportIssue[],
+  };
+}
+
 async function errorFrom(response: Response): Promise<SpeakerApiError> {
-  const body = (await response.json().catch(() => undefined)) as SpeakerErrorResponse | undefined;
+  const body = (await response.json().catch(() => undefined)) as unknown;
+  const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
   return new SpeakerApiError(
-    body?.error?.code ?? "SPEAKER_REQUEST_FAILED",
-    body?.error?.message ?? "The speaker request could not be completed.",
-    response.status,
-    body?.error?.traceId,
+    safeSpeakerErrorCode(error?.code),
+    typeof error?.message === "string" && error.message.trim().length > 0
+      ? error.message
+      : "The speaker request could not be completed.",
+    Number.isSafeInteger(response.status) && response.status >= 400 && response.status <= 599
+      ? response.status
+      : 500,
+    safeSpeakerTraceId(error?.traceId),
   );
 }
 
 export interface SpeakerApi {
   list(signal?: AbortSignal): Promise<SpeakerRosterEnvelope>;
   get(participantId: string, signal?: AbortSignal): Promise<SpeakerRecord>;
-  create(input: SpeakerCreateInput): Promise<SpeakerRosterEnvelope>;
+  create(input: SpeakerCreateInput, signal?: AbortSignal): Promise<SpeakerRosterEnvelope>;
   update(participantId: string, input: SpeakerUpdateInput): Promise<SpeakerRosterEnvelope>;
   getSessions(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerSession[]>;
   getAssets(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerAsset[]>;
   getDownloadGrant(assetId: string, signal?: AbortSignal): Promise<SpeakerDownloadGrant>;
+  replaceHeadshot(input: SpeakerHeadshotReplacementInput): Promise<SpeakerHeadshotReplacement>;
   previewImport(file: File, signal?: AbortSignal): Promise<SpeakerImportPreview>;
   commitImport(
-    input: SpeakerImportCommitInput,
+    input: SpeakerImportCommitRequest,
     signal?: AbortSignal,
   ): Promise<SpeakerRosterEnvelope>;
-  listTasks(participantId: string, signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
+  listTasks(signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
   assignTasks(input: SpeakerTaskAssignmentInput): Promise<SpeakerTaskEnvelope>;
   previewInvitations(
     input: SpeakerInvitationPreviewInput,
@@ -389,7 +655,7 @@ export function createSpeakerApi(
   const normalizedBaseUrl = baseWithoutTrailingSlash(baseUrl.trim());
   const normalizedOrganizationId = organizationId.trim();
   const normalizedEventId = eventId.trim();
-  if (normalizedBaseUrl.length === 0) throw new TypeError("A speaker API base URL is required.");
+  let latestImportPreview: SpeakerImportPreview | null = null;
   if (normalizedOrganizationId.length === 0) {
     throw new TypeError("An organization ID is required for speaker requests.");
   }
@@ -399,6 +665,40 @@ export function createSpeakerApi(
 
   const eventApiBase = `${normalizedBaseUrl}/api/admin/organizations/${pathSegment(normalizedOrganizationId)}/events/${pathSegment(normalizedEventId)}`;
   const apiBase = `${eventApiBase}/speakers`;
+  const organizerHeadshotBaseUrl =
+    normalizedBaseUrl.length > 0
+      ? normalizedBaseUrl
+      : typeof window === "undefined"
+        ? "http://localhost"
+        : window.location.origin;
+  const organizerHeadshotOrigin = new URL(organizerHeadshotBaseUrl).origin;
+  const organizerHeadshotFetcher = (input: RequestInfo | URL, init?: RequestInit) => {
+    const resolved = new URL(String(input), `${organizerHeadshotBaseUrl}/`);
+    if (resolved.origin !== organizerHeadshotOrigin || !resolved.pathname.startsWith("/api/")) {
+      throw new TypeError("Organizer headshot requests must use a same-origin /api/* path.");
+    }
+    return fetcher(`${resolved.pathname}${resolved.search}`, init);
+  };
+  const organizerHeadshotApi = createDeliverablesApi(
+    organizerHeadshotBaseUrl,
+    normalizedOrganizationId,
+    normalizedEventId,
+    organizerHeadshotFetcher,
+  );
+  const rawReplaceHeadshot = organizerHeadshotApi.replaceHeadshot;
+  if (rawReplaceHeadshot === undefined) {
+    throw new TypeError("The organizer headshot replacement adapter is unavailable.");
+  }
+
+  const replaceHeadshot = async (
+    input: SpeakerHeadshotReplacementInput,
+  ): Promise<SpeakerHeadshotReplacement> =>
+    assertSpeakerHeadshotReplacement(
+      await rawReplaceHeadshot(input),
+      normalizedEventId,
+      input.participantId,
+      input.expectedVersion,
+    );
 
   async function requestAt<T>(base: string, path: string, init?: RequestInit): Promise<T> {
     const response = await fetcher(`${base}${path}`, {
@@ -450,19 +750,29 @@ export function createSpeakerApi(
 
   return {
     list(signal) {
-      return request<SpeakerRosterEnvelope>("", signal === undefined ? undefined : { signal });
+      return request<SpeakerRosterEnvelope>("", signal === undefined ? undefined : { signal }).then(
+        (value) => assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      );
     },
     get(participantId, signal) {
       return request<SpeakerRecord>(
         `/${pathSegment(participantId)}`,
         signal === undefined ? undefined : { signal },
+      ).then((value) => assertSpeakerParticipant(value, participantId, normalizedEventId));
+    },
+    create(input, signal) {
+      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input, signal).then((value) =>
+        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
-    create(input) {
-      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input);
-    },
     update(participantId, input) {
-      return jsonRequest<SpeakerRosterEnvelope>(`/${pathSegment(participantId)}`, "PATCH", input);
+      return jsonRequest<SpeakerRosterEnvelope>(
+        `/${pathSegment(participantId)}`,
+        "PATCH",
+        input,
+      ).then((value) =>
+        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      );
     },
     getSessions(participantId, signal) {
       return request<readonly SpeakerSession[]>(
@@ -474,38 +784,96 @@ export function createSpeakerApi(
       return request<readonly SpeakerAsset[]>(
         `/${pathSegment(participantId)}/assets`,
         signal === undefined ? undefined : { signal },
-      );
+      ).then((assets) => {
+        for (const asset of assets) {
+          if (
+            isRecord(asset) &&
+            ((typeof asset.eventId === "string" && asset.eventId !== normalizedEventId) ||
+              (typeof asset.participantId === "string" && asset.participantId !== participantId))
+          ) {
+            throw new SpeakerAuthoritativeDataError(
+              "The speaker asset response belongs to a different event or participant.",
+            );
+          }
+        }
+        return assets.map((asset) => ({
+          ...asset,
+          // The list endpoint may include a short-lived grant for legacy callers. Keep it out of
+          // the browser-facing workspace until the organizer explicitly requests a download.
+          downloadUrl: null,
+        }));
+      });
     },
     getDownloadGrant(assetId, signal) {
-      return eventRequest<SpeakerDownloadGrant>(
-        `/organizer/assets/${pathSegment(assetId)}/download`,
+      return requestAt<SpeakerDownloadGrant>(
+        normalizedBaseUrl,
+        `/api/speaker/events/${pathSegment(normalizedEventId)}/organizer/assets/${pathSegment(assetId)}/download`,
         {
           method: "POST",
           ...(signal === undefined ? {} : { signal }),
         },
       );
     },
+    replaceHeadshot,
     previewImport(file, signal) {
       const body = new FormData();
       body.append("file", file);
-      return request<SpeakerImportPreview>("/imports/preview", {
+      return request<unknown>("/imports/preview", {
         method: "POST",
         body,
         ...(signal === undefined ? {} : { signal }),
+      }).then((value) => {
+        const preview = parseSpeakerImportPreview(value);
+        latestImportPreview = preview;
+        return preview;
       });
     },
     commitImport(input, signal) {
-      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal);
-    },
-    listTasks(participantId, signal) {
-      const query = new URLSearchParams({ participantId });
-      return eventRequest<SpeakerTaskEnvelope>(
-        `/speaker-tasks?${query.toString()}`,
-        signal === undefined ? undefined : { signal },
+      const canonicalInput =
+        "previewId" in input
+          ? input
+          : latestImportPreview === null
+            ? null
+            : {
+                previewId: latestImportPreview.previewId,
+                sourceDigest: latestImportPreview.sourceDigest,
+                idempotencyKey: input.idempotencyKey,
+              };
+      if (canonicalInput === null) {
+        throw new TypeError("A durable speaker import preview is required before commit.");
+      }
+      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", canonicalInput, signal).then(
+        (value) => assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
+    listTasks(signal) {
+      return eventRequest<SpeakerTaskEnvelope>(
+        "/speaker-tasks",
+        signal === undefined ? undefined : { signal },
+      ).then((value) => {
+        if (
+          !isRecord(value) ||
+          value.organizationId !== normalizedOrganizationId ||
+          value.eventId !== normalizedEventId ||
+          !Array.isArray(value.tasks)
+        ) {
+          throw new SpeakerAuthoritativeDataError(
+            "The speaker task response belongs to a different organization or event.",
+          );
+        }
+        return value;
+      });
+    },
     assignTasks(input) {
-      return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", input);
+      return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", {
+        title: input.title,
+        description: input.description,
+        dueAt: input.dueAt,
+        assignments: input.participantIds.map((participantId) => ({
+          participantId,
+          submissionId: null,
+        })),
+      });
     },
     previewInvitations(input) {
       return jsonRequest<readonly SpeakerInvitationPreview[]>(
@@ -515,7 +883,9 @@ export function createSpeakerApi(
       );
     },
     sendInvitations(input) {
-      return jsonRequest<SpeakerInvitationResult>("/invitations/send", "POST", input);
+      return jsonRequest<unknown>("/invitations/send", "POST", input).then(
+        parseSpeakerInvitationResult,
+      );
     },
     listEmailTemplates(signal) {
       return request<readonly SpeakerEmailTemplate[]>(

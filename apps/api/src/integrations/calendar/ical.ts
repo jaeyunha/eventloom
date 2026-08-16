@@ -1,9 +1,9 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
 import {
-  CALENDAR_ORGANIZER,
   CalendarInvitationError,
+  type CalendarInvitationPayload,
   type CalendarInvitationResult,
   type CalendarInvitationSerializationOptions,
+  isCalendarEmailAddress,
 } from "./types";
 
 const MAX_ICAL_LINE_OCTETS = 75;
@@ -43,7 +43,6 @@ interface TimeZoneTransition {
 
 const instantPattern =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:\d{2})$/;
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Serializes a provider-neutral invitation to RFC 5545. UPDATE is deliberately
@@ -63,7 +62,7 @@ export function serializeCalendarInvitation(
   const method = validated.method === "CANCEL" ? "CANCEL" : "REQUEST";
   const lines: string[] = [
     "BEGIN:VCALENDAR",
-    "PRODID:-//Forever Browsing//Open Sessionboard//EN",
+    "PRODID:-//Forever Browsing//Eventloom//EN",
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
     `METHOD:${method}`,
@@ -76,7 +75,7 @@ export function serializeCalendarInvitation(
     `DTEND;TZID=${validated.timeZone}:${formatBasicDateTime(localEnd)}`,
     `SUMMARY:${escapeIcalText(validated.summary)}`,
     `LOCATION:${escapeIcalText(validated.location)}`,
-    `ORGANIZER:mailto:${CALENDAR_ORGANIZER}`,
+    `ORGANIZER:mailto:${validated.organizer}`,
     ...validated.attendees.map(
       (attendee) =>
         `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${attendee}`,
@@ -137,15 +136,15 @@ export function validateCalendarInvitationPayload(
   if (!Number.isSafeInteger(payload.sequence) || payload.sequence < 0) {
     throw calendarPayloadError("Calendar sequence must be a non-negative integer");
   }
-  if (payload.organizer !== CALENDAR_ORGANIZER) {
-    throw calendarPayloadError(`Organizer must be ${CALENDAR_ORGANIZER}`);
+  if (!isCalendarEmailAddress(payload.organizer)) {
+    throw calendarPayloadError(`Invalid organizer address: ${payload.organizer}`);
   }
   if (!Array.isArray(payload.attendees) || payload.attendees.length === 0) {
     throw calendarPayloadError("At least one attendee is required");
   }
   for (const attendee of payload.attendees) {
     assertSafeText(attendee, "attendee", false);
-    if (!emailPattern.test(attendee)) {
+    if (!isCalendarEmailAddress(attendee)) {
       throw calendarPayloadError(`Invalid attendee address: ${attendee}`);
     }
   }

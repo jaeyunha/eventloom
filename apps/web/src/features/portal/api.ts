@@ -14,6 +14,7 @@ import type {
   PortalTaskForm,
   PortalTaskResponseEnvelope,
   PortalTaskStatus,
+  PortalTravelLogistics,
   PortalUploadAuthorization,
   PortalView,
   PortalWikiPage,
@@ -33,15 +34,17 @@ export class PortalApiError extends Error {
   }
 }
 export interface PortalProfileDetails {
+  email?: string;
   jobTitle?: string;
   company?: string;
+  status?: string;
   socialLinks?: Readonly<Record<string, string>>;
+  travelLogistics?: PortalTravelLogistics;
 }
 
-export type PortalProfileDto = Omit<PortalProfile, "headshotAssetId"> &
-  PortalProfileDetails & {
-    headshotAssetId?: string | null;
-  };
+export type PortalProfileDto = Omit<PortalProfile, "headshotAssetId"> & {
+  headshotAssetId?: string | null;
+};
 export type PortalSocialNetwork = "twitter" | "linkedin";
 
 function isLocalHostname(value: string): boolean {
@@ -96,7 +99,9 @@ export interface PortalApi {
     biography?: string;
     jobTitle?: string;
     company?: string;
+    status?: string;
     socialLinks?: Readonly<Record<string, string>>;
+    travelLogistics?: PortalTravelLogistics;
     headshotAssetId?: string | null;
     expectedVersion: number;
   }): Promise<PortalProfileDto>;
@@ -176,6 +181,7 @@ export interface PortalApi {
     file: File;
     supersedesAssetId?: string;
   }): Promise<PortalAsset>;
+  retryAssetUpload?(input: { eventId: string; assetId: string; file: File }): Promise<PortalAsset>;
   finalizeAsset?(input: {
     eventId: string;
     assetId: string;
@@ -216,11 +222,21 @@ function removeTrailingSlash(value: string): string {
 }
 
 function resolveGrantUrl(value: string, origin: string): string {
+  const fallbackOrigin =
+    removeTrailingSlash(origin) ||
+    (typeof window === "undefined" ? "" : removeTrailingSlash(window.location.origin));
+  let url: URL;
   try {
-    return new URL(value).toString();
+    url = fallbackOrigin ? new URL(value, `${fallbackOrigin}/`) : new URL(value);
   } catch {
-    return new URL(value, `${removeTrailingSlash(origin)}/`).toString();
+    if (fallbackOrigin.length === 0) return value;
+    throw new TypeError("The upload grant URL is invalid.");
   }
+  const hostname = url.hostname.toLowerCase();
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalHostname(hostname))) {
+    throw new TypeError("The upload grant URL must use HTTPS.");
+  }
+  return url.toString();
 }
 
 function routeSegment(value: string): string {
@@ -344,6 +360,27 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
         }),
       },
     );
+    await uploadAuthorizedFile(input.file, authorization);
+    return authorization.asset;
+  }
+
+  async function uploadAuthorizedFile(
+    file: File,
+    authorization: PortalUploadAuthorization,
+    requireMetadataMatch = false,
+  ): Promise<void> {
+    if (
+      (requireMetadataMatch && authorization.asset.fileName !== file.name) ||
+      (requireMetadataMatch && authorization.asset.sizeBytes !== file.size) ||
+      (requireMetadataMatch &&
+        authorization.asset.contentType !== (file.type || "application/octet-stream"))
+    ) {
+      throw new PortalApiError(
+        "UPLOAD_METADATA_MISMATCH",
+        "Choose the same file that was originally authorized for this upload.",
+        400,
+      );
+    }
     const uploadController = new AbortController();
     let uploadTimedOut = false;
     let uploadTimeout!: ReturnType<typeof setTimeout>;
@@ -360,7 +397,7 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
           method: authorization.grant.method,
           credentials: "omit",
           headers: authorization.grant.headers,
-          body: input.file,
+          body: file,
           signal: uploadController.signal,
         }),
         uploadTimeoutError,
@@ -380,7 +417,6 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
     } finally {
       clearTimeout(uploadTimeout);
     }
-    return authorization.asset;
   }
 
   const api: PortalApi = {
@@ -410,6 +446,10 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
             ...(input.biography === undefined ? {} : { biography: input.biography }),
             ...(input.jobTitle === undefined ? {} : { jobTitle: input.jobTitle }),
             ...(input.company === undefined ? {} : { company: input.company }),
+            ...(input.status === undefined ? {} : { status: input.status }),
+            ...(input.travelLogistics === undefined
+              ? {}
+              : { travelLogistics: input.travelLogistics }),
             ...(input.socialLinks === undefined ? {} : { socialLinks: input.socialLinks }),
             ...(input.headshotAssetId === undefined
               ? {}
@@ -538,6 +578,25 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
     },
 
     uploadFile: createUpload,
+
+    async retryAssetUpload(input) {
+      const authorization = await request<PortalUploadAuthorization>(
+        `/events/${routeSegment(input.eventId)}/assets/${routeSegment(input.assetId)}/upload-authorization`,
+        { method: "POST" },
+      );
+      if (
+        authorization.asset.id !== input.assetId ||
+        authorization.asset.state !== "pending_upload"
+      ) {
+        throw new PortalApiError(
+          "CONTEXT_MISMATCH",
+          "The upload authorization does not match the pending asset.",
+          409,
+        );
+      }
+      await uploadAuthorizedFile(input.file, authorization, true);
+      return authorization.asset;
+    },
 
     async finalizeAsset(input) {
       return request<PortalAsset>(

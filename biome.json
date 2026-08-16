@@ -4,13 +4,16 @@
     "includes": [
       "**",
       "!!**/.next",
+      "!!**/.next-*",
       "!!**/.gjc",
+      "!!**/.omo",
       "!!**/.open-next",
       "!!**/.wrangler",
       "!!**/dist",
       "!!**/coverage",
       "!!**/playwright-report",
       "!!**/test-results",
+      "!!gjc-session-*.html",
       "!!Kill-My-SaaS-Competition-Brief",
       "!!evidence"
     ]
@@ -38,6 +41,12 @@
       "quoteStyle": "double",
       "semicolons": "always",
       "trailingCommas": "all"
+    }
+  },
+  "css": {
+    "parser": {
+      "cssModules": true,
+      "tailwindDirectives": true
     }
   }
 }

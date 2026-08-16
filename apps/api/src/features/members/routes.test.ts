@@ -14,6 +14,8 @@ import type {
   MemberAuthBoundary,
   MemberInvitationDelivery,
   MemberRepositorySeed,
+  ReviewerEventInvitationLifecycle,
+  ReviewerPoolRepository,
 } from "./types";
 
 const initialNow = new Date("2026-08-09T12:00:00.000Z");
@@ -38,6 +40,7 @@ function principal(
     email: `${userId}@example.test`,
     memberships: [{ organizationId, role }],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 
@@ -95,24 +98,53 @@ function seed(): MemberRepositorySeed {
   };
 }
 
+function invitationLifecycle() {
+  const created: Parameters<ReviewerEventInvitationLifecycle["createReviewerInvitation"]>[0][] = [];
+  const revokedIfUnpooled: Parameters<
+    ReviewerEventInvitationLifecycle["revokeReviewerInvitationIfUnpooled"]
+  >[0][] = [];
+  const revokedForMembers: Parameters<
+    ReviewerEventInvitationLifecycle["revokeReviewerInvitationsForMember"]
+  >[0][] = [];
+  const lifecycle: ReviewerEventInvitationLifecycle = {
+    async createReviewerInvitation(input) {
+      created.push(input);
+    },
+    async revokeReviewerInvitationIfUnpooled(input) {
+      revokedIfUnpooled.push(input);
+    },
+    async revokeReviewerInvitationsForMember(input) {
+      revokedForMembers.push(input);
+    },
+  };
+  return { lifecycle, created, revokedIfUnpooled, revokedForMembers };
+}
+
 function fixture() {
   let id = 0;
   const identity = new InMemoryMemberIdentityRepository(seed());
   const auth = new InMemoryMemberAuthBoundary({
-    baseUrl: "https://sessionboard.test/member-setup",
+    baseUrl: "https://eventloom.test/member-setup",
     clock: () => new Date(initialNow),
     generateToken: () => `secret-token-${++id}`,
   });
   const delivery = new InMemoryMemberInvitationDelivery();
   const pools = new InMemoryReviewerPoolRepository();
+  const reviewerEventInvitations = invitationLifecycle();
   const service = new MemberService(
-    { identity, auth, invitationDelivery: delivery, reviewerPools: pools },
+    {
+      identity,
+      auth,
+      invitationDelivery: delivery,
+      reviewerPools: pools,
+      reviewerEventInvitations: reviewerEventInvitations.lifecycle,
+    },
     {
       clock: () => new Date(initialNow),
       generateId: () => `generated-${++id}`,
     },
   );
-  return { identity, auth, delivery, pools, service };
+  return { identity, auth, delivery, pools, reviewerEventInvitations, service };
 }
 
 function appFor(
@@ -199,7 +231,7 @@ describe("member provisioning service", () => {
       users: [...(seed().users ?? []), verifiedUser],
     });
     const auth = new InMemoryMemberAuthBoundary({
-      baseUrl: "https://sessionboard.test/member-setup",
+      baseUrl: "https://eventloom.test/member-setup",
       clock: () => new Date(initialNow),
       generateToken: () => "verified-user-token",
     });
@@ -209,6 +241,7 @@ describe("member provisioning service", () => {
       auth,
       invitationDelivery: delivery,
       reviewerPools: new InMemoryReviewerPoolRepository(),
+      reviewerEventInvitations: invitationLifecycle().lifecycle,
     });
 
     const invited = await service.inviteMember(actor(), {
@@ -237,7 +270,7 @@ describe("member provisioning service", () => {
   it("retries delivery with the same idempotency key after a transient send failure", async () => {
     const identity = new InMemoryMemberIdentityRepository(seed());
     const auth = new InMemoryMemberAuthBoundary({
-      baseUrl: "https://sessionboard.test/member-setup",
+      baseUrl: "https://eventloom.test/member-setup",
       clock: () => new Date(initialNow),
     });
     const delivered = new InMemoryMemberInvitationDelivery();
@@ -256,6 +289,7 @@ describe("member provisioning service", () => {
       auth,
       invitationDelivery: delivery,
       reviewerPools: new InMemoryReviewerPoolRepository(),
+      reviewerEventInvitations: invitationLifecycle().lifecycle,
     });
     const input = {
       organizationId: "org-a",
@@ -279,7 +313,7 @@ describe("member provisioning service", () => {
   it("keeps the setup token retryable when activation fails before finalization", async () => {
     const identity = new InMemoryMemberIdentityRepository(seed());
     const underlyingAuth = new InMemoryMemberAuthBoundary({
-      baseUrl: "https://sessionboard.test/member-setup",
+      baseUrl: "https://eventloom.test/member-setup",
       clock: () => new Date(initialNow),
       generateToken: () => "resumable-activation-token",
     });
@@ -304,6 +338,7 @@ describe("member provisioning service", () => {
       auth,
       invitationDelivery: delivery,
       reviewerPools: new InMemoryReviewerPoolRepository(),
+      reviewerEventInvitations: invitationLifecycle().lifecycle,
     });
     const invited = await service.inviteMember(actor(), {
       organizationId: "org-a",
@@ -373,15 +408,46 @@ describe("member provisioning service", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
   });
 
-  it("requires a one-time verified activation before a reviewer enters a pool", async () => {
-    const { service, auth, delivery } = fixture();
+  it("saves an unverified pending reviewer pool without attempting a database invitation", async () => {
+    const { auth, delivery, identity, pools } = fixture();
+    let poolSaved = false;
+    let invitationAttempted = false;
+    const reviewerPools: ReviewerPoolRepository = {
+      getReviewerPool: pools.getReviewerPool.bind(pools),
+      async saveReviewerPool(pool, expectedVersion) {
+        await pools.saveReviewerPool(pool, expectedVersion);
+        poolSaved = true;
+      },
+    };
+    const reviewerEventInvitations: ReviewerEventInvitationLifecycle = {
+      async createReviewerInvitation() {
+        invitationAttempted = true;
+        throw new Error("An unverified account cannot have a database invitation yet.");
+      },
+      async revokeReviewerInvitationIfUnpooled() {},
+      async revokeReviewerInvitationsForMember() {},
+    };
+    const service = new MemberService(
+      {
+        identity,
+        auth,
+        invitationDelivery: delivery,
+        reviewerPools,
+        reviewerEventInvitations,
+      },
+      {
+        clock: () => new Date(initialNow),
+        generateId: () => "generated-pending-reviewer",
+      },
+    );
     const invited = await service.inviteMember(actor(), {
       organizationId: "org-a",
       email: "reviewer@example.test",
       name: "Review Person",
       role: "reviewer",
-      idempotencyKey: "activate-1",
+      idempotencyKey: "pending-reviewer",
     });
+
     await expect(
       service.setReviewerPool(actor(), {
         organizationId: "org-a",
@@ -390,43 +456,157 @@ describe("member provisioning service", () => {
         reviewerIds: [invited.member.userId],
         maxAssignmentsPerReviewer: 2,
       }),
-    ).rejects.toMatchObject({ code: "REVIEWER_NOT_ACTIVE", status: 409 });
-    await expect(
-      service.activateMember({
-        organizationId: "org-a",
-        token: delivery.messages[0]?.setupUrl ?? "",
-        password: "weak",
-      }),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    ).resolves.toMatchObject({
+      reviewerIds: [invited.member.userId],
+      grants: [{ reviewerId: invited.member.userId, maxAssignments: 2, assignedCount: 0 }],
+    });
+
+    expect(poolSaved).toBe(true);
+    expect(invitationAttempted).toBe(false);
+    expect(await identity.getMember("org-a", invited.member.userId)).toBeNull();
+    expect(auth.hasEstablishedPassword(invited.member.userId)).toBe(false);
     expect(auth.storedSetupLink(invited.invitation?.id ?? "")?.usedAt).toBeNull();
-    await expect(
-      service.activateMember({
-        organizationId: "org-b",
-        token: delivery.messages[0]?.setupUrl ?? "",
-        password: "StrongPass1!",
-      }),
-    ).rejects.toMatchObject({ code: "INVITATION_INVALID", status: 400 });
-    expect(auth.storedSetupLink(invited.invitation?.id ?? "")?.usedAt).toBeNull();
-    const activated = await service.activateMember({
+  });
+
+  it("delegates multi-round invitation retention to exact-event lifecycle operations", async () => {
+    const { service, delivery, pools, reviewerEventInvitations } = fixture();
+    await service.inviteMember(actor(), {
+      organizationId: "org-a",
+      email: "multi-round-reviewer@example.test",
+      name: "Multi Round Reviewer",
+      role: "reviewer",
+      idempotencyKey: "multi-round-reviewer",
+    });
+    const active = await service.activateMember({
       organizationId: "org-a",
       token: delivery.messages[0]?.setupUrl ?? "",
       password: "StrongPass1!",
     });
-    expect(activated.member).toMatchObject({
-      userId: invited.member.userId,
-      role: "reviewer",
-      emailVerified: true,
-      status: "active",
+    const poolOne = await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-1",
+      reviewerIds: [active.member.userId],
+      maxAssignmentsPerReviewer: 2,
     });
-    expect(auth.hasEstablishedPassword(invited.member.userId)).toBe(true);
-    expect(auth.storedSetupLink(invited.invitation?.id ?? "")?.usedAt).not.toBeNull();
-    await expect(
-      service.activateMember({
+    await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-2",
+      reviewerIds: [active.member.userId],
+      maxAssignmentsPerReviewer: 2,
+    });
+    const replayed = await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-1",
+      reviewerIds: [active.member.userId],
+      maxAssignmentsPerReviewer: 2,
+      expectedVersion: poolOne.version,
+    });
+
+    const removed = await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-1",
+      reviewerIds: [],
+      expectedVersion: replayed.version,
+    });
+    const readded = await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-1",
+      reviewerIds: [active.member.userId],
+      maxAssignmentsPerReviewer: 2,
+      expectedVersion: removed.version,
+    });
+
+    expect(readded.version).toBe(4);
+    expect(reviewerEventInvitations.created.map(({ idempotencyKey }) => idempotencyKey)).toEqual([
+      `reviewer-event:org-a\u0000event-a\u0000round-1\u0000${active.member.userId}\u00001`,
+      `reviewer-event:org-a\u0000event-a\u0000round-2\u0000${active.member.userId}\u00001`,
+      `reviewer-event:org-a\u0000event-a\u0000round-1\u0000${active.member.userId}\u00004`,
+    ]);
+    expect(reviewerEventInvitations.revokedIfUnpooled).toEqual([
+      {
         organizationId: "org-a",
-        token: delivery.messages[0]?.setupUrl ?? "",
-        password: "StrongPass1!",
+        eventId: "event-a",
+        excludedRoundId: "round-1",
+        recipientUserId: active.member.userId,
+        revokedByUserId: "owner-a",
+        revokedAt: initialNow.toISOString(),
+      },
+    ]);
+    expect(reviewerEventInvitations.revokedForMembers).toEqual([]);
+    await expect(pools.getReviewerPool("org-a", "event-a", "round-2")).resolves.toMatchObject({
+      reviewerIds: [active.member.userId],
+    });
+  });
+
+  it("keeps the reviewer pool unchanged when invitation revocation fails", async () => {
+    const { service, identity, auth, delivery, pools } = fixture();
+    await service.inviteMember(actor(), {
+      organizationId: "org-a",
+      email: "pool-revocation-failure@example.test",
+      name: "Pool Revocation Failure",
+      role: "reviewer",
+      idempotencyKey: "pool-revocation-failure",
+    });
+    const active = await service.activateMember({
+      organizationId: "org-a",
+      token: delivery.messages[0]?.setupUrl ?? "",
+      password: "StrongPass1!",
+    });
+    const current = await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-1",
+      reviewerIds: [active.member.userId],
+      maxAssignmentsPerReviewer: 2,
+    });
+    let saveAttempted = false;
+    const reviewerPools: ReviewerPoolRepository = {
+      getReviewerPool: pools.getReviewerPool.bind(pools),
+      async saveReviewerPool(pool, expectedVersion) {
+        saveAttempted = true;
+        await pools.saveReviewerPool(pool, expectedVersion);
+      },
+    };
+    const guarded = new MemberService(
+      {
+        identity,
+        auth,
+        invitationDelivery: delivery,
+        reviewerPools,
+        reviewerEventInvitations: {
+          async createReviewerInvitation() {},
+          async revokeReviewerInvitationIfUnpooled() {
+            throw new Error("event invitation revocation failed");
+          },
+          async revokeReviewerInvitationsForMember() {},
+        },
+      },
+      {
+        clock: () => new Date(initialNow),
+        generateId: () => "pool-revocation-failure-id",
+      },
+    );
+
+    await expect(
+      guarded.setReviewerPool(actor(), {
+        organizationId: "org-a",
+        eventId: "event-a",
+        roundId: "round-1",
+        reviewerIds: [],
+        expectedVersion: current.version,
       }),
-    ).rejects.toMatchObject({ code: "INVITATION_INVALID", status: 400 });
+    ).rejects.toThrow("event invitation revocation failed");
+
+    expect(saveAttempted).toBe(false);
+    await expect(pools.getReviewerPool("org-a", "event-a", "round-1")).resolves.toMatchObject({
+      version: current.version,
+      reviewerIds: [active.member.userId],
+    });
   });
 
   it("keeps role authority isolated and protects the final owner", async () => {
@@ -626,31 +806,141 @@ describe("member provisioning service", () => {
     ).resolves.toMatchObject({ assignedCount: 1 });
   });
 
-  it("revokes membership and invalidates every user session", async () => {
-    const { service, auth, delivery } = fixture();
-    const invited = await service.inviteMember(actor(), {
+  it("allows verified organizers to receive review assignments", async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.setReviewerPool(actor(), {
+        organizationId: "org-a",
+        eventId: "event-a",
+        roundId: "round-a",
+        reviewerIds: ["owner-a"],
+        maxAssignmentsPerReviewer: 3,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reviewerIds: ["owner-a"],
+        grants: [
+          expect.objectContaining({ reviewerId: "owner-a", maxAssignments: 3, assignedCount: 0 }),
+        ],
+      }),
+    );
+  });
+
+  it("keeps active membership and sessions when reviewer invitation revocation fails", async () => {
+    const { identity, auth, delivery, pools } = fixture();
+    let sessionRevocations = 0;
+    const countingAuth: MemberAuthBoundary = {
+      issueSetupLink: (input) => auth.issueSetupLink(input),
+      consumeSetupLink: (token, organizationId) => auth.consumeSetupLink(token, organizationId),
+      finalizeSetupLink: (claim) => auth.finalizeSetupLink(claim),
+      establishPassword: (userId, password) => auth.establishPassword(userId, password),
+      async revokeSessions(userId) {
+        sessionRevocations += 1;
+        await auth.revokeSessions(userId);
+      },
+    };
+    let revocationAttempted = false;
+    const reviewerEventInvitations: ReviewerEventInvitationLifecycle = {
+      async createReviewerInvitation() {},
+      async revokeReviewerInvitationIfUnpooled() {},
+      async revokeReviewerInvitationsForMember() {
+        revocationAttempted = true;
+        throw new Error("event invitation revocation failed");
+      },
+    };
+    const service = new MemberService(
+      {
+        identity,
+        auth: countingAuth,
+        invitationDelivery: delivery,
+        reviewerPools: pools,
+        reviewerEventInvitations,
+      },
+      {
+        clock: () => new Date(initialNow),
+        generateId: () => "fail-closed-reviewer",
+      },
+    );
+    await service.inviteMember(actor(), {
+      organizationId: "org-a",
+      email: "fail-closed@example.test",
+      name: "Fail Closed Reviewer",
+      role: "reviewer",
+      idempotencyKey: "fail-closed-reviewer",
+    });
+    const active = await service.activateMember({
+      organizationId: "org-a",
+      token: delivery.messages[0]?.setupUrl ?? "",
+      password: "StrongPass1!",
+    });
+    expect(sessionRevocations).toBe(1);
+
+    await expect(
+      service.revokeMember(actor(), {
+        organizationId: "org-a",
+        userId: active.member.userId,
+      }),
+    ).rejects.toThrow("event invitation revocation failed");
+
+    expect(revocationAttempted).toBe(true);
+    await expect(identity.getMember("org-a", active.member.userId)).resolves.toMatchObject({
+      status: "active",
+      role: "reviewer",
+    });
+    await expect(identity.getInvitation(active.invitation.id)).resolves.toMatchObject({
+      status: "accepted",
+    });
+    expect(sessionRevocations).toBe(1);
+    await expect(service.listMembers(actor())).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: active.member.userId })]),
+    );
+  });
+
+  it("revokes all member reviewer invitations without deleting reviewer pool state", async () => {
+    const { service, auth, delivery, pools, reviewerEventInvitations } = fixture();
+    await service.inviteMember(actor(), {
       organizationId: "org-a",
       email: "revoke@example.test",
       name: "Revoke Me",
       role: "reviewer",
       idempotencyKey: "revoke-1",
     });
+    const active = await service.activateMember({
+      organizationId: "org-a",
+      token: delivery.messages[0]?.setupUrl ?? "",
+      password: "StrongPass1!",
+    });
+    await service.setReviewerPool(actor(), {
+      organizationId: "org-a",
+      eventId: "event-a",
+      roundId: "round-1",
+      reviewerIds: [active.member.userId],
+      maxAssignmentsPerReviewer: 2,
+    });
+
     const revoked = await service.revokeMember(actor(), {
       organizationId: "org-a",
-      userId: invited.member.userId,
+      userId: active.member.userId,
     });
-    expect(revoked.userId).toBe(invited.member.userId);
-    expect(auth.hasRevokedSessions(invited.member.userId)).toBe(true);
-    expect(await service.listMembers(actor())).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ userId: invited.member.userId })]),
-    );
-    await expect(
-      service.activateMember({
+
+    expect(revoked.userId).toBe(active.member.userId);
+    expect(reviewerEventInvitations.revokedForMembers).toEqual([
+      {
         organizationId: "org-a",
-        token: delivery.messages[0]?.setupUrl ?? "",
-        password: "StrongPass1!",
-      }),
-    ).rejects.toMatchObject({ code: "INVITATION_INVALID", status: 400 });
+        recipientUserId: active.member.userId,
+        revokedByUserId: "owner-a",
+        revokedAt: initialNow.toISOString(),
+      },
+    ]);
+    expect(reviewerEventInvitations.revokedIfUnpooled).toEqual([]);
+    expect(auth.hasRevokedSessions(active.member.userId)).toBe(true);
+    expect(await service.listMembers(actor())).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: active.member.userId })]),
+    );
+    await expect(pools.getReviewerPool("org-a", "event-a", "round-1")).resolves.toMatchObject({
+      reviewerIds: [active.member.userId],
+    });
   });
 });
 
@@ -739,6 +1029,38 @@ describe("member provisioning routes", () => {
     });
     expect(replay.status).toBe(400);
   });
+
+  it("allows an authenticated user to create their first organization", async () => {
+    const { service } = fixture();
+    const currentPrincipal = principal();
+    if (currentPrincipal.kind !== "user") throw new Error("Expected a user principal.");
+    const app = appFor(service, {
+      ...currentPrincipal,
+      memberships: [],
+    });
+    const response = await app.request(
+      "http://localhost/api/admin/organizations/org-first/members/organizations",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": "first-organization" },
+        body: JSON.stringify({
+          organizationId: "org-first",
+          slug: "first-organization",
+          name: "First Organization",
+        }),
+      },
+    );
+
+    const responseBody = (await response.json()) as {
+      data?: { organizationId?: string };
+      error?: { message?: string };
+    };
+    expect(response.status, responseBody.error?.message).toBe(201);
+    expect(responseBody.data).toMatchObject({
+      organizationId: "org-first",
+    });
+  });
+
   it("creates, lists, switches, and updates a member-owned tenant context", async () => {
     const { service } = fixture();
     const app = appFor(service);

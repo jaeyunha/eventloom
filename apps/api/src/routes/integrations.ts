@@ -4,7 +4,7 @@ import {
   apiScopes,
   type WebhookEventType,
   webhookEventTypes,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { requireOrganizationRole } from "../features/auth/authorization";
@@ -14,6 +14,11 @@ import {
   type WebhookSubscriptionRecord,
   type WebhookSubscriptionRepository,
 } from "../integrations/webhooks/types";
+import {
+  ApiKeyExpirationError,
+  normalizeApiKeyExpiration,
+  normalizeStoredApiKeyExpiration,
+} from "./api-key-expiration";
 
 export interface IntegrationEvent {
   readonly id: string;
@@ -56,6 +61,7 @@ export interface IntegrationApiKeySummary {
   readonly label: string;
   readonly prefix: string;
   readonly scopes: readonly ApiScope[];
+  readonly eventId: string | null;
   readonly createdAt: string;
   readonly lastUsedAt: string | null;
   readonly expiresAt: string | null;
@@ -74,17 +80,34 @@ export interface IntegrationWebhookDelivery {
 }
 
 export interface IntegrationAdminRouteDependencies {
-  readonly getEvent: (eventId: string) => Promise<IntegrationEvent | null>;
-  readonly getDeliveryStatus: (eventId: string) => Promise<IntegrationDeliveryStatus>;
-  readonly saveCredential: (eventId: string, provider: "opensend", secret: string) => Promise<void>;
-  readonly listApiKeys: (eventId: string) => Promise<readonly IntegrationApiKeySummary[]>;
+  readonly clock?: () => Date;
+  readonly getEvent: (organizationId: string, eventId: string) => Promise<IntegrationEvent | null>;
+  readonly getDeliveryStatus: (
+    organizationId: string,
+    eventId: string,
+  ) => Promise<IntegrationDeliveryStatus>;
+  readonly saveCredential: (
+    organizationId: string,
+    eventId: string,
+    provider: "opensend",
+    secret: string,
+  ) => Promise<void>;
+  readonly listApiKeys: (
+    organizationId: string,
+    eventId?: string,
+  ) => Promise<readonly IntegrationApiKeySummary[]>;
   readonly createApiKey: (input: {
-    readonly eventId: string;
+    readonly organizationId: string;
+    readonly eventId?: string | null;
     readonly label: string;
     readonly scopes: readonly ApiScope[];
     readonly expiresAt: string | null;
   }) => Promise<IntegrationApiKeyCreation>;
-  readonly revokeApiKey: (eventId: string, apiKeyId: string) => Promise<boolean>;
+  readonly revokeApiKey: (
+    organizationId: string,
+    apiKeyId: string,
+    eventId?: string,
+  ) => Promise<boolean>;
   readonly webhooks: WebhookSubscriptionRepository;
   readonly getWebhookLastDelivery?: (
     eventId: string,
@@ -119,15 +142,11 @@ class IntegrationRouteError extends Error {
 }
 
 const eventIdSchema = z.string().trim().min(1).max(200);
+const organizationIdSchema = z.string().trim().min(1).max(200);
 const providerSchema = z.literal("opensend");
 const credentialSchema = z.object({ secret: z.string().trim().min(1).max(512) }).strict();
 const apiScopeSchema = z.enum(apiScopes);
-const expirationSchema = z
-  .string()
-  .trim()
-  .max(80)
-  .refine((value) => !Number.isNaN(Date.parse(value)), "The expiration date is invalid.")
-  .nullable();
+const expirationSchema = z.string().trim().min(1).max(80).nullable();
 const webhookEndpointSchema = z
   .string()
   .url()
@@ -146,6 +165,9 @@ const createApiKeySchema = z
     expiresAt: expirationSchema,
   })
   .strict();
+const createOrganizationApiKeySchema = createApiKeySchema.extend({
+  eventId: eventIdSchema.nullable().optional(),
+});
 const createWebhookSchema = z
   .object({
     endpointUrl: webhookEndpointSchema,
@@ -187,6 +209,18 @@ function requiredEventId(context: IntegrationContext): string {
   return parsed.data;
 }
 
+function requiredOrganizationId(context: IntegrationContext): string {
+  const parsed = organizationIdSchema.safeParse(context.req.param("organizationId"));
+  if (!parsed.success) {
+    throw new IntegrationRouteError(
+      "VALIDATION_FAILED",
+      "The organization path parameter is invalid.",
+      400,
+    );
+  }
+  return parsed.data;
+}
+
 function requireOrganizer(context: IntegrationContext): AuthPrincipal {
   const principal = context.get("authPrincipal");
   if (principal === null) {
@@ -200,12 +234,20 @@ async function eventFor(
   dependencies: IntegrationAdminRouteDependencies,
 ): Promise<IntegrationEvent> {
   const principal = requireOrganizer(context);
-  const event = await dependencies.getEvent(requiredEventId(context));
+  const organizationId = requiredOrganizationId(context);
+  const event = await dependencies.getEvent(organizationId, requiredEventId(context));
   if (event === null) {
     throw new IntegrationRouteError("NOT_FOUND", "The event was not found.", 404);
   }
-  requireOrganizationRole(principal, event.organizationId, ["owner", "admin"]);
+  requireOrganizationRole(principal, organizationId, ["owner", "admin"]);
   return event;
+}
+
+function organizationFor(context: IntegrationContext): string {
+  const principal = requireOrganizer(context);
+  const organizationId = requiredOrganizationId(context);
+  requireOrganizationRole(principal, organizationId, ["owner", "admin"]);
+  return organizationId;
 }
 
 async function requestBody(context: IntegrationContext): Promise<unknown> {
@@ -225,6 +267,24 @@ function parseBody<T>(schema: z.ZodType<T>, value: unknown, message: string): T 
 function isoDate(value: Date | string): string {
   const parsed = value instanceof Date ? value : new Date(value);
   return Number.isNaN(parsed.valueOf()) ? new Date(0).toISOString() : parsed.toISOString();
+}
+
+function apiKeyExpiration(
+  dependencies: IntegrationAdminRouteDependencies,
+  value: string | null,
+): string | null {
+  try {
+    return normalizeApiKeyExpiration(value, dependencies.clock?.() ?? new Date());
+  } catch (error) {
+    if (error instanceof ApiKeyExpirationError) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", error.message, 400);
+    }
+    throw error;
+  }
+}
+
+function apiKeyView(summary: IntegrationApiKeySummary): IntegrationApiKeySummary {
+  return { ...summary, expiresAt: normalizeStoredApiKeyExpiration(summary.expiresAt) };
 }
 
 function webhookView(
@@ -258,7 +318,7 @@ async function findWebhook(
   return subscription;
 }
 
-/** Organizer-only event integration settings. Mount at `/api/admin/events/:eventId`. */
+/** Organizer-only event integration settings. Mount at the organization-qualified event path. */
 export function createIntegrationAdminRoutes(
   dependencies: IntegrationAdminRouteDependencies,
 ): Hono<IntegrationRouteEnvironment> {
@@ -267,8 +327,8 @@ export function createIntegrationAdminRoutes(
   routes.get("/integrations", async (context) => {
     const event = await eventFor(context, dependencies);
     const [delivery, apiKeys, subscriptions] = await Promise.all([
-      dependencies.getDeliveryStatus(event.id),
-      dependencies.listApiKeys(event.id),
+      dependencies.getDeliveryStatus(event.organizationId, event.id),
+      dependencies.listApiKeys(event.organizationId, event.id),
       dependencies.webhooks.listSubscriptions(event.organizationId),
     ]);
     const eventSubscriptions = subscriptions.filter(
@@ -294,7 +354,7 @@ export function createIntegrationAdminRoutes(
           publishedAgendaRevisionId: event.publishedAgendaRevisionId,
         },
         delivery,
-        apiKeys,
+        apiKeys: apiKeys.map(apiKeyView),
         webhooks,
       },
     });
@@ -312,7 +372,7 @@ export function createIntegrationAdminRoutes(
       await requestBody(context),
       "The credential payload is invalid.",
     );
-    await dependencies.saveCredential(event.id, provider, body.secret);
+    await dependencies.saveCredential(event.organizationId, event.id, provider, body.secret);
     return context.body(null, 204);
   });
 
@@ -323,7 +383,12 @@ export function createIntegrationAdminRoutes(
       await requestBody(context),
       "The API key payload is invalid.",
     );
-    const created = await dependencies.createApiKey({ eventId: event.id, ...body });
+    const created = await dependencies.createApiKey({
+      organizationId: event.organizationId,
+      eventId: event.id,
+      ...body,
+      expiresAt: apiKeyExpiration(dependencies, body.expiresAt),
+    });
     return context.json({ data: { id: created.summary.id, secret: created.secret } }, 201);
   });
 
@@ -332,7 +397,7 @@ export function createIntegrationAdminRoutes(
     const apiKeyId = context.req.param("apiKeyId")?.trim();
     if (!apiKeyId)
       throw new IntegrationRouteError("VALIDATION_FAILED", "The API key id is required.", 400);
-    if (!(await dependencies.revokeApiKey(event.id, apiKeyId))) {
+    if (!(await dependencies.revokeApiKey(event.organizationId, apiKeyId, event.id))) {
       throw new IntegrationRouteError("NOT_FOUND", "The API key was not found.", 404);
     }
     return context.body(null, 204);
@@ -446,30 +511,73 @@ export function createIntegrationAdminRoutes(
     return context.body(null, 204);
   });
 
-  routes.onError((error, context) => {
-    if (error instanceof AuthAccessError) {
-      return errorResponse(
-        context,
-        error.status,
-        error.code === "UNAUTHENTICATED" ? "AUTHENTICATION_REQUIRED" : "ACCESS_DENIED",
-        error.message,
-      );
-    }
-    if (error instanceof IntegrationRouteError) {
-      return errorResponse(context, error.status, error.code, error.message);
-    }
-    if (error instanceof ZodError) {
-      return errorResponse(
-        context,
-        400,
-        "VALIDATION_FAILED",
-        "The integration request is invalid.",
-      );
-    }
-    throw error;
-  });
+  routes.onError(integrationRouteErrorHandler);
 
   return routes;
+}
+
+/** Canonical owner/admin API-key management. API keys authorize an organization, not an event. */
+export function createOrganizationApiKeyAdminRoutes(
+  dependencies: IntegrationAdminRouteDependencies,
+): Hono<IntegrationRouteEnvironment> {
+  const routes = new Hono<IntegrationRouteEnvironment>();
+
+  routes.get("/", async (context) => {
+    const organizationId = organizationFor(context);
+    context.header("cache-control", "private, no-store");
+    const apiKeys = await dependencies.listApiKeys(organizationId);
+    return context.json({ data: apiKeys.map(apiKeyView) });
+  });
+
+  routes.post("/", async (context) => {
+    const organizationId = organizationFor(context);
+    const body = parseBody(
+      createOrganizationApiKeySchema,
+      await requestBody(context),
+      "The API key payload is invalid.",
+    );
+    const created = await dependencies.createApiKey({
+      organizationId,
+      eventId: body.eventId ?? null,
+      label: body.label,
+      scopes: body.scopes,
+      expiresAt: apiKeyExpiration(dependencies, body.expiresAt),
+    });
+    return context.json({ data: { id: created.summary.id, secret: created.secret } }, 201);
+  });
+
+  routes.delete("/:apiKeyId", async (context) => {
+    const organizationId = organizationFor(context);
+    const apiKeyId = context.req.param("apiKeyId")?.trim();
+    if (!apiKeyId) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", "The API key id is required.", 400);
+    }
+    if (!(await dependencies.revokeApiKey(organizationId, apiKeyId))) {
+      throw new IntegrationRouteError("NOT_FOUND", "The API key was not found.", 404);
+    }
+    return context.body(null, 204);
+  });
+
+  routes.onError(integrationRouteErrorHandler);
+  return routes;
+}
+
+function integrationRouteErrorHandler(error: Error, context: IntegrationContext): Response {
+  if (error instanceof AuthAccessError) {
+    return errorResponse(
+      context,
+      error.status,
+      error.code === "UNAUTHENTICATED" ? "AUTHENTICATION_REQUIRED" : "ACCESS_DENIED",
+      error.message,
+    );
+  }
+  if (error instanceof IntegrationRouteError) {
+    return errorResponse(context, error.status, error.code, error.message);
+  }
+  if (error instanceof ZodError) {
+    return errorResponse(context, 400, "VALIDATION_FAILED", "The integration request is invalid.");
+  }
+  throw error;
 }
 
 function webhookRouteError(error: unknown): IntegrationRouteError {

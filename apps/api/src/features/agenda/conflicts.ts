@@ -13,12 +13,18 @@ export interface ConflictDetectionInput extends AgendaCatalog {
   minimumTravelMinutes: number;
   customRules?: readonly AgendaCustomRule[];
 }
+export interface ReleasedSpeakerCommitmentDetectionInput {
+  entries: readonly AgendaEntry[];
+  releasedEntries: readonly AgendaEntry[];
+  sessions: readonly AgendaSession[];
+}
 
 export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaValidationReport {
   const conflicts: AgendaConflict[] = [];
   const warnings: AgendaWarning[] = [];
   const sessions = new Map(input.sessions.map((session) => [session.id, session]));
   const rooms = new Map(input.rooms.map((room) => [room.id, room]));
+  const tracks = new Map(input.tracks.map((track) => [track.id, track]));
 
   for (const entry of input.entries) {
     const session = sessions.get(entry.sessionId);
@@ -62,6 +68,9 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
         leftSession.participantIds,
         rightSession.participantIds,
       );
+      const participantNames = sharedParticipants.map((participantId) =>
+        participantName(participantId, leftSession, rightSession),
+      );
 
       if (isOverlap && left.roomId === right.roomId) {
         const roomName = rooms.get(left.roomId)?.name ?? left.roomId;
@@ -73,9 +82,6 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
         });
       }
       if (isOverlap && sharedParticipants.length > 0) {
-        const participantNames = sharedParticipants.map((participantId) =>
-          participantName(participantId, leftSession, rightSession),
-        );
         const participantList = participantNames.map((name) => `"${name}"`).join(", ");
         const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
         const participantVerb = participantNames.length === 1 ? "is" : "are";
@@ -100,11 +106,14 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
 
       const sharedTracks = intersection(left.trackIds, right.trackIds);
       if (isOverlap && sharedTracks.length > 0) {
+        const trackNames = sharedTracks.map((trackId) => tracks.get(trackId)?.name ?? trackId);
+        const trackLabel = trackNames.length === 1 ? "Track" : "Tracks";
+        const trackVerb = trackNames.length === 1 ? "contains" : "contain";
         warnings.push({
           id: conflictId("track", entryIds, sharedTracks.join("-")),
           kind: "track",
           entryIds,
-          message: `Tracks ${sharedTracks.join(", ")} contain overlapping sessions`,
+          message: `${trackLabel} ${trackNames.map((name) => `"${name}"`).join(", ")} ${trackVerb} overlapping sessions`,
         });
       }
 
@@ -116,11 +125,14 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
       ) {
         const gapMinutes = gapBetween(left, right) / (60 * 1000);
         if (gapMinutes < input.minimumTravelMinutes) {
+          const participantList = participantNames.map((name) => `"${name}"`).join(", ");
+          const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
+          const participantVerb = participantNames.length === 1 ? "has" : "have";
           warnings.push({
             id: conflictId("travel", entryIds, sharedParticipants.join("-")),
             kind: "travel",
             entryIds,
-            message: `Participants ${sharedParticipants.join(", ")} have ${gapMinutes} minutes to change rooms; ${input.minimumTravelMinutes} required`,
+            message: `${participantLabel} ${participantList} ${participantVerb} ${gapMinutes} minutes to change rooms; ${input.minimumTravelMinutes} required`,
           });
         }
       }
@@ -141,6 +153,55 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
   return {
     conflicts: uniqueById(conflicts).sort(compareById),
     warnings: uniqueById(warnings).sort(compareById),
+  };
+}
+export function detectReleasedSpeakerCommitmentConflicts(
+  input: ReleasedSpeakerCommitmentDetectionInput,
+): AgendaValidationReport {
+  const conflicts: AgendaConflict[] = [];
+  const sessions = new Map(input.sessions.map((session) => [session.id, session]));
+
+  for (const entry of input.entries) {
+    const session = sessions.get(entry.sessionId);
+    if (session === undefined) continue;
+
+    for (const releasedEntry of input.releasedEntries) {
+      if (releasedEntry.sessionId === entry.sessionId || !overlaps(entry, releasedEntry)) {
+        continue;
+      }
+      const releasedSession = sessions.get(releasedEntry.sessionId);
+      if (releasedSession === undefined) continue;
+      const sharedParticipants = intersection(
+        session.participantIds,
+        releasedSession.participantIds,
+      );
+      if (sharedParticipants.length === 0) continue;
+
+      const participantNames = sharedParticipants.map((participantId) =>
+        participantName(participantId, session, releasedSession),
+      );
+      const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
+      const participantVerb = participantNames.length === 1 ? "has" : "have";
+      conflicts.push({
+        id: conflictId(
+          "released-participant",
+          [entry.id, releasedEntry.id],
+          sharedParticipants.join("-"),
+        ),
+        kind: "participant",
+        entryIds: [entry.id, releasedEntry.id],
+        message: `${participantLabel} ${participantNames
+          .map((name) => `"${name}"`)
+          .join(
+            ", ",
+          )} ${participantVerb} an active released commitment for "${releasedSession.title}" that overlaps "${session.title}"`,
+      });
+    }
+  }
+
+  return {
+    conflicts: uniqueById(conflicts).sort(compareById),
+    warnings: [],
   };
 }
 

@@ -3,12 +3,11 @@ import { getInvalidEnvironmentFields, readWebEnvironment } from "./env";
 
 const validEnvironment = {
   APP_ENV: "local",
-  NEXT_PUBLIC_APP_URL: "http://localhost:3015",
-  NEXT_PUBLIC_API_URL: "http://localhost:8787",
+  NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3015",
 };
 
 describe("web environment", () => {
-  it("accepts isolated application URLs", () => {
+  it("accepts application config without a browser API origin", () => {
     expect(readWebEnvironment(validEnvironment).success).toBe(true);
   });
 
@@ -20,7 +19,7 @@ describe("web environment", () => {
     };
     const fields = getInvalidEnvironmentFields(invalid);
 
-    expect(fields).toEqual(["NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_APP_URL"]);
+    expect(fields).toEqual(["NEXT_PUBLIC_APP_URL"]);
     expect(JSON.stringify(fields)).not.toContain("secret-invalid-value");
   });
 });

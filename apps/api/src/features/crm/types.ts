@@ -37,6 +37,10 @@ export interface CrmContact {
   readonly source: CrmContactSource;
   readonly status: CrmContactStatus;
   readonly mergedIntoId: string | null;
+  /** Merge provenance is retained on tombstones for audit/recovery. */
+  readonly mergeAuditId?: string | null;
+  readonly mergedAt?: string | null;
+  readonly mergeSourceIds?: readonly string[];
   readonly pipelineStage: CrmPipelineStage;
   readonly version: number;
   readonly createdAt: string;
@@ -101,8 +105,28 @@ export interface ImportCrmContactsInput {
   readonly organizationId: string;
   readonly csv?: string | undefined;
   readonly rows?: readonly CrmImportRow[] | undefined;
-  readonly idempotencyKey: string;
+  /**
+   * Required for a commit and optional for a read-only preview.
+   * The service validates the requirement at the command boundary.
+   */
+  readonly idempotencyKey?: string | undefined;
   readonly mode?: "upsert" | "create" | undefined;
+}
+
+export interface CrmImportColumnMapping {
+  readonly sourceColumn: string;
+  readonly targetField: string;
+  readonly custom: boolean;
+}
+
+export type CrmImportRowStatus = "created" | "updated" | "skipped" | "error";
+
+export interface CrmImportRowResult {
+  readonly rowNumber: number;
+  readonly identity: string | null;
+  readonly status: CrmImportRowStatus;
+  readonly contactId: string | null;
+  readonly reason: string | null;
 }
 
 export interface CrmImportResult {
@@ -111,11 +135,19 @@ export interface CrmImportResult {
   readonly created: number;
   readonly updated: number;
   readonly skipped: number;
+  readonly errors: number;
   readonly contacts: readonly CrmContact[];
+  readonly mapping: readonly CrmImportColumnMapping[];
+  readonly rows: readonly CrmImportRowResult[];
   readonly idempotent: boolean;
   readonly createdAt: string;
   readonly idempotencyKey?: string;
+  /** Stable hash of the normalized input and mode used for idempotency reuse checks. */
+  readonly planFingerprint?: string;
+  /** True when this value is a read-only classification rather than a commit receipt. */
+  readonly preview?: boolean;
 }
+export type CrmImportPreviewResult = CrmImportResult;
 
 export type CrmSegmentOperator =
   | "eq"
@@ -139,6 +171,8 @@ export interface CrmSegment {
   readonly name: string;
   readonly description: string | null;
   readonly rules: readonly CrmSegmentRule[];
+  /** Merge audit receipts that rewired explicit contact references in this segment. */
+  readonly mergeAuditIds?: readonly string[];
   readonly createdBy: string;
   readonly version: number;
   readonly createdAt: string;
@@ -188,6 +222,65 @@ export interface MergeCrmContactsInput {
   readonly customFieldWinners?: Readonly<Record<string, string>> | undefined;
   readonly idempotencyKey?: string | undefined;
 }
+
+export interface CrmParticipantConflict {
+  readonly eventId: string;
+  readonly participantIds: readonly string[];
+  readonly crmContactIds: readonly string[];
+  readonly reason: "distinct-participants-share-merged-contacts";
+}
+
+export interface CrmMergeRewireCounts {
+  readonly participantContactLinks: number;
+  readonly notes: number;
+  readonly segments: number;
+  readonly pipelineHistory: number;
+}
+
+export interface CrmMergeReconciliationInput {
+  readonly organizationId: string;
+  readonly survivorId: string;
+  readonly retiredIds: readonly string[];
+  readonly auditId: string;
+}
+
+export interface CrmMergeReconciliationResult {
+  readonly survivorId: string;
+  readonly retiredIds: readonly string[];
+  readonly rewired: CrmMergeRewireCounts;
+  readonly participantConflicts: readonly CrmParticipantConflict[];
+  readonly auditId: string;
+}
+
+export interface CrmMergePlan {
+  readonly organizationId: string;
+  readonly survivorId: string;
+  readonly retiredIds: readonly string[];
+  readonly rewired: CrmMergeRewireCounts;
+  readonly participantConflicts: readonly CrmParticipantConflict[];
+  readonly auditId: string;
+  readonly planFingerprint: string;
+  readonly survivor: CrmContact;
+  readonly tombstones: readonly CrmContact[];
+  readonly primary: CrmContact;
+  readonly merged: readonly CrmContact[];
+}
+
+export interface CrmMergePreview extends CrmMergePlan {
+  readonly preview: true;
+  readonly canCommit: boolean;
+}
+export type CrmMergePreviewResult = CrmMergePreview;
+
+export interface CrmMergeResult extends CrmMergeReconciliationResult {
+  /** Survivor/tombstone aliases retain the existing service-caller boundary. */
+  readonly primary: CrmContact;
+  readonly merged: readonly CrmContact[];
+  readonly survivor: CrmContact;
+  readonly tombstones: readonly CrmContact[];
+  readonly idempotent: boolean;
+  readonly planFingerprint: string;
+}
 export interface UpdateCrmPipelineInput {
   readonly organizationId: string;
   readonly contactId: string;
@@ -201,19 +294,14 @@ export interface AddCrmNoteInput {
   readonly body: string;
 }
 
-export interface CrmMergeResult {
-  readonly primary: CrmContact;
-  readonly merged: readonly CrmContact[];
-  readonly idempotent: boolean;
-}
-
 export type CrmHistoryKind =
   | "event"
   | "session"
   | "submission"
   | "attendance"
   | "note"
-  | "pipeline";
+  | "pipeline"
+  | "communication";
 
 export interface CrmHistoryEntry {
   readonly id: string;
@@ -232,6 +320,9 @@ export interface CrmPipelineEntry {
   readonly id: string;
   readonly organizationId: string;
   readonly contactId: string;
+  /** Original contact retained after a merge rewires the active lookup. */
+  readonly sourceCrmContactId?: string;
+  readonly mergeAuditId?: string;
   readonly fromStage: CrmPipelineStage | null;
   readonly toStage: CrmPipelineStage;
   readonly note: string | null;
@@ -243,6 +334,9 @@ export interface CrmNote {
   readonly id: string;
   readonly organizationId: string;
   readonly contactId: string;
+  /** Original contact retained after a merge rewires the active lookup. */
+  readonly sourceCrmContactId?: string;
+  readonly mergeAuditId?: string;
   readonly body: string;
   readonly authorId: string;
   readonly createdAt: string;
@@ -250,7 +344,11 @@ export interface CrmNote {
 
 export interface AddContactToEventInput {
   readonly organizationId: string;
-  readonly contactId: string;
+  /** Existing callers may provide contactId; new callers should provide crmContactId. */
+  readonly contactId?: string;
+  readonly crmContactId?: string;
+  /** Immutable event-participant identity. */
+  readonly participantId?: string;
   readonly eventId: string;
   readonly role?: "speaker" | "prospect" | "attendee" | "sponsor";
   readonly sessionId?: string | null;
@@ -258,17 +356,35 @@ export interface AddContactToEventInput {
   readonly idempotencyKey: string;
 }
 
-export interface CrmEventProjection {
+export interface CrmParticipantContactLink {
   readonly id: string;
   readonly organizationId: string;
   readonly eventId: string;
-  readonly contactId: string;
+  readonly participantId: string;
+  readonly crmContactId: string;
+  /** Original contact retained after a merge rewires the active lookup. */
+  readonly sourceCrmContactId?: string;
+  readonly mergeAuditId?: string;
   readonly sessionId: string | null;
   readonly role: "speaker" | "prospect" | "attendee" | "sponsor";
   readonly note: string | null;
   readonly createdBy: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface CrmEventProjection extends CrmParticipantContactLink {
+  /**
+   * Deprecated lookup alias retained for existing adapters. It always mirrors
+   * crmContactId and must never be used as an identity or authorization anchor.
+   */
+  readonly contactId: string;
+}
+
+export interface CrmEventProjectionResult {
+  readonly projection: CrmEventProjection;
+  readonly idempotent: boolean;
+  readonly outcome: "created" | "existing";
 }
 
 export interface SendCrmOutreachInput {
@@ -282,17 +398,32 @@ export interface SendCrmOutreachInput {
   readonly idempotencyKey: string;
 }
 
-export type CrmOutreachStatus = "queued" | "sent" | "failed";
+export type CrmOutreachStatus =
+  | "queued"
+  | "sent"
+  | "delivered"
+  | "failed"
+  | "bounced"
+  | "complained";
 
 export interface CrmOutreachCommand {
   readonly id: string;
   readonly organizationId: string;
   readonly contactId: string;
   readonly eventId: string | null;
+  readonly recipientEmail: string;
+  readonly templateSubject: string;
   readonly subject: string;
   readonly body: string;
   readonly renderedBody: string;
   readonly status: CrmOutreachStatus;
+  readonly queuedCount: number;
+  readonly sentCount: number;
+  readonly failedCount: number;
+  readonly terminal: boolean;
+  readonly failureReason: string | null;
+  readonly providerMessageId?: string | null;
+  readonly completedAt?: string | null;
   readonly idempotencyKey: string;
   readonly createdBy: string;
   readonly createdAt: string;
@@ -313,7 +444,7 @@ export interface CrmRepositoryFilter extends CrmContactSearch {
   readonly organizationId?: string;
 }
 
-/** Airtable-backed business record boundary. D1/auth repositories must not be substituted here. */
+/** D1-authoritative CRM business-record boundary. */
 export interface CrmRepository {
   listContacts(
     organizationId: string,
@@ -327,7 +458,7 @@ export interface CrmRepository {
   saveSegment(segment: CrmSegment, expectedVersion: number | null): Promise<CrmSegment>;
   deleteSegment(organizationId: string, segmentId: string, expectedVersion: number): Promise<void>;
   listHistory(organizationId: string, contactId: string): Promise<readonly CrmHistoryEntry[]>;
-  appendHistory(entry: CrmHistoryEntry): Promise<CrmHistoryEntry>;
+  appendHistory(entry: CrmHistoryEntry, contact?: CrmContact): Promise<CrmHistoryEntry>;
   listPipelineHistory(
     organizationId: string,
     contactId: string,
@@ -338,11 +469,17 @@ export interface CrmRepository {
   getProjection(
     organizationId: string,
     eventId: string,
-    contactId: string,
+    crmContactId: string,
   ): Promise<CrmEventProjection | null>;
-  saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection>;
+  saveProjection(projection: CrmEventProjection, contact: CrmContact): Promise<CrmEventProjection>;
   listProjections(organizationId: string): Promise<readonly CrmEventProjection[]>;
+  listParticipantContactLinks(
+    organizationId: string,
+  ): Promise<readonly CrmParticipantContactLink[]>;
+  /** Re-keys active CRM lookup relationships without changing participant identity or access. */
+  reconcileContactMerge(input: CrmMergeReconciliationInput): Promise<CrmMergeReconciliationResult>;
   saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
+  updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
   getOutreachByIdempotencyKey(
     organizationId: string,
     idempotencyKey: string,
@@ -361,10 +498,6 @@ export interface CrmRepository {
     value: T,
   ): Promise<void>;
 }
-
-/** Named alias used by production composition code to make Airtable authority explicit. */
-export type AirtableCrmRepository = CrmRepository;
-export type CrmAirtableRepository = CrmRepository;
 
 export interface CrmServiceDependencies {
   readonly repository?: CrmRepository;
@@ -411,4 +544,5 @@ export interface CrmRepositorySeed {
   readonly projections?: readonly CrmEventProjection[];
   readonly outreach?: readonly CrmOutreachCommand[];
   readonly imports?: readonly CrmImportResult[];
+  readonly participantContactLinks?: readonly CrmParticipantContactLink[];
 }

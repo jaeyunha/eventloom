@@ -1,402 +1,77 @@
 "use client";
 
+import { ListFilter, Search, X } from "lucide-react";
 import Link from "next/link";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { Popover } from "radix-ui";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+  StatusBadge as WorkspaceStatusBadge,
+} from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "./organizer-event-workspace";
+import { SubmissionDetailDrawer } from "./submission-detail-drawer";
 import styles from "./submission-workspace.module.css";
-
-export type SubmissionStatus =
-  | "submitted"
-  | "under_review"
-  | "accepted"
-  | "waitlisted"
-  | "declined"
-  | "withdrawn";
-
-export interface SubmissionParticipant {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  organization: string;
-  answers?: Readonly<Record<string, unknown>>;
-}
-
-export interface SubmissionAnswer {
-  question: string;
-  answer: string;
-}
-
-export interface SubmissionTimelineEntry {
-  label: string;
-  at: string;
-  detail: string;
-}
-
-export interface ReviewAssignment {
-  reviewer: string;
-  status: "complete" | "in_progress" | "not_started" | "abstained";
-  score?: number;
-  conflict?: string;
-}
-
-export interface SubmissionRecord {
-  eventId: string;
-  id: string;
-  title: string;
-  status: SubmissionStatus;
-  track: string;
-  format: string;
-  version: number;
-  submittedAt: string;
-  updatedAt: string;
-  participants: SubmissionParticipant[];
-  participantProgress: { completed: number; total: number };
-  abstract: string;
-  answers: SubmissionAnswer[];
-  timeline: SubmissionTimelineEntry[];
-  reviewSummary: {
-    completed: number;
-    total: number;
-    averageScore: number | null;
-    maxScore: number;
-    recommendation: string;
-  };
-  reviewAssignments: ReviewAssignment[];
-  organizerNotes: string;
-  reopenAudit: { at: string; organizer: string; reason: string }[];
-  evaluationPlanId?: string;
-  decision?: EvaluationDecisionRecord;
-}
-
-const seededSubmissions: SubmissionRecord[] = [
-  {
-    eventId: "summit-2026",
-    id: "sub-001",
-    title: "Designing for Trust in AI-Assisted Teams",
-    status: "under_review",
-    track: "Product & Design",
-    format: "Talk",
-    version: 3,
-    submittedAt: "2026-03-12T14:30:00Z",
-    updatedAt: "2026-04-02T09:15:00Z",
-    participants: [
-      {
-        id: "person-001",
-        name: "Maya Chen",
-        email: "maya.chen@example.test",
-        role: "Lead speaker",
-        organization: "Northstar Labs",
-      },
-      {
-        id: "person-002",
-        name: "Jordan Williams",
-        email: "jordan.williams@example.test",
-        role: "Co-speaker",
-        organization: "Northstar Labs",
-      },
-    ],
-    participantProgress: { completed: 2, total: 2 },
-    abstract:
-      "Teams are adopting AI assistants faster than they are updating the habits that keep decisions accountable. This talk shares a practical trust framework for making human ownership visible without slowing down delivery.",
-    answers: [
-      {
-        question: "Who is this session for?",
-        answer: "Product, design, and engineering leads building AI-assisted workflows.",
-      },
-      {
-        question: "What will attendees take away?",
-        answer:
-          "A lightweight decision log, review checklist, and a set of prompts for surfacing uncertainty.",
-      },
-      { question: "Content level", answer: "Intermediate" },
-    ],
-    timeline: [
-      { label: "Submitted", at: "2026-03-12T14:30:00Z", detail: "Maya Chen submitted version 1." },
-      {
-        label: "Edited",
-        at: "2026-03-20T10:05:00Z",
-        detail: "The abstract and audience answer were updated.",
-      },
-      {
-        label: "Edited",
-        at: "2026-03-28T16:40:00Z",
-        detail: "Jordan Williams was added as a co-speaker.",
-      },
-      {
-        label: "Review started",
-        at: "2026-04-01T08:00:00Z",
-        detail: "The Product & Design review round was opened.",
-      },
-    ],
-    reviewSummary: {
-      completed: 2,
-      total: 3,
-      averageScore: 4.5,
-      maxScore: 5,
-      recommendation: "Strong accept",
-    },
-    reviewAssignments: [
-      { reviewer: "Avery Patel", status: "complete", score: 5 },
-      { reviewer: "Sam Rivera", status: "complete", score: 4 },
-      { reviewer: "Lee Okafor", status: "in_progress" },
-    ],
-    organizerNotes:
-      "The committee asked for a clearer note about measurement. Confirm the revised example before final programming.",
-    reopenAudit: [],
-  },
-  {
-    eventId: "summit-2026",
-    id: "sub-002",
-    title: "A Field Guide to Humane Observability",
-    status: "submitted",
-    track: "Engineering",
-    format: "Workshop",
-    version: 1,
-    submittedAt: "2026-03-16T11:20:00Z",
-    updatedAt: "2026-03-16T11:20:00Z",
-    participants: [
-      {
-        id: "person-003",
-        name: "Ravi Shah",
-        email: "ravi.shah@example.test",
-        role: "Lead speaker",
-        organization: "Cedar Systems",
-      },
-    ],
-    participantProgress: { completed: 1, total: 1 },
-    abstract:
-      "Observability can help teams learn from production without turning every metric into a performance score. This hands-on workshop maps humane practices to the tools teams already use.",
-    answers: [
-      {
-        question: "Who is this session for?",
-        answer: "Engineers and technical program leaders responsible for reliable services.",
-      },
-      {
-        question: "What should attendees bring?",
-        answer: "A recent incident retrospective and one dashboard they want to improve.",
-      },
-      { question: "Content level", answer: "Intermediate" },
-    ],
-    timeline: [
-      { label: "Submitted", at: "2026-03-16T11:20:00Z", detail: "Ravi Shah submitted version 1." },
-    ],
-    reviewSummary: {
-      completed: 0,
-      total: 3,
-      averageScore: null,
-      maxScore: 5,
-      recommendation: "Awaiting review",
-    },
-    reviewAssignments: [
-      { reviewer: "Nia Brooks", status: "not_started" },
-      { reviewer: "Theo Martin", status: "not_started" },
-      { reviewer: "Casey Nguyen", status: "not_started" },
-    ],
-    organizerNotes:
-      "The workshop needs a room with movable tables and a reliable Wi-Fi connection.",
-    reopenAudit: [],
-  },
-  {
-    eventId: "summit-2026",
-    id: "sub-003",
-    title: "Building Resilient Teams Through Small Experiments",
-    status: "accepted",
-    track: "People & Culture",
-    format: "Talk",
-    version: 2,
-    submittedAt: "2026-02-27T17:00:00Z",
-    updatedAt: "2026-03-30T13:25:00Z",
-    participants: [
-      {
-        id: "person-004",
-        name: "Elena Garcia",
-        email: "elena.garcia@example.test",
-        role: "Lead speaker",
-        organization: "Common Thread",
-      },
-      {
-        id: "person-005",
-        name: "Noah Kim",
-        email: "noah.kim@example.test",
-        role: "Co-speaker",
-        organization: "Common Thread",
-      },
-    ],
-    participantProgress: { completed: 1, total: 2 },
-    abstract:
-      "Resilience is a practice, not a trait. Elena and Noah share small, repeatable experiments that make team capacity and care visible during periods of change.",
-    answers: [
-      {
-        question: "Who is this session for?",
-        answer: "People managers and team leads supporting teams through change.",
-      },
-      {
-        question: "What will attendees take away?",
-        answer: "Three experiments that can be run in one week with a small team.",
-      },
-      { question: "Content level", answer: "Introductory" },
-    ],
-    timeline: [
-      {
-        label: "Submitted",
-        at: "2026-02-27T17:00:00Z",
-        detail: "Elena Garcia submitted version 1.",
-      },
-      {
-        label: "Accepted",
-        at: "2026-03-22T12:00:00Z",
-        detail: "An organizer recorded the final program decision.",
-      },
-      { label: "Edited", at: "2026-03-30T13:25:00Z", detail: "The speaker bio was updated." },
-    ],
-    reviewSummary: {
-      completed: 3,
-      total: 3,
-      averageScore: 4.7,
-      maxScore: 5,
-      recommendation: "Accept",
-    },
-    reviewAssignments: [
-      { reviewer: "Avery Patel", status: "complete", score: 5 },
-      { reviewer: "Nia Brooks", status: "complete", score: 4 },
-      { reviewer: "Casey Nguyen", status: "complete", score: 5 },
-    ],
-    organizerNotes: "Accepted. Speaker onboarding is waiting for the second participant's profile.",
-    reopenAudit: [],
-  },
-  {
-    eventId: "summit-2026",
-    id: "sub-004",
-    title: "Community-Led Design Systems",
-    status: "waitlisted",
-    track: "Product & Design",
-    format: "Panel",
-    version: 1,
-    submittedAt: "2026-03-05T08:45:00Z",
-    updatedAt: "2026-03-24T15:10:00Z",
-    participants: [
-      {
-        id: "person-006",
-        name: "Tessa Morgan",
-        email: "tessa.morgan@example.test",
-        role: "Lead speaker",
-        organization: "Harbor Studio",
-      },
-    ],
-    participantProgress: { completed: 1, total: 1 },
-    abstract:
-      "A panel about the maintenance habits that let design systems grow with the communities that depend on them, from contribution paths to respectful deprecation.",
-    answers: [
-      {
-        question: "Who is this session for?",
-        answer: "Design system maintainers, product designers, and frontend engineers.",
-      },
-      { question: "Preferred format", answer: "Panel with moderated audience questions." },
-      { question: "Content level", answer: "Intermediate" },
-    ],
-    timeline: [
-      {
-        label: "Submitted",
-        at: "2026-03-05T08:45:00Z",
-        detail: "Tessa Morgan submitted version 1.",
-      },
-      {
-        label: "Waitlisted",
-        at: "2026-03-24T15:10:00Z",
-        detail: "An organizer moved the proposal to the waitlist.",
-      },
-    ],
-    reviewSummary: {
-      completed: 3,
-      total: 3,
-      averageScore: 3.8,
-      maxScore: 5,
-      recommendation: "Hold for capacity",
-    },
-    reviewAssignments: [
-      { reviewer: "Sam Rivera", status: "complete", score: 4 },
-      { reviewer: "Lee Okafor", status: "complete", score: 4 },
-      { reviewer: "Theo Martin", status: "complete", score: 3 },
-    ],
-    organizerNotes: "Strong fit for the design track; hold until the room capacity is confirmed.",
-    reopenAudit: [],
-  },
-  {
-    eventId: "forge-2025",
-    id: "sub-101",
-    title: "Public Infrastructure, Private Responsibility",
-    status: "declined",
-    track: "Civic Technology",
-    format: "Talk",
-    version: 1,
-    submittedAt: "2025-09-06T12:15:00Z",
-    updatedAt: "2025-09-21T10:00:00Z",
-    participants: [
-      {
-        id: "person-101",
-        name: "Morgan Lee",
-        email: "morgan.lee@example.test",
-        role: "Lead speaker",
-        organization: "Civic Works",
-      },
-    ],
-    participantProgress: { completed: 1, total: 1 },
-    abstract:
-      "A case study in making public-interest infrastructure legible, maintainable, and accountable across organizational boundaries.",
-    answers: [
-      {
-        question: "Who is this session for?",
-        answer: "People building and maintaining civic technology.",
-      },
-      { question: "Content level", answer: "Intermediate" },
-    ],
-    timeline: [
-      { label: "Submitted", at: "2025-09-06T12:15:00Z", detail: "Morgan Lee submitted version 1." },
-      {
-        label: "Declined",
-        at: "2025-09-21T10:00:00Z",
-        detail: "An organizer recorded the final decision.",
-      },
-    ],
-    reviewSummary: {
-      completed: 2,
-      total: 2,
-      averageScore: 3.2,
-      maxScore: 5,
-      recommendation: "Do not select",
-    },
-    reviewAssignments: [
-      { reviewer: "Robin Ellis", status: "complete", score: 3 },
-      {
-        reviewer: "Drew Park",
-        status: "complete",
-        score: 3,
-        conflict: "Reviewer disclosed a prior collaboration and abstained from the decision.",
-      },
-    ],
-    organizerNotes: "Historical seed for event-isolation checks; not part of Summit 2026.",
-    reopenAudit: [],
-  },
-];
-
-export { seededSubmissions };
+import {
+  ApiRequestError,
+  answerText,
+  decisionNotificationSummary,
+  type EvaluationDecisionRecord,
+  type EvaluationDecisionStatus,
+  enrichCanonicalSubmission,
+  evaluationRequest,
+  formatDateTime,
+  getAcceptedHandoffMetadata,
+  indexOrganizerEvaluationWorkspace,
+  initialOrganizerEventName,
+  loadCanonicalSubmissionList,
+  loadOrganizerEvaluationWorkspace,
+  loadOrganizerEventIdentity,
+  mapCanonicalSubmission,
+  mergeCanonicalSubmissionEvaluation,
+  type ReviewAssignment,
+  type ReviewDataState,
+  reviewDataIsReady,
+  reviewDataMessage,
+  reviewDataStateForIndex,
+  reviewDataStateFromError,
+  type SubmissionLoadFailure,
+  type SubmissionRecord,
+  type SubmissionStatus,
+  submissionListState,
+  submissionLoadFailure,
+} from "./submission-workspace-model";
 
 const statusLabels: Record<SubmissionStatus, string> = {
+  draft: "Draft",
   submitted: "Submitted",
+  reopened: "Reopened",
   under_review: "Under review",
   accepted: "Accepted",
   waitlisted: "Waitlisted",
   declined: "Declined",
   withdrawn: "Withdrawn",
-};
-
-const statusTone: Record<SubmissionStatus, string> = {
-  submitted: styles.toneInfo ?? "",
-  under_review: styles.toneWarning ?? "",
-  accepted: styles.toneSuccess ?? "",
-  waitlisted: styles.toneNeutral ?? "",
-  declined: styles.toneDanger ?? "",
-  withdrawn: styles.toneNeutral ?? "",
 };
 
 const reviewStatusLabels: Record<ReviewAssignment["status"], string> = {
@@ -415,405 +90,14 @@ const sortLabels: Record<SortKey, string> = {
   updatedAt: "Last updated",
 };
 
-export function getSeededSubmissionsForEvent(eventId: string): SubmissionRecord[] {
-  return seededSubmissions.filter((submission) => submission.eventId === eventId);
+function apiBaseUrl(): string {
+  return "";
+}
+function submissionListHref(eventId: string, organizationId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
 }
 
-export function getSeededSubmission(
-  eventId: string,
-  submissionId: string,
-): SubmissionRecord | undefined {
-  return seededSubmissions.find(
-    (submission) => submission.eventId === eventId && submission.id === submissionId,
-  );
-}
-function apiBaseUrl(): string | null {
-  const value = process.env.NEXT_PUBLIC_API_URL?.trim();
-  return value && value.length > 0 ? value.replace(/\/$/u, "") : null;
-}
-
-async function submissionRequest<T>(
-  baseUrl: string,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const headers = new Headers(init.headers);
-  headers.set("accept", "application/json");
-  if (init.body !== undefined) headers.set("content-type", "application/json");
-  const response = await fetch(`${baseUrl}/api/admin/evaluations${path}`, {
-    ...init,
-    credentials: "include",
-    headers,
-    cache: "no-store",
-  });
-  const body = (await response.json().catch(() => undefined)) as
-    | { data?: T; error?: { message?: string } }
-    | T
-    | undefined;
-  if (!response.ok) {
-    const message =
-      typeof body === "object" &&
-      body !== null &&
-      "error" in body &&
-      typeof body.error === "object" &&
-      body.error !== null &&
-      typeof body.error.message === "string"
-        ? body.error.message
-        : "The submission request could not be completed.";
-    throw new Error(message);
-  }
-  if (typeof body === "object" && body !== null && "data" in body && body.data !== undefined) {
-    return body.data as T;
-  }
-  return body as T;
-}
-
-function localDemoEnabled(): boolean {
-  return (
-    process.env.NEXT_PUBLIC_APP_ENV === "local" ||
-    (process.env.NEXT_PUBLIC_APP_ENV !== "production" && process.env.NODE_ENV === "test")
-  );
-}
-
-interface SubmissionFieldOption {
-  readonly value: string;
-  readonly label?: string;
-}
-
-export interface SubmissionFieldDefinition {
-  readonly key: string;
-  readonly label?: string;
-  readonly options?: readonly (string | SubmissionFieldOption)[];
-}
-
-export type EvaluationDecisionStatus = "accepted" | "waitlisted" | "rejected";
-
-export interface EvaluationDecisionTransition {
-  readonly from: EvaluationDecisionStatus | null;
-  readonly to: EvaluationDecisionStatus;
-  readonly reason: string;
-  readonly decidedBy: string;
-  readonly decidedAt: string;
-  readonly idempotencyKey: string;
-}
-
-export interface EvaluationDecisionRecord {
-  readonly id: string;
-  readonly tenantId: string;
-  readonly eventId: string;
-  readonly planId: string;
-  readonly submissionId: string;
-  readonly status: EvaluationDecisionStatus;
-  readonly version: number;
-  readonly history: readonly EvaluationDecisionTransition[];
-  readonly updatedAt: string;
-}
-
-export interface AcceptedHandoffMetadata {
-  readonly title: string;
-  readonly track: string;
-  readonly version: number;
-  readonly primarySpeaker: SubmissionParticipant | null;
-  readonly coSpeakers: readonly SubmissionParticipant[];
-}
-export interface ServerSubmissionRecord {
-  id: string;
-  tenantId: string;
-  eventId: string;
-  title: string;
-  abstract: string;
-  answers: Readonly<Record<string, unknown>>;
-  fieldDefinitions?: readonly SubmissionFieldDefinition[];
-  participants: readonly {
-    id: string;
-    displayName: string;
-    email: string;
-    biography: string;
-    role?: string;
-    organization?: string;
-    answers?: Readonly<Record<string, unknown>>;
-  }[];
-  status: string;
-  version: number;
-  submittedAt: string | null;
-  updatedAt: string;
-  reopenedAt: string | null;
-}
-
-function answerText(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === "string") return value.trim().length === 0 ? null : value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const serialized = JSON.stringify(value);
-  return serialized === undefined ? null : serialized;
-}
-
-function optionValue(value: unknown): string | null {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "value" in value &&
-    typeof value.value === "string"
-  ) {
-    return value.value;
-  }
-  return answerText(value);
-}
-
-function fieldAnswer(value: unknown, definition: SubmissionFieldDefinition | undefined): string {
-  const raw = answerText(value);
-  if (raw === null) return "—";
-  const comparable = optionValue(value) ?? raw;
-  const option = definition?.options?.find((candidate) => optionValue(candidate) === comparable);
-  if (typeof option === "string") return option;
-  if (
-    typeof option === "object" &&
-    option !== null &&
-    typeof option.label === "string" &&
-    option.label.trim().length > 0
-  ) {
-    return option.label;
-  }
-  if (
-    definition !== undefined &&
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "label" in value &&
-    typeof value.label === "string" &&
-    value.label.trim().length > 0
-  ) {
-    return value.label;
-  }
-  return raw;
-}
-
-function participantRole(role: string | undefined): string {
-  const normalized = role?.trim();
-  if (normalized === "primary") return "Speaker";
-  if (normalized === "co_speaker") return "Co-speaker";
-  return normalized || "Speaker";
-}
-export function getAcceptedHandoffMetadata(
-  submission: Pick<SubmissionRecord, "title" | "track" | "version" | "participants">,
-): AcceptedHandoffMetadata {
-  const primarySpeaker =
-    submission.participants.find((participant) => participant.role === "Speaker") ??
-    submission.participants[0] ??
-    null;
-  const coSpeakers = submission.participants.filter(
-    (participant) => participant.id !== primarySpeaker?.id && participant.role === "Co-speaker",
-  );
-  return {
-    title: submission.title,
-    track: submission.track,
-    version: submission.version,
-    primarySpeaker,
-    coSpeakers,
-  };
-}
-
-export function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
-  const status: SubmissionStatus =
-    record.status === "accepted" ||
-    record.status === "waitlisted" ||
-    record.status === "declined" ||
-    record.status === "withdrawn" ||
-    record.status === "under_review"
-      ? record.status
-      : record.status === "reopened"
-        ? "under_review"
-        : "submitted";
-  const definitions = new Map(
-    (record.fieldDefinitions ?? []).map((definition) => [definition.key, definition]),
-  );
-  const answers = Object.entries(record.answers).map(([question, answer]) => ({
-    question: definitions.get(question)?.label?.trim() || question,
-    answer: fieldAnswer(answer, definitions.get(question)),
-  }));
-  const abstract = answerText(record.answers.abstract) ?? record.abstract;
-  const timeline: SubmissionTimelineEntry[] = [];
-  if (record.submittedAt !== null) {
-    timeline.push({
-      label: "Submitted",
-      at: record.submittedAt,
-      detail: "The submission was submitted through the CFP.",
-    });
-  }
-  if (record.reopenedAt !== null) {
-    timeline.push({
-      label: "Reopened",
-      at: record.reopenedAt,
-      detail: "An organizer reopened this submission through the evaluation workspace.",
-    });
-  }
-  return {
-    eventId: record.eventId,
-    id: record.id,
-    title: record.title,
-    status,
-    track: fieldAnswer(record.answers.track, definitions.get("track")),
-    format: fieldAnswer(record.answers.format, definitions.get("format")),
-    version: record.version,
-    submittedAt: record.submittedAt ?? record.updatedAt,
-    updatedAt: record.updatedAt,
-    participants: record.participants.map((participant) => ({
-      id: participant.id,
-      name: participant.displayName,
-      email: participant.email,
-      role: participantRole(participant.role),
-      organization: participant.organization ?? "",
-      answers: participant.answers ?? {},
-    })),
-    participantProgress: {
-      completed: record.participants.filter(
-        (participant) => participant.biography.trim().length > 0,
-      ).length,
-      total: record.participants.length,
-    },
-    abstract,
-    answers,
-    timeline,
-    reviewSummary: {
-      completed: 0,
-      total: 0,
-      averageScore: null,
-      maxScore: 0,
-      recommendation: "Evaluation data loads from the plan.",
-    },
-    reviewAssignments: [],
-    organizerNotes:
-      "Authoritative submission record. Review details load from the evaluation plan.",
-    reopenAudit:
-      record.reopenedAt === null
-        ? []
-        : [
-            {
-              at: record.reopenedAt,
-              organizer: "Organizer",
-              reason: "Recorded in the server audit log.",
-            },
-          ],
-  };
-}
-export async function enrichServerSubmission(
-  baseUrl: string,
-  record: ServerSubmissionRecord,
-): Promise<SubmissionRecord> {
-  const submission = mapServerSubmission(record);
-  const planResult = await submissionRequest<{
-    plans: readonly { id: string; rounds: readonly { id: string }[] }[];
-  }>(baseUrl, `/plans?eventId=${encodeURIComponent(record.eventId)}`).catch(() => ({
-    plans: [],
-  }));
-  const plan = planResult.plans[0];
-  if (plan === undefined) return submission;
-  const round = plan.rounds[0];
-  const [assignmentResult, decision, aggregate] = await Promise.all([
-    submissionRequest<{
-      assignments: readonly {
-        reviewerId: string;
-        submissionId: string;
-        status: "assigned" | "in_progress" | "submitted" | "abstained";
-      }[];
-    }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments`).catch(() => ({
-      assignments: [],
-    })),
-    submissionRequest<EvaluationDecisionRecord | null>(
-      baseUrl,
-      `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(record.id)}/decision`,
-    ).catch(() => null),
-    round === undefined
-      ? Promise.resolve(null)
-      : submissionRequest<{
-          submittedReviewCount: number;
-          expectedReviewCount: number;
-          averageWeightedTotal: number | null;
-          possibleWeightedTotal: number;
-        }>(
-          baseUrl,
-          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(record.id)}/aggregate`,
-        ).catch(() => null),
-  ]);
-  const assignments = assignmentResult.assignments.filter(
-    (assignment) => assignment.submissionId === record.id,
-  );
-  const decisionTimeline =
-    decision === null
-      ? []
-      : decision.history.map((transition) => ({
-          label:
-            transition.to === "accepted"
-              ? "Accepted"
-              : transition.to === "rejected"
-                ? "Rejected"
-                : "Waitlisted",
-          at: transition.decidedAt,
-          detail: `${transition.reason} (organizer ${transition.decidedBy}).`,
-        }));
-  return {
-    ...submission,
-    ...(decision === null ? {} : { decision }),
-    evaluationPlanId: plan.id,
-    timeline: [...submission.timeline, ...decisionTimeline],
-    status:
-      decision?.status === "accepted"
-        ? "accepted"
-        : decision?.status === "waitlisted"
-          ? "waitlisted"
-          : decision?.status === "rejected"
-            ? "declined"
-            : submission.status,
-    reviewSummary: {
-      completed: aggregate?.submittedReviewCount ?? 0,
-      total: aggregate?.expectedReviewCount ?? assignments.length,
-      averageScore: aggregate?.averageWeightedTotal ?? null,
-      maxScore: aggregate?.possibleWeightedTotal ?? 0,
-      recommendation: decision?.status
-        ? `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`
-        : "Awaiting human decision",
-    },
-    reviewAssignments: assignments.map((assignment) => ({
-      reviewer: assignment.reviewerId,
-      status:
-        assignment.status === "submitted"
-          ? "complete"
-          : assignment.status === "in_progress"
-            ? "in_progress"
-            : assignment.status === "abstained"
-              ? "abstained"
-              : "not_started",
-      ...(assignment.status === "abstained"
-        ? { conflict: "Reviewer declared a conflict and abstained." }
-        : {}),
-    })),
-    organizerNotes: decision?.history.at(-1)?.reason ?? submission.organizerNotes,
-  };
-}
-
-function eventTitle(eventId: string): string {
-  if (eventId === "summit-2026") {
-    return "Open Sessionboard Summit 2026";
-  }
-  if (eventId === "forge-2025") {
-    return "Forge Community Day 2025";
-  }
-  return eventId
-    .split(/[-_]/u)
-    .filter(Boolean)
-    .map((part) => part[0]?.toLocaleUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function submissionListHref(eventId: string, organizationId?: string): string {
-  if (organizationId !== undefined) {
-    return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
-  }
-  return `/admin/events/${encodeURIComponent(eventId)}/submissions`;
-}
-
-function submissionHref(eventId: string, submissionId: string, organizationId?: string): string {
+function submissionHref(eventId: string, submissionId: string, organizationId: string): string {
   return `${submissionListHref(eventId, organizationId)}/${encodeURIComponent(submissionId)}`;
 }
 
@@ -822,17 +106,6 @@ function formatDate(value: string): string {
     month: "short",
     day: "numeric",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(value));
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
     timeZone: "UTC",
   }).format(new Date(value));
 }
@@ -846,12 +119,31 @@ function initials(name: string): string {
     .toLocaleUpperCase();
 }
 
+function submissionStatusTone(
+  status: SubmissionStatus,
+): "neutral" | "info" | "success" | "warning" | "danger" {
+  switch (status) {
+    case "accepted":
+      return "success";
+    case "declined":
+    case "withdrawn":
+      return "danger";
+    case "waitlisted":
+    case "reopened":
+      return "warning";
+    case "under_review":
+    case "submitted":
+      return "info";
+    case "draft":
+      return "neutral";
+  }
+}
+
 function StatusBadge({ status }: Readonly<{ status: SubmissionStatus }>) {
   return (
-    <span className={`${styles.statusBadge} ${statusTone[status]}`}>
-      <span className={styles.statusDot} aria-hidden="true" />
+    <WorkspaceStatusBadge tone={submissionStatusTone(status)}>
       {statusLabels[status]}
-    </span>
+    </WorkspaceStatusBadge>
   );
 }
 
@@ -879,11 +171,47 @@ function ProgressMeter({
     </span>
   );
 }
+export function ReviewDataNotice({
+  state,
+  onRetry,
+  setupHref,
+}: Readonly<{ state: ReviewDataState; onRetry: () => void; setupHref?: string }>) {
+  if (state.status === "ready" || state.status === "pending") return null;
+  if (state.status === "no_plan") {
+    return (
+      <div className={styles.reviewPlanNotice} role="status">
+        <div className={styles.reviewPlanNoticeCopy}>
+          <strong>Review plan not set up</strong>
+          <p>{state.message} Review progress will appear after the plan is created.</p>
+        </div>
+        {setupHref === undefined ? null : (
+          <Button asChild size="sm" variant="outline">
+            <Link href={setupHref}>Set up review plan</Link>
+          </Button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className={styles.auditCallout} role="alert">
+      <p>{state.message}</p>
+      <Button type="button" variant="outline" onClick={onRetry}>
+        Retry review data
+      </Button>
+    </div>
+  );
+}
 
 export function SubmissionListWorkspace({
-  eventId,
+  eventId: fallbackEventId,
   organizationId,
-}: Readonly<{ eventId: string; organizationId?: string }>) {
+  selectedSubmissionId,
+}: Readonly<{
+  eventId: string;
+  organizationId: string;
+  selectedSubmissionId?: string;
+}>) {
+  const eventId = useOrganizerEventId(fallbackEventId);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
   const [track, setTrack] = useState("all");
@@ -891,36 +219,110 @@ export function SubmissionListWorkspace({
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [submissions, setSubmissions] = useState<SubmissionRecord[]>(() =>
-    localDemoEnabled() ? getSeededSubmissionsForEvent(eventId) : [],
-  );
-  const [loading, setLoading] = useState(!localDemoEnabled());
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [submissions, setSubmissions] = useState<SubmissionRecord[]>([]);
+  const canonicalRowsEventId = useRef<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<SubmissionLoadFailure | null>(null);
+  const [evaluationLoadState, setEvaluationLoadState] = useState<ReviewDataState>({
+    status: "pending",
+  });
+  const [evaluationReloadVersion, setEvaluationReloadVersion] = useState(0);
   const baseUrl = apiBaseUrl();
+  const [eventName, setEventName] = useState(initialOrganizerEventName);
+  const [eventSlug, setEventSlug] = useState<string | null>(null);
+  const [eventIdentityState, setEventIdentityState] = useState<"loading" | "ready" | "failure">(
+    "loading",
+  );
 
   useEffect(() => {
-    if (localDemoEnabled()) return;
+    void evaluationReloadVersion;
     let active = true;
-    if (baseUrl === null) {
+    if (organizationId === undefined || organizationId.trim().length === 0) {
       setLoading(false);
-      setLoadError("The evaluation API is not configured.");
+      setEventIdentityState("failure");
+      setLoadFailure({
+        kind: "failure",
+        message: "An organization-scoped route is required to load submissions.",
+      });
       return () => {
         active = false;
       };
     }
-    setLoading(true);
-    setLoadError(null);
-    void submissionRequest<readonly ServerSubmissionRecord[]>(
+    const rowsLoadedForEvent = canonicalRowsEventId.current === eventId;
+    if (!rowsLoadedForEvent) setSubmissions([]);
+    setLoading(!rowsLoadedForEvent);
+    setLoadFailure(null);
+    setEvaluationLoadState({ status: "pending" });
+    setEventName(initialOrganizerEventName());
+    setEventSlug(null);
+    setEventIdentityState("loading");
+    const eventController = new AbortController();
+    void loadOrganizerEventIdentity(baseUrl, organizationId, eventId, eventController.signal)
+      .then((event) => {
+        if (active) {
+          setEventName(event.name);
+          setEventSlug(event.slug);
+          setEventIdentityState("ready");
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active || eventController.signal.aborted) return;
+        setEventIdentityState("failure");
+        setEventSlug(null);
+        setLoadFailure({
+          kind: "failure",
+          message:
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "Event details could not be loaded.",
+        });
+      });
+
+    const workspacePromise = loadOrganizerEvaluationWorkspace(
       baseUrl,
-      `/events/${encodeURIComponent(eventId)}/submissions`,
+      eventId,
+      eventController.signal,
     )
+      .then((workspace) => ({ workspace, error: null }))
+      .catch((error: unknown) => ({ workspace: null, error }));
+    void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, eventController.signal)
       .then((records) => {
-        if (active) setSubmissions(records.map(mapServerSubmission));
+        if (!active) return;
+        const canonicalRows = records.map(mapCanonicalSubmission);
+        canonicalRowsEventId.current = eventId;
+        setSubmissions(canonicalRows);
+        setLoading(false);
+        void workspacePromise.then(({ workspace, error }) => {
+          if (!active) return;
+          if (workspace === null) {
+            const reviewState = reviewDataStateFromError(error);
+            setEvaluationLoadState(reviewState);
+            setSubmissions(
+              canonicalRows.map((record) => ({
+                ...record,
+                reviewData: reviewState,
+              })),
+            );
+            return;
+          }
+          const index = indexOrganizerEvaluationWorkspace(workspace);
+          const reviewState = reviewDataStateForIndex(index);
+          setEvaluationLoadState(reviewState);
+          setSubmissions(
+            records.map((record) => ({
+              ...mergeCanonicalSubmissionEvaluation(record, index),
+              reviewData: reviewState,
+            })),
+          );
+        });
       })
       .catch((reason: unknown) => {
         if (active) {
-          setLoadError(
-            reason instanceof Error ? reason.message : "Submissions could not be loaded.",
+          setLoadFailure(
+            submissionLoadFailure(
+              reason instanceof ApiRequestError ? reason.status : undefined,
+              reason instanceof Error ? reason.message : undefined,
+            ),
           );
         }
       })
@@ -928,9 +330,10 @@ export function SubmissionListWorkspace({
         if (active) setLoading(false);
       });
     return () => {
+      eventController.abort();
       active = false;
     };
-  }, [baseUrl, eventId]);
+  }, [baseUrl, eventId, organizationId, evaluationReloadVersion]);
 
   const tracks = useMemo(
     () => [...new Set(submissions.map((submission) => submission.track))].sort(),
@@ -965,10 +368,16 @@ export function SubmissionListWorkspace({
         return sortDirection === "asc" ? result : -result;
       });
   }, [format, search, sortDirection, sortKey, status, submissions, track]);
+  const selectedSubmission =
+    selectedSubmissionId === undefined
+      ? undefined
+      : submissions.find((submission) => submission.id === selectedSubmissionId);
 
   const selectedVisibleCount = filteredSubmissions.filter((submission) =>
     selected.has(submission.id),
   ).length;
+  const activeFilterCount =
+    (status === "all" ? 0 : 1) + (track === "all" ? 0 : 1) + (format === "all" ? 0 : 1);
   const allVisibleSelected =
     filteredSubmissions.length > 0 && selectedVisibleCount === filteredSubmissions.length;
 
@@ -1006,269 +415,517 @@ export function SubmissionListWorkspace({
     });
   }
 
-  const eventName = eventTitle(eventId);
-
+  const listState = submissionListState({
+    loading: loading || eventIdentityState === "loading",
+    loadFailure,
+    submissionCount: submissions.length,
+    visibleCount: filteredSubmissions.length,
+  });
+  const cfpConfigurationHref = `/admin/organizations/${encodeURIComponent(
+    organizationId,
+  )}/events/${encodeURIComponent(eventId)}/cfp`;
   return (
     <div className={styles.workspaceRoot}>
       <a className={styles.skipLink} href="#submission-list-content">
         Skip to submissions
       </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <p className={styles.eyebrow}>Organizer workspace</p>
-          <h1>Submissions</h1>
-          <p className={styles.pageDescription}>
-            Review and manage proposals for <strong>{eventName}</strong>.
-          </p>
-        </div>
-        <Link className={styles.backLink} href="/admin/events">
-          Back to events
-        </Link>
-      </header>
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
+            <span>{eventName}</span>
+            <span>/</span>
+            <strong>Submissions</strong>
+          </WorkspaceBreadcrumb>
+        }
+        title="Submissions"
+        status={<WorkspaceStatusBadge>{submissions.length} total</WorkspaceStatusBadge>}
+        description="Move proposals from intake through review and a final organizer decision."
+        metadata={
+          <>
+            <WorkspaceMetaItem>{filteredSubmissions.length} in this view</WorkspaceMetaItem>
+            <WorkspaceMetaItem>
+              {submissions.filter((submission) => submission.status === "accepted").length} accepted
+            </WorkspaceMetaItem>
+            <WorkspaceMetaItem>
+              {
+                submissions.filter(
+                  (submission) =>
+                    submission.status === "submitted" || submission.status === "under_review",
+                ).length
+              }{" "}
+              awaiting decision
+            </WorkspaceMetaItem>
+          </>
+        }
+        actions={
+          <>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/admin/events">Back to events</Link>
+            </Button>
+            {listState === "unconfigured" ? (
+              <Button asChild size="sm">
+                <Link href={cfpConfigurationHref}>Configure CFP</Link>
+              </Button>
+            ) : eventSlug !== null ? (
+              <Button asChild size="sm">
+                <Link
+                  href={`/cfp/organizations/${encodeURIComponent(organizationId ?? "local-organization")}/events/${encodeURIComponent(eventSlug)}`}
+                >
+                  Open CFP
+                </Link>
+              </Button>
+            ) : null}
+          </>
+        }
+      />
 
-      <div id="submission-list-content" className={styles.workspaceMain} tabIndex={-1}>
-        <section className={styles.summaryBar} aria-label="Submission summary">
-          <div>
-            <strong>{submissions.length}</strong>
-            <span>total submissions</span>
-          </div>
-          <div>
-            <strong>
-              {submissions.filter((submission) => submission.status === "under_review").length}
-            </strong>
-            <span>in review</span>
-          </div>
-          <div>
-            <strong>
-              {submissions.filter((submission) => submission.status === "accepted").length}
-            </strong>
-            <span>accepted</span>
-          </div>
-          <div className={styles.summaryNote}>
-            <span>{loading ? "Loading server submissions…" : "Server-backed organizer view"}</span>
-            <small>
-              {loadError ?? "Review assignments and decisions are read from the evaluation API."}
-            </small>
-          </div>
-        </section>
-
-        <section className={styles.listPanel} aria-labelledby="submission-table-heading">
-          <div className={styles.panelHeader}>
-            <div>
-              <p className={styles.eyebrow}>Event intake</p>
-              <h2 id="submission-table-heading">All submissions</h2>
-              <p className={styles.mutedText}>
-                {filteredSubmissions.length} of {submissions.length} shown
-                {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
-              </p>
-            </div>
-            <label className={styles.searchField} htmlFor="submission-search">
-              <span>Search submissions</span>
-              <input
-                id="submission-search"
-                type="search"
-                value={search}
-                placeholder="Title, track, format, or participant"
-                onChange={(event) => setSearch(event.currentTarget.value)}
-              />
-            </label>
-          </div>
-
-          <fieldset className={styles.filters} aria-label="Submission filters">
-            <div className={styles.filterField}>
-              <label htmlFor="submission-status">Status</label>
-              <select
-                id="submission-status"
-                value={status}
-                onChange={(event) =>
-                  setStatus(event.currentTarget.value as SubmissionStatus | "all")
-                }
-              >
-                <option value="all">All statuses</option>
-                {Object.entries(statusLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={styles.filterField}>
-              <label htmlFor="submission-track">Track</label>
-              <select
-                id="submission-track"
-                value={track}
-                onChange={(event) => setTrack(event.currentTarget.value)}
-              >
-                <option value="all">All tracks</option>
-                {tracks.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={styles.filterField}>
-              <label htmlFor="submission-format">Format</label>
-              <select
-                id="submission-format"
-                value={format}
-                onChange={(event) => setFormat(event.currentTarget.value)}
-              >
-                <option value="all">All formats</option>
-                {formats.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button
-              className={styles.clearButton}
-              type="button"
-              onClick={() => {
-                setSearch("");
-                setStatus("all");
-                setTrack("all");
-                setFormat("all");
-              }}
+      <div
+        id="submission-list-content"
+        className={styles.workspaceMain}
+        data-layout="submission-review-desk"
+        tabIndex={-1}
+      >
+        <div className={styles.reviewDesk}>
+          <div className={styles.submissionMaster}>
+            <section
+              id="submission-list-card"
+              className={styles.listPanel}
+              aria-labelledby="submission-table-heading"
+              data-submission-collection="true"
             >
-              Clear filters
-            </button>
-          </fieldset>
+              <h2 id="submission-table-heading" className={styles.srOnly}>
+                {submissions.length === 0 ? "Submission inbox" : "Submission queue"}
+              </h2>
 
-          {filteredSubmissions.length === 0 ? (
-            <div className={styles.emptyState} role="status">
-              <h3>No matching submissions</h3>
-              <p>
-                Try a different search or clear the filters to see this event&apos;s server
-                submissions.
-              </p>
-            </div>
-          ) : (
-            <div className={styles.tableWrap}>
-              <table className={styles.submissionTable}>
-                <caption className={styles.srOnly}>Submissions for {eventName}</caption>
-                <thead>
-                  <tr>
-                    <th className={styles.checkboxColumn} scope="col">
-                      <label className={styles.checkboxLabel}>
-                        <input
-                          type="checkbox"
-                          checked={allVisibleSelected}
-                          onChange={toggleAllVisible}
-                          aria-label="Select all visible submissions"
-                        />
-                        <span className={styles.srOnly}>Select all visible submissions</span>
-                      </label>
-                    </th>
-                    <SortableHeader
-                      sortKey="title"
-                      activeKey={sortKey}
-                      direction={sortDirection}
-                      onSort={toggleSort}
-                    >
-                      Submission
-                    </SortableHeader>
-                    <SortableHeader
-                      sortKey="status"
-                      activeKey={sortKey}
-                      direction={sortDirection}
-                      onSort={toggleSort}
-                    >
-                      Status
-                    </SortableHeader>
-                    <th scope="col">Participants</th>
-                    <th scope="col">Review progress</th>
-                    <th scope="col">Track / format</th>
-                    <SortableHeader
-                      sortKey="updatedAt"
-                      activeKey={sortKey}
-                      direction={sortDirection}
-                      onSort={toggleSort}
-                    >
-                      Updated
-                    </SortableHeader>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSubmissions.map((submission) => (
-                    <tr key={submission.id}>
-                      <td className={styles.checkboxColumn}>
-                        <label className={styles.checkboxLabel}>
-                          <input
-                            type="checkbox"
-                            checked={selected.has(submission.id)}
-                            onChange={() => toggleSelected(submission.id)}
-                            aria-label={`Select ${submission.title}`}
-                          />
-                          <span className={styles.srOnly}>Select {submission.title}</span>
+              {submissions.length > 0 ? (
+                <div className={styles.listContent}>
+                  <ReviewDataNotice
+                    state={evaluationLoadState}
+                    onRetry={() => setEvaluationReloadVersion((current) => current + 1)}
+                    {...(eventSlug === null
+                      ? {}
+                      : {
+                          setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
+                        })}
+                  />
+                  <div className={styles.toolbar}>
+                    <p className={styles.collectionCount} aria-live="polite">
+                      <span>
+                        {filteredSubmissions.length} of {submissions.length}
+                      </span>
+                      {selectedVisibleCount > 0 ? (
+                        <strong>{selectedVisibleCount} selected</strong>
+                      ) : null}
+                    </p>
+                    <div className={styles.toolbarControls}>
+                      <div className={styles.toolbarSearch}>
+                        <Search aria-hidden="true" />
+                        <label className={styles.srOnly} htmlFor="submission-search">
+                          Search submissions
                         </label>
-                      </td>
-                      <th scope="row" className={styles.titleCell}>
-                        <Link
-                          className={styles.submissionLink}
-                          href={submissionHref(eventId, submission.id, organizationId)}
+                        <Input
+                          id="submission-search"
+                          type="search"
+                          value={search}
+                          placeholder="Search submissions"
+                          onChange={(event) => setSearch(event.currentTarget.value)}
+                        />
+                        {search.length > 0 ? (
+                          <Button
+                            className={styles.clearSearch}
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label="Clear submission search"
+                            onClick={() => setSearch("")}
+                          >
+                            <X aria-hidden="true" />
+                          </Button>
+                        ) : null}
+                      </div>
+                      <Popover.Root>
+                        <Popover.Trigger asChild>
+                          <Button
+                            className={styles.filterTrigger}
+                            type="button"
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label={
+                              activeFilterCount > 0
+                                ? `Filter submissions, ${activeFilterCount} active`
+                                : "Filter submissions"
+                            }
+                            title={
+                              activeFilterCount > 0
+                                ? `Filter submissions, ${activeFilterCount} active`
+                                : "Filter submissions"
+                            }
+                          >
+                            <ListFilter aria-hidden="true" />
+                            {activeFilterCount > 0 ? (
+                              <span className={styles.filterActiveCount} aria-hidden="true">
+                                {activeFilterCount}
+                              </span>
+                            ) : null}
+                          </Button>
+                        </Popover.Trigger>
+                        <Popover.Portal>
+                          <Popover.Content
+                            align="end"
+                            aria-label="Submission filters"
+                            className={styles.filterPopover}
+                            sideOffset={8}
+                          >
+                            <div className={styles.filterPopoverHeader}>
+                              <strong>Filters</strong>
+                              {activeFilterCount > 0 ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  onClick={() => {
+                                    setStatus("all");
+                                    setTrack("all");
+                                    setFormat("all");
+                                  }}
+                                >
+                                  Clear
+                                </Button>
+                              ) : null}
+                            </div>
+                            <fieldset className={styles.filterMenu}>
+                              <legend className={styles.srOnly}>Filter submissions</legend>
+                              <div className={styles.filterRow}>
+                                <label htmlFor="submission-status">Status</label>
+                                <Select
+                                  value={status}
+                                  onValueChange={(value) =>
+                                    setStatus(value as SubmissionStatus | "all")
+                                  }
+                                >
+                                  <SelectTrigger
+                                    id="submission-status"
+                                    className={styles.filterSelectTrigger}
+                                  >
+                                    <SelectValue placeholder="All statuses" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">All statuses</SelectItem>
+                                    {Object.entries(statusLabels).map(([value, label]) => (
+                                      <SelectItem key={value} value={value}>
+                                        {label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className={styles.filterRow}>
+                                <label htmlFor="submission-track">Track</label>
+                                <Select value={track} onValueChange={setTrack}>
+                                  <SelectTrigger
+                                    id="submission-track"
+                                    className={styles.filterSelectTrigger}
+                                  >
+                                    <SelectValue placeholder="All tracks" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">All tracks</SelectItem>
+                                    {tracks.map((value) => (
+                                      <SelectItem key={value} value={value}>
+                                        {value}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className={styles.filterRow}>
+                                <label htmlFor="submission-format">Format</label>
+                                <Select value={format} onValueChange={setFormat}>
+                                  <SelectTrigger
+                                    id="submission-format"
+                                    className={styles.filterSelectTrigger}
+                                  >
+                                    <SelectValue placeholder="All formats" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">All formats</SelectItem>
+                                    {formats.map((value) => (
+                                      <SelectItem key={value} value={value}>
+                                        {value}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </fieldset>
+                          </Popover.Content>
+                        </Popover.Portal>
+                      </Popover.Root>
+                    </div>
+                  </div>
+
+                  {listState === "loading" ? (
+                    <div className={styles.emptyState} role="status" aria-live="polite">
+                      <h3>Loading submissions</h3>
+                      <p>We&apos;re getting the latest proposals for this event.</p>
+                    </div>
+                  ) : listState === "failure" || listState === "unconfigured" ? (
+                    <div className={styles.emptyState} role="alert">
+                      <h3>
+                        {listState === "unconfigured"
+                          ? "Set up submission intake"
+                          : "Unable to load submissions"}
+                      </h3>
+                      <p>{loadFailure?.message ?? "Submissions could not be loaded."}</p>
+                      {listState === "failure" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setEvaluationReloadVersion((value) => value + 1)}
                         >
-                          {submission.title}
-                        </Link>
-                        <span className={styles.submissionMeta}>
-                          {submission.id} · v{submission.version}
-                        </span>
-                      </th>
-                      <td>
-                        <StatusBadge status={submission.status} />
-                      </td>
-                      <td>
-                        <ProgressMeter
-                          completed={submission.participantProgress.completed}
-                          total={submission.participantProgress.total}
-                          label={`${submission.title} participant profile progress`}
-                        />
-                      </td>
-                      <td>
-                        <ProgressMeter
-                          completed={submission.reviewSummary.completed}
-                          total={submission.reviewSummary.total}
-                          label={`${submission.title} review progress`}
-                        />
-                      </td>
-                      <td>
-                        <span className={styles.trackValue}>{submission.track}</span>
-                        <span className={styles.submissionMeta}>{submission.format}</span>
-                      </td>
-                      <td>
-                        <time dateTime={submission.updatedAt}>
-                          {formatDate(submission.updatedAt)}
-                        </time>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+                          Retry submissions
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : listState === "filtered_empty" ? (
+                    <div className={styles.emptyState} role="status">
+                      <h3>No matching submissions</h3>
+                      <p>Try a different search or clear the filters to see more proposals.</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setSearch("");
+                          setStatus("all");
+                          setTrack("all");
+                          setFormat("all");
+                        }}
+                      >
+                        Clear filters
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className={styles.tableWrap} data-scroll-region="submission-queue">
+                      <Table className={styles.submissionTable}>
+                        <TableCaption className={styles.srOnly}>
+                          Submissions for {eventName}
+                        </TableCaption>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className={styles.checkboxColumn} scope="col">
+                              <Checkbox
+                                checked={
+                                  allVisibleSelected
+                                    ? true
+                                    : selectedVisibleCount > 0
+                                      ? "indeterminate"
+                                      : false
+                                }
+                                onCheckedChange={toggleAllVisible}
+                                aria-label="Select all visible submissions"
+                              />
+                            </TableHead>
+                            <SortableHeader
+                              className={styles.titleColumn}
+                              sortKey="title"
+                              activeKey={sortKey}
+                              direction={sortDirection}
+                              onSort={toggleSort}
+                            >
+                              Title
+                            </SortableHeader>
+                            <SortableHeader
+                              className={styles.statusColumn}
+                              sortKey="status"
+                              activeKey={sortKey}
+                              direction={sortDirection}
+                              onSort={toggleSort}
+                            >
+                              Status
+                            </SortableHeader>
+                            <TableHead className={styles.speakersColumn} scope="col">
+                              Speakers
+                            </TableHead>
+                            <TableHead className={styles.reviewColumn} scope="col">
+                              Reviews
+                            </TableHead>
+                            <TableHead className={styles.taxonomyColumn} scope="col">
+                              Track / format
+                            </TableHead>
+                            <SortableHeader
+                              className={styles.updatedColumn}
+                              sortKey="updatedAt"
+                              activeKey={sortKey}
+                              direction={sortDirection}
+                              onSort={toggleSort}
+                            >
+                              Updated
+                            </SortableHeader>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredSubmissions.map((submission) => (
+                            <TableRow
+                              key={submission.id}
+                              aria-current={
+                                submission.id === selectedSubmissionId ? "page" : undefined
+                              }
+                              data-state={
+                                submission.id === selectedSubmissionId ? "selected" : undefined
+                              }
+                              data-bulk-selected={selected.has(submission.id) ? "true" : "false"}
+                              aria-selected={selected.has(submission.id)}
+                              data-submission-row-layout="summary"
+                            >
+                              <TableCell className={styles.checkboxColumn}>
+                                <Checkbox
+                                  checked={selected.has(submission.id)}
+                                  onCheckedChange={() => toggleSelected(submission.id)}
+                                  aria-label={`Select ${submission.title}`}
+                                />
+                              </TableCell>
+                              <TableHead scope="row" className={styles.titleCell}>
+                                <a
+                                  className={styles.submissionLink}
+                                  href={submissionHref(eventId, submission.id, organizationId)}
+                                  title={submission.title}
+                                >
+                                  {submission.title}
+                                </a>
+                              </TableHead>
+                              <TableCell className={styles.statusCell}>
+                                <span className={styles.mobileLabel}>Status</span>
+                                <StatusBadge status={submission.status} />
+                              </TableCell>
+                              <TableCell className={styles.speakersCell}>
+                                <span className={styles.mobileLabel}>Speakers</span>
+                                <span
+                                  className={styles.speakerNames}
+                                  title={submission.participants
+                                    .map((participant) => participant.name)
+                                    .join(", ")}
+                                >
+                                  {submission.participants.length === 0
+                                    ? "No speaker"
+                                    : submission.participants
+                                        .map((participant) => participant.name)
+                                        .join(", ")}
+                                </span>
+                              </TableCell>
+                              <TableCell className={styles.reviewCell}>
+                                <span className={styles.mobileLabel}>Reviews</span>
+                                {reviewDataIsReady(submission) ? (
+                                  <ProgressMeter
+                                    completed={submission.reviewSummary.completed}
+                                    total={submission.reviewSummary.total}
+                                    label={`${submission.title} review progress`}
+                                  />
+                                ) : (
+                                  <span className={styles.mutedText}>
+                                    {reviewDataMessage(submission.reviewData)}
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className={styles.taxonomyCell}>
+                                <span className={styles.mobileLabel}>Track / format</span>
+                                <span className={styles.trackValue}>{submission.track}</span>
+                                <span className={styles.submissionMeta}>{submission.format}</span>
+                              </TableCell>
+                              <TableCell className={styles.updatedCell}>
+                                <span className={styles.mobileLabel}>Updated</span>
+                                <time dateTime={submission.updatedAt}>
+                                  {formatDate(submission.updatedAt)}
+                                </time>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              ) : listState === "loading" ? (
+                <div className={styles.listContent}>
+                  <div className={styles.emptyState} role="status" aria-live="polite">
+                    <h3>Loading submissions</h3>
+                    <p>We&apos;re getting the latest proposals for this event.</p>
+                  </div>
+                </div>
+              ) : listState === "failure" || listState === "unconfigured" ? (
+                <div className={styles.listContent}>
+                  <div className={styles.emptyState} role="alert">
+                    <h3>
+                      {listState === "unconfigured"
+                        ? "Set up submission intake"
+                        : "Unable to load submissions"}
+                    </h3>
+                    <p>{loadFailure?.message ?? "Submissions could not be loaded."}</p>
+                    {listState === "failure" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEvaluationReloadVersion((value) => value + 1)}
+                      >
+                        Retry submissions
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className={styles.emptyCardContent}>
+                  <Empty className={styles.emptyState} role="status">
+                    <EmptyHeader>
+                      <EmptyTitle>No submissions yet</EmptyTitle>
+                      <EmptyDescription>
+                        Share the public call for proposals to start collecting sessions for{" "}
+                        {eventName}.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+        {selectedSubmissionId === undefined ? null : (
+          <SubmissionDetailDrawer
+            closeHref={submissionListHref(eventId, organizationId)}
+            title={selectedSubmission?.title ?? "Submission details"}
+          >
+            <SubmissionDetailWorkspace
+              organizationId={organizationId}
+              eventId={eventId}
+              submissionId={selectedSubmissionId}
+              displayMode="panel"
+            />
+          </SubmissionDetailDrawer>
+        )}
       </div>
     </div>
   );
 }
-
 function SortableHeader({
   sortKey,
   activeKey,
   direction,
   onSort,
   children,
+  className = "",
 }: Readonly<{
   sortKey: SortKey;
   activeKey: SortKey;
   direction: SortDirection;
   onSort: (sortKey: SortKey) => void;
   children: string;
+  className?: string | undefined;
 }>) {
   const active = activeKey === sortKey;
   return (
-    <th
+    <TableHead
+      className={className}
       scope="col"
       aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
     >
@@ -1281,7 +938,7 @@ function SortableHeader({
         {children}
         <span aria-hidden="true">{active ? (direction === "asc" ? "↑" : "↓") : "↕"}</span>
       </button>
-    </th>
+    </TableHead>
   );
 }
 
@@ -1314,7 +971,7 @@ function DecisionControl({
   const [notificationState, setNotificationState] = useState<"idle" | "queued" | "confirmed">(
     submission.decision === undefined ? "idle" : "confirmed",
   );
-  const hasDecisionApi = baseUrl.trim().length > 0 && submission.evaluationPlanId !== undefined;
+  const hasDecisionApi = submission.evaluationPlanId !== undefined;
   const decisionHistory = submission.decision?.history ?? [];
   const canSubmit = hasDecisionApi && reason.trim().length >= 5 && !busy;
 
@@ -1324,7 +981,7 @@ function DecisionControl({
     setBusy(true);
     setError(null);
     try {
-      const decision = await submissionRequest<EvaluationDecisionRecord>(
+      const decision = await evaluationRequest<EvaluationDecisionRecord>(
         baseUrl,
         `/plans/${encodeURIComponent(submission.evaluationPlanId)}/submissions/${encodeURIComponent(submission.id)}/decision`,
         {
@@ -1357,9 +1014,9 @@ function DecisionControl({
       <p className={styles.eyebrow}>Human organizer decision</p>
       <h2 id="decision-heading">Accept or reject</h2>
       <p className={styles.mutedText}>
-        Decisions are versioned on the evaluation server. Saving waits for the decision notification
-        projection; accepted outcomes also wait for the canonical session handoff to be queued by
-        the existing APIs.
+        Decisions are versioned on the evaluation server. Saving waits for the durable decision and
+        its submitter notification queue. Accepted-speaker onboarding then continues through the
+        idempotent background handoff.
       </p>
       <form onSubmit={handleSubmit}>
         <div className={styles.formGrid}>
@@ -1375,26 +1032,6 @@ function DecisionControl({
               <option value="waitlisted">Waitlist</option>
               <option value="rejected">Reject</option>
             </select>
-          </div>
-          <div className={styles.decisionActions}>
-            <button
-              className={styles.clearButton}
-              type="button"
-              aria-pressed={status === "accepted"}
-              disabled={!hasDecisionApi || busy}
-              onClick={() => setStatus("accepted")}
-            >
-              Accept submission
-            </button>
-            <button
-              className={styles.dangerButton}
-              type="button"
-              aria-pressed={status === "rejected"}
-              disabled={!hasDecisionApi || busy}
-              onClick={() => setStatus("rejected")}
-            >
-              Reject submission
-            </button>
           </div>
         </div>
         <label className={styles.textareaLabel} htmlFor="decision-reason">
@@ -1412,7 +1049,7 @@ function DecisionControl({
           onChange={(event) => setReason(event.currentTarget.value)}
         />
         <p className={styles.fieldHelp}>
-          The reason and server decision version are retained in the immutable decision history.
+          The reason is retained in the immutable decision history.
         </p>
         {!hasDecisionApi ? (
           <p className={styles.auditCallout} role="note">
@@ -1424,10 +1061,15 @@ function DecisionControl({
             {error}
           </p>
         ) : null}
-        <button className={styles.primaryLink} type="submit" disabled={!canSubmit}>
+        <Button
+          className={styles.decisionSubmit}
+          type="submit"
+          variant={status === "rejected" ? "destructive" : "default"}
+          disabled={!canSubmit}
+        >
           Save {status === "accepted" ? "accept" : status === "rejected" ? "reject" : "waitlist"}{" "}
           decision and queue notifications
-        </button>
+        </Button>
       </form>
       <section aria-labelledby="decision-history-heading">
         <h3 id="decision-history-heading">Decision and notification history</h3>
@@ -1447,10 +1089,7 @@ function DecisionControl({
                   <time dateTime={transition.decidedAt}>
                     {formatDateTime(transition.decidedAt)}
                   </time>
-                  <p>
-                    {transition.reason} · organizer {transition.decidedBy} · decision version{" "}
-                    {decisionHistory.indexOf(transition) + 1}
-                  </p>
+                  <p>{transition.reason} · recorded by organizer</p>
                 </div>
               </li>
             ))}
@@ -1462,12 +1101,17 @@ function DecisionControl({
           <p className={styles.successMessage} role="status">
             Decision notification queued for the all_participants audience.
             {status === "accepted"
-              ? " Accepted-speaker handoff notification queued for the accepted_participants audience too."
+              ? " Accepted-speaker onboarding is continuing through the idempotent background handoff."
               : " No accepted-speaker handoff is required for this outcome."}
           </p>
         ) : notificationState === "confirmed" ? (
           <p className={styles.successMessage} role="status">
             Notification projection confirmed for the recorded decision.
+          </p>
+        ) : null}
+        {submission.decision?.notificationDelivery ? (
+          <p className={styles.successMessage} role="status">
+            {decisionNotificationSummary(submission.decision.notificationDelivery)}
           </p>
         ) : null}
       </section>
@@ -1484,8 +1128,7 @@ function AcceptedHandoffSummary({ submission }: Readonly<{ submission: Submissio
       <p className={styles.eyebrow}>Session and agenda handoff</p>
       <h2 id="accepted-handoff-heading">Accepted session handoff</h2>
       <p className={styles.mutedText}>
-        The canonical acceptance handoff is ready. These values come from the persisted submission
-        and are carried into the organizer session record without re-entry.
+        The accepted session is ready to move into your event program.
       </p>
       <dl className={styles.answerList}>
         <div>
@@ -1508,10 +1151,6 @@ function AcceptedHandoffSummary({ submission }: Readonly<{ submission: Submissio
           <dt>Track</dt>
           <dd>{metadata.track}</dd>
         </div>
-        <div>
-          <dt>Submission version</dt>
-          <dd>{metadata.version}</dd>
-        </div>
       </dl>
     </section>
   );
@@ -1520,131 +1159,262 @@ export function SubmissionDetailWorkspace({
   eventId,
   submissionId,
   organizationId,
-}: Readonly<{ eventId: string; submissionId: string; organizationId?: string }>) {
+  displayMode = "page",
+}: Readonly<{
+  eventId: string;
+  submissionId: string;
+  organizationId: string;
+  displayMode?: "page" | "panel";
+}>) {
   const baseUrl = apiBaseUrl();
-  const [submission, setSubmission] = useState<SubmissionRecord | null>(() =>
-    localDemoEnabled() ? (getSeededSubmission(eventId, submissionId) ?? null) : null,
-  );
-  const [loading, setLoading] = useState(!localDemoEnabled());
+  const [submission, setSubmission] = useState<SubmissionRecord | null>(null);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const [eventName, setEventName] = useState(initialOrganizerEventName);
+  const [eventSlug, setEventSlug] = useState<string | null>(null);
 
   useEffect(() => {
-    if (localDemoEnabled()) return;
     let active = true;
-    if (baseUrl === null) {
+    if (organizationId === undefined || organizationId.trim().length === 0) {
       setLoading(false);
-      setLoadError("The evaluation API is not configured.");
+      setNotFound(false);
+      setLoadError("An organization-scoped route is required to load submissions.");
       return () => {
         active = false;
       };
     }
-    void submissionRequest<readonly ServerSubmissionRecord[]>(
-      baseUrl,
-      `/events/${encodeURIComponent(eventId)}/submissions`,
-    )
-      .then((records) => {
-        if (!active) return null;
-        const record = records.find((candidate) => candidate.id === submissionId);
-        return record === undefined ? null : enrichServerSubmission(baseUrl, record);
+    setLoading(true);
+    setLoadError(null);
+    setNotFound(false);
+    setEventName(initialOrganizerEventName());
+    setEventSlug(null);
+    const controller = new AbortController();
+
+    void loadOrganizerEventIdentity(baseUrl, organizationId, eventId, controller.signal)
+      .then((event) => {
+        if (active) {
+          setEventName(event.name);
+          setEventSlug(event.slug);
+        }
       })
-      .then((loaded) => {
-        if (active) setSubmission(loaded);
+      .catch(() => undefined);
+    void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, controller.signal)
+      .then((records) => {
+        if (!active) return;
+        const envelope = records.find((candidate) => candidate.submission.id === submissionId);
+        if (envelope === undefined) {
+          setSubmission(null);
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+        const canonical = mapCanonicalSubmission(envelope);
+        setSubmission(canonical);
+        setLoading(false);
+        void enrichCanonicalSubmission(baseUrl, envelope, organizationId)
+          .then((loaded) => {
+            if (active) setSubmission(loaded);
+          })
+          .catch((reason: unknown) => {
+            if (active) {
+              setSubmission({
+                ...canonical,
+                reviewData: reviewDataStateFromError(reason),
+              });
+            }
+          });
       })
       .catch((reason: unknown) => {
-        if (active)
+        if (active) {
+          setSubmission(null);
+          setNotFound(false);
           setLoadError(
             reason instanceof Error ? reason.message : "Submission could not be loaded.",
           );
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+          setLoading(false);
+        }
       });
     return () => {
       active = false;
+      controller.abort(`Submission load attempt ${reloadVersion} was superseded.`);
     };
-  }, [baseUrl, eventId, submissionId]);
+  }, [baseUrl, eventId, organizationId, reloadVersion, submissionId]);
 
   if (loading) {
     return (
-      <div className={styles.workspaceRoot}>
+      <section
+        className={displayMode === "panel" ? styles.reviewPanel : styles.workspaceRoot}
+        aria-label={displayMode === "panel" ? "Submission review panel" : "Submission details"}
+      >
         <div className={styles.notFound} role="status">
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Loading submission</h1>
-          <p>Loading the authoritative submission record from the evaluation API.</p>
+          <p>Loading this submission.</p>
         </div>
-      </div>
+      </section>
     );
   }
   if (!submission) {
     return (
-      <div className={styles.workspaceRoot}>
+      <section
+        className={displayMode === "panel" ? styles.reviewPanel : styles.workspaceRoot}
+        aria-label={displayMode === "panel" ? "Submission review panel" : "Submission details"}
+      >
         <div className={styles.notFound} role="alert">
           <p className={styles.eyebrow}>Organizer workspace</p>
-          <h1>Submission not found</h1>
-          <p>{loadError ?? "This submission is not part of the selected event."}</p>
+          <h1>{notFound ? "Submission not found" : "Unable to load submission"}</h1>
+          <p>
+            {notFound
+              ? "This submission is not part of the selected event."
+              : (loadError ?? "Submission could not be loaded.")}
+          </p>
           <Link className={styles.primaryLink} href={submissionListHref(eventId, organizationId)}>
             Back to submissions
           </Link>
         </div>
-      </div>
+      </section>
     );
   }
+  const submittedReviewRead = submission.submittedReviewRead ?? {
+    status: "ready",
+    count: submission.reviewAssignments.filter((assignment) => assignment.status === "complete")
+      .length,
+  };
 
   return (
-    <div className={styles.workspaceRoot}>
-      <a className={styles.skipLink} href="#submission-detail-content">
-        Skip to submission details
-      </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-            <Link href="/admin/events">{eventTitle(eventId)}</Link>
-            <span aria-hidden="true">/</span>
-            <Link href={submissionListHref(eventId, organizationId)}>Submissions</Link>
-            <span aria-hidden="true">/</span>
-            <span aria-current="page">{submission.id}</span>
-          </nav>
-          <p className={styles.eyebrow}>Organizer submission detail</p>
-          <div className={styles.detailTitleRow}>
-            <h1>{submission.title}</h1>
-            <StatusBadge status={submission.status} />
-          </div>
-          <p className={styles.pageDescription}>
-            {submission.id} · version {submission.version} · last updated{" "}
-            <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
-          </p>
-        </div>
-        <Link className={styles.backLink} href={submissionListHref(eventId, organizationId)}>
-          Back to submissions
-        </Link>
-      </header>
+    <section
+      className={displayMode === "panel" ? styles.reviewPanel : styles.workspaceRoot}
+      aria-label={displayMode === "panel" ? "Submission review panel" : "Submission details"}
+    >
+      {displayMode === "page" ? (
+        <>
+          <a className={styles.skipLink} href="#submission-detail-content">
+            Skip to submission details
+          </a>
+          <WorkspaceHeader
+            breadcrumb={
+              <WorkspaceBreadcrumb>
+                <Link href="/admin/events">{eventName}</Link>
+                <span>/</span>
+                <Link href={submissionListHref(eventId, organizationId)}>Submissions</Link>
+                <span>/</span>
+                <strong>Submission details</strong>
+              </WorkspaceBreadcrumb>
+            }
+            title={submission.title}
+            status={
+              <WorkspaceStatusBadge tone={submission.status === "accepted" ? "success" : "info"}>
+                {statusLabels[submission.status]}
+              </WorkspaceStatusBadge>
+            }
+            description={`${submission.format} · ${submission.track}`}
+            metadata={
+              <>
+                <WorkspaceMetaItem>
+                  Updated{" "}
+                  <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
+                </WorkspaceMetaItem>
+                <WorkspaceMetaItem>{submission.participants.length} participants</WorkspaceMetaItem>
+              </>
+            }
+            actions={
+              <Button asChild size="sm" variant="outline">
+                <Link href={submissionListHref(eventId, organizationId)}>Back to queue</Link>
+              </Button>
+            }
+          />
+        </>
+      ) : null}
 
-      <div id="submission-detail-content" className={styles.workspaceMain} tabIndex={-1}>
+      <div
+        id="submission-detail-content"
+        className={displayMode === "panel" ? styles.reviewPanelBody : styles.workspaceMain}
+        tabIndex={-1}
+      >
+        {displayMode === "panel" ? (
+          <div className={styles.drawerIntro}>
+            <strong>Organizer review.</strong>
+            <span>
+              Review the submission content, participant context, committee activity, and final
+              decision.
+            </span>
+          </div>
+        ) : null}
         <div className={styles.detailGrid}>
           <div className={styles.detailPrimary}>
-            <section className={styles.detailPanel} aria-labelledby="abstract-heading">
-              <div className={styles.panelHeading}>
-                <div>
-                  <p className={styles.eyebrow}>Submission content</p>
-                  <h2 id="abstract-heading">Abstract</h2>
-                </div>
-                <span className={styles.versionBadge}>Version {submission.version}</span>
-              </div>
-              <p className={styles.abstract}>{submission.abstract}</p>
-            </section>
-
-            <section className={styles.detailPanel} aria-labelledby="answers-heading">
-              <p className={styles.eyebrow}>Form responses</p>
-              <h2 id="answers-heading">Structured answers</h2>
-              <dl className={styles.answerList}>
-                {submission.answers.map((answer) => (
-                  <div key={answer.question}>
-                    <dt>{answer.question}</dt>
-                    <dd>{answer.answer}</dd>
+            {displayMode === "panel" ? (
+              <section
+                className={`${styles.detailPanel} ${styles.submissionOverviewPanel}`}
+                aria-labelledby="submission-overview-heading"
+              >
+                <div className={styles.submissionOverviewHeader}>
+                  <div>
+                    <p className={styles.eyebrow}>{eventName} · Submission</p>
+                    <h1 id="submission-overview-heading">{submission.title}</h1>
                   </div>
-                ))}
-              </dl>
-            </section>
+                  <StatusBadge status={submission.status} />
+                </div>
+                <dl className={styles.submissionOverviewMeta}>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{statusLabels[submission.status]}</dd>
+                  </div>
+                  <div>
+                    <dt>Track / format</dt>
+                    <dd>
+                      {submission.track} · {submission.format}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatDateTime(submission.updatedAt)}</dd>
+                  </div>
+                </dl>
+                <div className={styles.submissionOverviewCopy}>
+                  <h2>Submission overview</h2>
+                  <p>{submission.abstract}</p>
+                </div>
+                <div className={styles.submissionOverviewAnswers}>
+                  <p className={styles.eyebrow}>Form responses</p>
+                  <h2>Structured answers</h2>
+                  <dl className={styles.answerList}>
+                    {submission.answers.map((answer) => (
+                      <div key={answer.question}>
+                        <dt>{answer.question}</dt>
+                        <dd>{answer.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              </section>
+            ) : (
+              <>
+                <section className={styles.detailPanel} aria-labelledby="abstract-heading">
+                  <div className={styles.panelHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>Submission content</p>
+                      <h2 id="abstract-heading">Abstract</h2>
+                    </div>
+                  </div>
+                  <p className={styles.abstract}>{submission.abstract}</p>
+                </section>
+
+                <section className={styles.detailPanel} aria-labelledby="answers-heading">
+                  <p className={styles.eyebrow}>Form responses</p>
+                  <h2 id="answers-heading">Structured answers</h2>
+                  <dl className={styles.answerList}>
+                    {submission.answers.map((answer) => (
+                      <div key={answer.question}>
+                        <dt>{answer.question}</dt>
+                        <dd>{answer.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              </>
+            )}
 
             <section className={styles.detailPanel} aria-labelledby="timeline-heading">
               <p className={styles.eyebrow}>Audit history</p>
@@ -1665,7 +1435,7 @@ export function SubmissionDetailWorkspace({
 
             <DecisionControl
               submission={submission}
-              baseUrl={baseUrl ?? ""}
+              baseUrl={baseUrl}
               onSaved={(decision) => {
                 setSubmission((current) =>
                   current === null
@@ -1683,7 +1453,7 @@ export function SubmissionDetailWorkspace({
               }}
             />
             <AcceptedHandoffSummary submission={submission} />
-            <ReopenControl submission={submission} baseUrl={baseUrl ?? ""} />
+            <ReopenControl submission={submission} baseUrl={baseUrl} />
           </div>
 
           <aside className={styles.detailAside} aria-label="Organizer-only submission information">
@@ -1699,9 +1469,13 @@ export function SubmissionDetailWorkspace({
                     <div>
                       <strong>{participant.name}</strong>
                       <span>
-                        {participant.role} · {participant.organization}
+                        {participant.role}
+                        {participant.organization ? ` · ${participant.organization}` : ""}
                       </span>
                       <a href={`mailto:${participant.email}`}>{participant.email}</a>
+                      {participant.biography ? (
+                        <span>Biography: {participant.biography}</span>
+                      ) : null}
                       {Object.entries(participant.answers ?? {}).map(([question, answer]) => (
                         <span key={`${participant.id}-${question}`}>
                           {question}: {answerText(answer) ?? "—"}
@@ -1729,11 +1503,38 @@ export function SubmissionDetailWorkspace({
                 </strong>
                 <span>{submission.reviewSummary.recommendation}</span>
               </div>
-              <ProgressMeter
-                completed={submission.reviewSummary.completed}
-                total={submission.reviewSummary.total}
-                label="Completed reviews"
+              {reviewDataIsReady(submission) ? (
+                <ProgressMeter
+                  completed={submission.reviewSummary.completed}
+                  total={submission.reviewSummary.total}
+                  label="Completed reviews"
+                />
+              ) : null}
+              <ReviewDataNotice
+                state={submission.reviewData ?? { status: "ready" as const }}
+                onRetry={() => setReloadVersion((current) => current + 1)}
+                {...(eventSlug === null
+                  ? {}
+                  : {
+                      setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
+                    })}
               />
+              {reviewDataIsReady(submission) ? (
+                submittedReviewRead.status === "error" ? (
+                  <div className={styles.auditCallout} role="alert">
+                    <p>Submitted reviews could not be loaded: {submittedReviewRead.message}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setReloadVersion((current) => current + 1)}
+                    >
+                      Retry submitted reviews
+                    </Button>
+                  </div>
+                ) : submittedReviewRead.count === 0 ? (
+                  <p className={styles.mutedText}>No submitted reviews yet.</p>
+                ) : null
+              ) : null}
               <ul className={styles.assignmentList}>
                 {submission.reviewAssignments.map((assignment) => (
                   <li key={assignment.reviewer}>
@@ -1746,6 +1547,18 @@ export function SubmissionDetailWorkspace({
                           : ` · ${assignment.score}/${submission.reviewSummary.maxScore}`}
                       </span>
                     </div>
+                    {assignment.criterionScores && assignment.criterionScores.length > 0 ? (
+                      <ul>
+                        {assignment.criterionScores.map((score) => (
+                          <li key={score.criterion}>
+                            {score.criterion}: {score.value}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {assignment.comment ? (
+                      <p className={styles.mutedText}>Reviewer comment: {assignment.comment}</p>
+                    ) : null}
                     {assignment.conflict ? (
                       <p className={styles.conflictNotice}>Conflict: {assignment.conflict}</p>
                     ) : null}
@@ -1783,7 +1596,7 @@ export function SubmissionDetailWorkspace({
           </aside>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1804,7 +1617,7 @@ function ReopenControl({
     setBusy(true);
     setError(null);
     try {
-      await submissionRequest(
+      await evaluationRequest(
         baseUrl,
         `/events/${encodeURIComponent(submission.eventId)}/submissions/${encodeURIComponent(submission.id)}/reopen`,
         {

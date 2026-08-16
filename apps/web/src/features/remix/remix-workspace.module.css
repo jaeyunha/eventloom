@@ -1,0 +1,533 @@
+.workspace {
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.pageBody {
+  display: grid;
+  width: min(100%, 74rem);
+  gap: 1.5rem;
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 4rem;
+}
+
+.statusPage {
+  width: min(100% - 2rem, 44rem);
+  margin: 0 auto;
+  padding: 3rem 0;
+}
+
+.statusPage h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  letter-spacing: -0.03em;
+}
+
+.unavailableCard {
+  margin-top: 1rem;
+}
+
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.skipLink {
+  position: fixed;
+  z-index: 100;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--foreground);
+  color: var(--background);
+  font-weight: 650;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+}
+
+.composerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(22rem, 0.92fr);
+}
+
+.composerSection {
+  display: grid;
+  align-content: start;
+  gap: 1.25rem;
+  padding: 1.4rem;
+}
+
+.composerSection + .composerSection {
+  border-left: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--muted) 24%, var(--card));
+}
+
+.sectionHeading {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.sectionHeading h3,
+.candidateHeader h3,
+.changeSummary h4 {
+  margin: 0;
+  color: var(--foreground);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.sectionHeading h3,
+.candidateHeader h3 {
+  font-size: 1rem;
+}
+
+.sectionHeading p,
+.candidateHeader p,
+.confirmation p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.stepLabel {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  font-weight: 680;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.controlGrid,
+.instructionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.selectTrigger {
+  width: 100%;
+}
+
+.loadingState {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+}
+
+.loadingState svg {
+  width: 1rem;
+  height: 1rem;
+  animation: remix-spin 0.8s linear infinite;
+}
+
+.sourceList {
+  min-height: 12rem;
+  max-height: 23rem;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 0.6rem;
+  background: var(--background);
+}
+
+.sourceList > legend {
+  padding: 0 0.25rem;
+}
+
+.sourceList ul,
+.candidateQueue ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.sourceList li + li,
+.candidateQueue li + li {
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sourceItem {
+  width: 100%;
+  gap: 0.7rem;
+  align-items: flex-start;
+  padding: 0.8rem;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.sourceItem:hover {
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.sourceCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.sourceCopy strong {
+  overflow: hidden;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.sourceCopy span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 450;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.checkboxGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.fieldOption {
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--background);
+  cursor: pointer;
+}
+
+.instructionGrid {
+  align-items: start;
+}
+
+.instructionTextarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.inlineMessage {
+  margin: 0;
+  padding: 0 1.4rem 1.1rem;
+}
+
+.composerFooter {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.4rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--muted) 38%, var(--card));
+}
+
+.requestSummary {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.requestSummary strong {
+  font-size: 0.8rem;
+}
+
+.requestSummary span,
+.muted {
+  color: var(--muted-foreground);
+  font-size: 0.74rem;
+}
+
+.candidateFilter {
+  min-width: 11rem;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.reviewEmpty {
+  min-height: 14rem;
+}
+
+.reviewGrid {
+  display: grid;
+  grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
+  min-height: 24rem;
+}
+
+.candidateQueue {
+  border-right: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--muted) 26%, var(--card));
+}
+
+.candidateRow {
+  display: flex;
+  width: 100%;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.85rem 0.9rem;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.candidateRow:hover,
+.candidateRow[data-selected="true"] {
+  background: var(--muted);
+}
+
+.candidateRow[data-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.candidateRow > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.candidateRow strong {
+  overflow: hidden;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.candidateRow small {
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+}
+
+.candidateDetail {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.candidateHeader {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.candidateHeader > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.comparisonTable {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--background);
+}
+
+.comparisonTableHead,
+.comparisonTableCell {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.changeSummary {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem;
+  border-radius: 0.6rem;
+  background: var(--muted);
+}
+
+.changeSummary h4 {
+  font-size: 0.8rem;
+}
+
+.changeSummary p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.changeSummary span {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+}
+
+.technicalDetails {
+  padding-top: 0.65rem;
+}
+
+.provenance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  padding: 0.8rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+}
+
+.provenance div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.provenance dt {
+  font-weight: 650;
+}
+
+.provenance dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.confirmation {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--primary) 4%, var(--background));
+}
+
+.confirmation legend {
+  padding: 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.confirmationLabel {
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.activityHeader {
+  display: flex;
+  min-height: 3.5rem;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+}
+
+.activityHeader span {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+}
+
+.activityContent {
+  padding: 0 1rem 1rem;
+}
+
+@keyframes remix-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 70rem) {
+  .composerGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .composerSection + .composerSection {
+    border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 52rem) {
+  .pageBody {
+    padding: 1rem 1rem 3rem;
+  }
+
+  .controlGrid,
+  .instructionGrid,
+  .provenance {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .candidateQueue {
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  }
+
+  .candidateQueue ul {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .candidateQueue ul > li {
+    min-width: 15rem;
+  }
+
+  .candidateQueue li + li {
+    border-top: 0;
+    border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  }
+
+  .candidateRow[data-selected="true"] {
+    box-shadow: inset 0 -2px 0 var(--primary);
+  }
+
+  .composerFooter,
+  .candidateHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .comparisonTableHeader {
+    display: none;
+  }
+
+  .comparisonTableRow {
+    display: block;
+    padding: 0.65rem 0;
+  }
+
+  .comparisonTableHead,
+  .comparisonTableCell {
+    display: block;
+    width: 100%;
+    padding: 0.35rem 0.65rem;
+  }
+
+  .comparisonTableCell::before {
+    display: block;
+    margin-bottom: 0.2rem;
+    color: var(--muted-foreground);
+    content: attr(data-label);
+    font-size: 0.7rem;
+    font-weight: 650;
+  }
+}

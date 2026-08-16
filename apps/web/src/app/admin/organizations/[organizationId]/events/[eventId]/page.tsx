@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import { EventOverviewWorkspace } from "@/features/events/event-overview-workspace";
 
 interface EventWorkspacePageProps {
   readonly params: Promise<{ organizationId: string; eventId: string }>;
@@ -6,7 +6,5 @@ interface EventWorkspacePageProps {
 
 export default async function EventWorkspacePage({ params }: EventWorkspacePageProps) {
   const { organizationId, eventId } = await params;
-  redirect(
-    `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/settings`,
-  );
+  return <EventOverviewWorkspace eventId={eventId} organizationId={organizationId} />;
 }

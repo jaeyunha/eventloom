@@ -48,6 +48,17 @@ function openApiPathSection(path: string): string {
   return match[1] ?? "";
 }
 
+function openApiSchemaSection(name: string): string {
+  const match = new RegExp(
+    `^    ${escapedRegExp(name)}:\\n([\\s\\S]*?)(?=^    [A-Za-z0-9_]+:|(?![\\s\\S]))`,
+    "m",
+  ).exec(openApiContract);
+  if (match === null) {
+    throw new Error(`OpenAPI schema is missing: ${name}`);
+  }
+  return match[1] ?? "";
+}
+
 interface EventRecord {
   readonly id: string;
   readonly organizationId: string;
@@ -315,7 +326,7 @@ describe("assembled API contract and security", () => {
     const { app, repository } = fixture();
     const injection = "') OR RECORD_ID() != ''";
     const response = await app.request(
-      `/api/v1/organizations/org-1/events?filter.name=${encodeURIComponent(injection)}`,
+      `/api/v1/organizations/org-1/events?filter.status=${encodeURIComponent(injection)}`,
       { headers: authorizedHeaders },
       environment,
     );
@@ -324,7 +335,7 @@ describe("assembled API contract and security", () => {
     expect(response.status).toBe(200);
     expect(body.data.map((event) => event.id)).toEqual(["event-safe"]);
     expect(repository.lastListInput?.organizationId).toBe("org-1");
-    expect(repository.lastListInput?.filters.name).toBe(injection);
+    expect(repository.lastListInput?.filters.status).toBe(injection);
   });
 
   it("serves untrusted text only as nosniff JSON with a non-HTML CSP", async () => {
@@ -378,7 +389,7 @@ describe("assembled API contract and security", () => {
         method: "POST",
         headers: { ...authorizedHeaders, "content-type": "application/json" },
         body: JSON.stringify({
-          endpointUrl: "https://hooks.example.test/sessionboard",
+          endpointUrl: "https://hooks.example.test/eventloom",
           events: ["agenda.published"],
           signingSecret,
         }),
@@ -472,7 +483,7 @@ describe("checked-in OpenAPI contract security", () => {
     expect(openApiContract).not.toMatch(/\bobjectKey\b/);
   });
 
-  it("uses exact request, version, error, and Sessionboard sender identities", () => {
+  it("uses exact request, version, error, and configurable sender contracts", () => {
     expect(openApiContract).toContain("name: Idempotency-Key");
     expect(openApiContract).toContain("name: If-Match");
     expect(openApiContract).toContain("X-Request-ID");
@@ -483,13 +494,10 @@ describe("checked-in OpenAPI contract security", () => {
     expect(openApiContract).toContain("Retry-After");
     expect(openApiContract).toContain("Cache-Control");
     expect(openApiContract).toContain("Authorization bearer");
-    for (const sender of [
-      "auth@sessionboard.namuh.co",
-      "speakers@sessionboard.namuh.co",
-      "calendar@sessionboard.namuh.co",
-    ]) {
-      expect(openApiContract).toContain(sender);
-    }
+    const communicationSender = openApiSchemaSection("CommunicationSender");
+    expect(communicationSender).toContain("type: string");
+    expect(communicationSender).toContain("format: email");
+    expect(communicationSender).not.toMatch(/\b(?:const|enum):/u);
     expect(openApiContract).not.toMatch(/foreverbrowsing\.com|Accelevents|noreply@/i);
     expect(openApiContract).not.toMatch(/\/events\/\{eventId\}.*\/events\/\{eventId\}/);
     expect(openApiContract).not.toContain("/reports/events/");

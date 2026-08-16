@@ -1,7 +1,8 @@
 {
-  "name": "open-sessionboard",
+  "name": "eventloom",
   "version": "0.1.0",
   "private": true,
+  "license": "Elastic-2.0",
   "type": "module",
   "packageManager": "bun@1.3.14",
   "workspaces": [
@@ -9,24 +10,40 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run --filter @open-sessionboard/contracts build && bun run --parallel --filter './apps/*' dev",
+    "dev": "bun run dev:infra && bun run --filter @eventloom/contracts build && concurrently --kill-others-on-fail --names api,web,mail,prewarm \"bun run --filter @eventloom/api dev\" \"bun run --filter @eventloom/web dev\" \"bun run dev:mail\" \"bun run dev:prewarm\"",
+    "dev:infra": "docker compose -f compose.dev.yaml up -d --wait mailpit",
+    "dev:mail": "bun run scripts/dev/mailpit-opensend-bridge.ts",
+    "dev:prewarm": "bun run scripts/dev/prewarm-next-routes.ts",
     "build": "bun run --filter '*' build",
-    "cloudflare:web:build": "bun run --filter @open-sessionboard/web cloudflare:build",
+    "cloudflare:web:build": "bun run --filter @eventloom/web cloudflare:build",
     "cloudflare:web:deploy": "node scripts/cloudflare/deploy-web.mjs",
+    "cloudflare:secrets:staging": "node scripts/cloudflare/install-staging-secrets.mjs",
+    "cloudflare:secrets:production": "node scripts/cloudflare/install-production-secrets.mjs",
     "check": "bun run typecheck && bun run lint && bun run format:check",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome lint .",
     "format:check": "biome format .",
-    "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test": "bun run test:unit && bun run test:scripts && bun run test:api && bun run test:runtime",
+    "test:unit": "vitest run",
+    "test:scripts": "node --test scripts/*.test.mjs scripts/airtable/*.test.mjs scripts/cloudflare/*.test.mjs scripts/d1-airtable-migration/*/*.test.mjs scripts/db/*.test.mjs scripts/release/*.test.mjs",
+    "test:eval": "node --test scripts/eval/*.test.mjs",
+    "test:api": "vitest run --config tests/api/vitest.config.ts",
+    "test:runtime": "vitest run --config tests/runtime/vitest.config.ts",
+    "test:e2e": "node scripts/run-isolated-playwright.mjs",
     "fix": "biome check --write .",
-    "postinstall": "bun run --filter @open-sessionboard/contracts build"
+    "postinstall": "bun run --filter @eventloom/contracts build"
   },
   "devDependencies": {
+    "@types/nodemailer": "8.0.1",
     "@biomejs/biome": "2.5.7",
+    "concurrently": "10.0.5",
     "@playwright/test": "1.62.1",
     "@types/node": "26.2.0",
     "typescript": "5.9.3",
+    "nodemailer": "9.0.5",
     "vitest": "4.1.10"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   }
 }

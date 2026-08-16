@@ -10,6 +10,7 @@ import {
   CloudflareAiProviderError,
   createCloudflareAiProviders,
 } from "./cloudflare";
+import { createOpenAiResponsesBinding } from "./openai";
 
 class FakeAi implements CloudflareAiBinding {
   readonly calls: Array<{ model: string; inputs: Record<string, unknown> }> = [];
@@ -181,7 +182,7 @@ describe("Cloudflare Workers AI advisory providers", () => {
     });
     expect(ai.calls[0]).toMatchObject({
       model: "test-model",
-      inputs: { response_format: { type: "json_object" } },
+      inputs: { response_format: { type: "json_schema", name: "agenda_proposal" } },
     });
     const prompt = promptOf(ai);
     expect(prompt).toContain('"eventId":"event-1"');
@@ -347,15 +348,17 @@ describe("Cloudflare Workers AI advisory providers", () => {
     await expect(providers.agenda.suggest?.(request)).resolves.toEqual({ placements: [] });
   });
 
-  it("returns evaluation candidates with exact rubric/submission revisions and validates evidence references", async () => {
+  it("returns stable, abstract-grounded evaluation candidates with explicit AI attribution", async () => {
     const ai = new FakeAi();
+    const writtenEvidence =
+      "The abstract promises a concrete audience outcome, supporting a strong quality score.";
     ai.enqueue(
       json({
         candidates: [
           {
             criterionId: "quality",
             value: 4,
-            evidence: ["abstract", "answers.topic"],
+            evidence: [writtenEvidence],
           },
         ],
       }),
@@ -364,32 +367,147 @@ describe("Cloudflare Workers AI advisory providers", () => {
       model: "evaluation-model",
       now: () => new Date("2026-08-09T12:00:00.000Z"),
     });
+    const provenance = {
+      provider: "cloudflare-workers-ai",
+      model: "evaluation-model",
+      generatedAt: "2026-08-09T12:00:00.000Z",
+      sourceReferences: ["abstract"],
+      promptVersion: "cloudflare-workers-ai-v1",
+    };
 
-    await expect(providers.evaluations.generate?.(evaluationInput)).resolves.toMatchObject({
-      candidates: [{ criterionId: "quality", value: 4, evidence: ["abstract", "answers.topic"] }],
-      provenance: {
-        provider: "cloudflare-workers-ai",
-        model: "evaluation-model",
-        generatedAt: "2026-08-09T12:00:00.000Z",
+    await expect(providers.evaluations.generate(evaluationInput)).resolves.toEqual({
+      candidates: [
+        {
+          id: "ai:assignment-1:quality:11:23",
+          criterionId: "quality",
+          value: 4,
+          evidence: [writtenEvidence],
+          provenance,
+        },
+      ],
+      provenance,
+    });
+    expect(ai.calls[0]?.inputs.response_format).toMatchObject({
+      type: "json_schema",
+      name: "evaluation_proposal",
+      strict: true,
+      schema: {
+        properties: {
+          candidates: {
+            minItems: 1,
+            maxItems: 1,
+            items: {
+              properties: {
+                criterionId: { enum: ["quality"] },
+                evidence: {
+                  minItems: 1,
+                  maxItems: 3,
+                  items: { type: "string", minLength: 1, maxLength: 2_000 },
+                },
+              },
+            },
+          },
+        },
       },
     });
+    expect(JSON.stringify(ai.calls[0]?.inputs.response_format)).not.toContain(
+      '"enum":["title","abstract"',
+    );
     const prompt = promptOf(ai);
     expect(prompt).toContain('"tenantId":"tenant-1"');
     expect(prompt).toContain('"rubricRevision":11');
     expect(prompt).toContain('"submissionRevision":23');
+    expect(prompt).toContain('"abstract":"A concrete audience outcome."');
+    expect(prompt).toContain("exactly one candidate for every supplied criterion");
+    expect(prompt).toContain("written rationales");
+    expect(prompt).not.toContain("Submission title");
+    expect(prompt).not.toContain("Accessible design");
     expect(prompt).not.toContain("private@example.test");
     expect(prompt).not.toContain("Private biography");
+  });
+
+  it("rejects ungrounded evaluation evidence, unknown criteria, and invalid scores", async () => {
+    const ai = new FakeAi();
+    const providers = createCloudflareAiProviders(ai);
 
     ai.enqueue(
-      json({ candidates: [{ criterionId: "unknown", value: 4, evidence: ["abstract"] }] }),
+      json({ candidates: [{ criterionId: "quality", value: 4, evidence: ["abstract"] }] }),
     );
-    await expect(providers.evaluations.generate?.(evaluationInput)).rejects.toMatchObject({
+    await expect(providers.evaluations.generate(evaluationInput)).rejects.toMatchObject({
       code: "AI_INVALID_OUTPUT",
     });
+
     ai.enqueue(
-      json({ candidates: [{ criterionId: "quality", value: 4, evidence: ["answers.private"] }] }),
+      json({
+        candidates: [
+          {
+            criterionId: "unknown",
+            value: 4,
+            evidence: ["The abstract describes a concrete outcome."],
+          },
+        ],
+      }),
     );
-    await expect(providers.evaluations.generate?.(evaluationInput)).rejects.toMatchObject({
+    await expect(providers.evaluations.generate(evaluationInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+
+    ai.enqueue(
+      json({
+        candidates: [
+          {
+            criterionId: "quality",
+            value: 6,
+            evidence: ["The abstract describes a concrete outcome."],
+          },
+        ],
+      }),
+    );
+    await expect(providers.evaluations.generate(evaluationInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+  });
+
+  it("requires exactly one evaluation candidate for every scoreable criterion", async () => {
+    const ai = new FakeAi();
+    const providers = createCloudflareAiProviders(ai);
+    const twoCriteriaInput: EvaluationSuggestionProviderInput = {
+      ...evaluationInput,
+      round: {
+        ...evaluationInput.round,
+        rubric: {
+          ...evaluationInput.round.rubric,
+          criteria: [
+            ...evaluationInput.round.rubric.criteria,
+            {
+              id: "impact",
+              label: "Impact",
+              description: "How meaningful is the audience outcome?",
+              minimum: 1,
+              maximum: 5,
+              weight: 1,
+              required: true,
+            },
+          ],
+        },
+      },
+    };
+    const evidence = ["The abstract states a concrete audience outcome."];
+
+    ai.enqueue(json({ candidates: [{ criterionId: "quality", value: 4, evidence }] }));
+    await expect(providers.evaluations.generate(twoCriteriaInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+
+    ai.enqueue(
+      json({
+        candidates: [
+          { criterionId: "quality", value: 4, evidence },
+          { criterionId: "quality", value: 3, evidence },
+        ],
+      }),
+    );
+    await expect(providers.evaluations.generate(twoCriteriaInput)).rejects.toMatchObject({
       code: "AI_INVALID_OUTPUT",
     });
   });
@@ -429,12 +547,55 @@ describe("Cloudflare Workers AI advisory providers", () => {
     });
   });
 
+  it("routes each feature to its configured model and reasoning effort", async () => {
+    const ai = new FakeAi();
+    ai.enqueue(json({ placements: [], removeEntryIds: [] }));
+    ai.enqueue(
+      json({
+        candidates: [
+          {
+            criterionId: "quality",
+            value: 4,
+            evidence: ["The abstract states a concrete audience outcome."],
+          },
+        ],
+      }),
+    );
+    ai.enqueue(json({ content: { title: "A clearer title" } }));
+
+    const providers = createCloudflareAiProviders(ai, {
+      model: "fallback-model",
+      agendaModel: "gpt-5.6-sol",
+      evaluationModel: "gpt-5.6-sol",
+      remixModel: "gpt-5.6-terra",
+      agendaReasoningEffort: "medium",
+      evaluationReasoningEffort: "medium",
+      remixReasoningEffort: "low",
+      providerName: "openai-responses",
+    });
+
+    await providers.agenda.suggest?.(agendaRequest);
+    await providers.evaluations.generate?.(evaluationInput);
+    await providers.remix.generate(remixInput);
+
+    expect(ai.calls.map(({ model }) => model)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+    ]);
+    expect(ai.calls.map(({ inputs }) => inputs.reasoning)).toEqual([
+      { effort: "medium" },
+      { effort: "medium" },
+      { effort: "low" },
+    ]);
+  });
+
   it("surfaces unavailable and retryable failures as safe typed errors", async () => {
     const unavailable = createCloudflareAiProviders(undefined);
     await expect(unavailable.remix.generate(remixInput)).rejects.toMatchObject({
       code: "AI_UNAVAILABLE",
       retryable: true,
-      message: "Cloudflare Workers AI is unavailable.",
+      message: "AI provider is unavailable.",
     });
 
     const authFailure = new FakeAi();
@@ -464,10 +625,45 @@ describe("Cloudflare Workers AI advisory providers", () => {
     await expect(providers.remix.generate(remixInput)).rejects.toMatchObject({
       code: "AI_RETRYABLE",
       retryable: true,
-      message: "Cloudflare Workers AI request timed out.",
+      message: "AI provider request timed out.",
     });
     expect(() => createCloudflareAiProviders(stalled, { requestTimeoutMs: 0 })).toThrow(
       "between 1 and 120000 milliseconds",
     );
   });
 });
+
+const liveProviderTest = process.env.RUN_OPENAI_LIVE === "1" ? it : it.skip;
+liveProviderTest(
+  "returns valid agenda, evaluation, and remix proposals from the selected GPT-5.6 models",
+  async () => {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error("OPENAI_API_KEY is required when RUN_OPENAI_LIVE=1.");
+    const providers = createCloudflareAiProviders(createOpenAiResponsesBinding({ apiKey }), {
+      model: process.env.OPENAI_MODEL?.trim() || "gpt-5.6-terra",
+      agendaModel: process.env.OPENAI_AGENDA_MODEL?.trim() || "gpt-5.6-sol",
+      evaluationModel: process.env.OPENAI_EVALUATION_MODEL?.trim() || "gpt-5.6-sol",
+      remixModel: process.env.OPENAI_REMIX_MODEL?.trim() || "gpt-5.6-terra",
+      agendaReasoningEffort: "medium",
+      evaluationReasoningEffort: "medium",
+      remixReasoningEffort: "low",
+      providerName: "openai-responses",
+      promptVersion: "openai-responses-v1",
+    });
+
+    await expect(providers.agenda.suggest?.(agendaRequest)).resolves.toBeDefined();
+    await expect(providers.evaluations.generate?.(evaluationInput)).resolves.toMatchObject({
+      provenance: {
+        provider: "openai-responses",
+        model: process.env.OPENAI_EVALUATION_MODEL?.trim() || "gpt-5.6-sol",
+      },
+    });
+    await expect(providers.remix.generate(remixInput)).resolves.toMatchObject({
+      provenance: {
+        provider: "openai-responses",
+        model: process.env.OPENAI_REMIX_MODEL?.trim() || "gpt-5.6-terra",
+      },
+    });
+  },
+  90_000,
+);

@@ -1,30 +1,93 @@
 "use client";
 
+import { formatInstantInTimeZone, type TimeDisambiguation } from "@eventloom/contracts";
+import { CalendarDays, CheckCircle2, Clock3, Save } from "lucide-react";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import styles from "./agenda.module.css";
-import viewStyles from "./agenda-workspace.module.css";
-import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
-  createLocalAgendaDemoApi,
-  loadAgendaWorkspace,
-  resolveAgendaAppEnvironment,
-} from "./demo/agenda-demo-api";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
+import {
+  StatusBadge,
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
+import {
+  createScopedReadFlightCoordinator,
+  type ScopedReadFlightCoordinator,
+} from "@/lib/scoped-read-flight";
+import { AgendaDaySelector } from "./agenda-day-selector";
+import { AgendaOverview } from "./agenda-overview";
+import { AgendaPlacementQueue } from "./agenda-placement-queue";
+import {
+  AGENDA_ENTRY_DRAG_TYPE,
+  AgendaTimetable,
+  type AgendaTimetablePlacement,
+} from "./agenda-timetable";
+import styles from "./agenda-workspace.module.css";
+import {
+  AGENDA_VIEW_MODES,
+  type AgendaAsyncScopeToken,
+  type AgendaSuggestionOptions,
+  type AgendaViewGroup,
+  type AgendaViewMode,
+  type AgendaWorkspaceLoadResult,
+  agendaViewLabels,
+  agendaWorkspaceCacheKey,
+  agendaWorkspaceCacheTags,
+  agendaWorkspaceDataMatchesEvent,
+  agendaWorkspaceScopeKey,
+  canCommitAgendaAsyncCompletion,
+  createCanonicalAgendaWorkspaceApi,
+  deriveAgendaViewGroups,
+  type ExistingSessionTimesSelection,
+  formatScheduleDate,
+  loadCanonicalAgendaWorkspaceWithCache,
+  safeScheduleId,
+  scheduleDate,
+  serializeAgendaSuggestionOptions,
+} from "./agenda-workspace-model";
+import { type AgendaApi, AgendaApiError } from "./api";
+import {
+  acceptedSessionCount,
   agendaDays,
   conflictsForEntry,
   eventDates,
-  formatLocalDate,
   formatLocalTime,
   formatRevisionTimestamp,
   publicationReadiness,
+  resolveAgendaPlacementDate,
   warningsForEntry,
 } from "./model";
 import type {
+  AgendaCalendarDeliveryState,
   AgendaEntry,
   AgendaEntryInput,
   AgendaPreview,
   AgendaSession,
   AgendaTrack,
+  AgendaValidationReport,
   AgendaWorkspaceData,
 } from "./types";
 
@@ -34,6 +97,7 @@ function messageFrom(error: unknown): string {
   }
   return "The agenda request could not be completed.";
 }
+export type AgendaCandidateDiagnostics = AgendaValidationReport;
 export interface AgendaSuggestionChangeView {
   id: string;
   kind: "add" | "move" | "change" | "remove";
@@ -51,25 +115,8 @@ export interface AgendaSuggestionRunView {
     summary: string;
     changes: readonly AgendaSuggestionChangeView[];
   };
-  validation?: {
-    conflicts: readonly { id: string; kind: string; message: string }[];
-  };
+  candidateDiagnostics?: AgendaCandidateDiagnostics;
   acceptedChangeIds?: readonly string[];
-}
-export interface AgendaSuggestionOptions {
-  ignoreExistingTimes: boolean;
-  ignoreExistingRooms: boolean;
-}
-export type ExistingSessionTimesSelection = "keep" | "move";
-
-export function serializeAgendaSuggestionOptions(
-  existingSessionTimes: ExistingSessionTimesSelection,
-  ignoreExistingRooms: boolean,
-): AgendaSuggestionOptions {
-  return {
-    ignoreExistingTimes: existingSessionTimes === "move",
-    ignoreExistingRooms,
-  };
 }
 export type AgendaBusyOperation =
   | "save"
@@ -80,7 +127,8 @@ export type AgendaBusyOperation =
   | "generate-suggestion"
   | "regenerate-suggestion"
   | "reject-suggestion"
-  | "apply-suggestion";
+  | "apply-suggestion"
+  | "retry-calendar-delivery";
 interface AgendaSuggestionApi {
   generateSuggestion(input: {
     eventId: string;
@@ -117,56 +165,13 @@ function suggestionApiFor(api: AgendaApi | null): AgendaSuggestionApi | null {
     : null;
 }
 
-function previewFromError(error: AgendaApiError, draftVersion: number): AgendaPreview | null {
-  if (Array.isArray(error.details)) {
-    const conflicts = error.details
-      .filter((issue) => issue.code.startsWith("agenda."))
-      .map((issue, index) => {
-        const kindValue = issue.code.slice("agenda.".length);
-        const kind = ["participant", "resource", "room"].includes(kindValue)
-          ? (kindValue as AgendaPreview["conflicts"][number]["kind"])
-          : "room";
-        const entryIds =
-          issue.path[0] === "entries"
-            ? issue.path
-                .slice(1)
-                .filter(
-                  (segment: string | number): segment is string => typeof segment === "string",
-                )
-            : [];
-        return {
-          id: `agenda-error-${index}-${issue.code}-${issue.path.join("-")}`,
-          kind,
-          entryIds,
-          message: issue.message,
-        };
-      });
-    if (conflicts.length === 0) return null;
-    return {
-      draftVersion,
-      conflicts,
-      warnings: [],
-      diff: { added: 0, changed: 0, removed: 0 },
-      validatedAt: new Date().toISOString(),
-    };
+function agendaBoundaryLocal(instant: string | undefined, timeZone: string): string | undefined {
+  if (instant === undefined) return undefined;
+  try {
+    return formatInstantInTimeZone(instant, timeZone);
+  } catch {
+    return undefined;
   }
-
-  const legacyDetails = error.details as
-    | {
-        readonly conflicts?: AgendaPreview["conflicts"];
-        readonly warnings?: AgendaPreview["warnings"];
-      }
-    | undefined;
-  if (!legacyDetails?.conflicts && !legacyDetails?.warnings) {
-    return null;
-  }
-  return {
-    draftVersion,
-    conflicts: legacyDetails.conflicts ?? [],
-    warnings: legacyDetails.warnings ?? [],
-    diff: { added: 0, changed: 0, removed: 0 },
-    validatedAt: new Date().toISOString(),
-  };
 }
 
 interface EntryFormProps {
@@ -174,10 +179,18 @@ interface EntryFormProps {
   sessions: readonly AgendaSession[];
   rooms: AgendaWorkspaceData["rooms"];
   tracks: readonly AgendaTrack[];
+  event: AgendaWorkspaceData["event"];
   eventStart: string;
   busy: boolean;
+  initialPlacement?: AgendaTimetablePlacement;
+  initialSessionId?: string;
   onSubmit(entry: AgendaEntryInput): Promise<void>;
   onCancel?: () => void;
+  onCreateRoom?: (input: {
+    name: string;
+    capacity: number;
+  }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
 }
 
 function EntryForm({
@@ -185,20 +198,45 @@ function EntryForm({
   sessions,
   rooms,
   tracks,
+  event,
   eventStart,
   busy,
+  initialPlacement,
+  initialSessionId,
   onSubmit,
   onCancel,
+  onCreateRoom,
+  onCreateTrack,
 }: EntryFormProps) {
-  const firstSession = entry?.sessionId ?? sessions[0]?.id ?? "";
+  const firstSession = entry?.sessionId ?? initialSessionId ?? sessions[0]?.id ?? "";
   const [sessionId, setSessionId] = useState(firstSession);
-  const [roomId, setRoomId] = useState(entry?.roomId ?? rooms[0]?.id ?? "");
+  const [roomId, setRoomId] = useState(
+    entry?.roomId ?? initialPlacement?.roomId ?? rooms[0]?.id ?? "",
+  );
   const [trackIds, setTrackIds] = useState<readonly string[]>(
     entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
   );
-  const [startsAtLocal, setStartsAtLocal] = useState(entry?.startsAtLocal ?? `${eventStart}T09:00`);
-  const [endsAtLocal, setEndsAtLocal] = useState(entry?.endsAtLocal ?? `${eventStart}T10:00`);
+  const [startsAtLocal, setStartsAtLocal] = useState(
+    entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
+  );
+  const [endsAtLocal, setEndsAtLocal] = useState(
+    entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
+  );
+  const [startDisambiguation, setStartDisambiguation] = useState<TimeDisambiguation | undefined>(
+    entry?.startDisambiguation,
+  );
+  const [endDisambiguation, setEndDisambiguation] = useState<TimeDisambiguation | undefined>(
+    entry?.endDisambiguation,
+  );
   const [formError, setFormError] = useState<string | null>(null);
+  const [roomCreatorOpen, setRoomCreatorOpen] = useState(false);
+  const [trackCreatorOpen, setTrackCreatorOpen] = useState(false);
+  const [roomName, setRoomName] = useState("");
+  const [roomCapacity, setRoomCapacity] = useState("");
+  const [trackName, setTrackName] = useState("");
+  useEffect(() => {
+    if (!entry && initialSessionId) setSessionId(initialSessionId);
+  }, [entry, initialSessionId]);
 
   function toggleTrack(trackId: string) {
     setTrackIds((current) =>
@@ -208,6 +246,39 @@ function EntryForm({
     );
   }
 
+  async function createRoom() {
+    if (!onCreateRoom) return;
+    const name = roomName.trim();
+    const capacity = Number(roomCapacity);
+    if (!name || !Number.isFinite(capacity) || capacity < 1) {
+      setFormError("Enter a room name and capacity of at least 1.");
+      return;
+    }
+    const room = await onCreateRoom({ name, capacity });
+    if (room) {
+      setRoomId(room.id);
+      setRoomName("");
+      setRoomCapacity("");
+      setRoomCreatorOpen(false);
+      setFormError(null);
+    }
+  }
+
+  async function createTrack() {
+    if (!onCreateTrack) return;
+    const name = trackName.trim();
+    if (!name) {
+      setFormError("Enter a track name.");
+      return;
+    }
+    const track = await onCreateTrack({ name });
+    if (track) {
+      setTrackIds((current) => (current.includes(track.id) ? current : [...current, track.id]));
+      setTrackName("");
+      setTrackCreatorOpen(false);
+      setFormError(null);
+    }
+  }
   async function submit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
     if (!sessionId || !roomId) {
@@ -226,6 +297,8 @@ function EntryForm({
       trackIds,
       startsAtLocal,
       endsAtLocal,
+      ...(startDisambiguation === undefined ? {} : { startDisambiguation }),
+      ...(endDisambiguation === undefined ? {} : { endDisambiguation }),
     });
   }
 
@@ -262,6 +335,42 @@ function EntryForm({
           ))}
         </select>
       </label>
+      {onCreateRoom ? (
+        <div className={styles.inlineCreate}>
+          <button
+            className={styles.textButton}
+            type="button"
+            onClick={() => setRoomCreatorOpen((open) => !open)}
+            aria-expanded={roomCreatorOpen}
+          >
+            {roomCreatorOpen ? "Cancel new room" : "Create room"}
+          </button>
+          {roomCreatorOpen ? (
+            <div className={styles.inlineCreateFields}>
+              <label>
+                <span>Room name</span>
+                <input value={roomName} onChange={(event) => setRoomName(event.target.value)} />
+              </label>
+              <label>
+                <span>Capacity</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={roomCapacity}
+                  onChange={(event) => setRoomCapacity(event.target.value)}
+                />
+              </label>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => void createRoom()}
+              >
+                Save room
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <fieldset className={styles.trackOptions}>
         <legend>Tracks</legend>
         {tracks.map((track) => (
@@ -277,25 +386,68 @@ function EntryForm({
           </label>
         ))}
       </fieldset>
+      {onCreateTrack ? (
+        <div className={styles.inlineCreate}>
+          <button
+            className={styles.textButton}
+            type="button"
+            onClick={() => setTrackCreatorOpen((open) => !open)}
+            aria-expanded={trackCreatorOpen}
+          >
+            {trackCreatorOpen ? "Cancel new track" : "Create track"}
+          </button>
+          {trackCreatorOpen ? (
+            <div className={styles.inlineCreateFields}>
+              <label>
+                <span>Track name</span>
+                <input value={trackName} onChange={(event) => setTrackName(event.target.value)} />
+              </label>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => void createTrack()}
+              >
+                Save track
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className={styles.timeFields}>
-        <label>
-          <span>Starts</span>
-          <input
-            type="datetime-local"
-            value={startsAtLocal}
-            onChange={(event) => setStartsAtLocal(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Ends</span>
-          <input
-            type="datetime-local"
-            value={endsAtLocal}
-            onChange={(event) => setEndsAtLocal(event.target.value)}
-          />
-        </label>
+        <TemporalPicker
+          id={`agenda-entry-${entry?.id ?? "new"}-schedule`}
+          mode="range"
+          precision="date-time"
+          startValue={startsAtLocal}
+          endValue={endsAtLocal}
+          startLabel="Starts"
+          endLabel="Ends"
+          eyebrow="Session schedule"
+          description="Choose the session window on the calendar, then confirm the local times."
+          minimumDateTime={agendaBoundaryLocal(event.startsAt, event.timeZone)}
+          maximumDateTime={agendaBoundaryLocal(event.endsAt, event.timeZone)}
+          allowedDates={
+            event.scheduleDates?.length
+              ? event.scheduleDates
+              : eventDates(event.startsOn, event.endsOn)
+          }
+          timeZone={event.timeZone}
+          startDisambiguation={startDisambiguation}
+          endDisambiguation={endDisambiguation}
+          onStartDisambiguationChange={setStartDisambiguation}
+          onEndDisambiguationChange={setEndDisambiguation}
+          clearable
+          onChange={({ start, end }) => {
+            setStartsAtLocal(start);
+            setEndsAtLocal(end);
+          }}
+        />
       </div>
-      {formError ? <p className={styles.formError}>{formError}</p> : null}
+      {formError ? (
+        <p className={styles.formError} role="alert">
+          {formError}
+        </p>
+      ) : null}
       <div className={styles.formActions}>
         {onCancel ? (
           <button className={styles.secondaryButton} type="button" onClick={onCancel}>
@@ -308,153 +460,6 @@ function EntryForm({
       </div>
     </form>
   );
-}
-
-export type AgendaViewMode = "list" | "day" | "week" | "track" | "room";
-
-export const AGENDA_VIEW_MODES: readonly AgendaViewMode[] = [
-  "list",
-  "day",
-  "week",
-  "track",
-  "room",
-];
-
-const agendaViewLabels: Record<AgendaViewMode, string> = {
-  list: "List",
-  day: "Day",
-  week: "Week",
-  track: "Track",
-  room: "Room",
-};
-
-export interface AgendaViewGroup {
-  id: string;
-  label: string;
-  entries: readonly AgendaEntry[];
-  emptyMessage: string;
-}
-
-function compareAgendaEntries(left: AgendaEntry, right: AgendaEntry): number {
-  const startOrder = left.startsAtLocal.localeCompare(right.startsAtLocal);
-  if (startOrder !== 0) return startOrder;
-  const endOrder = left.endsAtLocal.localeCompare(right.endsAtLocal);
-  if (endOrder !== 0) return endOrder;
-  const roomOrder = left.roomName.localeCompare(right.roomName);
-  if (roomOrder !== 0) return roomOrder;
-  const titleOrder = left.title.localeCompare(right.title);
-  return titleOrder === 0 ? left.id.localeCompare(right.id) : titleOrder;
-}
-
-function sortedAgendaEntries(entries: readonly AgendaEntry[]): readonly AgendaEntry[] {
-  return [...entries].sort(compareAgendaEntries);
-}
-
-function scheduleDate(entry: AgendaEntry): string {
-  return entry.startsAtLocal.slice(0, 10);
-}
-
-function formatScheduleDate(date: string): string {
-  return formatLocalDate(`${date}T12:00`);
-}
-
-function safeScheduleId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]/g, "-");
-}
-
-function scheduleDates(data: AgendaWorkspaceData): readonly string[] {
-  return eventDates(data.event.startsOn, data.event.endsOn);
-}
-
-export function deriveAgendaViewGroups(
-  data: AgendaWorkspaceData,
-  mode: AgendaViewMode,
-): readonly AgendaViewGroup[] {
-  const entries = sortedAgendaEntries(data.draft.entries);
-  if (mode === "list") {
-    return [
-      {
-        id: "list",
-        label: "All scheduled sessions",
-        entries,
-        emptyMessage: "No sessions scheduled yet.",
-      },
-    ];
-  }
-
-  if (mode === "day") {
-    return agendaDays(entries, data.event).map((day) => ({
-      id: day.date,
-      label: day.label,
-      entries: day.entries,
-      emptyMessage: "No sessions scheduled on this day.",
-    }));
-  }
-
-  if (mode === "week") {
-    const entriesByDate = new Map<string, AgendaEntry[]>();
-    for (const entry of entries) {
-      const dateEntries = entriesByDate.get(scheduleDate(entry)) ?? [];
-      dateEntries.push(entry);
-      entriesByDate.set(scheduleDate(entry), dateEntries);
-    }
-    return scheduleDates(data).map((date) => ({
-      id: `week-${date}`,
-      label: formatScheduleDate(date),
-      entries: entriesByDate.get(date) ?? [],
-      emptyMessage: "No sessions scheduled on this day.",
-    }));
-  }
-
-  if (mode === "track") {
-    const knownTrackIds = new Set(data.tracks.map((track) => track.id));
-    const groups = [...data.tracks]
-      .sort((left, right) => {
-        const nameOrder = left.name.localeCompare(right.name);
-        return nameOrder === 0 ? left.id.localeCompare(right.id) : nameOrder;
-      })
-      .map((track) => ({
-        id: `track-${track.id}`,
-        label: track.name,
-        entries: entries.filter((entry) => entry.trackIds.includes(track.id)),
-        emptyMessage: "No sessions scheduled in this track.",
-      }));
-    const unassigned = entries.filter(
-      (entry) => !entry.trackIds.some((trackId) => knownTrackIds.has(trackId)),
-    );
-    if (groups.length === 0 || unassigned.length > 0) {
-      groups.push({
-        id: "track-unassigned",
-        label: "Unassigned track",
-        entries: unassigned,
-        emptyMessage: "No sessions without a track.",
-      });
-    }
-    return groups;
-  }
-
-  const knownRoomIds = new Set(data.rooms.map((room) => room.id));
-  const groups = [...data.rooms]
-    .sort((left, right) => {
-      const nameOrder = left.name.localeCompare(right.name);
-      return nameOrder === 0 ? left.id.localeCompare(right.id) : nameOrder;
-    })
-    .map((room) => ({
-      id: `room-${room.id}`,
-      label: room.name,
-      entries: entries.filter((entry) => entry.roomId === room.id),
-      emptyMessage: "No sessions scheduled in this room.",
-    }));
-  const unassigned = entries.filter((entry) => !knownRoomIds.has(entry.roomId));
-  if (groups.length === 0 || unassigned.length > 0) {
-    groups.push({
-      id: "room-unassigned",
-      label: "Unassigned room",
-      entries: unassigned,
-      emptyMessage: "No sessions without a room.",
-    });
-  }
-  return groups;
 }
 
 interface AgendaBoardProps {
@@ -477,6 +482,13 @@ interface AgendaBoardProps {
   onRegenerateSuggestion?: () => Promise<void>;
   onRejectSuggestion?: () => Promise<void>;
   onApplySuggestion?: (changeIds: readonly string[]) => Promise<void>;
+  onCreateRoom?: (input: {
+    name: string;
+    capacity: number;
+  }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
+  calendarDelivery?: AgendaCalendarDeliveryState | null;
+  onRetryCalendarDelivery?: () => Promise<void>;
 }
 
 export function AgendaBoard({
@@ -499,10 +511,17 @@ export function AgendaBoard({
   onRegenerateSuggestion,
   onRejectSuggestion,
   onApplySuggestion,
+  onCreateRoom,
+  onCreateTrack,
+  calendarDelivery,
+  onRetryCalendarDelivery,
 }: AgendaBoardProps) {
   const readiness = publicationReadiness(data, preview);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [placementDraft, setPlacementDraft] = useState<AgendaTimetablePlacement | undefined>();
+  const [placementSessionId, setPlacementSessionId] = useState<string | null>(null);
+  const [queueDropActive, setQueueDropActive] = useState(false);
   const [viewMode, setViewMode] = useState<AgendaViewMode>(initialView);
   const { startsOn, endsOn } = data.event;
   const eventDays = useMemo(
@@ -513,10 +532,22 @@ export function AgendaBoard({
   const [selectedSuggestionChanges, setSelectedSuggestionChanges] = useState<readonly string[]>([]);
   const viewTabRefs = useRef<Partial<Record<AgendaViewMode, HTMLButtonElement | null>>>({});
   const currentRevision = data.currentPublishedRevision;
+  const editingEntry =
+    editingEntryId === null
+      ? null
+      : (data.draft.entries.find((entry) => entry.id === editingEntryId) ?? null);
   const isBusyFor = (operation: AgendaBusyOperation): boolean =>
     busy && (busyOperation === undefined || busyOperation === null || busyOperation === operation);
   const settingsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/settings`;
+  const sessionsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/sessions`;
   const hasRooms = data.rooms.length > 0;
+  const acceptedCount = acceptedSessionCount(data);
+  const scheduledCount = data.draft.entries.length;
+  const toPlaceCount = data.unscheduledSessions.length;
+  const hasScheduleInventory = acceptedCount > 0 || scheduledCount > 0;
+  const placementComplete = acceptedCount > 0 && toPlaceCount === 0;
+  const hardConflictCount =
+    preview === null ? null : preview.conflicts.length + preview.releaseConflicts.length;
 
   useEffect(() => {
     const suggestionId = suggestionRun?.id;
@@ -529,7 +560,6 @@ export function AgendaBoard({
       setSelectedDay(eventDays[0]?.date ?? "");
     }
   }, [eventDays, selectedDay]);
-
   function selectView(nextView: AgendaViewMode) {
     setViewMode(nextView);
   }
@@ -557,20 +587,30 @@ export function AgendaBoard({
 
   function renderEntryCard(entry: AgendaEntry, key: string, showDate = false): React.ReactNode {
     const entryConflicts = conflictsForEntry(entry.id, preview?.conflicts ?? []);
+    const entryReleaseConflicts = conflictsForEntry(entry.id, preview?.releaseConflicts ?? []);
     const entryWarnings = warningsForEntry(entry.id, preview?.warnings ?? []);
-    const hasIssues = entryConflicts.length + entryWarnings.length > 0;
-    const editExpanded = viewMode === "day" && editingEntryId === entry.id;
+    const hasIssues =
+      entryConflicts.length + entryReleaseConflicts.length + entryWarnings.length > 0;
     return (
       <li key={key}>
-        <article className={`${styles.sessionCard} ${hasIssues ? styles.sessionIssue : ""}`}>
+        <article
+          className={`${styles.sessionCard} ${hasIssues ? styles.sessionIssue : ""}`}
+          style={
+            {
+              "--session-accent":
+                data.tracks.find((track) => entry.trackIds.includes(track.id))?.color ??
+                "var(--color-border-strong)",
+            } as React.CSSProperties
+          }
+        >
           <div className={styles.sessionTime}>
             {showDate ? (
-              <time className={viewStyles.entryDate} dateTime={scheduleDate(entry)}>
+              <time className={styles.entryDate} dateTime={scheduleDate(entry)}>
                 {formatScheduleDate(scheduleDate(entry))}
               </time>
             ) : null}
             <time dateTime={entry.startsAtLocal}>{formatLocalTime(entry.startsAtLocal)}</time>
-            <span aria-hidden="true">to</span>
+            <span aria-hidden="true">–</span>
             <time dateTime={entry.endsAtLocal}>{formatLocalTime(entry.endsAtLocal)}</time>
           </div>
           <div className={styles.sessionDetails}>
@@ -588,6 +628,11 @@ export function AgendaBoard({
                 Hard conflict: {conflict.message}
               </p>
             ))}
+            {entryReleaseConflicts.map((conflict) => (
+              <p className={styles.inlineConflict} key={conflict.id}>
+                Released commitment conflict: {conflict.message}
+              </p>
+            ))}
             {entryWarnings.map((warning) => (
               <p className={styles.inlineWarning} key={warning.id}>
                 Warning: {warning.message}
@@ -601,45 +646,17 @@ export function AgendaBoard({
               onClick={() => {
                 if (viewMode !== "day") {
                   setViewMode("day");
-                  setEditingEntryId(entry.id);
                   const entryDay = eventDays.find((day) => day.date === scheduleDate(entry));
                   if (entryDay) setSelectedDay(entryDay.date);
-                } else {
-                  setEditingEntryId((current) => (current === entry.id ? null : entry.id));
                 }
+                setEditingEntryId(entry.id);
               }}
-              aria-expanded={editExpanded}
-              aria-controls={`edit-${entry.id}`}
+              aria-haspopup="dialog"
             >
               Edit
             </button>
-            <button
-              type="button"
-              className={styles.dangerButton}
-              disabled={busy}
-              onClick={() => void onRemoveEntry(entry.id)}
-            >
-              Remove
-            </button>
           </div>
         </article>
-        {editExpanded ? (
-          <div id={`edit-${entry.id}`} className={styles.editPanel}>
-            <EntryForm
-              entry={entry}
-              sessions={[]}
-              rooms={data.rooms}
-              tracks={data.tracks}
-              eventStart={data.event.startsOn}
-              busy={busy}
-              onCancel={() => setEditingEntryId(null)}
-              onSubmit={async (input) => {
-                const saved = await onSaveEntry(input);
-                if (saved !== false) setEditingEntryId(null);
-              }}
-            />
-          </div>
-        ) : null}
       </li>
     );
   }
@@ -649,17 +666,17 @@ export function AgendaBoard({
     return (
       <section
         key={group.id}
-        className={`${styles.day} ${viewStyles.viewGroup}`}
+        className={`${styles.day} ${styles.viewGroup}`}
         aria-labelledby={headingId}
       >
-        <header className={viewStyles.viewGroupHeader}>
+        <header className={styles.viewGroupHeader}>
           <h3 id={headingId}>{group.label}</h3>
           <span>
             {group.entries.length} session{group.entries.length === 1 ? "" : "s"}
           </span>
         </header>
         {group.entries.length === 0 ? (
-          <p className={viewStyles.viewGroupEmpty}>{group.emptyMessage}</p>
+          <p className={styles.viewGroupEmpty}>{group.emptyMessage}</p>
         ) : (
           <ol className={styles.sessionList}>
             {group.entries.map((entry) =>
@@ -668,79 +685,6 @@ export function AgendaBoard({
           </ol>
         )}
       </section>
-    );
-  }
-
-  function renderUnscheduledGroup() {
-    const sessions = [...data.unscheduledSessions].sort((left, right) => {
-      const titleOrder = left.title.localeCompare(right.title);
-      return titleOrder === 0 ? left.id.localeCompare(right.id) : titleOrder;
-    });
-    return (
-      <section className={viewStyles.unscheduledGroup} aria-labelledby="agenda-unscheduled-heading">
-        <header className={viewStyles.viewGroupHeader}>
-          <h3 id="agenda-unscheduled-heading">Unscheduled accepted sessions</h3>
-          <span>
-            {sessions.length} session{sessions.length === 1 ? "" : "s"}
-          </span>
-        </header>
-        {sessions.length === 0 ? (
-          <p className={viewStyles.viewGroupEmpty}>No unscheduled accepted sessions.</p>
-        ) : (
-          <ul className={viewStyles.unscheduledList}>
-            {sessions.map((session) => (
-              <li className={viewStyles.unscheduledItem} key={session.id}>
-                <strong>{session.title}</strong>
-                <span>
-                  {session.format} · {session.durationMinutes} minutes ·{" "}
-                  {session.speakerNames.join(", ")}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    );
-  }
-
-  function renderDayNavigation(groups: readonly AgendaViewGroup[]) {
-    const currentIndex = groups.findIndex((group) => group.id === selectedDay);
-    const activeIndex = currentIndex >= 0 ? currentIndex : 0;
-    const currentGroup = groups[activeIndex];
-    const previousGroup = groups[activeIndex - 1];
-    const nextGroup = groups[activeIndex + 1];
-
-    return (
-      <nav className={viewStyles.viewSwitcher} aria-label="Event day navigation">
-        <span className={viewStyles.viewLabel}>Event days</span>
-        <div className={viewStyles.viewTablist}>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={previousGroup === undefined}
-            onClick={() => {
-              if (previousGroup) setSelectedDay(previousGroup.id);
-            }}
-          >
-            Previous day
-          </button>
-          <p aria-live="polite">
-            {currentGroup
-              ? `${currentGroup.label} · Day ${activeIndex + 1} of ${groups.length}`
-              : "No event days available"}
-          </p>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={nextGroup === undefined}
-            onClick={() => {
-              if (nextGroup) setSelectedDay(nextGroup.id);
-            }}
-          >
-            Next day
-          </button>
-        </div>
-      </nav>
     );
   }
 
@@ -757,7 +701,7 @@ export function AgendaBoard({
             </div>
           ) : (
             <section aria-labelledby="agenda-list-heading">
-              <header className={viewStyles.viewGroupHeader}>
+              <header className={styles.viewGroupHeader}>
                 <h3 id="agenda-list-heading">All scheduled sessions</h3>
                 <span>
                   {entries.length} session{entries.length === 1 ? "" : "s"}
@@ -768,7 +712,6 @@ export function AgendaBoard({
               </ol>
             </section>
           )}
-          {renderUnscheduledGroup()}
         </>
       );
     }
@@ -776,18 +719,56 @@ export function AgendaBoard({
     if (viewMode === "day") {
       const currentIndex = groups.findIndex((group) => group.id === selectedDay);
       const currentGroup = groups[currentIndex >= 0 ? currentIndex : 0];
+      const conflictEntryIds = new Set(
+        [...(preview?.conflicts ?? []), ...(preview?.releaseConflicts ?? [])].flatMap(
+          (conflict) => conflict.entryIds,
+        ),
+      );
+      const warningEntryIds = new Set(
+        (preview?.warnings ?? []).flatMap((warning) => warning.entryIds),
+      );
       return (
         <>
-          {renderDayNavigation(groups)}
           {currentGroup ? (
-            <div className={styles.days}>{renderGroup(currentGroup)}</div>
+            <AgendaTimetable
+              date={currentGroup.id}
+              entries={currentGroup.entries}
+              rooms={data.rooms}
+              sessions={data.unscheduledSessions}
+              tracks={data.tracks}
+              conflictEntryIds={conflictEntryIds}
+              warningEntryIds={warningEntryIds}
+              onEditEntry={(entryId) => {
+                setShowAddForm(false);
+                setEditingEntryId(entryId);
+              }}
+              onMoveEntry={async (placement) => {
+                const entry = data.draft.entries.find(
+                  (candidate) => candidate.id === placement.entryId,
+                );
+                if (entry === undefined) return;
+                await onSaveEntry({
+                  id: entry.id,
+                  sessionId: entry.sessionId,
+                  roomId: placement.roomId,
+                  trackIds: entry.trackIds,
+                  startsAtLocal: placement.startsAtLocal,
+                  endsAtLocal: placement.endsAtLocal,
+                });
+              }}
+              onRequestPlacement={(placement) => {
+                setEditingEntryId(null);
+                setPlacementSessionId(placement.sessionId);
+                setPlacementDraft(placement);
+                setShowAddForm(true);
+              }}
+            />
           ) : (
             <div className={styles.emptySchedule}>
               <strong>No event days are available</strong>
               <p>The event start and end dates do not define a navigable calendar range.</p>
             </div>
           )}
-          {renderUnscheduledGroup()}
         </>
       );
     }
@@ -796,26 +777,18 @@ export function AgendaBoard({
       const firstDate = groups[0]?.label;
       const lastDate = groups.at(-1)?.label;
       return (
-        <>
-          <div className={viewStyles.weekView}>
-            <p className={viewStyles.viewContext}>
-              {firstDate && lastDate && firstDate !== lastDate
-                ? `Week: ${firstDate} – ${lastDate}`
-                : "Week schedule"}
-            </p>
-            <div className={viewStyles.weekGroups}>{groups.map((group) => renderGroup(group))}</div>
-          </div>
-          {renderUnscheduledGroup()}
-        </>
+        <div className={styles.weekView}>
+          <p className={styles.viewContext}>
+            {firstDate && lastDate && firstDate !== lastDate
+              ? `Week: ${firstDate} – ${lastDate}`
+              : "Week schedule"}
+          </p>
+          <div className={styles.weekGroups}>{groups.map((group) => renderGroup(group))}</div>
+        </div>
       );
     }
 
-    return (
-      <div className={viewStyles.groupedView}>
-        <div className={viewStyles.groupGroups}>{groups.map((group) => renderGroup(group))}</div>
-        {renderUnscheduledGroup()}
-      </div>
-    );
+    return <div className={styles.groupedView}>{groups.map((group) => renderGroup(group))}</div>;
   }
 
   return (
@@ -823,47 +796,48 @@ export function AgendaBoard({
       <a className={styles.skipLink} href="#agenda-content">
         Skip to agenda workspace
       </a>
-      <header className={styles.topbar}>
-        <a className={styles.brand} href="/admin">
-          <span aria-hidden="true">OS</span>
-          Open Sessionboard
-        </a>
-        <nav aria-label="Organizer navigation">
-          <a href={`/admin/events/${encodeURIComponent(data.event.id)}`}>Event overview</a>
-          <a
-            aria-current="page"
-            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/agenda`}
-          >
-            Agenda
-          </a>
-        </nav>
-      </header>
-
-      <main id="agenda-content" className={styles.workspace} tabIndex={-1}>
-        <header className={styles.pageHeading}>
-          <div>
-            <p className={styles.eyebrow}>{data.event.name}</p>
-            <h1>Agenda workspace</h1>
-            <p className={styles.pageDescription}>
-              Schedule accepted sessions in a private draft. Public embeds continue to use the last
-              published revision until you publish again.
-            </p>
-            <p>
-              <a className={styles.secondaryButton} href={settingsHref}>
-                Rooms and tracks settings
-              </a>
-            </p>
-          </div>
-          <div className={styles.draftStatus}>
-            <span className={styles.statusDot} aria-hidden="true" />
-            <div>
-              <strong>Draft v{data.draft.version}</strong>
-              <small>
-                Updated {formatRevisionTimestamp(data.draft.updatedAt)} by {data.draft.updatedBy}
-              </small>
-            </div>
-          </div>
-        </header>
+      <div id="agenda-content" className={styles.workspace} tabIndex={-1}>
+        <WorkspaceHeader
+          breadcrumb={
+            <WorkspaceBreadcrumb>
+              <Link
+                href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}
+              >
+                {data.event.name}
+              </Link>
+              <span>/</span>
+              <strong>Agenda</strong>
+            </WorkspaceBreadcrumb>
+          }
+          title="Agenda"
+          status={
+            <StatusBadge tone={readiness.ready ? "info" : "warning"}>
+              Draft v{data.draft.version}
+            </StatusBadge>
+          }
+          description="Place accepted sessions into rooms and times, resolve conflicts, then publish."
+          metadata={
+            <>
+              <WorkspaceMetaItem icon={<CalendarDays aria-hidden="true" />}>
+                {formatScheduleDate(data.event.startsOn)}
+                {data.event.endsOn === data.event.startsOn
+                  ? ""
+                  : ` – ${formatScheduleDate(data.event.endsOn)}`}
+              </WorkspaceMetaItem>
+              <WorkspaceMetaItem icon={<Clock3 aria-hidden="true" />}>
+                {data.event.timeZone}
+              </WorkspaceMetaItem>
+              <WorkspaceMetaItem icon={<Save aria-hidden="true" />}>
+                Last saved {formatRevisionTimestamp(data.draft.updatedAt)}
+              </WorkspaceMetaItem>
+            </>
+          }
+          actions={
+            <Button asChild size="sm" variant="outline">
+              <Link href={settingsHref}>Rooms and tracks</Link>
+            </Button>
+          }
+        />
 
         {error ? (
           <div className={styles.errorBanner} role="alert">
@@ -883,113 +857,60 @@ export function AgendaBoard({
           {statusMessage}
         </div>
 
-        <div className={styles.workspaceGrid}>
-          <section className={styles.boardColumn} aria-labelledby="schedule-heading">
-            <div className={styles.sectionHeading}>
-              <div>
-                <p className={styles.eyebrow}>Private schedule</p>
-                <h2 id="schedule-heading">Draft schedule</h2>
-                <p>Times are shown in {data.event.timeZone}.</p>
-              </div>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                disabled={data.unscheduledSessions.length === 0 || busy || !hasRooms}
-                onClick={() => setShowAddForm((current) => !current)}
-                aria-expanded={showAddForm}
-                aria-controls="add-session-panel"
-              >
-                Add accepted session
-              </button>
-            </div>
-            {!hasRooms ? (
-              <p className={styles.formError} role="status">
-                Scheduling is unavailable until you create a room.{" "}
-                <a href={settingsHref}>Create a room in Rooms and tracks settings</a> before
-                scheduling accepted sessions.
-              </p>
-            ) : null}
+        <div className={styles.overviewBand}>
+          <AgendaOverview
+            acceptedCount={acceptedCount}
+            scheduledCount={scheduledCount}
+            toPlaceCount={toPlaceCount}
+            hardConflictCount={hardConflictCount}
+            publishedRevisionNumber={currentRevision?.number ?? null}
+          />
+        </div>
 
-            <div className={viewStyles.viewSwitcher}>
-              <span id="agenda-view-label" className={viewStyles.viewLabel}>
-                Schedule view
+        <section
+          className={styles.releaseCenter}
+          aria-label="Agenda release center"
+          data-agenda-region="release"
+          data-agenda-order="2"
+        >
+          <header className={styles.releaseCenterHeader}>
+            <div>
+              <p className={styles.eyebrow}>Release center</p>
+              <h2>Prepare the public agenda</h2>
+              <p>Validate the private draft, then publish when every requirement is clear.</p>
+            </div>
+            <div className={styles.releaseStatus}>
+              <StatusBadge tone={readiness.ready ? "info" : "warning"}>
+                Draft v{data.draft.version}
+              </StatusBadge>
+              <span>
+                {readiness.ready
+                  ? "Ready to publish"
+                  : `${readiness.reasons.length} requirement${
+                      readiness.reasons.length === 1 ? "" : "s"
+                    } remaining`}
               </span>
-              <div
-                className={viewStyles.viewTablist}
-                role="tablist"
-                aria-labelledby="agenda-view-label"
-                aria-orientation="horizontal"
-              >
-                {AGENDA_VIEW_MODES.map((mode) => (
-                  <button
-                    key={mode}
-                    id={`agenda-view-${mode}`}
-                    className={viewStyles.viewTab}
-                    type="button"
-                    role="tab"
-                    aria-selected={viewMode === mode}
-                    aria-controls="agenda-view-panel"
-                    tabIndex={viewMode === mode ? 0 : -1}
-                    ref={(node) => {
-                      viewTabRefs.current[mode] = node;
-                    }}
-                    onClick={() => selectView(mode)}
-                    onKeyDown={(event) => moveView(event, mode)}
-                  >
-                    {agendaViewLabels[mode]}
-                  </button>
-                ))}
-              </div>
             </div>
+          </header>
 
-            {showAddForm && hasRooms ? (
-              <div id="add-session-panel" className={styles.addPanel}>
-                <h3>Schedule a session</h3>
-                <EntryForm
-                  sessions={data.unscheduledSessions}
-                  rooms={data.rooms}
-                  tracks={data.tracks}
-                  eventStart={data.event.startsOn}
-                  busy={busy}
-                  onCancel={() => setShowAddForm(false)}
-                  onSubmit={async (entry) => {
-                    const saved = await onSaveEntry(entry);
-                    if (saved !== false) setShowAddForm(false);
-                  }}
-                />
-              </div>
-            ) : null}
-
-            <div
-              id="agenda-view-panel"
-              className={viewStyles.viewPanel}
-              role="tabpanel"
-              aria-labelledby={`agenda-view-${viewMode}`}
-            >
-              {renderScheduleView()}
-            </div>
-          </section>
-
-          <aside
-            className={`${styles.inspector} ${viewStyles.actionRail}`}
-            aria-label="Agenda validation and publication"
-          >
-            <section className={styles.inspectorCard} aria-labelledby="validation-heading">
+          <div className={styles.releaseCenterGrid}>
+            <section className={styles.releaseAction} aria-labelledby="validation-heading">
               <div className={styles.inspectorHeading}>
                 <div>
-                  <p className={styles.eyebrow}>Safety check</p>
-                  <h2 id="validation-heading">Validate draft</h2>
+                  <p className={styles.eyebrow}>Required check</p>
+                  <h3 id="validation-heading">Validate draft</h3>
                 </div>
-                {preview?.draftVersion === data.draft.version ? (
-                  <span className={styles.validatedBadge}>Validated</span>
-                ) : (
-                  <span className={styles.draftBadge}>Needs validation</span>
-                )}
+                <span
+                  className={
+                    preview?.draftVersion === data.draft.version
+                      ? styles.validatedBadge
+                      : styles.draftBadge
+                  }
+                >
+                  {preview?.draftVersion === data.draft.version ? "Validated" : "Needs validation"}
+                </span>
               </div>
-              <p>
-                Check room, speaker, resource, travel, track, and capacity rules against draft v
-                {data.draft.version}.
-              </p>
+              <p>Check conflicts and release rules for draft v{data.draft.version}.</p>
               <button
                 className={styles.secondaryButton}
                 type="button"
@@ -1013,6 +934,7 @@ export function AgendaBoard({
                 </fieldset>
               ) : null}
             </section>
+
             {hasRooms ? (
               <AgendaSuggestionPanel
                 run={suggestionRun ?? null}
@@ -1029,64 +951,18 @@ export function AgendaBoard({
               />
             ) : null}
 
-            {preview?.conflicts.length ? (
-              <section className={styles.conflictPanel} aria-labelledby="conflicts-heading">
-                <h2 id="conflicts-heading">
-                  {preview.conflicts.length} hard conflict
-                  {preview.conflicts.length === 1 ? "" : "s"}
-                </h2>
-                <p>Hard conflicts block publication and cannot be overridden.</p>
-                <ul>
-                  {preview.conflicts.map((conflict) => (
-                    <li key={conflict.id}>
-                      <strong>{conflict.kind.replace("_", " ")}</strong>
-                      <span>{conflict.message}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-
-            {preview?.warnings.length ? (
-              <section className={styles.warningPanel} aria-labelledby="warnings-heading">
-                <h2 id="warnings-heading">
-                  {preview.warnings.length} warning{preview.warnings.length === 1 ? "" : "s"}
-                </h2>
-                <p>Warnings require a recorded organizer reason before publication.</p>
-                <ul>
-                  {preview.warnings.map((warning) => (
-                    <li key={warning.id}>
-                      <strong>{warning.kind}</strong>
-                      <span>{warning.message}</span>
-                      {warning.overridden ? (
-                        <p className={styles.overrideRecorded}>
-                          Override recorded: {warning.overrideReason}
-                        </p>
-                      ) : (
-                        <WarningOverrideForm
-                          busy={busy}
-                          onSubmit={async (reason) => {
-                            await onOverrideWarning(warning.id, reason);
-                          }}
-                        />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-
-            <section className={styles.publishCard} aria-labelledby="publish-heading">
-              <p className={styles.eyebrow}>Public revision</p>
-              <h2 id="publish-heading">Publish agenda</h2>
-              {currentRevision ? (
-                <p>
-                  Revision {currentRevision.number} is public with {currentRevision.sessionCount}
-                  sessions. Published {formatRevisionTimestamp(currentRevision.publishedAt)}.
-                </p>
-              ) : (
-                <p>No agenda revision has been published. Public embeds remain unavailable.</p>
-              )}
+            <Card className={styles.publishCard} size="sm">
+              <div className={styles.inspectorHeading}>
+                <div>
+                  <p className={styles.eyebrow}>Public release</p>
+                  <h3 id="publish-heading">Publish agenda</h3>
+                </div>
+                {currentRevision ? (
+                  <Badge variant="outline">Revision {currentRevision.number} live</Badge>
+                ) : (
+                  <Badge variant="outline">Not published</Badge>
+                )}
+              </div>
               {!readiness.ready ? (
                 <ul className={styles.readinessList} aria-label="Publication requirements">
                   {readiness.reasons.map((reason) => (
@@ -1098,29 +974,149 @@ export function AgendaBoard({
                   Draft v{data.draft.version} is ready to publish.
                 </p>
               )}
-              <button
+              <Button
                 className={styles.publishButton}
                 type="button"
                 disabled={busy || !readiness.ready}
                 onClick={() => void onPublish()}
               >
-                {isBusyFor("publish") ? "Publishing..." : "Publish immutable revision"}
-              </button>
+                {isBusyFor("publish") ? "Publishing..." : "Publish agenda"}
+              </Button>
               <small>
-                Publishing atomically updates the public projection and queues cache, calendar, and
-                integration notifications.
+                {currentRevision
+                  ? `Current public revision: ${currentRevision.sessionCount} sessions, published ${formatRevisionTimestamp(
+                      currentRevision.publishedAt,
+                    )}.`
+                  : "Publishing creates the first immutable public revision."}
               </small>
-            </section>
+            </Card>
+          </div>
 
-            {data.revisions.length > 0 ? (
-              <section className={styles.historyCard} aria-labelledby="history-heading">
-                <h2 id="history-heading">Revision history</h2>
+          {preview?.conflicts.length ? (
+            <Alert variant="destructive" className={styles.conflictPanel}>
+              <AlertTitle>
+                {preview.conflicts.length} hard conflict
+                {preview.conflicts.length === 1 ? "" : "s"}
+              </AlertTitle>
+              <AlertDescription>
+                <p>Hard conflicts block publication and cannot be overridden.</p>
+                <ul>
+                  {preview.conflicts.map((conflict) => (
+                    <li key={conflict.id}>
+                      <strong>{conflict.kind.replace("_", " ")}</strong>
+                      <span>{conflict.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {preview?.releaseConflicts.length ? (
+            <Alert variant="destructive" className={styles.conflictPanel}>
+              <AlertTitle>
+                {preview.releaseConflicts.length} released commitment conflict
+                {preview.releaseConflicts.length === 1 ? "" : "s"}
+              </AlertTitle>
+              <AlertDescription>
+                <p>Released commitment conflicts block publication until resolved.</p>
+                <ul>
+                  {preview.releaseConflicts.map((conflict) => (
+                    <li key={conflict.id}>
+                      <strong>{conflict.kind.replace("_", " ")}</strong>
+                      <span>{conflict.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {preview?.warnings.length ? (
+            <section className={styles.warningPanel} aria-labelledby="warnings-heading">
+              <h2 id="warnings-heading">
+                {preview.warnings.length} warning{preview.warnings.length === 1 ? "" : "s"}
+              </h2>
+              <p>Warnings require a recorded organizer reason before publication.</p>
+              <ul>
+                {preview.warnings.map((warning) => (
+                  <li key={warning.id}>
+                    <strong>{warning.kind}</strong>
+                    <span>{warning.message}</span>
+                    {warning.overridden ? (
+                      <p className={styles.overrideRecorded}>
+                        Override recorded: {warning.overrideReason}
+                      </p>
+                    ) : (
+                      <WarningOverrideForm
+                        busy={busy}
+                        onSubmit={async (reason) => {
+                          await onOverrideWarning(warning.id, reason);
+                        }}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {calendarDelivery ? (
+            <div className={styles.calendarDelivery} aria-live="polite">
+              <strong>Released commitment calendar delivery</strong>
+              <span>Calendar: {calendarDelivery.state.replace("_", " ")}</span>
+              <span>Sent last 24 hours: {calendarDelivery.sentLast24Hours}</span>
+              <span>Failed last 24 hours: {calendarDelivery.failedLast24Hours}</span>
+              <span>
+                Last invitation:{" "}
+                {calendarDelivery.lastInvitationAt
+                  ? formatRevisionTimestamp(calendarDelivery.lastInvitationAt)
+                  : "None"}
+              </span>
+              {calendarDelivery.lastFailure ? (
+                <div role="alert">
+                  <span>Last failure: {calendarDelivery.lastFailure.summary}</span>
+                  <small>
+                    Committed UID and sequence are retained for repair; this does not claim delivery
+                    success.
+                  </small>
+                  {calendarDelivery.lastFailure.retryable && onRetryCalendarDelivery ? (
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onRetryCalendarDelivery()}
+                    >
+                      {isBusyFor("retry-calendar-delivery")
+                        ? "Retrying..."
+                        : "Retry calendar delivery"}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {data.revisions.length > 0 ? (
+            <Collapsible>
+              <div className={styles.historyDisclosure}>
+                <div>
+                  <strong>Revision history</strong>
+                  <small>
+                    {data.revisions.length} published revision
+                    {data.revisions.length === 1 ? "" : "s"}
+                  </small>
+                </div>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" type="button">
+                    View history
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+              <CollapsibleContent className={styles.historyContent}>
                 <ol>
                   {data.revisions.map((revision) => (
                     <li key={revision.id}>
                       <div>
                         <strong>Revision {revision.number}</strong>
-                        {revision.current ? <span>Current</span> : null}
+                        {revision.current ? <Badge variant="outline">Current</Badge> : null}
                       </div>
                       <small>
                         {revision.sessionCount} sessions,{" "}
@@ -1129,11 +1125,295 @@ export function AgendaBoard({
                     </li>
                   ))}
                 </ol>
-              </section>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
+        </section>
+
+        <div className={styles.workspaceGrid} data-agenda-region="planner" data-agenda-order="1">
+          <section className={styles.boardColumn} aria-labelledby="schedule-heading">
+            <div className={styles.sectionHeading}>
+              <div>
+                <p className={styles.eyebrow}>Schedule builder</p>
+                <h2 id="schedule-heading">Build the agenda</h2>
+                <p>Choose an event day, then place accepted sessions into a room and time.</p>
+              </div>
+              {!hasScheduleInventory ? null : placementComplete ? (
+                <div
+                  className={styles.placementComplete}
+                  data-placement-complete="true"
+                  role="status"
+                >
+                  <CheckCircle2 aria-hidden="true" />
+                  <span>
+                    <strong>Queue clear</strong>
+                    No sessions waiting to be placed
+                  </span>
+                </div>
+              ) : toPlaceCount > 0 ? (
+                <button
+                  className={styles.primaryButton}
+                  type="button"
+                  disabled={busy || !hasRooms}
+                  onClick={() => {
+                    setEditingEntryId(null);
+                    setPlacementSessionId(null);
+                    setPlacementDraft(undefined);
+                    setShowAddForm((current) => !current);
+                  }}
+                  aria-expanded={showAddForm}
+                  aria-controls="add-session-panel"
+                >
+                  {showAddForm ? "Close form" : "Schedule session"}
+                </button>
+              ) : null}
+            </div>
+            {hasScheduleInventory && !hasRooms ? (
+              <p className={styles.formError} role="status">
+                Scheduling is unavailable until you create a room.{" "}
+                <Link href={settingsHref}>Create a room in Rooms and tracks settings</Link> before
+                scheduling accepted sessions.
+              </p>
             ) : null}
-          </aside>
+
+            {!hasScheduleInventory ? (
+              <Empty className={styles.agendaEmpty} data-agenda-empty-state="no-accepted-sessions">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <CalendarDays aria-hidden="true" />
+                  </EmptyMedia>
+                  <EmptyTitle>No accepted sessions to schedule</EmptyTitle>
+                  <EmptyDescription>
+                    Accept sessions before assigning rooms and times. Accepted sessions will appear
+                    here automatically.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button asChild>
+                    <Link href={sessionsHref}>Open sessions</Link>
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            ) : (
+              <>
+                {viewMode === "day" ? (
+                  <AgendaDaySelector
+                    days={eventDays.map((day) => ({
+                      date: day.date,
+                      label: day.label,
+                      sessionCount: day.entries.length,
+                    }))}
+                    selectedDate={selectedDay}
+                    onSelectDate={setSelectedDay}
+                  />
+                ) : null}
+                <div className={styles.scheduleToolbar}>
+                  <span id="agenda-view-label" className={styles.viewLabel}>
+                    Schedule view
+                  </span>
+                  <div
+                    className={styles.viewTablist}
+                    role="tablist"
+                    aria-labelledby="agenda-view-label"
+                    aria-orientation="horizontal"
+                  >
+                    {AGENDA_VIEW_MODES.map((mode) => (
+                      <button
+                        key={mode}
+                        id={`agenda-view-${mode}`}
+                        className={styles.viewTab}
+                        type="button"
+                        role="tab"
+                        aria-selected={viewMode === mode}
+                        aria-controls="agenda-view-panel"
+                        tabIndex={viewMode === mode ? 0 : -1}
+                        ref={(node) => {
+                          viewTabRefs.current[mode] = node;
+                        }}
+                        onClick={() => selectView(mode)}
+                        onKeyDown={(event) => moveView(event, mode)}
+                      >
+                        {agendaViewLabels[mode]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <section
+                  className={styles.placementDock}
+                  aria-label="Placement queue drop zone"
+                  data-agenda-drop-target="placement-queue"
+                  data-empty={data.unscheduledSessions.length === 0 ? "true" : undefined}
+                  data-active={queueDropActive ? "true" : undefined}
+                  onDragEnter={(event) => {
+                    if (event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) {
+                      setQueueDropActive(true);
+                    }
+                  }}
+                  onDragLeave={() => setQueueDropActive(false)}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setQueueDropActive(false);
+                    const entryId = event.dataTransfer.getData(AGENDA_ENTRY_DRAG_TYPE);
+                    if (entryId !== "") void onRemoveEntry(entryId);
+                  }}
+                >
+                  {data.unscheduledSessions.length > 0 ? (
+                    <AgendaPlacementQueue
+                      sessions={data.unscheduledSessions}
+                      busy={busy}
+                      onChooseSession={(sessionId) => {
+                        setPlacementSessionId(sessionId);
+                        setPlacementDraft(undefined);
+                        setEditingEntryId(null);
+                        setShowAddForm(true);
+                      }}
+                    />
+                  ) : (
+                    <div className={styles.placementDockEmpty} role="status">
+                      <strong>No sessions waiting to be placed</strong>
+                      <span>Drag a scheduled session here to return it to the queue.</span>
+                    </div>
+                  )}
+                </section>
+
+                <div
+                  id="agenda-view-panel"
+                  className={styles.viewPanel}
+                  role="tabpanel"
+                  aria-labelledby={`agenda-view-${viewMode}`}
+                  aria-label="Schedule canvas"
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sessionId = event.dataTransfer.getData("text/plain");
+                    if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
+                      setPlacementSessionId(sessionId);
+                      setPlacementDraft(undefined);
+                      setShowAddForm(true);
+                    }
+                  }}
+                >
+                  {renderScheduleView()}
+                </div>
+              </>
+            )}
+          </section>
+          <Dialog
+            open={showAddForm || editingEntry !== null}
+            onOpenChange={(open) => {
+              if (open) return;
+              setShowAddForm(false);
+              setPlacementSessionId(null);
+              setPlacementDraft(undefined);
+              setEditingEntryId(null);
+            }}
+          >
+            <DialogContent className={styles.agendaEditorDialog}>
+              <DialogHeader className={styles.agendaEditorHeader}>
+                <div className={styles.agendaEditorHeading}>
+                  <div>
+                    <p className={styles.eyebrow}>
+                      {showAddForm ? "Schedule placement" : "Session placement"}
+                    </p>
+                    <DialogTitle>
+                      {showAddForm ? "Schedule a session" : "Edit placement"}
+                    </DialogTitle>
+                  </div>
+                  <Badge variant="outline">
+                    {showAddForm ? "Accepted session" : "Scheduled session"}
+                  </Badge>
+                </div>
+                <DialogDescription>
+                  {showAddForm
+                    ? "Choose the room, tracks, and exact local time before adding this session to the private draft."
+                    : "Adjust this session without leaving the timetable. Changes remain private until the agenda is published."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className={styles.agendaEditorBody}>
+                {showAddForm && hasRooms ? (
+                  <EntryForm
+                    key={
+                      placementDraft === undefined
+                        ? (placementSessionId ?? "new-placement")
+                        : `${placementDraft.sessionId}-${placementDraft.roomId}-${placementDraft.startsAtLocal}`
+                    }
+                    sessions={data.unscheduledSessions}
+                    rooms={data.rooms}
+                    tracks={data.tracks}
+                    event={data.event}
+                    eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
+                    busy={busy}
+                    onCancel={() => {
+                      setShowAddForm(false);
+                      setPlacementSessionId(null);
+                      setPlacementDraft(undefined);
+                    }}
+                    {...(placementSessionId === null
+                      ? {}
+                      : { initialSessionId: placementSessionId })}
+                    {...(placementDraft === undefined ? {} : { initialPlacement: placementDraft })}
+                    {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
+                    {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
+                    onSubmit={async (entry) => {
+                      const saved = await onSaveEntry(entry);
+                      if (saved !== false) {
+                        setShowAddForm(false);
+                        setPlacementSessionId(null);
+                        setPlacementDraft(undefined);
+                      }
+                    }}
+                  />
+                ) : editingEntry !== null ? (
+                  <>
+                    <EntryForm
+                      entry={editingEntry}
+                      sessions={[]}
+                      rooms={data.rooms}
+                      tracks={data.tracks}
+                      event={data.event}
+                      eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
+                      busy={busy}
+                      onCancel={() => setEditingEntryId(null)}
+                      {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
+                      {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
+                      onSubmit={async (entry) => {
+                        const saved = await onSaveEntry(entry);
+                        if (saved !== false) setEditingEntryId(null);
+                      }}
+                    />
+                    <div className={styles.agendaEditorDangerZone}>
+                      <div>
+                        <strong>Remove from this agenda draft</strong>
+                        <p>The accepted session returns to the placement queue.</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={busy}
+                        onClick={async () => {
+                          const removed = await onRemoveEntry(editingEntry.id);
+                          if (removed !== false) setEditingEntryId(null);
+                        }}
+                      >
+                        Remove placement
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
@@ -1165,7 +1445,7 @@ export function AgendaSuggestionPanel({
   onReject,
   onApply,
 }: AgendaSuggestionPanelProps) {
-  const blockers = run?.validation?.conflicts ?? [];
+  const blockers = run?.candidateDiagnostics?.conflicts ?? [];
   const stale = run !== null && run.baseDraftVersion !== currentDraftVersion;
   const selectedAvailableChangeIds =
     run?.diff.changes
@@ -1184,6 +1464,10 @@ export function AgendaSuggestionPanel({
     useState<ExistingSessionTimesSelection>("keep");
   const [ignoreExistingRooms, setIgnoreExistingRooms] = useState(false);
   const suggestionOptionsDisabled = busy || onGenerate === undefined;
+  const [suggestionsOpen, setSuggestionsOpen] = useState(run !== null);
+  useEffect(() => {
+    if (run !== null) setSuggestionsOpen(true);
+  }, [run]);
 
   function toggleChange(changeId: string) {
     onSelectionChange(
@@ -1194,194 +1478,230 @@ export function AgendaSuggestionPanel({
   }
 
   return (
-    <section className={styles.inspectorCard} aria-labelledby="suggestion-heading">
-      <div className={styles.inspectorHeading}>
-        <div>
-          <p className={styles.eyebrow}>Advisory assistant</p>
-          <h2 id="suggestion-heading">Private agenda suggestions</h2>
-        </div>
-        {run ? <span className={styles.draftBadge}>Run v{run.version}</span> : null}
-      </div>
-      <p>
-        Suggestions are private candidates only. They never change this draft or publish anything
-        until an organizer explicitly selects and applies individual changes.
-      </p>
-      {run === null ? (
-        eligibleUnscheduledCount === 0 ? (
-          <div className={viewStyles.suggestionEmpty} role="status">
-            <strong>No eligible unscheduled sessions</strong>
-            <p>
-              No eligible unscheduled accepted sessions are currently available. Accept a session
-              before generating private placement suggestions. The current draft already contains
-              every accepted session available to this assistant.
-            </p>
+    <Card className={styles.suggestionCard} size="sm">
+      <Collapsible open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
+        <div className={styles.inspectorHeading}>
+          <div>
+            <p className={styles.eyebrow}>Optional advisory</p>
+            <h2 id="suggestion-heading">Suggestions</h2>
           </div>
-        ) : (
-          <>
-            <p role="status">No advisory suggestion run has been generated.</p>
-            <div className={viewStyles.suggestionOptions}>
-              <fieldset className={viewStyles.scheduleOptions}>
-                <legend>Existing session times</legend>
-                <label
-                  className={`${viewStyles.scheduleOption} ${
-                    existingSessionTimes === "keep" ? viewStyles.scheduleOptionSelected : ""
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="existing-session-times"
-                    value="keep"
-                    checked={existingSessionTimes === "keep"}
-                    disabled={suggestionOptionsDisabled}
-                    onChange={() => setExistingSessionTimes("keep")}
-                  />
-                  <span className={viewStyles.scheduleOptionCopy}>
-                    <strong>Keep scheduled sessions fixed</strong>
-                    <small>The generator preserves their current times.</small>
-                  </span>
-                </label>
-                <label
-                  className={`${viewStyles.scheduleOption} ${
-                    existingSessionTimes === "move" ? viewStyles.scheduleOptionSelected : ""
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="existing-session-times"
-                    value="move"
-                    checked={existingSessionTimes === "move"}
-                    disabled={suggestionOptionsDisabled}
-                    onChange={() => setExistingSessionTimes("move")}
-                  />
-                  <span className={viewStyles.scheduleOptionCopy}>
-                    <strong>Allow scheduled sessions to move</strong>
-                    <small>The generator may assign them different times.</small>
-                  </span>
-                </label>
-              </fieldset>
-              <fieldset className={viewStyles.roomOptions}>
-                <legend>Existing room occupancy</legend>
-                <label className={viewStyles.roomOption}>
-                  <input
-                    type="checkbox"
-                    checked={ignoreExistingRooms}
-                    disabled={suggestionOptionsDisabled}
-                    onChange={(event) => setIgnoreExistingRooms(event.target.checked)}
-                  />
-                  <span className={viewStyles.scheduleOptionCopy}>
-                    <strong>Ignore existing room occupancy when generating</strong>
-                    <small>
-                      The generator may place sessions in rooms that already have a scheduled
-                      session.
-                    </small>
-                  </span>
-                </label>
-              </fieldset>
-            </div>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              disabled={suggestionOptionsDisabled}
-              onClick={() =>
-                onGenerate
-                  ? void onGenerate(
-                      serializeAgendaSuggestionOptions(existingSessionTimes, ignoreExistingRooms),
-                    )
-                  : undefined
-              }
-            >
-              {isBusyFor("generate-suggestion") ? "Generating..." : "Generate private suggestions"}
-            </button>
-            {onGenerate === undefined ? (
-              <small>
-                Suggestion generation is unavailable until an approved provider is connected.
-              </small>
-            ) : null}
-          </>
-        )
-      ) : (
-        <>
-          <p role="status" aria-live="polite">
-            Suggestion run v{run.version} is {run.status}. Base draft revision: v
-            {run.baseDraftVersion}.
+          {run ? <Badge variant="outline">Run v{run.version}</Badge> : null}
+        </div>
+        <CollapsibleTrigger asChild>
+          <Button className={styles.suggestionToggle} variant="outline" type="button">
+            {suggestionsOpen
+              ? "Hide suggestions"
+              : run
+                ? "Review suggestions"
+                : "Configure suggestions"}
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className={styles.suggestionContent}>
+          <p>
+            Suggestions are private candidates only. They never change this draft or publish
+            anything until an organizer explicitly selects and applies individual changes.
           </p>
-          {stale ? (
-            <p className={styles.inlineConflict} role="alert">
-              The draft has changed since this run was generated. Regenerate before applying.
-            </p>
-          ) : null}
-          <p>{run.diff.summary}</p>
-          {run.status === "pending" && run.diff.changes.length === 0 ? (
-            <p className={viewStyles.suggestionEmpty} role="status">
-              No eligible unscheduled sessions produced a proposal. Accept another session or
-              regenerate after changing the schedule context.
-            </p>
-          ) : null}
-          {run.status === "pending" && run.diff.changes.length > 0 ? (
-            <fieldset className={styles.overrideForm}>
-              <legend>Choose changes for human application</legend>
-              {run.diff.changes.map((change) => (
-                <label key={change.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedChangeIds.includes(change.id)}
-                    onChange={() => toggleChange(change.id)}
-                  />
-                  <span>
-                    <strong>{change.kind}</strong> {change.summary}
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          ) : null}
-          {blockers.length > 0 ? (
-            <div className={styles.conflictPanel} role="alert">
-              <strong>
-                {blockers.length} hard blocker{blockers.length === 1 ? "" : "s"} prevent application
-              </strong>
-              <p>Resolve blockers in the draft and regenerate. They cannot be overridden by AI.</p>
-              <ul>
-                {blockers.map((blocker) => (
-                  <li key={blocker.id}>{blocker.message}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {run.status === "pending" ? (
-            <div className={styles.formActions}>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                disabled={busy || onRegenerate === undefined}
-                onClick={() => (onRegenerate ? void onRegenerate() : undefined)}
-              >
-                {isBusyFor("regenerate-suggestion") ? "Regenerating..." : "Regenerate"}
-              </button>
-              <button
-                className={styles.textButton}
-                type="button"
-                disabled={busy || onReject === undefined}
-                onClick={() => (onReject ? void onReject() : undefined)}
-              >
-                Reject run
-              </button>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                disabled={!canApply}
-                onClick={() => (onApply ? void onApply(selectedAvailableChangeIds) : undefined)}
-              >
-                {isBusyFor("apply-suggestion") ? "Applying..." : "Apply selected changes"}
-              </button>
+          {run === null ? (
+            <div className={styles.suggestionSetup}>
+              {eligibleUnscheduledCount === 0 ? (
+                <div className={styles.suggestionEmpty} role="status">
+                  <strong>No eligible unscheduled sessions</strong>
+                  <p>
+                    No eligible unscheduled accepted sessions are currently available. Accept a
+                    session before generating private placement suggestions. The current draft
+                    already contains every accepted session available to this assistant.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <p role="status">No advisory suggestion run has been generated.</p>
+                  <div className={styles.suggestionOptions}>
+                    <fieldset className={styles.scheduleOptions}>
+                      <legend>Existing session times</legend>
+                      <label
+                        className={`${styles.scheduleOption} ${
+                          existingSessionTimes === "keep" ? styles.scheduleOptionSelected : ""
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="existing-session-times"
+                          value="keep"
+                          checked={existingSessionTimes === "keep"}
+                          disabled={suggestionOptionsDisabled}
+                          onChange={() => setExistingSessionTimes("keep")}
+                        />
+                        <span className={styles.scheduleOptionCopy}>
+                          <strong>Keep scheduled sessions fixed</strong>
+                          <small>The generator preserves their current times.</small>
+                        </span>
+                      </label>
+                      <label
+                        className={`${styles.scheduleOption} ${
+                          existingSessionTimes === "move" ? styles.scheduleOptionSelected : ""
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="existing-session-times"
+                          value="move"
+                          checked={existingSessionTimes === "move"}
+                          disabled={suggestionOptionsDisabled}
+                          onChange={() => setExistingSessionTimes("move")}
+                        />
+                        <span className={styles.scheduleOptionCopy}>
+                          <strong>Allow scheduled sessions to move</strong>
+                          <small>The generator may assign them different times.</small>
+                        </span>
+                      </label>
+                    </fieldset>
+                    <fieldset className={styles.roomOptions}>
+                      <legend>Existing room occupancy</legend>
+                      <label className={styles.roomOption}>
+                        <input
+                          type="checkbox"
+                          checked={ignoreExistingRooms}
+                          disabled={suggestionOptionsDisabled}
+                          onChange={(event) => setIgnoreExistingRooms(event.target.checked)}
+                        />
+                        <span className={styles.scheduleOptionCopy}>
+                          <strong>Ignore existing room occupancy when generating</strong>
+                          <small>
+                            The generator may place sessions in rooms that already have a scheduled
+                            session.
+                          </small>
+                        </span>
+                      </label>
+                    </fieldset>
+                  </div>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={suggestionOptionsDisabled}
+                    onClick={() =>
+                      onGenerate
+                        ? void onGenerate(
+                            serializeAgendaSuggestionOptions(
+                              existingSessionTimes,
+                              ignoreExistingRooms,
+                            ),
+                          )
+                        : undefined
+                    }
+                  >
+                    {isBusyFor("generate-suggestion")
+                      ? "Generating..."
+                      : "Generate private suggestions"}
+                  </Button>
+                  {onGenerate === undefined ? (
+                    <small>
+                      Suggestion generation is unavailable until an approved provider is connected.
+                    </small>
+                  ) : null}
+                </>
+              )}
             </div>
           ) : (
-            <small>
-              This run is closed. Generate or regenerate a new private candidate to continue.
-            </small>
+            <>
+              <p role="status" aria-live="polite">
+                Suggestion run v{run.version} is {run.status}. Base draft revision: v
+                {run.baseDraftVersion}.
+              </p>
+              {stale ? (
+                <p className={styles.inlineConflict} role="alert">
+                  The draft has changed since this run was generated. Regenerate before applying.
+                </p>
+              ) : null}
+              <p>{run.diff.summary}</p>
+              {run.status === "pending" && run.diff.changes.length === 0 ? (
+                <p className={styles.suggestionEmpty} role="status">
+                  No eligible unscheduled sessions produced a proposal. Accept another session or
+                  regenerate after changing the schedule context.
+                </p>
+              ) : null}
+              {run.status === "pending" && run.diff.changes.length > 0 ? (
+                <fieldset className={styles.overrideForm}>
+                  <legend>Choose changes for human application</legend>
+                  {run.diff.changes.map((change) => (
+                    <label key={change.id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedChangeIds.includes(change.id)}
+                        onChange={() => toggleChange(change.id)}
+                      />
+                      <span>
+                        <strong>{change.kind}</strong> {change.summary}
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
+              ) : null}
+              {blockers.length > 0 ? (
+                <div className={styles.conflictPanel} role="alert">
+                  <strong>
+                    {blockers.length} hard blocker{blockers.length === 1 ? "" : "s"} prevent
+                    application
+                  </strong>
+                  <p>
+                    Resolve blockers in the draft and regenerate. They cannot be overridden by AI.
+                  </p>
+                  <ul>
+                    {blockers.map((blocker) => (
+                      <li key={blocker.id}>{blocker.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {run.candidateDiagnostics?.warnings.length ? (
+                <div className={styles.warningPanel}>
+                  <strong>
+                    {run.candidateDiagnostics.warnings.length} candidate warning
+                    {run.candidateDiagnostics.warnings.length === 1 ? "" : "s"}
+                  </strong>
+                  <p>Review these private diagnostics before applying selected changes.</p>
+                  <ul>
+                    {run.candidateDiagnostics.warnings.map((warning) => (
+                      <li key={warning.id}>{warning.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {run.status === "pending" ? (
+                <div className={styles.formActions}>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={busy || onRegenerate === undefined}
+                    onClick={() => (onRegenerate ? void onRegenerate() : undefined)}
+                  >
+                    {isBusyFor("regenerate-suggestion") ? "Regenerating..." : "Regenerate"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    disabled={busy || onReject === undefined}
+                    onClick={() => (onReject ? void onReject() : undefined)}
+                  >
+                    Reject run
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={!canApply}
+                    onClick={() => (onApply ? void onApply(selectedAvailableChangeIds) : undefined)}
+                  >
+                    {isBusyFor("apply-suggestion") ? "Applying..." : "Apply selected changes"}
+                  </Button>
+                </div>
+              ) : (
+                <small>
+                  This run is closed. Generate or regenerate a new private candidate to continue.
+                </small>
+              )}
+            </>
           )}
-        </>
-      )}
-    </section>
+        </CollapsibleContent>
+      </Collapsible>
+    </Card>
   );
 }
 function WarningOverrideForm({
@@ -1424,85 +1744,202 @@ interface AgendaWorkspaceProps {
   eventId: string;
   organizationId: string;
   api?: AgendaApi;
-  appEnvironment?: string;
 }
 
-export function AgendaWorkspace({
+interface ScopedAgendaSnapshot {
+  readonly scopeKey: string;
+  readonly api: AgendaApi;
+  readonly data: AgendaWorkspaceData;
+}
+
+interface ScopedAgendaWorkspaceProps extends AgendaWorkspaceProps {
+  readonly scopeKey: string;
+}
+
+export function AgendaWorkspace(props: Readonly<AgendaWorkspaceProps>) {
+  const eventId = useOrganizerEventId(props.eventId).trim();
+  const organizationId = props.organizationId.trim();
+  const scopeKey = agendaWorkspaceScopeKey(organizationId, eventId);
+  return (
+    <ScopedAgendaWorkspace
+      key={scopeKey}
+      {...props}
+      eventId={eventId}
+      organizationId={organizationId}
+      scopeKey={scopeKey}
+    />
+  );
+}
+
+function ScopedAgendaWorkspace({
   eventId,
   organizationId,
+  scopeKey,
   api: providedApi,
-  appEnvironment = process.env.APP_ENV,
-}: Readonly<AgendaWorkspaceProps>) {
-  const api = useMemo(
-    () => providedApi ?? createAgendaApi("", organizationId),
-    [organizationId, providedApi],
+}: Readonly<ScopedAgendaWorkspaceProps>) {
+  const cache = useNavigationDataCache();
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  const agendaApi = useMemo(
+    () => createCanonicalAgendaWorkspaceApi(normalizedOrganizationId, providedApi),
+    [normalizedOrganizationId, providedApi],
   );
-  const localDemoApiRef = useRef<{ eventId: string; api: AgendaApi } | null>(null);
-  const resolveLocalDemoApi = useCallback(
-    async (signal?: AbortSignal) => {
-      if (localDemoApiRef.current?.eventId === eventId) {
-        return localDemoApiRef.current.api;
-      }
-      const environment = await resolveAgendaAppEnvironment(appEnvironment, signal);
-      const localApi = createLocalAgendaDemoApi(environment, eventId);
-      if (localApi) {
-        localDemoApiRef.current = { eventId, api: localApi };
-      }
-      return localApi;
-    },
-    [appEnvironment, eventId],
+  const workspaceCacheKey = useMemo(
+    () => agendaWorkspaceCacheKey(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
   );
-  const [activeApi, setActiveApi] = useState<AgendaApi | null>(api);
-  const [data, setData] = useState<AgendaWorkspaceData | null>(null);
+  const workspaceCacheTags = useMemo(
+    () => agendaWorkspaceCacheTags(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const workspaceInvalidationTags = useMemo(
+    () => [`event:${normalizedEventId}`, `agenda:${normalizedEventId}`],
+    [normalizedEventId],
+  );
+  const cachedData = cache?.peek<AgendaWorkspaceData>(workspaceCacheKey);
+  const initialCachedData =
+    cachedData !== undefined && agendaWorkspaceDataMatchesEvent(cachedData, normalizedEventId)
+      ? cachedData
+      : undefined;
+  const initialSnapshot: ScopedAgendaSnapshot | null =
+    initialCachedData === undefined ? null : { scopeKey, api: agendaApi, data: initialCachedData };
+  const initialReadKey = useMemo(() => ({ api: agendaApi, scopeKey }), [agendaApi, scopeKey]);
+  const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(() => initialSnapshot);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialSnapshot === null);
   const [busyOperation, setBusyOperation] = useState<AgendaBusyOperation | null>(null);
+  const busyOperationRef = useRef<AgendaBusyOperation | null>(null);
+  const loadGenerationRef = useRef(0);
+  const operationGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const initialReadCoordinatorRef = useRef<ScopedReadFlightCoordinator<
+    object,
+    AgendaWorkspaceLoadResult
+  > | null>(null);
+  if (initialReadCoordinatorRef.current === null) {
+    initialReadCoordinatorRef.current = createScopedReadFlightCoordinator();
+  }
+  const initialReadCoordinator = initialReadCoordinatorRef.current;
   const busy = busyOperation !== null;
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [suggestionRun, setSuggestionRun] = useState<AgendaSuggestionRunView | null>(null);
+  const activeApi = snapshot?.api ?? null;
+  const data = snapshot?.data ?? null;
   const suggestionApi = suggestionApiFor(activeApi);
-  function beginBusy(operation: AgendaBusyOperation) {
-    setBusyOperation(operation);
+
+  function operationIsCurrent(token: AgendaAsyncScopeToken): boolean {
+    return canCommitAgendaAsyncCompletion(
+      token,
+      scopeKey,
+      operationGenerationRef.current,
+      mountedRef.current,
+    );
   }
 
-  function endBusy(operation: AgendaBusyOperation) {
-    setBusyOperation((current) => (current === operation ? null : current));
+  function beginOperation(operation: AgendaBusyOperation): AgendaAsyncScopeToken | null {
+    if (!mountedRef.current || busyOperationRef.current !== null) return null;
+    const token = { scopeKey, generation: operationGenerationRef.current + 1 };
+    operationGenerationRef.current = token.generation;
+    busyOperationRef.current = operation;
+    setBusyOperation(operation);
+    setError(null);
+    setStatusMessage(null);
+    return token;
   }
+
+  function endOperation(token: AgendaAsyncScopeToken): void {
+    if (!operationIsCurrent(token)) return;
+    busyOperationRef.current = null;
+    setBusyOperation(null);
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadGenerationRef.current += 1;
+      operationGenerationRef.current += 1;
+      busyOperationRef.current = null;
+    };
+  }, []);
+  const readWorkspace = useCallback(
+    (signal?: AbortSignal, fresh = false) =>
+      loadCanonicalAgendaWorkspaceWithCache(
+        agendaApi,
+        normalizedEventId,
+        cache,
+        workspaceCacheKey,
+        workspaceCacheTags,
+        signal,
+        fresh,
+      ),
+    [agendaApi, cache, normalizedEventId, workspaceCacheKey, workspaceCacheTags],
+  );
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
-      setLoading(true);
-      setError(null);
-      setStatusMessage(null);
+    async (
+      signal?: AbortSignal,
+      initialRead?: Promise<AgendaWorkspaceLoadResult>,
+      fresh = false,
+    ) => {
+      const token = { scopeKey, generation: loadGenerationRef.current + 1 };
+      loadGenerationRef.current = token.generation;
+      const loadIsCurrent = () =>
+        canCommitAgendaAsyncCompletion(
+          token,
+          scopeKey,
+          loadGenerationRef.current,
+          mountedRef.current,
+          signal?.aborted ?? false,
+        );
+
+      if (loadIsCurrent()) {
+        setLoading(true);
+        setError(null);
+        setStatusMessage(null);
+      }
       try {
-        const loaded = await loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal);
-        setActiveApi(loaded.api);
-        setData(loaded.data);
-        setSuggestionRun(null);
-        if (loaded.usingLocalDemo) {
-          setStatusMessage(
-            "Showing the deterministic local demo agenda because the local API has no agenda data.",
-          );
+        const loaded = await (initialRead ?? readWorkspace(signal, fresh));
+        if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
+          throw new Error("The agenda response belongs to another event.");
         }
+        if (!loadIsCurrent()) return;
+        setSnapshot({ scopeKey, api: loaded.api, data: loaded.data });
+        setPreview(null);
+        setSuggestionRun(null);
+        setStatusMessage(null);
       } catch (loadError) {
-        if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
+        if (
+          loadIsCurrent() &&
+          !(loadError instanceof DOMException && loadError.name === "AbortError")
+        ) {
           setError(messageFrom(loadError));
         }
       } finally {
-        if (!signal?.aborted) {
+        if (loadIsCurrent()) {
           setLoading(false);
         }
       }
     },
-    [api, eventId, resolveLocalDemoApi],
+    [eventId, readWorkspace, scopeKey],
   );
 
   useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
+    const cached = cache?.peek<AgendaWorkspaceData>(workspaceCacheKey);
+    if (cached !== undefined && agendaWorkspaceDataMatchesEvent(cached, normalizedEventId)) return;
+    const lease = initialReadCoordinator.acquire(initialReadKey, (signal) => readWorkspace(signal));
+    void load(lease.signal, lease.promise);
+    return () => lease.release();
+  }, [
+    cache,
+    initialReadCoordinator,
+    initialReadKey,
+    load,
+    normalizedEventId,
+    readWorkspace,
+    workspaceCacheKey,
+  ]);
 
   async function mutate(
     operation: (activeApi: AgendaApi, current: AgendaWorkspaceData) => Promise<AgendaWorkspaceData>,
@@ -1510,124 +1947,212 @@ export function AgendaWorkspace({
     refreshPreview = false,
     busyKind: AgendaBusyOperation = "save",
   ): Promise<boolean> {
-    const currentApi = activeApi;
-    const currentData = data;
-    if (!currentApi || !currentData) {
+    const currentSnapshot = snapshot;
+    if (
+      currentSnapshot === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
       return false;
     }
-    let authoritativeData = currentData;
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const token = beginOperation(busyKind);
+    if (token === null) return false;
+    loadGenerationRef.current += 1;
+    cache?.invalidate(workspaceInvalidationTags);
     try {
-      const nextData = await operation(currentApi, currentData);
-      authoritativeData = nextData;
-      setData(nextData);
-      setPreview(refreshPreview ? await currentApi.preview(eventId) : null);
+      const nextData = await operation(currentSnapshot.api, currentSnapshot.data);
+      if (!agendaWorkspaceDataMatchesEvent(nextData, eventId)) {
+        throw new Error("The agenda mutation returned data for another event.");
+      }
+      if (!operationIsCurrent(token)) return false;
+      setSnapshot({ ...currentSnapshot, data: nextData });
+      cache?.write(workspaceCacheKey, nextData, workspaceCacheTags);
+      if (refreshPreview) {
+        const nextPreview = await currentSnapshot.api.preview(eventId);
+        if (!operationIsCurrent(token)) return false;
+        setPreview(nextPreview);
+      } else {
+        setPreview(null);
+      }
       setStatusMessage(successMessage);
       return true;
     } catch (mutationError) {
+      if (!operationIsCurrent(token)) return false;
       setError(messageFrom(mutationError));
       if (mutationError instanceof AgendaApiError) {
-        const failurePreview = previewFromError(mutationError, authoritativeData.draft.version);
-        if (failurePreview) setPreview(failurePreview);
+        setSuggestionRun((current) =>
+          current
+            ? {
+                ...current,
+                candidateDiagnostics: mutationError.candidateDiagnostics?.report ?? {
+                  conflicts: [],
+                  warnings: [],
+                },
+              }
+            : current,
+        );
+        const recovered = await Promise.all([
+          currentSnapshot.api.getWorkspace(eventId),
+          currentSnapshot.api.preview(eventId),
+        ]);
+        if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recovered[0], eventId)) {
+          setSnapshot({ ...currentSnapshot, data: recovered[0] });
+          setPreview(recovered[1]);
+          cache?.write(workspaceCacheKey, recovered[0], workspaceCacheTags);
+        }
       }
       return false;
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function generateSuggestion(options: AgendaSuggestionOptions) {
-    if (!data || !activeApi) return;
-    const busyKind: AgendaBusyOperation = "generate-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    if (
+      currentSnapshot === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("generate-suggestion");
+    if (token === null) return;
     try {
-      if (!suggestionApi) {
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
         throw new Error("Private suggestion generation is unavailable for this agenda.");
       }
-      const dates = eventDates(data.event.startsOn, data.event.endsOn);
-      const run = await suggestionApi.generateSuggestion({
+      const dates = eventDates(
+        currentSnapshot.data.event.startsOn,
+        currentSnapshot.data.event.endsOn,
+      );
+      const run = await currentSuggestionApi.generateSuggestion({
         eventId,
-        baseDraftVersion: data.draft.version,
+        baseDraftVersion: currentSnapshot.data.draft.version,
         dates,
         eligibleStatuses: ["accepted"],
-        roomIds: data.rooms.map((room) => room.id),
-        dayWindows: dates.map((date) => ({ date, startLocal: "09:00", endLocal: "17:00" })),
+        roomIds: currentSnapshot.data.rooms.map((room) => room.id),
+        dayWindows: dates.map((date) => ({
+          date,
+          startLocal: "09:00",
+          endLocal: "17:00",
+        })),
         orderedRules: [],
         ignoreExistingTimes: options.ignoreExistingTimes,
         ignoreExistingRooms: options.ignoreExistingRooms,
       });
+      if (!operationIsCurrent(token)) return;
       setSuggestionRun(run);
       setStatusMessage(
         `Private advisory suggestion run v${run.version} is ready for human review.`,
       );
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function regenerateSuggestion() {
-    if (!suggestionApi || !data || !suggestionRun) return;
-    const busyKind: AgendaBusyOperation = "regenerate-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    const currentRun = suggestionRun;
+    if (
+      currentSnapshot === null ||
+      currentRun === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("regenerate-suggestion");
+    if (token === null) return;
     try {
-      const run = await suggestionApi.regenerateSuggestion({
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
+        throw new Error("Private suggestion regeneration is unavailable for this agenda.");
+      }
+      const run = await currentSuggestionApi.regenerateSuggestion({
         eventId,
-        runId: suggestionRun.id,
-        baseDraftVersion: data.draft.version,
+        runId: currentRun.id,
+        baseDraftVersion: currentSnapshot.data.draft.version,
       });
+      if (!operationIsCurrent(token)) return;
       setSuggestionRun(run);
       setStatusMessage(`Private advisory suggestion regenerated as run v${run.version}.`);
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function rejectSuggestion() {
-    if (!suggestionApi || !suggestionRun) return;
-    const busyKind: AgendaBusyOperation = "reject-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    const currentRun = suggestionRun;
+    if (
+      currentSnapshot === null ||
+      currentRun === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("reject-suggestion");
+    if (token === null) return;
     try {
-      const run = await suggestionApi.rejectSuggestion({
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
+        throw new Error("Private suggestion rejection is unavailable for this agenda.");
+      }
+      const run = await currentSuggestionApi.rejectSuggestion({
         eventId,
-        runId: suggestionRun.id,
+        runId: currentRun.id,
       });
+      if (!operationIsCurrent(token)) return;
       setSuggestionRun(run);
       setStatusMessage("Advisory suggestion rejected. The private draft was not changed.");
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function applySuggestion(changeIds: readonly string[]) {
-    if (!suggestionApi || !suggestionRun) return;
-    const busyKind: AgendaBusyOperation = "apply-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    const currentRun = suggestionRun;
+    if (
+      currentSnapshot === null ||
+      currentRun === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("apply-suggestion");
+    if (token === null) return;
+    loadGenerationRef.current += 1;
+    cache?.invalidate(workspaceInvalidationTags);
     try {
-      const nextData = await suggestionApi.applySuggestion({
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
+        throw new Error("Private suggestion application is unavailable for this agenda.");
+      }
+      const nextData = await currentSuggestionApi.applySuggestion({
         eventId,
-        runId: suggestionRun.id,
+        runId: currentRun.id,
         acceptedChangeIds: changeIds,
       });
-      setData(nextData);
+      if (!agendaWorkspaceDataMatchesEvent(nextData, eventId)) {
+        throw new Error("The agenda suggestion returned data for another event.");
+      }
+      if (!operationIsCurrent(token)) return;
+      setSnapshot({ ...currentSnapshot, data: nextData });
+      cache?.write(workspaceCacheKey, nextData, workspaceCacheTags);
       setPreview(null);
       setSuggestionRun({
-        ...suggestionRun,
+        ...currentRun,
         status: "applied",
         acceptedChangeIds: [...changeIds],
       });
@@ -1635,31 +2160,63 @@ export function AgendaWorkspace({
         "Selected advisory changes were applied to the private draft. Nothing was published.",
       );
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
+    }
+  }
+
+  async function previewAgenda() {
+    const currentSnapshot = snapshot;
+    if (
+      currentSnapshot === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("validate");
+    if (token === null) return;
+    try {
+      const result = await currentSnapshot.api.preview(eventId);
+      if (!operationIsCurrent(token)) return;
+      setPreview(result);
+      setStatusMessage(
+        result.conflicts.length === 0
+          ? "Agenda validation completed."
+          : "Agenda validation found hard conflicts.",
+      );
+    } catch (previewError) {
+      if (!operationIsCurrent(token)) return;
+      setError(messageFrom(previewError));
+    } finally {
+      endOperation(token);
     }
   }
 
   if (loading && !data) {
     return (
-      <main className={styles.loadingState} aria-live="polite">
+      <div className={styles.loadingState} aria-live="polite">
         <span className={styles.loadingBar} aria-hidden="true" />
         <h1>Loading agenda workspace</h1>
         <p>Retrieving the private draft and published revision.</p>
-      </main>
+      </div>
     );
   }
 
   if (!data) {
     return (
-      <main className={styles.loadingState}>
+      <div className={styles.loadingState}>
         <h1>Agenda workspace unavailable</h1>
         <p role="alert">{error ?? "The agenda could not be loaded."}</p>
-        <button className={styles.primaryButton} type="button" onClick={() => void load()}>
+        <button
+          className={styles.primaryButton}
+          type="button"
+          onClick={() => void load(undefined, undefined, true)}
+        >
           Try again
         </button>
-      </main>
+      </div>
     );
   }
 
@@ -1708,30 +2265,7 @@ export function AgendaWorkspace({
           "remove",
         )
       }
-      onPreview={async () => {
-        if (!activeApi) return;
-        const busyKind: AgendaBusyOperation = "validate";
-        beginBusy(busyKind);
-        setError(null);
-        setStatusMessage(null);
-        try {
-          const result = await activeApi.preview(eventId);
-          setPreview(result);
-          setStatusMessage(
-            result.conflicts.length === 0
-              ? "Agenda validation completed."
-              : "Agenda validation found hard conflicts.",
-          );
-        } catch (previewError) {
-          setError(messageFrom(previewError));
-          if (previewError instanceof AgendaApiError && data) {
-            const failurePreview = previewFromError(previewError, data.draft.version);
-            if (failurePreview) setPreview(failurePreview);
-          }
-        } finally {
-          endBusy(busyKind);
-        }
-      }}
+      onPreview={previewAgenda}
       onOverrideWarning={(warningId, reason) =>
         mutate(
           (activeApi, current) =>

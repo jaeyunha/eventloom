@@ -1,7 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "../../components/layout";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SettingsShell } from "@/components/workspace/settings-ui";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
+import { workspaceClassNames } from "@/components/workspace/workspace-ui-model";
+import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { Button } from "../../components/ui";
 import {
   createIntegrationAdminApi,
@@ -18,10 +26,11 @@ import {
 import styles from "./integrations.module.css";
 import type { IntegrationAdminSnapshot, OneTimeSecret } from "./types";
 
-type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
+export type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
 
 export interface IntegrationAdminProps {
   readonly eventId: string;
+  readonly organizationId: string;
   readonly section: SupportedIntegrationSection;
   readonly initialSnapshot?: IntegrationAdminSnapshot;
   readonly api?: IntegrationAdminApi;
@@ -36,16 +45,18 @@ const sectionCopy: Record<
     description: "Connect distribution services and monitor every outbound program handoff.",
   },
   "api-keys": {
-    title: "API keys",
-    description: "Issue least-privilege credentials for tenant-scoped API clients.",
+    title: "Organization API keys",
+    description:
+      "Issue organization-scoped credentials. Event context is operational metadata, not an authorization boundary.",
   },
   webhooks: {
     title: "Webhooks",
     description: "Deliver signed event notifications and inspect endpoint health.",
   },
   delivery: {
-    title: "Email & calendar",
-    description: "Monitor OpenSend identities, transactional email, and RFC 5545 delivery.",
+    title: "Delivery operations",
+    description:
+      "Monitor deployment-managed email delivery, verified identities, and RFC 5545 operations.",
   },
 };
 
@@ -57,16 +68,18 @@ function messageFrom(error: unknown): string {
 }
 
 export function IntegrationAdmin({
-  eventId,
+  eventId: fallbackEventId,
+  organizationId,
   section,
   initialSnapshot,
   api: injectedApi,
 }: IntegrationAdminProps) {
-  const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-  const api = useMemo(
-    () => injectedApi ?? (configuredApiUrl ? createIntegrationAdminApi(configuredApiUrl) : null),
-    [configuredApiUrl, injectedApi],
-  );
+  const eventId = useOrganizerEventId(fallbackEventId);
+  const api = useMemo(() => injectedApi ?? createIntegrationAdminApi(""), [injectedApi]);
+  const initialRequestRef = useRef<{
+    readonly key: string;
+    readonly request: Promise<IntegrationAdminSnapshot>;
+  } | null>(null);
   const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
     initialSnapshot ?? null,
   );
@@ -80,43 +93,55 @@ export function IntegrationAdmin({
     readonly label: string;
   } | null>(null);
 
-  const loadSnapshot = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!api) {
-        if (!initialSnapshot) {
-          setLoadError("The admin API URL is not configured.");
-          setLoading(false);
-        }
-        return;
-      }
-      setLoadError(null);
-      try {
-        setSnapshot(await api.getSnapshot(eventId, signal));
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setLoadError(messageFrom(error));
-        }
-      } finally {
-        if (!signal?.aborted) {
-          setLoading(false);
-        }
-      }
-    },
-    [api, eventId, initialSnapshot],
-  );
+  const loadSnapshot = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setSnapshot(await api.getSnapshot(organizationId, eventId));
+    } catch (error) {
+      setLoadError(messageFrom(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [api, eventId, organizationId]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void loadSnapshot(controller.signal);
-    return () => controller.abort();
-  }, [loadSnapshot]);
+    const requestKey = `${organizationId}\u0000${eventId}`;
+    const cachedRequest = initialRequestRef.current;
+    const request =
+      cachedRequest?.key === requestKey
+        ? cachedRequest.request
+        : api.getSnapshot(organizationId, eventId);
+    initialRequestRef.current = { key: requestKey, request };
+    let active = true;
+
+    setLoadError(null);
+    void request
+      .then((value) => {
+        if (active) setSnapshot(value);
+      })
+      .catch((error: unknown) => {
+        if (active) setLoadError(messageFrom(error));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [api, eventId, organizationId]);
+
+  const refreshAfter = useCallback(async () => {
+    try {
+      setSnapshot(await api.getSnapshot(organizationId, eventId));
+    } catch (error) {
+      setMutationError(`The change was saved, but status could not refresh: ${messageFrom(error)}`);
+    }
+  }, [api, eventId, organizationId]);
 
   const mutate = useCallback(
     async <T,>(operation: () => Promise<T>, successMessage: string): Promise<T | null> => {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return null;
-      }
       setBusy(true);
       setMutationError(null);
       setNotice(null);
@@ -131,29 +156,14 @@ export function IntegrationAdmin({
         setBusy(false);
       }
     },
-    [api],
+    [],
   );
-
-  const refreshAfter = useCallback(async () => {
-    if (!api) {
-      return;
-    }
-    try {
-      setSnapshot(await api.getSnapshot(eventId));
-    } catch (error) {
-      setMutationError(`The change was saved, but status could not refresh: ${messageFrom(error)}`);
-    }
-  }, [api, eventId]);
 
   const actions = {
     busy,
     async saveCredential(provider: "opensend", secret: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const saved = await mutate(
-        () => api.saveCredential({ eventId, provider, secret }),
+        () => api.saveCredential({ organizationId, eventId, provider, secret }),
         "OpenSend credential saved.",
       );
       if (saved === null) {
@@ -164,15 +174,11 @@ export function IntegrationAdmin({
     },
     async createApiKey(
       input: Parameters<IntegrationAdminApi["createApiKey"]>[0] extends infer P
-        ? Omit<Extract<P, object>, "eventId">
+        ? Omit<Extract<P, object>, "organizationId" | "eventId">
         : never,
     ) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const secret = await mutate(
-        () => api.createApiKey({ ...input, eventId }),
+        () => api.createApiKey({ ...input, organizationId, eventId }),
         "API key created. Copy it before leaving this page.",
       );
       if (!secret) {
@@ -183,11 +189,10 @@ export function IntegrationAdmin({
       return true;
     },
     async revokeApiKey(apiKeyId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
-      const revoked = await mutate(() => api.revokeApiKey(eventId, apiKeyId), "API key revoked.");
+      const revoked = await mutate(
+        () => api.revokeApiKey(organizationId, eventId, apiKeyId),
+        "API key revoked.",
+      );
       if (revoked === null) {
         return false;
       }
@@ -196,15 +201,11 @@ export function IntegrationAdmin({
     },
     async createWebhook(
       input: Parameters<IntegrationAdminApi["createWebhook"]>[0] extends infer P
-        ? Omit<Extract<P, object>, "eventId">
+        ? Omit<Extract<P, object>, "organizationId" | "eventId">
         : never,
     ) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const secret = await mutate(
-        () => api.createWebhook({ ...input, eventId }),
+        () => api.createWebhook({ ...input, organizationId, eventId }),
         "Webhook endpoint created. Copy its signing secret now.",
       );
       if (!secret) {
@@ -215,12 +216,8 @@ export function IntegrationAdmin({
       return true;
     },
     async setWebhookActive(subscriptionId: string, active: boolean) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const updated = await mutate(
-        () => api.setWebhookActive(eventId, subscriptionId, active),
+        () => api.setWebhookActive(organizationId, eventId, subscriptionId, active),
         active ? "Webhook deliveries resumed." : "Webhook deliveries paused.",
       );
       if (updated === null) {
@@ -230,12 +227,8 @@ export function IntegrationAdmin({
       return true;
     },
     async rotateWebhookSecret(subscriptionId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const secret = await mutate(
-        () => api.rotateWebhookSecret(eventId, subscriptionId),
+        () => api.rotateWebhookSecret(organizationId, eventId, subscriptionId),
         "Signing secret rotated. Update the endpoint before dismissing it.",
       );
       if (!secret) {
@@ -246,12 +239,8 @@ export function IntegrationAdmin({
       return true;
     },
     async deleteWebhook(subscriptionId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const removed = await mutate(
-        () => api.deleteWebhook(eventId, subscriptionId),
+        () => api.deleteWebhook(organizationId, eventId, subscriptionId),
         "Webhook endpoint removed.",
       );
       if (removed === null) {
@@ -261,12 +250,8 @@ export function IntegrationAdmin({
       return true;
     },
     async retryCalendarDelivery(deliveryId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const retried = await mutate(
-        () => api.retryCalendarDelivery(eventId, deliveryId),
+        () => api.retryCalendarDelivery(organizationId, eventId, deliveryId),
         "Calendar delivery queued for retry.",
       );
       if (retried === null) {
@@ -277,109 +262,120 @@ export function IntegrationAdmin({
     },
   };
 
-  const base = `/admin/events/${encodeURIComponent(eventId)}/integrations`;
+  const eventBase = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`;
+  const base = `${eventBase}/integrations`;
   const tabs: readonly {
     readonly section: SupportedIntegrationSection;
     readonly label: string;
     readonly href: string;
   }[] = [
     { section: "overview", label: "Overview", href: base },
-    { section: "api-keys", label: "API keys", href: `${base}/api-keys` },
+    {
+      section: "api-keys",
+      label: "Organization API keys",
+      href: `${base}/api-keys`,
+    },
     { section: "webhooks", label: "Webhooks", href: `${base}/webhooks` },
     { section: "delivery", label: "Email & calendar", href: `${base}/delivery` },
   ];
   const copy = sectionCopy[section];
 
   return (
-    <div className={styles.integrationPage}>
-      <a className={styles.skipLink} href="#integration-content">
-        Skip to integration settings
-      </a>
-      <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-        <a href="/admin">Events</a>
-        <span aria-hidden="true">/</span>
-        <a href={`/admin/events/${encodeURIComponent(eventId)}`}>
-          {snapshot?.event.name ?? "Event"}
-        </a>
-        <span aria-hidden="true">/</span>
-        <span>Integrations</span>
-      </nav>
-      <PageHeader
-        eyebrow={<span className={styles.eyebrow}>Organizer workspace</span>}
-        title={copy.title}
+    <main className={`${workspaceClassNames.page} ${styles.integrationPage}`}>
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
+            <Link href={eventBase}>{snapshot?.event.name ?? "Event"}</Link>
+            <span aria-hidden="true">/</span>
+            <span>Integrations</span>
+          </WorkspaceBreadcrumb>
+        }
         description={copy.description}
+        metadata={
+          <>
+            <WorkspaceMetaItem>Event {eventId}</WorkspaceMetaItem>
+            <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
+          </>
+        }
+        title={copy.title}
       />
-      <nav className={styles.tabs} aria-label="Integration settings">
-        {tabs.map((tab) => (
-          <a
-            key={tab.section}
-            href={tab.href}
-            aria-current={tab.section === section ? "page" : undefined}
-          >
-            {tab.label}
-          </a>
-        ))}
-      </nav>
 
-      <div id="integration-content" className={styles.integrationContent} tabIndex={-1}>
-        {notice ? (
-          <div className={styles.successPanel} role="status" aria-live="polite">
-            <p>{notice}</p>
-          </div>
-        ) : null}
-        {mutationError ? (
-          <div className={styles.errorPanel} role="alert">
-            <div>
-              <h2>Could not save the change</h2>
-              <p>{mutationError}</p>
+      <SettingsShell
+        wide
+        navigation={
+          <nav className={styles.settingsNavigation} aria-label="Integration settings">
+            {tabs.map((tab) => (
+              <Link
+                key={tab.section}
+                href={tab.href}
+                aria-current={tab.section === section ? "page" : undefined}
+              >
+                {tab.label}
+              </Link>
+            ))}
+          </nav>
+        }
+      >
+        <div className={styles.integrationContent}>
+          {notice ? (
+            <div className={styles.successPanel} role="status" aria-live="polite">
+              <p>{notice}</p>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="small"
-              onClick={() => setMutationError(null)}
-            >
-              Dismiss
-            </Button>
-          </div>
-        ) : null}
-        {oneTimeSecret ? (
-          <OneTimeSecretPanel
-            secret={oneTimeSecret.value}
-            label={oneTimeSecret.label}
-            onDismiss={() => setOneTimeSecret(null)}
-          />
-        ) : null}
+          ) : null}
+          {mutationError ? (
+            <div className={styles.errorPanel} role="alert">
+              <div>
+                <h2>Could not save the change</h2>
+                <p>{mutationError}</p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setMutationError(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
+          ) : null}
+          {oneTimeSecret ? (
+            <OneTimeSecretPanel
+              secret={oneTimeSecret.value}
+              label={oneTimeSecret.label}
+              onDismiss={() => setOneTimeSecret(null)}
+            />
+          ) : null}
 
-        {loading && !snapshot ? (
-          <div className={styles.statePanel} role="status" aria-live="polite">
-            <span className={styles.spinner} aria-hidden="true" />
-            <h2>Loading integration settings</h2>
-            <p>Retrieving tenant-scoped connection and delivery status.</p>
-          </div>
-        ) : null}
-        {loadError && !snapshot ? (
-          <div className={styles.statePanel} role="alert">
-            <h2>Integration settings are unavailable</h2>
-            <p>{loadError}</p>
-            <Button type="button" onClick={() => void loadSnapshot()}>
-              Try again
-            </Button>
-          </div>
-        ) : null}
+          {loading && !snapshot ? (
+            <div className={styles.statePanel} role="status" aria-live="polite">
+              <span className={styles.spinner} aria-hidden="true" />
+              <h2>Loading integration settings</h2>
+              <p>Retrieving tenant-scoped connection and delivery status.</p>
+            </div>
+          ) : null}
+          {loadError && !snapshot ? (
+            <div className={styles.statePanel} role="alert">
+              <h2>Integration settings are unavailable</h2>
+              <p>{loadError}</p>
+              <Button type="button" onClick={() => void loadSnapshot()}>
+                Try again
+              </Button>
+            </div>
+          ) : null}
 
-        {snapshot ? (
-          section === "overview" ? (
-            <OverviewSection snapshot={snapshot} />
-          ) : section === "api-keys" ? (
-            <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
-          ) : section === "webhooks" ? (
-            <WebhooksSection webhooks={snapshot.webhooks} actions={actions} />
-          ) : (
-            <DeliverySection snapshot={snapshot} actions={actions} />
-          )
-        ) : null}
-      </div>
-    </div>
+          {snapshot ? (
+            section === "overview" ? (
+              <OverviewSection basePath={base} snapshot={snapshot} />
+            ) : section === "api-keys" ? (
+              <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
+            ) : section === "webhooks" ? (
+              <WebhooksSection webhooks={snapshot.webhooks} actions={actions} />
+            ) : (
+              <DeliverySection snapshot={snapshot} actions={actions} />
+            )
+          ) : null}
+        </div>
+      </SettingsShell>
+    </main>
   );
 }

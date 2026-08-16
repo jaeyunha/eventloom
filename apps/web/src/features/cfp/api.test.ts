@@ -20,6 +20,10 @@ describe("CFP authenticated session", () => {
           name: "Priya Raman",
           emailVerified: true,
         },
+        memberships: [
+          { organizationId: "org-1", role: "admin" },
+          { organizationId: "org-2", role: "reviewer" },
+        ],
       });
     }) as typeof fetch);
 
@@ -28,9 +32,41 @@ describe("CFP authenticated session", () => {
       name: "Priya Raman",
       firstName: "Priya",
       lastName: "Raman",
+      memberships: [
+        { organizationId: "org-1", role: "admin" },
+        { organizationId: "org-2", role: "reviewer" },
+      ],
     });
     expect(requestUrl).toBe("https://web.example.com/api/auth/get-session");
     expect(requestInit?.method).toBe("GET");
+    expect(requestInit?.credentials).toBe("include");
+  });
+  it("uses the same-origin gateway when no API origin is configured", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createCfpApi("", (async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return Response.json({
+        data: {
+          id: "event-1",
+          tenantId: "org-1",
+          version: 1,
+          slug: "event-1",
+          name: "Event",
+          timezone: "UTC",
+          opensAt: "2026-01-01T00:00:00.000Z",
+          closesAt: "2026-02-01T00:00:00.000Z",
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.getEvent({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toMatchObject({
+      id: "event-1",
+    });
+    expect(requestedUrl).toBe("/api/cfp/organizations/org-1/events/event-1/config");
     expect(requestInit?.credentials).toBe("include");
   });
 
@@ -40,11 +76,195 @@ describe("CFP authenticated session", () => {
 
     await expect(api.getSession()).resolves.toBeNull();
   });
+  it("creates an account explicitly and hands off verified session data", async () => {
+    const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const api = createCfpApi("https://web.example.com", (async (input, init) => {
+      requests.push({ url: String(input), init });
+      return Response.json({
+        token: "signup-token",
+        user: {
+          email: "Ada@Example.com",
+          name: "Ada Speaker",
+          emailVerified: true,
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: " Ada@Example.com ",
+        mode: "sign_up",
+        password: "StrongPass1!",
+        name: "Ada Speaker",
+        verificationCallbackUrl:
+          "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
+      }),
+    ).resolves.toEqual({
+      status: "authenticated",
+      session: {
+        email: "ada@example.com",
+        name: "Ada Speaker",
+        firstName: "Ada",
+        lastName: "Speaker",
+        memberships: [],
+      },
+    });
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://web.example.com/api/auth/sign-up/email",
+    ]);
+    expect(requests.every((request) => request.init?.credentials === "include")).toBe(true);
+    expect(requests[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      email: "ada@example.com",
+      password: "StrongPass1!",
+      name: "Ada Speaker",
+      callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
+    });
+  });
+
+  it("refreshes authoritative memberships after credential sign-in", async () => {
+    const requests: string[] = [];
+    const api = createCfpApi("https://web.example.com", (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/sign-in/email")) {
+        return Response.json({
+          token: "signin-token",
+          user: {
+            email: "Organizer@Example.com",
+            name: "Olivia Organizer",
+            emailVerified: true,
+          },
+        });
+      }
+      return Response.json({
+        session: { id: "session-1" },
+        user: {
+          email: "Organizer@Example.com",
+          name: "Olivia Organizer",
+          emailVerified: true,
+        },
+        memberships: [{ organizationId: "org-1", role: "owner" }],
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "Organizer@Example.com",
+        mode: "sign_in",
+        password: "StrongPass1!",
+        name: "Olivia Organizer",
+      }),
+    ).resolves.toEqual({
+      status: "authenticated",
+      session: {
+        email: "organizer@example.com",
+        name: "Olivia Organizer",
+        firstName: "Olivia",
+        lastName: "Organizer",
+        memberships: [{ organizationId: "org-1", role: "owner" }],
+      },
+    });
+    expect(requests).toEqual([
+      "https://web.example.com/api/auth/sign-in/email",
+      "https://web.example.com/api/auth/get-session",
+    ]);
+  });
+
+  it("does not fall back to account creation when sign-in fails", async () => {
+    let requestCount = 0;
+    let requestInit: RequestInit | undefined;
+    let requestUrl = "";
+    const api = createCfpApi("https://web.example.com", (async (input, init) => {
+      requestCount += 1;
+      requestUrl = String(input);
+      requestInit = init;
+      return Response.json(
+        {
+          error: {
+            code: "AUTHENTICATION_REQUIRED",
+            message: "The authentication request could not be completed.",
+          },
+        },
+        { status: 401 },
+      );
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "speaker@example.com",
+        mode: "sign_in",
+        password: "StrongPass1!",
+        name: "New Speaker",
+        verificationCallbackUrl:
+          "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
+      }),
+    ).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+    expect(requestCount).toBe(1);
+    expect(requestUrl).toBe("https://web.example.com/api/auth/sign-in/email");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      email: "speaker@example.com",
+      password: "StrongPass1!",
+      callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
+    });
+  });
+
+  it("fails closed when a successful sign-in omits a usable verified session", async () => {
+    let requestCount = 0;
+    const api = createCfpApi("https://web.example.com", (async () => {
+      requestCount += 1;
+      return Response.json({ token: "token-without-user" });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "ada@example.com",
+        mode: "sign_in",
+        password: "StrongPass1!",
+        name: "Ada Speaker",
+      }),
+    ).rejects.toMatchObject({
+      code: "AUTH_SESSION_NOT_CREATED",
+      status: 200,
+    });
+    expect(requestCount).toBe(1);
+  });
+
+  it("keeps sign-up verification required when the returned user is unverified", async () => {
+    const api = createCfpApi("https://web.example.com", (async (input) => {
+      if (String(input).endsWith("/sign-in/email")) {
+        return Response.json({ error: { code: "INVALID_EMAIL_OR_PASSWORD" } }, { status: 401 });
+      }
+      return Response.json({
+        token: null,
+        user: {
+          email: "ada@example.com",
+          name: "Ada Speaker",
+          emailVerified: false,
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "ada@example.com",
+        mode: "sign_up",
+        password: "StrongPass1!",
+        name: "Ada Speaker",
+      }),
+    ).resolves.toEqual({ status: "verification_required" });
+  });
 });
+
 it("parses the published dynamic schema without dropping rules or reusable metadata", async () => {
   const fetcher = (async () =>
     Response.json({
       data: {
+        organization: {
+          id: "org-1",
+          slug: "eventloom",
+          name: "Eventloom",
+        },
         event: {
           id: "event-1",
           slug: "event-1",
@@ -150,6 +370,7 @@ it("parses the published dynamic schema without dropping rules or reusable metad
   });
   expect(published.form.participantFields[0]?.key).toBe("pronouns");
   expect(published.form.rules[0]).toMatchObject({ id: "show-deck" });
+  expect(published.organization.name).toBe("Eventloom");
 });
 describe("CFP mutation schema versions", () => {
   const submission = {
@@ -337,6 +558,7 @@ describe("CFP mutation schema versions", () => {
       );
       const pending = api.authenticateAccount({
         email: "speaker@example.com",
+        mode: "sign_in",
         password: "Password1!",
         name: "Fresh Speaker",
       });
@@ -415,6 +637,7 @@ describe("CFP private file uploads", () => {
       state: "ready",
       contentType: "application/pdf",
       sizeBytes: 3,
+      fileName: "slides.pdf",
     });
 
     expect(requests).toHaveLength(3);

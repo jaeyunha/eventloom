@@ -1,4 +1,6 @@
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
+import { createCalendarInvitation } from "../calendar";
 import {
   createCalendarOpenSendMessage,
   createOpenSendOutboxJob,
@@ -12,14 +14,48 @@ import {
   type OpenSendSender,
 } from "./index";
 
+const senderAddresses = {
+  auth: "auth@sessionboard.namuh.co",
+  speakers: "speakers@sessionboard.namuh.co",
+  calendar: "calendar@sessionboard.namuh.co",
+} as const;
+
 const message: OpenSendMessage = {
-  from: "speakers@sessionboard.namuh.co",
+  from: senderAddresses.speakers,
   to: ["speaker@example.com"],
   subject: "Your session is accepted",
   html: "<p>Congratulations</p>",
   text: "Congratulations",
   idempotencyKey: "email-job-0001",
 };
+function calendarFixture(overrides: Partial<CalendarInvitationPayload> = {}): {
+  payload: CalendarInvitationPayload;
+  invitation: ReturnType<typeof createCalendarInvitation>;
+  message: OpenSendMessage;
+} {
+  const payload: CalendarInvitationPayload = {
+    method: "UPDATE",
+    uid: "tenant-event-session@calendar.sessionboard.namuh.co",
+    sequence: 1,
+    timeZone: "America/Los_Angeles",
+    startsAt: "2026-11-01T10:30:00.000Z",
+    endsAt: "2026-11-01T11:30:00.000Z",
+    organizer: "calendar@sessionboard.namuh.co",
+    attendees: ["speaker@example.com"],
+    summary: "A <safer> session",
+    location: "Room & Board",
+    idempotencyKey: "calendar-update-0001",
+    ...overrides,
+  };
+  const invitation = createCalendarInvitation(payload, {
+    generatedAt: "2026-08-08T12:00:00.000Z",
+  });
+  return {
+    payload,
+    invitation,
+    message: createCalendarOpenSendMessage(payload, invitation),
+  };
+}
 
 describe("OpenSendClient", () => {
   it("uses the hosted send contract and forwards idempotency and calendar attachments", async () => {
@@ -31,13 +67,14 @@ describe("OpenSendClient", () => {
     const client = new OpenSendClient({
       sendingApiKey: "os_sending_secret",
       baseUrl: "https://mail.example.test/",
+      senderAddresses,
       fetch,
     });
 
     const result = await client.send({
       ...message,
       from: "calendar@sessionboard.namuh.co",
-      headers: { "X-Sessionboard-Calendar-Action": "REQUEST" },
+      headers: { "X-Eventloom-Calendar-Action": "REQUEST" },
       attachments: [
         {
           filename: "session.ics",
@@ -73,7 +110,7 @@ describe("OpenSendClient", () => {
         status: 429,
         headers: { "retry-after": "3" },
       });
-    const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
+    const client = new OpenSendClient({ sendingApiKey: "os_key", senderAddresses, fetch });
 
     const rejection = client.send(message);
     await expect(rejection).rejects.toMatchObject({
@@ -91,7 +128,7 @@ describe("OpenSendClient", () => {
       requestCount += 1;
       return Response.json({ accepted: true });
     };
-    const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
+    const client = new OpenSendClient({ sendingApiKey: "os_key", senderAddresses, fetch });
 
     await expect(
       client.send({ ...message, from: "attacker@example.com" } as unknown as OpenSendMessage),
@@ -106,35 +143,22 @@ describe("OpenSendClient", () => {
 });
 
 describe("createCalendarOpenSendMessage", () => {
-  it("delivers UPDATE as a REQUEST calendar attachment without provider OAuth", () => {
-    const email = createCalendarOpenSendMessage(
-      {
-        method: "UPDATE",
-        uid: "tenant-event-session@calendar.foreverbrowsing.com",
-        sequence: 3,
-        timeZone: "America/Los_Angeles",
-        startsAt: "2026-11-01T10:30:00.000Z",
-        endsAt: "2026-11-01T11:30:00.000Z",
-        organizer: "calendar@sessionboard.namuh.co",
-        attendees: ["speaker@example.com"],
-        summary: "A <safer> session",
-        location: "Room & Board",
-        idempotencyKey: "calendar-update-0003",
-      },
-      {
-        ics: "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n",
-        method: "REQUEST",
-        contentType: "text/calendar; charset=utf-8; method=REQUEST",
-        generatedAt: "2026-08-08T12:00:00.000Z",
-      },
-    );
+  it("delivers UPDATE as the committed REQUEST calendar attachment without provider OAuth", () => {
+    const { invitation, message: email } = calendarFixture({
+      sequence: 3,
+      idempotencyKey: "calendar-update-0003",
+    });
 
     expect(email).toMatchObject({
       from: "calendar@sessionboard.namuh.co",
       to: ["speaker@example.com"],
       subject: "Updated invitation: A <safer> session",
       idempotencyKey: "calendar-update-0003",
-      headers: { "X-Sessionboard-Calendar-Action": "UPDATE" },
+      headers: {
+        "Content-Class": "urn:content-classes:calendarmessage",
+        "X-Eventloom-Calendar-Action": "UPDATE",
+        "X-Eventloom-Calendar-Uid": "tenant-event-session@calendar.sessionboard.namuh.co",
+      },
       attachments: [
         {
           content_type: "text/calendar; charset=utf-8; method=REQUEST",
@@ -142,33 +166,61 @@ describe("createCalendarOpenSendMessage", () => {
       ],
     });
     expect(email.html).toContain("A &lt;safer&gt; session");
-    expect(atob(email.attachments?.[0]?.content ?? "")).toContain("METHOD:REQUEST");
+    expect(atob(email.attachments?.[0]?.content ?? "")).toBe(invitation.ics);
+    expect(invitation.ics).toContain("SEQUENCE:3");
   });
 
-  it("rejects a lifecycle/MIME method mismatch", () => {
+  it("rejects calendar bytes or MIME metadata from a different lifecycle snapshot", () => {
+    const current = calendarFixture();
+    const stale = calendarFixture({
+      sequence: 2,
+      idempotencyKey: "calendar-update-0002",
+    });
+
+    expect(() => createCalendarOpenSendMessage(current.payload, stale.invitation)).toThrow(
+      "do not match",
+    );
     expect(() =>
-      createCalendarOpenSendMessage(
+      createCalendarOpenSendMessage(current.payload, {
+        ...current.invitation,
+        contentType: "text/calendar; charset=utf-8; method=CANCEL",
+      }),
+    ).toThrow("do not match");
+  });
+
+  it("labels cancellation consistently in the envelope, attachment, and body", () => {
+    const {
+      payload,
+      invitation,
+      message: email,
+    } = calendarFixture({
+      method: "CANCEL",
+      sequence: 2,
+      idempotencyKey: "calendar-cancel-0002",
+    });
+
+    expect(email).toMatchObject({
+      subject: "Cancelled: A <safer> session",
+      idempotencyKey: payload.idempotencyKey,
+      headers: {
+        "Content-Class": "urn:content-classes:calendarmessage",
+        "X-Eventloom-Calendar-Action": "CANCEL",
+        "X-Eventloom-Calendar-Uid": payload.uid,
+      },
+      attachments: [
         {
-          method: "CANCEL",
-          uid: "tenant-event-session@calendar.foreverbrowsing.com",
-          sequence: 4,
-          timeZone: "America/Los_Angeles",
-          startsAt: "2026-11-01T10:30:00.000Z",
-          endsAt: "2026-11-01T11:30:00.000Z",
-          organizer: "calendar@sessionboard.namuh.co",
-          attendees: ["speaker@example.com"],
-          summary: "Session",
-          location: "",
-          idempotencyKey: "calendar-cancel-0004",
+          content_type: "text/calendar; charset=utf-8; method=CANCEL",
         },
-        {
-          ics: "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n",
-          method: "REQUEST",
-          contentType: "text/calendar; charset=utf-8; method=REQUEST",
-          generatedAt: "2026-08-08T12:00:00.000Z",
-        },
-      ),
-    ).toThrow("does not match");
+      ],
+    });
+    expect(email.text).toContain("remove this event");
+    expect(email.html).toContain("remove this event");
+    expect(email.text).not.toContain("add or update");
+    expect(email.html).not.toContain("add or update");
+    expect(atob(email.attachments?.[0]?.content ?? "")).toBe(invitation.ics);
+    expect(invitation.ics).toContain("METHOD:CANCEL");
+    expect(invitation.ics).toContain("SEQUENCE:2");
+    expect(invitation.ics).toContain("STATUS:CANCELLED");
   });
 });
 
@@ -191,7 +243,7 @@ describe("OpenSendOutboxProcessor", () => {
     expect(await repository.find(job.id)).toEqual(job);
     expect(queue.enqueued).toEqual([{ jobId: job.id, delayMs: 0 }]);
   });
-  it("delivers once and preserves an observable receipt for duplicate queue delivery", async () => {
+  it("provider-accepts once and preserves an observable receipt for duplicate queue delivery", async () => {
     const repository = new InMemoryOpenSendOutboxRepository();
     await repository.insert(
       createOpenSendOutboxJob({
@@ -215,18 +267,18 @@ describe("OpenSendOutboxProcessor", () => {
     });
 
     await expect(processor.process("outbox-1")).resolves.toEqual({
-      outcome: "delivered",
+      outcome: "provider_accepted",
       providerMessageId: "provider-1",
     });
     await expect(processor.process("outbox-1")).resolves.toEqual({ outcome: "skipped" });
 
     expect(sends).toBe(1);
     expect(await repository.find("outbox-1")).toMatchObject({
-      status: "delivered",
+      status: "provider_accepted",
       attemptCount: 1,
       providerMessageId: "provider-1",
       lastError: null,
-      attempts: [{ outcome: "delivered", providerMessageId: "provider-1" }],
+      attempts: [{ outcome: "provider_accepted", providerMessageId: "provider-1" }],
     });
   });
 
@@ -267,12 +319,14 @@ describe("OpenSendOutboxProcessor", () => {
     await expect(processor.process("outbox-2")).resolves.toEqual({ outcome: "skipped" });
 
     now = new Date("2026-08-08T12:00:05.000Z");
-    await expect(processor.process("outbox-2")).resolves.toMatchObject({ outcome: "delivered" });
+    await expect(processor.process("outbox-2")).resolves.toMatchObject({
+      outcome: "provider_accepted",
+    });
     expect(seenKeys).toEqual(["email-job-0001", "email-job-0001"]);
     expect(await repository.find("outbox-2")).toMatchObject({
-      status: "delivered",
+      status: "provider_accepted",
       attemptCount: 2,
-      attempts: [{ outcome: "retry_scheduled" }, { outcome: "delivered" }],
+      attempts: [{ outcome: "retry_scheduled" }, { outcome: "provider_accepted" }],
     });
   });
 

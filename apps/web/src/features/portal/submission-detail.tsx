@@ -1,19 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { portalSubmissionEditTarget, submissionStatusPresentation } from "./model";
+import { clearCfpSubmissionState } from "../cfp/draft-persistence";
+import { portalSubmissionIdsMatch, submissionStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
-import { portalSubmissionIdsMatch } from "./portal-submissions";
+import {
+  canonicalPortalSubmissionId,
+  portalSubmissionActionTargets,
+  portalSubmissionDisplayTitle,
+} from "./portal-submission-model";
 import {
   EmptyState,
-  formatPortalDate,
   PageHeading,
   PortalContentState,
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
+import { formatPortalDate } from "./portal-ui-model";
+import { SubmissionAnswers, SubmissionParticipants } from "./submission-detail-sections";
 import type { PortalSubmissionStatus } from "./types";
+
+export { SubmissionAnswers, SubmissionParticipants } from "./submission-detail-sections";
 
 const standardJourney: readonly PortalSubmissionStatus[] = [
   "submitted",
@@ -30,10 +38,8 @@ export function SubmissionDetail({ submissionId }: Readonly<{ submissionId: stri
 }
 
 function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: string }>) {
-  const { eventQuery, view, context, can, workspace, workspaceLoading } = usePortal();
-  if (!view) {
-    return null;
-  }
+  const { eventQuery, view, context, can } = usePortal();
+  if (!view) return null;
   const submission = view.submissions.find((candidate) =>
     portalSubmissionIdsMatch(candidate.id, submissionId),
   );
@@ -41,7 +47,7 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
     return (
       <EmptyState
         title="Submission not found"
-        description="This submission is not available to your speaker account."
+        description="This submission is not available to your account in the selected event."
         action={
           <Link className={styles.secondaryButton} href={`/portal/submissions${eventQuery}`}>
             Back to submissions
@@ -50,18 +56,19 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
       />
     );
   }
+
   const presentation = submissionStatusPresentation(submission.status);
-  const submissionTasks = view.tasks.filter((task) =>
-    portalSubmissionIdsMatch(task.submissionId, submission.id),
+  const submissionTasks = view.tasks.filter(
+    (task) =>
+      task.submissionId !== null && portalSubmissionIdsMatch(task.submissionId, submission.id),
   );
+  const displayTitle = portalSubmissionDisplayTitle(submission, view.submissions);
   const currentJourneyIndex = standardJourney.indexOf(submission.status);
-  const editTarget = can("submission-edit")
-    ? portalSubmissionEditTarget(context, submission)
-    : null;
-  const roster = Object.values(workspace.rosters).find((candidate) =>
-    portalSubmissionIdsMatch(candidate.submissionId, submission.id),
-  );
-  const canManageRoster = can("roster-manage") && (roster?.capabilities.manage ?? false);
+  const actionTargets =
+    can("submission-edit") && submission.status !== "accepted"
+      ? portalSubmissionActionTargets(context, submission)
+      : null;
+  const cfpEventSlug = context?.slug?.trim() || context?.eventId.trim() || "";
 
   return (
     <>
@@ -69,19 +76,36 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
         <span aria-hidden="true">←</span> All submissions
       </Link>
       <PageHeading
-        eyebrow={`Submission ${submission.id}`}
-        title={submission.title}
-        description="Your latest program status and accepted-speaker requirements."
+        eyebrow="Proposal status"
+        title={displayTitle}
+        description="The latest persisted proposal status and any accepted-speaker requirements."
         action={<SubmissionStatusBadge status={submission.status} />}
       />
-      {editTarget === null ? null : (
-        <Link
-          className={styles.primaryButton}
-          href={editTarget.href}
-          onClick={() => window.localStorage.setItem(editTarget.pointerKey, submission.id)}
-        >
-          Edit proposal
-        </Link>
+      {actionTargets === null ? null : (
+        <div className={styles.headingAction}>
+          <Link
+            className={styles.primaryButton}
+            href={actionTargets.editHref}
+            onClick={() =>
+              window.localStorage.setItem(
+                actionTargets.pointerKey,
+                canonicalPortalSubmissionId(submission.id),
+              )
+            }
+          >
+            Edit proposal
+          </Link>
+          <Link
+            className={styles.secondaryButton}
+            href={actionTargets.newProposalHref}
+            onClick={() => {
+              if (context === null || cfpEventSlug.length === 0) return;
+              clearCfpSubmissionState(cfpEventSlug, actionTargets.identity, window.localStorage);
+            }}
+          >
+            Submit another proposal
+          </Link>
+        </div>
       )}
 
       <section className={`${styles.panel} ${styles.statusHero}`}>
@@ -95,7 +119,10 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
           <p className={styles.eyebrow}>Current status</p>
           <h2>{presentation.label}</h2>
           <p>{presentation.description}</p>
-          <small>Last updated {formatPortalDate(submission.updatedAt) ?? "recently"}</small>
+          <small>
+            {submission.version === undefined ? "" : `Revision ${submission.version} · `}
+            Last updated {formatPortalDate(submission.updatedAt) ?? "recently"}
+          </small>
         </div>
       </section>
 
@@ -129,51 +156,10 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
           </ol>
         </section>
       )}
-      {submission.status === "accepted" ? (
-        <section className={styles.panel} aria-labelledby="participants-heading">
-          <div className={styles.panelHeading}>
-            <div>
-              <p className={styles.eyebrow}>Accepted session</p>
-              <h2 id="participants-heading">Participants</h2>
-            </div>
-            {canManageRoster ? (
-              <Link href="/portal?workspace=co-speakers">Manage co-speakers</Link>
-            ) : null}
-          </div>
-          {roster === undefined ? (
-            <p className={styles.toolbarDescription}>
-              {workspaceLoading
-                ? "Loading the participant roster…"
-                : "The participant roster is unavailable for this session."}
-            </p>
-          ) : roster.members.length === 0 ? (
-            <EmptyState
-              title="No co-speakers added"
-              description={
-                canManageRoster
-                  ? "Add collaborators from the co-speaker workspace."
-                  : "No co-speakers are listed for this session."
-              }
-            />
-          ) : (
-            <ul className={styles.taskSummaryList} aria-label="Session participants">
-              {roster.members.map((member) => (
-                <li key={member.participantId}>
-                  <span className={styles.taskCheck} aria-hidden="true">
-                    {member.status === "active" ? "✓" : "○"}
-                  </span>
-                  <div>
-                    <h3>{member.displayName}</h3>
-                    <p>
-                      {member.role.replaceAll("_", " ")} · {member.status}
-                      {member.email ? ` · ${member.email}` : ""}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+
+      {submission.answers ? <SubmissionAnswers answers={submission.answers} /> : null}
+      {submission.participants ? (
+        <SubmissionParticipants participants={submission.participants} />
       ) : null}
 
       {submission.status === "accepted" ? (
@@ -183,7 +169,9 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
               <p className={styles.eyebrow}>Accepted speaker checklist</p>
               <h2 id="accepted-tasks-heading">Tasks for this session</h2>
             </div>
-            <Link href={`/portal/tasks${eventQuery}`}>Open task workspace</Link>
+            {can("task-response") ? (
+              <Link href={`/portal/tasks${eventQuery}`}>Open task workspace</Link>
+            ) : null}
           </div>
           {submissionTasks.length === 0 ? (
             <EmptyState

@@ -2,117 +2,302 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
-  enrichServerSubmission,
-  getAcceptedHandoffMetadata,
-  getSeededSubmission,
-  mapServerSubmission,
+  ReviewDataNotice,
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
 } from "./submission-workspace";
+import {
+  decisionNotificationSummary,
+  enrichCanonicalSubmission,
+  getAcceptedHandoffMetadata,
+  indexOrganizerEvaluationWorkspace,
+  initialOrganizerEventName,
+  loadCanonicalSubmissionList,
+  loadOrganizerEvaluationWorkspace,
+  loadOrganizerEventIdentity,
+  loadOrganizerEventName,
+  mapCanonicalSubmission,
+  mergeCanonicalSubmissionEvaluation,
+  type OrganizerEvaluationWorkspace,
+  submissionListState,
+  submissionLoadErrorMessage,
+  submissionLoadFailure,
+} from "./submission-workspace-model";
+
+describe("review data notices", () => {
+  it("treats a missing plan as setup guidance instead of a retryable error", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewDataNotice, {
+        state: {
+          status: "no_plan",
+          message: "No evaluation plan is configured for this event.",
+        },
+        onRetry: vi.fn(),
+        setupHref: "/admin/organizations/org/events/summit/reviews",
+      }),
+    );
+
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain("Set up review plan");
+    expect(markup).toContain('href="/admin/organizations/org/events/summit/reviews"');
+    expect(markup).not.toContain("Retry review data");
+  });
+
+  it("keeps retry available for a genuine review-data failure", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewDataNotice, {
+        state: {
+          status: "unavailable",
+          message: "Review data is temporarily unavailable.",
+        },
+        onRetry: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toMatch(/<button[^>]*type="button"[^>]*>Retry review data<\/button>/u);
+    expect(markup).not.toContain("Set up review plan");
+  });
+});
+
+const canonicalEnvelope = {
+  submission: {
+    id: "submission-devflow-1",
+    tenantId: "tenant-devflow",
+    eventId: "devflow-conf-2027",
+    formId: "main-cfp",
+    ownerAccountId: "speaker-account",
+    formVersion: 4,
+    version: 1,
+    status: "submitted" as const,
+    completedSteps: ["welcome", "account", "submission", "participant", "review"],
+    answers: {
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      abstract:
+        "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+      format: "workshop",
+      track: "platform",
+      topics: ["accessibility", "reliability"],
+      workshopAudience: "Staff engineers and platform teams.",
+    },
+    participants: [
+      {
+        id: "participant-priya",
+        firstName: "Priya",
+        lastName: "Raman",
+        email: "sbek-speaker@example.com",
+        role: "primary" as const,
+        biography: "Priya's canonical biography.",
+        answers: {
+          participantType: "company",
+          participantCompany: "Latticework Systems",
+        },
+      },
+      {
+        id: "participant-marcus",
+        firstName: "Marcus",
+        lastName: "Okafor",
+        email: "sbek-speaker2@example.com",
+        role: "co_speaker" as const,
+        biography: "Marcus's canonical biography.",
+        answers: { participantType: "individual" },
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2027-01-02T11:00:00.000Z",
+    updatedAt: "2027-01-02T12:00:00.000Z",
+    submittedAt: "2027-01-02T12:00:00.000Z",
+    reopenedAt: null,
+  },
+  submissionFields: [
+    { key: "title", label: "Session title" },
+    { key: "abstract", label: "Abstract" },
+    {
+      key: "format",
+      label: "Session format",
+      options: [{ value: "workshop", label: "Workshop" }],
+    },
+    {
+      key: "track",
+      label: "Track",
+      options: [{ value: "platform", label: "Platform & Infra" }],
+    },
+    {
+      key: "topics",
+      label: "Topics",
+      options: [
+        { value: "accessibility", label: "Accessibility" },
+        { value: "reliability", label: "Reliability" },
+      ],
+    },
+    { key: "workshopAudience", label: "Workshop audience" },
+  ],
+  participantFields: [
+    { key: "firstName", label: "First name" },
+    { key: "lastName", label: "Last name" },
+    { key: "email", label: "Email" },
+    {
+      key: "participantType",
+      label: "Participant type",
+      options: [
+        { value: "company", label: "Company" },
+        { value: "individual", label: "Individual" },
+      ],
+    },
+    { key: "participantCompany", label: "Company" },
+    { key: "biography", label: "Biography" },
+  ],
+} as const;
 
 describe("organizer submission workspace", () => {
-  it("round-trips official taxonomy, custom answers, co-speakers, and edited abstracts", () => {
-    const abstract =
-      "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.";
-    const record = {
-      id: "submission-devflow-1",
-      tenantId: "tenant-devflow",
-      eventId: "devflow-conf-2027",
-      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-      abstract,
-      answers: {
-        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-        abstract,
-        track: "Platform & Infra",
-        format: "Talk (30 min)",
-        audienceLevel: "Intermediate",
-        keyTakeaway: "A decision framework for which incremental-build investments pay off",
-      },
-      fieldDefinitions: [
-        { key: "title", label: "Session title" },
-        { key: "abstract", label: "Abstract" },
-        { key: "track", label: "Track", options: ["AI Engineering", "Platform & Infra"] },
-        {
-          key: "format",
-          label: "Format",
-          options: [{ value: "Talk (30 min)", label: "Talk (30 min)" }],
-        },
-        {
-          key: "audienceLevel",
-          label: "Audience level",
-          options: ["Beginner", "Intermediate", "Advanced"],
-        },
-        { key: "keyTakeaway", label: "Key takeaway" },
-      ],
-      participants: [
-        {
-          id: "participant-priya",
-          displayName: "Priya Raman",
-          email: "sbek-speaker@example.com",
-          biography: "Priya's fixture biography.",
-          role: "primary",
-          organization: "Latticework Systems",
-          answers: { dietary: "Vegetarian" },
-        },
-        {
-          id: "participant-marcus",
-          displayName: "Marcus Okafor",
-          email: "sbek-speaker2@example.com",
-          biography: "Marcus's fixture biography.",
-          role: "co_speaker",
-          organization: "Cloudreach Labs",
-          answers: { pronouns: "he/him" },
-        },
-      ],
-      status: "submitted",
-      version: 1,
-      submittedAt: "2027-01-02T12:00:00.000Z",
-      updatedAt: "2027-01-02T12:00:00.000Z",
-      reopenedAt: null,
-    } as const;
+  it("formats durable decision notification delivery evidence", () => {
+    expect(
+      decisionNotificationSummary({
+        state: "delivered",
+        completedAt: "2026-08-13T20:00:00.000Z",
+      }),
+    ).toContain("Decision notification delivered");
+  });
 
-    const listRecord = mapServerSubmission(record);
-    const detailRecord = mapServerSubmission(record);
-    expect(listRecord).toMatchObject({
-      track: "Platform & Infra",
-      format: "Talk (30 min)",
-    });
-    expect(detailRecord).toMatchObject({
-      track: "Platform & Infra",
-      format: "Talk (30 min)",
-      abstract,
-    });
-    expect(detailRecord.answers).toEqual(
-      expect.arrayContaining([
-        { question: "Audience level", answer: "Intermediate" },
-        {
-          question: "Key takeaway",
-          answer: "A decision framework for which incremental-build investments pay off",
+  it("distinguishes loading, failure, unconfigured, empty, and filtered states", () => {
+    expect(
+      submissionListState({
+        loading: true,
+        loadFailure: null,
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("loading");
+    expect(
+      submissionListState({
+        loading: false,
+        loadFailure: { kind: "failure", message: "Gateway unavailable" },
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("failure");
+    expect(
+      submissionListState({
+        loading: false,
+        loadFailure: {
+          kind: "unconfigured",
+          message: "Submission intake is not configured for this event.",
         },
-      ]),
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("unconfigured");
+    expect(
+      submissionListState({
+        loading: false,
+        loadFailure: null,
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("empty");
+    expect(
+      submissionListState({
+        loading: false,
+        loadFailure: null,
+        submissionCount: 2,
+        visibleCount: 0,
+      }),
+    ).toBe("filtered_empty");
+
+    const markup = renderToStaticMarkup(
+      createElement(SubmissionListWorkspace, {
+        eventId: "event-with-no-submissions",
+        organizationId: "org-1",
+      }),
     );
-    expect(detailRecord.participants).toMatchObject([
+    expect(markup).toContain("Loading submissions");
+    expect(markup).not.toContain("No submissions yet");
+    expect(markup).not.toContain('id="submission-search"');
+    expect(markup).not.toContain("<table");
+  });
+
+  it("explains a missing CFP record without claiming the event is missing", () => {
+    expect(submissionLoadFailure(404, "The event was not found.")).toEqual({
+      kind: "unconfigured",
+      message: "Submission intake is not configured for this event.",
+    });
+    expect(submissionLoadFailure(503, "Gateway unavailable")).toEqual({
+      kind: "failure",
+      message: "Gateway unavailable",
+    });
+    expect(submissionLoadErrorMessage(404, "The event was not found.")).toBe(
+      "Submission intake is not configured for this event.",
+    );
+    expect(submissionLoadErrorMessage(503, "Gateway unavailable")).toBe("Gateway unavailable");
+  });
+
+  it("maps the exact canonical fields, edited values, and every co-speaker", () => {
+    const record = mapCanonicalSubmission(canonicalEnvelope);
+
+    expect(record).toMatchObject({
+      id: "submission-devflow-1",
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      track: "Platform & Infra",
+      format: "Workshop",
+      abstract:
+        "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+    });
+    expect(record.reviewData).toEqual({ status: "pending" });
+    expect(record.answers).toEqual([
+      {
+        question: "Session title",
+        answer: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      },
+      {
+        question: "Abstract",
+        answer:
+          "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+      },
+      { question: "Session format", answer: "Workshop" },
+      { question: "Track", answer: "Platform & Infra" },
+      { question: "Topics", answer: "Accessibility, Reliability" },
+      { question: "Workshop audience", answer: "Staff engineers and platform teams." },
+    ]);
+    expect(record.participants).toMatchObject([
       {
         name: "Priya Raman",
         role: "Speaker",
         organization: "Latticework Systems",
-        answers: { dietary: "Vegetarian" },
+        biography: "Priya's canonical biography.",
+        answers: {
+          "First name": "Priya",
+          "Last name": "Raman",
+          Email: "sbek-speaker@example.com",
+          "Participant type": "Company",
+          Company: "Latticework Systems",
+          Biography: "Priya's canonical biography.",
+        },
       },
       {
         name: "Marcus Okafor",
         role: "Co-speaker",
-        organization: "Cloudreach Labs",
-        answers: { pronouns: "he/him" },
+        organization: "",
+        biography: "Marcus's canonical biography.",
+        answers: {
+          "First name": "Marcus",
+          "Last name": "Okafor",
+          Email: "sbek-speaker2@example.com",
+          "Participant type": "Individual",
+          Company: "—",
+          Biography: "Marcus's canonical biography.",
+        },
       },
     ]);
 
-    const editedAbstract = `${abstract} Updated: now includes 2026 benchmark data.`;
-    const editedRecord = mapServerSubmission({
-      ...record,
-      abstract: editedAbstract,
-      answers: { ...record.answers, abstract: editedAbstract },
-      version: 2,
-      updatedAt: "2027-01-03T12:00:00.000Z",
+    const editedAbstract = "Updated: the session now includes the canonical 2027 benchmark data.";
+    const editedRecord = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        version: 2,
+        updatedAt: "2027-01-03T12:00:00.000Z",
+        answers: { ...canonicalEnvelope.submission.answers, abstract: editedAbstract },
+      },
     });
     expect(editedRecord.abstract).toBe(editedAbstract);
     expect(editedRecord.answers).toContainEqual({
@@ -120,192 +305,622 @@ describe("organizer submission workspace", () => {
       answer: editedAbstract,
     });
   });
-  it("keeps authoritative submissions visible when optional evaluation aggregates fail", async () => {
+  it("reads canonical answers stored under immutable field ids after form revisions", () => {
+    const submissionFields = canonicalEnvelope.submissionFields.map((definition) => ({
+      ...definition,
+      id: `field-${definition.key}`,
+    }));
+    const participantFields = canonicalEnvelope.participantFields.map((definition) => ({
+      ...definition,
+      id: `field-${definition.key}`,
+    }));
+    const answers = Object.fromEntries(
+      Object.entries(canonicalEnvelope.submission.answers).map(([key, value]) => [
+        `field-${key}`,
+        value,
+      ]),
+    );
+    const participants = canonicalEnvelope.submission.participants.map((participant) => ({
+      ...participant,
+      answers: Object.fromEntries(
+        Object.entries(participant.answers).map(([key, value]) => [`field-${key}`, value]),
+      ),
+    }));
+
+    const record = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        answers,
+        participants,
+      },
+      submissionFields,
+      participantFields,
+    });
+
+    expect(record).toMatchObject({
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      abstract:
+        "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+      track: "Platform & Infra",
+      format: "Workshop",
+    });
+    expect(record.participants[0]?.organization).toBe("Latticework Systems");
+  });
+  it("loads the authoritative event name instead of presenting a raw event UUID", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: { name: "Forward Summit 2028" } }));
+
+    try {
+      await expect(
+        loadOrganizerEventName("", "organization-1", "82b23d61-c2f8-4f6b-a89a-9bba98c3555c"),
+      ).resolves.toBe("Forward Summit 2028");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/cfp/organizations/organization-1/events/82b23d61-c2f8-4f6b-a89a-9bba98c3555c/config",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("keeps an authoritative public slug separate from the event id", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: {
+          id: "evt_01JXYZ",
+          name: "DevFlow Conference",
+          slug: "devflow-conf-2027",
+        },
+      }),
+    );
+    try {
+      await expect(loadOrganizerEventIdentity("", "organization-1", "evt_01JXYZ")).resolves.toEqual(
+        {
+          name: "DevFlow Conference",
+          slug: "devflow-conf-2027",
+        },
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/cfp/organizations/organization-1/events/evt_01JXYZ/config",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+  it("uses the same-origin gateway and keeps canonical submissions visible when aggregates fail", async () => {
+    const requests: string[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes("/plans?eventId=")) {
+      requests.push(url);
+      if (url.includes("/organizer/workspace?eventId=")) {
         return Response.json({
-          data: { plans: [{ id: "plan-1", rounds: [{ id: "round-1" }] }] },
+          data: {
+            plan: {
+              id: "plan-1",
+              rounds: [
+                { id: "round-initial", sequence: 1 },
+                { id: "round-final", sequence: 2 },
+              ],
+            },
+            assignments: [
+              {
+                id: "assignment-1",
+                reviewerId: "reviewer-1",
+                submissionId: "submission-devflow-1",
+                status: "submitted",
+              },
+            ],
+            decisions: {},
+            aggregates: [
+              {
+                submissionId: "submission-devflow-1",
+                roundId: "round-final",
+                submittedReviewCount: 0,
+                expectedReviewCount: 1,
+                averageWeightedTotal: null,
+                possibleWeightedTotal: 0,
+              },
+            ],
+          },
         });
       }
-      if (url.endsWith("/assignments")) {
-        return Response.json({ data: { assignments: [] } });
+      if (url.endsWith("/reviews")) {
+        return Response.json({
+          data: {
+            reviews: [
+              {
+                assignmentId: "assignment-1",
+                submissionId: "submission-devflow-1",
+                comment: "Ready for the committee.",
+                scores: {
+                  overall_rating: { value: 4 },
+                  recommendation: { value: "accept" },
+                },
+              },
+            ],
+          },
+        });
       }
-      if (url.endsWith("/decision")) {
-        return Response.json({ data: null });
+      if (url === "/api/admin/organizations/organization-1/members") {
+        return Response.json([
+          {
+            organizationId: "organization-1",
+            userId: "reviewer-1",
+            email: "sam@example.test",
+            name: "Sam Whitfield",
+            emailVerified: true,
+            status: "active",
+            role: "reviewer",
+            createdAt: "2026-08-13T00:00:00.000Z",
+            updatedAt: "2026-08-13T00:00:00.000Z",
+          },
+        ]);
       }
-      if (url.endsWith("/aggregate")) {
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const submission = await enrichCanonicalSubmission("", canonicalEnvelope, "organization-1");
+      expect(submission).toMatchObject({
+        id: "submission-devflow-1",
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+        evaluationPlanId: "plan-1",
+        reviewSummary: { completed: 0, total: 1, averageScore: null, maxScore: 0 },
+        reviewAssignments: [
+          {
+            reviewer: "Sam Whitfield",
+            status: "complete",
+            criterionScores: [
+              { criterion: "Overall Rating", value: 4 },
+              { criterion: "Recommendation", value: "accept" },
+            ],
+            comment: "Ready for the committee.",
+          },
+        ],
+      });
+      expect(requests).toHaveLength(3);
+
+      expect(requests).toContain("/api/admin/organizations/organization-1/members");
+      expect(requests.filter((request) => request.includes("/organizer/workspace"))).toHaveLength(
+        1,
+      );
+      expect(requests.some((request) => request.includes("/plans?eventId="))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/assignments"))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/aggregate"))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/decision"))).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+  it("loads canonical titles independently of the event-wide evaluation batch", async () => {
+    let releaseWorkspace: ((response: Response) => void) | undefined;
+    const workspaceGate = new Promise<Response>((resolve) => {
+      releaseWorkspace = resolve;
+    });
+    const requests: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/cfp/organizations/org-1/events/event-1/submissions") {
+        return Response.json({ data: [canonicalEnvelope] });
+      }
+      if (url === "/api/admin/evaluations/organizer/workspace?eventId=event-1") {
+        return workspaceGate;
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const workspacePromise = loadOrganizerEvaluationWorkspace("", "event-1");
+      const envelopes = await loadCanonicalSubmissionList("", "org-1", "event-1");
+      const rows = envelopes.map(mapCanonicalSubmission);
+      expect(rows.map((row) => row.title)).toEqual([
+        "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      ]);
+      expect(requests).toEqual([
+        "/api/admin/evaluations/organizer/workspace?eventId=event-1",
+        "/api/cfp/organizations/org-1/events/event-1/submissions",
+      ]);
+
+      releaseWorkspace?.(
+        Response.json({
+          data: {
+            plan: { id: "plan-1", rounds: [{ id: "round-1", sequence: 1 }] },
+            assignments: [],
+            aggregates: [],
+            decisions: {},
+          },
+        }),
+      );
+      const workspace = await workspacePromise;
+      expect(
+        envelopes.map((envelope) =>
+          mergeCanonicalSubmissionEvaluation(
+            envelope,
+            indexOrganizerEvaluationWorkspace(workspace),
+          ),
+        ),
+      ).toHaveLength(1);
+      expect(requests.some((request) => request.includes("/plans?eventId="))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/reviews"))).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("keeps canonical rows when the evaluation batch fails", async () => {
+    const requests: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/cfp/organizations/org-1/events/event-1/submissions") {
+        return Response.json({ data: [canonicalEnvelope] });
+      }
+      if (url === "/api/admin/evaluations/organizer/workspace?eventId=event-1") {
+        return Response.json({ error: { message: "Evaluation unavailable." } }, { status: 503 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const [envelopes, workspace] = await Promise.all([
+        loadCanonicalSubmissionList("", "org-1", "event-1"),
+        loadOrganizerEvaluationWorkspace("", "event-1").catch(() => null),
+      ]);
+      const rows =
+        workspace === null
+          ? envelopes.map(mapCanonicalSubmission)
+          : envelopes.map((envelope) =>
+              mergeCanonicalSubmissionEvaluation(
+                envelope,
+                indexOrganizerEvaluationWorkspace(workspace),
+              ),
+            );
+      expect(rows[0]?.title).toBe("Taming 40-Minute CI: Incremental Builds at Monorepo Scale");
+      expect(
+        submissionListState({
+          loading: false,
+          loadFailure: null,
+          submissionCount: rows.length,
+          visibleCount: rows.length,
+        }),
+      ).toBe("ready");
+      expect(requests).toHaveLength(2);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("does not expose internal reviewer or organizer identifiers in merged presentation data", () => {
+    const internalReviewerId = "reviewer-internal-123";
+    const internalOrganizerId = "organizer-internal-456";
+    const workspace: OrganizerEvaluationWorkspace = {
+      plan: { id: "plan-1", rounds: [{ id: "round-1", sequence: 1 }] },
+      assignments: [
+        {
+          id: "assignment-1",
+          reviewerId: internalReviewerId,
+          submissionId: canonicalEnvelope.submission.id,
+          roundId: "round-1",
+          status: "assigned",
+        },
+      ],
+      aggregates: [
+        {
+          roundId: "round-1",
+          submissionId: canonicalEnvelope.submission.id,
+          submittedReviewCount: 0,
+          expectedReviewCount: 1,
+          averageWeightedTotal: null,
+          possibleWeightedTotal: 5,
+        },
+      ],
+      decisions: {
+        [canonicalEnvelope.submission.id]: {
+          id: "decision-1",
+          tenantId: canonicalEnvelope.submission.tenantId,
+          eventId: canonicalEnvelope.submission.eventId,
+          planId: "plan-1",
+          submissionId: canonicalEnvelope.submission.id,
+          status: "accepted",
+          version: 2,
+          history: [
+            {
+              from: null,
+              to: "accepted",
+              reason: "Ready for the program.",
+              decidedBy: internalOrganizerId,
+              decidedAt: "2027-01-03T12:00:00.000Z",
+              idempotencyKey: "decision-accepted",
+            },
+          ],
+          updatedAt: "2027-01-03T12:00:00.000Z",
+        },
+      },
+    };
+
+    const row = mergeCanonicalSubmissionEvaluation(
+      canonicalEnvelope,
+      indexOrganizerEvaluationWorkspace(workspace),
+    );
+
+    expect(row.reviewAssignments[0]?.reviewer).toBeTruthy();
+    expect(row.reviewAssignments[0]?.reviewer).not.toContain(internalReviewerId);
+    expect(row.timeline.some((entry) => entry.detail.includes(internalOrganizerId))).toBe(false);
+  });
+
+  it("distinguishes submitted-review failures from an authoritative zero result", async () => {
+    let reviewsFail = true;
+    const reviewRequests: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/organizer/workspace?eventId=")) {
+        return Response.json({
+          data: {
+            plan: { id: "plan-1", rounds: [{ id: "round-final", sequence: 2 }] },
+            assignments: [
+              {
+                id: "assignment-1",
+                reviewerId: "reviewer-1",
+                submissionId: canonicalEnvelope.submission.id,
+                status: "submitted",
+              },
+            ],
+            decisions: {},
+            aggregates: [
+              {
+                roundId: "round-final",
+                submissionId: canonicalEnvelope.submission.id,
+                submittedReviewCount: 1,
+                expectedReviewCount: 1,
+                averageWeightedTotal: 4,
+                possibleWeightedTotal: 5,
+              },
+            ],
+          },
+        });
+      }
+      if (url.endsWith("/reviews")) {
+        reviewRequests.push(url);
+        return reviewsFail
+          ? Response.json(
+              { error: { message: "Submitted review read unavailable." } },
+              { status: 503 },
+            )
+          : Response.json({ data: { reviews: [] } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const failed = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(failed.submittedReviewRead).toEqual({
+        status: "error",
+        message: "Submitted review read unavailable.",
+      });
+      expect(failed.reviewAssignments[0]).not.toHaveProperty("criterionScores");
+      expect(failed.reviewAssignments[0]).not.toHaveProperty("comment");
+
+      reviewsFail = false;
+      const empty = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(empty.submittedReviewRead).toEqual({ status: "ready", count: 0 });
+      expect(reviewRequests).toEqual([
+        "/api/admin/evaluations/plans/plan-1/rounds/round-final/submissions/submission-devflow-1/reviews",
+        "/api/admin/evaluations/plans/plan-1/rounds/round-final/submissions/submission-devflow-1/reviews",
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+  it("keeps canonical detail content when optional evaluation data has no plan or is unavailable", async () => {
+    let evaluationStatus = 404;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/organizer/workspace?eventId=")) {
         return Response.json(
-          { error: { code: "INTERNAL_ERROR", message: "Aggregate unavailable" } },
-          { status: 500 },
+          {
+            error: {
+              message: evaluationStatus === 404 ? "No evaluation plan." : "Evaluation unavailable.",
+            },
+          },
+          { status: evaluationStatus },
         );
       }
       throw new Error(`Unexpected request: ${url}`);
     });
 
     try {
-      const submission = await enrichServerSubmission("https://api.example.test", {
-        id: "submission-1",
-        tenantId: "org-1",
-        eventId: "event-1",
-        title: "Visible submission",
-        abstract: "The authoritative abstract.",
-        answers: {},
-        participants: [],
-        status: "submitted",
-        version: 1,
-        submittedAt: "2027-01-02T12:00:00.000Z",
-        updatedAt: "2027-01-02T12:00:00.000Z",
-        reopenedAt: null,
+      const noPlan = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(noPlan).toMatchObject({
+        id: canonicalEnvelope.submission.id,
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+        abstract:
+          "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+        participants: [{ name: "Priya Raman" }, { name: "Marcus Okafor" }],
+        reviewSummary: { completed: 0, total: 0 },
+        reviewData: {
+          status: "no_plan",
+          message: "No evaluation plan is configured for this event.",
+        },
       });
-      expect(submission).toMatchObject({
-        id: "submission-1",
-        title: "Visible submission",
-        evaluationPlanId: "plan-1",
-        reviewSummary: { completed: 0, total: 0, averageScore: null, maxScore: 0 },
+      expect(noPlan.evaluationPlanId).toBeUndefined();
+
+      evaluationStatus = 503;
+      const unavailable = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(unavailable).toMatchObject({
+        id: canonicalEnvelope.submission.id,
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+        answers: expect.arrayContaining([
+          {
+            question: "Session title",
+            answer: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+          },
+        ]),
+        reviewData: {
+          status: "unavailable",
+          message: "Review data is unavailable: Evaluation unavailable.",
+        },
       });
     } finally {
       fetchMock.mockRestore();
     }
   });
 
-  it("uses the stored taxonomy answer and only renders an em dash when it is absent", () => {
-    const record = {
-      id: "submission-without-format",
-      tenantId: "tenant-devflow",
-      eventId: "devflow-conf-2027",
-      title: "A submission",
-      abstract: "An abstract",
-      answers: { track: "Platform & Infra" },
-      participants: [],
-      status: "submitted",
-      version: 1,
-      submittedAt: null,
-      updatedAt: "2027-01-02T12:00:00.000Z",
-      reopenedAt: null,
-    };
-    expect(mapServerSubmission(record)).toMatchObject({
+  it("starts submission detail in loading until the canonical list responds", () => {
+    const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
+    try {
+      const markup = renderToStaticMarkup(
+        createElement(SubmissionDetailWorkspace, {
+          eventId: "summit-2026",
+          submissionId: "missing-submission",
+          organizationId: "organization-1",
+        }),
+      );
+
+      expect(markup).toContain("Loading submission");
+      expect(markup).not.toContain("Submission not found");
+      expect(markup).not.toContain("Unable to load submission");
+    } finally {
+      process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
+    }
+  });
+
+  it("projects persisted accepted and rejected decisions into canonical statuses", async () => {
+    let decisionStatus: "accepted" | "rejected" = "accepted";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/organizer/workspace?eventId=")) {
+        return Response.json({
+          data: {
+            plan: { id: "plan-1", rounds: [{ id: "round-final", sequence: 1 }] },
+            assignments: [],
+            aggregates: [
+              {
+                roundId: "round-final",
+                submissionId: canonicalEnvelope.submission.id,
+                submittedReviewCount: 0,
+                expectedReviewCount: 0,
+                averageWeightedTotal: null,
+                possibleWeightedTotal: 0,
+              },
+            ],
+            decisions: {
+              [canonicalEnvelope.submission.id]: {
+                id: "decision-1",
+                tenantId: canonicalEnvelope.submission.tenantId,
+                eventId: canonicalEnvelope.submission.eventId,
+                planId: "plan-1",
+                submissionId: canonicalEnvelope.submission.id,
+                status: decisionStatus,
+                version: 2,
+                history: [
+                  {
+                    from: null,
+                    to: decisionStatus,
+                    reason: `Organizer decision: ${decisionStatus}.`,
+                    decidedBy: "organizer-1",
+                    decidedAt: "2027-01-03T12:00:00.000Z",
+                    idempotencyKey: `decision-${decisionStatus}`,
+                  },
+                ],
+                updatedAt: "2027-01-03T12:00:00.000Z",
+              },
+            },
+          },
+        });
+      }
+      if (url.endsWith("/reviews")) return Response.json({ data: { reviews: [] } });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      for (const [status, expectedStatus, timelineLabel] of [
+        ["accepted", "accepted", "Accepted"],
+        ["rejected", "declined", "Rejected"],
+      ] as const) {
+        decisionStatus = status;
+        const submission = await enrichCanonicalSubmission("", canonicalEnvelope);
+        expect(submission.status).toBe(expectedStatus);
+        expect(submission.decision?.status).toBe(status);
+        expect(submission.timeline.at(-1)?.label).toBe(timelineLabel);
+      }
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("uses stored taxonomy answers and an em dash only when a canonical field is absent", () => {
+    const record = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        answers: { ...canonicalEnvelope.submission.answers, format: undefined },
+      },
+    });
+    expect(record).toMatchObject({
       track: "Platform & Infra",
       format: "—",
     });
   });
-  it("renders an accessible event-scoped submission table with filters and progress", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, { eventId: "summit-2026" }),
-    );
+  it("keeps the initial event label neutral until authoritative identity loads", () => {
+    expect(initialOrganizerEventName()).toBe("Selected event");
 
-    expect(markup).toContain("<table");
-    expect(markup).toContain("<caption");
-    expect(markup).toContain('scope="col"');
-    expect(markup).toContain('scope="row"');
-    expect(markup).toContain('aria-label="Select all visible submissions"');
-    expect(markup).toContain('aria-label="Select Designing for Trust in AI-Assisted Teams"');
-    expect(markup).toContain('id="submission-search"');
-    expect(markup).toContain('for="submission-status"');
-    expect(markup).toContain('for="submission-track"');
-    expect(markup).toContain('for="submission-format"');
-    expect(markup).toContain('role="progressbar"');
-    expect(markup).toContain("Under review");
-    expect(markup).toContain("Review progress");
-    expect(markup).toContain("/admin/events/summit-2026/submissions/sub-001");
-    expect(markup).not.toContain("maya.chen@example.test");
-    expect(markup).not.toContain("Organizer notes");
+    for (const eventId of ["demo-event", "summit-2026", "forge-2025"]) {
+      const markup = renderToStaticMarkup(
+        createElement(SubmissionListWorkspace, {
+          eventId,
+          organizationId: "organization-1",
+        }),
+      );
+      expect(markup).toContain("Selected event");
+      expect(markup).not.toContain("Open Sessionboard Conference");
+      expect(markup).not.toContain("Eventloom Summit 2026");
+      expect(markup).not.toContain("Forge Community Day 2025");
+    }
   });
 
-  it("keeps detail content private to the organizer detail view", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-001",
-      }),
-    );
+  it("loads canonical submissions from the same-origin API even under fixture profile", async () => {
+    const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: [canonicalEnvelope] }));
 
-    expect(markup).toContain("Designing for Trust in AI-Assisted Teams");
-    expect(markup).toContain("Version 3");
-    expect(markup).toContain("maya.chen@example.test");
-    expect(markup).toContain("Structured answers");
-    expect(markup).toContain("Lifecycle timeline");
-    expect(markup).toContain("Review score summary");
-    expect(markup).toContain("Assignment &amp; conflicts");
-    expect(markup).toContain("Organizer notes");
-    expect(markup).toContain("Human-authored reason");
-  });
-  it("exposes versioned decisions, queued audience notifications, and post-close lock guidance", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-001",
-      }),
-    );
-
-    expect(markup).toContain("Accept submission");
-    expect(markup).toContain("Reject submission");
-    expect(markup).toContain("Decision and notification history");
-    expect(markup).toContain("speaker edits are");
-    expect(markup).toContain("read-only");
-    expect(markup).toContain("server evaluation plan");
+    try {
+      await expect(
+        loadCanonicalSubmissionList("", "organization-1", "summit-2026"),
+      ).resolves.toEqual([canonicalEnvelope]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/cfp/organizations/organization-1/events/summit-2026/submissions",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
+    }
   });
 
-  it("summarizes accepted handoff metadata from server participant identities", () => {
-    const accepted = getSeededSubmission("summit-2026", "sub-003");
-    expect(accepted).toBeDefined();
-    if (!accepted) return;
-
-    const metadata = getAcceptedHandoffMetadata(accepted);
-    expect(metadata).toMatchObject({
-      title: "Building Resilient Teams Through Small Experiments",
-      track: "People & Culture",
-      primarySpeaker: { name: "Elena Garcia", role: "Lead speaker" },
-      coSpeakers: [{ name: "Noah Kim", role: "Co-speaker" }],
-      version: 2,
+  it("derives accepted handoff metadata from canonical API data", () => {
+    const accepted = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        status: "submitted",
+      },
     });
+    const metadata = getAcceptedHandoffMetadata(accepted);
 
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-003",
-      }),
-    );
-    expect(markup).toContain("Accepted session handoff");
-    expect(markup).toContain("Elena Garcia");
-    expect(markup).toContain("Noah Kim");
-    expect(markup).toContain("People &amp; Culture");
-  });
-
-  it("requires an authored reason and explicit confirmation before reopening", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-001",
-      }),
-    );
-
-    expect(markup).toContain('name="reopenReason"');
-    expect(markup).toContain('minLength="10"');
-    expect(markup).toContain('required=""');
-    expect(markup).toContain("I confirm that reopening is necessary and authorized");
-    expect(markup).toContain("Reopen and write audit event");
-    expect(markup).toContain('disabled=""');
-    expect(markup).toContain("Every reopen is recorded in the audit log");
-    expect(markup).toContain("automated tools cannot reopen a submission or make a final decision");
-  });
-
-  it("uses the requested event in every seeded list/detail lookup and link", () => {
-    const listMarkup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, { eventId: "forge-2025" }),
-    );
-    const detailMarkup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "forge-2025",
-        submissionId: "sub-101",
-      }),
-    );
-
-    expect(getSeededSubmission("forge-2025", "sub-101")?.eventId).toBe("forge-2025");
-    expect(getSeededSubmission("summit-2026", "sub-101")).toBeUndefined();
-    expect(listMarkup).toContain("/admin/events/forge-2025/submissions/sub-101");
-    expect(listMarkup).not.toContain("/admin/events/summit-2026/submissions/");
-    expect(detailMarkup).toContain("/admin/events/forge-2025/submissions");
-    expect(detailMarkup).not.toContain("/admin/events/summit-2026/submissions");
+    expect(metadata).toMatchObject({
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      track: "Platform & Infra",
+      primarySpeaker: { name: "Priya Raman", role: "Speaker" },
+      coSpeakers: [{ name: "Marcus Okafor", role: "Co-speaker" }],
+      version: 1,
+    });
   });
 });

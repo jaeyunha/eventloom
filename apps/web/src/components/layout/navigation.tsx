@@ -44,9 +44,9 @@ function NavigationLink({ item }: { item: NavigationItem }) {
 
 export function SidebarNavigation({
   sections,
-  brand = "Open Sessionboard",
+  brand = "Eventloom",
   brandHref = "/",
-  mark = "OS",
+  mark = "EL",
   ariaLabel = "Program navigation",
   className,
 }: SidebarNavigationProps) {
@@ -87,7 +87,7 @@ export interface PortalHeaderProps {
 
 export function PortalHeader({
   items,
-  brand = "Open Sessionboard",
+  brand = "Eventloom",
   brandHref = "/portal",
   actions,
   ariaLabel = "Speaker portal",

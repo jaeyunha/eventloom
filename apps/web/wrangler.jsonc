@@ -2,7 +2,6 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "open-sessionboard-web-local",
   "main": ".open-next/worker.js",
-  "account_id": "7bcb73282d45e4294cc70dd3e2671bfb",
   "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
@@ -12,8 +11,8 @@
   },
   "vars": {
     "APP_ENV": "local",
-    "NEXT_PUBLIC_APP_URL": "http://localhost:3015",
-    "NEXT_PUBLIC_API_URL": "http://localhost:8787"
+    "NEXT_PUBLIC_APP_URL": "http://127.0.0.1:3015",
+    "API_UPSTREAM_ORIGIN": "http://127.0.0.1:8787"
   },
   "assets": {
     "directory": ".open-next/assets",
@@ -40,9 +39,9 @@
       },
       "vars": {
         "APP_ENV": "staging",
-        // These are intentionally empty; deploy-web.mjs injects verified origins.
-        "NEXT_PUBLIC_APP_URL": "",
-        "NEXT_PUBLIC_API_URL": ""
+        // Generated deployment config replaces these operator-neutral placeholders.
+        "NEXT_PUBLIC_APP_URL": "https://web-staging.example.invalid",
+        "API_UPSTREAM_ORIGIN": "https://api-staging.example.invalid"
       },
       "assets": {
         "directory": ".open-next/assets",
@@ -63,20 +62,27 @@
     },
     "production": {
       "name": "open-sessionboard-web-production",
-      "workers_dev": true,
+      "workers_dev": false,
       "observability": {
         "enabled": true
       },
       "vars": {
         "APP_ENV": "production",
-        // These are intentionally empty; deploy-web.mjs injects verified origins.
-        "NEXT_PUBLIC_APP_URL": "",
-        "NEXT_PUBLIC_API_URL": ""
+        // Generated deployment config replaces these operator-neutral placeholders.
+        "NEXT_PUBLIC_APP_URL": "https://web-production.example.invalid",
+        "API_UPSTREAM_ORIGIN": "https://api-production.example.invalid"
       },
       "assets": {
         "directory": ".open-next/assets",
         "binding": "ASSETS"
       },
+      "routes": [
+        {
+          "pattern": "web-production.example.invalid",
+          "zone_name": "production.example.invalid",
+          "custom_domain": true
+        }
+      ],
       "services": [
         {
           "binding": "WORKER_SELF_REFERENCE",

@@ -18,6 +18,7 @@ export interface AgendaSession {
   summary?: string;
   format?: string;
   speakerNames?: readonly string[];
+  trackIds?: readonly string[];
 }
 
 export interface AgendaRoom {
@@ -62,6 +63,8 @@ export interface AgendaEntry {
   startsAtLocal: string;
   endsAtLocal: string;
   timeZone: string;
+  startDisambiguation?: TimeDisambiguation;
+  endDisambiguation?: TimeDisambiguation;
   metadata?: AgendaEntryPublicMetadata;
 }
 export type AgendaSuggestionRunStatus = "pending" | "rejected" | "superseded" | "stale" | "applied";
@@ -202,7 +205,7 @@ export interface AgendaSuggestionRun {
   placements: readonly AgendaEntry[];
   proposedEntries: readonly AgendaEntry[];
   diff: AgendaSuggestionDiff;
-  validation: AgendaValidationReport;
+  candidateDiagnostics: AgendaValidationReport;
   generatedAt: string;
   generatedBy: string;
   regenerationOfRunId: string | null;
@@ -325,6 +328,7 @@ export type AgendaCustomRule = (context: AgendaRuleContext) => readonly AgendaWa
 export interface AgendaPreview {
   draftVersion: number;
   validation: AgendaValidationReport;
+  releaseValidation: AgendaValidationReport;
   unoverriddenWarnings: readonly AgendaWarning[];
   diff: {
     addedEntryIds: readonly string[];

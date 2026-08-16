@@ -3,7 +3,7 @@ import { GET } from "./route";
 
 describe("script embed loader", () => {
   it("creates a sandboxed responsive iframe with allowlisted view and theme", async () => {
-    const response = await GET(new Request("https://sessionboard.example/embed/open/script"), {
+    const response = await GET(new Request("https://eventloom.example/embed/open/script"), {
       params: Promise.resolve({ eventSlug: "open/systems" }),
     });
     const source = await response.text();
@@ -24,7 +24,7 @@ describe("script embed loader", () => {
   it("rejects iframe-only sessions and itinerary views from script requests", async () => {
     for (const view of ["sessions", "itinerary"] as const) {
       const response = await GET(
-        new Request(`https://sessionboard.example/embed/open/script?view=${view}`),
+        new Request(`https://eventloom.example/embed/open/script?view=${view}`),
         {
           params: Promise.resolve({ eventSlug: "open/systems" }),
         },

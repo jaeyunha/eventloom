@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { agendaDays, eventDates, publicationReadiness } from "./model";
+import {
+  acceptedSessionCount,
+  agendaDays,
+  eventDates,
+  publicationReadiness,
+  resolveAgendaPlacementDate,
+} from "./model";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const data: AgendaWorkspaceData = {
@@ -45,6 +51,7 @@ const data: AgendaWorkspaceData = {
   },
   rooms: [],
   tracks: [],
+  acceptedSessionIds: ["session_early", "session_later"],
   unscheduledSessions: [],
   revisions: [],
   currentPublishedRevision: null,
@@ -54,6 +61,7 @@ function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
   return {
     draftVersion: 4,
     conflicts: [],
+    releaseConflicts: [],
     warnings: [],
     diff: { added: 2, changed: 0, removed: 0 },
     validatedAt: "2026-08-08T12:01:00.000Z",
@@ -62,6 +70,33 @@ function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
 }
 
 describe("agenda workspace model", () => {
+  it("uses the selected event day as the placement context", () => {
+    expect(resolveAgendaPlacementDate("2026-09-19", "2026-09-18")).toBe("2026-09-19");
+    expect(resolveAgendaPlacementDate("", "2026-09-18")).toBe("2026-09-18");
+  });
+
+  it("counts unique authoritative accepted session IDs", () => {
+    expect(acceptedSessionCount(data)).toBe(2);
+    expect(
+      acceptedSessionCount({
+        acceptedSessionIds: ["session_early", "session_early"],
+      }),
+    ).toBe(1);
+  });
+
+  it("reports zero accepted sessions when nothing is scheduled or queued", () => {
+    expect(acceptedSessionCount({ acceptedSessionIds: [] })).toBe(0);
+  });
+
+  it("does not count retained scheduled entries that are no longer accepted", () => {
+    const staleSchedule = {
+      ...data,
+      acceptedSessionIds: [],
+    };
+
+    expect(acceptedSessionCount(staleSchedule)).toBe(0);
+  });
+
   it("groups and orders draft entries by local event day", () => {
     const days = agendaDays(data.draft.entries);
 
@@ -69,6 +104,16 @@ describe("agenda workspace model", () => {
     expect(days[0]?.label).toBe("Friday, September 18");
     expect(days[0]?.entries[0]?.title).toBe("Opening keynote");
   });
+  it("uses sparse authoritative schedule dates without inventing intervening days", () => {
+    const days = agendaDays([], {
+      startsOn: "2026-09-18",
+      endsOn: "2026-09-20",
+      scheduleDates: ["2026-09-18", "2026-09-20"],
+    });
+
+    expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-20"]);
+  });
+
   it("uses the authoritative event range for empty days and excludes out-of-range draft dates", () => {
     const outsideEntry = data.draft.entries[0];
     if (!outsideEntry) throw new Error("Expected fixture entry.");

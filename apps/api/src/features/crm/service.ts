@@ -13,14 +13,22 @@ import {
   type CrmDuplicateMatch,
   type CrmDuplicateReport,
   type CrmEventProjection,
+  type CrmEventProjectionResult,
   type CrmHistoryEntry,
   type CrmImportResult,
   type CrmImportRow,
+  type CrmImportRowResult,
+  type CrmMergePlan,
+  type CrmMergePreview,
+  type CrmMergeReconciliationInput,
+  type CrmMergeReconciliationResult,
   type CrmMergeResult,
   type CrmMergeScalarField,
   type CrmNote,
   type CrmOutreachBoundary,
   type CrmOutreachCommand,
+  type CrmParticipantConflict,
+  type CrmParticipantContactLink,
   type CrmPipelineEntry,
   type CrmPipelineStage,
   type CrmRepository,
@@ -40,16 +48,18 @@ import {
   type UpdateCrmSegmentInput,
 } from "./types";
 
-export type { AirtableCrmRepository, CrmRepository, CrmServiceErrorCode } from "./types";
+export type { CrmRepository, CrmServiceErrorCode } from "./types";
 export { CrmServiceError } from "./types";
 
 export class CrmRepositoryConflictError extends Error {
-  constructor(message = "The CRM record already exists or changed.") {
+  constructor(
+    message = "The CRM record already exists or changed.",
+    readonly details?: unknown,
+  ) {
     super(message);
     this.name = "CrmRepositoryConflictError";
   }
 }
-
 const MAX_ID = 200;
 const MAX_TEXT = 20_000;
 const MAX_TAG = 100;
@@ -90,6 +100,145 @@ type CrmEventRole = (typeof EVENT_ROLES)[number];
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stableValue(item)]),
+    );
+  }
+  return value;
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
+function fingerprint(value: unknown): string {
+  let hash = 2166136261;
+  for (const character of stableJson(value)) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function sameRecord(left: unknown, right: unknown): boolean {
+  return stableJson(left) === stableJson(right);
+}
+
+function contactComparable(contact: CrmContact): Record<string, unknown> {
+  return {
+    organizationId: contact.organizationId,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    displayName: contact.displayName,
+    email: contact.email,
+    phone: contact.phone,
+    company: contact.company,
+    title: contact.title,
+    website: contact.website,
+    linkedinUrl: contact.linkedinUrl,
+    notes: contact.notes,
+    tags: contact.tags,
+    customFields: contact.customFields,
+    source: contact.source,
+    status: contact.status,
+    mergedIntoId: contact.mergedIntoId,
+    pipelineStage: contact.pipelineStage,
+  };
+}
+
+function replaceContactReference(
+  value: unknown,
+  retiredIds: ReadonlySet<string>,
+  survivorId: string,
+): { readonly value: unknown; readonly changed: boolean } {
+  if (typeof value === "string") {
+    return retiredIds.has(value) ? { value: survivorId, changed: true } : { value, changed: false };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const output = value.map((item) => {
+      const replaced = replaceContactReference(item, retiredIds, survivorId);
+      changed ||= replaced.changed;
+      return replaced.value;
+    });
+    return { value: changed ? output : value, changed };
+  }
+  if (value !== null && typeof value === "object") {
+    let changed = false;
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const replaced = replaceContactReference(item, retiredIds, survivorId);
+      changed ||= replaced.changed;
+      output[key] = replaced.value;
+    }
+    return { value: changed ? output : value, changed };
+  }
+  return { value, changed: false };
+}
+
+function projectionParticipantId(projection: CrmEventProjection): string {
+  return projection.participantId ?? projection.crmContactId ?? projection.contactId;
+}
+
+function projectionCrmContactId(projection: CrmEventProjection): string {
+  return projection.crmContactId ?? projection.contactId;
+}
+
+function participantConflictDetails(
+  projections: readonly CrmEventProjection[],
+  contactIds: ReadonlySet<string>,
+): readonly CrmParticipantConflict[] {
+  const byEvent = new Map<string, Map<string, Set<string>>>();
+  for (const projection of projections) {
+    const crmContactId = projectionCrmContactId(projection);
+    if (!contactIds.has(crmContactId)) continue;
+    const participants = byEvent.get(projection.eventId) ?? new Map<string, Set<string>>();
+    const contacts = participants.get(projectionParticipantId(projection)) ?? new Set<string>();
+    contacts.add(crmContactId);
+    participants.set(projectionParticipantId(projection), contacts);
+    byEvent.set(projection.eventId, participants);
+  }
+  const conflicts: CrmParticipantConflict[] = [];
+  for (const [eventId, participants] of byEvent) {
+    if (participants.size < 2) continue;
+    conflicts.push({
+      eventId,
+      participantIds: [...participants.keys()].sort((left, right) => left.localeCompare(right)),
+      crmContactIds: [...new Set([...participants.values()].flatMap((ids) => [...ids]))].sort(
+        (left, right) => left.localeCompare(right),
+      ),
+      reason: "distinct-participants-share-merged-contacts",
+    });
+  }
+  return conflicts.sort((left, right) => left.eventId.localeCompare(right.eventId));
+}
+
+function rewireCounts(
+  projections: readonly CrmEventProjection[],
+  notes: readonly CrmNote[],
+  segments: readonly CrmSegment[],
+  pipeline: readonly CrmPipelineEntry[],
+  retiredIds: ReadonlySet<string>,
+): CrmMergeReconciliationResult["rewired"] {
+  let segmentCount = 0;
+  for (const segment of segments) {
+    const replaced = replaceContactReference(segment.rules, retiredIds, "");
+    if (replaced.changed) segmentCount += 1;
+  }
+  return {
+    participantContactLinks: projections.filter((projection) =>
+      retiredIds.has(projectionCrmContactId(projection)),
+    ).length,
+    notes: notes.filter((note) => retiredIds.has(note.contactId)).length,
+    segments: segmentCount,
+    pipelineHistory: pipeline.filter((entry) => retiredIds.has(entry.contactId)).length,
+  };
+}
 
 function invalid(message: string, details?: unknown): CrmServiceError {
   return new CrmServiceError("CRM_INVALID_INPUT", message, 400, details);
@@ -103,8 +252,8 @@ function notFound(message = "The CRM record was not found."): CrmServiceError {
   return new CrmServiceError("CRM_NOT_FOUND", message, 404);
 }
 
-function conflict(message: string): CrmServiceError {
-  return new CrmServiceError("CRM_CONFLICT", message, 409);
+function conflict(message: string, details?: unknown): CrmServiceError {
+  return new CrmServiceError("CRM_CONFLICT", message, 409, details);
 }
 
 function dependencyUnavailable(message = "The CRM repository is not configured."): CrmServiceError {
@@ -312,6 +461,34 @@ function normalizedName(input: CrmContactInput): {
   }
   return { firstName, lastName, displayName };
 }
+function outreachNameParts(contact: Pick<CrmContact, "firstName" | "lastName" | "displayName">): {
+  readonly firstName: string;
+  readonly lastName: string;
+} {
+  const displayParts = contact.displayName.trim().split(/\s+/u).filter(Boolean);
+  const fallbackFirstName = displayParts[0] ?? "";
+  const fallbackLastName = displayParts.slice(1).join(" ");
+  return {
+    firstName: contact.firstName?.trim() || fallbackFirstName,
+    lastName: contact.lastName?.trim() || fallbackLastName,
+  };
+}
+
+function contactMergeTagValues(contact: CrmContact): Readonly<Record<string, string>> {
+  const displayName = contact.displayName.trim();
+  const { firstName, lastName } = outreachNameParts(contact);
+  return {
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+    display_name: displayName,
+    displayName,
+    email: contact.email?.trim() ?? "",
+    company: contact.company?.trim() ?? "",
+    title: contact.title?.trim() ?? "",
+  };
+}
 
 function canonical(value: string | null | undefined): string {
   return (value ?? "")
@@ -429,37 +606,102 @@ function parseCsv(csv: string): readonly Record<string, string>[] {
     });
 }
 
+const CSV_FIELD_TARGETS: Readonly<Record<string, string>> = {
+  firstname: "firstName",
+  "first name": "firstName",
+  lastname: "lastName",
+  "last name": "lastName",
+  name: "displayName",
+  displayname: "displayName",
+  "display name": "displayName",
+  email: "email",
+  phone: "phone",
+  company: "company",
+  title: "title",
+  jobtitle: "title",
+  "job title": "title",
+  website: "website",
+  linkedin: "linkedinUrl",
+  linkedinurl: "linkedinUrl",
+  notes: "notes",
+  tags: "tags",
+  source: "source",
+  pipelinestage: "pipelineStage",
+  stage: "pipelineStage",
+};
+
+function importColumnMapping(columns: readonly string[]): CrmImportResult["mapping"] {
+  const directFields = new Set([
+    "firstName",
+    "lastName",
+    "displayName",
+    "email",
+    "phone",
+    "company",
+    "title",
+    "website",
+    "linkedinUrl",
+    "notes",
+    "tags",
+    "customFields",
+    "source",
+    "pipelineStage",
+  ]);
+  return columns.map((sourceColumn) => {
+    const trimmed = sourceColumn.trim();
+    const direct = directFields.has(trimmed) ? trimmed : undefined;
+    const target = direct ?? CSV_FIELD_TARGETS[trimmed.toLowerCase()];
+    return {
+      sourceColumn,
+      targetField: target ?? `custom.${trimmed}`,
+      custom: target === undefined,
+    };
+  });
+}
+
 function csvRowInput(row: Record<string, string>): CrmImportRow {
   const known: Record<string, unknown> = {};
   const customFields: Record<string, unknown> = {};
-  const names: Record<string, string> = {
-    firstname: "firstName",
-    "first name": "firstName",
-    lastname: "lastName",
-    "last name": "lastName",
-    name: "displayName",
-    displayname: "displayName",
-    email: "email",
-    phone: "phone",
-    company: "company",
-    title: "title",
-    website: "website",
-    linkedin: "linkedinUrl",
-    linkedinurl: "linkedinUrl",
-    notes: "notes",
-    tags: "tags",
-    source: "source",
-    pipelinestage: "pipelineStage",
-    stage: "pipelineStage",
-  };
   for (const [key, value] of Object.entries(row)) {
-    const target = names[key.trim().toLowerCase()];
-    if (target === "tags") known.tags = value.split(",");
+    const trimmedKey = key.trim();
+    const target = CSV_FIELD_TARGETS[trimmedKey.toLowerCase()];
+    if (target === "email") known.email = value;
+    else if (value.trim().length === 0) continue;
+    else if (target === "tags") known.tags = value.split(",");
     else if (target !== undefined) known[target] = value;
-    else if (key.trim().length > 0) customFields[key.trim()] = value;
+    else if (trimmedKey.length > 0) customFields[trimmedKey] = value;
   }
   if (Object.keys(customFields).length > 0) known.customFields = customFields;
   return known as CrmImportRow;
+}
+
+function normalizeImportRow(row: CrmImportRow): CrmImportRow {
+  const normalized: Record<string, unknown> = { ...row };
+  for (const field of [
+    "firstName",
+    "lastName",
+    "displayName",
+    "phone",
+    "company",
+    "title",
+    "website",
+    "linkedinUrl",
+    "notes",
+    "source",
+    "pipelineStage",
+  ] as const) {
+    const value = normalized[field];
+    if (typeof value === "string" && value.trim().length === 0) delete normalized[field];
+  }
+  const jobTitle = normalized.jobTitle;
+  if (
+    normalized.title === undefined &&
+    typeof jobTitle === "string" &&
+    jobTitle.trim().length > 0
+  ) {
+    normalized.title = jobTitle;
+  }
+  return normalized as CrmImportRow;
 }
 
 function normalizeSegmentRules(value: unknown): readonly CrmSegmentRule[] {
@@ -731,79 +973,138 @@ export class CrmService {
     });
   }
 
+  async previewImport(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
+    const prepared = await this.prepareImport(actor, input);
+    const previewKey =
+      input.idempotencyKey === undefined
+        ? undefined
+        : text(input.idempotencyKey, "idempotencyKey", 512);
+    return {
+      id: `preview-${prepared.planFingerprint}`,
+      organizationId: prepared.organizationId,
+      created: prepared.counts.created,
+      updated: prepared.counts.updated,
+      skipped: prepared.counts.skipped,
+      errors: prepared.counts.errors,
+      contacts: prepared.previewContacts,
+      mapping: prepared.mapping,
+      rows: prepared.rows.map(({ result }) => result),
+      idempotent: false,
+      createdAt: nowIso(this.#clock),
+      ...(previewKey === undefined ? {} : { idempotencyKey: previewKey }),
+      planFingerprint: prepared.planFingerprint,
+      preview: true,
+    };
+  }
+
+  async previewImportContacts(
+    actor: CrmActor,
+    input: ImportCrmContactsInput,
+  ): Promise<CrmImportResult> {
+    return this.previewImport(actor, input);
+  }
+
+  async previewCsvImport(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
+    return this.previewImport(actor, input);
+  }
+
   async importContacts(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
     const organizationId = identifier(input.organizationId, "organizationId");
     assertActor(actor, organizationId);
+    if (input.idempotencyKey === undefined)
+      throw invalid("An idempotency key is required for an import commit.");
     const key = text(input.idempotencyKey, "idempotencyKey", 512);
     return this.runIdempotent(`import:${organizationId}:${key}`, async () => {
       const repository = this.requireRepository();
-      const existing = await repository.getImportByIdempotencyKey(organizationId, key);
-      if (existing !== null) return { ...clone(existing), idempotent: true };
-      const prior = await repository.getCommandResult<CrmImportResult>(
+      const prepared = await this.prepareImport(actor, { ...input, idempotencyKey: key });
+      const prior = await repository.getImportByIdempotencyKey(organizationId, key);
+      const commandPrior = await repository.getCommandResult<CrmImportResult>(
         organizationId,
         "import-contacts",
         key,
       );
-      if (prior !== null) return { ...clone(prior), idempotent: true };
-      if (input.csv !== undefined && input.rows !== undefined)
-        throw invalid("Provide csv or rows, not both.");
-      const rawRows =
-        input.rows !== undefined
-          ? input.rows
-          : input.csv === undefined
-            ? []
-            : parseCsv(input.csv).map(csvRowInput);
-      if (rawRows.length === 0 || rawRows.length > MAX_IMPORT_ROWS)
-        throw invalid(`Import must contain between 1 and ${MAX_IMPORT_ROWS} rows.`);
-      const mode = input.mode ?? "upsert";
-      if (mode !== "upsert" && mode !== "create") throw invalid("mode must be upsert or create.");
-      const contacts: CrmContact[] = [];
+      const persisted = prior ?? commandPrior;
+      if (persisted !== null) {
+        if (
+          persisted.planFingerprint !== undefined &&
+          persisted.planFingerprint !== prepared.planFingerprint
+        ) {
+          throw conflict(
+            "The import idempotency key was already used for a different normalized input.",
+            {
+              idempotencyKey: key,
+              priorPlanFingerprint: persisted.planFingerprint,
+              planFingerprint: prepared.planFingerprint,
+            },
+          );
+        }
+        return { ...clone(persisted), idempotent: true, preview: false };
+      }
+
+      const contactsById = new Map<string, CrmContact>();
+      const rows: CrmImportRowResult[] = [];
       let created = 0;
       let updated = 0;
       let skipped = 0;
-      for (const raw of rawRows) {
-        const candidate = this.buildContact(
-          organizationId,
-          { ...raw, source: raw.source ?? "csv" },
-          undefined,
-          "csv",
-        );
-        const existingContact =
-          candidate.email === null
-            ? null
-            : await repository.findContactByEmail(organizationId, candidate.email);
-        if (existingContact !== null && mode === "create") {
-          skipped += 1;
+      let errors = 0;
+      for (const preparedRow of prepared.rows) {
+        const result = preparedRow.result;
+        if (result.status === "error") {
+          errors += 1;
+          rows.push(result);
           continue;
         }
-        if (existingContact === null) {
-          const saved = await repository.saveContact(candidate, null);
-          assertTenant(saved, organizationId);
-          contacts.push(clone(saved));
-          created += 1;
-        } else {
-          const merged = this.buildContact(
-            organizationId,
-            raw,
-            existingContact,
-            existingContact.source,
+        if (result.status === "skipped") {
+          if (result.contactId !== null) {
+            const authoritative = await repository.getContact(organizationId, result.contactId);
+            if (authoritative !== null) contactsById.set(authoritative.id, clone(authoritative));
+          }
+          skipped += 1;
+          rows.push(result);
+          continue;
+        }
+        try {
+          if (preparedRow.candidate === undefined)
+            throw invalid("The import row did not produce a contact candidate.");
+          const saved = await repository.saveContact(
+            preparedRow.candidate,
+            preparedRow.existing?.version ?? null,
           );
-          const saved = await repository.saveContact(merged, existingContact.version);
           assertTenant(saved, organizationId);
-          contacts.push(clone(saved));
-          updated += 1;
+          const authoritative = await repository.getContact(organizationId, saved.id);
+          if (authoritative === null)
+            throw dependencyUnavailable("The saved contact could not be re-read.");
+          contactsById.set(authoritative.id, clone(authoritative));
+          if (result.status === "created") created += 1;
+          else updated += 1;
+          rows.push({ ...result, contactId: authoritative.id });
+        } catch (error) {
+          if (!repositoryConflict(error) && !(error instanceof CrmServiceError)) throw error;
+          errors += 1;
+          rows.push({
+            ...result,
+            status: "error",
+            contactId: null,
+            reason: error instanceof Error ? error.message : "The contact could not be saved.",
+          });
         }
       }
+
       const result: CrmImportResult = {
         id: this.#generateId("import"),
         organizationId,
         created,
         updated,
         skipped,
-        contacts,
+        errors,
+        contacts: [...contactsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
+        mapping: prepared.mapping,
+        rows,
         idempotent: false,
         createdAt: nowIso(this.#clock),
         idempotencyKey: key,
+        planFingerprint: prepared.planFingerprint,
+        preview: false,
       };
       await repository.saveImport(result);
       await repository.saveCommandResult(organizationId, "import-contacts", key, result);
@@ -811,8 +1112,164 @@ export class CrmService {
     });
   }
 
+  async commitImport(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
+    return this.importContacts(actor, input);
+  }
+
   async importCsv(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
     return this.importContacts(actor, input);
+  }
+
+  private async prepareImport(
+    actor: CrmActor,
+    input: ImportCrmContactsInput,
+  ): Promise<{
+    readonly organizationId: string;
+    readonly mapping: CrmImportResult["mapping"];
+    readonly rows: readonly {
+      readonly result: CrmImportRowResult;
+      readonly candidate?: CrmContact;
+      readonly existing?: CrmContact;
+    }[];
+    readonly counts: {
+      readonly created: number;
+      readonly updated: number;
+      readonly skipped: number;
+      readonly errors: number;
+    };
+    readonly previewContacts: readonly CrmContact[];
+    readonly planFingerprint: string;
+  }> {
+    const organizationId = identifier(input.organizationId, "organizationId");
+    assertActor(actor, organizationId);
+    if (input.csv !== undefined && input.rows !== undefined)
+      throw invalid("Provide csv or rows, not both.");
+    const parsedCsv = input.csv === undefined ? undefined : parseCsv(input.csv);
+    const rawRows =
+      input.rows !== undefined
+        ? input.rows
+        : parsedCsv === undefined
+          ? []
+          : parsedCsv.map(csvRowInput);
+    if (rawRows.length === 0 || rawRows.length > MAX_IMPORT_ROWS)
+      throw invalid(`Import must contain between 1 and ${MAX_IMPORT_ROWS} rows.`);
+    const mode = input.mode ?? "upsert";
+    if (mode !== "upsert" && mode !== "create") throw invalid("mode must be upsert or create.");
+    const columns = Object.keys(
+      (input.rows?.[0] ?? parsedCsv?.[0] ?? {}) as Record<string, unknown>,
+    );
+    const mapping = importColumnMapping(columns);
+    const planFingerprint = fingerprint({
+      organizationId,
+      mode,
+      mapping,
+      rows: rawRows.map((row) => normalizeImportRow(row)),
+    });
+    const repository = this.requireRepository();
+    const existingContacts = await repository.listContacts(organizationId, { organizationId });
+    const byEmail = new Map<string, CrmContact>();
+    for (const contact of existingContacts) {
+      if (
+        contact.organizationId === organizationId &&
+        contact.status === "active" &&
+        contact.email
+      ) {
+        byEmail.set(contact.email.toLowerCase(), clone(contact));
+      }
+    }
+    const rows: {
+      result: CrmImportRowResult;
+      candidate?: CrmContact;
+      existing?: CrmContact;
+    }[] = [];
+    const contacts = new Map<string, CrmContact>();
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    let errors = 0;
+    for (const [index, raw] of rawRows.entries()) {
+      const rowNumber = index + 1;
+      const row = normalizeImportRow(raw);
+      let identity: string | null = null;
+      try {
+        identity = nullableEmail(row.email) ?? null;
+        if (identity === null) throw invalid("Email is required as the canonical import identity.");
+        const existing = byEmail.get(identity);
+        if (existing !== undefined && mode === "create") {
+          skipped += 1;
+          rows.push({
+            result: {
+              rowNumber,
+              identity,
+              status: "skipped",
+              contactId: existing.id,
+              reason: "A contact with this canonical email already exists.",
+            },
+            existing,
+          });
+          continue;
+        }
+        const candidate = this.buildContact(
+          organizationId,
+          {
+            ...row,
+            email: identity,
+            ...(row.source === undefined ? {} : { source: row.source }),
+          },
+          existing,
+          existing?.source ?? "csv",
+        );
+        if (
+          existing !== undefined &&
+          sameRecord(contactComparable(existing), contactComparable(candidate))
+        ) {
+          skipped += 1;
+          rows.push({
+            result: {
+              rowNumber,
+              identity,
+              status: "skipped",
+              contactId: existing.id,
+              reason: "The existing contact already has these values.",
+            },
+            existing,
+          });
+          continue;
+        }
+        const status = existing === undefined ? "created" : "updated";
+        if (status === "created") created += 1;
+        else updated += 1;
+        rows.push({
+          result: { rowNumber, identity, status, contactId: candidate.id, reason: null },
+          candidate,
+          ...(existing === undefined ? {} : { existing }),
+        });
+        byEmail.set(identity, candidate);
+        contacts.set(candidate.id, candidate);
+      } catch (error) {
+        if (!(error instanceof CrmServiceError)) throw error;
+        errors += 1;
+        rows.push({
+          result: {
+            rowNumber,
+            identity,
+            status: "error",
+            contactId: null,
+            reason: error.message,
+          },
+        });
+      }
+    }
+    return {
+      organizationId,
+      mapping,
+      rows,
+      counts: { created, updated, skipped, errors },
+      previewContacts: [...contacts.values()].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      ),
+      planFingerprint,
+    };
   }
 
   async createSegment(actor: CrmActor, input: CreateCrmSegmentInput): Promise<CrmSegment> {
@@ -980,232 +1437,421 @@ export class CrmService {
     return this.findDuplicates(actor, organizationId, contactId);
   }
 
-  async mergeContacts(actor: CrmActor, input: MergeCrmContactsInput): Promise<CrmMergeResult> {
-    const organizationId = identifier(input.organizationId, "organizationId");
-    const primaryContactId = identifier(input.primaryContactId, "primaryContactId");
-    if (!Array.isArray(input.duplicateContactIds))
-      throw invalid("duplicateContactIds must be an array.");
-    const duplicateContactIds = input.duplicateContactIds.map((id) =>
-      identifier(id, "duplicateContactId"),
-    );
-    if (
-      duplicateContactIds.length === 0 ||
-      new Set(duplicateContactIds).size !== duplicateContactIds.length ||
-      duplicateContactIds.includes(primaryContactId)
-    ) {
-      throw invalid(
-        "duplicateContactIds must contain unique contacts other than the primary contact.",
-      );
-    }
-    assertActor(actor, organizationId);
-    const fieldWinners = normalizeMergeScalarWinners(input.fieldWinners);
-    const customFieldWinners = normalizeMergeCustomFieldWinners(input.customFieldWinners);
-    const key =
-      input.idempotencyKey === undefined
-        ? undefined
-        : text(input.idempotencyKey, "idempotencyKey", 512);
-    return this.runIdempotent(
-      `merge:${organizationId}:${key ?? `${primaryContactId}:${duplicateContactIds.join(",")}`}`,
-      async () => {
-        const repository = this.requireRepository();
-        if (key !== undefined) {
-          const prior = await repository.getCommandResult<CrmMergeResult>(
-            organizationId,
-            "merge-contacts",
-            key,
-          );
-          if (prior !== null) return { ...clone(prior), idempotent: true };
-        }
-        const primary = await this.getContact(actor, organizationId, primaryContactId);
-        if (primary.status !== "active") throw invalid("The primary contact must be active.");
-        const duplicates: CrmContact[] = [];
-        for (const id of duplicateContactIds)
-          duplicates.push(await this.getContact(actor, organizationId, id));
-        const alreadyMergedDuplicateIds = new Set<string>();
-        for (const duplicate of duplicates) {
-          if (duplicate.status === "active") continue;
-          if (duplicate.status === "merged" && duplicate.mergedIntoId === primary.id) {
-            alreadyMergedDuplicateIds.add(duplicate.id);
-            continue;
-          }
-          throw invalid(
-            "Every duplicate contact must be active or already merged into this primary contact.",
-          );
-        }
-        const allowedWinnerIds = new Set([primary.id, ...duplicates.map((contact) => contact.id)]);
-        for (const winnerId of [
-          ...Object.values(fieldWinners),
-          ...Object.values(customFieldWinners),
-        ]) {
-          if (typeof winnerId !== "string" || !allowedWinnerIds.has(winnerId)) {
-            throw invalid(
-              "Every merge winner must be the primary contact or a requested duplicate being merged into it.",
-            );
-          }
-        }
-        const contactsById = new Map<string, CrmContact>([
-          [primary.id, primary],
-          ...duplicates.map((contact) => [contact.id, contact] as const),
-        ]);
-        const mergedTags = normalizeTags([
-          ...primary.tags,
-          ...duplicates.flatMap((contact) => contact.tags),
-        ]);
-        const mergedFields: Record<string, CrmValue> = { ...primary.customFields };
-        for (const duplicate of duplicates) {
-          for (const [field, value] of Object.entries(duplicate.customFields))
-            if (mergedFields[field] === undefined) mergedFields[field] = clone(value);
-        }
-        let firstName =
-          primary.firstName ??
-          duplicates.find((contact) => contact.firstName !== null)?.firstName ??
-          null;
-        let lastName =
-          primary.lastName ??
-          duplicates.find((contact) => contact.lastName !== null)?.lastName ??
-          null;
-        let displayName =
-          primary.displayName ||
-          duplicates.find((contact) => contact.displayName)?.displayName ||
-          "Unnamed contact";
-        let email =
-          primary.email ?? duplicates.find((contact) => contact.email !== null)?.email ?? null;
-        let phone =
-          primary.phone ?? duplicates.find((contact) => contact.phone !== null)?.phone ?? null;
-        let company =
-          primary.company ??
-          duplicates.find((contact) => contact.company !== null)?.company ??
-          null;
-        let title =
-          primary.title ?? duplicates.find((contact) => contact.title !== null)?.title ?? null;
-        const website =
-          primary.website ??
-          duplicates.find((contact) => contact.website !== null)?.website ??
-          null;
-        const linkedinUrl =
-          primary.linkedinUrl ??
-          duplicates.find((contact) => contact.linkedinUrl !== null)?.linkedinUrl ??
-          null;
-        const notes =
-          primary.notes ?? duplicates.find((contact) => contact.notes !== null)?.notes ?? null;
+  async previewMergeContacts(
+    actor: CrmActor,
+    input: MergeCrmContactsInput,
+  ): Promise<CrmMergePreview> {
+    const normalized = this.normalizeMergeInput(input, false);
+    const plan = await this.buildMergePlan(actor, normalized);
+    return {
+      ...plan,
+      preview: true,
+      canCommit: plan.participantConflicts.length === 0,
+    };
+  }
 
-        for (const [field, winnerId] of Object.entries(fieldWinners)) {
-          const winner = contactsById.get(winnerId);
-          if (winner === undefined) throw invalid(`fieldWinners.${field} is not valid.`);
-          if (winner.id === primary.id) continue;
-          switch (field as CrmMergeScalarField) {
-            case "email":
-              email = winner.email;
-              break;
-            case "phone":
-              phone = winner.phone;
-              break;
-            case "name":
-              firstName = winner.firstName;
-              lastName = winner.lastName;
-              displayName = winner.displayName;
-              break;
-            case "company":
-              company = winner.company;
-              break;
-            case "title":
-              title = winner.title;
-              break;
-            case "bio":
-            case "headshot": {
-              const aliases = new Set(MERGE_PROFILE_FIELD_ALIASES[field as "bio" | "headshot"]);
-              let hasValue = false;
-              let value: CrmValue | null = null;
-              for (const [customField, candidate] of Object.entries(winner.customFields)) {
-                if (aliases.has(customField.toLowerCase())) {
-                  hasValue = true;
-                  value = candidate;
-                  break;
-                }
-              }
-              for (const customField of Object.keys(mergedFields))
-                if (aliases.has(customField.toLowerCase())) delete mergedFields[customField];
-              if (hasValue) mergedFields[field === "bio" ? "bio" : "headshotUrl"] = clone(value);
-              break;
-            }
-          }
-        }
-        for (const [field, winnerId] of Object.entries(customFieldWinners)) {
-          const winner = contactsById.get(winnerId);
-          if (winner === undefined) throw invalid(`customFieldWinners.${field} is not valid.`);
-          if (winner.id === primary.id) continue;
-          const winnerValue = winner.customFields[field];
-          if (Object.hasOwn(winner.customFields, field) && winnerValue !== undefined)
-            mergedFields[field] = clone(winnerValue);
-          else delete mergedFields[field];
-        }
-        if (email !== null) {
-          const existing = await repository.findContactByEmail(organizationId, email);
-          if (existing !== null) {
-            assertTenant(existing, organizationId);
-            if (existing.id !== primary.id && !allowedWinnerIds.has(existing.id))
-              throw conflict("A contact with this email already exists.");
-          }
-        }
-        const mergedPrimary: CrmContact = {
-          ...primary,
-          firstName,
-          lastName,
-          displayName,
-          email,
-          phone,
-          company,
-          title,
-          website,
-          linkedinUrl,
-          notes,
-          tags: mergedTags,
-          customFields: mergedFields,
-          version: primary.version + 1,
-          updatedAt: nowIso(this.#clock),
-        };
-        // Retire requested duplicates before saving a winner email onto the primary.
-        const merged: CrmContact[] = [];
-        for (const duplicate of duplicates) {
-          if (alreadyMergedDuplicateIds.has(duplicate.id)) {
-            merged.push(clone(duplicate));
-            continue;
-          }
-          const saved = await repository.saveContact(
+  async previewMerge(actor: CrmActor, input: MergeCrmContactsInput): Promise<CrmMergePreview> {
+    return this.previewMergeContacts(actor, input);
+  }
+  async previewContactMerge(
+    actor: CrmActor,
+    input: MergeCrmContactsInput,
+  ): Promise<CrmMergePreview> {
+    return this.previewMergeContacts(actor, input);
+  }
+
+  async planMergeContacts(actor: CrmActor, input: MergeCrmContactsInput): Promise<CrmMergePreview> {
+    return this.previewMergeContacts(actor, input);
+  }
+
+  async mergeContacts(actor: CrmActor, input: MergeCrmContactsInput): Promise<CrmMergeResult> {
+    const normalized = this.normalizeMergeInput(input, true);
+    const key = normalized.idempotencyKey;
+    if (key === undefined) throw invalid("An idempotency key is required for a merge commit.");
+    return this.runIdempotent(`merge:${normalized.organizationId}:${key}`, async () => {
+      const repository = this.requireRepository();
+      const prior = await repository.getCommandResult<CrmMergeResult>(
+        normalized.organizationId,
+        "merge-contacts",
+        key,
+      );
+      if (prior !== null) {
+        if (
+          prior.planFingerprint !== undefined &&
+          prior.planFingerprint !== normalized.planFingerprint
+        ) {
+          throw conflict(
+            "The merge idempotency key was already used for a different normalized plan.",
             {
-              ...duplicate,
-              status: "merged",
-              mergedIntoId: primary.id,
-              version: duplicate.version + 1,
-              updatedAt: nowIso(this.#clock),
+              idempotencyKey: key,
+              priorPlanFingerprint: prior.planFingerprint,
+              planFingerprint: normalized.planFingerprint,
             },
-            duplicate.version,
           );
-          assertTenant(saved, organizationId);
-          merged.push(clone(saved));
         }
-        const savedPrimary = assertTenant(
-          await repository.saveContact(mergedPrimary, primary.version),
-          organizationId,
-        );
+        return { ...clone(prior), idempotent: true };
+      }
+      const plan = await this.buildMergePlan(actor, normalized);
+      if (plan.participantConflicts.length > 0) {
+        throw conflict("The merge would reconcile two distinct participants in the same event.", {
+          participantConflicts: plan.participantConflicts,
+          plan: clone(plan),
+        });
+      }
+
+      const tombstones: CrmContact[] = [];
+      const mergedAt = nowIso(this.#clock);
+      for (const plannedTombstone of plan.tombstones) {
+        const current = await repository.getContact(normalized.organizationId, plannedTombstone.id);
+        if (current === null) throw notFound("A requested duplicate contact was not found.");
+        if (current.status === "merged" && current.mergedIntoId === plan.survivorId) {
+          tombstones.push(clone(current));
+          continue;
+        }
+        if (current.status !== "active")
+          throw invalid(
+            "Every duplicate contact must be active or already merged into this survivor.",
+          );
+        const retired: CrmContact = {
+          ...current,
+          status: "merged",
+          mergedIntoId: plan.survivorId,
+          mergeAuditId: plan.auditId,
+          mergedAt,
+          mergeSourceIds: [...plan.retiredIds],
+          version: current.version + 1,
+          updatedAt: mergedAt,
+        };
+        const saved = await repository.saveContact(retired, current.version);
+        assertTenant(saved, normalized.organizationId);
+        tombstones.push(clone(saved));
+      }
+
+      const currentSurvivor = await repository.getContact(
+        normalized.organizationId,
+        plan.survivorId,
+      );
+      if (currentSurvivor === null) throw notFound("The survivor contact was not found.");
+      let _savedPrimary: CrmContact;
+      if (
+        currentSurvivor.status === "active" &&
+        sameRecord(contactComparable(currentSurvivor), contactComparable(plan.survivor))
+      ) {
+        _savedPrimary = clone(currentSurvivor);
+      } else if (currentSurvivor.status === "active") {
+        const saved = await repository.saveContact(plan.survivor, currentSurvivor.version);
+        _savedPrimary = assertTenant(saved, normalized.organizationId);
+      } else {
+        throw invalid("The survivor contact must be active.");
+      }
+
+      const reconciliationInput: CrmMergeReconciliationInput = {
+        organizationId: normalized.organizationId,
+        survivorId: plan.survivorId,
+        retiredIds: plan.retiredIds,
+        auditId: plan.auditId,
+      };
+      let reconciliation: CrmMergeReconciliationResult;
+      try {
+        reconciliation = await repository.reconcileContactMerge(reconciliationInput);
+      } catch (error) {
+        if (repositoryConflict(error)) {
+          const details = error instanceof CrmRepositoryConflictError ? error.details : undefined;
+          throw conflict(
+            "The merge would reconcile two distinct participants in the same event.",
+            details === undefined ? undefined : { participantConflicts: details },
+          );
+        }
+        throw error;
+      }
+      if (reconciliation.participantConflicts.length > 0) {
+        throw conflict("The merge would reconcile two distinct participants in the same event.", {
+          participantConflicts: reconciliation.participantConflicts,
+        });
+      }
+
+      const history = await repository.listHistory(normalized.organizationId, plan.survivorId);
+      const audited = history.some(
+        (entry) => (entry.metadata.auditId as string | undefined) === plan.auditId,
+      );
+      if (!audited) {
         await repository.appendHistory({
           id: this.#generateId("history"),
-          organizationId,
-          contactId: primary.id,
+          organizationId: normalized.organizationId,
+          contactId: plan.survivorId,
           kind: "note",
           eventId: null,
           sessionId: null,
           title: "Contacts merged",
-          detail: `Merged ${merged.length} duplicate contact(s).`,
+          detail: `Merged ${plan.retiredIds.length} duplicate contact(s).`,
           occurredAt: nowIso(this.#clock),
-          metadata: { duplicateIds: merged.map((contact) => contact.id) },
+          metadata: {
+            auditId: plan.auditId,
+            survivorId: plan.survivorId,
+            retiredIds: plan.retiredIds,
+          },
         });
-        const result: CrmMergeResult = { primary: clone(savedPrimary), merged, idempotent: false };
-        if (key !== undefined)
-          await repository.saveCommandResult(organizationId, "merge-contacts", key, result);
-        return result;
-      },
+      }
+
+      const authoritativePrimary = await repository.getContact(
+        normalized.organizationId,
+        plan.survivorId,
+      );
+      if (authoritativePrimary === null)
+        throw dependencyUnavailable("The merged survivor could not be re-read.");
+      const authoritativeTombstones: CrmContact[] = [];
+      for (const retiredId of plan.retiredIds) {
+        const authoritative = await repository.getContact(normalized.organizationId, retiredId);
+        if (authoritative !== null) authoritativeTombstones.push(clone(authoritative));
+      }
+      const result: CrmMergeResult = {
+        survivorId: plan.survivorId,
+        retiredIds: [...plan.retiredIds],
+        rewired: reconciliation.rewired,
+        participantConflicts: [],
+        auditId: plan.auditId,
+        primary: clone(authoritativePrimary),
+        merged: authoritativeTombstones,
+        survivor: clone(authoritativePrimary),
+        tombstones: authoritativeTombstones,
+        idempotent: false,
+        planFingerprint: normalized.planFingerprint,
+      };
+      await repository.saveCommandResult(normalized.organizationId, "merge-contacts", key, result);
+      return clone(result);
+    });
+  }
+
+  private normalizeMergeInput(
+    input: MergeCrmContactsInput,
+    requireIdempotencyKey: boolean,
+  ): {
+    readonly organizationId: string;
+    readonly survivorId: string;
+    readonly retiredIds: readonly string[];
+    readonly fieldWinners: Readonly<Partial<Record<CrmMergeScalarField, string>>>;
+    readonly customFieldWinners: Readonly<Record<string, string>>;
+    readonly idempotencyKey?: string;
+    readonly planFingerprint: string;
+  } {
+    const organizationId = identifier(input.organizationId, "organizationId");
+    const survivorId = identifier(input.primaryContactId, "primaryContactId");
+    if (!Array.isArray(input.duplicateContactIds))
+      throw invalid("duplicateContactIds must be an array.");
+    const retiredIds = [
+      ...new Set(input.duplicateContactIds.map((id) => identifier(id, "duplicateContactId"))),
+    ].sort((left, right) => left.localeCompare(right));
+    if (retiredIds.length === 0 || retiredIds.includes(survivorId))
+      throw invalid(
+        "duplicateContactIds must contain unique contacts other than the primary contact.",
+      );
+    if (new Set(input.duplicateContactIds).size !== input.duplicateContactIds.length)
+      throw invalid(
+        "duplicateContactIds must contain unique contacts other than the primary contact.",
+      );
+    const fieldWinners = normalizeMergeScalarWinners(input.fieldWinners);
+    const customFieldWinners = normalizeMergeCustomFieldWinners(input.customFieldWinners);
+    const idempotencyKey =
+      input.idempotencyKey === undefined
+        ? undefined
+        : text(input.idempotencyKey, "idempotencyKey", 512);
+    if (requireIdempotencyKey && idempotencyKey === undefined)
+      throw invalid("An idempotency key is required for a merge commit.");
+    const planFingerprint = fingerprint({
+      organizationId,
+      survivorId,
+      retiredIds,
+      fieldWinners,
+      customFieldWinners,
+    });
+    return {
+      organizationId,
+      survivorId,
+      retiredIds,
+      fieldWinners,
+      customFieldWinners,
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      planFingerprint,
+    };
+  }
+
+  private async buildMergePlan(
+    actor: CrmActor,
+    normalized: ReturnType<CrmService["normalizeMergeInput"]>,
+  ): Promise<CrmMergePlan> {
+    const repository = this.requireRepository();
+    assertActor(actor, normalized.organizationId);
+    const primary = await this.getContact(actor, normalized.organizationId, normalized.survivorId);
+    if (primary.status !== "active") throw invalid("The survivor contact must be active.");
+    const duplicates: CrmContact[] = [];
+    for (const id of normalized.retiredIds)
+      duplicates.push(await this.getContact(actor, normalized.organizationId, id));
+    for (const duplicate of duplicates) {
+      if (duplicate.status === "active") continue;
+      if (duplicate.status === "merged" && duplicate.mergedIntoId === primary.id) continue;
+      throw invalid("Every duplicate contact must be active or already merged into this survivor.");
+    }
+
+    const allowedWinnerIds = new Set([primary.id, ...duplicates.map((contact) => contact.id)]);
+    for (const winnerId of [
+      ...Object.values(normalized.fieldWinners),
+      ...Object.values(normalized.customFieldWinners),
+    ]) {
+      if (typeof winnerId !== "string" || !allowedWinnerIds.has(winnerId))
+        throw invalid("Every merge winner must be the survivor or a requested duplicate.");
+    }
+    const contactsById = new Map<string, CrmContact>([
+      [primary.id, primary],
+      ...duplicates.map((contact) => [contact.id, contact] as const),
+    ]);
+    const mergedTags = normalizeTags([
+      ...primary.tags,
+      ...duplicates.flatMap((contact) => contact.tags),
+    ]);
+    const mergedFields: Record<string, CrmValue> = { ...primary.customFields };
+    for (const duplicate of duplicates)
+      for (const [field, value] of Object.entries(duplicate.customFields))
+        if (mergedFields[field] === undefined) mergedFields[field] = clone(value);
+
+    let firstName =
+      primary.firstName ??
+      duplicates.find((contact) => contact.firstName !== null)?.firstName ??
+      null;
+    let lastName =
+      primary.lastName ?? duplicates.find((contact) => contact.lastName !== null)?.lastName ?? null;
+    let displayName =
+      primary.displayName ||
+      duplicates.find((contact) => contact.displayName)?.displayName ||
+      "Unnamed contact";
+    let email =
+      primary.email ?? duplicates.find((contact) => contact.email !== null)?.email ?? null;
+    let phone =
+      primary.phone ?? duplicates.find((contact) => contact.phone !== null)?.phone ?? null;
+    let company =
+      primary.company ?? duplicates.find((contact) => contact.company !== null)?.company ?? null;
+    let title =
+      primary.title ?? duplicates.find((contact) => contact.title !== null)?.title ?? null;
+    const website =
+      primary.website ?? duplicates.find((contact) => contact.website !== null)?.website ?? null;
+    const linkedinUrl =
+      primary.linkedinUrl ??
+      duplicates.find((contact) => contact.linkedinUrl !== null)?.linkedinUrl ??
+      null;
+    const survivorNotes =
+      primary.notes ?? duplicates.find((contact) => contact.notes !== null)?.notes ?? null;
+
+    for (const [field, winnerId] of Object.entries(normalized.fieldWinners)) {
+      const winner = contactsById.get(winnerId);
+      if (winner === undefined) throw invalid(`fieldWinners.${field} is not valid.`);
+      if (winner.id === primary.id) continue;
+      switch (field as CrmMergeScalarField) {
+        case "email":
+          email = winner.email;
+          break;
+        case "phone":
+          phone = winner.phone;
+          break;
+        case "name":
+          firstName = winner.firstName;
+          lastName = winner.lastName;
+          displayName = winner.displayName;
+          break;
+        case "company":
+          company = winner.company;
+          break;
+        case "title":
+          title = winner.title;
+          break;
+        case "bio":
+        case "headshot": {
+          const aliases = new Set(MERGE_PROFILE_FIELD_ALIASES[field as "bio" | "headshot"]);
+          let hasValue = false;
+          let value: CrmValue | null = null;
+          for (const [customField, candidate] of Object.entries(winner.customFields)) {
+            if (aliases.has(customField.toLowerCase())) {
+              hasValue = true;
+              value = candidate;
+              break;
+            }
+          }
+          for (const customField of Object.keys(mergedFields))
+            if (aliases.has(customField.toLowerCase())) delete mergedFields[customField];
+          if (hasValue) mergedFields[field === "bio" ? "bio" : "headshotUrl"] = clone(value);
+          break;
+        }
+      }
+    }
+    for (const [field, winnerId] of Object.entries(normalized.customFieldWinners)) {
+      const winner = contactsById.get(winnerId);
+      if (winner === undefined) throw invalid(`customFieldWinners.${field} is not valid.`);
+      if (winner.id === primary.id) continue;
+      const winnerValue = winner.customFields[field];
+      if (Object.hasOwn(winner.customFields, field) && winnerValue !== undefined)
+        mergedFields[field] = clone(winnerValue);
+      else delete mergedFields[field];
+    }
+    if (email !== null) {
+      const existing = await repository.findContactByEmail(normalized.organizationId, email);
+      if (existing !== null) {
+        assertTenant(existing, normalized.organizationId);
+        if (existing.id !== primary.id && !allowedWinnerIds.has(existing.id))
+          throw conflict("A contact with this email already exists.");
+      }
+    }
+    const survivor: CrmContact = {
+      ...primary,
+      firstName,
+      lastName,
+      displayName,
+      email,
+      phone,
+      company,
+      title,
+      website,
+      linkedinUrl,
+      notes: survivorNotes,
+      tags: mergedTags,
+      customFields: mergedFields,
+      version: primary.version + 1,
+      updatedAt: nowIso(this.#clock),
+    };
+    const projections = await repository.listProjections(normalized.organizationId);
+    const links = projections.filter(
+      (projection) =>
+        normalized.retiredIds.includes(projectionCrmContactId(projection)) ||
+        projectionCrmContactId(projection) === normalized.survivorId,
     );
+    const participantConflicts = participantConflictDetails(
+      projections,
+      new Set([normalized.survivorId, ...normalized.retiredIds]),
+    );
+    const [segments, notesByContact, pipelineByContact] = await Promise.all([
+      repository.listSegments(normalized.organizationId),
+      Promise.all(
+        normalized.retiredIds.map((id) => repository.listNotes(normalized.organizationId, id)),
+      ),
+      Promise.all(
+        normalized.retiredIds.map((id) =>
+          repository.listPipelineHistory(normalized.organizationId, id),
+        ),
+      ),
+    ]);
+    const notes = notesByContact.flat();
+    const pipeline = pipelineByContact.flat();
+    const retiredSet = new Set(normalized.retiredIds);
+    return {
+      organizationId: normalized.organizationId,
+      survivorId: normalized.survivorId,
+      retiredIds: normalized.retiredIds,
+      rewired: rewireCounts(links, notes, segments, pipeline, retiredSet),
+      participantConflicts,
+      auditId: `audit-crm-${normalized.planFingerprint}`,
+      planFingerprint: normalized.planFingerprint,
+      survivor: clone(survivor),
+      tombstones: duplicates.map(clone),
+      primary: clone(survivor),
+      merged: duplicates.map(clone),
+    };
   }
 
   async getContactHistory(
@@ -1355,74 +2001,88 @@ export class CrmService {
   async addContactToEvent(
     actor: CrmActor,
     input: AddContactToEventInput,
-  ): Promise<{ readonly projection: CrmEventProjection; readonly idempotent: boolean }> {
+  ): Promise<CrmEventProjectionResult> {
     const organizationId = identifier(input.organizationId, "organizationId");
-    const contactId = identifier(input.contactId, "contactId");
+    const crmContactId = identifier(input.crmContactId ?? input.contactId, "crmContactId");
+    const participantId = identifier(input.participantId ?? crmContactId, "participantId");
     const eventId = identifier(input.eventId, "eventId");
     const key = text(input.idempotencyKey, "idempotencyKey", 512);
     const role = eventRole(input.role);
+    const sessionId =
+      input.sessionId === undefined || input.sessionId === null
+        ? null
+        : identifier(input.sessionId, "sessionId");
+    const note = optionalText(input.note, "note", 2_000) ?? null;
     assertActor(actor, organizationId);
-    await this.getContact(actor, organizationId, contactId);
     return this.runIdempotent(`event:${organizationId}:${key}`, async () => {
       const repository = this.requireRepository();
-      const prior = await repository.getCommandResult<{
-        readonly projection: CrmEventProjection;
-        readonly idempotent: boolean;
-      }>(organizationId, "add-to-event", key);
+      const prior = await repository.getCommandResult<CrmEventProjectionResult>(
+        organizationId,
+        "add-to-event",
+        key,
+      );
       if (prior !== null) {
-        if (prior.projection.contactId !== contactId || prior.projection.eventId !== eventId) {
+        if (
+          prior.projection.crmContactId !== crmContactId ||
+          prior.projection.participantId !== participantId ||
+          prior.projection.eventId !== eventId ||
+          prior.projection.role !== role ||
+          prior.projection.sessionId !== sessionId ||
+          prior.projection.note !== note
+        ) {
           throw conflict(
-            "The add-to-event idempotency key was already used for another projection.",
+            "The add-to-event idempotency key was already used for another relationship.",
           );
         }
-        return { projection: clone(prior.projection), idempotent: true };
+        return { ...clone(prior), idempotent: true };
       }
-      const existing = await repository.getProjection(organizationId, eventId, contactId);
-      if (existing !== null) {
-        if (existing.role !== role || existing.sessionId !== (input.sessionId ?? null))
-          throw conflict("The contact is already projected to this event with another role.");
-        const result = { projection: clone(existing), idempotent: true };
-        await repository.saveCommandResult(organizationId, "add-to-event", key, result);
-        return result;
-      }
+      const contact = await this.getContact(actor, organizationId, crmContactId);
       const createdAt = nowIso(this.#clock);
       const projection: CrmEventProjection = {
         id: this.#generateId("event-contact"),
         organizationId,
         eventId,
-        contactId,
-        sessionId:
-          input.sessionId === undefined || input.sessionId === null
-            ? null
-            : identifier(input.sessionId, "sessionId"),
+        participantId,
+        crmContactId,
+        contactId: crmContactId,
+        sessionId,
         role,
-        note: optionalText(input.note, "note", 2_000) ?? null,
+        note,
         createdBy: identifier(actor.userId, "actor userId"),
         createdAt,
         updatedAt: createdAt,
       };
-      const saved = await repository.saveProjection(projection);
+      const saved = await repository.saveProjection(projection, contact);
       assertTenant(saved, organizationId);
       if (saved.id !== projection.id) {
-        if (saved.role !== role || saved.sessionId !== (input.sessionId ?? null))
-          throw conflict("The contact is already projected to this event with another role.");
-        const result = { projection: clone(saved), idempotent: true };
+        const result: CrmEventProjectionResult = {
+          projection: clone(saved),
+          idempotent: true,
+          outcome: "existing",
+        };
         await repository.saveCommandResult(organizationId, "add-to-event", key, result);
         return result;
       }
-      await repository.appendHistory({
-        id: this.#generateId("history"),
-        organizationId,
-        contactId,
-        kind: "event",
-        eventId,
-        sessionId: saved.sessionId,
-        title: "Added to event",
-        detail: saved.note,
-        occurredAt: createdAt,
-        metadata: { role: saved.role, projectionId: saved.id },
-      });
-      const result = { projection: clone(saved), idempotent: false };
+      await repository.appendHistory(
+        {
+          id: this.#generateId("history"),
+          organizationId,
+          contactId: crmContactId,
+          kind: "event",
+          eventId,
+          sessionId: saved.sessionId,
+          title: "Added to event",
+          detail: saved.note,
+          occurredAt: createdAt,
+          metadata: { role: saved.role, projectionId: saved.id },
+        },
+        contact,
+      );
+      const result: CrmEventProjectionResult = {
+        projection: clone(saved),
+        idempotent: false,
+        outcome: "created",
+      };
       await repository.saveCommandResult(organizationId, "add-to-event", key, result);
       return result;
     });
@@ -1450,44 +2110,203 @@ export class CrmService {
     if (input.eventId !== undefined && input.eventId !== null) identifier(input.eventId, "eventId");
     if (input.segmentId !== undefined && input.segmentId !== null)
       await this.getSegment(actor, organizationId, input.segmentId);
-    const subject = text(input.subject, "subject", 500);
+    const templateSubject = text(input.subject, "subject", 500);
     const body = text(input.body, "body", 20_000);
+    const recipientEmail = contact.email;
+    if (recipientEmail === null) throw invalid("The outreach recipient needs an email address.");
     return this.runIdempotent(`outreach:${organizationId}:${key}`, async () => {
       const repository = this.requireRepository();
       const prior = await repository.getOutreachByIdempotencyKey(organizationId, key);
       if (prior !== null) {
-        if (prior.contactId !== contactId || prior.subject !== subject || prior.body !== body)
+        if (
+          prior.contactId !== contactId ||
+          prior.templateSubject !== templateSubject ||
+          prior.body !== body
+        ) {
           throw conflict("The outreach idempotency key was already used for another message.");
+        }
         return clone(prior);
       }
+      const subject = this.render(templateSubject, contact, input.variables);
       const renderedBody = this.render(body, contact, input.variables);
       let command: CrmOutreachCommand = {
         id: this.#generateId("outreach"),
         organizationId,
         contactId,
         eventId: input.eventId ?? null,
+        recipientEmail,
+        templateSubject,
         subject,
         body,
         renderedBody,
         status: "queued",
+        queuedCount: 1,
+        sentCount: 0,
+        failedCount: 0,
+        terminal: false,
+        failureReason: null,
+        providerMessageId: null,
+        completedAt: null,
         idempotencyKey: key,
         createdBy: identifier(actor.userId, "actor userId"),
         createdAt: nowIso(this.#clock),
       };
-      if (this.#outreach !== undefined) {
-        const sent = await this.#outreach.send(clone(command));
-        if (sent !== undefined) {
-          assertTenant(sent, organizationId);
-          command = sent;
-        } else {
-          command = { ...command, status: "sent" };
+      if (this.#outreach === undefined) {
+        command = {
+          ...command,
+          status: "failed",
+          queuedCount: 0,
+          failedCount: 1,
+          terminal: true,
+          failureReason: "Operational outreach delivery is not configured.",
+        };
+      } else {
+        try {
+          const sent = await this.#outreach.send(clone(command));
+          if (sent !== undefined) {
+            assertTenant(sent, organizationId);
+            if (
+              sent.id !== command.id ||
+              sent.contactId !== contactId ||
+              sent.idempotencyKey !== key
+            ) {
+              throw conflict("The outreach boundary returned a mismatched send receipt.");
+            }
+            const status = sent.status;
+            command = {
+              ...command,
+              status,
+              queuedCount: status === "queued" ? 1 : 0,
+              sentCount: status === "sent" ? 1 : 0,
+              failedCount: status === "failed" ? 1 : 0,
+              terminal: status !== "queued",
+              failureReason:
+                status === "failed"
+                  ? (sent.failureReason ?? "The delivery boundary rejected the recipient.")
+                  : null,
+            };
+          } else {
+            command = {
+              ...command,
+              status: "failed",
+              queuedCount: 0,
+              failedCount: 1,
+              terminal: true,
+              failureReason: "The delivery boundary returned no send receipt.",
+            };
+          }
+        } catch (error) {
+          if (error instanceof CrmServiceError) throw error;
+          command = {
+            ...command,
+            status: "failed",
+            queuedCount: 0,
+            failedCount: 1,
+            terminal: true,
+            failureReason: error instanceof Error ? error.message : "The delivery boundary failed.",
+          };
         }
       }
       const saved = await repository.saveOutreach(command);
       assertTenant(saved, organizationId);
+      await repository.appendHistory({
+        id: this.#generateId("history"),
+        organizationId,
+        contactId,
+        kind: "communication",
+        eventId: command.eventId,
+        sessionId: null,
+        title: `Outreach ${command.status}`,
+        detail: command.failureReason,
+        occurredAt: command.createdAt,
+        metadata: {
+          sendId: command.id,
+          recipientEmail: command.recipientEmail,
+          status: command.status,
+          queuedCount: command.queuedCount,
+          sentCount: command.sentCount,
+          failedCount: command.failedCount,
+          terminal: command.terminal,
+        },
+      });
       await repository.saveCommandResult(organizationId, "outreach", key, saved);
       return clone(saved);
     });
+  }
+  async recordOutreachDeliveryStatus(input: {
+    readonly organizationId: string;
+    readonly outreachId: string;
+    readonly idempotencyKey: string;
+    readonly status: "delivered" | "failed" | "bounced" | "complained";
+    readonly providerMessageId?: string;
+    readonly reason?: string;
+    readonly occurredAt?: string;
+  }): Promise<CrmOutreachCommand> {
+    const organizationId = identifier(input.organizationId, "organizationId");
+    const outreachId = identifier(input.outreachId, "outreachId");
+    const idempotencyKey = text(input.idempotencyKey, "idempotencyKey", 512);
+    const providerMessageId = optionalText(input.providerMessageId, "providerMessageId", 512);
+    const reason = optionalText(input.reason, "reason", 2_000);
+    const occurredAt =
+      input.occurredAt === undefined
+        ? nowIso(this.#clock)
+        : (() => {
+            const parsed = new Date(input.occurredAt);
+            if (!Number.isFinite(parsed.getTime()))
+              throw invalid("occurredAt must be an ISO instant.");
+            return parsed.toISOString();
+          })();
+    const repository = this.requireRepository();
+    const current = await repository.getOutreachByIdempotencyKey(organizationId, idempotencyKey);
+    if (current === null || current.id !== outreachId)
+      throw notFound("The outreach was not found.");
+    if (current.terminal) {
+      if (
+        current.status === input.status &&
+        (providerMessageId === undefined || providerMessageId === current.providerMessageId) &&
+        (reason === undefined || reason === current.failureReason)
+      ) {
+        return clone(current);
+      }
+      throw conflict("A terminal outreach delivery cannot move to another state.");
+    }
+
+    const failed = input.status !== "delivered";
+    const next: CrmOutreachCommand = {
+      ...current,
+      status: input.status,
+      queuedCount: 0,
+      sentCount: failed ? 0 : 1,
+      failedCount: failed ? 1 : 0,
+      terminal: true,
+      failureReason: failed ? (reason ?? "The delivery failed.") : null,
+      providerMessageId: providerMessageId ?? current.providerMessageId ?? null,
+      completedAt: occurredAt,
+    };
+    const saved = await repository.updateOutreach(next);
+    assertTenant(saved, organizationId);
+    await repository.appendHistory({
+      id: this.#generateId("history"),
+      organizationId,
+      contactId: saved.contactId,
+      kind: "communication",
+      eventId: saved.eventId,
+      sessionId: null,
+      title: `Outreach ${saved.status}`,
+      detail: saved.failureReason,
+      occurredAt,
+      metadata: {
+        sendId: saved.id,
+        recipientEmail: saved.recipientEmail,
+        status: saved.status,
+        providerMessageId: saved.providerMessageId ?? null,
+        queuedCount: saved.queuedCount,
+        sentCount: saved.sentCount,
+        failedCount: saved.failedCount,
+        terminal: saved.terminal,
+      },
+    });
+    return clone(saved);
   }
 
   async outreach(actor: CrmActor, input: SendCrmOutreachInput): Promise<CrmOutreachCommand> {
@@ -1500,8 +2319,15 @@ export class CrmService {
   async analytics(actor: CrmActor, organizationId = actor.organizationId): Promise<CrmAnalytics> {
     const organization = identifier(organizationId, "organizationId");
     assertActor(actor, organization);
-    const contacts = await this.listContacts(actor, organization, { limit: 500 });
-    const projections = (await this.requireRepository().listProjections(organization)).filter(
+    const repository = this.requireRepository();
+    const [contacts, rawProjections, outreach] = await Promise.all([
+      this.listContacts(actor, organization, { limit: 500 }),
+      repository.listProjections(organization),
+      repository.listOutreach === undefined
+        ? Promise.resolve([])
+        : repository.listOutreach(organization),
+    ]);
+    const projections = rawProjections.filter(
       (projection) => projection.organizationId === organization,
     );
     const stageCounts = Object.fromEntries(
@@ -1517,12 +2343,15 @@ export class CrmService {
     const eventCounts = new Map<string, number>();
     for (const projection of projections)
       eventCounts.set(projection.eventId, (eventCounts.get(projection.eventId) ?? 0) + 1);
-    const repository = this.requireRepository();
-    const outreach =
-      repository.listOutreach === undefined ? [] : await repository.listOutreach(organization);
     const outreachCounts = { queued: 0, sent: 0, failed: 0 };
-    for (const command of outreach.filter((candidate) => candidate.organizationId === organization))
-      outreachCounts[command.status] += 1;
+    for (const command of outreach.filter(
+      (candidate) => candidate.organizationId === organization,
+    )) {
+      if (command.status === "queued") outreachCounts.queued += 1;
+      else if (command.status === "sent" || command.status === "delivered")
+        outreachCounts.sent += 1;
+      else outreachCounts.failed += 1;
+    }
     return {
       organizationId: organization,
       totalContacts: contacts.length,
@@ -1666,23 +2495,29 @@ export class CrmService {
   }
 
   private render(
-    body: string,
+    content: string,
     contact: CrmContact,
     variables: Readonly<Record<string, string>> | undefined,
   ): string {
     const values: Record<string, string> = {
-      firstName: contact.firstName ?? "",
-      lastName: contact.lastName ?? "",
-      displayName: contact.displayName,
-      email: contact.email ?? "",
-      company: contact.company ?? "",
-      title: contact.title ?? "",
       ...(variables ?? {}),
+      ...contactMergeTagValues(contact),
     };
-    return body.replace(
+    const unknown = new Set<string>();
+    const rendered = content.replace(
       /\{\{\s*([A-Za-z][A-Za-z0-9_.-]{0,99})\s*\}\}/gu,
-      (_match, key: string) => values[key] ?? "",
+      (_match, key: string) => {
+        if (!Object.hasOwn(values, key)) {
+          unknown.add(key);
+          return "";
+        }
+        return values[key] ?? "";
+      },
     );
+    if (unknown.size > 0) {
+      throw invalid(`Unknown outreach merge tags: ${[...unknown].sort().join(", ")}.`);
+    }
+    return rendered;
   }
 
   private requireRepository(): CrmRepository {
@@ -1714,6 +2549,7 @@ export class InMemoryCrmRepository implements CrmRepository {
   readonly #outreach = new Map<string, CrmOutreachCommand>();
   readonly #imports = new Map<string, CrmImportResult>();
   readonly #commands = new Map<string, unknown>();
+  readonly #mergeReceipts = new Map<string, CrmMergeReconciliationResult>();
 
   constructor(seed: CrmRepositorySeed = {}) {
     for (const contact of seed.contacts ?? [])
@@ -1723,11 +2559,31 @@ export class InMemoryCrmRepository implements CrmRepository {
     this.#history.push(...(seed.history ?? []).map(clone));
     this.#pipeline.push(...(seed.pipeline ?? []).map(clone));
     this.#notes.push(...(seed.notes ?? []).map(clone));
-    for (const projection of seed.projections ?? [])
+    const projections = [
+      ...(seed.projections ?? []),
+      ...(seed.participantContactLinks ?? []).map((link) => ({
+        ...link,
+        contactId: link.crmContactId,
+      })),
+    ];
+    for (const projection of projections) {
+      const participantId = projection.participantId ?? projection.contactId;
+      const crmContactId = projection.crmContactId ?? projection.contactId;
+      const normalizedProjection: CrmEventProjection = {
+        ...projection,
+        participantId,
+        crmContactId,
+        contactId: crmContactId,
+      };
       this.#projections.set(
-        this.projectionKey(projection.organizationId, projection.eventId, projection.contactId),
-        clone(projection),
+        this.projectionKey(
+          normalizedProjection.organizationId,
+          normalizedProjection.eventId,
+          participantId,
+        ),
+        clone(normalizedProjection),
       );
+    }
     for (const command of seed.outreach ?? [])
       this.#outreach.set(
         this.commandKey(command.organizationId, command.idempotencyKey),
@@ -1875,24 +2731,48 @@ export class InMemoryCrmRepository implements CrmRepository {
   async getProjection(
     organizationId: string,
     eventId: string,
-    contactId: string,
+    crmContactId: string,
   ): Promise<CrmEventProjection | null> {
-    const projection = this.#projections.get(
-      this.projectionKey(organizationId, eventId, contactId),
+    const projection = [...this.#projections.values()].find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        candidate.eventId === eventId &&
+        candidate.crmContactId === crmContactId,
     );
     return projection === undefined ? null : clone(projection);
   }
 
-  async saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection> {
+  async saveProjection(
+    projection: CrmEventProjection,
+    contact: CrmContact,
+  ): Promise<CrmEventProjection> {
+    const crmContactId = projection.crmContactId ?? projection.contactId;
+    const participantId = projection.participantId ?? crmContactId;
+    const normalizedProjection: CrmEventProjection = {
+      ...projection,
+      participantId,
+      crmContactId,
+      contactId: crmContactId,
+    };
     const key = this.projectionKey(
-      projection.organizationId,
-      projection.eventId,
-      projection.contactId,
+      normalizedProjection.organizationId,
+      normalizedProjection.eventId,
+      normalizedProjection.participantId,
     );
+    const storedContact = this.#contacts.get(
+      this.contactKey(normalizedProjection.organizationId, normalizedProjection.crmContactId),
+    );
+    if (
+      contact.organizationId !== normalizedProjection.organizationId ||
+      contact.id !== normalizedProjection.crmContactId ||
+      storedContact === undefined
+    ) {
+      throw new CrmRepositoryConflictError("The projected contact was not found.");
+    }
     const existing = this.#projections.get(key);
     if (existing !== undefined) return clone(existing);
-    this.#projections.set(key, clone(projection));
-    return clone(projection);
+    this.#projections.set(key, clone(normalizedProjection));
+    return clone(normalizedProjection);
   }
 
   async listProjections(organizationId: string): Promise<readonly CrmEventProjection[]> {
@@ -1900,11 +2780,155 @@ export class InMemoryCrmRepository implements CrmRepository {
       .filter((projection) => projection.organizationId === organizationId)
       .map(clone);
   }
+  async listParticipantContactLinks(
+    organizationId: string,
+  ): Promise<readonly CrmParticipantContactLink[]> {
+    return (await this.listProjections(organizationId)).map(
+      ({ contactId: _contactId, ...link }) => link,
+    );
+  }
+
+  async reconcileContactMerge(
+    input: CrmMergeReconciliationInput,
+  ): Promise<CrmMergeReconciliationResult> {
+    const organizationId = identifier(input.organizationId, "organizationId");
+    const survivorId = identifier(input.survivorId, "survivorId");
+    const retiredIds = [...new Set(input.retiredIds.map((id) => identifier(id, "retiredId")))].sort(
+      (left, right) => left.localeCompare(right),
+    );
+    const auditId = identifier(input.auditId, "auditId");
+    const receiptKey = this.commandKey(organizationId, `merge-reconcile:${auditId}`);
+    const prior = this.#mergeReceipts.get(receiptKey);
+    if (prior !== undefined) return clone(prior);
+    const retiredSet = new Set(retiredIds);
+    const projections = await this.listProjections(organizationId);
+    const participantConflicts = participantConflictDetails(
+      projections,
+      new Set([survivorId, ...retiredIds]),
+    );
+    if (participantConflicts.length > 0) {
+      throw new CrmRepositoryConflictError(
+        "The merge would reconcile distinct participants in one event.",
+        participantConflicts,
+      );
+    }
+    const survivor = this.#contacts.get(this.contactKey(organizationId, survivorId));
+    if (survivor === undefined || survivor.status !== "active")
+      throw new CrmRepositoryConflictError("The merge survivor is not active.");
+    for (const retiredId of retiredIds) {
+      const retired = this.#contacts.get(this.contactKey(organizationId, retiredId));
+      if (
+        retired === undefined ||
+        retired.status !== "merged" ||
+        retired.mergedIntoId !== survivorId ||
+        retired.mergeAuditId !== auditId
+      ) {
+        throw new CrmRepositoryConflictError(
+          "The retired CRM contact does not match this merge audit.",
+        );
+      }
+    }
+
+    let participantContactLinks = 0;
+    const orderedProjections = [...projections].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+    for (const projection of orderedProjections) {
+      if (!retiredSet.has(projectionCrmContactId(projection))) continue;
+      const oldKey = this.projectionKey(
+        projection.organizationId,
+        projection.eventId,
+        projection.participantId,
+      );
+      const next: CrmEventProjection = {
+        ...projection,
+        crmContactId: survivorId,
+        contactId: survivorId,
+        sourceCrmContactId: projection.sourceCrmContactId ?? projectionCrmContactId(projection),
+        mergeAuditId: auditId,
+        updatedAt: projection.updatedAt,
+      };
+      const nextKey = this.projectionKey(next.organizationId, next.eventId, next.participantId);
+      this.#projections.delete(oldKey);
+      const existing = this.#projections.get(nextKey);
+      if (existing === undefined || existing.id === projection.id) {
+        this.#projections.set(nextKey, clone(next));
+      }
+      participantContactLinks += 1;
+    }
+
+    let notes = 0;
+    for (let index = 0; index < this.#notes.length; index += 1) {
+      const note = this.#notes[index];
+      if (note === undefined || !retiredSet.has(note.contactId)) continue;
+      this.#notes[index] = {
+        ...note,
+        contactId: survivorId,
+        sourceCrmContactId: note.sourceCrmContactId ?? note.contactId,
+        mergeAuditId: auditId,
+      };
+      notes += 1;
+    }
+
+    let pipelineHistory = 0;
+    for (let index = 0; index < this.#pipeline.length; index += 1) {
+      const entry = this.#pipeline[index];
+      if (entry === undefined || !retiredSet.has(entry.contactId)) continue;
+      this.#pipeline[index] = {
+        ...entry,
+        contactId: survivorId,
+        sourceCrmContactId: entry.sourceCrmContactId ?? entry.contactId,
+        mergeAuditId: auditId,
+      };
+      pipelineHistory += 1;
+    }
+
+    let segments = 0;
+    const orderedSegments = [...this.#segments.values()]
+      .filter((segment) => segment.organizationId === organizationId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    for (const segment of orderedSegments) {
+      const replaced = replaceContactReference(segment.rules, retiredSet, survivorId);
+      if (!replaced.changed) continue;
+      const updatedSegment: CrmSegment = {
+        ...segment,
+        rules: replaced.value as CrmSegment["rules"],
+        mergeAuditIds: [...new Set([...(segment.mergeAuditIds ?? []), auditId])],
+        version: segment.version + 1,
+        updatedAt: segment.updatedAt,
+      };
+      this.#segments.set(this.segmentKey(organizationId, segment.id), clone(updatedSegment));
+      segments += 1;
+    }
+
+    const result: CrmMergeReconciliationResult = {
+      survivorId,
+      retiredIds,
+      rewired: { participantContactLinks, notes, segments, pipelineHistory },
+      participantConflicts: [],
+      auditId,
+    };
+    this.#mergeReceipts.set(receiptKey, clone(result));
+    return clone(result);
+  }
 
   async saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
     const key = this.commandKey(command.organizationId, command.idempotencyKey);
     const existing = this.#outreach.get(key);
     if (existing !== undefined) return clone(existing);
+    this.#outreach.set(key, clone(command));
+    return clone(command);
+  }
+  async updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
+    const key = this.commandKey(command.organizationId, command.idempotencyKey);
+    const existing = this.#outreach.get(key);
+    if (
+      existing === undefined ||
+      existing.id !== command.id ||
+      existing.contactId !== command.contactId
+    ) {
+      throw new CrmRepositoryConflictError("The outreach delivery identity does not match.");
+    }
     this.#outreach.set(key, clone(command));
     return clone(command);
   }
@@ -1971,5 +2995,3 @@ export class InMemoryCrmRepository implements CrmRepository {
     return `${organizationId}\u0000${key}`;
   }
 }
-
-export type InMemoryAirtableCrmRepository = InMemoryCrmRepository;

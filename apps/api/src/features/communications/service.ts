@@ -11,16 +11,29 @@ import type {
   CommunicationGrant,
   CommunicationPreview,
   CommunicationRecipient,
+  CommunicationRecipientPreview,
   CommunicationRecipientSnapshot,
   CommunicationRenderData,
   CommunicationRepository,
   CommunicationRole,
   CommunicationSend,
+  CommunicationSenderIdentities,
   CommunicationSenderIdentity,
+  CommunicationSenderPurpose,
   CommunicationSendStatus,
   CommunicationTemplate,
   CommunicationTemplatePurpose,
   CommunicationTemplateSnapshot,
+  ReminderCandidate,
+  ReminderCandidateSourceResult,
+  ReminderDispatch,
+  ReminderDispatchStatus,
+  ReminderFacts,
+  ReminderRepository,
+  ReminderRun,
+  ReminderRuntime,
+  ReminderSubject,
+  ReminderTriggerType,
 } from "./types";
 import { COMMUNICATION_AUDIENCES, COMMUNICATION_TEMPLATE_PURPOSES } from "./types";
 
@@ -70,6 +83,7 @@ export interface CommunicationPreviewInput {
   templateId: string;
   templateVersion?: number;
   audience: CommunicationAudience;
+  recipientIds?: readonly string[];
   data?: CommunicationRenderData;
 }
 
@@ -110,6 +124,61 @@ export interface RecordCommunicationDeliveryInput {
 export interface CommunicationServiceOptions {
   clock?: () => Date;
   previewLifetimeMs?: number;
+  reminders?: ReminderRuntime;
+  senderIdentities?: CommunicationSenderIdentities;
+}
+export interface ReminderPreviewInput {
+  organizationId?: string;
+  eventId: string;
+  triggerType?: ReminderTriggerType;
+  scheduledAt?: string;
+}
+
+export interface RunManualRemindersInput {
+  organizationId?: string;
+  eventId: string;
+  idempotencyKey: string;
+  expectedAudienceRevision: string;
+  scheduledAt?: string;
+}
+
+export interface RunAutomaticRemindersInput {
+  organizationId?: string;
+  eventId: string;
+  scheduledAt: string;
+}
+
+export interface ReminderListRunsInput {
+  organizationId?: string;
+  eventId: string;
+}
+
+export interface ReminderListDispatchesInput {
+  organizationId?: string;
+  eventId: string;
+  runId?: string;
+}
+
+export interface ReminderFactsInput {
+  organizationId?: string;
+  eventId: string;
+  recipientApplicationId: string;
+  subject: ReminderSubject;
+}
+
+export interface RecordReminderDispatchStatusInput {
+  organizationId?: string;
+  eventId: string;
+  dispatchId?: string;
+  providerMessageId?: string;
+  status: ReminderDispatchStatus;
+  failureMetadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface ReminderPreview {
+  audienceType: ReminderCandidateSourceResult["audienceType"];
+  audienceRevision: string;
+  candidates: readonly ReminderCandidate[];
 }
 
 function invalidInput(message: string): CommunicationError {
@@ -168,18 +237,48 @@ function requirePurpose(value: CommunicationTemplatePurpose): CommunicationTempl
   return value;
 }
 
-function senderForPurpose(purpose: CommunicationTemplatePurpose): CommunicationSenderIdentity {
-  if (purpose === "verification") {
-    return "auth@sessionboard.namuh.co";
+const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+
+function validEmailAddress(value: string): boolean {
+  return (
+    value.length <= 320 &&
+    value === value.trim() &&
+    !/[\r\n]/u.test(value) &&
+    EMAIL_ADDRESS_PATTERN.test(value)
+  );
+}
+
+function resolveSenderIdentities(
+  configured: CommunicationSenderIdentities | undefined,
+): CommunicationSenderIdentities | undefined {
+  if (configured === undefined) return undefined;
+  for (const purpose of ["auth", "speakers", "calendar"] as const) {
+    if (!validEmailAddress(configured[purpose])) {
+      throw new TypeError(`Communication ${purpose} sender must be a valid email address.`);
+    }
   }
+  return { ...configured };
+}
+
+function senderPurposeForTemplatePurpose(
+  purpose: CommunicationTemplatePurpose,
+): CommunicationSenderPurpose {
+  if (purpose === "verification") return "auth";
   if (
     purpose === "schedule_publish" ||
     purpose === "schedule_update" ||
     purpose === "schedule_cancel"
   ) {
-    return "calendar@sessionboard.namuh.co";
+    return "calendar";
   }
-  return "speakers@sessionboard.namuh.co";
+  return "speakers";
+}
+
+function senderForPurpose(
+  purpose: CommunicationTemplatePurpose,
+  identities: CommunicationSenderIdentities,
+): CommunicationSenderIdentity {
+  return identities[senderPurposeForTemplatePurpose(purpose)];
 }
 
 function hasGrant(actor: CommunicationActor, eventId: string, role: CommunicationRole): boolean {
@@ -264,6 +363,40 @@ function dataFingerprint(data: CommunicationRenderData): string {
   return stableValue(data);
 }
 
+function canonicalSendPayload(input: {
+  purpose: CommunicationTemplatePurpose;
+  audience: CommunicationAudience | null;
+  templateId: string;
+  templateVersion: number;
+  recipientIds: readonly string[];
+  data: CommunicationRenderData;
+}): string {
+  return stableValue({
+    purpose: input.purpose,
+    audience: input.audience,
+    templateId: input.templateId,
+    templateVersion: input.templateVersion,
+    recipientIds: [...input.recipientIds].sort(),
+    data: input.data,
+  });
+}
+
+function sendMatchesPayload(
+  send: CommunicationSend,
+  input: Parameters<typeof canonicalSendPayload>[0],
+): boolean {
+  return (
+    canonicalSendPayload({
+      purpose: send.purpose,
+      audience: send.audience,
+      templateId: send.templateId,
+      templateVersion: send.templateVersion,
+      recipientIds: send.recipients.map((recipient) => recipient.id),
+      data: send.data,
+    }) === canonicalSendPayload(input)
+  );
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -323,22 +456,48 @@ export function renderCommunicationTemplate(
 }
 export const renderTemplate = renderCommunicationTemplate;
 
+function firstNameForRecipient(recipient: CommunicationRecipientSnapshot): string {
+  const configured = recipient.data.first_name ?? recipient.data.firstName;
+  if (typeof configured === "string" && configured.trim().length > 0) {
+    return configured.trim();
+  }
+  return recipient.displayName.trim().split(/\s+/u)[0] ?? recipient.displayName;
+}
+
 function renderDataForRecipient(
   data: CommunicationRenderData,
   recipient: CommunicationRecipientSnapshot,
 ): CommunicationRenderData {
+  const firstName = firstNameForRecipient(recipient);
   return {
     ...data,
     ...recipient.data,
     recipientId: recipient.id,
+    first_name: firstName,
+    display_name: recipient.displayName,
     email: recipient.email,
     displayName: recipient.displayName,
     recipient: {
       id: recipient.id,
-      email: recipient.email,
+      firstName,
       displayName: recipient.displayName,
+      email: recipient.email,
     },
   };
+}
+
+export function redactCommunicationProviderReason(value: string): string {
+  return value
+    .replace(/\b(https?:\/\/)([^\s/@:]+):([^\s/@]+)@/giu, "$1[REDACTED]@")
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/giu, "$1 [REDACTED]")
+    .replace(
+      /\b(api[-_ ]?key|access[-_ ]?token|auth(?:orization)?|password|secret|token)\b(\s*[:=]\s*)([^\s,;]+)/giu,
+      "$1$2[REDACTED]",
+    );
+}
+
+function providerReason(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : redactCommunicationProviderReason(value);
 }
 
 function deliveryAction(status: CommunicationDeliveryStatus): CommunicationAuditEntry["action"] {
@@ -347,34 +506,86 @@ function deliveryAction(status: CommunicationDeliveryStatus): CommunicationAudit
     : (`delivery_${status}` as CommunicationAuditEntry["action"]);
 }
 
-function sendStatus(deliveries: readonly CommunicationDelivery[]): CommunicationSendStatus {
-  if (deliveries.every((delivery) => delivery.status === "delivered")) {
-    return "delivered";
+interface CommunicationDeliverySummary {
+  status: CommunicationSendStatus;
+  recipientCount: number;
+  queuedCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  terminal: boolean;
+}
+
+function summarizeDeliveries(
+  deliveries: readonly CommunicationDelivery[],
+  recipientCount = deliveries.length,
+): CommunicationDeliverySummary {
+  const normalizedRecipientCount = Math.max(recipientCount, deliveries.length);
+  const missingDeliveryCount = normalizedRecipientCount - deliveries.length;
+  let queuedCount = missingDeliveryCount;
+  let deliveredCount = 0;
+  let failedCount = 0;
+  for (const delivery of deliveries) {
+    if (delivery.status === "queued") {
+      queuedCount += 1;
+    } else if (delivery.status === "delivered") {
+      deliveredCount += 1;
+    } else {
+      failedCount += 1;
+    }
   }
-  if (deliveries.every((delivery) => delivery.status === "failed")) {
-    return "failed";
-  }
-  if (deliveries.every((delivery) => delivery.status === "queued")) {
-    return "queued";
-  }
-  return "partial";
+  const terminal = queuedCount === 0;
+  const status: CommunicationSendStatus = !terminal
+    ? "queued"
+    : normalizedRecipientCount > 0 && deliveredCount === normalizedRecipientCount
+      ? "delivered"
+      : normalizedRecipientCount > 0 && failedCount === normalizedRecipientCount
+        ? "failed"
+        : "partial";
+  return {
+    status,
+    recipientCount: normalizedRecipientCount,
+    queuedCount,
+    deliveredCount,
+    failedCount,
+    terminal,
+  };
 }
 
 function copySend(send: CommunicationSend): CommunicationSend {
+  const recipients = send.recipients.map((recipient) => ({
+    ...recipient,
+    audiences: [...recipient.audiences],
+    data: cloneData(recipient.data),
+  }));
+  const deliveries = send.deliveries.map((delivery) => ({
+    ...delivery,
+    failureReason:
+      delivery.failureReason === null
+        ? null
+        : redactCommunicationProviderReason(delivery.failureReason),
+    history: delivery.history.map((entry) => ({
+      ...entry,
+      reason: entry.reason === null ? null : redactCommunicationProviderReason(entry.reason),
+    })),
+  }));
+  const summary = summarizeDeliveries(deliveries, recipients.length);
   return {
     ...send,
+    ...summary,
     data: cloneData(send.data),
     template: { ...send.template },
-    recipients: send.recipients.map((recipient) => ({
-      ...recipient,
-      audiences: [...recipient.audiences],
-      data: cloneData(recipient.data),
-    })),
-    deliveries: send.deliveries.map((delivery) => ({
-      ...delivery,
-      history: delivery.history.map((entry) => ({ ...entry })),
-    })),
-    history: send.history.map((entry) => ({ ...entry, details: cloneData(entry.details) })),
+    recipients,
+    deliveries,
+    history: send.history.map((entry) => {
+      const details = cloneData(entry.details);
+      return {
+        ...entry,
+        details:
+          typeof details.reason === "string"
+            ? { ...details, reason: redactCommunicationProviderReason(details.reason) }
+            : details,
+      };
+    }),
   };
 }
 
@@ -388,13 +599,149 @@ function copyPreview(preview: CommunicationPreview): CommunicationPreview {
       audiences: [...recipient.audiences],
       data: cloneData(recipient.data),
     })),
+    recipientPreviews: preview.recipientPreviews.map((recipient) => ({ ...recipient })),
     template: { ...preview.template },
+  };
+}
+function cloneReminderMetadata(
+  metadata: Readonly<Record<string, unknown>> | null,
+): Readonly<Record<string, unknown>> | null {
+  return metadata === null
+    ? null
+    : (JSON.parse(JSON.stringify(metadata)) as Readonly<Record<string, unknown>>);
+}
+
+function cloneReminderSubject(subject: ReminderSubject): ReminderSubject {
+  return subject.type === "task"
+    ? { type: "task", taskId: subject.taskId }
+    : { type: "review", reviewAssignmentId: subject.reviewAssignmentId };
+}
+
+function copyReminderCandidate(candidate: ReminderCandidate): ReminderCandidate {
+  return {
+    ...candidate,
+    subject: cloneReminderSubject(candidate.subject),
+    renderedMessage: { ...candidate.renderedMessage },
+  };
+}
+
+function copyReminderRun(run: ReminderRun): ReminderRun {
+  return { ...run };
+}
+
+function copyReminderDispatch(dispatch: ReminderDispatch): ReminderDispatch {
+  return {
+    ...dispatch,
+    subject: cloneReminderSubject(dispatch.subject),
+    skipMetadata: cloneReminderMetadata(dispatch.skipMetadata),
+    failureMetadata: cloneReminderMetadata(dispatch.failureMetadata),
+  };
+}
+
+function reminderSubjectKey(subject: ReminderSubject): string {
+  return subject.type === "task"
+    ? `task:${subject.taskId}`
+    : `review:${subject.reviewAssignmentId}`;
+}
+
+function reminderRunId(
+  organizationId: string,
+  eventId: string,
+  triggerType: ReminderTriggerType,
+  key: string,
+): string {
+  return `reminder-run:${organizationId}:${eventId}:${triggerType}:${key}`;
+}
+
+function reminderDispatchId(idempotencyKey: string): string {
+  return `reminder-dispatch:${idempotencyKey}`;
+}
+
+function reminderIdempotencyKey(
+  organizationId: string,
+  eventId: string,
+  triggerType: ReminderTriggerType,
+  candidate: ReminderCandidate,
+): string {
+  return [
+    "reminder",
+    organizationId,
+    eventId,
+    triggerType,
+    reminderSubjectKey(candidate.subject),
+    candidate.recipientApplicationId,
+    candidate.cadenceWindow,
+  ].join(":");
+}
+
+function reminderHourWindow(scheduledAt: string): string {
+  const parsed = Date.parse(scheduledAt);
+  if (!Number.isFinite(parsed)) {
+    throw invalidInput("scheduledAt must be an ISO-8601 instant.");
+  }
+  return new Date(Math.floor(parsed / 3_600_000) * 3_600_000).toISOString();
+}
+
+function reminderScope(
+  actor: CommunicationActor,
+  organizationId: string | undefined,
+  eventId: string,
+): { organizationId: string; eventId: string } {
+  const normalizedEventId = requireText(eventId, "Event id", 200);
+  const normalizedOrganizationId = requireText(
+    organizationId ?? actor.tenantId,
+    "Organization id",
+    200,
+  );
+  if (normalizedOrganizationId !== actor.tenantId) {
+    throw forbidden("The actor cannot access this organization.");
+  }
+  return { organizationId: normalizedOrganizationId, eventId: normalizedEventId };
+}
+
+function requireAutomationDelivery(actor: CommunicationActor, eventId: string): void {
+  if (actor.kind !== "automation" || !hasGrant(actor, eventId, "delivery")) {
+    throw forbidden("An automation delivery actor must perform this reminder action.");
+  }
+}
+
+function reminderErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message.length > 0 ? error.message : String(error);
+}
+
+function isReminderTerminal(status: ReminderDispatchStatus): boolean {
+  return (
+    status === "skipped" || status === "failed" || status === "bounced" || status === "delivered"
+  );
+}
+
+function reminderCountStatus(status: ReminderDispatchStatus): {
+  eligible: number;
+  queued: number;
+  skipped: number;
+  failed: number;
+} {
+  return {
+    eligible:
+      status === "eligible" ||
+      status === "queued" ||
+      status === "provider_accepted" ||
+      status === "delivered" ||
+      status === "failed" ||
+      status === "bounced"
+        ? 1
+        : 0,
+    queued: status === "queued" || status === "provider_accepted" || status === "delivered" ? 1 : 0,
+    skipped: status === "skipped" ? 1 : 0,
+    failed: status === "failed" || status === "bounced" ? 1 : 0,
   };
 }
 
 export class CommunicationService {
   private readonly clock: () => Date;
   private readonly previewLifetimeMs: number;
+  private readonly senderIdentities: CommunicationSenderIdentities | undefined;
+  private reminders: ReminderRuntime | undefined;
 
   constructor(
     private readonly repository: CommunicationRepository,
@@ -403,9 +750,11 @@ export class CommunicationService {
   ) {
     this.clock = options.clock ?? (() => new Date());
     this.previewLifetimeMs = options.previewLifetimeMs ?? 15 * 60 * 1_000;
+    this.senderIdentities = resolveSenderIdentities(options.senderIdentities);
     if (!Number.isSafeInteger(this.previewLifetimeMs) || this.previewLifetimeMs < 1_000) {
       throw new Error("previewLifetimeMs must be at least one second.");
     }
+    this.reminders = options.reminders;
   }
 
   async createTemplate(
@@ -420,8 +769,12 @@ export class CommunicationService {
     const text = requireText(input.text, "Template text", 100_000);
     const id =
       input.id === undefined ? createId("template") : requireText(input.id, "Template id", 200);
-    const sender = input.sender ?? senderForPurpose(purpose);
-    if (sender !== senderForPurpose(purpose)) {
+    if (this.senderIdentities === undefined) {
+      throw unavailable("Communication sender identities are not configured.");
+    }
+    const approvedSender = senderForPurpose(purpose, this.senderIdentities);
+    const sender = input.sender ?? approvedSender;
+    if (!validEmailAddress(sender) || sender !== approvedSender) {
       throw invalidInput(`The ${purpose} purpose must use its approved sender identity.`);
     }
     const variables = this.validateVariables(input.variables ?? [], subject, html, text);
@@ -466,6 +819,10 @@ export class CommunicationService {
       html,
       text,
     );
+    if (this.senderIdentities === undefined) {
+      throw unavailable("Communication sender identities are not configured.");
+    }
+    const sender = senderForPurpose(existing.purpose, this.senderIdentities);
     const versions = await this.repository.listTemplates(actor.tenantId, existing.eventId);
     const latest = versions
       .filter((candidate) => candidate.id === existing.id)
@@ -475,6 +832,7 @@ export class CommunicationService {
       ...existing,
       version: latest + 1,
       status: "draft",
+      sender,
       subject,
       html,
       text,
@@ -508,13 +866,14 @@ export class CommunicationService {
       throw conflict("An archived template version cannot be approved.");
     }
     const now = this.clock().toISOString();
-    return this.repository.saveTemplate({
+    const approved = {
       ...template,
       status: "approved",
       approvedBy: actor.userId,
       approvedAt: now,
       updatedAt: now,
-    });
+    } satisfies CommunicationTemplate;
+    return this.repository.updateTemplate?.(approved) ?? this.repository.saveTemplate(approved);
   }
 
   async archiveTemplate(
@@ -533,11 +892,12 @@ export class CommunicationService {
     if (template === undefined) {
       throw notFound("The template version was not found.");
     }
-    return this.repository.saveTemplate({
+    const archived = {
       ...template,
       status: "archived",
       updatedAt: this.clock().toISOString(),
-    });
+    } satisfies CommunicationTemplate;
+    return this.repository.updateTemplate?.(archived) ?? this.repository.saveTemplate(archived);
   }
 
   async listTemplates(
@@ -576,12 +936,21 @@ export class CommunicationService {
     input: CommunicationPreviewInput,
   ): Promise<CommunicationPreview> {
     requireOrganizer(actor, input.eventId);
-    if (input.purpose !== "organizer_group_email") {
+    if (input.purpose !== "organizer_group_email" && input.purpose !== "decision") {
       throw invalidInput(
-        "Only organizer group email templates can preview a participant audience.",
+        "Only organizer group email and decision templates can preview a participant audience.",
       );
     }
     const audience = requireAudience(input.audience);
+    if (
+      input.purpose === "decision" &&
+      audience !== "accepted_participants" &&
+      audience !== "waitlisted_participants" &&
+      audience !== "rejected_participants"
+    ) {
+      throw invalidInput("Decision templates require a decision-status participant audience.");
+    }
+    const recipientIds = this.validateRecipientIds(input.recipientIds);
     const authorization = this.assertAudienceAuthorized(actor.tenantId, input.eventId, audience);
     const templatePromise = this.resolveApprovedTemplate(
       actor.tenantId,
@@ -590,25 +959,49 @@ export class CommunicationService {
       input.templateVersion,
       input.purpose,
     );
-    const recipientsPromise = this.repository.listRecipients(
-      actor.tenantId,
-      input.eventId,
-      audience,
-    );
+    const recipientsPromise =
+      recipientIds === undefined
+        ? this.repository.listRecipients(actor.tenantId, input.eventId, audience)
+        : this.repository.getRecipientsByIds(actor.tenantId, input.eventId, recipientIds);
     const [, template, recipients] = await Promise.all([
       authorization,
       templatePromise,
       recipientsPromise,
     ]);
-    const snapshots = recipients.map((recipient) =>
-      this.assertRecipientScope(recipient, actor, input.eventId),
-    );
+    if (recipientIds !== undefined && recipients.length !== recipientIds.length) {
+      throw notFound("One or more preview recipients were not found for this event.");
+    }
+    const snapshots = recipients.map((recipient) => {
+      const snapshot = this.assertRecipientScope(recipient, actor, input.eventId);
+      if (
+        recipientIds !== undefined &&
+        snapshot.audiences.length > 0 &&
+        !snapshot.audiences.includes(audience)
+      ) {
+        throw notFound("One or more preview recipients do not belong to the selected audience.");
+      }
+      return snapshot;
+    });
     const data = cloneData(input.data);
-    const first = snapshots[0];
-    const rendered = renderCommunicationTemplate(
-      template,
-      renderDataForRecipient(data, first ?? this.emptyRecipient(actor.tenantId, input.eventId)),
-    );
+    const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
+      const renderedRecipient = renderCommunicationTemplate(
+        template,
+        renderDataForRecipient(data, recipient),
+      );
+      return {
+        recipientId: recipient.id,
+        email: recipient.email,
+        displayName: recipient.displayName,
+        ...renderedRecipient,
+      };
+    });
+    const firstPreview = recipientPreviews[0];
+    const rendered =
+      firstPreview ??
+      renderCommunicationTemplate(
+        template,
+        renderDataForRecipient(data, this.emptyRecipient(actor.tenantId, input.eventId)),
+      );
     const now = this.clock();
     const preview: CommunicationPreview = {
       id: createId("preview"),
@@ -622,6 +1015,7 @@ export class CommunicationService {
       recipientCount: snapshots.length,
       recipientIds: snapshots.map((recipient) => recipient.id),
       recipients: snapshots,
+      recipientPreviews,
       template: templateSnapshot(template),
       subject: rendered.subject,
       html: rendered.html,
@@ -652,17 +1046,6 @@ export class CommunicationService {
   ): Promise<CommunicationSend> {
     requireOrganizer(actor, input.eventId);
     const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 300);
-    const existing = await this.repository.findSendByIdempotency(
-      actor.tenantId,
-      input.eventId,
-      idempotencyKey,
-    );
-    if (existing !== undefined) {
-      return existing;
-    }
-    if (this.deliveryAdapter === undefined) {
-      throw unavailable("Operational email delivery is not configured.");
-    }
     const preview = await this.repository.getPreview(
       actor.tenantId,
       input.eventId,
@@ -693,17 +1076,51 @@ export class CommunicationService {
     if (recipients.length === 0) {
       throw invalidInput("The selected audience has no recipients.");
     }
-    const send = await this.createSend(actor, {
+    const existing = await this.repository.findSendByIdempotency(
+      actor.tenantId,
+      input.eventId,
+      idempotencyKey,
+    );
+    if (existing !== undefined) {
+      if (
+        !sendMatchesPayload(existing, {
+          purpose: preview.purpose,
+          audience: preview.audience,
+          templateId: template.id,
+          templateVersion: template.version,
+          recipientIds: recipients.map((recipient) => recipient.id),
+          data: preview.data,
+        })
+      ) {
+        throw conflict(
+          "The idempotency key was already used with a different communication payload.",
+        );
+      }
+      return copySend(existing);
+    }
+    if (this.deliveryAdapter === undefined) {
+      throw unavailable("Operational email delivery is not configured.");
+    }
+    const previewTemplate: CommunicationTemplate = {
+      ...template,
+      name: preview.template.name,
+      purpose: preview.template.purpose,
+      sender: preview.template.sender,
+      subject: preview.template.subject,
+      html: preview.template.html,
+      text: preview.template.text,
+    };
+    const created = await this.createSend(actor, {
       eventId: input.eventId,
       purpose: preview.purpose,
       audience: preview.audience,
-      template,
+      template: previewTemplate,
       recipients,
       data: preview.data,
       idempotencyKey,
       previewId: preview.id,
     });
-    return this.deliverSend(actor, send);
+    return created.created ? this.deliverSend(actor, created.send) : copySend(created.send);
   }
   async sendOrganizerGroup(
     actor: CommunicationActor,
@@ -730,17 +1147,6 @@ export class CommunicationService {
       }
     }
     const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 300);
-    const existing = await this.repository.findSendByIdempotency(
-      actor.tenantId,
-      input.eventId,
-      idempotencyKey,
-    );
-    if (existing !== undefined) {
-      return existing;
-    }
-    if (this.deliveryAdapter === undefined) {
-      throw unavailable("Operational email delivery is not configured.");
-    }
     if (input.recipientIds.length === 0) {
       throw invalidInput("At least one recipient is required.");
     }
@@ -762,17 +1168,43 @@ export class CommunicationService {
     const snapshots = recipients.map((recipient) =>
       this.assertRecipientScope(recipient, actor, input.eventId),
     );
-    const send = await this.createSend(actor, {
+    const data = cloneData(input.data);
+    const existing = await this.repository.findSendByIdempotency(
+      actor.tenantId,
+      input.eventId,
+      idempotencyKey,
+    );
+    if (existing !== undefined) {
+      if (
+        !sendMatchesPayload(existing, {
+          purpose,
+          audience: null,
+          templateId: template.id,
+          templateVersion: template.version,
+          recipientIds: snapshots.map((recipient) => recipient.id),
+          data,
+        })
+      ) {
+        throw conflict(
+          "The idempotency key was already used with a different communication payload.",
+        );
+      }
+      return copySend(existing);
+    }
+    if (this.deliveryAdapter === undefined) {
+      throw unavailable("Operational email delivery is not configured.");
+    }
+    const created = await this.createSend(actor, {
       eventId: input.eventId,
       purpose,
       audience: null,
       template,
       recipients: snapshots,
-      data: cloneData(input.data),
+      data,
       idempotencyKey,
       previewId: null,
     });
-    return this.deliverSend(actor, send);
+    return created.created ? this.deliverSend(actor, created.send) : copySend(created.send);
   }
 
   async sendDecision(
@@ -842,6 +1274,17 @@ export class CommunicationService {
     return copyPreview(preview);
   }
 
+  async listSends(
+    actor: CommunicationActor,
+    eventId: string,
+  ): Promise<readonly CommunicationSend[]> {
+    requireOrganizer(actor, eventId);
+    if (this.repository.listSends === undefined) {
+      throw unavailable("Durable communication send history is not configured.");
+    }
+    return (await this.repository.listSends(actor.tenantId, eventId)).map(copySend);
+  }
+
   async getSend(
     actor: CommunicationActor,
     eventId: string,
@@ -859,9 +1302,25 @@ export class CommunicationService {
     actor: CommunicationActor,
     eventId: string,
     sendId: string,
-  ): Promise<readonly CommunicationAuditEntry[]> {
+  ): Promise<{
+    history: readonly CommunicationAuditEntry[];
+    deliveries: readonly CommunicationDelivery[];
+    recipientCount: number;
+    queuedCount: number;
+    deliveredCount: number;
+    failedCount: number;
+    terminal: boolean;
+  }> {
     const send = await this.getSend(actor, eventId, sendId);
-    return send.history;
+    return {
+      history: send.history,
+      deliveries: send.deliveries,
+      recipientCount: send.recipientCount,
+      queuedCount: send.queuedCount,
+      deliveredCount: send.deliveredCount,
+      failedCount: send.failedCount,
+      terminal: send.terminal,
+    };
   }
 
   async recordDeliveryStatus(
@@ -880,11 +1339,24 @@ export class CommunicationService {
       throw notFound("The delivery recipient was not found.");
     }
     const status = input.status;
-    if (status === "queued" && delivery.status !== "queued" && delivery.status !== "failed") {
-      throw conflict("A terminal delivery state cannot return to queued.");
+    const reason = providerReason(input.reason);
+    const terminalStatus =
+      delivery.status === "delivered" ||
+      delivery.status === "bounced" ||
+      delivery.status === "complained";
+    if (terminalStatus && status !== delivery.status) {
+      throw conflict("A terminal delivery state cannot move to another state.");
     }
-    if (delivery.status === "delivered" && status !== "delivered") {
-      throw conflict("A delivered message cannot move to another state.");
+    if (
+      status === delivery.status &&
+      (input.providerMessageId === undefined ||
+        input.providerMessageId === delivery.providerMessageId) &&
+      (reason === undefined || reason === delivery.failureReason)
+    ) {
+      return copySend(send);
+    }
+    if (status === "queued" && delivery.status !== "queued" && delivery.status !== "failed") {
+      throw conflict("Only a failed delivery can be queued for retry.");
     }
     const occurredAt =
       input.occurredAt === undefined
@@ -895,7 +1367,7 @@ export class CommunicationService {
       status,
       occurredAt,
       providerMessageId: input.providerMessageId ?? delivery.providerMessageId,
-      reason: input.reason ?? null,
+      reason: reason ?? null,
       actorId: actor.userId,
     };
     const nextDelivery: CommunicationDelivery = {
@@ -904,9 +1376,9 @@ export class CommunicationService {
       providerMessageId: input.providerMessageId ?? delivery.providerMessageId,
       failureReason:
         status === "failed" || status === "bounced" || status === "complained"
-          ? (input.reason ?? delivery.failureReason)
+          ? (reason ?? delivery.failureReason)
           : null,
-      attempts: status === "queued" ? delivery.attempts : delivery.attempts + 1,
+      attempts: delivery.attempts,
       history: [...delivery.history, historyEntry],
     };
     const audit: CommunicationAuditEntry = {
@@ -923,19 +1395,16 @@ export class CommunicationService {
       occurredAt,
       details: {
         providerMessageId: input.providerMessageId ?? null,
-        reason: input.reason ?? null,
+        reason: reason ?? null,
       },
     };
+    const deliveries = send.deliveries.map((candidate) =>
+      candidate.recipientId === input.recipientId ? nextDelivery : candidate,
+    );
     const next: CommunicationSend = {
       ...send,
-      status: sendStatus(
-        send.deliveries.map((candidate) =>
-          candidate.recipientId === input.recipientId ? nextDelivery : candidate,
-        ),
-      ),
-      deliveries: send.deliveries.map((candidate) =>
-        candidate.recipientId === input.recipientId ? nextDelivery : candidate,
-      ),
+      ...summarizeDeliveries(deliveries, send.recipientCount),
+      deliveries,
       history: [...send.history, audit],
       updatedAt: occurredAt,
     };
@@ -1013,7 +1482,11 @@ export class CommunicationService {
     if (selected === undefined) {
       throw notFound("No approved template version is available for this purpose.");
     }
-    if (selected.sender !== senderForPurpose(purpose)) {
+    if (
+      !validEmailAddress(selected.sender) ||
+      (this.senderIdentities !== undefined &&
+        selected.sender !== senderForPurpose(purpose, this.senderIdentities))
+    ) {
       throw invalidInput(`The ${purpose} purpose must use its approved sender identity.`);
     }
     return selected;
@@ -1031,6 +1504,28 @@ export class CommunicationService {
     if (!authorized) {
       throw forbidden("This recipient audience is not authorized for the event.");
     }
+  }
+
+  private validateRecipientIds(
+    recipientIds: readonly string[] | undefined,
+  ): readonly string[] | undefined {
+    if (recipientIds === undefined) return undefined;
+    if (recipientIds.length === 0) {
+      throw invalidInput(
+        "At least one preview recipient is required when recipientIds is provided.",
+      );
+    }
+    const validated = recipientIds.map((recipientId) => {
+      const normalized = requireText(recipientId, "Recipient id", 200);
+      if (normalized !== recipientId) {
+        throw invalidInput("Recipient ids cannot contain surrounding whitespace.");
+      }
+      return normalized;
+    });
+    if (new Set(validated).size !== validated.length) {
+      throw invalidInput("Recipient ids must be unique.");
+    }
+    return validated;
   }
 
   private assertRecipientScope(
@@ -1069,7 +1564,7 @@ export class CommunicationService {
       idempotencyKey: string;
       previewId: string | null;
     },
-  ): Promise<CommunicationSend> {
+  ): Promise<{ send: CommunicationSend; created: boolean }> {
     const now = this.clock().toISOString();
     const history: CommunicationAuditEntry[] = [];
     const deliveries: CommunicationDelivery[] = [];
@@ -1124,6 +1619,7 @@ export class CommunicationService {
       },
       ...history.map((entry) => ({ ...entry, sendId })),
     ];
+    const summary = summarizeDeliveries(deliveries, input.recipients.length);
     const send: CommunicationSend = {
       id: sendId,
       tenantId: actor.tenantId,
@@ -1136,8 +1632,7 @@ export class CommunicationService {
       idempotencyKey: input.idempotencyKey,
       previewId: input.previewId,
       data: cloneData(input.data),
-      status: "queued",
-      recipientCount: input.recipients.length,
+      ...summary,
       recipients: input.recipients,
       deliveries,
       history: sendHistory,
@@ -1146,7 +1641,7 @@ export class CommunicationService {
       updatedAt: now,
     };
     try {
-      return await this.repository.saveSend(send);
+      return { send: await this.repository.saveSend(send), created: true };
     } catch (error) {
       if (error instanceof CommunicationError && error.code === "COMMUNICATION_CONFLICT") {
         const existing = await this.repository.findSendByIdempotency(
@@ -1155,7 +1650,7 @@ export class CommunicationService {
           input.idempotencyKey,
         );
         if (existing !== undefined) {
-          return existing;
+          return { send: existing, created: false };
         }
       }
       throw error;
@@ -1190,6 +1685,7 @@ export class CommunicationService {
         recipientId: recipient.id,
         to: recipient.email,
         from: current.template.sender,
+        senderPurpose: senderPurposeForTemplatePurpose(current.purpose),
         subject: rendered.subject,
         html: rendered.html,
         text: rendered.text,
@@ -1199,7 +1695,9 @@ export class CommunicationService {
       try {
         result = await this.deliveryAdapter.send(request);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : "The delivery provider failed.";
+        const reason = redactCommunicationProviderReason(
+          error instanceof Error ? error.message : "The delivery provider failed.",
+        );
         current = this.applyDeliveryResult(actor, current, recipient.id, {
           status: "failed",
           reason,
@@ -1207,11 +1705,13 @@ export class CommunicationService {
         await this.repository.saveSend(current);
         continue;
       }
+      const reason = providerReason(result.reason);
       current = this.applyDeliveryResult(actor, current, recipient.id, {
         status: result.status ?? "queued",
         ...(result.providerMessageId === undefined
           ? {}
           : { providerMessageId: result.providerMessageId }),
+        ...(reason === undefined ? {} : { reason }),
       });
       await this.repository.saveSend(current);
     }
@@ -1242,7 +1742,7 @@ export class CommunicationService {
       status: result.status,
       occurredAt,
       providerMessageId: result.providerMessageId ?? current.providerMessageId,
-      reason: result.reason ?? null,
+      reason: providerReason(result.reason) ?? null,
       actorId: actor.userId,
     };
     const nextDelivery: CommunicationDelivery = {
@@ -1251,7 +1751,7 @@ export class CommunicationService {
       providerMessageId: result.providerMessageId ?? current.providerMessageId,
       failureReason:
         result.status === "failed" || result.status === "bounced" || result.status === "complained"
-          ? (result.reason ?? current.failureReason)
+          ? (providerReason(result.reason) ?? current.failureReason)
           : null,
       attempts: current.attempts + 1,
       history: [...current.history, historyEntry],
@@ -1267,7 +1767,7 @@ export class CommunicationService {
       occurredAt,
       details: {
         providerMessageId: result.providerMessageId ?? null,
-        reason: result.reason ?? null,
+        reason: providerReason(result.reason) ?? null,
       },
     };
     const deliveries = send.deliveries.map((delivery) =>
@@ -1275,11 +1775,583 @@ export class CommunicationService {
     );
     return {
       ...send,
-      status: sendStatus(deliveries),
+      ...summarizeDeliveries(deliveries, send.recipientCount),
       deliveries,
       history: [...send.history, audit],
       updatedAt: occurredAt,
     };
+  }
+  configureReminders(runtime: ReminderRuntime): void {
+    if (this.reminders !== undefined && this.reminders !== runtime) {
+      throw conflict("Reminder runtime has already been configured.");
+    }
+    this.reminders = runtime;
+  }
+
+  async previewReminders(
+    actor: CommunicationActor,
+    input: ReminderPreviewInput,
+  ): Promise<ReminderPreview> {
+    requireOrganizer(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.reminders;
+    if (runtime?.source === undefined) {
+      throw unavailable("The reminder candidate source is not configured.");
+    }
+    const triggerType = input.triggerType ?? "manual";
+    const scheduledAt = requireIsoInstant(
+      input.scheduledAt ?? this.clock().toISOString(),
+      "scheduledAt",
+    );
+    const result = await runtime.source.listCandidates({
+      ...scope,
+      triggerType,
+      scheduledAt,
+    });
+    return {
+      audienceType: result.audienceType,
+      audienceRevision: result.audienceRevision,
+      candidates: result.candidates.map(copyReminderCandidate),
+    };
+  }
+
+  async runManualReminders(
+    actor: CommunicationActor,
+    input: RunManualRemindersInput,
+  ): Promise<ReminderRun> {
+    requireOrganizer(actor, input.eventId);
+    const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 300);
+    const expectedAudienceRevision = requireText(
+      input.expectedAudienceRevision,
+      "Expected audience revision",
+      300,
+    );
+    const scheduledAt = requireIsoInstant(
+      input.scheduledAt ?? this.clock().toISOString(),
+      "scheduledAt",
+    );
+    return this.executeReminderRun(actor, {
+      ...input,
+      idempotencyKey,
+      expectedAudienceRevision,
+      scheduledAt,
+      triggerType: "manual",
+    });
+  }
+
+  async runAutomaticReminders(
+    actor: CommunicationActor,
+    input: RunAutomaticRemindersInput,
+  ): Promise<ReminderRun> {
+    requireAutomationDelivery(actor, input.eventId);
+    const scheduledAt = requireIsoInstant(input.scheduledAt, "scheduledAt");
+    return this.executeReminderRun(actor, {
+      ...input,
+      scheduledAt,
+      triggerType: "automatic",
+    });
+  }
+
+  async listReminderRuns(
+    actor: CommunicationActor,
+    input: string | ReminderListRunsInput,
+  ): Promise<readonly ReminderRun[]> {
+    const eventId = typeof input === "string" ? input : input.eventId;
+    requireOrganizer(actor, eventId);
+    const scope = reminderScope(
+      actor,
+      typeof input === "string" ? undefined : input.organizationId,
+      eventId,
+    );
+    const runtime = this.requireReminderRepository();
+    return (await runtime.listRuns(scope.organizationId, scope.eventId)).map(copyReminderRun);
+  }
+
+  async listReminderDispatches(
+    actor: CommunicationActor,
+    input: string | ReminderListDispatchesInput,
+    runId?: string,
+  ): Promise<readonly ReminderDispatch[]> {
+    const eventId = typeof input === "string" ? input : input.eventId;
+    requireOrganizer(actor, eventId);
+    const scope = reminderScope(
+      actor,
+      typeof input === "string" ? undefined : input.organizationId,
+      eventId,
+    );
+    const runtime = this.requireReminderRepository();
+    const filterRunId = typeof input === "string" ? runId : input.runId;
+    return (await runtime.listDispatches(scope.organizationId, scope.eventId, filterRunId)).map(
+      copyReminderDispatch,
+    );
+  }
+
+  async getReminderFacts(
+    actor: CommunicationActor,
+    input: ReminderFactsInput,
+  ): Promise<ReminderFacts> {
+    requireOrganizer(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.requireReminderRepository();
+    const [runs, dispatches] = await Promise.all([
+      runtime.listRuns(scope.organizationId, scope.eventId),
+      runtime.listDispatches(scope.organizationId, scope.eventId),
+    ]);
+    const runsById = new Map(runs.map((run) => [run.id, run]));
+    const matching = dispatches
+      .filter(
+        (dispatch) =>
+          dispatch.recipient === input.recipientApplicationId &&
+          reminderSubjectKey(dispatch.subject) === reminderSubjectKey(input.subject),
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    let lastAutomatic: ReminderRun | null = null;
+    let lastManual: ReminderRun | null = null;
+    for (const dispatch of matching) {
+      const run = runsById.get(dispatch.runId);
+      if (run?.triggerType === "automatic" && lastAutomatic === null) {
+        lastAutomatic = copyReminderRun(run);
+      }
+      if (run?.triggerType === "manual" && lastManual === null) {
+        lastManual = copyReminderRun(run);
+      }
+      if (lastAutomatic !== null && lastManual !== null) break;
+    }
+    let nextEligibleAt: string | null = null;
+    const source = this.reminders?.source;
+    if (source !== undefined) {
+      try {
+        const sourceResult = await source.listCandidates({
+          ...scope,
+          triggerType: "automatic",
+          scheduledAt: this.clock().toISOString(),
+        });
+        for (const candidate of sourceResult.candidates) {
+          const candidateNext = candidate.nextEligibleAt;
+          if (
+            candidate.recipientApplicationId === input.recipientApplicationId &&
+            reminderSubjectKey(candidate.subject) === reminderSubjectKey(input.subject) &&
+            candidateNext !== null &&
+            Number.isFinite(Date.parse(candidateNext)) &&
+            Date.parse(candidateNext) > this.clock().getTime() &&
+            (nextEligibleAt === null || candidateNext < nextEligibleAt)
+          ) {
+            nextEligibleAt = candidateNext;
+          }
+        }
+      } catch {
+        nextEligibleAt = null;
+      }
+    }
+    return {
+      lastAutomatic,
+      lastManual,
+      nextEligibleAt,
+      lastOutcome: matching[0] === undefined ? null : copyReminderDispatch(matching[0]),
+    };
+  }
+
+  async recordReminderDispatchStatus(
+    actor: CommunicationActor,
+    input: RecordReminderDispatchStatusInput,
+  ): Promise<ReminderDispatch> {
+    requireAutomationDelivery(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.requireReminderRepository();
+    const dispatchId =
+      input.dispatchId === undefined
+        ? undefined
+        : requireText(input.dispatchId, "Dispatch id", 300);
+    const providerMessageId =
+      input.providerMessageId === undefined
+        ? undefined
+        : requireText(input.providerMessageId, "Provider message id", 300);
+    const dispatch =
+      dispatchId === undefined
+        ? providerMessageId === undefined
+          ? undefined
+          : await runtime.findDispatchByProviderMessageId(
+              scope.organizationId,
+              scope.eventId,
+              providerMessageId,
+            )
+        : await runtime.getDispatch(scope.organizationId, scope.eventId, dispatchId);
+    if (dispatch === undefined) {
+      throw notFound("The reminder dispatch was not found.");
+    }
+    if (
+      providerMessageId !== undefined &&
+      dispatch.providerMessageId !== null &&
+      dispatch.providerMessageId !== providerMessageId
+    ) {
+      throw conflict("The provider message id does not match the reminder dispatch.");
+    }
+    if (providerMessageId !== undefined) {
+      const duplicate = await runtime.findDispatchByProviderMessageId(
+        scope.organizationId,
+        scope.eventId,
+        providerMessageId,
+      );
+      if (duplicate !== undefined && duplicate.id !== dispatch.id) {
+        throw conflict("The provider message id belongs to another reminder dispatch.");
+      }
+    }
+    if (
+      (input.status === "provider_accepted" ||
+        input.status === "delivered" ||
+        input.status === "bounced") &&
+      providerMessageId === undefined
+    ) {
+      throw invalidInput("A provider message id is required for this reminder status.");
+    }
+    const currentProviderMessageId = providerMessageId ?? dispatch.providerMessageId;
+    const validTransition =
+      (dispatch.status === "queued" &&
+        (input.status === "provider_accepted" || input.status === "failed")) ||
+      (dispatch.status === "provider_accepted" &&
+        (input.status === "delivered" ||
+          input.status === "failed" ||
+          input.status === "bounced")) ||
+      (dispatch.status === input.status && currentProviderMessageId === dispatch.providerMessageId);
+    if (!validTransition) {
+      throw conflict(
+        `Cannot transition reminder dispatch from ${dispatch.status} to ${input.status}.`,
+      );
+    }
+    const now = this.clock().toISOString();
+    const next: ReminderDispatch = {
+      ...dispatch,
+      providerMessageId: currentProviderMessageId,
+      status: input.status,
+      failureMetadata:
+        input.failureMetadata === undefined
+          ? dispatch.failureMetadata
+          : cloneReminderMetadata(input.failureMetadata),
+      updatedAt: now,
+      providerAcceptedAt:
+        input.status === "provider_accepted"
+          ? (dispatch.providerAcceptedAt ?? now)
+          : dispatch.providerAcceptedAt,
+      deliveredAt: input.status === "delivered" ? now : dispatch.deliveredAt,
+      failedAt: input.status === "failed" ? now : dispatch.failedAt,
+      bouncedAt: input.status === "bounced" ? now : dispatch.bouncedAt,
+      completedAt:
+        input.status === "failed" || input.status === "delivered" || input.status === "bounced"
+          ? now
+          : dispatch.completedAt,
+    };
+    const saved = await runtime.updateDispatch(next);
+    await this.refreshReminderRun(saved.runId, scope.organizationId, scope.eventId);
+    return copyReminderDispatch(saved);
+  }
+
+  private requireReminderRepository(): ReminderRepository {
+    const runtime = this.reminders;
+    if (runtime?.repository === undefined) {
+      throw unavailable("The reminder repository is not configured.");
+    }
+    return runtime.repository;
+  }
+
+  private async executeReminderRun(
+    actor: CommunicationActor,
+    input: {
+      organizationId?: string;
+      eventId: string;
+      scheduledAt: string;
+      triggerType: ReminderTriggerType;
+      idempotencyKey?: string;
+      expectedAudienceRevision?: string;
+    },
+  ): Promise<ReminderRun> {
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.reminders;
+    if (runtime?.repository === undefined) {
+      throw unavailable("The reminder repository is not configured.");
+    }
+    const runKey =
+      input.triggerType === "manual"
+        ? requireText(input.idempotencyKey ?? "", "Idempotency key", 300)
+        : reminderHourWindow(input.scheduledAt);
+    const id = reminderRunId(scope.organizationId, scope.eventId, input.triggerType, runKey);
+    const existing = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
+    if (existing !== undefined) {
+      return copyReminderRun(existing);
+    }
+    const now = this.clock().toISOString();
+    let run: ReminderRun = {
+      id,
+      organizationId: scope.organizationId,
+      eventId: scope.eventId,
+      triggerType: input.triggerType,
+      audienceType: "combined",
+      audienceRevision: input.expectedAudienceRevision ?? "",
+      candidateCount: 0,
+      eligibleCount: 0,
+      queuedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      state: "pending",
+      configurationFailure: null,
+      actorId: actor.userId,
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    run = await runtime.repository.insertRun(run);
+    run = await runtime.repository.updateRun({
+      ...run,
+      state: "running",
+      updatedAt: this.clock().toISOString(),
+    });
+    if (runtime.source === undefined || runtime.outbox === undefined) {
+      return this.finishReminderRun(
+        run,
+        runtime.source === undefined
+          ? "The reminder candidate source is not configured."
+          : "The reminder outbox is not configured.",
+        runtime.repository,
+      );
+    }
+    let sourceResult: ReminderCandidateSourceResult;
+    try {
+      sourceResult = await runtime.source.listCandidates({
+        ...scope,
+        triggerType: input.triggerType,
+        scheduledAt: input.scheduledAt,
+      });
+    } catch (error) {
+      return this.finishReminderRun(
+        run,
+        `Candidate source failed: ${reminderErrorMessage(error)}`,
+        runtime.repository,
+      );
+    }
+    run = await runtime.repository.updateRun({
+      ...run,
+      audienceType: sourceResult.audienceType,
+      audienceRevision: sourceResult.audienceRevision,
+      updatedAt: this.clock().toISOString(),
+    });
+    if (
+      input.triggerType === "manual" &&
+      sourceResult.audienceRevision !== input.expectedAudienceRevision
+    ) {
+      const failed = await this.finishReminderRun(
+        run,
+        `Audience revision ${sourceResult.audienceRevision} does not match expected revision ${input.expectedAudienceRevision}.`,
+        runtime.repository,
+      );
+      throw conflict(failed.configurationFailure ?? "The reminder audience revision is stale.");
+    }
+    const observed: ReminderDispatch[] = [];
+    for (const candidate of sourceResult.candidates) {
+      const idempotencyKey = reminderIdempotencyKey(
+        scope.organizationId,
+        scope.eventId,
+        input.triggerType,
+        candidate,
+      );
+      const existingDispatch = await runtime.repository.findDispatchByIdempotency(
+        scope.organizationId,
+        scope.eventId,
+        idempotencyKey,
+      );
+      if (existingDispatch !== undefined) {
+        observed.push(existingDispatch);
+        continue;
+      }
+      const dispatchNow = this.clock().toISOString();
+      let dispatch: ReminderDispatch = {
+        id: reminderDispatchId(idempotencyKey),
+        runId: run.id,
+        organizationId: scope.organizationId,
+        eventId: scope.eventId,
+        recipient: candidate.recipientApplicationId,
+        subject: cloneReminderSubject(candidate.subject),
+        eligibilityReason: candidate.eligibilityReason,
+        cadenceWindow: candidate.cadenceWindow,
+        idempotencyKey,
+        providerMessageId: null,
+        status: "candidate",
+        skipMetadata: null,
+        failureMetadata: null,
+        createdAt: dispatchNow,
+        updatedAt: dispatchNow,
+        eligibleAt: null,
+        skippedAt: null,
+        queuedAt: null,
+        providerAcceptedAt: null,
+        deliveredAt: null,
+        failedAt: null,
+        bouncedAt: null,
+        completedAt: null,
+        outboxJobId: null,
+      };
+      try {
+        dispatch = await runtime.repository.insertDispatch(dispatch);
+      } catch (error) {
+        const duplicate = await runtime.repository.findDispatchByIdempotency(
+          scope.organizationId,
+          scope.eventId,
+          idempotencyKey,
+        );
+        if (duplicate !== undefined) {
+          observed.push(duplicate);
+          continue;
+        }
+        throw error;
+      }
+      if (candidate.normalizedEmail === null || candidate.normalizedEmail.trim().length === 0) {
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "skipped",
+          skipMetadata: { reason: "missing_email" },
+          skippedAt: this.clock().toISOString(),
+          completedAt: this.clock().toISOString(),
+          updatedAt: this.clock().toISOString(),
+        });
+        observed.push(dispatch);
+        continue;
+      }
+      if (!candidate.eligible) {
+        const skippedAt = this.clock().toISOString();
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "skipped",
+          skipMetadata: { reason: candidate.eligibilityReason },
+          skippedAt,
+          completedAt: skippedAt,
+          updatedAt: skippedAt,
+        });
+        observed.push(dispatch);
+        continue;
+      }
+      const eligibleAt = this.clock().toISOString();
+      dispatch = await runtime.repository.updateDispatch({
+        ...dispatch,
+        status: "eligible",
+        eligibleAt,
+        updatedAt: eligibleAt,
+      });
+      try {
+        const result = await runtime.outbox.enqueue({
+          dispatchId: dispatch.id,
+          runId: dispatch.runId,
+          organizationId: dispatch.organizationId,
+          eventId: dispatch.eventId,
+          recipient: candidate.normalizedEmail.trim(),
+          from: candidate.renderedMessage.from,
+          senderPurpose: "speakers",
+          subject: candidate.renderedMessage.subject,
+          html: candidate.renderedMessage.html,
+          text: candidate.renderedMessage.text,
+          idempotencyKey: dispatch.idempotencyKey,
+        });
+        const outboxJobId = result.outboxJobId.trim();
+        if (outboxJobId.length === 0)
+          throw new Error("The reminder outbox returned an empty job id.");
+        const queuedAt = this.clock().toISOString();
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "queued",
+          outboxJobId,
+          queuedAt,
+          updatedAt: queuedAt,
+        });
+      } catch (error) {
+        const failedAt = this.clock().toISOString();
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "failed",
+          failureMetadata: { reason: reminderErrorMessage(error) },
+          failedAt,
+          completedAt: failedAt,
+          updatedAt: failedAt,
+        });
+      }
+      observed.push(dispatch);
+    }
+    const finishedAt = this.clock().toISOString();
+    const counts = observed.reduce(
+      (summary, dispatch) => {
+        const count = reminderCountStatus(dispatch.status);
+        summary.eligibleCount += count.eligible;
+        summary.queuedCount += count.queued;
+        summary.skippedCount += count.skipped;
+        summary.failedCount += count.failed;
+        return summary;
+      },
+      { eligibleCount: 0, queuedCount: 0, skippedCount: 0, failedCount: 0 },
+    );
+    run = await runtime.repository.updateRun({
+      ...run,
+      candidateCount: sourceResult.candidates.length,
+      ...counts,
+      state: "completed",
+      completedAt: finishedAt,
+      updatedAt: finishedAt,
+    });
+    return copyReminderRun(run);
+  }
+
+  private async finishReminderRun(
+    run: ReminderRun,
+    configurationFailure: string,
+    repository: ReminderRepository,
+  ): Promise<ReminderRun> {
+    const completedAt = this.clock().toISOString();
+    const failed = await repository.updateRun({
+      ...run,
+      state: "failed",
+      configurationFailure,
+      completedAt,
+      updatedAt: completedAt,
+    });
+    return copyReminderRun(failed);
+  }
+
+  private async refreshReminderRun(
+    runId: string,
+    organizationId: string,
+    eventId: string,
+  ): Promise<void> {
+    const runtime = this.reminders;
+    if (runtime?.repository === undefined) return;
+    const run = await runtime.repository.getRun(organizationId, eventId, runId);
+    if (run === undefined) return;
+    const dispatches = await runtime.repository.listDispatches(organizationId, eventId, runId);
+    const counts = dispatches.reduce(
+      (summary, dispatch) => {
+        const count = reminderCountStatus(dispatch.status);
+        summary.candidateCount += 1;
+        summary.eligibleCount += count.eligible;
+        summary.queuedCount += count.queued;
+        summary.skippedCount += count.skipped;
+        summary.failedCount += count.failed;
+        return summary;
+      },
+      { candidateCount: 0, eligibleCount: 0, queuedCount: 0, skippedCount: 0, failedCount: 0 },
+    );
+    const nextState =
+      run.state === "completed" || run.state === "failed"
+        ? run.state
+        : dispatches.every(
+              (dispatch) => isReminderTerminal(dispatch.status) || dispatch.status === "queued",
+            )
+          ? "completed"
+          : "running";
+    await runtime.repository.updateRun({
+      ...run,
+      ...counts,
+      state: nextState,
+      completedAt:
+        nextState === "completed" && run.completedAt === null
+          ? this.clock().toISOString()
+          : run.completedAt,
+      updatedAt: this.clock().toISOString(),
+    });
   }
 }
 
@@ -1404,12 +2476,7 @@ export class InMemoryCommunicationRepository implements CommunicationRepository 
     if (configured !== undefined) {
       return configured.has(audience);
     }
-    return [...this.recipients.values()].some(
-      (recipient) =>
-        recipient.tenantId === tenantId &&
-        recipient.eventId === eventId &&
-        (recipient.audiences.length === 0 || recipient.audiences.includes(audience)),
-    );
+    return true;
   }
 
   authorizeAudience(tenantId: string, eventId: string, audience: CommunicationAudience): void {
@@ -1448,6 +2515,16 @@ export class InMemoryCommunicationRepository implements CommunicationRepository 
         send.idempotencyKey === idempotencyKey,
     );
     return found === undefined ? undefined : copySend(found);
+  }
+
+  async listSends(tenantId: string, eventId: string): Promise<readonly CommunicationSend[]> {
+    return [...this.sends.values()]
+      .filter((send) => send.tenantId === tenantId && send.eventId === eventId)
+      .sort(
+        (left, right) =>
+          right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+      )
+      .map(copySend);
   }
 
   async getSend(
@@ -1505,10 +2582,190 @@ export class InMemoryCommunicationRepository implements CommunicationRepository 
     return `${tenantId}:${eventId}:${recipientId}`;
   }
 }
+export interface InMemoryReminderRepositoryOptions {
+  runs?: readonly ReminderRun[];
+  dispatches?: readonly ReminderDispatch[];
+}
+
+export class InMemoryReminderRepository implements ReminderRepository {
+  private readonly runs = new Map<string, ReminderRun>();
+  private readonly dispatches = new Map<string, ReminderDispatch>();
+
+  constructor(options: InMemoryReminderRepositoryOptions = {}) {
+    for (const run of options.runs ?? []) {
+      this.runs.set(run.id, copyReminderRun(run));
+    }
+    for (const dispatch of options.dispatches ?? []) {
+      this.dispatches.set(dispatch.id, copyReminderDispatch(dispatch));
+    }
+  }
+
+  async getRun(
+    organizationId: string,
+    eventId: string,
+    runId: string,
+  ): Promise<ReminderRun | undefined> {
+    const run = this.runs.get(runId);
+    return run === undefined || run.organizationId !== organizationId || run.eventId !== eventId
+      ? undefined
+      : copyReminderRun(run);
+  }
+
+  async listRuns(organizationId: string, eventId: string): Promise<readonly ReminderRun[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.organizationId === organizationId && run.eventId === eventId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(copyReminderRun);
+  }
+
+  async insertRun(run: ReminderRun): Promise<ReminderRun> {
+    if (this.runs.has(run.id)) {
+      throw conflict("The reminder run id already exists.");
+    }
+    this.runs.set(run.id, copyReminderRun(run));
+    return copyReminderRun(run);
+  }
+
+  async updateRun(run: ReminderRun): Promise<ReminderRun> {
+    const existing = this.runs.get(run.id);
+    if (
+      existing === undefined ||
+      existing.organizationId !== run.organizationId ||
+      existing.eventId !== run.eventId
+    ) {
+      throw notFound("The reminder run was not found.");
+    }
+    this.runs.set(run.id, copyReminderRun(run));
+    return copyReminderRun(run);
+  }
+
+  async getDispatch(
+    organizationId: string,
+    eventId: string,
+    dispatchId: string,
+  ): Promise<ReminderDispatch | undefined> {
+    const dispatch = this.dispatches.get(dispatchId);
+    return dispatch === undefined ||
+      dispatch.organizationId !== organizationId ||
+      dispatch.eventId !== eventId
+      ? undefined
+      : copyReminderDispatch(dispatch);
+  }
+
+  async findDispatchByIdempotency(
+    organizationId: string,
+    eventId: string,
+    idempotencyKey: string,
+  ): Promise<ReminderDispatch | undefined> {
+    const dispatch = [...this.dispatches.values()].find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        candidate.eventId === eventId &&
+        candidate.idempotencyKey === idempotencyKey,
+    );
+    return dispatch === undefined ? undefined : copyReminderDispatch(dispatch);
+  }
+
+  async findDispatchByProviderMessageId(
+    organizationId: string,
+    eventId: string,
+    providerMessageId: string,
+  ): Promise<ReminderDispatch | undefined> {
+    const dispatch = [...this.dispatches.values()].find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        candidate.eventId === eventId &&
+        candidate.providerMessageId === providerMessageId,
+    );
+    return dispatch === undefined ? undefined : copyReminderDispatch(dispatch);
+  }
+
+  async listDispatches(
+    organizationId: string,
+    eventId: string,
+    runId?: string,
+  ): Promise<readonly ReminderDispatch[]> {
+    return [...this.dispatches.values()]
+      .filter(
+        (dispatch) =>
+          dispatch.organizationId === organizationId &&
+          dispatch.eventId === eventId &&
+          (runId === undefined || dispatch.runId === runId),
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(copyReminderDispatch);
+  }
+
+  async insertDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch> {
+    if (this.dispatches.has(dispatch.id)) {
+      throw conflict("The reminder dispatch id already exists.");
+    }
+    const duplicate = await this.findDispatchByIdempotency(
+      dispatch.organizationId,
+      dispatch.eventId,
+      dispatch.idempotencyKey,
+    );
+    if (duplicate !== undefined) {
+      throw conflict("The reminder dispatch idempotency key has already been used.");
+    }
+    if (dispatch.providerMessageId !== null) {
+      const providerDuplicate = await this.findDispatchByProviderMessageId(
+        dispatch.organizationId,
+        dispatch.eventId,
+        dispatch.providerMessageId,
+      );
+      if (providerDuplicate !== undefined) {
+        throw conflict("The provider message id has already been used.");
+      }
+    }
+    this.dispatches.set(dispatch.id, copyReminderDispatch(dispatch));
+    return copyReminderDispatch(dispatch);
+  }
+
+  async updateDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch> {
+    const existing = this.dispatches.get(dispatch.id);
+    if (
+      existing === undefined ||
+      existing.organizationId !== dispatch.organizationId ||
+      existing.eventId !== dispatch.eventId
+    ) {
+      throw notFound("The reminder dispatch was not found.");
+    }
+    const duplicate = await this.findDispatchByIdempotency(
+      dispatch.organizationId,
+      dispatch.eventId,
+      dispatch.idempotencyKey,
+    );
+    if (duplicate !== undefined && duplicate.id !== dispatch.id) {
+      throw conflict("The reminder dispatch idempotency key has already been used.");
+    }
+    if (dispatch.providerMessageId !== null) {
+      const providerDuplicate = await this.findDispatchByProviderMessageId(
+        dispatch.organizationId,
+        dispatch.eventId,
+        dispatch.providerMessageId,
+      );
+      if (providerDuplicate !== undefined && providerDuplicate.id !== dispatch.id) {
+        throw conflict("The provider message id has already been used.");
+      }
+    }
+    this.dispatches.set(dispatch.id, copyReminderDispatch(dispatch));
+    return copyReminderDispatch(dispatch);
+  }
+}
 
 export type CommunicationRepositoryGrant = CommunicationGrant;
 export type {
   CommunicationActor,
   CommunicationDeliveryAdapter,
   CommunicationRepository,
+  ReminderCandidate,
+  ReminderCandidateSource,
+  ReminderDispatch,
+  ReminderFacts,
+  ReminderRepository,
+  ReminderRun,
+  ReminderRuntime,
+  ReminderSubject,
+  ReminderTriggerType,
 } from "./types";

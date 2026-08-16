@@ -1,0 +1,49 @@
+# Exact historical fingerprints reviewed on 2026-08-16. These are test fixtures,
+# stable IDs, source identifiers, or import paths—not provider credentials.
+# Re-review every finding if history is rewritten because commit fingerprints change.
+105994e1fb71bd7ce1de5b6776b56417eb656f7e:apps/api/src/infrastructure/cloudflare/repositories/event-role-invitations.test.ts:generic-api-key:20
+1710a4e0665accc2d513f958f8c6efa1cddb02dc:apps/web/src/features/agenda/agenda-workspace.component.test.tsx:generic-api-key:716
+266dee76b550d2cd59b898a64c1b360b4f1053d0:apps/web/src/features/agenda/agenda-workspace.component.test.tsx:generic-api-key:699
+01d61006b265c6266d259dcc7fe13faa74193e28:apps/api/src/test-support/speaker-lifecycle.ts:generic-api-key:31
+f0f52160f09dbad925db81af8fc284e84092f15d:apps/api/src/runtime/composition.test.ts.orig:generic-api-key:248
+f0f52160f09dbad925db81af8fc284e84092f15d:apps/api/src/runtime/composition.test.ts.orig:generic-api-key:5443
+5daf5d88d65de4aae2169461d3bf634eac796479:apps/api/src/test-support/speaker-lifecycle.ts:generic-api-key:31
+dba9d93659b32972fa87338592fc943f11e8ea20:apps/api/src/runtime/cloudflare.ts:airtable-api-key:2121
+3a79317ea56b606ad6e94872733f1d1f504ec9b5:apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:192
+3a79317ea56b606ad6e94872733f1d1f504ec9b5:apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:196
+3a79317ea56b606ad6e94872733f1d1f504ec9b5:apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:198
+3a79317ea56b606ad6e94872733f1d1f504ec9b5:apps/api/src/integrations/airtable/projection/worker.test.ts:generic-api-key:25
+3a79317ea56b606ad6e94872733f1d1f504ec9b5:apps/api/src/runtime/d1-composition.test.ts:generic-api-key:75
+3a79317ea56b606ad6e94872733f1d1f504ec9b5:apps/api/src/integrations/airtable/oauth/runtime/base-selection.ts:airtable-api-key:115
+5e7a8a912a8663e9e1595af96fb9ded044a5a6ed:apps/api/src/runtime/composition.test.ts:generic-api-key:5535
+fd42c6b1a034d7f4c6eb4e78ef2beff6d4c9a98c:apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:188
+fd42c6b1a034d7f4c6eb4e78ef2beff6d4c9a98c:apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:211
+72ad7c70238ec4bbe39ad63c13f5457a0e6a20f6:apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:188
+72ad7c70238ec4bbe39ad63c13f5457a0e6a20f6:apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:211
+2047b20843010be8a8a1673bd20dddbaa8c9f964:scripts/release/migrate-organization-id.mjs:airtable-api-key:545
+2047b20843010be8a8a1673bd20dddbaa8c9f964:scripts/release/migrate-organization-id.mjs:airtable-api-key:575
+63b9ddf577a4ee35a1cfdc1e89066cad700c01a0:apps/web/src/features/portal/portal-profile.tsx:linkedin-client-secret:211
+64a07ff4b0c88f889cae792dbaf1c90a4c63d890:apps/api/src/features/crm/service.test.ts:generic-api-key:418
+b9b2f0d4706d3329d8a7d5715bc85707c4f83a76:apps/web/src/features/portal/portal-profile.tsx:linkedin-client-secret:211
+49974ce7fa8849bd4f18a0a618a3f3253c7a7d4a:apps/api/src/runtime/composition.test.ts:generic-api-key:81
+b9b2f0d4706d3329d8a7d5715bc85707c4f83a76:scripts/release/migrate-organization-id.mjs:airtable-api-key:529
+edccaa919ea19332af5fd86d57548aeb36327607:apps/web/src/features/integrations/api.test.ts:generic-api-key:69
+4fe15279e1f91483f361fe008035e113357d009e:apps/api/src/integrations/accelevents/accelevents.test.ts:generic-api-key:208
+4fe15279e1f91483f361fe008035e113357d009e:apps/api/src/integrations/accelevents/accelevents.test.ts:generic-api-key:243
+299d9198edefef5837810d3a9dd9435ce6570671:apps/api/src/infrastructure/airtable/retry.ts:airtable-api-key:1
+# Current-tree fingerprints for the same reviewed source identifiers and fixtures.
+apps/api/src/infrastructure/airtable/retry.ts:airtable-api-key:1
+apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:301
+apps/api/src/infrastructure/cloudflare/outbox-consumer.test.ts:generic-api-key:324
+apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:192
+apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:196
+apps/api/src/integrations/airtable/control/service.test.ts:generic-api-key:198
+apps/api/src/integrations/airtable/projection/worker.test.ts:generic-api-key:25
+apps/api/src/integrations/airtable/oauth/runtime/base-selection.ts:airtable-api-key:115
+apps/api/src/features/crm/service.test.ts:generic-api-key:930
+apps/api/src/runtime/d1-composition.test.ts:generic-api-key:82
+apps/api/src/test-support/speaker-lifecycle.ts:generic-api-key:31
+apps/api/src/infrastructure/cloudflare/repositories/event-role-invitations.test.ts:generic-api-key:20
+apps/api/src/runtime/composition.test.ts:generic-api-key:243
+scripts/release/migrate-organization-id.mjs:airtable-api-key:545
+scripts/release/migrate-organization-id.mjs:airtable-api-key:575

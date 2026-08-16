@@ -114,7 +114,7 @@ const publicApiErrorSchema = {
           ],
         },
         message: { type: "string" },
-        traceId: { type: "string" },
+        traceId: { type: "string", format: "uuid" },
         details: { type: "array", items: { type: "object" } },
       },
       additionalProperties: false,
@@ -129,7 +129,7 @@ export const publicApiV1Contract = {
     name: "apiKey",
     type: "http",
     scheme: "bearer",
-    bearerFormat: "Open Sessionboard scoped API key",
+    bearerFormat: "Eventloom scoped API key",
   },
   schemas: {
     page: {

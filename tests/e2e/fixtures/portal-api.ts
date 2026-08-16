@@ -43,6 +43,8 @@ export interface PortalTaskSeed {
   dependencyIds: string[];
   reminderOffsetsMinutes: number[];
   acceptedAssetKinds?: Array<"headshot" | "slides" | "supporting_file">;
+  allowedMimeTypes?: string[];
+  maxBytes?: number;
   version: number;
   updatedAt: string;
 }
@@ -107,6 +109,10 @@ export interface PortalAssetSeed {
   version?: number;
   versionFamilyId?: string;
   supersedesAssetId?: string;
+  latestVersionId?: string | null;
+  currentVersionId?: string | null;
+  approvedVersionId?: string | null;
+  releasedVersionId?: string | null;
   commentThreadId?: string;
   rejectionReason?: string;
   finalizedAt?: string;
@@ -288,6 +294,8 @@ function initialEvaluatorState(): PortalScenarioState {
       createdAt: now,
       version: 1,
       versionFamilyId: "asset-family-slides",
+      latestVersionId: "asset-slides-v1",
+      currentVersionId: "asset-slides-v1",
       commentThreadId: "asset-comments:asset-family-slides",
       finalizedAt: now,
       objectKey: "ai-engineer/event-evaluator/participant-ada/asset-slides-v1",
@@ -349,6 +357,8 @@ function initialEvaluatorState(): PortalScenarioState {
         dependencyIds: ["task-agreement"],
         reminderOffsetsMinutes: [1440],
         acceptedAssetKinds: ["headshot"],
+        allowedMimeTypes: ["image/png"],
+        maxBytes: 5_000_000,
         version: 1,
         updatedAt: now,
       },
@@ -614,11 +624,14 @@ function errorPayload(
   return { error: { code, message, traceId: "e2e-portal-trace" } };
 }
 
+const webPort = process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3015";
+const apiPort = process.env.PLAYWRIGHT_API_PORT?.trim() || "8787";
+const e2eApiOrigin = `http://127.0.0.1:${apiPort}`;
 const corsHeaders = {
   "access-control-allow-credentials": "true",
   "access-control-allow-headers": "accept,content-type",
   "access-control-allow-methods": "GET,PATCH,POST,PUT,DELETE,OPTIONS",
-  "access-control-allow-origin": "http://127.0.0.1:3015",
+  "access-control-allow-origin": `http://127.0.0.1:${webPort}`,
 };
 
 async function fulfillJson(route: Route, payload: unknown, status = 200): Promise<void> {
@@ -673,6 +686,7 @@ export async function installPortalApi(
   session: E2eAuthSession,
   options: PortalApiOptions = {},
 ): Promise<PortalApiHarness> {
+  const apiOrigin = e2eApiOrigin;
   const scenarios = cloneScenarios();
   let activeScenario = scenarios[0];
   if (!activeScenario) throw new Error("Missing E2E portal scenario");
@@ -710,7 +724,7 @@ export async function installPortalApi(
     else view.wiki = next.wiki;
   };
 
-  await page.route("http://127.0.0.1:8787/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());
@@ -718,6 +732,11 @@ export async function installPortalApi(
 
     if (request.method() === "OPTIONS") {
       await route.fulfill({ status: 204, headers: corsHeaders });
+      return;
+    }
+
+    if (pathname.startsWith("/api/auth/")) {
+      await route.fallback();
       return;
     }
 
@@ -792,6 +811,8 @@ export async function installPortalApi(
         await notFound(route, "This event is not authorized for the speaker portal.");
         return;
       }
+      activeScenario = state;
+      syncView(state);
       await send(route, structuredClone(state.context));
       return;
     }
@@ -970,8 +991,11 @@ export async function installPortalApi(
       const body = requestBody(request);
       const participantId = stringValue(body, "participantId");
       const taskId = body.taskId === undefined ? undefined : stringValue(body, "taskId");
-      const submissionId =
+      const requestedSubmissionId =
         body.submissionId === undefined ? undefined : stringValue(body, "submissionId");
+      const task =
+        taskId === undefined ? undefined : state.tasks.find((candidate) => candidate.id === taskId);
+      const submissionId = requestedSubmissionId ?? task?.submissionId ?? undefined;
       const kind = stringValue(body, "kind") as PortalAssetSeed["kind"];
       const fileName = stringValue(body, "fileName");
       const contentType = stringValue(body, "contentType");
@@ -979,7 +1003,7 @@ export async function installPortalApi(
       const supersedesAssetId =
         body.supersedesAssetId === undefined ? undefined : stringValue(body, "supersedesAssetId");
       expect(state.context.participantIds).toContain(participantId);
-      if (taskId !== undefined) expect(state.tasks.some((task) => task.id === taskId)).toBe(true);
+      if (taskId !== undefined) expect(task).toBeDefined();
       if (submissionId !== undefined) expect(state.context.submissionIds).toContain(submissionId);
       const superseded =
         supersedesAssetId === undefined
@@ -1011,7 +1035,7 @@ export async function installPortalApi(
       syncView(state);
       const grant = {
         method: "PUT" as const,
-        url: `http://127.0.0.1:8787/api/speaker/assets/capabilities/upload/${encodeURIComponent(id)}/opaque-upload-token-${state.nextAssetNumber}`,
+        url: `${apiOrigin}/api/speaker/assets/capabilities/upload/${encodeURIComponent(id)}/opaque-upload-token-${state.nextAssetNumber}`,
         headers: { "content-type": contentType },
         expiresAt: "2026-08-09T02:00:00.000Z",
       };
@@ -1056,6 +1080,8 @@ export async function installPortalApi(
         .filter((asset) => participantId === null || asset.participantId === participantId)
         .filter((asset) => versionFamilyId === null || asset.versionFamilyId === versionFamilyId)
         .map(publicAsset);
+      activeScenario = state;
+      syncView(state);
       await send(route, assets);
       return;
     }
@@ -1179,6 +1205,10 @@ export async function installPortalApi(
       expect(["ready", "rejected"]).toContain(nextState);
       asset.state = nextState;
       asset.finalizedAt = later;
+      if (nextState === "ready") {
+        asset.latestVersionId = asset.id;
+        asset.currentVersionId = asset.id;
+      }
       if (body.rejectionReason !== undefined)
         asset.rejectionReason = stringValue(body, "rejectionReason");
       syncView(state);
@@ -1213,7 +1243,7 @@ export async function installPortalApi(
       downloadNumber += 1;
       await send(route, {
         method: "GET",
-        url: `http://127.0.0.1:8787/api/speaker/assets/capabilities/download/${encodeURIComponent(asset.id)}/opaque-download-token-${downloadNumber}`,
+        url: `${apiOrigin}/api/speaker/assets/capabilities/download/${encodeURIComponent(asset.id)}/opaque-download-token-${downloadNumber}`,
         expiresAt: "2026-08-09T02:00:00.000Z",
       });
       return;

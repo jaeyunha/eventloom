@@ -27,6 +27,9 @@ export async function isLocalApiEnvironment(
   signal?: AbortSignal,
   fetcher: Fetcher = fetch,
 ): Promise<boolean> {
+  if (process.env.NODE_ENV !== "test" && process.env.NEXT_PUBLIC_RUNTIME_PROFILE !== "fixture") {
+    return false;
+  }
   let response: Response;
   try {
     response = await fetcher(`${removeTrailingSlash(apiBaseUrl)}/api/health`, {
@@ -47,7 +50,7 @@ export async function isLocalApiEnvironment(
     return false;
   }
   const body = (await response.json().catch(() => undefined)) as unknown;
-  return isRecord(body) && body.environment === "local";
+  return isRecord(body) && body.environment === "local" && body.runtimeProfile === "fixture";
 }
 
 export async function loadPortalWithLocalDemo(input: {

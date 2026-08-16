@@ -1,5 +1,6 @@
-import { hashPassword } from "better-auth/crypto";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
 import type { ApiBindings, ApiDependencies } from "../app";
+import { parseCommunicationIdentityEnvironment } from "../env";
 import { RequestAuthenticator } from "../features/auth/authenticator";
 import {
   AuthConfigurationError,
@@ -12,10 +13,12 @@ import type {
   BetterAuthGateway,
   D1ApiKeyGateway,
   OrganizationMembership,
+  ReviewerGrant,
   SpeakerGrant,
   StoredApiKey,
 } from "../features/auth/types";
 import { apiKeyScopes, organizationRoles } from "../features/auth/types";
+import type { EventRepository } from "../features/events/types";
 import {
   type OrganizationMembership as MemberOrganizationMembership,
   MemberRepositoryConflictError,
@@ -30,28 +33,47 @@ import type {
   MemberInvitationDelivery,
   MemberMembership,
   MemberUser,
-  ReviewerPool,
-  ReviewerPoolRepository,
   SetupLinkClaim,
 } from "../features/members/types";
-import type { AirtableTransport } from "../infrastructure/airtable";
-import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareBindings,
   type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
-import { type CloudflareAiBinding, createCloudflareAiProviders } from "../integrations/ai";
-import { DEFAULT_OPEN_SEND_SENDERS, OpenSendClient } from "../integrations/opensend/client";
+import {
+  type AdvisoryAiReasoningEffort,
+  type CloudflareAiBinding,
+  createCloudflareAiProviders,
+  createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_RESPONSES_MODEL,
+} from "../integrations/ai";
+import { createAirtableIntegrationDependencies } from "../integrations/airtable/runtime";
+import {
+  OpenSendClient,
+  type OpenSendSenderAddress,
+  type OpenSendSenderAddresses,
+} from "../integrations/opensend/client";
 import type { OpenSendMessage } from "../integrations/opensend/types";
-import { AirtableJsonStore, createAirtableDependencies, D1IdempotencyStore } from "./airtable";
+import type {
+  IntegrationAdminRouteDependencies,
+  IntegrationApiKeyCreation,
+  IntegrationApiKeySummary,
+  IntegrationDeliveryStatus,
+} from "../routes/integrations";
+import { createD1ApplicationDependencies, D1IdempotencyStore } from "./airtable";
+import { createD1RuntimeDependencies, createRuntimeEventRoleInvitationAdapters } from "./d1";
 
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
     readonly API_ORIGIN?: string;
+    readonly RUNTIME_PROFILE?: string;
+    /** Legacy global Airtable bindings are ignored; each connection chooses its own credential and base. */
     readonly AIRTABLE_ACCESS_TOKEN?: string;
     readonly AIRTABLE_BASE_ID?: string;
+    readonly AIRTABLE_BASE_DEV_ID?: string;
+    readonly AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?: string;
+    readonly AIRTABLE_PAT_CONNECTION_ENABLED?: string;
     readonly BETTER_AUTH_SECRET?: string;
     readonly OPENSEND_API_KEY?: string;
     readonly OPENSEND_SENDING_API_KEY?: string;
@@ -61,12 +83,21 @@ export type RuntimeBindings = ApiBindings &
     readonly AUTH_FROM_EMAIL?: string;
     readonly SPEAKERS_FROM_EMAIL?: string;
     readonly CALENDAR_FROM_EMAIL?: string;
+    readonly CALENDAR_UID_DOMAIN?: string;
     readonly AIRTABLE_API_ORIGIN?: string;
-    readonly AIRTABLE_TRANSPORT?: AirtableTransport;
+    readonly AIRTABLE_OAUTH_CLIENT_ID?: string;
+    readonly AIRTABLE_OAUTH_CLIENT_SECRET?: string;
     readonly AI?: CloudflareAiBinding;
     readonly AI_MODEL?: string;
-    readonly ORGANIZER_AUTOJOIN_DOMAINS?: string;
-    readonly ORGANIZER_AUTOJOIN_ORGANIZATION_ID?: string;
+    readonly AI_PROVIDER?: string;
+    readonly OPENAI_API_KEY?: string;
+    readonly OPENAI_MODEL?: string;
+    readonly OPENAI_AGENDA_MODEL?: string;
+    readonly OPENAI_EVALUATION_MODEL?: string;
+    readonly OPENAI_REMIX_MODEL?: string;
+    readonly OPENAI_AGENDA_REASONING_EFFORT?: string;
+    readonly OPENAI_EVALUATION_REASONING_EFFORT?: string;
+    readonly OPENAI_REMIX_REASONING_EFFORT?: string;
   };
 
 export interface RuntimeConfigurationInspection {
@@ -82,9 +113,23 @@ interface SessionRow {
   readonly expires_at: string;
 }
 
+interface SessionScopeRow extends SessionRow {
+  readonly scope_type: "session" | "membership" | "reviewer_grant" | "speaker_grant";
+  readonly scope_order: number;
+  readonly organization_id: string | null;
+  readonly event_id: string | null;
+  readonly role: string | null;
+  readonly speaker_profile_id: string | null;
+}
+
 interface MembershipRow {
   readonly organization_id: string;
   readonly role: string;
+}
+
+interface ReviewerGrantRow {
+  readonly organization_id: string;
+  readonly event_id: string;
 }
 
 interface SpeakerGrantRow {
@@ -156,88 +201,30 @@ interface MemberInvitationEnvelope {
   readonly kind: "member_invitation";
   readonly invitation: MemberInvitation;
   readonly usedAt: string | null;
+  readonly activationCredentialHash: string | null;
+  /** Temporary dual-read field for pre-0025 envelopes. New writes keep it null. */
   readonly activationDigest: string | null;
 }
-
-interface ReviewerPoolRecord extends ReviewerPool {
-  readonly id: string;
-}
-export interface OrganizerAutojoinConfiguration {
-  readonly domains: readonly string[];
-  readonly organizationId: string;
-}
-
-const ORGANIZER_AUTOJOIN_DOMAINS = new Set(["swyx.io", "ai.engineer"]);
-const ORGANIZER_AUTOJOIN_ORGANIZATION_ID = "ai-engineer";
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
-function normalizedEmailDomain(email: string): string | null {
-  const normalized = email.trim().toLowerCase();
-  const at = normalized.lastIndexOf("@");
-  if (at <= 0 || at === normalized.length - 1 || normalized.indexOf("@") !== at) return null;
-  return normalized.slice(at + 1);
-}
 
-function parseOrganizerAutojoinConfiguration(
-  bindings: Pick<
-    RuntimeBindings,
-    "ORGANIZER_AUTOJOIN_DOMAINS" | "ORGANIZER_AUTOJOIN_ORGANIZATION_ID"
-  >,
-): OrganizerAutojoinConfiguration | null {
-  const rawDomains = bindings.ORGANIZER_AUTOJOIN_DOMAINS;
-  const rawOrganizationId = bindings.ORGANIZER_AUTOJOIN_ORGANIZATION_ID;
-  if (!nonEmpty(rawDomains) || !nonEmpty(rawOrganizationId)) return null;
-
-  const domains = rawDomains.split(",").map((domain) => domain.trim().toLowerCase());
-  const domainPattern =
-    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
-  if (
-    domains.length === 0 ||
-    domains.some((domain) => !domainPattern.test(domain) || !ORGANIZER_AUTOJOIN_DOMAINS.has(domain))
-  ) {
-    return null;
+function isHttpsOrigin(value: unknown): value is string {
+  if (!nonEmpty(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === ""
+    );
+  } catch {
+    return false;
   }
-
-  const organizationId = rawOrganizationId.trim();
-  if (
-    organizationId !== ORGANIZER_AUTOJOIN_ORGANIZATION_ID ||
-    !/^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(organizationId)
-  ) {
-    return null;
-  }
-
-  return { domains: [...new Set(domains)], organizationId };
-}
-
-function organizerAutojoinConfigurationProvided(
-  bindings: Pick<
-    RuntimeBindings,
-    "ORGANIZER_AUTOJOIN_DOMAINS" | "ORGANIZER_AUTOJOIN_ORGANIZATION_ID"
-  >,
-): boolean {
-  return (
-    nonEmpty(bindings.ORGANIZER_AUTOJOIN_DOMAINS) ||
-    nonEmpty(bindings.ORGANIZER_AUTOJOIN_ORGANIZATION_ID)
-  );
-}
-
-function validOrganizerAutojoinConfiguration(
-  configuration: OrganizerAutojoinConfiguration | null,
-): OrganizerAutojoinConfiguration | null {
-  if (
-    configuration === null ||
-    configuration.organizationId !== ORGANIZER_AUTOJOIN_ORGANIZATION_ID ||
-    configuration.domains.length === 0 ||
-    configuration.domains.some((domain) => !ORGANIZER_AUTOJOIN_DOMAINS.has(domain))
-  ) {
-    return null;
-  }
-  return {
-    domains: [...new Set(configuration.domains)],
-    organizationId: configuration.organizationId,
-  };
 }
 
 function validDate(value: string): Date | null {
@@ -261,6 +248,14 @@ function membershipsFrom(rows: readonly MembershipRow[]): OrganizationMembership
             role: row.role as OrganizationMembership["role"],
           },
         ]
+      : [],
+  );
+}
+
+function reviewerGrantsFrom(rows: readonly ReviewerGrantRow[]): ReviewerGrant[] {
+  return rows.flatMap((row) =>
+    nonEmpty(row.organization_id) && nonEmpty(row.event_id)
+      ? [{ organizationId: row.organization_id, eventId: row.event_id }]
       : [],
   );
 }
@@ -291,104 +286,138 @@ const unavailableMagicLinks: MagicLinkOperations = {
 
 export class D1BetterAuthGateway implements BetterAuthGateway {
   readonly #magicLinks: MagicLinkOperations;
-  readonly #organizerAutojoin: OrganizerAutojoinConfiguration | null;
 
   constructor(
     private readonly database: D1Database,
     magicLinks: MagicLinkOperations = unavailableMagicLinks,
-    organizerAutojoin: OrganizerAutojoinConfiguration | null = null,
   ) {
     this.#magicLinks = magicLinks;
-    this.#organizerAutojoin = validOrganizerAutojoinConfiguration(organizerAutojoin);
   }
 
   async resolveSession(sessionToken: string): Promise<AuthSession | null> {
     const tokenDigest = await sha256(sessionToken);
-    const row = await this.database
+    const result = await this.database
       .prepare(
-        `SELECT sessions.id AS session_id,
-                sessions.user_id AS user_id,
-                users.email AS email,
-                users.email_verified AS email_verified,
-                sessions.expires_at AS expires_at
-           FROM auth_sessions AS sessions
-           JOIN auth_users AS users ON users.id = sessions.user_id
-          WHERE sessions.token_digest = ?
-          LIMIT 1`,
+        `WITH session_base AS (
+           SELECT sessions.id AS session_id,
+                  sessions.user_id AS user_id,
+                  users.email AS email,
+                  users.email_verified AS email_verified,
+                  sessions.expires_at AS expires_at
+             FROM auth_sessions AS sessions
+             JOIN auth_users AS users ON users.id = sessions.user_id
+            WHERE sessions.token_digest = ?
+            LIMIT 1
+         )
+         SELECT session_id,
+                user_id,
+                email,
+                email_verified,
+                expires_at,
+                'session' AS scope_type,
+                0 AS scope_order,
+                NULL AS organization_id,
+                NULL AS event_id,
+                NULL AS role,
+                NULL AS speaker_profile_id
+           FROM session_base
+         UNION ALL
+         SELECT base.session_id,
+                base.user_id,
+                base.email,
+                base.email_verified,
+                base.expires_at,
+                'membership' AS scope_type,
+                1 AS scope_order,
+                memberships.organization_id,
+                NULL AS event_id,
+                memberships.role,
+                NULL AS speaker_profile_id
+           FROM session_base AS base
+           JOIN organization_memberships AS memberships
+             ON memberships.user_id = base.user_id
+         UNION ALL
+         SELECT base.session_id,
+                base.user_id,
+                base.email,
+                base.email_verified,
+                base.expires_at,
+                'reviewer_grant' AS scope_type,
+                2 AS scope_order,
+                invitations.organization_id,
+                invitations.event_id,
+                NULL AS role,
+                NULL AS speaker_profile_id
+           FROM session_base AS base
+           JOIN event_role_invitations AS invitations
+             ON invitations.recipient_user_id = base.user_id
+            AND invitations.role = 'reviewer'
+            AND invitations.status = 'accepted'
+          WHERE base.email_verified = 1
+         UNION ALL
+         SELECT base.session_id,
+                base.user_id,
+                base.email,
+                base.email_verified,
+                base.expires_at,
+                'speaker_grant' AS scope_type,
+                3 AS scope_order,
+                grants.organization_id,
+                grants.event_id,
+                NULL AS role,
+                profiles.id AS speaker_profile_id
+           FROM session_base AS base
+           JOIN participant_grants AS grants
+             ON grants.user_id = base.user_id
+            AND grants.revoked_at IS NULL
+           JOIN event_role_invitations AS invitations
+             ON invitations.organization_id = grants.organization_id
+            AND invitations.event_id = grants.event_id
+            AND invitations.role = 'speaker'
+            AND invitations.recipient_user_id = grants.user_id
+            AND invitations.participant_id = grants.participant_id
+            AND invitations.status = 'accepted'
+           JOIN speaker_profiles AS profiles
+             ON profiles.organization_id = grants.organization_id
+            AND profiles.event_id = grants.event_id
+            AND profiles.participant_id = grants.participant_id
+            AND profiles.status <> 'revoked'
+          WHERE base.email_verified = 1
+          ORDER BY scope_order, organization_id, event_id, speaker_profile_id`,
       )
       .bind(tokenDigest)
-      .first<SessionRow>();
+      .all<SessionScopeRow>();
+    const row = result.results.find((candidate) => candidate.scope_type === "session") ?? null;
     if (row === null) return null;
     const expiresAt = validDate(row.expires_at);
     if (expiresAt === null || !nonEmpty(row.session_id) || !nonEmpty(row.user_id)) return null;
 
-    const [membershipResult, speakerGrantResult] = await Promise.all([
-      this.database
-        .prepare(
-          `SELECT organization_id, role
-             FROM organization_memberships
-            WHERE user_id = ?
-            ORDER BY organization_id`,
-        )
-        .bind(row.user_id)
-        .all<MembershipRow>(),
-      this.database
-        .prepare(
-          `SELECT organization_id, speaker_profile_id
-             FROM speaker_grants
-            WHERE user_id = ? AND revoked_at IS NULL
-            ORDER BY organization_id, speaker_profile_id`,
-        )
-        .bind(row.user_id)
-        .all<SpeakerGrantRow>(),
-    ]);
+    const membershipRows: MembershipRow[] = result.results.flatMap((scope) =>
+      scope.scope_type === "membership" && scope.organization_id !== null && scope.role !== null
+        ? [{ organization_id: scope.organization_id, role: scope.role }]
+        : [],
+    );
+    const reviewerGrantRows: ReviewerGrantRow[] = result.results.flatMap((scope) =>
+      scope.scope_type === "reviewer_grant" &&
+      scope.organization_id !== null &&
+      scope.event_id !== null
+        ? [{ organization_id: scope.organization_id, event_id: scope.event_id }]
+        : [],
+    );
+    const speakerGrantRows: SpeakerGrantRow[] = result.results.flatMap((scope) =>
+      scope.scope_type === "speaker_grant" &&
+      scope.organization_id !== null &&
+      scope.speaker_profile_id !== null
+        ? [
+            {
+              organization_id: scope.organization_id,
+              speaker_profile_id: scope.speaker_profile_id,
+            },
+          ]
+        : [],
+    );
 
-    let memberships = membershipsFrom(membershipResult.results);
-    const organizerAutojoin = this.#organizerAutojoin;
-    const emailDomain = normalizedEmailDomain(row.email);
-    if (
-      organizerAutojoin !== null &&
-      row.email_verified === 1 &&
-      expiresAt.getTime() > Date.now() &&
-      emailDomain !== null &&
-      organizerAutojoin.domains.includes(emailDomain) &&
-      !memberships.some(
-        (membership) => membership.organizationId === organizerAutojoin.organizationId,
-      ) &&
-      !(await this.hasUnfinishedMemberInvitation(
-        organizerAutojoin.organizationId,
-        row.user_id,
-        row.email,
-      ))
-    ) {
-      const auditTimestamp = new Date().toISOString();
-      const insertResult = await this.database
-        .prepare(
-          `INSERT INTO organization_memberships (
-             organization_id, user_id, role, created_at, updated_at
-           ) VALUES (?, ?, 'admin', ?, ?)
-           ON CONFLICT (organization_id, user_id) DO NOTHING`,
-        )
-        .bind(organizerAutojoin.organizationId, row.user_id, auditTimestamp, auditTimestamp)
-        .run();
-      if (Number(insertResult.meta?.changes ?? 0) > 0) {
-        memberships = [
-          ...memberships,
-          { organizationId: organizerAutojoin.organizationId, role: "admin" },
-        ];
-      } else {
-        const refreshedMemberships = await this.database
-          .prepare(
-            `SELECT organization_id, role
-               FROM organization_memberships
-              WHERE user_id = ?
-              ORDER BY organization_id`,
-          )
-          .bind(row.user_id)
-          .all<MembershipRow>();
-        memberships = membershipsFrom(refreshedMemberships.results);
-      }
-    }
+    const memberships = membershipsFrom(membershipRows);
 
     return {
       sessionId: row.session_id,
@@ -397,39 +426,9 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
       emailVerified: row.email_verified === 1,
       expiresAt,
       memberships,
-      speakerGrants: speakerGrantsFrom(speakerGrantResult.results),
+      reviewerGrants: reviewerGrantsFrom(reviewerGrantRows),
+      speakerGrants: speakerGrantsFrom(speakerGrantRows),
     };
-  }
-
-  private async hasUnfinishedMemberInvitation(
-    organizationId: string,
-    userId: string,
-    email: string,
-  ): Promise<boolean> {
-    const rows = await this.database
-      .prepare(
-        `SELECT id, identifier, token_digest, expires_at, created_at, updated_at
-           FROM auth_verifications`,
-      )
-      .all<MemberInvitationRow>();
-    return rows.results.some((invitationRow) => {
-      let parsed: MemberInvitationEnvelope | null;
-      try {
-        parsed = invitationEnvelope(JSON.parse(invitationRow.identifier));
-      } catch {
-        parsed = null;
-      }
-      return (
-        parsed !== null &&
-        parsed.usedAt === null &&
-        parsed.invitation.organizationId === organizationId &&
-        parsed.invitation.userId === userId &&
-        parsed.invitation.email.toLowerCase() === email.toLowerCase() &&
-        (parsed.invitation.status === "pending" ||
-          parsed.invitation.status === "delivered" ||
-          parsed.invitation.status === "accepted")
-      );
-    });
   }
 
   async requestMagicLink(input: { email: string; callbackUrl: string }): Promise<void> {
@@ -650,15 +649,25 @@ function invitationEnvelope(value: unknown): MemberInvitationEnvelope | null {
     typeof candidate.expiresAt !== "string" ||
     (candidate.deliveredAt !== null && typeof candidate.deliveredAt !== "string") ||
     (candidate.acceptedAt !== null && typeof candidate.acceptedAt !== "string") ||
-    (value.activationDigest !== null && typeof value.activationDigest !== "string") ||
     (value.usedAt !== null && typeof value.usedAt !== "string")
+  ) {
+    return null;
+  }
+  const activationDigest = value.activationDigest === undefined ? null : value.activationDigest;
+  const activationCredentialHash =
+    value.activationCredentialHash === undefined ? null : value.activationCredentialHash;
+  if (
+    (activationDigest !== null && typeof activationDigest !== "string") ||
+    (activationCredentialHash !== null && typeof activationCredentialHash !== "string") ||
+    (activationDigest !== null && activationCredentialHash !== null)
   ) {
     return null;
   }
   return {
     kind: "member_invitation",
     invitation: candidate as unknown as MemberInvitation,
-    activationDigest: value.activationDigest as string | null,
+    activationCredentialHash: activationCredentialHash as string | null,
+    activationDigest: activationDigest as string | null,
     usedAt: value.usedAt as string | null,
   };
 }
@@ -1370,6 +1379,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
       kind: "member_invitation",
       invitation: cloneValue(input),
       usedAt: null,
+      activationCredentialHash: null,
       activationDigest: null,
     };
     const temporaryDigest = await sha256(randomToken());
@@ -1416,7 +1426,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
   async claimInvitationActivation(
     invitationId: string,
-    activationDigest: string,
+    activationCredential: string,
     acceptedAt: string,
   ): Promise<MemberInvitation> {
     const row = await this.database
@@ -1432,7 +1442,46 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     const parsed = this.parseInvitationRow(row);
     if (parsed === null) throw new MemberRepositoryConflictError("The invitation does not exist.");
     if (parsed.envelope.invitation.status === "accepted") {
-      if (parsed.envelope.activationDigest !== activationDigest) {
+      if (parsed.envelope.activationCredentialHash === null) {
+        if (
+          parsed.envelope.activationDigest === null ||
+          (await sha256(activationCredential)) !== parsed.envelope.activationDigest
+        ) {
+          throw new MemberRepositoryConflictError(
+            "The invitation is already being activated with different account details.",
+          );
+        }
+        const upgradedEnvelope: MemberInvitationEnvelope = {
+          ...parsed.envelope,
+          activationCredentialHash: await hashPassword(activationCredential),
+          activationDigest: null,
+        };
+        const result = await this.database
+          .prepare(
+            `UPDATE auth_verifications
+                SET identifier = ?, updated_at = ?
+              WHERE id = ? AND identifier = ?`,
+          )
+          .bind(
+            invitationIdentifier(upgradedEnvelope),
+            parsed.envelope.invitation.updatedAt,
+            invitationId,
+            row.identifier,
+          )
+          .run();
+        if (Number(result.meta?.changes ?? 1) !== 1) {
+          throw new MemberRepositoryConflictError(
+            "The invitation activation claim was superseded.",
+          );
+        }
+        return cloneValue(parsed.envelope.invitation);
+      }
+      if (
+        !(await verifyPassword({
+          hash: parsed.envelope.activationCredentialHash,
+          password: activationCredential,
+        }))
+      ) {
         throw new MemberRepositoryConflictError(
           "The invitation is already being activated with different account details.",
         );
@@ -1451,10 +1500,12 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
       acceptedAt,
       updatedAt: acceptedAt,
     };
+    const activationCredentialHash = await hashPassword(activationCredential);
     const updatedEnvelope: MemberInvitationEnvelope = {
       ...parsed.envelope,
       invitation: updatedInvitation,
-      activationDigest,
+      activationCredentialHash,
+      activationDigest: null,
     };
     const result = await this.database
       .prepare(
@@ -1725,7 +1776,12 @@ export class D1MemberAuthBoundary implements MemberAuthBoundary {
       return false;
     }
     const usedAt = new Date().toISOString();
-    const usedEnvelope: MemberInvitationEnvelope = { ...parsed, usedAt };
+    const usedEnvelope: MemberInvitationEnvelope = {
+      ...parsed,
+      usedAt,
+      activationCredentialHash: null,
+      activationDigest: null,
+    };
     const result = await this.database
       .prepare(
         `UPDATE auth_verifications
@@ -1769,6 +1825,7 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
   constructor(
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
+    private readonly authSender: OpenSendSenderAddress,
   ) {}
 
   async sendMemberInvitation(input: {
@@ -1784,14 +1841,14 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
     const roleLabel =
       input.role === "reviewer" ? "Evaluator" : input.role === "admin" ? "Administrator" : "Owner";
     const message: OpenSendMessage = {
-      from: DEFAULT_OPEN_SEND_SENDERS.auth,
+      from: this.authSender,
       to: [input.email],
-      subject: `You are invited to Open Sessionboard as ${roleLabel}`,
+      subject: `You are invited to Eventloom as ${roleLabel}`,
       html:
-        `<p>You have been invited to join Open Sessionboard with the assigned role ` +
+        `<p>You have been invited to join Eventloom with the assigned role ` +
         `<strong>${escapeHtml(roleLabel)}</strong>.</p>` +
         `<p><a href="${escapeHtml(input.setupUrl)}">Set up ${escapeHtml(roleLabel)} access</a></p>`,
-      text: `You have been invited to join Open Sessionboard as ${roleLabel}. Set up ${roleLabel} access: ${input.setupUrl}`,
+      text: `You have been invited to join Eventloom as ${roleLabel}. Set up ${roleLabel} access: ${input.setupUrl}`,
       idempotencyKey: `member-invitation:${input.invitationId}`,
     };
     const now = new Date().toISOString();
@@ -1851,52 +1908,6 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
       )
       .bind(now, jobId)
       .run();
-  }
-}
-
-/** Airtable/evaluation reviewer pools are keyed by organization, event, and round. */
-export class AirtableReviewerPoolRepository implements ReviewerPoolRepository {
-  readonly #store: AirtableJsonStore<ReviewerPoolRecord>;
-
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
-    this.#store = new AirtableJsonStore({
-      ...options,
-      table: "Reviewer Pools",
-      jsonField: "Pool JSON",
-    });
-  }
-
-  async getReviewerPool(
-    organizationId: string,
-    eventId: string,
-    roundId: string,
-  ): Promise<ReviewerPool | null> {
-    const record = await this.#store.find(this.poolKey(organizationId, eventId, roundId));
-    if (record === undefined) return null;
-    if (
-      record.organizationId !== organizationId ||
-      record.eventId !== eventId ||
-      record.roundId !== roundId
-    ) {
-      return null;
-    }
-    const { id: _id, ...pool } = record;
-    return cloneValue(pool);
-  }
-
-  async saveReviewerPool(pool: ReviewerPool, expectedVersion: number | null): Promise<void> {
-    const id = this.poolKey(pool.organizationId, pool.eventId, pool.roundId);
-    const current = await this.#store.find(id);
-    if ((current?.version ?? null) !== expectedVersion) {
-      throw new MemberRepositoryConflictError("The reviewer pool changed.");
-    }
-    const record: ReviewerPoolRecord = { ...cloneValue(pool), id };
-    if (current === undefined) await this.#store.create(record);
-    else await this.#store.update(id, record);
-  }
-
-  private poolKey(organizationId: string, eventId: string, roundId: string): string {
-    return `reviewer-pool:${organizationId}:${eventId}:${roundId}`;
   }
 }
 
@@ -1973,96 +1984,480 @@ export class D1ApiKeyAuthenticatorGateway implements D1ApiKeyGateway {
   }
 }
 
+interface IntegrationApiKeyRow {
+  readonly id?: unknown;
+  readonly event_id?: unknown;
+  readonly label?: unknown;
+  readonly key_prefix?: unknown;
+  readonly scopes_json?: unknown;
+  readonly created_at?: unknown;
+  readonly last_used_at?: unknown;
+  readonly expires_at?: unknown;
+  readonly revoked_at?: unknown;
+}
+
+interface IntegrationStatusRow {
+  readonly payload_json?: unknown;
+}
+
+function integrationDefaultStatus(credentialLastFour: string | null): IntegrationDeliveryStatus {
+  return {
+    openSend: {
+      state: credentialLastFour === null ? "not_configured" : "connected",
+      credentialLastFour,
+      senderChecks: [],
+      deliveredLast24Hours: 0,
+      failedLast24Hours: 0,
+      lastDeliveryAt: null,
+    },
+    calendar: {
+      state: "not_configured",
+      sentLast24Hours: 0,
+      failedLast24Hours: 0,
+      lastInvitationAt: null,
+      lastFailure: null,
+    },
+  };
+}
+
+function integrationApiKey(row: IntegrationApiKeyRow): IntegrationApiKeySummary | null {
+  if (
+    !nonEmpty(row.id) ||
+    !nonEmpty(row.label) ||
+    !nonEmpty(row.key_prefix) ||
+    !nonEmpty(row.created_at) ||
+    !nonEmpty(row.scopes_json)
+  ) {
+    return null;
+  }
+  const scopes = scopesFrom(row.scopes_json);
+  if (scopes === null) return null;
+  return {
+    id: row.id,
+    label: row.label,
+    prefix: row.key_prefix,
+    scopes: scopes as IntegrationApiKeySummary["scopes"],
+    eventId: nonEmpty(row.event_id) ? row.event_id : null,
+    createdAt: row.created_at,
+    lastUsedAt: nonEmpty(row.last_used_at) ? row.last_used_at : null,
+    expiresAt: nonEmpty(row.expires_at) ? row.expires_at : null,
+    revokedAt: nonEmpty(row.revoked_at) ? row.revoked_at : null,
+  };
+}
+
+async function encryptedIntegrationSecret(secret: string, keyMaterial: string): Promise<string> {
+  const keyBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(keyMaterial));
+  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(secret)),
+  );
+  return `${Buffer.from(iv).toString("base64url")}.${Buffer.from(ciphertext).toString("base64url")}`;
+}
+
+export class CloudflareIntegrationAdminRepository
+  implements
+    Omit<
+      IntegrationAdminRouteDependencies,
+      "webhooks" | "getWebhookLastDelivery" | "retryCalendarDelivery"
+    >
+{
+  constructor(
+    private readonly database: D1Database,
+    private readonly events: EventRepository,
+    private readonly encryptionKey: string,
+  ) {}
+
+  async getEvent(organizationId: string, eventId: string) {
+    const event = await this.events.getEvent(organizationId, eventId);
+    return event === null
+      ? null
+      : {
+          id: event.id,
+          organizationId: event.organizationId,
+          name: event.name,
+          timeZone: event.timeZone,
+          publishedAgendaRevisionId: null,
+        };
+  }
+
+  async getDeliveryStatus(
+    organizationId: string,
+    eventId: string,
+  ): Promise<IntegrationDeliveryStatus> {
+    const [statusRow, credentialRow] = await Promise.all([
+      this.database
+        .prepare(
+          `SELECT payload_json
+             FROM integration_delivery_status
+            WHERE organization_id = ? AND event_id = ?`,
+        )
+        .bind(organizationId, eventId)
+        .first<IntegrationStatusRow>(),
+      this.database
+        .prepare(
+          `SELECT credential_last_four
+             FROM integration_credentials
+            WHERE organization_id = ? AND event_id = ? AND provider = 'opensend'`,
+        )
+        .bind(organizationId, eventId)
+        .first<{ credential_last_four?: unknown }>(),
+    ]);
+    if (statusRow !== null && nonEmpty(statusRow.payload_json)) {
+      try {
+        return JSON.parse(statusRow.payload_json) as IntegrationDeliveryStatus;
+      } catch {
+        // Invalid operational state fails closed to a neutral snapshot.
+      }
+    }
+    return integrationDefaultStatus(
+      credentialRow !== null && nonEmpty(credentialRow.credential_last_four)
+        ? credentialRow.credential_last_four
+        : null,
+    );
+  }
+
+  async saveCredential(
+    organizationId: string,
+    eventId: string,
+    provider: "opensend",
+    secret: string,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const encrypted = await encryptedIntegrationSecret(secret, this.encryptionKey);
+    await this.database
+      .prepare(
+        `INSERT INTO integration_credentials (
+           organization_id, event_id, provider, encrypted_secret, credential_last_four, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, event_id, provider) DO UPDATE SET
+           encrypted_secret = excluded.encrypted_secret,
+           credential_last_four = excluded.credential_last_four,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(organizationId, eventId, provider, encrypted, secret.slice(-4), now)
+      .run();
+  }
+
+  async listApiKeys(
+    organizationId: string,
+    eventId?: string,
+  ): Promise<readonly IntegrationApiKeySummary[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT id, event_id, label, key_prefix, scopes_json, created_at, last_used_at, expires_at, revoked_at
+           FROM api_keys
+          WHERE organization_id = ? AND (? IS NULL OR event_id = ?)
+          ORDER BY created_at DESC`,
+      )
+      .bind(organizationId, eventId ?? null, eventId ?? null)
+      .all<IntegrationApiKeyRow>();
+    return rows.results.flatMap((row) => {
+      const key = integrationApiKey(row);
+      return key === null ? [] : [key];
+    });
+  }
+
+  async createApiKey(input: {
+    readonly organizationId: string;
+    readonly eventId?: string | null;
+    readonly label: string;
+    readonly scopes: readonly IntegrationApiKeySummary["scopes"][number][];
+    readonly expiresAt: string | null;
+  }): Promise<IntegrationApiKeyCreation> {
+    const secret = `osb_${randomToken()}`;
+    const now = new Date().toISOString();
+    const summary: IntegrationApiKeySummary = {
+      id: `key_${crypto.randomUUID()}`,
+      label: input.label,
+      prefix: secret.slice(0, 12),
+      scopes: [...new Set(input.scopes)],
+      eventId: input.eventId ?? null,
+      createdAt: now,
+      lastUsedAt: null,
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+    };
+    await this.database
+      .prepare(
+        `INSERT INTO api_keys (
+           id, organization_id, event_id, label, key_prefix, key_digest, scopes_json,
+           expires_at, revoked_at, last_used_at, created_by_user_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+      )
+      .bind(
+        summary.id,
+        input.organizationId,
+        summary.eventId,
+        summary.label,
+        summary.prefix,
+        await sha256(secret),
+        JSON.stringify(summary.scopes),
+        summary.expiresAt,
+        now,
+        now,
+      )
+      .run();
+    return { summary, secret };
+  }
+
+  async revokeApiKey(organizationId: string, apiKeyId: string, eventId?: string): Promise<boolean> {
+    const now = new Date().toISOString();
+    const existing = await this.database
+      .prepare(
+        `SELECT id FROM api_keys
+          WHERE id = ? AND organization_id = ? AND (? IS NULL OR event_id = ?) AND revoked_at IS NULL`,
+      )
+      .bind(apiKeyId, organizationId, eventId ?? null, eventId ?? null)
+      .first<{ id?: unknown }>();
+    if (existing === null) return false;
+    await this.database
+      .prepare(
+        "UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE id = ? AND organization_id = ?",
+      )
+      .bind(now, now, apiKeyId, organizationId)
+      .run();
+    return true;
+  }
+}
+
 const fixedOrigins = {
-  staging: {
-    web: "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-    api: "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
-  },
-  production: {
-    web: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    api: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+  local: {
+    web: "http://127.0.0.1:3015",
+    api: "http://127.0.0.1:8787",
   },
 } as const;
 
-function authEnvironment(value: string): keyof typeof fixedOrigins | null {
-  return value === "staging" || value === "production" ? value : null;
+const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
+const LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
+  "eventloom-integrated-local-airtable-credential-key-v2";
+const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
+const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
+
+function authEnvironment(value: string): "local" | "staging" | "production" | null {
+  return value === "local" || value === "staging" || value === "production" ? value : null;
+}
+
+export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeBindings {
+  if (source.APP_ENV !== "local") return source;
+  return {
+    ...source,
+    API_ORIGIN: fixedOrigins.local.api,
+    AIRTABLE_CREDENTIAL_ENCRYPTION_KEY:
+      source.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?.trim() || LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
+    BETTER_AUTH_SECRET: LOCAL_BETTER_AUTH_SECRET,
+    CACHE_INVALIDATION_URL: LOCAL_CACHE_INVALIDATION_URL,
+    CACHE_INVALIDATION_TOKEN: LOCAL_CACHE_INVALIDATION_TOKEN,
+  };
+}
+
+function patConnectionEnabled(value: string | undefined): boolean | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === undefined || normalized.length === 0 || normalized === "false") return false;
+  return normalized === "true" ? true : null;
 }
 
 function configuredApiOrigin(bindings: RuntimeBindings): string | null {
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment === null) return null;
-  const expected = fixedOrigins[environment].api;
-  return bindings.API_ORIGIN === undefined ? expected : bindings.API_ORIGIN;
+  if (environment === "local") return bindings.API_ORIGIN ?? fixedOrigins.local.api;
+  return bindings.API_ORIGIN?.trim() || null;
 }
 
-export function inspectProductionRuntime(
-  bindings: RuntimeBindings,
-): RuntimeConfigurationInspection {
+const aiReasoningEfforts = new Set<AdvisoryAiReasoningEffort>([
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function aiReasoningEffort(
+  value: string | undefined,
+  fallback: AdvisoryAiReasoningEffort,
+): AdvisoryAiReasoningEffort | null {
+  const normalized = value?.trim().toLowerCase() || fallback;
+  return aiReasoningEfforts.has(normalized as AdvisoryAiReasoningEffort)
+    ? (normalized as AdvisoryAiReasoningEffort)
+    : null;
+}
+type AiProviderSelection = "auto" | "cloudflare" | "openai" | "disabled";
+
+function aiProviderSelection(value: string | undefined): AiProviderSelection | null {
+  const normalized = value?.trim().toLowerCase() || "auto";
+  return normalized === "auto" ||
+    normalized === "cloudflare" ||
+    normalized === "openai" ||
+    normalized === "disabled"
+    ? normalized
+    : null;
+}
+
+interface SelectedAiProvider {
+  readonly binding: CloudflareAiBinding | undefined;
+  readonly model: string | undefined;
+  readonly agendaModel?: string;
+  readonly evaluationModel?: string;
+  readonly remixModel?: string;
+  readonly agendaReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly evaluationReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly remixReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly providerName: "cloudflare-workers-ai" | "openai-responses";
+  readonly promptVersion: string;
+}
+
+function selectedAiProvider(bindings: RuntimeBindings): SelectedAiProvider | null {
+  const selection = aiProviderSelection(bindings.AI_PROVIDER);
+  if (selection === null || selection === "disabled") return null;
+  const openAiKey = bindings.OPENAI_API_KEY?.trim();
+  const cloudflareModel = bindings.AI_MODEL?.trim();
+  const useOpenAi = selection === "openai" || (selection === "auto" && nonEmpty(openAiKey));
+  if (useOpenAi && nonEmpty(openAiKey)) {
+    const model = bindings.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL;
+    const agendaReasoningEffort = aiReasoningEffort(
+      bindings.OPENAI_AGENDA_REASONING_EFFORT,
+      "medium",
+    );
+    const evaluationReasoningEffort = aiReasoningEffort(
+      bindings.OPENAI_EVALUATION_REASONING_EFFORT,
+      "medium",
+    );
+    const remixReasoningEffort = aiReasoningEffort(bindings.OPENAI_REMIX_REASONING_EFFORT, "low");
+    return {
+      binding: createOpenAiResponsesBinding({ apiKey: openAiKey }),
+      model,
+      agendaModel: bindings.OPENAI_AGENDA_MODEL?.trim() || model,
+      evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || model,
+      remixModel: bindings.OPENAI_REMIX_MODEL?.trim() || model,
+      ...(agendaReasoningEffort === null ? {} : { agendaReasoningEffort }),
+      ...(evaluationReasoningEffort === null ? {} : { evaluationReasoningEffort }),
+      ...(remixReasoningEffort === null ? {} : { remixReasoningEffort }),
+      providerName: "openai-responses",
+      promptVersion: "openai-responses-v1",
+    };
+  }
+  const useCloudflare =
+    selection === "cloudflare" ||
+    (selection === "auto" &&
+      bindings.AI !== undefined &&
+      typeof bindings.AI.run === "function" &&
+      nonEmpty(cloudflareModel));
+  if (useCloudflare) {
+    return {
+      binding: bindings.AI,
+      model: cloudflareModel,
+      providerName: "cloudflare-workers-ai",
+      promptVersion: "cloudflare-workers-ai-v1",
+    };
+  }
+  return null;
+}
+export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfigurationInspection {
+  const bindings = runtimeBindingsForEnvironment(source);
   const issues: string[] = [];
   const cloudflare = inspectCloudflareBindings(bindings);
   if (!cloudflare.success) issues.push(...cloudflare.issues);
 
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment !== null) {
-    const origins = fixedOrigins[environment];
-    if (bindings.WEB_ORIGIN !== origins.web) {
-      issues.push("WEB_ORIGIN does not match the fixed deployment origin.");
+    if (environment === "local" && bindings.WEB_ORIGIN !== fixedOrigins.local.web) {
+      issues.push("WEB_ORIGIN must match the integrated local web origin.");
     }
-    if (bindings.API_ORIGIN !== undefined && bindings.API_ORIGIN !== origins.api) {
-      issues.push("API_ORIGIN does not match the fixed deployment origin.");
+    if (
+      environment === "local" &&
+      bindings.API_ORIGIN !== undefined &&
+      bindings.API_ORIGIN !== fixedOrigins.local.api
+    ) {
+      issues.push("API_ORIGIN must match the integrated local API origin.");
+    }
+    if (environment !== "local" && !isHttpsOrigin(bindings.WEB_ORIGIN)) {
+      issues.push("WEB_ORIGIN must be an HTTPS origin for deployed environments.");
+    }
+    if (environment !== "local" && !isHttpsOrigin(bindings.API_ORIGIN)) {
+      issues.push("API_ORIGIN must be an HTTPS origin for deployed environments.");
     }
   }
-  if (environment !== null) {
+  const aiSelection = aiProviderSelection(bindings.AI_PROVIDER);
+  if (aiSelection === null) {
+    issues.push("AI_PROVIDER must be auto, cloudflare, openai, or disabled");
+  } else if (aiSelection === "cloudflare") {
     if (bindings.AI === undefined || typeof bindings.AI.run !== "function") {
-      issues.push("AI must be a Cloudflare Workers AI binding outside local development");
+      issues.push("AI_PROVIDER=cloudflare requires the Workers AI binding");
     }
     if (!nonEmpty(bindings.AI_MODEL)) {
-      issues.push("AI_MODEL is required outside local development");
+      issues.push("AI_PROVIDER=cloudflare requires AI_MODEL");
+    }
+  } else if (aiSelection === "openai" && !nonEmpty(bindings.OPENAI_API_KEY)) {
+    issues.push("AI_PROVIDER=openai requires OPENAI_API_KEY");
+  }
+  if (aiSelection === "openai") {
+    for (const [name, value, fallback] of [
+      ["OPENAI_AGENDA_REASONING_EFFORT", bindings.OPENAI_AGENDA_REASONING_EFFORT, "medium"],
+      ["OPENAI_EVALUATION_REASONING_EFFORT", bindings.OPENAI_EVALUATION_REASONING_EFFORT, "medium"],
+      ["OPENAI_REMIX_REASONING_EFFORT", bindings.OPENAI_REMIX_REASONING_EFFORT, "low"],
+    ] as const) {
+      if (aiReasoningEffort(value, fallback) === null) {
+        issues.push(`${name} must be none, low, medium, high, xhigh, or max`);
+      }
     }
   }
+  if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
+    issues.push("BETTER_AUTH_SECRET must contain at least 32 characters");
+  }
   if (
-    organizerAutojoinConfigurationProvided(bindings) &&
-    parseOrganizerAutojoinConfiguration(bindings) === null
+    environment !== "local" &&
+    nonEmpty(bindings.AIRTABLE_OAUTH_CLIENT_ID) &&
+    (!nonEmpty(bindings.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY) ||
+      bindings.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY.trim().length < 32)
   ) {
     issues.push(
-      "ORGANIZER_AUTOJOIN_DOMAINS and ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be configured as a valid pair.",
+      "AIRTABLE_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters when Airtable OAuth is configured",
     );
   }
-
-  if (!nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN)) {
-    issues.push("AIRTABLE_ACCESS_TOKEN is required outside local development");
+  if (patConnectionEnabled(bindings.AIRTABLE_PAT_CONNECTION_ENABLED) === null) {
+    issues.push("AIRTABLE_PAT_CONNECTION_ENABLED must be true or false");
   }
-  if (!nonEmpty(bindings.AIRTABLE_BASE_ID)) {
-    issues.push("AIRTABLE_BASE_ID is required outside local development");
+  if (!nonEmpty(bindings.CACHE_INVALIDATION_URL)) {
+    issues.push("CACHE_INVALIDATION_URL is required for the integrated runtime");
+  } else {
+    try {
+      const url = new URL(bindings.CACHE_INVALIDATION_URL);
+      if (url.protocol !== "https:" && source.APP_ENV !== "local") {
+        issues.push("CACHE_INVALIDATION_URL must use HTTPS outside local development");
+      }
+    } catch {
+      issues.push("CACHE_INVALIDATION_URL must be a valid URL");
+    }
   }
-  if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
-    issues.push("BETTER_AUTH_SECRET must contain at least 32 characters outside local development");
+  if (!nonEmpty(bindings.CACHE_INVALIDATION_TOKEN)) {
+    issues.push("CACHE_INVALIDATION_TOKEN is required for the integrated runtime");
   }
 
   const openSendKey = (bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY)?.trim();
   if (!openSendKey || !nonEmpty(bindings.OPENSEND_API_URL)) {
-    issues.push("OPENSEND_API_URL and OPENSEND_API_KEY are required outside local development");
+    issues.push("OPENSEND_API_URL and OPENSEND_API_KEY are required");
   }
-  const configuredSenders = [
-    ["AUTH_FROM_EMAIL", bindings.AUTH_FROM_EMAIL, DEFAULT_OPEN_SEND_SENDERS.auth],
-    ["SPEAKERS_FROM_EMAIL", bindings.SPEAKERS_FROM_EMAIL, DEFAULT_OPEN_SEND_SENDERS.speakers],
-    ["CALENDAR_FROM_EMAIL", bindings.CALENDAR_FROM_EMAIL, DEFAULT_OPEN_SEND_SENDERS.calendar],
-  ] as const;
-  for (const [name, value, expected] of configuredSenders) {
-    if (value !== undefined && (typeof value !== "string" || value.trim() !== expected)) {
-      issues.push(`${name} must be an approved OpenSend sender address.`);
+  const identityResult = parseCommunicationIdentityEnvironment(bindings);
+  if (!identityResult.success) {
+    const invalidNames = new Set(identityResult.error.issues.map((issue) => String(issue.path[0])));
+    for (const name of ["AUTH_FROM_EMAIL", "SPEAKERS_FROM_EMAIL", "CALENDAR_FROM_EMAIL"] as const) {
+      if (invalidNames.has(name)) issues.push(`${name} must be a valid email address.`);
+    }
+    if (invalidNames.has("CALENDAR_UID_DOMAIN")) {
+      issues.push("CALENDAR_UID_DOMAIN must be a valid domain name");
     }
   }
 
   const apiOrigin = configuredApiOrigin(bindings);
   if (apiOrigin === null || !nonEmpty(bindings.WEB_ORIGIN)) {
-    issues.push("Better Auth web and API origins are required outside local development");
+    issues.push("Better Auth web and API origins are required");
   } else {
     try {
       createBetterAuthRuntimeConfiguration({
         secret: bindings.BETTER_AUTH_SECRET ?? "",
-        baseUrl: apiOrigin,
-        trustedOrigins: [bindings.WEB_ORIGIN],
+        baseUrl: bindings.WEB_ORIGIN,
+        trustedOrigins: [bindings.WEB_ORIGIN, apiOrigin],
       });
     } catch (error) {
       if (error instanceof AuthConfigurationError) {
@@ -2075,8 +2470,9 @@ export function inspectProductionRuntime(
   return { success: issues.length === 0, issues };
 }
 
-export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDependencies {
-  const inspection = inspectProductionRuntime(bindings);
+export function createCloudflareDependencies(source: RuntimeBindings): ApiDependencies {
+  const inspection = inspectProductionRuntime(source);
+  const bindings = runtimeBindingsForEnvironment(source);
   if (!inspection.success) {
     throw new TypeError("The production runtime is not configured.");
   }
@@ -2104,26 +2500,53 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
   ) {
     throw new TypeError("The production authentication runtime is not configured.");
   }
-  const organizerAutojoin = parseOrganizerAutojoinConfiguration(bindings);
-  const model = bindings.AI_MODEL?.trim();
-  const aiProviders = createCloudflareAiProviders(
-    bindings.AI,
-    model === undefined ? {} : { model },
-  );
+  const aiSelection = selectedAiProvider(bindings);
+  const aiProviders = createCloudflareAiProviders(aiSelection?.binding, {
+    ...(aiSelection?.model === undefined ? {} : { model: aiSelection.model }),
+    ...(aiSelection?.agendaModel === undefined ? {} : { agendaModel: aiSelection.agendaModel }),
+    ...(aiSelection?.evaluationModel === undefined
+      ? {}
+      : { evaluationModel: aiSelection.evaluationModel }),
+    ...(aiSelection?.remixModel === undefined ? {} : { remixModel: aiSelection.remixModel }),
+    ...(aiSelection?.agendaReasoningEffort === undefined
+      ? {}
+      : { agendaReasoningEffort: aiSelection.agendaReasoningEffort }),
+    ...(aiSelection?.evaluationReasoningEffort === undefined
+      ? {}
+      : { evaluationReasoningEffort: aiSelection.evaluationReasoningEffort }),
+    ...(aiSelection?.remixReasoningEffort === undefined
+      ? {}
+      : { remixReasoningEffort: aiSelection.remixReasoningEffort }),
+    ...(aiSelection === null
+      ? {}
+      : {
+          providerName: aiSelection.providerName,
+          promptVersion: aiSelection.promptVersion,
+        }),
+  });
 
   const authConfiguration = createBetterAuthRuntimeConfiguration({
     secret: bindings.BETTER_AUTH_SECRET ?? "",
-    baseUrl: apiOrigin,
-    trustedOrigins: [bindings.WEB_ORIGIN],
+    baseUrl: bindings.WEB_ORIGIN,
+    trustedOrigins: [bindings.WEB_ORIGIN, apiOrigin],
   });
+  const identityResult = parseCommunicationIdentityEnvironment(bindings);
+  if (!identityResult.success) {
+    throw new TypeError("The production communication identities are not configured.");
+  }
+  const senderAddresses: OpenSendSenderAddresses = {
+    auth: identityResult.data.AUTH_FROM_EMAIL,
+    speakers: identityResult.data.SPEAKERS_FROM_EMAIL,
+    calendar: identityResult.data.CALENDAR_FROM_EMAIL,
+  };
+  const calendarIntegrationOptions = {
+    organizer: senderAddresses.calendar,
+    uidDomain: identityResult.data.CALENDAR_UID_DOMAIN,
+  };
   const openSend = new OpenSendClient({
     sendingApiKey: openSendKey,
     baseUrl: bindings.OPENSEND_API_URL,
-    senderAddresses: {
-      ...(nonEmpty(bindings.AUTH_FROM_EMAIL) ? { auth: bindings.AUTH_FROM_EMAIL } : {}),
-      ...(nonEmpty(bindings.SPEAKERS_FROM_EMAIL) ? { speakers: bindings.SPEAKERS_FROM_EMAIL } : {}),
-      ...(nonEmpty(bindings.CALENDAR_FROM_EMAIL) ? { calendar: bindings.CALENDAR_FROM_EMAIL } : {}),
-    },
+    senderAddresses,
   });
   const betterAuthRuntime = createBetterAuthRuntime({
     database: bindings.DB,
@@ -2141,39 +2564,190 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
   });
 
   const authenticator = new RequestAuthenticator(
-    new D1BetterAuthGateway(bindings.DB, betterAuthRuntime, organizerAutojoin),
+    new D1BetterAuthGateway(bindings.DB, betterAuthRuntime),
     new D1ApiKeyAuthenticatorGateway(bindings.DB),
-    { sessionCookieName: "__Secure-better-auth.session_token" },
+    {
+      sessionCookieName:
+        new URL(bindings.WEB_ORIGIN).protocol === "https:"
+          ? "__Secure-better-auth.session_token"
+          : "better-auth.session_token",
+    },
   );
-  const transport =
-    bindings.AIRTABLE_TRANSPORT ??
-    new RetryingAirtableTransport(
-      new FetchAirtableTransport({
-        token: bindings.AIRTABLE_ACCESS_TOKEN ?? "",
-        ...(bindings.AIRTABLE_API_ORIGIN === undefined
-          ? {}
-          : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
-      }),
-    );
-  const dependencies = createAirtableDependencies({
+  const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
+  const eventRoleInvitationAdapters = createRuntimeEventRoleInvitationAdapters(
+    businessRepositories.eventRoleInvitations,
+  );
+  const dependencies = createD1ApplicationDependencies({
     authenticator,
-    baseId: bindings.AIRTABLE_BASE_ID ?? "",
-    transport,
     database: bindings.DB,
     agendaCoordinator: bindings.AGENDA_COORDINATOR,
     privateFiles: bindings.PRIVATE_FILES,
     outboxQueue: bindings.OUTBOX_QUEUE,
     webOrigin: bindings.WEB_ORIGIN,
     aiProviders,
+    businessRepositories,
+    eventRoleInvitationAdapters,
+    senderAddresses,
+    calendarIntegrationOptions,
   });
   const memberService = new MemberService({
     identity: new D1MemberIdentityRepository(bindings.DB),
     auth: new D1MemberAuthBoundary(bindings.DB, bindings.WEB_ORIGIN),
-    invitationDelivery: new CloudflareMemberInvitationDelivery(bindings.DB, bindings.OUTBOX_QUEUE),
-    reviewerPools: new AirtableReviewerPoolRepository({
-      baseId: bindings.AIRTABLE_BASE_ID ?? "",
-      transport,
-    }),
+    invitationDelivery: new CloudflareMemberInvitationDelivery(
+      bindings.DB,
+      bindings.OUTBOX_QUEUE,
+      senderAddresses.auth,
+    ),
+    reviewerPools: businessRepositories.reviewerPool,
+    reviewerEventInvitations: eventRoleInvitationAdapters.reviewerLifecycle,
   });
-  return { ...dependencies, auth: betterAuthRuntime, members: { service: memberService } };
+  const integrationRepository = new CloudflareIntegrationAdminRepository(
+    bindings.DB,
+    businessRepositories.events,
+    bindings.BETTER_AUTH_SECRET ?? "",
+  );
+  const integrations: IntegrationAdminRouteDependencies = {
+    getEvent: integrationRepository.getEvent.bind(integrationRepository),
+    getDeliveryStatus: integrationRepository.getDeliveryStatus.bind(integrationRepository),
+    saveCredential: integrationRepository.saveCredential.bind(integrationRepository),
+    listApiKeys: integrationRepository.listApiKeys.bind(integrationRepository),
+    createApiKey: integrationRepository.createApiKey.bind(integrationRepository),
+    revokeApiKey: integrationRepository.revokeApiKey.bind(integrationRepository),
+    webhooks:
+      dependencies.webhooks ??
+      (() => {
+        throw new Error("The integrated webhook repository is not configured.");
+      })(),
+    retryCalendarDelivery: async () => false,
+  };
+  const airtableIntegration = nonEmpty(bindings.AIRTABLE_OAUTH_CLIENT_ID)
+    ? createAirtableIntegrationDependencies({
+        database: bindings.DB,
+        authenticator,
+        clientId: bindings.AIRTABLE_OAUTH_CLIENT_ID,
+        ...(bindings.AIRTABLE_OAUTH_CLIENT_SECRET === undefined
+          ? {}
+          : { clientSecret: bindings.AIRTABLE_OAUTH_CLIENT_SECRET }),
+        patConnectionsEnabled:
+          patConnectionEnabled(bindings.AIRTABLE_PAT_CONNECTION_ENABLED) === true,
+        webOrigin: bindings.WEB_ORIGIN,
+        redirectUri: `${apiOrigin.replace(/\/$/, "")}/api/integrations/airtable/oauth/callback`,
+        cipher: createAirtableSecretCipher({
+          credentialEncryptionKey: bindings.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY ?? "",
+          ...(bindings.BETTER_AUTH_SECRET === undefined
+            ? {}
+            : { legacyBetterAuthSecret: bindings.BETTER_AUTH_SECRET }),
+        }),
+        sessions: businessRepositories.sessions,
+        ...(bindings.AIRTABLE_API_ORIGIN === undefined
+          ? {}
+          : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
+      })
+    : undefined;
+  return {
+    ...dependencies,
+    ...(dependencies.access === undefined ? {} : { access: dependencies.access }),
+    auth: betterAuthRuntime,
+    members: { service: memberService },
+    integrations,
+    ...(airtableIntegration === undefined ? {} : { airtableIntegration }),
+  };
+}
+
+export function createAirtableSecretCipher(input: {
+  credentialEncryptionKey: string;
+  legacyBetterAuthSecret?: string;
+}) {
+  const credentialEncryptionKey = input.credentialEncryptionKey.trim();
+  if (credentialEncryptionKey.length === 0) {
+    throw new TypeError("AIRTABLE_CREDENTIAL_ENCRYPTION_KEY is required for Airtable credentials.");
+  }
+  const credentialKeyPromise = createAirtableCipherKey(
+    `airtable-credential:v2:${credentialEncryptionKey}`,
+  );
+  // This branch is only for unversioned ciphertext created before v2. New data never derives from
+  // BETTER_AUTH_SECRET and legacy data must be reconnected before that secret is rotated.
+  const legacyKeyPromise = nonEmpty(input.legacyBetterAuthSecret)
+    ? createAirtableCipherKey(`airtable:${input.legacyBetterAuthSecret}`)
+    : null;
+  return {
+    encrypt: async (value: string) => {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await encryptAirtableSecret(credentialKeyPromise, iv, value);
+      return `v2.${encodeBase64Url(iv)}.${encodeBase64Url(new Uint8Array(encrypted))}`;
+    },
+    decrypt: async (value: string) => {
+      const segments = value.split(".");
+      if (segments[0] === "v2") {
+        const [version, iv, encrypted] = segments;
+        if (
+          version !== "v2" ||
+          iv === undefined ||
+          encrypted === undefined ||
+          segments.length !== 3
+        ) {
+          throw new Error("Invalid Airtable secret reference.");
+        }
+        return decryptAirtableSecret(credentialKeyPromise, iv, encrypted);
+      }
+      const [iv, encrypted] = segments;
+      if (
+        iv === undefined ||
+        encrypted === undefined ||
+        segments.length !== 2 ||
+        legacyKeyPromise === null
+      ) {
+        throw new Error("Invalid Airtable secret reference.");
+      }
+      return decryptAirtableSecret(legacyKeyPromise, iv, encrypted);
+    },
+  };
+}
+
+async function createAirtableCipherKey(keyMaterial: string): Promise<CryptoKey> {
+  const rawKey = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(keyMaterial));
+  return crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+async function encryptAirtableSecret(
+  keyPromise: Promise<CryptoKey>,
+  iv: Uint8Array,
+  value: string,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await keyPromise,
+    new TextEncoder().encode(value),
+  );
+}
+
+async function decryptAirtableSecret(
+  keyPromise: Promise<CryptoKey>,
+  iv: string,
+  encrypted: string,
+): Promise<string> {
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: decodeBase64Url(iv) as Uint8Array<ArrayBuffer> },
+    await keyPromise,
+    decodeBase64Url(encrypted),
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function decodeBase64Url(value: string): Uint8Array {
+  const binary = atob(
+    value
+      .replaceAll("-", "+")
+      .replaceAll("_", "/")
+      .padEnd(Math.ceil(value.length / 4) * 4, "="),
+  );
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }

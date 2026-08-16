@@ -1,0 +1,261 @@
+.workspace {
+  display: grid;
+  gap: 1rem;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(17rem, 0.75fr);
+  gap: 1rem;
+}
+
+.main,
+.rail {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+}
+
+.phaseStrip {
+  overflow: hidden;
+  padding: 0;
+}
+
+.phaseStrip > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 0.55rem;
+}
+
+.phase {
+  position: relative;
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.75rem;
+  border-radius: 0.45rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.phase::after {
+  position: absolute;
+  right: 0;
+  bottom: 0.75rem;
+  left: 0;
+  height: 1px;
+  content: "";
+  background: color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+.phase:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--muted) 48%, transparent);
+}
+
+.phaseActive {
+  color: var(--foreground);
+  background: var(--workspace-accent-soft);
+}
+
+.phaseLabel {
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.phaseMeta {
+  min-height: 2rem;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.phaseProgress {
+  position: relative;
+  z-index: 1;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-top: 0.35rem;
+  border: 2px solid var(--card);
+  border-radius: 50%;
+  background: var(--workspace-progress-idle);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 86%, transparent);
+}
+
+.phaseActive .phaseProgress,
+.phaseDone .phaseProgress {
+  background: var(--workspace-accent);
+}
+
+.attentionList,
+.activityList,
+.milestoneList {
+  display: grid;
+}
+
+.emptyAttention {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 1rem;
+  color: var(--muted-foreground);
+}
+
+.emptyAttention strong,
+.emptyAttention span {
+  display: block;
+}
+
+.emptyAttention strong {
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 630;
+}
+
+.emptyAttention span {
+  margin-top: 0.16rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.attentionItem,
+.activityItem,
+.milestoneItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.attentionItem:last-child,
+.activityItem:last-child,
+.milestoneItem:last-child {
+  border-bottom: 0;
+}
+
+.attentionIcon,
+.activityIcon {
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border-radius: 0.45rem;
+  color: var(--workspace-accent);
+  background: var(--workspace-accent-soft);
+}
+
+.attentionText,
+.activityText,
+.milestoneText {
+  min-width: 0;
+}
+
+.attentionText strong,
+.activityText strong,
+.milestoneText strong {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 630;
+}
+
+.attentionText span,
+.activityText span,
+.milestoneText span {
+  display: block;
+  margin-top: 0.16rem;
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.attentionLink {
+  color: var(--muted-foreground);
+}
+
+.attentionLink:hover {
+  color: var(--foreground);
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.metric {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.9rem;
+}
+
+.metric span,
+.metric strong {
+  display: block;
+}
+
+.metric span {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  font-weight: 620;
+}
+
+.metric strong {
+  font-size: 1.25rem;
+  font-weight: 660;
+  letter-spacing: -0.04em;
+}
+
+.milestoneDate {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.loadState {
+  min-height: 18rem;
+}
+
+.loadState > div {
+  display: grid;
+  gap: 0.65rem;
+  place-items: center;
+  align-content: center;
+  min-height: 18rem;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.loadState h2,
+.loadState p {
+  margin: 0;
+}
+
+.loadState h2 {
+  color: var(--foreground);
+  font-size: 1rem;
+}
+
+.loadState p {
+  max-width: 34rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 980px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .phaseStrip > div,
+  .metricGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .phase::after {
+    display: none;
+  }
+}

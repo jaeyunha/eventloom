@@ -1,0 +1,220 @@
+.shell {
+  width: 100%;
+  height: 100svh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--workspace-outer);
+  color: var(--foreground);
+}
+
+.sidebar {
+  border-right: 0;
+}
+
+.skipLink {
+  position: fixed;
+  z-index: 60;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  opacity: 0;
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+}
+
+.skipLink:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sidebarHeader {
+  padding: 0.45rem 0.5rem 0.2rem;
+}
+
+.brandButton {
+  height: 2.5rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.brandCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.05rem;
+  line-height: 1.15;
+}
+
+.brandCopy strong {
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+}
+
+.brandCopy small {
+  overflow: hidden;
+  color: var(--sidebar-foreground);
+  font-size: 0.66rem;
+  opacity: 0.62;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarContent {
+  gap: 0.1rem;
+  padding-block: 0.15rem;
+}
+
+.sidebarGroup {
+  padding: 0.08rem 0.45rem 0.18rem;
+}
+
+.sidebarGroupLabel {
+  height: 1.45rem;
+  padding-inline: 0.45rem;
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+  font-weight: 680;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.sidebarMenuButton {
+  height: 1.875rem;
+  padding-inline: 0.5rem;
+  border-radius: 0.4rem;
+  font-size: 0.775rem;
+}
+
+.sidebarMenuButton svg {
+  width: 0.92rem;
+  height: 0.92rem;
+}
+
+.sidebarFooter {
+  padding: 0.35rem 0.55rem 0.6rem;
+}
+
+.inset {
+  height: calc(100svh - 1rem);
+  min-height: 0;
+  margin: 0.5rem 0.5rem 0.5rem 0;
+  overflow: hidden;
+  border: 1px solid var(--workspace-pane-edge);
+  border-radius: 0.75rem;
+  background: var(--workspace-pane);
+  box-shadow: var(--workspace-pane-shadow);
+}
+
+.topbar {
+  display: flex;
+  min-height: 3rem;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--workspace-divider);
+  background: var(--workspace-pane);
+}
+
+.topbarContext,
+.headerActions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.topbarContext {
+  gap: 0.4rem;
+}
+
+.sidebarTrigger {
+  flex: none;
+}
+
+.pageContext {
+  display: grid;
+  min-width: 0;
+  gap: 0.04rem;
+  line-height: 1.2;
+}
+
+.pageContext strong,
+.pageContext span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pageContext strong {
+  font-size: 0.78rem;
+  font-weight: 660;
+}
+
+.pageContext span {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+}
+
+.headerActions {
+  flex: none;
+  gap: 0.35rem;
+}
+
+.main {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+
+.main:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.content {
+  min-width: 0;
+}
+
+@media (max-width: 47.999rem) {
+  .inset {
+    height: 100svh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .topbar {
+    min-height: 3.25rem;
+    padding-inline: 0.6rem;
+  }
+
+  .main {
+    padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+  }
+
+  .pageContext span {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skipLink {
+    transition: none;
+  }
+}

@@ -2,6 +2,44 @@ import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixture
 import { installCfpApi } from "./fixtures/cfp-api";
 
 test.use({ authRole: "submitter" });
+const EVALUATOR_CFP_PATH = "/cfp/organizations/evaluator-org/events/evaluator-2026";
+
+test("participant-only accounts enter CFP without organizer context controls", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "participant-context",
+    initiallyAuthenticated: true,
+    memberships: [],
+  });
+
+  await page.goto("/cfp/organizations/evaluator-org/events/participant-context/account");
+
+  await expect(page.locator("[data-cfp-applicant-context-boundary]")).toHaveCount(0);
+  await expect(page.locator('a[href="/admin"]')).toHaveCount(0);
+  await expect(page.locator('button[type="submit"]')).toBeEnabled();
+});
+
+test("current-organization organizers confirm the CFP applicant context", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "organizer-context",
+    initiallyAuthenticated: true,
+    memberships: [{ organizationId: "evaluator-org", role: "owner" }],
+  });
+
+  await page.goto("/cfp/organizations/evaluator-org/events/organizer-context/account");
+
+  const boundary = page.locator("[data-cfp-applicant-context-boundary]");
+  await expect(boundary).toBeVisible();
+  await expect(page.locator('a[href="/admin"]')).toBeVisible();
+  await expect(page.locator('button[type="submit"]')).toBeDisabled();
+  await boundary.locator("[data-cfp-applicant-context-confirm]").click();
+  await expect(page.locator('button[type="submit"]')).toBeEnabled();
+});
 
 async function selectSearchable(
   page: import("@playwright/test").Page,
@@ -13,16 +51,137 @@ async function selectSearchable(
   await page.getByRole("option", { name: option, exact: true }).click();
   await expect(combobox).toHaveValue(option);
 }
+interface CfpPortalHandoffHarness {
+  selectedEventIds: string[];
+}
+
+async function installCfpPortalHandoffApi(
+  page: import("@playwright/test").Page,
+  session: E2eAuthSession,
+  submittedEventId: string,
+  submissionId: string,
+): Promise<CfpPortalHandoffHarness> {
+  const participantId = "participant-cfp-handoff";
+  const alternateEventId = "event-alternate-authorized";
+  const matchingContext = {
+    id: `portal:ai-engineer:${submittedEventId}`,
+    eventId: submittedEventId,
+    name: "Submitted CFP Event",
+    capabilities: ["profile-self"],
+    submissionIds: [submissionId],
+    participantIds: [participantId],
+    primaryParticipantId: participantId,
+  };
+  const alternateContext = {
+    id: `portal:ai-engineer:${alternateEventId}`,
+    eventId: alternateEventId,
+    name: "Alternate Authorized Event",
+    capabilities: ["profile-self"],
+    submissionIds: [],
+    participantIds: ["participant-alternate"],
+    primaryParticipantId: "participant-alternate",
+  };
+  const viewFor = (context: typeof matchingContext) => ({
+    submissions:
+      context.eventId === submittedEventId
+        ? [
+            {
+              id: submissionId,
+              eventId: submittedEventId,
+              title: "Submitted CFP session",
+              status: "submitted",
+              participantIds: [participantId],
+              updatedAt: "2026-08-08T13:05:00.000Z",
+            },
+          ]
+        : [],
+    profiles: [
+      {
+        id: `profile-${context.eventId}`,
+        eventId: context.eventId,
+        participantId: context.primaryParticipantId,
+        displayName: context.eventId === submittedEventId ? "Ada Speaker" : "Alternate Speaker",
+        biography: "",
+        version: 1,
+        updatedAt: "2026-08-08T13:05:00.000Z",
+      },
+    ],
+    tasks: [],
+    outstandingTaskCount: 0,
+    context,
+    capabilities: context.capabilities,
+  });
+  const selectedEventIds: string[] = [];
+  await page.route("**/api/speaker/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    if (request.headers().cookie?.includes(`${E2E_SESSION_COOKIE}=${session.token}`) !== true) {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "AUTHENTICATION_REQUIRED" } }),
+      });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === "/api/speaker/portal/contexts") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: [alternateContext, matchingContext] }),
+      });
+      return;
+    }
+    const portalPath = url.pathname.match(/^\/api\/speaker\/events\/([^/]+)\/portal$/u);
+    if (request.method() === "GET" && portalPath) {
+      const eventId = decodeURIComponent(portalPath[1] ?? "");
+      selectedEventIds.push(eventId);
+      const context =
+        eventId === submittedEventId
+          ? matchingContext
+          : eventId === alternateEventId
+            ? alternateContext
+            : null;
+      if (!context) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "NOT_FOUND" } }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: viewFor(context) }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  return { selectedEventIds };
+}
 
 test("submitter completes the account-first CFP with two participants", async ({
   page,
   authSession,
 }) => {
+  test.setTimeout(60_000);
   await installCfpApi(page, authSession, {
-    eventId: "evaluator-2026",
+    eventId: "evt_evaluator_2026",
+    eventSlug: "evaluator-2026",
     formId: "evaluator-2026-cfp",
   });
-  await page.goto("/cfp/evaluator-2026");
+  const portalHandoff = await installCfpPortalHandoffApi(
+    page,
+    authSession,
+    "evt_evaluator_2026",
+    "submission-evt_evaluator_2026-e2e",
+  );
+  await page.goto(EVALUATOR_CFP_PATH);
 
   await expect(
     page.getByRole("heading", { level: 1, name: "Welcome to our event!" }),
@@ -30,15 +189,16 @@ test("submitter completes the account-first CFP with two participants", async ({
   const continueButton = page.getByRole("button", { name: "Continue →" });
   await continueButton.focus();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/account$/);
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/account$`));
 
   await page.getByLabel("Your Email Address:").fill("ada@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Ada");
   await page.getByLabel("Last Name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Continue with email →" }).click();
-  await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/submission$/);
+  await page.getByRole("button", { name: "Create account →" }).click();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
 
   await page.getByLabel("Title").fill("Designing calm incident response");
   await page
@@ -47,12 +207,16 @@ test("submitter completes the account-first CFP with two participants", async ({
       "A practical, evidence-led approach to building resilient teams before an incident begins.",
     );
   await selectSearchable(page, "Format", "Breakout Session");
-  await page.getByRole("checkbox", { name: "Leadership" }).check();
+  const tagsSearch = page.getByLabel("Search Tags options");
+  await tagsSearch.fill("Leadership");
+  const leadershipTag = page.getByRole("checkbox", { name: "Leadership", exact: true });
+  await leadershipTag.check();
+  await expect(leadershipTag).toBeChecked();
   await selectSearchable(page, "Track", "Track 2");
   await selectSearchable(page, "Level", "Advanced");
   await selectSearchable(page, "Language", "English");
   await page.getByRole("button", { name: "Next step →" }).click();
-  await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/participants$/);
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/participants$`));
 
   await expect(page.getByLabel("First Name").first()).toHaveValue("Ada");
   await expect(page.getByLabel("Last Name").first()).toHaveValue("Speaker");
@@ -63,10 +227,8 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByLabel("Last Name").nth(1).fill("Cooper");
   await page.getByLabel("Email").nth(1).fill("grace@example.test");
   await page.getByLabel("Biography").nth(1).fill("Engineering leader and incident facilitator.");
-  await Promise.all([
-    page.waitForURL(/\/cfp\/evaluator-2026\/review$/, { timeout: 15_000 }),
-    page.getByRole("button", { name: "Continue to review →" }).click(),
-  ]);
+  await page.getByRole("button", { name: "Continue to review →" }).click();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/review$`));
 
   await expect(
     page.getByRole("heading", { level: 1, name: "Review your submission" }),
@@ -76,7 +238,7 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(page.getByRole("heading", { level: 3, name: /Grace Cooper/ })).toBeVisible();
   await page.getByRole("button", { name: "Submit", exact: true }).click();
 
-  await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/complete$/);
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/complete$`));
   await expect(
     page.getByRole("heading", {
       level: 1,
@@ -87,34 +249,259 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(
     page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
+  const statusDashboard = page.getByRole("button", { name: "View submission status dashboard" });
+  await statusDashboard.click();
+  await expect(page).toHaveURL(/\/portal\/submissions\?event=evt_evaluator_2026$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Event context" })).toHaveValue(
+    "portal:ai-engineer:evt_evaluator_2026",
+  );
+  expect(portalHandoff.selectedEventIds).toEqual(["evt_evaluator_2026"]);
+
+  await page.goto("/portal/submissions?event=event-not-authorized");
+  await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Event context" })).toHaveValue(
+    "portal:ai-engineer:event-alternate-authorized",
+  );
+  expect(portalHandoff.selectedEventIds).toEqual([
+    "evt_evaluator_2026",
+    "event-alternate-authorized",
+  ]);
+  expect(portalHandoff.selectedEventIds).not.toContain("event-not-authorized");
 
   const browserState = await page.evaluate(() => ({
     pointer: window.localStorage.getItem(
-      "open-sessionboard:cfp-submission:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
+      "eventloom:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
     ),
     legacyDraft: window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026"),
+    completionHandoff: window.sessionStorage.getItem(
+      "eventloom:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+    ),
   }));
-  expect(browserState.pointer).toMatch(/^submission[_-]/);
+  expect(browserState.pointer).toBeNull();
+  expect(browserState.completionHandoff).toMatch(/^submission[_-]/);
   expect(browserState.legacyDraft).toBeNull();
+  await page.goto(`${EVALUATOR_CFP_PATH}/complete`);
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Submission received: Designing calm incident response",
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Submit another session" }).click();
-  await expect(page).toHaveURL(/\/cfp\/evaluator-2026$/);
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}$`));
   await expect
     .poll(() =>
       page.evaluate(() =>
         window.localStorage.getItem(
-          "open-sessionboard:cfp-submission:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
+          "eventloom:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+        ),
+      ),
+    )
+    .toBeNull();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.sessionStorage.getItem(
+          "eventloom:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
         ),
       ),
     )
     .toBeNull();
 });
+test("new submitter returns from email verification and continues automatically", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "verification-return",
+    formId: "verification-return-cfp",
+    eventName: "Verification Return Test Event",
+  });
+  const email = "averylongunbrokeneverificationaddress@example.test";
+  let verified = false;
+  let callbackUrl: string | null = null;
+  await page.route("**/api/auth/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "GET" && pathname.endsWith("/get-session")) {
+      if (!verified) {
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "AUTHENTICATION_REQUIRED" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session: { id: "verified-session", userId: "verified-user" },
+          user: {
+            id: "verified-user",
+            email,
+            name: "Verified Speaker",
+            emailVerified: true,
+          },
+        }),
+      });
+      return;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/sign-in/email")) {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "INVALID_EMAIL_OR_PASSWORD" }),
+      });
+      return;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/sign-up/email")) {
+      const body: unknown = request.postDataJSON();
+      callbackUrl =
+        typeof body === "object" &&
+        body !== null &&
+        "callbackURL" in body &&
+        typeof body.callbackURL === "string"
+          ? body.callbackURL
+          : null;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          user: {
+            id: "verified-user",
+            email,
+            name: "Verified Speaker",
+            emailVerified: false,
+          },
+        }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  const accountPath = "/cfp/organizations/evaluator-org/events/verification-return/account";
+  await page.goto(accountPath);
+  await page.getByLabel("Your Email Address:").fill(email);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByLabel("Password:").fill("StrongPass1!");
+  await page.getByLabel("First Name").fill("Verified");
+  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Create account →" }).click();
+
+  await expect(page.getByRole("heading", { level: 1, name: "Check your inbox" })).toBeVisible();
+  await expect(page.getByText(email, { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("After verification, you’ll return here and continue automatically.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator("[data-local-mail-inbox]")).toHaveAttribute(
+    "href",
+    "http://127.0.0.1:8025/",
+  );
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Check the highlighted fields." }),
+  ).toHaveCount(0);
+  expect(callbackUrl).not.toBeNull();
+  const verificationReturn = new URL(callbackUrl ?? "http://invalid.test");
+  expect(verificationReturn.searchParams.get("cfpVerification")).toBe("complete");
+
+  verified = true;
+  await page.goto(verificationReturn.toString());
+  await expect(page).toHaveURL(
+    /\/cfp\/organizations\/evaluator-org\/events\/verification-return\/submission$/,
+  );
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Tell us about your submission" }),
+  ).toBeVisible();
+});
+test("CFP shell reflows without clipping and exposes the current step", async ({
+  page,
+  authSession,
+}, testInfo) => {
+  await installCfpApi(page, authSession, {
+    eventId: "mobile-progress",
+    formId: "mobile-progress-cfp",
+    eventName: "Mobile Progress Test Event",
+  });
+  await page.setViewportSize({ height: 900, width: 900 });
+  await page.goto("/cfp/organizations/evaluator-org/events/mobile-progress");
+
+  const progressNavigations = page.getByRole("navigation", { name: "Submission progress" });
+  const submissionWindow = page.locator('[data-cfp-submission-window="true"]');
+  await expect(progressNavigations).toHaveCount(1);
+  await expect(progressNavigations).toBeVisible();
+  await expect(submissionWindow).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(1);
+  await expect(progressNavigations.getByText("Get started", { exact: true })).toBeVisible();
+  await expect(progressNavigations.getByText("Review", { exact: true })).toBeVisible();
+  await expect(progressNavigations.locator('[aria-current="step"]')).toHaveCount(1);
+  const formWhitespace = await page.locator("form").evaluate((form) => {
+    const parent = form.parentElement;
+    if (parent === null) throw new Error("The CFP form column is unavailable.");
+    const formRect = form.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    return {
+      left: formRect.left - parentRect.left,
+      right: parentRect.right - formRect.right,
+    };
+  });
+  expect(Math.abs(formWhitespace.left - formWhitespace.right)).toBeLessThanOrEqual(1);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+        document.body.scrollWidth <= document.body.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-shell-desktop.png"),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ height: 844, width: 390 });
+  const compactProgress = page.getByRole("navigation", { name: "Submission progress" });
+  await expect(compactProgress).toBeVisible();
+  await expect(compactProgress.getByText("Step 1 of 5", { exact: true })).toBeVisible();
+  const currentCompactStep = compactProgress.locator('[aria-current="step"]');
+  await expect(currentCompactStep).toHaveCount(1);
+  await expect(currentCompactStep).toContainText("Get started");
+  for (const value of await submissionWindow.locator("time").all()) {
+    await expect(value).toHaveCSS("white-space", "nowrap");
+  }
+
+  const fitsViewport = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+      document.body.scrollWidth <= document.body.clientWidth,
+  );
+  expect(fitsViewport).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-shell-mobile.png"),
+    fullPage: true,
+  });
+});
 
 test("required CFP validation announces errors and focuses the first invalid field", async ({
   page,
+  authSession,
 }) => {
-  await page.goto("/cfp/validation-check/account");
-  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await installCfpApi(page, authSession, {
+    eventId: "validation-check",
+    formId: "validation-check-cfp",
+    eventName: "Validation Check Event",
+  });
+  await page.goto("/cfp/organizations/evaluator-org/events/validation-check/account");
+  await page.getByRole("button", { name: "Sign in →" }).click();
 
   const errorSummary = page.getByRole("alert").filter({ hasText: "Check the highlighted fields." });
   await expect(errorSummary).toBeVisible();
@@ -129,15 +516,22 @@ test("CFP draft survives a reload without submitting", async ({ page, authSessio
     formId: "resume-check-cfp",
     eventName: "Resume Draft Test Event",
   });
-  await page.goto("/cfp/resume-check/account");
+  await page.goto("/cfp/organizations/evaluator-org/events/resume-check/account");
+  await expect(page.getByRole("button", { name: "Save as draft" })).toHaveCount(0);
   await page.getByLabel("Your Email Address:").fill("resume@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByLabel("Password:").fill("ResumeDraft!26");
   await page.getByLabel("First Name").fill("Resilient");
+  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Create account →" }).click();
+  await expect(page).toHaveURL(/\/resume-check\/submission$/);
+  await page.getByLabel("Title").fill("A persisted draft title");
   await page.getByRole("button", { name: "Save as draft" }).click();
   await expect(page.getByText("Draft saved", { exact: true })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByLabel("Your Email Address:")).toHaveValue("resume@example.test");
-  await expect(page.getByLabel("First Name")).toHaveValue("Resilient");
+  await expect(page.getByLabel("Title")).toHaveValue("A persisted draft title");
 });
 const CFP_ORGANIZATION_ID = "ai-engineer";
 const CFP_EVENT_ID = "open-sessionboard-conf";
@@ -145,11 +539,18 @@ const CFP_FORM_ID = "main-cfp";
 const CFP_FORM_VERSION = 4;
 const CFP_SUBMISSION_ID = "submission-cfp-e2e";
 const CFP_UPDATED_AT = "2026-08-08T12:00:00.000Z";
+const CFP_PATH = `/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;
+
+const CFP_ORGANIZATION = {
+  id: CFP_ORGANIZATION_ID,
+  slug: CFP_ORGANIZATION_ID,
+  name: "AI Engineer",
+} as const;
 
 const CFP_EVENT = {
   id: CFP_EVENT_ID,
   slug: CFP_EVENT_ID,
-  name: "Open Sessionboard Conference",
+  name: "Eventloom Conference",
   timezone: "America/Los_Angeles",
   opensAt: "2026-08-01T07:00:00.000Z",
   closesAt: "2026-09-15T07:00:00.000Z",
@@ -413,6 +814,7 @@ interface DynamicCfpSubmission {
 interface DynamicCfpHarness {
   requests: Array<import("@playwright/test").Request>;
   publishedResponses: Array<{
+    organization: typeof CFP_ORGANIZATION;
     event: typeof CFP_EVENT;
     form: typeof CFP_FORM;
   }>;
@@ -506,7 +908,7 @@ async function installDynamicCfpApi(
   };
   let draftPatchCount = 0;
 
-  await page.route("http://127.0.0.1:8787/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());
@@ -523,7 +925,27 @@ async function installDynamicCfpApi(
       });
       return;
     }
+    if (request.method() === "GET" && url.pathname === "/api/auth/get-session") {
+      await route.fallback();
+      return;
+    }
     expect(request.headers().cookie).toContain(`${E2E_SESSION_COOKIE}=${session.token}`);
+
+    if (
+      request.method() === "POST" &&
+      (url.pathname === "/api/auth/sign-in/email" || url.pathname === "/api/auth/sign-up/email")
+    ) {
+      await fulfillCfpJson(route, {
+        token: session.token,
+        user: {
+          id: session.userId,
+          email: session.email,
+          name: session.displayName,
+          emailVerified: true,
+        },
+      });
+      return;
+    }
 
     const publicPath = `/api/public/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;
     const apiPath = `/api/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;
@@ -531,7 +953,11 @@ async function installDynamicCfpApi(
       request.method() === "GET" &&
       (url.pathname === publicPath || url.pathname === `${publicPath}/forms/${CFP_FORM_ID}`)
     ) {
-      const response = { event: cloneCfp(CFP_EVENT), form: cloneCfp(CFP_FORM) };
+      const response = {
+        organization: cloneCfp(CFP_ORGANIZATION),
+        event: cloneCfp(CFP_EVENT),
+        form: cloneCfp(CFP_FORM),
+      };
       publishedResponses.push(response);
       await fulfillCfpJson(route, response);
       return;
@@ -708,7 +1134,7 @@ async function installDynamicCfpApi(
 }
 
 function pointerKey(): string {
-  return `open-sessionboard:cfp-submission:v1:${encodeURIComponent(CFP_ORGANIZATION_ID)}:${encodeURIComponent(CFP_EVENT_ID)}:${encodeURIComponent(CFP_FORM_ID)}`;
+  return `eventloom:cfp-submission:v1:${encodeURIComponent(CFP_ORGANIZATION_ID)}:${encodeURIComponent(CFP_EVENT_ID)}:${encodeURIComponent(CFP_FORM_ID)}`;
 }
 
 function cfpMutationBody(request: import("@playwright/test").Request): Record<string, unknown> {
@@ -719,24 +1145,29 @@ function cfpMutationBody(request: import("@playwright/test").Request): Record<st
 test("published dynamic CFP keeps conditional sections, custom answers, and schema references through submission", async ({
   authSession,
   page,
-}) => {
+}, testInfo) => {
   const harness = await installDynamicCfpApi(page, authSession);
-  await page.goto(`/cfp/${CFP_EVENT_ID}`);
+  await page.goto(CFP_PATH);
 
-  await expect(
-    page.getByRole("heading", { level: 1, name: "Open Sessionboard Conference" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Eventloom Conference" })).toBeVisible();
+  const visibleProposalLimit = page
+    .getByText(`Up to ${CFP_FORM.settings.maxSubmissionsPerAccount} proposals per account`, {
+      exact: true,
+    })
+    .filter({ visible: true });
+  await expect(visibleProposalLimit).toHaveCount(1);
   await expect(page.getByText(CFP_FORM.welcomeContent, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Continue →" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/account$`));
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));
 
   await page.getByLabel("Your Email Address:").fill("cfp-e2e@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Ada");
   await page.getByLabel("Last Name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Continue with email →" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/submission$`));
+  await page.getByRole("button", { name: "Create account →" }).click();
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/submission$`));
 
   await expect(page.getByRole("heading", { level: 2, name: "Session proposal" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Workshop details" })).toHaveCount(0);
@@ -756,9 +1187,10 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await page.getByLabel("Workshop audience").fill("Staff engineers and platform teams.");
   await expect(page.getByLabel("Final slides")).toBeVisible();
   await page.getByRole("button", { name: "Next step →" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/participants$`));
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/participants$`));
 
-  await expect(page.getByRole("heading", { level: 2, name: "Participant 1 of 1" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Tell us about you" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Primary speaker" })).toBeVisible();
   await expect(page.getByLabel("Company", { exact: true })).toHaveCount(0);
   const firstParticipantType = page.getByRole("combobox", { name: "Participant type" }).first();
   await firstParticipantType.fill("Company");
@@ -774,16 +1206,16 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   const secondParticipantType = page.getByRole("combobox", { name: "Participant type" }).nth(1);
   await secondParticipantType.fill("Individual");
   await page.getByRole("option", { name: "Individual", exact: true }).click();
-  await page.getByLabel("Role for this participant").nth(1).selectOption({ label: "Co-speaker" });
+  await expect(page.getByText("Co-speaker", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Company", { exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "Continue to review →" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/review$`));
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/review$`));
   await expect(page.getByRole("heading", { level: 3, name: /Ada Speaker/ })).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: /Grace Cooper/ })).toContainText(
     "Co-speaker",
   );
   await page.getByRole("button", { name: "Submit", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/complete$`));
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/complete$`));
   await expect(
     page.getByRole("heading", {
       level: 1,
@@ -794,14 +1226,53 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
     page.getByText(CFP_FORM.settings.confirmationMessage, { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(CFP_FORM.settings.successContent, { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit submission" })).toBeVisible();
+  await expect(page.getByText(/Eventloom Conference received your proposal\./)).toBeVisible();
   await expect(
-    page.getByText(/Open Sessionboard Conference received your proposal\./),
+    page.getByRole("button", { name: "View submission status dashboard" }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "View submission status dashboard" })).toBeVisible();
+  const completedProgress = page
+    .getByRole("navigation", { name: "Submission progress" })
+    .filter({ visible: true });
+  await expect(completedProgress).toBeVisible();
+  await expect(completedProgress.locator('[data-state="complete"]')).toHaveCount(5);
+  await expect(completedProgress.locator('[aria-current="step"]')).toHaveCount(0);
+  await expect(
+    page.getByText(CFP_ORGANIZATION.name, { exact: true }).filter({ visible: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText(CFP_FORM.name, { exact: true }).filter({ visible: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-complete-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ height: 844, width: 390 });
+  await expect(completedProgress).toBeVisible();
+  await expect(completedProgress.getByText("Submission complete", { exact: true })).toBeVisible();
+  await expect(
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]').filter({
+      visible: true,
+    }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+        document.body.scrollWidth <= document.body.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-complete-mobile.png"),
+    fullPage: true,
+  });
 
   expect(harness.publishedResponses.length).toBeGreaterThan(0);
   expect(harness.submission.formVersion).toBe(CFP_FORM_VERSION);
+  expect(harness.publishedResponses[0]?.organization).toEqual(CFP_ORGANIZATION);
   expect(harness.publishedResponses[0]?.form.sections).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ id: "session", title: "Session proposal" }),
@@ -897,13 +1368,14 @@ test("CFP rejects a stale draft version without abandoning the five-step session
   page,
 }) => {
   const harness = await installDynamicCfpApi(page, authSession, { conflictOnDraftPatch: 1 });
-  await page.goto(`/cfp/${CFP_EVENT_ID}/account`);
+  await page.goto(`${CFP_PATH}/account`);
   await page.getByLabel("Your Email Address:").fill("stale-cfp@example.test");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Stale");
   await page.getByLabel("Last Name").fill("Writer");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await page.getByRole("button", { name: "Create account →" }).click();
 
   await expect(page.getByText("The CFP submission has changed.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Your Email Address:")).toHaveValue("stale-cfp@example.test");
@@ -912,7 +1384,7 @@ test("CFP rejects a stale draft version without abandoning the five-step session
   await expect(
     page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }),
   ).toBeChecked();
-  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/account$`));
+  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));
   const conflictedWrite = harness.requests.find(
     (request) =>
       request.method() === "PATCH" &&
@@ -940,9 +1412,10 @@ test("CFP clears a stale saved pointer and starts a fresh account step", async (
     },
     { key, value: CFP_SUBMISSION_ID },
   );
-  await page.goto(`/cfp/${CFP_EVENT_ID}/account`);
-  await expect(page.getByRole("heading", { level: 1, name: "Create account" })).toBeVisible();
+  await page.goto(`${CFP_PATH}/account`);
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
   await expect(page.getByLabel("Your Email Address:")).toHaveValue("");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByLabel("First Name")).toHaveValue("");
   expect(
     await page.evaluate((storageKey) => window.localStorage.getItem(storageKey), key),

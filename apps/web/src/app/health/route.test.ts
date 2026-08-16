@@ -1,15 +1,14 @@
-import { apiErrorSchema, healthResponseSchema } from "@open-sessionboard/contracts";
+import { healthResponseSchema } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import { createWebHealthResponse } from "./route";
 
 const validEnvironment = {
   APP_ENV: "local",
-  NEXT_PUBLIC_APP_URL: "http://localhost:3015",
-  NEXT_PUBLIC_API_URL: "http://localhost:8787",
+  NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3015",
 };
 
 describe("web health endpoint", () => {
-  it("reports a contract-valid response for a configured deployment", async () => {
+  it("reports a contract-valid response without a browser API origin", async () => {
     const response = createWebHealthResponse(validEnvironment);
     const body = healthResponseSchema.parse(await response.json());
 
@@ -19,15 +18,16 @@ describe("web health endpoint", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("fails closed without leaking invalid environment values", async () => {
+  it("ignores an invalid browser API origin", async () => {
+    const invalidApiOrigin = "a-secret-but-invalid-value";
     const response = createWebHealthResponse({
       ...validEnvironment,
-      NEXT_PUBLIC_API_URL: "a-secret-but-invalid-value",
+      NEXT_PUBLIC_API_URL: invalidApiOrigin,
     });
-    const body = apiErrorSchema.parse(await response.json());
+    const body = healthResponseSchema.parse(await response.json());
 
-    expect(response.status).toBe(503);
-    expect(body.error.code).toBe("CONFIGURATION_ERROR");
-    expect(JSON.stringify(body)).not.toContain("a-secret-but-invalid-value");
+    expect(response.status).toBe(200);
+    expect(body.service).toBe("web");
+    expect(JSON.stringify(body)).not.toContain(invalidApiOrigin);
   });
 });

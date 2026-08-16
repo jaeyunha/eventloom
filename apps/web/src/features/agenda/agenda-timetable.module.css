@@ -1,0 +1,406 @@
+.timetable {
+  container-name: agenda-timetable;
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  margin: -1px;
+  white-space: nowrap;
+}
+
+.emptyTimetable {
+  margin: 0 0 0.7rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 0.9rem;
+  background: var(--color-brand-soft);
+  color: var(--color-muted);
+  font-size: 0.76rem;
+}
+
+.desktopTimetable {
+  display: block;
+}
+
+.gridScroller {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 1.25rem;
+  background: var(--color-surface);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--color-text) 5%, transparent),
+    0 18px 44px color-mix(in srgb, var(--color-text) 8%, transparent);
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.gridFrame {
+  --agenda-time-column: 4.75rem;
+  --agenda-header-height: 4.25rem;
+
+  position: relative;
+  min-width: calc(var(--agenda-time-column) + var(--agenda-room-count) * 12.5rem);
+}
+
+.semanticGrid {
+  position: relative;
+}
+
+.gridHeader,
+.slotRow,
+.entryOverlay {
+  display: grid;
+  grid-template-columns:
+    var(--agenda-time-column)
+    repeat(var(--agenda-room-count), minmax(12.5rem, 1fr));
+}
+
+.gridHeader {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  min-height: var(--agenda-header-height);
+  border-bottom: 1px solid var(--color-border-strong);
+  background: color-mix(in srgb, var(--color-surface) 94%, var(--color-brand-soft));
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--color-text) 5%, transparent);
+}
+
+.timeHeader,
+.roomHeader {
+  display: flex;
+  align-items: center;
+  padding: 0.85rem 1rem;
+}
+
+.timeHeader {
+  position: sticky;
+  z-index: 6;
+  left: 0;
+  justify-content: center;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-brand-soft);
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.roomHeader {
+  gap: 0.65rem;
+  border-right: 1px solid var(--color-border);
+}
+
+.roomHeader:last-child {
+  border-right: 0;
+}
+
+.roomHeader svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-primary);
+}
+
+.roomHeader span {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.roomHeader strong {
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roomHeader small {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.slotRows {
+  min-height: var(--agenda-grid-height);
+}
+
+.slotRow {
+  min-height: 36px;
+}
+
+.timeLabel {
+  position: sticky;
+  z-index: 3;
+  left: 0;
+  padding: 0.45rem 0.6rem 0;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-brand-soft);
+  color: var(--color-muted);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: right;
+}
+
+.slotCell {
+  appearance: none;
+  min-width: 0;
+  padding: 0;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-primary) 2.5%, transparent),
+    transparent 28%
+  );
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.slotCell:last-child {
+  border-right: 0;
+}
+
+.slotCell:hover {
+  background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 38%, transparent);
+}
+
+.entryOverlay {
+  position: absolute;
+  z-index: 4;
+  top: var(--agenda-header-height);
+  right: 0;
+  left: 0;
+  height: var(--agenda-grid-height);
+  pointer-events: none;
+}
+
+.roomEntries {
+  position: relative;
+  min-width: 0;
+  border-right: 1px solid transparent;
+}
+
+.entryCard {
+  position: absolute;
+  top: var(--agenda-entry-top);
+  right: 0.35rem;
+  left: 0.35rem;
+  display: grid;
+  gap: 0.18rem;
+  align-content: start;
+  height: max(2.75rem, calc(var(--agenda-entry-height) - 0.3rem));
+  padding: 0.52rem 1.7rem 0.48rem 0.68rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--agenda-entry-accent) 34%, var(--color-border));
+  border-left: 4px solid var(--agenda-entry-accent);
+  border-radius: 0.78rem;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--agenda-entry-accent) 10%, var(--color-surface)),
+    var(--color-surface) 68%
+  );
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--color-text) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 72%, transparent);
+  color: var(--color-text);
+  cursor: grab;
+  pointer-events: auto;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.entryCard:hover {
+  border-color: color-mix(in srgb, var(--agenda-entry-accent) 70%, var(--color-border));
+  box-shadow:
+    0 12px 24px color-mix(in srgb, var(--color-text) 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 78%, transparent);
+  transform: translateY(-1px);
+}
+
+.entryCard:active {
+  cursor: grabbing;
+}
+
+.entryCard:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.entryCard[data-conflict="true"] {
+  border-color: color-mix(in srgb, var(--color-destructive) 54%, var(--color-border));
+  border-left-color: var(--color-destructive);
+}
+
+.entryCard[data-warning="true"]:not([data-conflict="true"]) {
+  border-color: color-mix(in srgb, var(--color-warning) 50%, var(--color-border));
+  border-left-color: var(--color-warning);
+}
+
+.entryTime {
+  color: var(--color-muted);
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.entryCard strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.entryMeta,
+.entryIssue {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 0.66rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entryMeta svg,
+.entryIssue svg {
+  width: 0.78rem;
+  height: 0.78rem;
+  flex: 0 0 auto;
+}
+
+.entryIssue {
+  color: var(--color-destructive);
+  font-weight: 800;
+}
+
+.editGlyph {
+  position: absolute;
+  top: 0.62rem;
+  right: 0.6rem;
+  width: 0.78rem;
+  height: 0.78rem;
+  color: var(--color-muted);
+}
+
+.mobileTimetable {
+  display: none;
+}
+
+.dropHint {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0.7rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+}
+
+.dropHint svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.mobileRoom {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  background: var(--color-surface);
+}
+
+.mobileRoom > header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-brand-soft);
+}
+
+.mobileRoom > header > div {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.mobileRoom > header svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--color-primary);
+}
+
+.mobileEntryList {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.7rem;
+}
+
+.mobileEntryList .entryCard {
+  position: relative;
+  min-height: 5rem;
+  height: auto;
+  inset: auto;
+}
+
+.mobileEmpty {
+  margin: 0;
+  padding: 1rem;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 48rem) {
+  .desktopTimetable {
+    display: none;
+  }
+
+  .mobileTimetable {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .dropHint {
+    display: none;
+  }
+}
+
+@container agenda-timetable (max-width: 36rem) {
+  .desktopTimetable {
+    display: none;
+  }
+
+  .mobileTimetable {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .dropHint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entryCard,
+  .slotCell {
+    transition: none;
+  }
+}

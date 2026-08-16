@@ -9,7 +9,8 @@ import {
 function validBindings(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     APP_ENV: "local",
-    WEB_ORIGIN: "http://localhost:3015",
+    WEB_ORIGIN: "http://127.0.0.1:3015",
+    CALENDAR_UID_DOMAIN: "calendar.localhost.test",
     DB: { prepare: () => undefined, batch: () => undefined },
     AGENDA_COORDINATOR: { idFromName: () => undefined, get: () => undefined },
     PRIVATE_FILES: { get: () => undefined, put: () => undefined },
@@ -59,22 +60,27 @@ describe("Cloudflare binding validation", () => {
 
     expect(inspection).toMatchObject({
       success: true,
-      bindings: { APP_ENV: "local", WEB_ORIGIN: "http://localhost:3015" },
+      bindings: { APP_ENV: "local", WEB_ORIGIN: "http://127.0.0.1:3015" },
     });
   });
 
-  it("requires HTTPS and every stateful binding outside local development", () => {
+  it("requires HTTPS, a valid calendar UID domain, and every stateful binding outside local development", () => {
     const inspection = inspectCloudflareBindings(
       validBindings({
         APP_ENV: "staging",
         WEB_ORIGIN: "http://staging.example.test",
+        CALENDAR_UID_DOMAIN: "https://calendar.example.test",
         PRIVATE_FILES: undefined,
       }),
     );
 
     expect(inspection).toEqual({
       success: false,
-      issues: ["non-local WEB_ORIGIN must use HTTPS", "PRIVATE_FILES must be an R2 binding"],
+      issues: [
+        "non-local WEB_ORIGIN must use HTTPS",
+        "CALENDAR_UID_DOMAIN must be a valid domain name",
+        "PRIVATE_FILES must be an R2 binding",
+      ],
     });
   });
 

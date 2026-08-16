@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create or reuse an Open Sessionboard worktree under ~/wt/open-sessionboard,
+# Create or reuse an Eventloom worktree under ~/wt/open-sessionboard,
 # provision its ignored environment files, and install dependencies.
 
 set -euo pipefail
@@ -12,11 +12,12 @@ Options:
   --env-mode <mode>  local (default), symlink, copy, or none.
   --no-install       Skip `bun install --frozen-lockfile`.
   --refresh-env      Replace existing worktree environment files.
+  --provider <name>  gjc (default) or omo.
   --launcher <name>  cmux (default), auto, or none.
   --no-launch        Create/setup only; alias for `--launcher none`.
   --focus            Focus the newly created cmux workspace.
-  --prompt <text>    Start GJC with this literal task prompt.
-  --prompt-file <p>  Read the GJC task prompt from a file.
+  --prompt <text>    Start the selected agent with this literal task prompt.
+  --prompt-file <p>  Read the selected agent task prompt from a file.
   --help             Show this help.
 
 The default base ref is `main`. Worktrees are created under
@@ -85,6 +86,7 @@ registered_branch_at_path() {
 ENV_MODE=local
 INSTALL=true
 REFRESH_ENV=false
+PROVIDER=gjc
 LAUNCHER=cmux
 FOCUS=false
 PROMPT=''
@@ -104,6 +106,11 @@ while [ $# -gt 0 ]; do
     --refresh-env)
       REFRESH_ENV=true
       shift
+      ;;
+    --provider)
+      [ $# -ge 2 ] || fail '--provider requires gjc or omo'
+      PROVIDER=$2
+      shift 2
       ;;
     --launcher)
       [ $# -ge 2 ] || fail '--launcher requires auto, cmux, or none'
@@ -146,11 +153,19 @@ case "$ENV_MODE" in
   local|symlink|copy|none) ;;
   *) fail "invalid env mode: $ENV_MODE" ;;
 esac
+case "$PROVIDER" in
+  gjc|omo) ;;
+  *) fail "invalid provider: $PROVIDER" ;;
+esac
 case "$LAUNCHER" in
   auto|cmux|none) ;;
   *) fail "invalid launcher: $LAUNCHER" ;;
 esac
+if [ "$INSTALL" = true ] && { [ "$ENV_MODE" = copy ] || [ "$ENV_MODE" = symlink ]; }; then
+  fail "--env-mode $ENV_MODE provisions non-local secret files; use --no-install to prevent dependency lifecycle scripts from accessing them"
+fi
 [ "$PROMPT_SET" = false ] || [ -z "$PROMPT_FILE" ] || \
+
   fail 'use either --prompt or --prompt-file, not both'
 if [ -n "$PROMPT_FILE" ]; then
   [ -f "$PROMPT_FILE" ] || fail "prompt file does not exist: $PROMPT_FILE"
@@ -257,7 +272,6 @@ APP_ENV=local
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer
 API_URL=http://127.0.0.1:8787
@@ -301,15 +315,23 @@ EOF
   )
 }
 
-provision_env_files
-
 if [ "$INSTALL" = true ]; then
+  EXISTING_ENV_FILE=$(find "$WORKTREE_PATH" \
+    \( -type d \( -name .git -o -name node_modules -o -name .next -o -name .wrangler -o -name dist \) -prune \) -o \
+    \( \( -type f -o -type l \) \
+      \( -name .env -o -name '.env.*' -o -name .dev.vars -o -name '.dev.vars.*' \) \
+      ! -name .env.example ! -name '.env.*.example' -print -quit \))
+  if [ -n "$EXISTING_ENV_FILE" ]; then
+    fail 'refusing dependency installation in a worktree that already contains environment files; use --no-install'
+  fi
   command -v bun >/dev/null 2>&1 || fail 'bun is required; use --no-install to skip setup'
   printf 'Installing dependencies in %s\n' "$WORKTREE_PATH"
   (cd "$WORKTREE_PATH" && bun install --frozen-lockfile)
 else
   printf 'Dependency installation skipped.\n'
 fi
+
+provision_env_files
 
 trap - ERR
 
@@ -324,9 +346,23 @@ BRANCH_SLUG=${BRANCH_SLUG%-}
 SESSION_DIGEST=$(printf '%s\0%s' "$GIT_COMMON_DIR" "$WORKTREE_NAME" | \
   git -C "$REPO_ROOT" hash-object --stdin)
 SESSION_DIGEST=${SESSION_DIGEST:0:12}
-GJC_TMUX_SESSION="gjc-${REPO_NAME}-${BRANCH_SLUG}-${SESSION_DIGEST}"
-GJC_MESSAGE="Prompt: $PROMPT"
-GJC_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux $(shell_quote "$GJC_MESSAGE")"
+AGENT_PROMPT_DIR="$GIT_COMMON_DIR/gjc-worktree-prompts"
+AGENT_PROMPT_FILE="$AGENT_PROMPT_DIR/$SESSION_DIGEST.txt"
+mkdir -p "$AGENT_PROMPT_DIR"
+printf 'Prompt: %s\n' "$PROMPT" > "$AGENT_PROMPT_FILE"
+chmod go-rwx "$AGENT_PROMPT_FILE" 2>/dev/null || true
+
+case "$PROVIDER" in
+  gjc)
+    AGENT_LABEL=GJC
+    GJC_TMUX_SESSION="gjc-${REPO_NAME}-${BRANCH_SLUG}-${SESSION_DIGEST}"
+    AGENT_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux \"\$(cat $(shell_quote "$AGENT_PROMPT_FILE"))\""
+    ;;
+  omo)
+    AGENT_LABEL=OMO
+    AGENT_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec omo \"\$(cat $(shell_quote "$AGENT_PROMPT_FILE"))\""
+    ;;
+esac
 
 SELECTED_LAUNCHER=$LAUNCHER
 if [ "$SELECTED_LAUNCHER" = auto ]; then
@@ -338,7 +374,8 @@ if [ "$SELECTED_LAUNCHER" = auto ]; then
 fi
 
 print_manual_command() {
-  printf 'Start GJC manually from the worktree with:\n%s\n' "$GJC_COMMAND"
+  printf 'Start %s manually from the worktree with:\n%s\n' \
+    "$AGENT_LABEL" "$AGENT_COMMAND"
 }
 
 launch_cmux() {
@@ -352,7 +389,7 @@ launch_cmux() {
     new-workspace
     --name "$workspace_name"
     --cwd "$WORKTREE_PATH"
-    --command "$GJC_COMMAND"
+    --command "$AGENT_COMMAND"
     --focus "$FOCUS"
   )
   if ! cmux "${args[@]}"; then
@@ -372,5 +409,8 @@ esac
 printf '\nWorktree ready: %s\n' "$WORKTREE_PATH"
 printf 'Branch: %s\n' "$WORKTREE_NAME"
 printf 'Base: %s\n' "$BASE_REF"
-printf 'GJC tmux session: %s\n' "$GJC_TMUX_SESSION"
+printf 'Agent provider: %s\n' "$AGENT_LABEL"
+if [ "$PROVIDER" = gjc ]; then
+  printf 'GJC tmux session: %s\n' "$GJC_TMUX_SESSION"
+fi
 printf 'Remove it safely with:\n  ./hack/cleanup_worktree.sh %q\n' "$WORKTREE_NAME"

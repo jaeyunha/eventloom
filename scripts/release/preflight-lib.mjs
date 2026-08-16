@@ -4,7 +4,7 @@ const REQUIRED_CONFIGURATION = [
   "APP_ENV",
   "WEB_ORIGIN",
   "NEXT_PUBLIC_APP_URL",
-  "NEXT_PUBLIC_API_URL",
+  "API_UPSTREAM_ORIGIN",
   "API_URL",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
@@ -13,18 +13,18 @@ const REQUIRED_CONFIGURATION = [
   "D1_DATABASE_ID",
   "R2_BUCKET_NAME",
   "QUEUE_NAME",
-  "AIRTABLE_ACCESS_TOKEN",
-  "AIRTABLE_BASE_ID",
   "OPENSEND_API_URL",
   "OPENSEND_API_KEY",
   "AUTH_FROM_EMAIL",
   "SPEAKERS_FROM_EMAIL",
   "CALENDAR_FROM_EMAIL",
+  "CALENDAR_UID_DOMAIN",
+  "AI_PROVIDER",
+  "OPENAI_MODEL",
+  "OPENAI_AGENDA_MODEL",
+  "OPENAI_EVALUATION_MODEL",
+  "OPENAI_REMIX_MODEL",
 ];
-
-const OPTIONAL_PROVIDERS = {
-  accelevents: ["ACCELEVENTS_API_BASE_URL", "ACCELEVENTS_API_KEY"],
-};
 
 const ISOLATED_CONFIGURATION = [
   "BETTER_AUTH_SECRET",
@@ -32,10 +32,7 @@ const ISOLATED_CONFIGURATION = [
   "D1_DATABASE_ID",
   "R2_BUCKET_NAME",
   "QUEUE_NAME",
-  "AIRTABLE_ACCESS_TOKEN",
-  "AIRTABLE_BASE_ID",
   "OPENSEND_API_KEY",
-  "ACCELEVENTS_API_KEY",
 ];
 
 const REQUIRED_CLOUDFLARE_PERMISSIONS = {
@@ -155,6 +152,28 @@ function collectWranglerValues(source, key) {
   const pattern = new RegExp(`^${key}\\s*=\\s*"([^"]+)"$`, "gm");
   return [...source.matchAll(pattern)].map((match) => match[1]);
 }
+
+function collectWorkerNames(source) {
+  const namesByEnvironment = Object.fromEntries(
+    ENVIRONMENTS.map((environment) => [environment, []]),
+  );
+  let environment = "local";
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      environment = /^\[env\.(staging|production)\](?:\s*#.*)?$/.exec(line)?.[1];
+      continue;
+    }
+    if (!environment) continue;
+
+    const match = /^name\s*=\s*"([^"]+)"\s*(?:#.*)?$/.exec(line);
+    if (match) namesByEnvironment[environment].push(match[1]);
+  }
+
+  return namesByEnvironment;
+}
+
 function collapseConsecutiveDuplicates(values) {
   return values.filter((value, index) => index === 0 || value !== values[index - 1]);
 }
@@ -209,13 +228,6 @@ async function requestJson(
   return payload;
 }
 
-function providerState(configuration, keys) {
-  const present = keys.filter((key) => Boolean(configValue(configuration, key)));
-  if (present.length === 0) return "disabled";
-  if (present.length !== keys.length) return "partial";
-  return "configured";
-}
-
 export function parseDotEnv(source) {
   const configuration = {};
   const lines = source.replace(/^\uFEFF/, "").split(/\r?\n/);
@@ -251,9 +263,7 @@ export function parseWranglerInventory(source) {
   const accountIds = collectWranglerValues(source, "account_id");
   const appEnvironments = collectWranglerValues(source, "APP_ENV");
   const webOrigins = collectWranglerValues(source, "WEB_ORIGIN");
-  const workerNames = collectWranglerValues(source, "name").filter((name) =>
-    name.startsWith("open-sessionboard-api-"),
-  );
+  const workerNamesByEnvironment = collectWorkerNames(source);
   const databaseNames = collectWranglerValues(source, "database_name");
   const databaseIds = collectWranglerValues(source, "database_id");
   const bucketNames = collectWranglerValues(source, "bucket_name");
@@ -262,7 +272,6 @@ export function parseWranglerInventory(source) {
   for (const [label, values] of [
     ["APP_ENV", appEnvironments],
     ["WEB_ORIGIN", webOrigins],
-    ["Worker name", workerNames],
     ["D1 database name", databaseNames],
     ["D1 database ID", databaseIds],
     ["R2 bucket name", bucketNames],
@@ -272,8 +281,21 @@ export function parseWranglerInventory(source) {
       fail("INVALID_WRANGLER_CONFIGURATION", `${label} must be declared once per environment`);
     }
   }
-  if (accountIds.length !== 1) {
-    fail("INVALID_WRANGLER_CONFIGURATION", "Wrangler must declare exactly one Cloudflare account");
+  const workerNames = ENVIRONMENTS.map((environment) => {
+    const names = workerNamesByEnvironment[environment];
+    if (names.length !== 1) {
+      fail(
+        "INVALID_WRANGLER_CONFIGURATION",
+        `Worker name must be declared once for ${environment}`,
+      );
+    }
+    return names[0];
+  });
+  if (new Set(workerNames).size !== ENVIRONMENTS.length) {
+    fail("INVALID_WRANGLER_CONFIGURATION", "Worker names must be unique across environments");
+  }
+  if (accountIds.length > 1) {
+    fail("INVALID_WRANGLER_CONFIGURATION", "Wrangler may declare at most one Cloudflare account");
   }
   if (appEnvironments.join(",") !== ENVIRONMENTS.join(",")) {
     fail(
@@ -286,7 +308,7 @@ export function parseWranglerInventory(source) {
     ENVIRONMENTS.map((environment, index) => [
       environment,
       {
-        accountId: accountIds[0],
+        accountId: accountIds[0] ?? "",
         appEnvironment: appEnvironments[index],
         webOrigin: webOrigins[index],
         workerName: workerNames[index],
@@ -302,20 +324,12 @@ export function parseWranglerInventory(source) {
 export function validateReleaseConfiguration({
   configurations,
   targetEnvironment,
-  requiredProviders = [],
   wranglerInventory,
 }) {
   if (!ENVIRONMENTS.includes(targetEnvironment)) {
     fail("INVALID_ARGUMENT", "Target environment must be local, staging, or production");
   }
 
-  for (const provider of requiredProviders) {
-    if (!Object.hasOwn(OPTIONAL_PROVIDERS, provider)) {
-      fail("INVALID_ARGUMENT", "Unknown required provider");
-    }
-  }
-
-  const providerStates = {};
   for (const environment of ENVIRONMENTS) {
     const configuration = configurations[environment];
     if (!configuration)
@@ -335,7 +349,7 @@ export function validateReleaseConfiguration({
     for (const key of [
       "WEB_ORIGIN",
       "NEXT_PUBLIC_APP_URL",
-      "NEXT_PUBLIC_API_URL",
+      "API_UPSTREAM_ORIGIN",
       "API_URL",
       "OPENSEND_API_URL",
     ]) {
@@ -346,34 +360,69 @@ export function validateReleaseConfiguration({
         fail("INVALID_CONFIGURATION", `${environment} has an invalid ${key}`);
       }
     }
+    const aiProvider = assertPresent(configuration, "AI_PROVIDER", environment).toLowerCase();
+    if (aiProvider !== "disabled" && aiProvider !== "openai") {
+      fail("INVALID_CONFIGURATION", `${environment} AI_PROVIDER must be disabled or openai`);
+    }
+    if (aiProvider === "openai") {
+      assertPresent(configuration, "OPENAI_API_KEY", environment);
+    }
 
-    providerStates[environment] = {};
-    for (const [provider, keys] of Object.entries(OPTIONAL_PROVIDERS)) {
-      const state = providerState(configuration, keys);
-      providerStates[environment][provider] = state;
-      if (state === "partial") {
-        fail(
-          "PARTIAL_PROVIDER_CONFIGURATION",
-          `${environment} has partial ${provider} configuration`,
-        );
-      }
-      if (requiredProviders.includes(provider) && state !== "configured") {
-        fail("MISSING_PROVIDER_CONFIGURATION", `${environment} requires ${provider} configuration`);
-      }
+    const calendarUidDomain = assertPresent(configuration, "CALENDAR_UID_DOMAIN", environment);
+    const domainLabel = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+    if (
+      calendarUidDomain.length > 253 ||
+      calendarUidDomain.endsWith(".") ||
+      !calendarUidDomain.includes(".") ||
+      !calendarUidDomain.split(".").every((label) => domainLabel.test(label))
+    ) {
+      fail("INVALID_CONFIGURATION", `${environment} has an invalid CALENDAR_UID_DOMAIN`);
     }
 
     const wrangler = wranglerInventory?.[environment];
     if (!wrangler) fail("INVALID_WRANGLER_CONFIGURATION", `Wrangler is missing ${environment}`);
     for (const [configurationKey, wranglerKey] of [
-      ["CLOUDFLARE_ACCOUNT_ID", "accountId"],
-      ["WEB_ORIGIN", "webOrigin"],
-      ["D1_DATABASE_ID", "databaseId"],
       ["R2_BUCKET_NAME", "bucketName"],
       ["QUEUE_NAME", "queueName"],
     ]) {
       if (configValue(configuration, configurationKey) !== wrangler[wranglerKey]) {
         fail("WRANGLER_ENV_MISMATCH", `${environment} ${configurationKey} does not match Wrangler`);
       }
+    }
+    if (
+      wrangler.accountId &&
+      wrangler.accountId !== "00000000-0000-0000-0000-000000000000" &&
+      configValue(configuration, "CLOUDFLARE_ACCOUNT_ID") !== wrangler.accountId
+    ) {
+      fail("WRANGLER_ENV_MISMATCH", `${environment} CLOUDFLARE_ACCOUNT_ID does not match Wrangler`);
+    }
+    if (
+      !wrangler.webOrigin.endsWith(".example.invalid") &&
+      configValue(configuration, "WEB_ORIGIN") !== wrangler.webOrigin
+    ) {
+      fail("WRANGLER_ENV_MISMATCH", `${environment} WEB_ORIGIN does not match Wrangler`);
+    }
+    if (
+      !/^00000000-0000-0000-0000-00000000000\d$/.test(wrangler.databaseId) &&
+      configValue(configuration, "D1_DATABASE_ID") !== wrangler.databaseId
+    ) {
+      fail("WRANGLER_ENV_MISMATCH", `${environment} D1_DATABASE_ID does not match Wrangler`);
+    }
+    const webOrigin = configValue(configuration, "WEB_ORIGIN");
+    const appOrigin = configValue(configuration, "NEXT_PUBLIC_APP_URL");
+    const apiOrigin = configValue(configuration, "API_URL");
+    const upstreamOrigin = configValue(configuration, "API_UPSTREAM_ORIGIN");
+    const authOrigin = configValue(configuration, "BETTER_AUTH_URL");
+    if (
+      webOrigin !== appOrigin ||
+      apiOrigin !== upstreamOrigin ||
+      apiOrigin !== authOrigin ||
+      webOrigin === apiOrigin
+    ) {
+      fail(
+        "ORIGIN_CONTRACT_MISMATCH",
+        `${environment} web, API, proxy, and auth origins must form one consistent contract`,
+      );
     }
 
     for (const [key, expected] of [
@@ -399,7 +448,7 @@ export function validateReleaseConfiguration({
     }
   }
 
-  for (const key of ["WEB_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_API_URL", "API_URL"]) {
+  for (const key of ["WEB_ORIGIN", "NEXT_PUBLIC_APP_URL", "API_UPSTREAM_ORIGIN", "API_URL"]) {
     const values = ENVIRONMENTS.map((environment) => configValue(configurations[environment], key));
     if (new Set(values).size !== ENVIRONMENTS.length) {
       fail("INVALID_ISOLATION", `${key} must be unique across environments`);
@@ -413,7 +462,7 @@ export function validateReleaseConfiguration({
     fail("UNPROVISIONED_RESOURCE", `${targetEnvironment} D1 database is still a placeholder`);
   }
 
-  return { providerStates };
+  return {};
 }
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -875,16 +924,13 @@ export async function verifyForgePrivacy({ configuration, fetchImplementation = 
     fetchImplementation,
     `${baseUrl}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
     token,
-    "Forge repository privacy",
+    "Forge repository visibility",
     "token",
   );
-  if (payload?.private !== true) {
-    fail("FORGE_NOT_PRIVATE", "Forge repository is not private; release must stop");
-  }
-  if (payload?.full_name && payload.full_name !== repository) {
+  if (payload?.full_name !== repository) {
     fail("FORGE_REPOSITORY_MISMATCH", "Forge returned a different repository identity");
   }
-  return { private: true };
+  return { private: payload?.private === true };
 }
 
 export { ENVIRONMENTS, ORGANIZATION_ID_MIGRATION };

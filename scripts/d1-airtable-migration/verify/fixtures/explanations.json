@@ -1,0 +1,8 @@
+[
+  {
+    "domain": "events",
+    "recordId": "evt-1",
+    "reason": "Approved title normalization during migration",
+    "ticket": "MIG-42"
+  }
+]

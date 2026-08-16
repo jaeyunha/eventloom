@@ -2,22 +2,40 @@
 .env
 .env.*
 !.env.example
+!.env.cloudflare.example
 
 # Dependencies and builds
 node_modules/
 .next/
+.next-*/
 .open-next/
 dist/
 build/
 coverage/
 .turbo/
 *.tsbuildinfo
+next-env.d.ts
 Kill-My-SaaS-Competition-Brief/
 
 # Cloudflare and workflow runtime
 .wrangler/
 .dev.vars
 .gjc/
+.omo/
+apps/api/wrangler.generated.toml
+apps/web/wrangler.generated.jsonc
+.cloudflare-secret-fingerprints-*.json
+.agents/
+.claude/
+skills-lock.json
+
+# Public-release exclusions
+.env.release-*
+*.session.html
+gjc-session-*.html
+evidence/*
+!evidence/README.md
+docs/plans/
 
 # Tests and browser artifacts
 playwright-report/
@@ -30,6 +48,8 @@ blob-report/
 .idea/
 .vscode/
 *.swp
+*.orig
+*.rej
 
 # Logs
 *.log

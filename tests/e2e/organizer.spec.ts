@@ -1,8 +1,9 @@
-import type { Page, Request, Route } from "@playwright/test";
+import type { Locator, Page, Request, Route } from "@playwright/test";
 import type {
   OrganizerEventCreateInput,
   OrganizerEventRecord,
-  OrganizerOverviewData,
+  OrganizerOverviewActivityData,
+  OrganizerOverviewCoreData,
 } from "../../apps/web/src/features/admin/organizer-overview";
 import type { AgendaEntry, AgendaWorkspaceData } from "../../apps/web/src/features/agenda/types";
 import type {
@@ -16,13 +17,11 @@ import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixture
 
 test.use({ authRole: "organizer" });
 
-const API_ORIGIN = "http://127.0.0.1:8787";
-const ORGANIZATION_ID = "ai-engineer";
-const ORGANIZER_EMAIL = "jaeyunha0317@gmail.com";
-const ORGANIZER_PASSWORD = "CalmSystems!26";
+const ORGANIZATION_ID = "local-organization";
 const PRIMARY_EVENT_ID = "open-sessionboard-conf";
 const SECONDARY_EVENT_ID = "devflow-conf-2027";
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
+const DISTINCT_PRIMARY_EVENT_SLUG = "test-summit-local";
 
 const corsHeaders = {
   "access-control-allow-credentials": "true",
@@ -34,11 +33,12 @@ const corsHeaders = {
 interface OrganizerApiHarness {
   readonly requests: Request[];
   readonly createdInputs: OrganizerEventCreateInput[];
-  readonly verifiedLogins: string[];
 }
 
 interface InstallOrganizerApiOptions {
   readonly includeSecondaryEvent?: boolean;
+  readonly primaryEndsAt?: string;
+  readonly primaryEventSlug?: string;
 }
 
 function eventRecord(input: {
@@ -60,7 +60,7 @@ function eventRecord(input: {
     timeZone,
     startsAt: input.startsAt,
     endsAt: input.endsAt,
-    venue: "Sessionboard Hall",
+    venue: "Eventloom Hall",
     cfpSettings: {
       enabled: true,
       opensAt: "2026-06-01T16:00:00.000Z",
@@ -69,7 +69,7 @@ function eventRecord(input: {
     defaultCalendarSettings: {
       durationMinutes: 45,
       timeZone,
-      location: "Sessionboard Hall",
+      location: "Eventloom Hall",
     },
     version: 1,
     createdAt: SEEDED_AT,
@@ -174,6 +174,8 @@ function agendaFor(event: OrganizerEventRecord): AgendaWorkspaceData {
         durationMinutes: 60,
         speakerNames: ["Avery Kim"],
         capacityRequired: 80,
+        trackIds: [...entry.trackIds],
+        trackNames: [...entry.trackNames],
       },
     ],
     revisions: [revision],
@@ -245,15 +247,11 @@ function settingsFor(event: OrganizerEventRecord): EventSettingsData {
   };
 }
 
-function overviewFor(events: readonly OrganizerEventRecord[]): OrganizerOverviewData {
+function overviewCoreFor(events: readonly OrganizerEventRecord[]): OrganizerOverviewCoreData {
   return {
     organizationId: ORGANIZATION_ID,
     metrics: {
       eventCount: events.length,
-      submissionCount: events.length,
-      pendingReviewCount: 1,
-      outstandingSpeakerTaskCount: 2,
-      publishedSessionCount: events.length,
     },
     events: events.map((event) => ({
       id: event.id,
@@ -263,6 +261,20 @@ function overviewFor(events: readonly OrganizerEventRecord[]): OrganizerOverview
       startsAt: event.startsAt,
       endsAt: event.endsAt,
     })),
+  };
+}
+
+function overviewActivityFor(
+  events: readonly OrganizerEventRecord[],
+): OrganizerOverviewActivityData {
+  return {
+    organizationId: ORGANIZATION_ID,
+    metrics: {
+      submissionCount: events.length,
+      pendingReviewCount: 1,
+      outstandingSpeakerTaskCount: 2,
+      publishedSessionCount: events.length,
+    },
     actionItems: [
       {
         id: `agenda:${PRIMARY_EVENT_ID}`,
@@ -313,10 +325,10 @@ async function installOrganizerApi(
 ): Promise<OrganizerApiHarness> {
   const primaryEvent = eventRecord({
     id: PRIMARY_EVENT_ID,
-    slug: PRIMARY_EVENT_ID,
-    name: "Open Sessionboard Conference",
+    slug: options.primaryEventSlug ?? PRIMARY_EVENT_ID,
+    name: "Eventloom Conference",
     startsAt: "2026-09-18T16:00:00.000Z",
-    endsAt: "2026-09-19T23:00:00.000Z",
+    endsAt: options.primaryEndsAt ?? "2026-09-19T23:00:00.000Z",
     createdBy: session.userId,
   });
   const secondaryEvent = eventRecord({
@@ -333,9 +345,8 @@ async function installOrganizerApi(
   ];
   const requests: Request[] = [];
   const createdInputs: OrganizerEventCreateInput[] = [];
-  const verifiedLogins: string[] = [];
 
-  await page.route(`${API_ORIGIN}/**`, async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());
@@ -345,24 +356,17 @@ async function installOrganizerApi(
       return;
     }
 
-    if (request.method() === "POST" && url.pathname === "/api/auth/sign-in/email") {
-      const body = request.postDataJSON() as { email?: unknown; password?: unknown };
-      expect(Object.keys(body).sort()).toEqual(["email", "password"]);
-      expect(body).toEqual({ email: ORGANIZER_EMAIL, password: ORGANIZER_PASSWORD });
-      verifiedLogins.push(ORGANIZER_EMAIL);
-      await fulfillJson(route, {
-        session: { id: "verified-organizer-session", email: ORGANIZER_EMAIL, emailVerified: true },
-        user: { id: session.userId, email: ORGANIZER_EMAIL, emailVerified: true },
-      });
-      return;
-    }
-
     if (request.method() === "GET" && url.pathname === "/api/auth/get-session") {
-      await fulfillJson(route, {
-        session: { id: "verified-organizer-session" },
-        user: { id: session.userId },
-        memberships: [{ organizationId: ORGANIZATION_ID, role: "owner" }],
-        speakerGrants: [],
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: corsHeaders,
+        body: JSON.stringify({
+          session: { id: "verified-organizer-session", userId: session.userId },
+          user: { id: session.userId, email: session.email, name: session.displayName },
+          memberships: [{ organizationId: ORGANIZATION_ID, role: "owner" }],
+          speakerGrants: [],
+        }),
       });
       return;
     }
@@ -370,8 +374,27 @@ async function installOrganizerApi(
     expectAuthenticated(request, session);
 
     const expectedPrefix = `/api/admin/organizations/${ORGANIZATION_ID}`;
-    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/overview`) {
-      await fulfillJson(route, overviewFor(events));
+    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/members/organizations`) {
+      await fulfillJson(route, [{ organizationId: ORGANIZATION_ID, name: "Eventloom organizers" }]);
+      return;
+    }
+    if (
+      request.method() === "GET" &&
+      url.pathname === "/api/admin/evaluations/reviewer/workspace"
+    ) {
+      await fulfillJson(route, { assignments: [] });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === "/api/speaker/portal/contexts") {
+      await fulfillJson(route, []);
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/overview/core`) {
+      await fulfillJson(route, overviewCoreFor(events));
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/overview/activity`) {
+      await fulfillJson(route, overviewActivityFor(events));
       return;
     }
 
@@ -487,6 +510,36 @@ async function installOrganizerApi(
         await fulfillJson(route, settings.audit);
         return;
       }
+      if (request.method() === "GET" && suffix === "integrations") {
+        await fulfillJson(route, {
+          event: {
+            id: event.id,
+            name: event.name,
+            timeZone: event.timeZone,
+            publishedAgendaRevisionId: "agenda-revision-e2e",
+          },
+          delivery: {
+            openSend: {
+              state: "connected",
+              credentialLastFour: "2468",
+              senderChecks: [],
+              deliveredLast24Hours: 12,
+              failedLast24Hours: 0,
+              lastDeliveryAt: SEEDED_AT,
+            },
+            calendar: {
+              state: "connected",
+              sentLast24Hours: 8,
+              failedLast24Hours: 0,
+              lastInvitationAt: SEEDED_AT,
+              lastFailure: null,
+            },
+          },
+          apiKeys: [],
+          webhooks: [],
+        });
+        return;
+      }
       await fulfillError(route, 404, "E2E_ROUTE_NOT_FOUND", `No organizer route for ${suffix}.`);
       return;
     }
@@ -504,7 +557,19 @@ async function installOrganizerApi(
     await route.continue();
   });
 
-  return { requests, createdInputs, verifiedLogins };
+  return { requests, createdInputs };
+}
+
+function organizationUrl(): string {
+  return `/admin/organizations/${ORGANIZATION_ID}`;
+}
+
+async function clickLinkAndWaitForUrl(page: Page, link: Locator, targetUrl: string): Promise<void> {
+  await Promise.all([page.waitForURL(targetUrl), link.click()]);
+}
+
+function organizationEventsUrl(): string {
+  return `${organizationUrl()}/events`;
 }
 
 function agendaUrl(eventId: string): string {
@@ -516,49 +581,209 @@ function settingsUrl(eventId: string): string {
 }
 
 async function expectAgendaWorkspace(page: Page): Promise<void> {
-  await expect(page.getByRole("heading", { level: 1, name: "Agenda workspace" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Draft schedule" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Build the agenda" })).toBeVisible();
+  await expect(page.getByLabel("Agenda release center")).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Schedule view" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview and validate" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Publish immutable revision" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish agenda" })).toBeVisible();
   await expect(
     page.getByRole("heading", { level: 1, name: "Agenda workspace unavailable" }),
   ).toHaveCount(0);
   await expect(page.getByText("The agenda could not be loaded.", { exact: true })).toHaveCount(0);
 }
 
-test("verified organizer login opens the organization overview", async ({ authSession, page }) => {
+test("verified organizer login opens the organization overview through the shared shell", async ({
+  authSession,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   expect(authSession.role).toBe("organizer");
-  expect(authSession.email).toBe(ORGANIZER_EMAIL);
   const api = await installOrganizerApi(page, authSession);
+  await page.addInitScript(
+    (organizationId) =>
+      window.localStorage.setItem("eventloom.organizer-organization", organizationId),
+    ORGANIZATION_ID,
+  );
 
   await page.goto("/login");
+  await expect(page).toHaveURL("/work");
   await expect(
-    page.getByRole("heading", { level: 1, name: "Welcome back to the program desk." }),
+    page.getByRole("heading", { level: 1, name: "Where do you want to work?" }),
   ).toBeVisible();
-  await page.getByLabel("Email address").fill(ORGANIZER_EMAIL);
-  await page.getByLabel("Password").fill(ORGANIZER_PASSWORD);
-  await page.getByRole("button", { name: "Sign in to workspace" }).click();
+  const organizerWorkspace = page.locator('[data-workspace="organizer"]');
+  await expect(organizerWorkspace).toBeVisible();
+  const continueToOrganization = organizerWorkspace.getByRole("link", {
+    name: "Continue with Eventloom organizers",
+  });
+  await expect(continueToOrganization).toHaveAttribute("href", organizationEventsUrl());
+  await clickLinkAndWaitForUrl(page, continueToOrganization, organizationEventsUrl());
+  await expect(page.getByRole("heading", { level: 1, name: "Event management" })).toBeVisible();
 
-  await expect(page).toHaveURL(/\/admin$/);
+  const overviewLink = page.getByRole("link", { name: "Eventloom organizer overview" });
+  await expect(overviewLink).toHaveAttribute("href", organizationUrl());
+  await clickLinkAndWaitForUrl(page, overviewLink, organizationUrl());
   await expect(
     page.getByRole("heading", { level: 1, name: "Organization overview" }),
   ).toBeVisible();
-  await expect(page.getByText("ai-engineer", { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Signed in organizer" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Events" })).toBeVisible();
   await expect(
-    page.getByText("Open Sessionboard Conference", { exact: true }).first(),
+    page.locator("#admin-content").getByText(ORGANIZATION_ID, { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
-  expect(api.verifiedLogins).toEqual([ORGANIZER_EMAIL]);
-  expect(
-    api.requests.some(
-      (request) =>
-        request.method() === "GET" &&
-        new URL(request.url()).pathname === `/api/admin/organizations/${ORGANIZATION_ID}/overview`,
-    ),
-  ).toBe(true);
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Events" })).toBeVisible();
+
+  await page.keyboard.press("Control+k");
+  const commandPalette = page.getByRole("dialog", { name: "Search events and pages" });
+  await expect(commandPalette).toBeVisible();
+  const commandSearch = commandPalette.getByRole("combobox", { name: "Search events and pages" });
+  await expect(commandSearch).toBeFocused();
+  await commandSearch.fill("nothing matches");
+  await expect(commandPalette.getByText("No matching events or pages.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(commandPalette).toBeHidden();
+  await expect(page.getByRole("button", { name: "Search or jump to" })).toBeFocused();
+
+  const agendaDestination = agendaUrl(PRIMARY_EVENT_ID);
+  const agendaLink = page.getByRole("link", {
+    name: "Open agenda for Eventloom Conference",
+    exact: true,
+  });
+  await expect(agendaLink).toHaveAttribute("href", agendaDestination);
+  await agendaLink.click();
+  await expect(page).toHaveURL(agendaDestination);
+  await expectAgendaWorkspace(page);
+
+  const overviewRequests = api.requests
+    .filter((request) => request.method() === "GET")
+    .map((request) => new URL(request.url()).pathname);
+  expect(overviewRequests).toEqual(
+    expect.arrayContaining([
+      `/api/admin/organizations/${ORGANIZATION_ID}/overview/core`,
+      `/api/admin/organizations/${ORGANIZATION_ID}/overview/activity`,
+    ]),
+  );
+});
+
+test("keeps organizer reads bounded when revisiting through links and browser history", async ({
+  authSession,
+  page,
+}) => {
+  const api = await installOrganizerApi(page, authSession);
+
+  await page.goto(organizationUrl());
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Organization overview" }),
+  ).toBeVisible();
+
+  const organizationNavigation = page.getByRole("navigation", {
+    name: "Organization organizer navigation",
+  });
+  const membersLink = organizationNavigation.getByRole("link", { name: "Members", exact: true });
+  const membersPath = `${organizationUrl()}/members`;
+  await expect(membersLink).toHaveAttribute("href", membersPath);
+  await clickLinkAndWaitForUrl(page, membersLink, membersPath);
+
+  await Promise.all([
+    page.waitForURL(organizationUrl()),
+    page.evaluate(() => window.history.back()),
+  ]);
+  await expect(page).toHaveURL(organizationUrl());
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Organization overview" }),
+  ).toBeVisible();
+
+  await clickLinkAndWaitForUrl(page, membersLink, membersPath);
+
+  const overviewLink = organizationNavigation.getByRole("link", { name: "Overview", exact: true });
+  await overviewLink.click();
+  await expect(page).toHaveURL(organizationUrl());
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Organization overview" }),
+  ).toBeVisible();
+
+  const overviewReads = api.requests
+    .filter((request) => request.method() === "GET")
+    .map((request) => new URL(request.url()).pathname)
+    .filter((pathname) =>
+      pathname.includes(`/api/admin/organizations/${ORGANIZATION_ID}/overview/`),
+    );
+  const corePath = `/api/admin/organizations/${ORGANIZATION_ID}/overview/core`;
+  const activityPath = `/api/admin/organizations/${ORGANIZATION_ID}/overview/activity`;
+  const coreReads = overviewReads.filter((pathname) => pathname === corePath).length;
+  const activityReads = overviewReads.filter((pathname) => pathname === activityPath).length;
+
+  expect(new Set(overviewReads)).toEqual(new Set([corePath, activityPath]));
+  expect(coreReads).toBeGreaterThan(0);
+  expect(coreReads).toBeLessThanOrEqual(3);
+  expect(activityReads).toBe(coreReads);
+});
+
+test("organization overview reflows without document overflow", async ({ authSession, page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installOrganizerApi(page, authSession);
+  await page.goto(organizationUrl());
+
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Organization overview" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Events" })
+      .getByRole("heading", { level: 2, name: "Eventloom Conference" }),
+  ).toBeVisible();
+  const mobileNavigation = page.getByRole("navigation", { name: "Organizer mobile navigation" });
+  await expect(mobileNavigation).toBeVisible();
+  await expect(mobileNavigation.getByRole("link", { name: "Overview", exact: true })).toBeVisible();
+  await mobileNavigation.getByRole("button", { name: "More navigation destinations" }).click();
+  const additionalNavigation = page.getByRole("dialog", { name: "More navigation" });
+  await expect(additionalNavigation).toBeVisible();
+  await expect(
+    additionalNavigation.getByRole("link", { name: "Settings", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(additionalNavigation).toBeHidden();
+  const mobileOverflow = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("body *")]
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        let ancestor: HTMLElement | null = element;
+        let hasFixedAncestor = false;
+        while (ancestor && !hasFixedAncestor) {
+          hasFixedAncestor = getComputedStyle(ancestor).position === "fixed";
+          ancestor = ancestor.parentElement;
+        }
+        return {
+          tag: element.tagName,
+          className: element.className,
+          left: rect.left,
+          right: rect.right,
+          visible:
+            !hasFixedAncestor &&
+            element.getClientRects().length > 0 &&
+            getComputedStyle(element).visibility !== "hidden" &&
+            !element.classList.contains("sr-only"),
+        };
+      })
+      .filter(({ left, right, visible }) => visible && (left < -1 || right > window.innerWidth + 1))
+      .slice(0, 10),
+  );
+  expect(mobileOverflow).toEqual([]);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    )
+    .toBe(true);
+
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    )
+    .toBe(true);
 });
 
 test("dedicated Events page creates an event with canonical timezone and dates", async ({
@@ -566,22 +791,33 @@ test("dedicated Events page creates an event with canonical timezone and dates",
   page,
 }) => {
   const api = await installOrganizerApi(page, authSession);
+  await page.clock.install({ time: new Date("2026-08-15T12:00:00.000Z") });
 
-  await page.goto("/admin/events");
+  await page.goto(organizationEventsUrl());
   await expect(page.getByRole("heading", { level: 1, name: "Event management" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Events" })).toBeVisible();
   await page.getByRole("button", { name: "Create event", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 2, name: "Create an event" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Create event" })).toBeVisible();
 
-  await page.getByLabel("Event name").fill("DevFlow Conf 2027");
-  await page.getByLabel("URL slug").fill(SECONDARY_EVENT_ID);
-  await page.getByLabel("Event time zone").fill("America/Los_Angeles");
-  await page.getByLabel("Starts").fill("2027-03-18T09:00");
-  await page.getByLabel("Ends").fill("2027-03-19T16:30");
-  await page.getByLabel("Venue").fill("DevFlow Studio");
+  await page.getByRole("textbox", { name: /^Event name\b/u }).fill("DevFlow Conf 2027");
+  await page.getByRole("textbox", { name: /^Public URL slug\b/u }).fill(SECONDARY_EVENT_ID);
+  await page.getByRole("combobox", { name: /^Event time zone\b/u }).fill("America/Los_Angeles");
+  const eventSchedule = page.getByRole("region", { name: "When does this event happen?" });
+  for (let month = 0; month < 7; month += 1) {
+    await eventSchedule.getByRole("button", { name: "Next month" }).click();
+  }
+  await expect(eventSchedule.getByText("March 2027", { exact: true })).toBeVisible();
+  await eventSchedule.getByRole("button", { name: /Starts Choose date/u }).click();
+  await eventSchedule.getByRole("button", { name: "Thu, Mar 18, 2027" }).click();
+  await eventSchedule.getByRole("button", { name: /Ends Mar 18, 2027/u }).click();
+  await eventSchedule.getByRole("button", { name: "Fri, Mar 19, 2027" }).click();
+  await page.getByLabel("Start time").fill("09:00");
+  await page.getByLabel("End time").fill("16:30");
+  await page.getByRole("textbox", { name: /^Event location\b/u }).fill("DevFlow Studio");
   await page.getByRole("button", { name: "Create event", exact: true }).click();
 
   await expect(page.getByText("Event created.", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "List", exact: true }).click();
   const row = page.getByRole("row").filter({ hasText: "DevFlow Conf 2027" });
   await expect(row).toBeVisible();
   await expect(row).toContainText(`/${SECONDARY_EVENT_ID}`);
@@ -605,41 +841,124 @@ test("canonical Settings navigation stays organization and event qualified", asy
   authSession,
   page,
 }) => {
-  const api = await installOrganizerApi(page, authSession);
+  const api = await installOrganizerApi(page, authSession, {
+    primaryEventSlug: DISTINCT_PRIMARY_EVENT_SLUG,
+  });
 
-  await page.goto("/admin/events");
-  await page.getByRole("link", { name: "Open Sessionboard Conference", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`));
-  await expect(page.getByRole("heading", { level: 1, name: "Event settings" })).toBeVisible();
+  await page.goto(organizationEventsUrl());
+  const eventSettingsLink = page
+    .getByRole("link", { name: "Eventloom Conference", exact: true })
+    .first();
+  const eventSettingsPath = settingsUrl(PRIMARY_EVENT_ID);
+  await expect(eventSettingsLink).toHaveAttribute("href", eventSettingsPath);
+  await clickLinkAndWaitForUrl(page, eventSettingsLink, eventSettingsPath);
+  await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(
-    page.getByText(`Organization ${ORGANIZATION_ID} · Event ${PRIMARY_EVENT_ID}`, { exact: true }),
+    page.getByText(`Organization ${ORGANIZATION_ID} · Public slug ${DISTINCT_PRIMARY_EVENT_SLUG}`, {
+      exact: true,
+    }),
   ).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Event settings sections" })).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Sessions and statuses", exact: true }),
-  ).toHaveAttribute("href", "#session-settings");
-
-  const organizerSidebar = page.locator('aside[aria-label="Organizer workspace"]');
-  await expect(organizerSidebar.getByRole("link", { name: "Agenda", exact: true })).toHaveAttribute(
+  const visibleSettingsSectionLink = async (name: RegExp) => {
+    const desktopNavigation = page.getByRole("complementary", {
+      name: "Event settings sections",
+    });
+    if (!(await desktopNavigation.isVisible())) {
+      const trigger = page.getByRole("button", { name: "Choose event settings section" });
+      await expect(trigger).toBeVisible();
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+    }
+    return page.getByRole("link", { name });
+  };
+  const initialWorkflowSettingsLink = await visibleSettingsSectionLink(/Session workflow/u);
+  await expect(initialWorkflowSettingsLink).toHaveAttribute(
     "href",
-    agendaUrl(PRIMARY_EVENT_ID),
+    `${settingsUrl(PRIMARY_EVENT_ID)}/workflow`,
   );
-  await organizerSidebar.getByRole("link", { name: "Agenda", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${agendaUrl(PRIMARY_EVENT_ID)}$`));
+  for (const [name, section] of [
+    [/Session workflow/u, "workflow"],
+    [/Rooms and venues/u, "rooms"],
+    [/Session classification/u, "classification"],
+    [/Change history/u, "history"],
+  ] as const) {
+    const link = await visibleSettingsSectionLink(name);
+    const href = await link.getAttribute("href");
+    expect(href).toBe(`${settingsUrl(PRIMARY_EVENT_ID)}/${section}`);
+    expect(href).not.toContain(DISTINCT_PRIMARY_EVENT_SLUG);
+  }
+
+  const programNavigation = page.getByRole("navigation", { name: "Program organizer navigation" });
+  const agendaLink = programNavigation.getByRole("link", { name: "Agenda", exact: true });
+  await expect(agendaLink).toHaveAttribute("href", agendaUrl(PRIMARY_EVENT_ID));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${agendaUrl(PRIMARY_EVENT_ID)}$`)),
+    agendaLink.click(),
+  ]);
   await expectAgendaWorkspace(page);
 
-  await organizerSidebar.getByRole("link", { name: "Settings", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`));
-  await expect(page.getByRole("heading", { level: 1, name: "Event settings" })).toBeVisible();
+  const peopleNavigation = page.getByRole("navigation", { name: "People organizer navigation" });
+  const programSettingsLink = peopleNavigation.getByRole("link", {
+    name: "Program settings",
+    exact: true,
+  });
+  await expect(programSettingsLink).toHaveAttribute("href", settingsUrl(PRIMARY_EVENT_ID));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`)),
+    programSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  const eventCollectionPath = `/api/admin/organizations/${ORGANIZATION_ID}/events`;
+  const settingsWorkspaceReadCount = () =>
+    api.requests.filter((request) => {
+      if (request.method() !== "GET") return false;
+      const pathname = new URL(request.url()).pathname;
+      return pathname === eventCollectionPath || pathname.includes("/sessions/");
+    }).length;
+  const readsBeforeSectionNavigation = settingsWorkspaceReadCount();
+
+  const roomsSettingsLink = await visibleSettingsSectionLink(/Rooms and venues/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/rooms$`)),
+    roomsSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Rooms and venues" })).toBeVisible();
+
+  const classificationSettingsLink = await visibleSettingsSectionLink(/Session classification/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/classification$`)),
+    classificationSettingsLink.click(),
+  ]);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Session classification" }),
+  ).toBeVisible();
+
+  const historySettingsLink = await visibleSettingsSectionLink(/Change history/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/history$`)),
+    historySettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Change history" })).toBeVisible();
+
+  const workflowSettingsLink = await visibleSettingsSectionLink(/Session workflow/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/workflow$`)),
+    workflowSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
+  expect(settingsWorkspaceReadCount()).toBe(readsBeforeSectionNavigation);
+  const settingsRequests = api.requests.filter(
+    (request) =>
+      request.method() === "GET" && new URL(request.url()).pathname.includes("/sessions/"),
+  );
+  expect(settingsRequests).not.toHaveLength(0);
   expect(
-    api.requests
-      .filter((request) => request.method() === "GET")
-      .filter((request) => new URL(request.url()).pathname.includes("/sessions/"))
-      .every((request) =>
-        new URL(request.url()).pathname.includes(
-          `/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/`,
-        ),
+    settingsRequests.every((request) =>
+      new URL(request.url()).pathname.includes(
+        `/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/`,
       ),
+    ),
   ).toBe(true);
 });
 
@@ -652,7 +971,7 @@ test("agenda workspace exposes all five accessible view modes without an unavail
   await page.goto(agendaUrl(PRIMARY_EVENT_ID));
   await expectAgendaWorkspace(page);
 
-  const viewModes = ["List", "Day", "Week", "Track", "Room"] as const;
+  const viewModes = ["Timetable", "All days", "List", "Tracks", "Rooms"] as const;
   await expect(page.getByRole("tab")).toHaveCount(viewModes.length);
   for (const mode of viewModes) {
     const tab = page.getByRole("tab", { name: mode, exact: true });
@@ -660,6 +979,144 @@ test("agenda workspace exposes all five accessible view modes without an unavail
     await expect(tab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tabpanel")).toBeVisible();
     await expectAgendaWorkspace(page);
+  }
+});
+
+test("organizer sidebar keeps every event destination reachable at constrained height", async ({
+  authSession,
+  page,
+}, testInfo) => {
+  await installOrganizerApi(page, authSession);
+
+  for (const viewport of [
+    { name: "normal", width: 1440, height: 900 },
+    { name: "zoomed-out", width: 1800, height: 1125 },
+  ] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto(agendaUrl(PRIMARY_EVENT_ID));
+    await expectAgendaWorkspace(page);
+    await expect(page.getByText("Organization workspace", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .locator('[data-scroll-region="sidebar-navigation"]')
+        .getByRole("link", { name: "Integrations", exact: true }),
+    ).toBeInViewport();
+    await page.screenshot({
+      path: testInfo.outputPath(`organizer-sidebar-${viewport.name}.png`),
+      fullPage: true,
+    });
+  }
+
+  await page.setViewportSize({ width: 1152, height: 620 });
+  await page.goto(agendaUrl(PRIMARY_EVENT_ID));
+  await expectAgendaWorkspace(page);
+
+  const navigation = page.locator('[data-scroll-region="sidebar-navigation"]');
+  const integrationsLink = navigation.getByRole("link", {
+    name: "Integrations",
+    exact: true,
+  });
+  const footerLabel = page.getByText("Organization workspace", { exact: true });
+  const main = page.locator("#admin-content");
+
+  await expect(navigation).toBeVisible();
+  await expect(footerLabel).toBeVisible();
+
+  const metrics = await navigation.evaluate((element) => {
+    const node = element as HTMLElement;
+    return {
+      clientHeight: node.clientHeight,
+      overflowY: getComputedStyle(node).overflowY,
+      scrollHeight: node.scrollHeight,
+    };
+  });
+  expect(metrics.overflowY).toBe("auto");
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+
+  const footerBefore = await footerLabel.boundingBox();
+  const mainScrollBefore = await main.evaluate((element) => (element as HTMLElement).scrollTop);
+
+  await navigation.evaluate((element) => {
+    const node = element as HTMLElement;
+    node.scrollTop = node.scrollHeight;
+  });
+
+  await expect(integrationsLink).toBeInViewport();
+  await expect(footerLabel).toBeVisible();
+
+  const footerAfter = await footerLabel.boundingBox();
+  const mainScrollAfter = await main.evaluate((element) => (element as HTMLElement).scrollTop);
+  expect(footerBefore).not.toBeNull();
+  expect(footerAfter).not.toBeNull();
+  expect(Math.abs((footerAfter?.y ?? 0) - (footerBefore?.y ?? 0))).toBeLessThan(1);
+  expect(mainScrollAfter).toBe(mainScrollBefore);
+});
+
+test("agenda day navigation supports direct multi-day jumps at responsive widths", async ({
+  authSession,
+  page,
+}, testInfo) => {
+  await installOrganizerApi(page, authSession, {
+    primaryEndsAt: "2026-09-24T23:00:00.000Z",
+  });
+
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 1000 },
+    { name: "tablet", width: 820, height: 1180 },
+    { name: "mobile", width: 390, height: 844 },
+  ] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto(agendaUrl(PRIMARY_EVENT_ID));
+    await expectAgendaWorkspace(page);
+
+    const dayChooser = page.getByRole("radiogroup", { name: "Choose an event day" });
+    await expect(dayChooser).toBeVisible();
+    await expect(dayChooser.getByRole("radio")).toHaveCount(7);
+    const dayOne = dayChooser.getByRole("radio", {
+      name: /Day 1.*Friday, September 18.*1 session/u,
+    });
+    const daySeven = dayChooser.getByRole("radio", {
+      name: /Day 7.*Thursday, September 24.*0 sessions/u,
+    });
+    await expect(dayOne).toHaveAttribute("aria-current", "date");
+
+    await daySeven.click();
+    await expect(daySeven).toHaveAttribute("aria-current", "date");
+    await daySeven.press("Home");
+    await expect(dayOne).toBeChecked();
+    await dayOne.press("End");
+    await expect(daySeven).toBeChecked();
+    const dayNavigation = page.getByRole("region", { name: "Event day navigation" });
+    await expect(
+      dayNavigation.getByText("Thursday, September 24 · Day 7 of 7 · 0 sessions", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("No sessions scheduled on this day.", { exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Schedule session" }).click();
+    await expect(page.getByRole("button", { name: "Starts Sep 24" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Ends Sep 24" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const layout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+      hanOrKanaOrHangul: (
+        document.body.innerText.match(
+          /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu,
+        ) ?? []
+      ).length,
+    }));
+    expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(layout.hanOrKanaOrHangul).toBe(0);
+
+    await page.screenshot({
+      path: testInfo.outputPath(`agenda-multi-day-${viewport.name}.png`),
+      fullPage: true,
+    });
   }
 });
 
@@ -671,19 +1128,17 @@ test("agenda data remains isolated between organization-qualified events", async
 
   await page.goto(agendaUrl(PRIMARY_EVENT_ID));
   await expectAgendaWorkspace(page);
+  await expect(page.getByText("Eventloom Conference", { exact: true }).first()).toBeVisible();
   await expect(
-    page.getByText("Open Sessionboard Conference", { exact: true }).first(),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Opening keynote: Systems that earn trust" }),
+    page.getByRole("button", { name: /Edit Opening keynote: Systems that earn trust/u }),
   ).toBeVisible();
   await expect(page.getByText("DevFlow Conf 2027", { exact: true })).toHaveCount(0);
 
   await page.goto(agendaUrl(SECONDARY_EVENT_ID));
   await expectAgendaWorkspace(page);
   await expect(page.getByText("DevFlow Conf 2027", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "DevFlow platform patterns" })).toBeVisible();
-  await expect(page.getByText("Open Sessionboard Conference", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Edit DevFlow platform patterns/u })).toBeVisible();
+  await expect(page.getByText("Eventloom Conference", { exact: true })).toHaveCount(0);
 
   const agendaRequests = api.requests.filter(
     (request) => request.method() === "GET" && new URL(request.url()).pathname.endsWith("/agenda"),

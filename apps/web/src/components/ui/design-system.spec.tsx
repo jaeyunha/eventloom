@@ -1,14 +1,24 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AppShell, SidebarNavigation } from "../layout";
 import { DataTable } from "./data-table";
-import { Field, Input } from "./field";
-import { applyRichTextCommand } from "./rich-text";
-import { filterOptions, SearchableSelect } from "./searchable-select";
-import { getStepState, Stepper } from "./stepper";
+import { Field, FieldDescription, FieldError, FieldLabel } from "./field";
+import { Input } from "./input";
+import { applyRichTextCommand } from "./rich-text-logic";
+import { SearchableSelect } from "./searchable-select";
+import { filterOptions } from "./searchable-select-logic";
+import { Stepper } from "./stepper";
+import { getStepState } from "./stepper-logic";
 
 describe("design system accessibility", () => {
+  it("restricts Tailwind source scanning to runtime web source", () => {
+    const globalsCss = readFileSync(new URL("../../app/globals.css", import.meta.url), "utf8");
+
+    expect(globalsCss).toContain('@import "tailwindcss" source("../");');
+  });
+
   it("marks step progress with ordered, current, and completed semantics", () => {
     const markup = renderToStaticMarkup(
       createElement(Stepper, {
@@ -31,14 +41,13 @@ describe("design system accessibility", () => {
 
   it("connects labels, help, validation, and controls", () => {
     const markup = renderToStaticMarkup(
-      <Field
-        error="A title is required"
-        hint="Use a concise title"
-        label="Title"
-        name="title"
-        required
-      >
-        {(controlProps) => <Input {...controlProps} />}
+      <Field data-invalid>
+        <FieldLabel htmlFor="title">
+          Title <span aria-hidden="true">*</span>
+        </FieldLabel>
+        <Input id="title" aria-describedby="title-hint title-error" aria-invalid aria-required />
+        <FieldDescription id="title-hint">Use a concise title</FieldDescription>
+        <FieldError id="title-error">A title is required</FieldError>
       </Field>,
     );
 

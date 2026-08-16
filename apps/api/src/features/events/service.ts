@@ -1,29 +1,51 @@
 import { canonicalizeTimeZone } from "../agenda/timezone";
 import {
+  assertEventTemporalDependencies,
+  EventTemporalDependencyConflictError,
+  type EventTemporalDependencySource,
+} from "./event-temporal-dependencies";
+import {
   type ArchiveEventInput,
   type CreateEventInput,
   type Event,
-  type EventEmbedConfiguration,
-  type EventEmbedConfigurationInput,
-  type EventEmbedDisplayField,
-  eventEmbedDisplayFields,
-  eventEmbedLayouts,
-  eventEmbedOutputFormats,
-  eventEmbedThemes,
-  eventEmbedWidgetIds,
   type EventActor,
   type EventAuditEntry,
   type EventCfpSettings,
   type EventCfpSettingsInput,
   type EventDefaultCalendarSettings,
   type EventDefaultCalendarSettingsInput,
+  type EventEmbedConfiguration,
+  type EventEmbedConfigurationInput,
+  type EventEmbedDisplayField,
   type EventOrganizationRole,
   type EventRepository,
   EventRepositoryConflictError,
   type EventRepositorySeed,
   type EventStatus,
+  eventEmbedDisplayFields,
+  eventEmbedLayouts,
+  eventEmbedOutputFormats,
+  eventEmbedThemes,
+  eventEmbedWidgetIds,
   eventStatuses,
   type ListEventsInput,
+  type ProgramPublicationCacheInvalidationPort,
+  type ProgramPublicationCompletionInput,
+  type ProgramPublicationEnqueuePort,
+  type ProgramPublicationFailureInput,
+  type ProgramPublicationManifest,
+  type ProgramPublicationPreviewRequest,
+  type ProgramPublicationRebuildRequest,
+  type ProgramPublicationRepository,
+  ProgramPublicationRepositoryConflictError,
+  type ProgramPublicationRepositorySeed,
+  type ProgramPublicationRollbackInput,
+  type ProgramPublicationServiceDependencies,
+  type ProgramPublicationServiceOptions,
+  type ProgramPublicationState,
+  type ProgramResolvedPublication,
+  programPublicationSourceTriggers,
+  type ResolveProgramPublicationInput,
   type UpdateEventInput,
 } from "./types";
 
@@ -58,6 +80,8 @@ export interface EventServiceOptions {
   generateId?: () => string;
 }
 
+export type { EventTemporalDependencySource } from "./event-temporal-dependencies";
+
 const DEFAULT_CFP_SETTINGS: EventCfpSettings = {
   enabled: false,
   opensAt: null,
@@ -75,6 +99,7 @@ const CREATE_EVENT_FIELDS = [
   "timeZone",
   "startsAt",
   "endsAt",
+  "scheduleDates",
   "venue",
   "cfpSettings",
   "defaultCalendarSettings",
@@ -90,6 +115,7 @@ const UPDATE_EVENT_FIELDS = [
   "timeZone",
   "startsAt",
   "endsAt",
+  "scheduleDates",
   "venue",
   "cfpSettings",
   "defaultCalendarSettings",
@@ -113,8 +139,9 @@ const EMBED_CONFIGURATION_FIELDS = [
   "textColor",
   "customCss",
   "displayFields",
-  "tracks",
+  "trackIds",
   "statuses",
+  "revision",
 ] as const;
 const MAX_EMBED_CONFIGURATIONS = 100;
 const MAX_EMBED_LIST_ITEMS = 100;
@@ -264,6 +291,52 @@ function embedDisplayFields(value: unknown, field: string): readonly EventEmbedD
   return [...required, ...normalized.filter((item) => !required.includes(item))];
 }
 
+function embedConfigurationRevision(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw validation(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function embedConfigurationSemanticallyEqual(
+  left: EventEmbedConfiguration,
+  right: EventEmbedConfiguration,
+): boolean {
+  return (
+    JSON.stringify({
+      id: left.id,
+      name: left.name,
+      widgetId: left.widgetId,
+      enabled: left.enabled,
+      theme: left.theme,
+      outputFormat: left.outputFormat,
+      layout: left.layout,
+      accent: left.accent,
+      backgroundColor: left.backgroundColor,
+      textColor: left.textColor,
+      customCss: left.customCss,
+      displayFields: left.displayFields,
+      trackIds: left.trackIds,
+      statuses: left.statuses,
+    }) ===
+    JSON.stringify({
+      id: right.id,
+      name: right.name,
+      widgetId: right.widgetId,
+      enabled: right.enabled,
+      theme: right.theme,
+      outputFormat: right.outputFormat,
+      layout: right.layout,
+      accent: right.accent,
+      backgroundColor: right.backgroundColor,
+      textColor: right.textColor,
+      customCss: right.customCss,
+      displayFields: right.displayFields,
+      trackIds: right.trackIds,
+      statuses: right.statuses,
+    })
+  );
+}
 function normalizeEmbedConfigurations(
   input: readonly EventEmbedConfigurationInput[] | undefined,
   current: readonly EventEmbedConfiguration[] = [],
@@ -276,6 +349,22 @@ function normalizeEmbedConfigurations(
     );
   }
   const ids = new Set<string>();
+  const currentById = new Map(current.map((configuration) => [configuration.id, configuration]));
+  for (let index = 0; index < input.length; index += 1) {
+    const field = `embedConfigurations[${index}]`;
+    const value = objectValue(input[index], field);
+    const id = text(value.id, `${field}.id`, 128);
+    if (ids.has(id)) throw validation("embedConfigurations ids must be unique.");
+    ids.add(id);
+  }
+  for (const configuration of current) {
+    if (!ids.has(configuration.id)) {
+      throw validation(
+        `Saved embed configuration ${configuration.id} cannot be removed; disable it instead.`,
+      );
+    }
+  }
+  ids.clear();
   const normalized: EventEmbedConfiguration[] = [];
   for (let index = 0; index < input.length; index += 1) {
     const field = `embedConfigurations[${index}]`;
@@ -288,7 +377,28 @@ function normalizeEmbedConfigurations(
     const enabled = value.enabled;
     if (typeof enabled !== "boolean") throw validation(`${field}.enabled must be a boolean.`);
     const customCss = embedCustomCss(value.customCss, `${field}.customCss`);
-    normalized.push({
+    const trackIds = embedStringList(value.trackIds, `${field}.trackIds`);
+    const statuses = embedStringList(value.statuses, `${field}.statuses`);
+    const currentConfiguration = currentById.get(id);
+    const suppliedRevision =
+      value.revision === undefined
+        ? undefined
+        : embedConfigurationRevision(value.revision, `${field}.revision`);
+    if (
+      currentConfiguration === undefined &&
+      suppliedRevision !== undefined &&
+      suppliedRevision !== 1
+    ) {
+      throw validation(`${field}.revision must start at 1.`);
+    }
+    if (
+      currentConfiguration !== undefined &&
+      suppliedRevision !== undefined &&
+      suppliedRevision !== currentConfiguration.revision
+    ) {
+      throw conflict(`Saved embed configuration ${id} changed. Reload it before saving.`);
+    }
+    const candidate: EventEmbedConfiguration = {
       id,
       name,
       widgetId: embedEnum(value.widgetId, eventEmbedWidgetIds, `${field}.widgetId`),
@@ -301,9 +411,22 @@ function normalizeEmbedConfigurations(
       textColor: embedColor(value.textColor, `${field}.textColor`),
       customCss,
       displayFields: embedDisplayFields(value.displayFields, `${field}.displayFields`),
-      tracks: embedStringList(value.tracks, `${field}.tracks`),
-      statuses: embedStringList(value.statuses, `${field}.statuses`),
-    });
+      trackIds,
+      statuses,
+      revision: 1,
+    };
+    if (currentConfiguration === undefined) {
+      normalized.push(candidate);
+      continue;
+    }
+    const currentRevision = embedConfigurationRevision(
+      currentConfiguration.revision,
+      `${field}.revision`,
+    );
+    candidate.revision = embedConfigurationSemanticallyEqual(candidate, currentConfiguration)
+      ? currentRevision
+      : currentRevision + 1;
+    normalized.push(candidate);
   }
   return normalized;
 }
@@ -343,6 +466,73 @@ function dateOrdering(startsAt: string, endsAt: string): void {
   if (Date.parse(startsAt) >= Date.parse(endsAt)) {
     throw validation("startsAt must be before endsAt.");
   }
+}
+
+function eventLocalDate(instantValue: string, timeZoneValue: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timeZoneValue,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(instantValue));
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  return `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
+}
+
+function requireCurrentOrFutureEventDate(
+  value: string | null,
+  label: string,
+  timeZoneValue: string,
+  now: string,
+  currentValue?: string | null,
+): void {
+  if (value === null || value === currentValue) return;
+  if (eventLocalDate(value, timeZoneValue) < eventLocalDate(now, timeZoneValue)) {
+    throw validation(`${label} cannot be before today.`);
+  }
+}
+
+function normalizeScheduleDates(
+  value: unknown,
+  startsAt: string,
+  endsAt: string,
+  eventTimeZone: string,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw validation("scheduleDates must be an array of calendar dates.");
+  }
+  if (value.length === 0) return undefined;
+  if (value.length > 366) {
+    throw validation("scheduleDates cannot contain more than 366 dates.");
+  }
+  const dates = value.map((candidate, index) => {
+    if (typeof candidate !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(candidate)) {
+      throw validation(`scheduleDates[${index}] must use YYYY-MM-DD.`);
+    }
+    const [year, month, day] = candidate.split("-").map(Number);
+    const parsed = new Date(Date.UTC(year ?? 0, (month ?? 0) - 1, day ?? 0));
+    if (
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() + 1 !== month ||
+      parsed.getUTCDate() !== day
+    ) {
+      throw validation(`scheduleDates[${index}] must be a valid calendar date.`);
+    }
+    return candidate;
+  });
+  if (new Set(dates).size !== dates.length) {
+    throw validation("scheduleDates must not contain duplicate dates.");
+  }
+  if (dates.some((date, index) => index > 0 && date <= (dates[index - 1] ?? ""))) {
+    throw validation("scheduleDates must be ordered from earliest to latest.");
+  }
+  const firstDate = eventLocalDate(startsAt, eventTimeZone);
+  const lastDate = eventLocalDate(endsAt, eventTimeZone);
+  if (dates[0] !== firstDate || dates.at(-1) !== lastDate) {
+    throw validation("scheduleDates must include the first and last event date.");
+  }
+  return dates;
 }
 
 function repositoryConflict(error: unknown): boolean {
@@ -416,6 +606,15 @@ function normalizeCfpSettings(
   return { enabled, opensAt, closesAt };
 }
 
+function requireCfpBeforeEvent(cfpSettings: EventCfpSettings, eventStartsAt: string): void {
+  if (
+    (cfpSettings.opensAt !== null && Date.parse(cfpSettings.opensAt) > Date.parse(eventStartsAt)) ||
+    (cfpSettings.closesAt !== null && Date.parse(cfpSettings.closesAt) > Date.parse(eventStartsAt))
+  ) {
+    throw validation("The CFP window must finish before the event begins.");
+  }
+}
+
 function normalizeCalendarSettings(
   input: EventDefaultCalendarSettingsInput | undefined,
   current: EventDefaultCalendarSettings,
@@ -455,11 +654,17 @@ function eventInputOrganization(input: { organizationId?: string }): string | un
 
 export class EventService {
   readonly #repository: EventRepository;
+  readonly #temporalDependencies: EventTemporalDependencySource;
   readonly #clock: () => Date;
   readonly #generateId: () => string;
 
-  constructor(repository: EventRepository, options: EventServiceOptions = {}) {
+  constructor(
+    repository: EventRepository,
+    temporalDependencies: EventTemporalDependencySource,
+    options: EventServiceOptions = {},
+  ) {
     this.#repository = repository;
+    this.#temporalDependencies = temporalDependencies;
     this.#clock = options.clock ?? (() => new Date());
     this.#generateId = options.generateId ?? (() => crypto.randomUUID());
   }
@@ -493,11 +698,18 @@ export class EventService {
     const endsAt = instant(input.endsAt, "endsAt");
     dateOrdering(startsAt, endsAt);
     const eventTimeZone = timeZone(input.timeZone, "timeZone");
+    const scheduleDates = normalizeScheduleDates(
+      input.scheduleDates,
+      startsAt,
+      endsAt,
+      eventTimeZone,
+    );
     const eventStatus = input.status === undefined ? "draft" : status(input.status);
     const id =
       input.id === undefined ? text(this.#generateId(), "event id", 128) : eventId(input.id);
     const venue = optionalText(input.venue, "venue");
     const cfpSettings = normalizeCfpSettings(input.cfpSettings);
+    requireCfpBeforeEvent(cfpSettings, startsAt);
     const defaultCalendarSettings = normalizeCalendarSettings(
       input.defaultCalendarSettings,
       {
@@ -510,6 +722,10 @@ export class EventService {
     );
     const embedConfigurations = normalizeEmbedConfigurations(input.embedConfigurations);
     const now = this.instant(this.#clock(), "clock");
+    requireCurrentOrFutureEventDate(startsAt, "Event start", eventTimeZone, now);
+    requireCurrentOrFutureEventDate(endsAt, "Event end", eventTimeZone, now);
+    requireCurrentOrFutureEventDate(cfpSettings.opensAt, "CFP opening", eventTimeZone, now);
+    requireCurrentOrFutureEventDate(cfpSettings.closesAt, "CFP closing", eventTimeZone, now);
     const event: Event = {
       id,
       organizationId,
@@ -519,6 +735,7 @@ export class EventService {
       timeZone: eventTimeZone,
       startsAt,
       endsAt,
+      ...(scheduleDates === undefined ? {} : { scheduleDates }),
       venue,
       cfpSettings,
       defaultCalendarSettings,
@@ -531,13 +748,7 @@ export class EventService {
     };
     const existingSlug = await this.#repository.findEventBySlug(organizationId, eventSlug);
     if (existingSlug !== null) throw conflict("An event with this slug already exists.");
-    try {
-      await this.#repository.saveEvent(event, null);
-    } catch (error) {
-      if (repositoryConflict(error)) throw conflict("An event with this id already exists.");
-      throw error;
-    }
-    await this.#repository.appendAudit({
+    const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,
       eventId: event.id,
@@ -546,7 +757,18 @@ export class EventService {
       actorId: userId,
       occurredAt: now,
       after: clone(event),
-    });
+    };
+    try {
+      if (this.#repository.commitEvent !== undefined) {
+        await this.#repository.commitEvent({ event, expectedVersion: null, audit });
+      } else {
+        await this.#repository.saveEvent(event, null);
+        await this.#repository.appendAudit(audit);
+      }
+    } catch (error) {
+      if (repositoryConflict(error)) throw conflict("An event with this id already exists.");
+      throw error;
+    }
     return clone(event);
   }
 
@@ -587,10 +809,17 @@ export class EventService {
     const nextEndsAt =
       input.endsAt === undefined ? current.endsAt : instant(input.endsAt, "endsAt");
     dateOrdering(nextStartsAt, nextEndsAt);
+    const nextScheduleDates = normalizeScheduleDates(
+      input.scheduleDates === undefined ? current.scheduleDates : input.scheduleDates,
+      nextStartsAt,
+      nextEndsAt,
+      nextTimeZone,
+    );
     const nextVenue =
       input.venue === undefined ? current.venue : optionalText(input.venue, "venue");
     const nextStatus = input.status === undefined ? current.status : status(input.status);
     const cfpSettings = normalizeCfpSettings(input.cfpSettings, current.cfpSettings);
+    requireCfpBeforeEvent(cfpSettings, nextStartsAt);
     const defaultCalendarSettings = normalizeCalendarSettings(
       input.defaultCalendarSettings,
       current.defaultCalendarSettings,
@@ -602,6 +831,28 @@ export class EventService {
       current.embedConfigurations ?? [],
     );
     const now = this.instant(this.#clock(), "clock");
+    requireCurrentOrFutureEventDate(
+      nextStartsAt,
+      "Event start",
+      nextTimeZone,
+      now,
+      current.startsAt,
+    );
+    requireCurrentOrFutureEventDate(nextEndsAt, "Event end", nextTimeZone, now, current.endsAt);
+    requireCurrentOrFutureEventDate(
+      cfpSettings.opensAt,
+      "CFP opening",
+      nextTimeZone,
+      now,
+      current.cfpSettings.opensAt,
+    );
+    requireCurrentOrFutureEventDate(
+      cfpSettings.closesAt,
+      "CFP closing",
+      nextTimeZone,
+      now,
+      current.cfpSettings.closesAt,
+    );
     const updated: Event = {
       ...current,
       slug: nextSlug,
@@ -610,6 +861,7 @@ export class EventService {
       timeZone: nextTimeZone,
       startsAt: nextStartsAt,
       endsAt: nextEndsAt,
+      scheduleDates: nextScheduleDates,
       venue: nextVenue,
       cfpSettings,
       defaultCalendarSettings,
@@ -619,12 +871,14 @@ export class EventService {
       updatedBy: userId,
     };
     try {
-      await this.#repository.saveEvent(updated, expectedVersion);
+      await assertEventTemporalDependencies(this.#temporalDependencies, current, updated);
     } catch (error) {
-      if (repositoryConflict(error)) throw versionConflict();
+      if (error instanceof EventTemporalDependencyConflictError) {
+        throw conflict(error.message);
+      }
       throw error;
     }
-    await this.#repository.appendAudit({
+    const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,
       eventId: updated.id,
@@ -635,7 +889,18 @@ export class EventService {
       occurredAt: now,
       before: clone(current),
       after: clone(updated),
-    });
+    };
+    try {
+      if (this.#repository.commitEvent !== undefined) {
+        await this.#repository.commitEvent({ event: updated, expectedVersion, audit });
+      } else {
+        await this.#repository.saveEvent(updated, expectedVersion);
+        await this.#repository.appendAudit(audit);
+      }
+    } catch (error) {
+      if (repositoryConflict(error)) throw versionConflict();
+      throw error;
+    }
     return clone(updated);
   }
 
@@ -656,13 +921,7 @@ export class EventService {
       updatedAt: now,
       updatedBy: userId,
     };
-    try {
-      await this.#repository.saveEvent(archived, expectedVersion);
-    } catch (error) {
-      if (repositoryConflict(error)) throw versionConflict();
-      throw error;
-    }
-    await this.#repository.appendAudit({
+    const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,
       eventId: archived.id,
@@ -672,7 +931,18 @@ export class EventService {
       occurredAt: now,
       before: clone(current),
       after: clone(archived),
-    });
+    };
+    try {
+      if (this.#repository.commitEvent !== undefined) {
+        await this.#repository.commitEvent({ event: archived, expectedVersion, audit });
+      } else {
+        await this.#repository.saveEvent(archived, expectedVersion);
+        await this.#repository.appendAudit(audit);
+      }
+    } catch (error) {
+      if (repositoryConflict(error)) throw versionConflict();
+      throw error;
+    }
     return clone(archived);
   }
 
@@ -772,4 +1042,504 @@ export class InMemoryEventRepository implements EventRepository {
   }
 }
 
+export class InMemoryProgramPublicationRepository implements ProgramPublicationRepository {
+  readonly #states = new Map<string, ProgramPublicationState>();
+
+  constructor(seed: ProgramPublicationRepositorySeed = {}) {
+    for (const state of seed.states ?? []) {
+      this.#states.set(this.key(state.organizationId, state.eventId), clone(state));
+    }
+  }
+
+  async getState(
+    organizationId: string,
+    eventIdValue: string,
+  ): Promise<ProgramPublicationState | null> {
+    const state = this.#states.get(this.key(organizationId, eventIdValue));
+    return state === undefined ? null : clone(state);
+  }
+
+  async compareAndSwap(
+    organizationId: string,
+    eventIdValue: string,
+    expectedVersion: number | null,
+    state: ProgramPublicationState,
+  ): Promise<void> {
+    const key = this.key(organizationId, eventIdValue);
+    const current = this.#states.get(key);
+    if (
+      (current?.version ?? null) !== expectedVersion ||
+      state.organizationId !== organizationId ||
+      state.eventId !== eventIdValue
+    ) {
+      throw new ProgramPublicationRepositoryConflictError();
+    }
+    this.#states.set(key, clone(state));
+  }
+
+  private key(organizationId: string, eventIdValue: string): string {
+    return `${organizationId}\u0000${eventIdValue}`;
+  }
+}
+
+function publicationVersionConflict(): EventServiceError {
+  return new EventServiceError(
+    "VERSION_CONFLICT",
+    409,
+    "The program publication changed. Reload it before continuing.",
+  );
+}
+
+function positiveInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw validation(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function sourceHash(value: unknown, field: string): string {
+  return text(value, field, 256);
+}
+
+function releaseForCompletion(
+  state: ProgramPublicationState,
+  input: ProgramPublicationCompletionInput,
+): ProgramPublicationManifest {
+  if (
+    state.version !==
+    positiveInteger(input.expectedPublicationVersion, "expectedPublicationVersion")
+  ) {
+    throw publicationVersionConflict();
+  }
+  const revision = positiveInteger(input.revision, "revision");
+  const release = state.releases.find(
+    (candidate) => candidate.id === input.releaseId && candidate.revision === revision,
+  );
+  if (
+    release === undefined ||
+    release.lifecycle !== "pending" ||
+    state.pendingReleaseId !== release.id ||
+    state.pendingRevision !== release.revision
+  ) {
+    throw conflict("The pending program release is no longer current.");
+  }
+  return release;
+}
+
+export class ProgramPublicationService {
+  readonly #repository: ProgramPublicationRepository;
+  readonly #enqueue: ProgramPublicationEnqueuePort;
+  readonly #cacheInvalidation: ProgramPublicationCacheInvalidationPort;
+  readonly #eventRepository: Pick<EventRepository, "getEvent">;
+  readonly #clock: () => Date;
+  readonly #generateId: () => string;
+
+  constructor(
+    repository: ProgramPublicationRepository,
+    dependencies: ProgramPublicationServiceDependencies,
+    options: ProgramPublicationServiceOptions = {},
+  ) {
+    this.#repository = repository;
+    this.#enqueue = dependencies.enqueue;
+    this.#cacheInvalidation = dependencies.cacheInvalidation;
+    this.#eventRepository = dependencies.eventRepository;
+    this.#clock = options.clock ?? (() => new Date());
+    this.#generateId = options.generateId ?? (() => crypto.randomUUID());
+  }
+
+  async getState(
+    actor: EventActor,
+    input: { organizationId?: string; eventId: string },
+  ): Promise<ProgramPublicationState | null> {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    const scopedEventId = eventId(input.eventId);
+    await this.#requireEvent(organizationId, scopedEventId);
+    return this.#repository.getState(organizationId, scopedEventId);
+  }
+
+  async requestRebuild(
+    actor: EventActor,
+    input: ProgramPublicationRebuildRequest,
+  ): Promise<ProgramPublicationState> {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    const scopedEventId = eventId(input.eventId);
+    const actorId = actorUserId(actor);
+    await this.#requireEvent(organizationId, scopedEventId);
+    if (!programPublicationSourceTriggers.includes(input.trigger)) {
+      throw validation("trigger is not an approved program publication source transition.");
+    }
+
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current?.pendingRevision !== null && current?.pendingRevision !== undefined) {
+      throw conflict("A program publication rebuild is already pending.");
+    }
+    if (
+      input.trigger === "initial-publication" &&
+      current?.servedManifest !== null &&
+      current !== null
+    ) {
+      throw conflict("The program already has publication intent.");
+    }
+    if (
+      input.trigger !== "initial-publication" &&
+      (current === null || current.servedManifest === null)
+    ) {
+      throw conflict(
+        "Approved source changes cannot publish a program before explicit publication.",
+      );
+    }
+    if (
+      input.parentServedRevision !== undefined &&
+      input.parentServedRevision !== (current?.servedRevision ?? null)
+    ) {
+      throw publicationVersionConflict();
+    }
+
+    const revision = (current?.releases.at(-1)?.revision ?? 0) + 1;
+    const releaseId = text(this.#generateId(), "release id", 128);
+    const now = instant(this.#clock().toISOString(), "publishedAt");
+    const manifest: ProgramPublicationManifest = {
+      id: releaseId,
+      organizationId,
+      eventId: scopedEventId,
+      revision,
+      lifecycle: "pending",
+      agendaProjectionId: text(input.agendaProjectionId, "agendaProjectionId", 128),
+      agendaRevisionNumber: positiveInteger(input.agendaRevisionNumber, "agendaRevisionNumber"),
+      agendaSourceHash: sourceHash(input.agendaSourceHash, "agendaSourceHash"),
+      speakerProjectionId: text(input.speakerProjectionId, "speakerProjectionId", 128),
+      speakerRevisionNumber: positiveInteger(input.speakerRevisionNumber, "speakerRevisionNumber"),
+      speakerSourceHash: sourceHash(input.speakerSourceHash, "speakerSourceHash"),
+      approvedContentRevision: positiveInteger(
+        input.approvedContentRevision,
+        "approvedContentRevision",
+      ),
+      approvedProfileRevision: positiveInteger(
+        input.approvedProfileRevision,
+        "approvedProfileRevision",
+      ),
+      releasedAssetRevision: positiveInteger(input.releasedAssetRevision, "releasedAssetRevision"),
+      actorId,
+      publishedAt: now,
+      parentServedRevision: current?.servedRevision ?? null,
+      rollbackTargetRevision: null,
+      cacheRevision: (current?.releases.at(-1)?.cacheRevision ?? 0) + 1,
+      sourceTrigger: input.trigger,
+      failureReason: null,
+    };
+    const pending: ProgramPublicationState = {
+      organizationId,
+      eventId: scopedEventId,
+      version: (current?.version ?? 0) + 1,
+      servedRevision: current?.servedRevision ?? null,
+      servedManifest: current?.servedManifest ?? null,
+      pendingRevision: revision,
+      pendingReleaseId: releaseId,
+      releases: [...(current?.releases ?? []), manifest],
+    };
+    try {
+      await this.#repository.compareAndSwap(
+        organizationId,
+        scopedEventId,
+        current?.version ?? null,
+        pending,
+      );
+    } catch (error) {
+      if (error instanceof ProgramPublicationRepositoryConflictError) {
+        throw publicationVersionConflict();
+      }
+      throw error;
+    }
+
+    try {
+      await this.#enqueue.enqueue({ organizationId, eventId: scopedEventId, releaseId, revision });
+      return clone(pending);
+    } catch (error) {
+      return this.failRebuild({
+        organizationId,
+        eventId: scopedEventId,
+        releaseId,
+        revision,
+        expectedPublicationVersion: pending.version,
+        reason: error instanceof Error ? error.message : "Publication rebuild enqueue failed.",
+      });
+    }
+  }
+
+  async completeRebuild(
+    input: ProgramPublicationCompletionInput,
+  ): Promise<ProgramPublicationState> {
+    const organizationId = text(input.organizationId, "organizationId", 128);
+    const scopedEventId = eventId(input.eventId);
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current === null) throw notFound();
+    const pendingRelease = releaseForCompletion(current, input);
+    const servedRelease: ProgramPublicationManifest = {
+      ...pendingRelease,
+      lifecycle: "served",
+      publishedAt: instant(this.#clock().toISOString(), "publishedAt"),
+      failureReason: null,
+    };
+    const next: ProgramPublicationState = {
+      ...current,
+      version: current.version + 1,
+      servedRevision: servedRelease.revision,
+      servedManifest: servedRelease,
+      pendingRevision: null,
+      pendingReleaseId: null,
+      releases: current.releases.map((release) =>
+        release.id === servedRelease.id ? servedRelease : release,
+      ),
+    };
+    await this.#savePublication(current, next);
+    await this.#cacheInvalidation.invalidate({
+      organizationId,
+      eventId: scopedEventId,
+      revision: servedRelease.revision,
+      cacheRevision: servedRelease.cacheRevision,
+    });
+    return clone(next);
+  }
+
+  async failRebuild(input: ProgramPublicationFailureInput): Promise<ProgramPublicationState> {
+    const organizationId = text(input.organizationId, "organizationId", 128);
+    const scopedEventId = eventId(input.eventId);
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current === null) throw notFound();
+    const pendingRelease = releaseForCompletion(current, input);
+    const failedRelease: ProgramPublicationManifest = {
+      ...pendingRelease,
+      lifecycle: "failed",
+      failureReason: text(input.reason, "reason", 2_000),
+    };
+    const next: ProgramPublicationState = {
+      ...current,
+      version: current.version + 1,
+      pendingRevision: null,
+      pendingReleaseId: null,
+      releases: current.releases.map((release) =>
+        release.id === failedRelease.id ? failedRelease : release,
+      ),
+    };
+    await this.#savePublication(current, next);
+    return clone(next);
+  }
+
+  async rollback(
+    actor: EventActor,
+    input: ProgramPublicationRollbackInput,
+  ): Promise<ProgramPublicationState> {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    const scopedEventId = eventId(input.eventId);
+    const actorId = actorUserId(actor);
+    await this.#requireEvent(organizationId, scopedEventId);
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current === null || current.servedManifest === null) throw notFound();
+    if (
+      input.expectedPublicationVersion !== undefined &&
+      input.expectedPublicationVersion !== current.version
+    ) {
+      throw publicationVersionConflict();
+    }
+    if (input.expectedServedRevision !== current.servedRevision) throw publicationVersionConflict();
+    if (current.pendingRevision !== null) {
+      throw conflict("A pending rebuild must complete or fail before rollback.");
+    }
+    const targetRevision = positiveInteger(input.targetRevision, "targetRevision");
+    const target = current.releases.find(
+      (release) => release.revision === targetRevision && release.lifecycle === "served",
+    );
+    if (target === undefined) throw notFound();
+
+    const revision = (current.releases.at(-1)?.revision ?? 0) + 1;
+    const rolledBack: ProgramPublicationManifest = {
+      ...target,
+      id: text(this.#generateId(), "release id", 128),
+      revision,
+      lifecycle: "served",
+      actorId,
+      publishedAt: instant(this.#clock().toISOString(), "publishedAt"),
+      parentServedRevision: current.servedRevision,
+      rollbackTargetRevision: target.revision,
+      cacheRevision: (current.releases.at(-1)?.cacheRevision ?? 0) + 1,
+      sourceTrigger: "released-schedule-change",
+      failureReason: null,
+    };
+    const next: ProgramPublicationState = {
+      ...current,
+      version: current.version + 1,
+      servedRevision: revision,
+      servedManifest: rolledBack,
+      releases: [...current.releases, rolledBack],
+    };
+    await this.#savePublication(current, next);
+    await this.#cacheInvalidation.invalidate({
+      organizationId,
+      eventId: scopedEventId,
+      revision,
+      cacheRevision: rolledBack.cacheRevision,
+    });
+    return clone(next);
+  }
+
+  resolvePreview(
+    actor: EventActor,
+    input: ProgramPublicationPreviewRequest,
+  ): ProgramResolvedPublication {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    if (
+      organizationId !== input.manifest.organizationId ||
+      eventId(input.eventId) !== input.manifest.eventId
+    ) {
+      throw forbidden("The published program does not belong to this event.");
+    }
+    return resolvePublishedProgram(input);
+  }
+
+  async #requireEvent(organizationId: string, scopedEventId: string): Promise<void> {
+    const event = await this.#eventRepository.getEvent(organizationId, scopedEventId);
+    if (event === null) throw notFound();
+  }
+
+  async #savePublication(
+    current: ProgramPublicationState,
+    next: ProgramPublicationState,
+  ): Promise<void> {
+    try {
+      await this.#repository.compareAndSwap(
+        current.organizationId,
+        current.eventId,
+        current.version,
+        next,
+      );
+    } catch (error) {
+      if (error instanceof ProgramPublicationRepositoryConflictError) {
+        throw publicationVersionConflict();
+      }
+      throw error;
+    }
+  }
+}
+
+function projectionMatches(
+  binding: { id: string; revisionNumber: number; sourceHash: string },
+  projectionId: string,
+  revisionNumber: number,
+  sourceHashValue: string,
+): boolean {
+  return (
+    binding.id === projectionId &&
+    binding.revisionNumber === revisionNumber &&
+    binding.sourceHash === sourceHashValue
+  );
+}
+
+function safeProgramAvatarUrl(value: string | null | undefined): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (
+    value.startsWith("/api/public/events/") &&
+    value.includes("/speakers/") &&
+    value.endsWith("/headshot") &&
+    !value.includes("?") &&
+    !value.includes("#")
+  ) {
+    return value;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.pathname.includes("/public/")
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolvePublishedProgram(
+  input: ResolveProgramPublicationInput,
+): ProgramResolvedPublication {
+  const { manifest, configuration, agendaProjection, speakerProjection } = input;
+  if (manifest.lifecycle !== "served" || !configuration.enabled) {
+    throw new EventServiceError("NOT_FOUND", 404, "The published program was not found.");
+  }
+  if (
+    !projectionMatches(
+      agendaProjection,
+      manifest.agendaProjectionId,
+      manifest.agendaRevisionNumber,
+      manifest.agendaSourceHash,
+    ) ||
+    !projectionMatches(
+      speakerProjection,
+      manifest.speakerProjectionId,
+      manifest.speakerRevisionNumber,
+      manifest.speakerSourceHash,
+    )
+  ) {
+    throw conflict("The served program release is incomplete.");
+  }
+
+  const configuredTrackIds = new Set(configuration.trackIds);
+  const configuredStatuses = new Set(configuration.statuses);
+  const filteredEntries = agendaProjection.entries.filter(
+    (entry) =>
+      (configuredTrackIds.size === 0 ||
+        entry.trackIds.some((trackId) => configuredTrackIds.has(trackId))) &&
+      (configuredStatuses.size === 0 || configuredStatuses.has(entry.status)),
+  );
+  const sessionIds = new Set(filteredEntries.map((entry) => entry.sessionId));
+  const fields = new Set(configuration.displayFields);
+  const agenda = filteredEntries.map((entry): ProgramResolvedPublication["agenda"][number] => ({
+    id: entry.id,
+    sessionId: entry.sessionId,
+    title: entry.title,
+    ...(fields.has("summary") && entry.summary !== undefined ? { summary: entry.summary } : {}),
+    ...(fields.has("format") && entry.format !== undefined ? { format: entry.format } : {}),
+    ...(fields.has("date-time") && entry.startsAt !== undefined
+      ? { startsAt: entry.startsAt }
+      : {}),
+    ...(fields.has("date-time") && entry.endsAt !== undefined ? { endsAt: entry.endsAt } : {}),
+    ...(fields.has("date-time") && entry.startsAtLocal !== undefined
+      ? { startsAtLocal: entry.startsAtLocal }
+      : {}),
+    ...(fields.has("date-time") && entry.endsAtLocal !== undefined
+      ? { endsAtLocal: entry.endsAtLocal }
+      : {}),
+    ...(fields.has("date-time") && entry.timeZone !== undefined
+      ? { timeZone: entry.timeZone }
+      : {}),
+    ...(fields.has("room") && entry.roomName !== undefined ? { roomName: entry.roomName } : {}),
+    trackNames: fields.has("track") ? [...(entry.trackNames ?? [])] : [],
+    speakerNames: fields.has("speakers") ? [...(entry.speakerNames ?? [])] : [],
+  }));
+  const speakers = speakerProjection.speakers
+    .filter((speaker) => speaker.sessionIds.some((sessionId) => sessionIds.has(sessionId)))
+    .map((speaker): ProgramResolvedPublication["speakers"][number] => ({
+      id: speaker.id,
+      participantId: speaker.participantId,
+      sessionIds: speaker.sessionIds.filter((sessionId) => sessionIds.has(sessionId)),
+      displayName: speaker.displayName,
+      ...(fields.has("company") && speaker.company !== undefined
+        ? { company: speaker.company }
+        : {}),
+      ...(fields.has("bio") && speaker.bio !== undefined ? { bio: speaker.bio } : {}),
+      ...(speaker.avatarUrl !== undefined
+        ? { avatarUrl: safeProgramAvatarUrl(speaker.avatarUrl) ?? null }
+        : {}),
+    }));
+
+  return {
+    configurationRevision: configuration.revision,
+    servedProgramRevision: manifest.revision,
+    programRevision: manifest.revision,
+    cacheRevision: manifest.cacheRevision,
+    agenda,
+    speakers,
+  };
+}
 export { EventServiceError as EventError };

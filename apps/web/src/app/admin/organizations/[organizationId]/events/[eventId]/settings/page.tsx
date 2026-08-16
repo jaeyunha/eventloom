@@ -1,10 +1,5 @@
-import type { Metadata } from "next";
-import { EventSettingsWorkspace } from "@/features/settings/event-settings-workspace";
-
-export const metadata: Metadata = {
-  title: "Event settings",
-  description: "Configure event-scoped session settings, rooms, and program library values.",
-};
+import { redirect } from "next/navigation";
+import { eventSettingsSectionHref } from "@/features/settings/event-settings-sections";
 
 interface EventSettingsPageProps {
   params: Promise<{ organizationId: string; eventId: string }>;
@@ -12,5 +7,5 @@ interface EventSettingsPageProps {
 
 export default async function EventSettingsPage({ params }: EventSettingsPageProps) {
   const { organizationId, eventId } = await params;
-  return <EventSettingsWorkspace organizationId={organizationId} eventId={eventId} />;
+  redirect(eventSettingsSectionHref(organizationId, eventId, "workflow"));
 }

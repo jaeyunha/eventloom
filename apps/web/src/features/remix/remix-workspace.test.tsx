@@ -8,7 +8,13 @@ import {
   type RemixContentRevision,
   type RemixFetcher,
 } from "./api";
-import { allowedContentForApply, RemixWorkspace } from "./remix-workspace";
+import {
+  allowedContentForApply,
+  candidateIsStale,
+  RemixWorkspace,
+  remixNavigationCacheKey,
+  remixNavigationCacheTags,
+} from "./remix-workspace";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -89,6 +95,21 @@ describe("remix API", () => {
       tone: "Clear",
       guidance: "Keep the meaning.",
     });
+    expect(calls[0]?.init?.credentials).toBe("include");
+  });
+
+  it("uses a same-origin API path when the base URL is empty", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const generated = candidate();
+    const fetcher: RemixFetcher = async (input, init) => {
+      calls.push({ url: String(input), init });
+      return response({ candidates: [generated] });
+    };
+    const api = createRemixApi("", "org-1", fetcher);
+
+    await expect(api.listCandidates({ eventId: "event-1" })).resolves.toEqual([generated]);
+
+    expect(calls[0]?.url).toBe("/api/admin/organizations/org-1/events/event-1/remix/candidates");
     expect(calls[0]?.init?.credentials).toBe("include");
   });
 
@@ -202,31 +223,73 @@ describe("remix API", () => {
 });
 
 describe("remix workspace", () => {
-  it("renders source selection, comparison, provenance, and human-authority messaging", () => {
+  it("renders an honest unavailable state without fake candidates or audit", () => {
     const markup = renderToStaticMarkup(
       createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1" }),
     );
 
-    expect(markup).toContain("Choose event content");
-    expect(markup).toContain("Source versus candidate");
-    expect(markup).toContain("Provider provenance");
-    expect(markup).toContain("Change summary");
-    expect(markup).toContain("Candidates are private until a human applies them");
-    expect(markup).toContain("cannot affect public content");
-    expect(markup).toContain("Only an authorized human organizer can apply");
-    expect(markup).toContain("Apply reviewed candidate to event content");
+    expect(markup).toContain('data-state="remix-unavailable"');
+    expect(markup).not.toContain('data-workflow="remix-composer"');
+    expect(markup).not.toContain("candidate-local");
+  });
+  it("normalizes remix cache scope keys and isolates resource tags", () => {
+    expect(remixNavigationCacheKey(" org-1 ", " event-1 ", "session")).toBe(
+      "organization:org-1:event:event-1:remix:workspace:session",
+    );
+    expect(remixNavigationCacheKey("org-1", "event-2", "session")).not.toBe(
+      remixNavigationCacheKey("org-1", "event-1", "session"),
+    );
+    expect(remixNavigationCacheTags(" org-1 ", " event-1 ")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "remix:event-1",
+    ]);
   });
 
-  it("keeps stale source candidates visibly non-applicable", () => {
+  it("keeps an injected API workspace available without using local demo state", () => {
+    const api = {
+      listRecords: async () => [],
+      listCandidates: async () => [],
+      getCandidate: async () => candidate(),
+      listAudit: async () => [],
+      generate: async () => [candidate()],
+      regenerate: async () => candidate({ id: "candidate-2", generation: 2 }),
+      reject: async () => candidate({ status: "rejected" }),
+      apply: async () => ({
+        id: "revision-1",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        sourceType: "session" as const,
+        sourceId: "session-1",
+        sourceRevision: 4,
+        fields: ["title"] as const,
+        content: candidate().candidate,
+        candidateId: "candidate-1",
+        appliedBy: "organizer-1",
+        appliedAt: "2026-08-09T12:01:00.000Z",
+      }),
+    };
     const markup = renderToStaticMarkup(
-      createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1" }),
+      createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1", api }),
     );
 
-    expect(markup).toContain("candidate-stale");
-    expect(markup).toContain("Stale — regenerate before applying");
-    expect(markup).toContain("Stale candidates cannot be applied.");
+    expect(markup).toContain('data-workflow="remix-composer"');
+    expect(markup).toContain('data-section="remix-review"');
+    expect(markup).toContain('data-section="remix-activity"');
+    expect(markup).not.toContain('data-state="remix-unavailable"');
+    expect(markup).not.toContain("org-1");
+    expect(markup).not.toContain("event-1");
   });
 
+  it("does not infer stale state from a source hidden by browse filters", () => {
+    expect(candidateIsStale(candidate(), undefined)).toBe(false);
+    expect(candidateIsStale(candidate(), { revision: 4 })).toBe(false);
+    expect(candidateIsStale(candidate(), { revision: 5 })).toBe(true);
+    expect(candidateIsStale(candidate({ status: "stale" }), undefined)).toBe(true);
+  });
+});
+
+describe("apply allowlist", () => {
   it("enforces the source-type field allowlist when preparing human apply content", () => {
     const session = candidate({ fields: ["title"] });
     expect(

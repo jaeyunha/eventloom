@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   applyRepair,
-  applyWorkflowReset,
+  applyWorkflowReset as applyWorkflowResetSource,
   buildRepairManifest,
   DevflowRepairError,
   parseArguments,
   prepareRepair,
-  prepareWorkflowReset,
+  prepareWorkflowReset as prepareWorkflowResetSource,
   REPAIR_CONFIRMATION,
   RESET_WORKFLOW_CONFIRMATION,
   readRepairInvariantReport,
   resumeRepair,
-  resumeWorkflowReset,
+  resumeWorkflowReset as resumeWorkflowResetSource,
   runRepair,
 } from "./repair-devflow-production.mjs";
 
@@ -32,6 +35,74 @@ const PROFILE_IDS = {
   "speaker-priya": `speaker-profile:devflow-conf-2027:${PARTICIPANT_IDS["speaker-priya"]}`,
   "speaker-marcus": `speaker-profile:devflow-conf-2027:${PARTICIPANT_IDS["speaker-marcus"]}`,
 };
+const RESET_ENVIRONMENT = "staging";
+const TEST_FIXTURE = {
+  event: {
+    name: "DevFlow Conf 2027",
+    tagline: "A deterministic evaluator fixture.",
+    dates: "2027-05-12 to 2027-05-13",
+    location: "Test Convention Center",
+    description: "Repository-owned data for the evaluator repair unit tests.",
+    tracks: ["Platform & Infra", "AI Engineering", "Developer Experience"],
+    session_formats: ["Talk (30 min)", "Lightning Talk (10 min)", "Workshop (120 min)"],
+    rooms: ["Room 2A", "Room 2B"],
+  },
+  identities: {
+    organizer: { name: "Jordan Alvarez", email: "organizer@example.test" },
+    reviewer: { name: "Sam Reviewer", email: "reviewer@example.test" },
+    speaker: {
+      name: "Priya Raman",
+      email: "priya@example.test",
+      bio: "Platform engineer focused on reliable build systems.",
+      company: "Latticework Systems",
+    },
+    speaker2: {
+      name: "Marcus Okafor",
+      email: "marcus@example.test",
+      bio: "Developer experience engineer building retrieval-grounded tools.",
+      company: "Northstar Labs",
+    },
+  },
+  submissions: [
+    {
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      abstract: "Practical techniques for making large monorepo builds incremental.",
+      track: "Platform & Infra",
+      format: "Talk (30 min)",
+      audience_level: "Advanced",
+    },
+    {
+      title: "Your AI Pair Programmer Is Lying to You: Verification Patterns That Scale",
+      abstract: "Verification patterns for safely using AI-assisted development.",
+      track: "AI Engineering",
+      format: "Talk (30 min)",
+      audience_level: "Intermediate",
+    },
+    {
+      title: "Docs That Answer Back: Retrieval-Grounded Documentation Sites",
+      abstract: "Building useful documentation experiences with retrieval grounding.",
+      track: "Developer Experience",
+      format: "Lightning Talk (10 min)",
+      audience_level: "Intermediate",
+    },
+  ],
+  communications: {
+    acceptance_subject: "Your session has been accepted",
+    acceptance_body: "Hi {speaker_name}, your session '{talk_title}' has been accepted.",
+  },
+};
+
+function prepareWorkflowReset(options) {
+  return prepareWorkflowResetSource({ ...options, environment: RESET_ENVIRONMENT });
+}
+
+function applyWorkflowReset(options) {
+  return applyWorkflowResetSource({ ...options, environment: RESET_ENVIRONMENT });
+}
+
+function resumeWorkflowReset(options) {
+  return resumeWorkflowResetSource({ ...options, environment: RESET_ENVIRONMENT });
+}
 
 function identities() {
   return Object.fromEntries(
@@ -46,18 +117,33 @@ function identities() {
   );
 }
 
-function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {}) {
+function fakeTransport({
+  duplicateKey,
+  driftKey,
+  omitBlankFields = false,
+  ledgerFailureState,
+  ledgerFailureKey,
+} = {}) {
   const records = new Map();
   const writes = [];
   const commands = [];
+  const ledgerEntries = [];
+  const commandRecords = new Map();
   let failWrites = false;
+  let durableLedgerFailureState = ledgerFailureState;
+  let durableLedgerFailureKey = ledgerFailureKey;
   const key = (operation) => `${operation.table ?? operation.kind}:${operation.id}`;
   return {
     records,
     writes,
     commands,
+    ledgerEntries,
     setFailWrites(value) {
       failWrites = value;
+    },
+    setLedgerFailure(value, key = durableLedgerFailureKey) {
+      durableLedgerFailureState = value;
+      durableLedgerFailureKey = key;
     },
     async read(operation) {
       if (operation.key === duplicateKey)
@@ -65,6 +151,10 @@ function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {})
           { id: "a", fields: operation.fields },
           { id: "b", fields: operation.fields },
         ];
+      if (operation.store !== "airtable") {
+        const command = commandRecords.get(operation.key);
+        return command === undefined ? [] : [command];
+      }
       const record = records.get(key(operation));
       if (record === undefined) return [];
       if (operation.key === driftKey)
@@ -100,14 +190,36 @@ function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {})
     async execute(command) {
       if (failWrites) throw new Error("injected command failure");
       commands.push(command);
+      if (typeof command.idempotencyKey === "string") {
+        commandRecords.set(command.idempotencyKey, structuredClone(command));
+      }
     },
     async verifyIdentity() {},
-    async recordLedger() {},
+    async recordLedger(entry) {
+      ledgerEntries.push(entry);
+      if (
+        entry.state === durableLedgerFailureState &&
+        (durableLedgerFailureKey === undefined || entry.key === durableLedgerFailureKey)
+      ) {
+        const error = new Error("injected durable ledger failure");
+        error.code = "LEDGER_UNAVAILABLE";
+        throw error;
+      }
+    },
   };
 }
 
 function build() {
-  return buildRepairManifest({ identities: identities() });
+  return buildRepairManifest({ fixture: TEST_FIXTURE, identities: identities() });
+}
+function temporaryManifestPath() {
+  const directory = mkdtempSync(join(tmpdir(), "devflow-repair-test-"));
+  return {
+    path: join(directory, "manifest.json"),
+    cleanup() {
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
 }
 function resetTransport() {
   const transport = fakeTransport();
@@ -153,6 +265,24 @@ function addWorkflowRecords(transport, manifest) {
       id: unknownId,
     }),
   });
+  const d1Id = "outbox-evaluator-created";
+  const d1Record = {
+    store: "d1",
+    table: "durable_outbox",
+    id: d1Id,
+    recordId: d1Id,
+    applicationId: d1Id,
+    fields: {
+      "Organization ID": "ai-engineer",
+      "Event ID": "devflow-conf-2027",
+      "Payload JSON": JSON.stringify({
+        tenantId: "ai-engineer",
+        eventId: "devflow-conf-2027",
+      }),
+    },
+  };
+  transport.records.set(`${d1Record.table}:${d1Id}`, d1Record);
+  transport.discovered.push(d1Record);
   transport.add("Sessions", "foreign-event-session", {
     "Application ID": "foreign-event-session",
     "Organization ID": "ai-engineer",
@@ -247,6 +377,48 @@ test("builds the strict six-identity ledger and exact canonical graph", () => {
     ),
     true,
   );
+  const requiredSessionFields = [
+    "tenantId",
+    "organizationId",
+    "eventId",
+    "createdAt",
+    "updatedAt",
+    "createdBy",
+    "updatedBy",
+    "history",
+  ];
+  assert.equal(
+    manifest.graph.sessions.every((session) =>
+      requiredSessionFields.every((field) => Object.hasOwn(session, field)),
+    ),
+    true,
+  );
+  assert.equal(
+    sessionOperations.every((operation) => {
+      const metadata = JSON.parse(operation.fields["Metadata JSON"]);
+      return (
+        requiredSessionFields.every((field) => Object.hasOwn(metadata, field)) &&
+        operation.fields["Organization ID"] === metadata.organizationId &&
+        operation.fields["Event ID"] === metadata.eventId &&
+        operation.fields["Created At"] === metadata.createdAt &&
+        operation.fields["Updated At"] === metadata.updatedAt &&
+        operation.fields["Created By User ID"] === metadata.createdBy &&
+        operation.fields["Updated By User ID"] === metadata.updatedBy &&
+        operation.fields["History JSON"] === JSON.stringify(metadata.history)
+      );
+    }),
+    true,
+  );
+  const currentAgendaRevision = manifest.graph.agenda.revisions.find(
+    (revision) => revision.id === manifest.graph.agenda.currentPublishedRevisionId,
+  );
+  assert.ok(currentAgendaRevision);
+  assert.deepEqual(manifest.graph.projection.revision, {
+    id: currentAgendaRevision.id,
+    number: currentAgendaRevision.revisionNumber,
+    publishedAt: currentAgendaRevision.publishedAt,
+  });
+  assert.equal(projectionOperation.fields["Revision ID"], currentAgendaRevision.id);
   const scheduledParticipantIds = [
     ...new Set(
       manifest.graph.sessions
@@ -438,6 +610,182 @@ test("builds the strict six-identity ledger and exact canonical graph", () => {
     true,
   );
 });
+test("serializes a complete canonical communication template", () => {
+  const manifest = build();
+  const operation = manifest.operations.find((candidate) => candidate.table === "Email Templates");
+  assert.ok(operation);
+
+  const template = manifest.graph.communication.template;
+  const settings = JSON.parse(operation.fields["Settings JSON"]);
+  const templateFields = [
+    "id",
+    "tenantId",
+    "organizationId",
+    "eventId",
+    "name",
+    "purpose",
+    "version",
+    "status",
+    "sender",
+    "subject",
+    "html",
+    "text",
+    "variables",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+    "approvedBy",
+    "approvedAt",
+  ];
+  assert.deepEqual(Object.keys(settings).sort(), [...templateFields].sort());
+  assert.deepEqual(settings, template);
+  assert.equal(operation.fields["Application ID"], template.id);
+  assert.equal(operation.fields["Organization ID"], template.tenantId);
+  assert.equal(operation.fields["Event ID"], template.eventId);
+  assert.equal(operation.fields.Name, template.name);
+  assert.equal(operation.fields.Purpose, template.purpose);
+  assert.equal(operation.fields.Status, template.status);
+  assert.equal(operation.fields.Sender, template.sender);
+  assert.equal(operation.fields.Subject, template.subject);
+  assert.equal(operation.fields.HTML, template.html);
+  assert.equal(operation.fields.Text, template.text);
+  assert.deepEqual(JSON.parse(operation.fields["Variables JSON"]), template.variables);
+  assert.equal(operation.fields.Version, template.version);
+  assert.equal(template.status, "draft");
+  assert.equal(template.approvedBy, null);
+  assert.equal(template.approvedAt, null);
+});
+
+test("rejects incomplete session metadata and unresolved publication revisions", async () => {
+  const incompleteSession = build();
+  delete incompleteSession.graph.sessions[0].updatedBy;
+  await assert.rejects(
+    readRepairInvariantReport({ manifest: incompleteSession }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "MANIFEST_INVALID" &&
+      error.message.includes("updatedBy"),
+  );
+
+  const inconsistentOperation = build();
+  const sessionOperation = inconsistentOperation.operations.find(
+    (operation) => operation.table === "Sessions",
+  );
+  sessionOperation.fields["Created At"] = "2026-08-10T00:00:00.000Z";
+  await assert.rejects(
+    readRepairInvariantReport({ manifest: inconsistentOperation }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "MANIFEST_INVALID" &&
+      error.message.includes("metadata fields are inconsistent"),
+  );
+
+  const unresolvedRevision = build();
+  const projectionOperation = unresolvedRevision.operations.find(
+    (operation) => operation.table === "Published Speaker Projections",
+  );
+  projectionOperation.fields["Revision ID"] = `${unresolvedRevision.eventId}-other-revision`;
+  await assert.rejects(
+    readRepairInvariantReport({ manifest: unresolvedRevision }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "MANIFEST_INVALID" &&
+      error.message.includes("revision references do not resolve"),
+  );
+});
+test("persists independent review rounds and deterministic proposal session IDs", () => {
+  const manifest = build();
+  const replay = build();
+  const reviewPlanOperation = manifest.operations.find(
+    (operation) => operation.table === "Review Plans",
+  );
+  assert.ok(reviewPlanOperation);
+  const plan = JSON.parse(reviewPlanOperation.fields["Rounds JSON"]);
+  const reviewPlanId = `${manifest.eventId}-initial-review`;
+  const [initialRound, finalRound] = plan.rounds;
+  assert.deepEqual(
+    plan.rounds.map((round) => ({
+      id: round.id,
+      name: round.name,
+      sequence: round.sequence,
+      opensAt: round.opensAt,
+      closesAt: round.closesAt,
+      reviewerIds: round.reviewerPool?.reviewerIds,
+      rubricId: round.rubric.id,
+    })),
+    [
+      {
+        id: `${reviewPlanId}-round-initial`,
+        name: "Initial Review",
+        sequence: 1,
+        opensAt: "2026-08-01T00:00:00.000Z",
+        closesAt: "2026-10-15T23:59:59.000Z",
+        reviewerIds: [IDS["reviewer-sam"]],
+        rubricId: `${reviewPlanId}-rubric-initial`,
+      },
+      {
+        id: `${reviewPlanId}-round-final`,
+        name: "Final Review",
+        sequence: 2,
+        opensAt: "2026-10-16T00:00:00.000Z",
+        closesAt: "2026-11-30T23:59:59.000Z",
+        reviewerIds: [],
+        rubricId: `${reviewPlanId}-rubric-final`,
+      },
+    ],
+  );
+  assert.equal(plan.status, "open");
+  assert.ok(Date.parse(plan.closesAt) >= Date.parse(finalRound.closesAt));
+  assert.equal(initialRound.blindReview, true);
+  assert.equal(initialRound.anonymization, "double");
+  assert.notEqual(initialRound.rubric.id, finalRound.rubric.id);
+  assert.deepEqual(
+    Object.fromEntries(
+      initialRound.rubric.criteria.map((criterion) => [
+        criterion.id,
+        [criterion.inputType, criterion.weight],
+      ]),
+    ),
+    {
+      originality: ["numeric", 2],
+      relevance: ["numeric", 1],
+      recommendation: ["dropdown", 0],
+      comments: ["free_text", 0],
+    },
+  );
+  assert.deepEqual(
+    finalRound.rubric.criteria.map((criterion) => [criterion.id, criterion.inputType]),
+    [
+      ["final-recommendation", "dropdown"],
+      ["program-notes", "free_text"],
+    ],
+  );
+  const assignments = manifest.operations.filter((operation) => operation.table === "Evaluations");
+  assert.equal(assignments.length, 3);
+  assert.equal(
+    assignments.every((operation) => {
+      const scores = JSON.parse(operation.fields["Scores JSON"]);
+      return operation.fields["Round ID"] === initialRound.id && scores.roundId === initialRound.id;
+    }),
+    true,
+  );
+  const proposalSessions = manifest.graph.sessions.filter((session) => session.proposalId !== null);
+  assert.deepEqual(
+    proposalSessions.map((session) => [session.proposalId, session.id]),
+    manifest.graph.proposals.map((proposal) => [proposal.id, `session-${proposal.id}`]),
+  );
+  const lightning = manifest.graph.sessions.find((session) => session.proposalId === null);
+  assert.equal(lightning.id, "devflow-conf-2027-session-lightning-agents-in-production-q-a");
+  assert.equal(manifest.digest, replay.digest);
+  assert.deepEqual(
+    manifest.operations.map((operation) => [operation.key, operation.id, operation.inputDigest]),
+    replay.operations.map((operation) => [operation.key, operation.id, operation.inputDigest]),
+  );
+  assert.deepEqual(
+    manifest.graph.sessions.map((session) => [session.id, session.proposalId]),
+    replay.graph.sessions.map((session) => [session.id, session.proposalId]),
+  );
+});
 
 test("prepare is read-only and plans all writes", async () => {
   const manifest = build();
@@ -513,6 +861,171 @@ test("partial failure can resume from the durable run ledger", async () => {
   );
 });
 
+test("durable complete failure checkpoints a retryable state and resumes without rewriting", async () => {
+  const temporary = temporaryManifestPath();
+  try {
+    const manifest = build();
+    const target = manifest.operations.find((operation) => operation.table === "Sessions");
+    const transport = fakeTransport({
+      ledgerFailureState: "complete",
+      ledgerFailureKey: target.key,
+    });
+    const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+    let failure;
+    await assert.rejects(
+      applyRepair({
+        manifest,
+        manifestPath: temporary.path,
+        prepared,
+        transport,
+        confirm: REPAIR_CONFIRMATION,
+      }),
+      (error) => {
+        failure = error;
+        return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+      },
+    );
+    assert.deepEqual(failure.details, {
+      phase: "repair",
+      ledgerKey: target.key,
+      state: "complete",
+      causeCode: "LEDGER_UNAVAILABLE",
+      checkpoint: {
+        attempted: true,
+        persisted: true,
+        path: temporary.path,
+        recoveryState: "started",
+      },
+    });
+    const checkpoint = JSON.parse(readFileSync(temporary.path, "utf8"));
+    assert.equal(checkpoint.runLedger[target.key].state, "started");
+    assert.equal(checkpoint.runLedger[target.key].durableLedgerFailure.attemptedState, "complete");
+    assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+    const stored = transport.records.get(`${target.table}:${target.id}`);
+    stored.fields["External Observation"] = "preserved";
+
+    transport.setLedgerFailure(undefined);
+    const resumed = await resumeRepair({
+      manifest: checkpoint,
+      manifestPath: temporary.path,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    });
+    assert.equal(resumed.status, "applied");
+    assert.equal(checkpoint.runLedger[target.key].state, "complete");
+    assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+    assert.equal(stored.fields["External Observation"], "preserved");
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("durable started failure remains retryable without writing a manifest", async () => {
+  const manifest = build();
+  const target = manifest.operations.find((operation) => operation.table === "Sessions");
+  const transport = fakeTransport({
+    ledgerFailureState: "started",
+    ledgerFailureKey: target.key,
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  let failure;
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  assert.equal(failure.details.checkpoint.attempted, false);
+  assert.equal(failure.details.checkpoint.persisted, false);
+  assert.equal(failure.details.checkpoint.recoveryState, "started");
+  assert.equal(manifest.runLedger[target.key].state, "started");
+  assert.equal(manifest.runLedger[target.key].durableLedgerFailure.attemptedState, "started");
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 0);
+
+  transport.setLedgerFailure(undefined);
+  const resumed = await resumeRepair({
+    manifest,
+    transport,
+    confirm: REPAIR_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(manifest.runLedger[target.key].state, "complete");
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+});
+
+test("apply refuses to mutate without a durable ledger capability", async () => {
+  const manifest = build();
+  const transport = fakeTransport();
+  delete transport.recordLedger;
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  let failure;
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  assert.equal(failure.details.causeCode, "LEDGER_UNAVAILABLE");
+  assert.equal(failure.details.state, "started");
+  assert.equal(failure.details.checkpoint.recoveryState, "started");
+  assert.equal(transport.writes.length, 0);
+  assert.equal(transport.commands.length, 0);
+});
+
+test("post-write reconciliation rejects an owned-field mutation before retry", async () => {
+  const manifest = build();
+  const target = manifest.operations.find((operation) => operation.table === "Sessions");
+  const transport = fakeTransport({
+    ledgerFailureState: "complete",
+    ledgerFailureKey: target.key,
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED",
+  );
+  const stored = transport.records.get(`${target.table}:${target.id}`);
+  stored.fields.Title = "Changed before reconciliation";
+  transport.setLedgerFailure(undefined);
+
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "LEDGER_RECONCILIATION_CONFLICT" &&
+      error.details.ledgerKey === target.key,
+  );
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+});
+
 test("apply verifies Airtable records when blank cells are omitted", async () => {
   const manifest = build();
   const transport = fakeTransport({ omitBlankFields: true });
@@ -568,7 +1081,7 @@ test("apply creates an unresolved identity before dependent writes", async () =>
   const unresolved = identities();
   delete unresolved["organizer-fixture"].userId;
   unresolved["organizer-fixture"].verified = false;
-  const manifest = buildRepairManifest({ identities: unresolved });
+  const manifest = buildRepairManifest({ fixture: TEST_FIXTURE, identities: unresolved });
   const transport = fakeTransport();
   const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
   let signupName;
@@ -601,13 +1114,27 @@ test("apply creates an unresolved identity before dependent writes", async () =>
     IDS["organizer-fixture"],
   );
   assert.equal(signupName, "Jordan Alvarez");
+  const sessionOperation = manifest.operations.find((operation) => operation.table === "Sessions");
+  const sessionMetadata = JSON.parse(sessionOperation.fields["Metadata JSON"]);
+  assert.equal(sessionMetadata.createdBy, IDS["organizer-fixture"]);
+  assert.equal(sessionMetadata.updatedBy, IDS["organizer-fixture"]);
+  assert.equal(sessionOperation.fields["Created By User ID"], IDS["organizer-fixture"]);
+  assert.equal(sessionOperation.fields["Updated By User ID"], IDS["organizer-fixture"]);
+  assert.equal(
+    manifest.graph.sessions.every(
+      (session) =>
+        session.createdBy === IDS["organizer-fixture"] &&
+        session.updatedBy === IDS["organizer-fixture"],
+    ),
+    true,
+  );
 });
 
 test("runRepair forwards production account origins to identity resolution", async () => {
   const unresolved = identities();
   delete unresolved["organizer-fixture"].userId;
   unresolved["organizer-fixture"].verified = false;
-  const manifest = buildRepairManifest({ identities: unresolved });
+  const manifest = buildRepairManifest({ fixture: TEST_FIXTURE, identities: unresolved });
   const transport = fakeTransport();
   let signupUrl;
   const result = await runRepair({
@@ -640,7 +1167,7 @@ test("identity email collisions never merge by name or alias", () => {
   const duplicate = identities();
   duplicate["organizer-agenda"].email = duplicate["organizer-fixture"].email;
   assert.throws(
-    () => buildRepairManifest({ identities: duplicate }),
+    () => buildRepairManifest({ fixture: TEST_FIXTURE, identities: duplicate }),
     (error) => error instanceof DevflowRepairError && error.code === "DUPLICATE_IDENTITY",
   );
 });
@@ -680,6 +1207,11 @@ test("workflow reset plans without writes, removes unknown scoped records, and p
         entry.id === "published-speakers:devflow-conf-2027",
     ),
   );
+  assert.ok(
+    prepared.prepared.plan.deletes.some(
+      (entry) => entry.store === "d1" && entry.id === "outbox-evaluator-created",
+    ),
+  );
   const result = await applyWorkflowReset({
     manifest,
     prepared,
@@ -706,6 +1238,7 @@ test("workflow reset plans without writes, removes unknown scoped records, and p
   assert.equal(transport.records.has("Sessions:foreign-event-session"), true);
   assert.equal(transport.records.has("Sessions:foreign-org-session"), true);
   assert.equal(transport.writes.length, 0);
+  assert.equal(transport.records.has("durable_outbox:outbox-evaluator-created"), false);
   const second = await applyWorkflowReset({
     manifest,
     transport,
@@ -812,7 +1345,166 @@ test("workflow reset resumes after a partial delete and rejects unsafe confirmat
   );
 });
 
-test("reset CLI requires exact confirmation only for destructive mode", () => {
+test("workflow reset replays a failed durable completion without deleting twice", async () => {
+  const temporary = temporaryManifestPath();
+  try {
+    const manifest = build();
+    const transport = resetTransport();
+    addWorkflowRecords(transport, manifest);
+    const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+    const target = prepared.targets[0];
+    transport.setLedgerFailure("complete", target.key);
+    let failure;
+    await assert.rejects(
+      applyWorkflowReset({
+        manifest,
+        manifestPath: temporary.path,
+        prepared,
+        transport,
+        confirm: RESET_WORKFLOW_CONFIRMATION,
+      }),
+      (error) => {
+        failure = error;
+        return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+      },
+    );
+    assert.equal(failure.details.phase, "reset-workflow");
+    assert.equal(failure.details.ledgerKey, target.key);
+    assert.equal(failure.details.checkpoint.recoveryState, "started");
+    assert.equal(failure.details.checkpoint.persisted, true);
+    assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 1);
+
+    const checkpoint = JSON.parse(readFileSync(temporary.path, "utf8"));
+    assert.equal(checkpoint.resetLedger[target.key].state, "started");
+    transport.setLedgerFailure(undefined);
+    const resumed = await resumeWorkflowReset({
+      manifest: checkpoint,
+      manifestPath: temporary.path,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    });
+    assert.equal(resumed.status, "applied");
+    assert.equal(checkpoint.resetLedger[target.key].state, "complete");
+    assert.equal(checkpoint.resetLedger[target.key].recovered, true);
+    assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 1);
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("workflow reset retries a failed durable start before deleting", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  addWorkflowRecords(transport, manifest);
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  const target = prepared.targets[0];
+  transport.setLedgerFailure("started", target.key);
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED",
+  );
+  assert.equal(manifest.resetLedger[target.key].state, "started");
+  assert.equal(manifest.resetLedger[target.key].durableLedgerFailure.attemptedState, "started");
+  assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 0);
+
+  transport.setLedgerFailure(undefined);
+  const resumed = await resumeWorkflowReset({
+    manifest,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(manifest.resetLedger[target.key].state, "complete");
+  assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 1);
+});
+
+test("foundation reconciliation preserves an unowned mutation without rewriting", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  const target = prepared.foundationOperations[0];
+  transport.setLedgerFailure("complete");
+  let failure;
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  const stored = transport.records.get(`${target.table}:${target.id}`);
+  stored.fields["External Observation"] = "preserved";
+  transport.setLedgerFailure(undefined);
+
+  const resumed = await resumeWorkflowReset({
+    manifest,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(manifest.resetLedger[failure.details.ledgerKey].state, "complete");
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+  assert.equal(stored.fields["External Observation"], "preserved");
+});
+
+test("foundation reconciliation rejects an owned-field mutation before rewriting", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  const target = prepared.foundationOperations[0];
+  transport.setLedgerFailure("complete");
+  let failure;
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  const stored = transport.records.get(`${target.table}:${target.id}`);
+  const ownedField = Object.keys(target.ownedFields).find(
+    (field) => field !== "Application ID" && typeof stored.fields[field] === "string",
+  );
+  stored.fields[ownedField] = "Changed before reconciliation";
+  transport.setLedgerFailure(undefined);
+
+  await assert.rejects(
+    resumeWorkflowReset({
+      manifest,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "LEDGER_RECONCILIATION_CONFLICT" &&
+      error.details.ledgerKey === failure.details.ledgerKey,
+  );
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+});
+
+test("reset CLI requires an explicit confirmation only for destructive mode", () => {
   const plan = parseArguments(["--reset-workflow"]);
   assert.equal(plan.phase, "reset-workflow");
   assert.equal(plan.dryRun, true);
@@ -820,10 +1512,12 @@ test("reset CLI requires exact confirmation only for destructive mode", () => {
     () => parseArguments(["--reset-workflow", "--apply"]),
     (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
   );
-  assert.throws(
-    () => parseArguments(["--reset-workflow", "--confirm", "no"]),
-    (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
-  );
+  const manifestBound = parseArguments([
+    "--reset-workflow",
+    "--confirm",
+    "I_UNDERSTAND_PRODUCTION_DEVFLOW_RESET:digest",
+  ]);
+  assert.equal(manifestBound.dryRun, false);
   const apply = parseArguments(["--reset-workflow", "--confirm", "ai-engineer"]);
   assert.equal(apply.dryRun, false);
 });

@@ -1,16 +1,24 @@
-import { createElement } from "react";
+import { createElement, isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import MembersPage from "../../app/admin/organizations/[organizationId]/members/page";
 import { isPublicMemberSetupPath, sessionHasOrganizerMembership } from "../admin/admin-shell";
-import { createMemberApi, type OrganizationMember, type ReviewerPool } from "./api";
+import {
+  activeVerifiedReviewers,
+  createMemberApi,
+  type OrganizationMember,
+  type ReviewerPool,
+} from "./api";
+import { MemberSetup } from "./member-setup";
 import {
   completeMemberSetup,
-  MemberSetup,
   MemberSetupActivatedSignInRequiredError,
   memberSetupPasswordIssues,
   setupUrlWithoutToken,
-} from "./member-setup";
-import { inviteRolesForOrganization, MemberWorkspace } from "./member-workspace";
+} from "./member-setup-model";
+import { MemberWorkspace } from "./member-workspace";
+import { inviteRolesForOrganization } from "./member-workspace-model";
+import { OrganizationSettingsWorkspace } from "./organization-settings-workspace";
 
 const owner: OrganizationMember = {
   organizationId: "org-1",
@@ -48,16 +56,15 @@ const pool: ReviewerPool = {
 };
 
 describe("organization member API adapter", () => {
+  it("limits assignment candidates to active verified reviewer-role members", () => {
+    expect(activeVerifiedReviewers([owner, reviewer])).toEqual([reviewer]);
+  });
+
   it("uses organization-qualified member and event-round pool endpoints", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const scopedOwner = { ...owner, organizationId: "org/1" };
     const scopedReviewer = { ...reviewer, organizationId: "org/1" };
-    const scopedPool = {
-      ...pool,
-      organizationId: "org/1",
-      eventId: "event/1",
-      roundId: "round/1",
-    };
+    const scopedPool = { ...pool, organizationId: "org/1", eventId: "event/1", roundId: "round/1" };
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push(init === undefined ? { input } : { input, init });
       const url = String(input);
@@ -124,6 +131,18 @@ describe("organization member API adapter", () => {
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
   });
 
+  it("uses a same-origin API path when the base URL is empty", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(init === undefined ? { input } : { input, init });
+      return new Response(JSON.stringify({ data: [owner] }), { status: 200 });
+    };
+    const api = createMemberApi("", owner.organizationId, fetcher);
+    await expect(api.listMembers()).resolves.toEqual([owner]);
+    expect(String(calls[0]?.input)).toBe("/api/admin/organizations/org-1/members");
+    expect(calls[0]?.init).toMatchObject({ credentials: "include" });
+  });
+
   it("rejects a cross-organization response and requires tenant scope", async () => {
     const api = createMemberApi(
       "https://api.example.test",
@@ -158,7 +177,6 @@ describe("organization member API adapter", () => {
         },
       }),
     );
-
     await expect(api.inviteMember({ email: reviewer.email, role: "reviewer" })).rejects.toThrow(
       "does not match",
     );
@@ -166,15 +184,8 @@ describe("organization member API adapter", () => {
 
   it("rejects a nullable invitation response with the wrong member role", async () => {
     const api = createMemberApi("https://api.example.test", "org-1", async () =>
-      Response.json({
-        data: {
-          member: reviewer,
-          invitation: null,
-          created: false,
-        },
-      }),
+      Response.json({ data: { member: reviewer, invitation: null, created: false } }),
     );
-
     await expect(api.inviteMember({ email: reviewer.email, role: "admin" })).rejects.toThrow(
       "does not match",
     );
@@ -194,7 +205,6 @@ describe("member invitation setup", () => {
     expect(isPublicMemberSetupPath("/admin/organizations/org-1/members/setup/")).toBe(true);
     expect(isPublicMemberSetupPath("/admin/organizations/org-1/members")).toBe(false);
     expect(isPublicMemberSetupPath("/admin/organizations/org-1/events/event-1")).toBe(false);
-
     expect(
       sessionHasOrganizerMembership(
         { memberships: [{ organizationId: "org-2", role: "owner" }] },
@@ -257,8 +267,7 @@ describe("member invitation setup", () => {
       name: "Review Person",
       password: "StrongPass1!",
     });
-
-    expect(destination).toBe("/review");
+    expect(destination).toBe("/work");
     expect(calls).toEqual([
       "activate:one-time-token:StrongPass1!",
       "login:reviewer@example.test:StrongPass1!",
@@ -302,7 +311,6 @@ describe("member invitation setup", () => {
       token: "one-time-token",
       password: "StrongPass1!",
     });
-
     await expect(result).rejects.toBeInstanceOf(MemberSetupActivatedSignInRequiredError);
     await expect(result).rejects.toMatchObject({ email: reviewer.email });
     expect(activationCount).toBe(1);
@@ -310,20 +318,11 @@ describe("member invitation setup", () => {
 
   it("renders accessible setup and missing-token states without exposing a token", () => {
     const setup = renderToStaticMarkup(
-      createElement(MemberSetup, {
-        organizationId: "org-1",
-        token: "secret-token",
-        apiBaseUrl: "https://api.example.test",
-      }),
+      createElement(MemberSetup, { organizationId: "org-1", token: "secret-token" }),
     );
     const missing = renderToStaticMarkup(
-      createElement(MemberSetup, {
-        organizationId: "org-1",
-        token: null,
-        apiBaseUrl: "https://api.example.test",
-      }),
+      createElement(MemberSetup, { organizationId: "org-1", token: null }),
     );
-
     expect(setup).toContain("Set up organization access");
     expect(setup).toContain("Accept invitation and sign in");
     expect(setup).toContain("new-password");
@@ -333,28 +332,55 @@ describe("member invitation setup", () => {
 });
 
 describe("member workspace", () => {
-  it("renders reviewer provisioning, role separation, pool setup, and accessible states", () => {
+  it("defaults to a concise People directory and keeps administrative work behind tabs", () => {
     const markup = renderToStaticMarkup(
       createElement(MemberWorkspace, {
         organizationId: "org-1",
-        eventId: "event-1",
-        roundId: "round-1",
         baseUrl: "https://api.example.test",
       }),
     );
 
-    expect(markup).toContain("Members and evaluators");
-    expect(markup).toContain("Invite an organization member");
-    expect(markup).toContain("one-time setup");
-    expect(markup).toContain("Search members");
-    expect(markup).toContain("Evaluator");
-    expect(markup).toContain("Evaluator pool and assignment caps");
-    expect(markup).toContain("Event ID");
-    expect(markup).toContain("Round ID");
-    expect(markup).toContain("open the assigned review dashboard");
-    expect(markup).toContain("Organizations");
-    expect(markup).toContain("Switch organization");
-    expect(markup).toContain("Create organization");
-    expect(markup).toContain("Update current organization");
+    expect(markup).toContain("People");
+    expect(markup).toContain("People directory");
+    expect(markup).toContain("Invite member");
+    expect(markup).not.toContain("Reviewer pools");
+    expect(markup).not.toContain("Load pool");
+    expect(markup).not.toContain("Save reviewer pool");
+    expect(markup).not.toContain("Organization settings");
+    expect(markup).toContain("Search people");
+    expect(markup).not.toContain("CEP-10");
+    expect(markup).not.toContain("ABS-02");
+    expect(markup).not.toContain("CFP-10");
+    expect(markup).not.toContain("Members and evaluators");
+    expect(markup).not.toContain("Organization configuration (JSON)");
+    expect(markup).not.toContain("Event ID");
+    expect(markup).not.toContain("Round ID");
+  });
+
+  it("opens the invitation tab directly from an event review link", async () => {
+    const page = await MembersPage({
+      params: Promise.resolve({ organizationId: "org-1" }),
+      searchParams: Promise.resolve({ tab: "invite" }),
+    });
+
+    expect(isValidElement<{ initialTab?: string }>(page)).toBe(true);
+    if (!isValidElement<{ initialTab?: string }>(page)) throw new Error("Members page is invalid.");
+    expect(page.props.initialTab).toBe("invite");
+  });
+
+  it("renders organization settings only through the dedicated settings workspace", () => {
+    const markup = renderToStaticMarkup(
+      createElement(OrganizationSettingsWorkspace, {
+        organizationId: "org-1",
+        baseUrl: "https://api.example.test",
+      }),
+    );
+
+    expect(markup).toContain("Organization settings");
+    expect(markup).toContain("Refresh settings");
+    expect(markup).not.toContain('role="tablist"');
+    expect(markup).not.toContain('aria-label="Switch organization"');
+    expect(markup).not.toContain("People directory");
+    expect(markup).not.toContain("Reviewer pools");
   });
 });

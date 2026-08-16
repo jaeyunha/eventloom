@@ -1,19 +1,22 @@
+import { ThemeToggle } from "./theme-toggle";
+
 const productNavigationLinks = [
-  { href: "/cfp/devflow-conf-2027", label: "Call for speakers" },
-  { href: "/embed/devflow-conf-2027/sessions", label: "Public program" },
-  { href: "/login", label: "Sign in" },
+  { href: "/#workflow", label: "Product", primary: false },
+  { href: "/#workspaces", label: "Workspaces", primary: false },
+  { href: "/events", label: "Live demo", primary: false },
+  { href: "/login", label: "Sign in", primary: true },
 ] as const;
 
 export function ProductNavigation() {
   return (
     <header className="product-nav-shell">
       <div className="product-nav-inner">
-        <a className="product-brand" href="/" aria-label="Open Sessionboard home">
+        <a className="product-brand" href="/" aria-label="Eventloom home">
           <span className="product-brand-mark" aria-hidden="true">
-            OS
+            EL
           </span>
           <span>
-            <strong>Open Sessionboard</strong>
+            <strong>Eventloom</strong>
             <small>Conference program operations</small>
           </span>
         </a>
@@ -23,17 +26,16 @@ export function ProductNavigation() {
             {productNavigationLinks.map((link) => (
               <li key={link.href}>
                 <a
-                  className={
-                    link.href === "/login"
-                      ? "product-nav-link product-nav-link-primary"
-                      : "product-nav-link"
-                  }
+                  className={`product-nav-link${link.primary ? " product-nav-link-primary" : ""}`}
                   href={link.href}
                 >
                   {link.label}
                 </a>
               </li>
             ))}
+            <li>
+              <ThemeToggle />
+            </li>
           </ul>
         </nav>
       </div>

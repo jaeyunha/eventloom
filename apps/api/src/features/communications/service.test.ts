@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CommunicationError } from "./service";
-import { CommunicationService, InMemoryCommunicationRepository } from "./service";
+import {
+  CommunicationService,
+  InMemoryCommunicationRepository,
+  InMemoryReminderRepository,
+} from "./service";
 import type {
   CommunicationActor,
   CommunicationAudience,
@@ -11,6 +15,9 @@ import type {
   CommunicationSenderIdentity,
   CommunicationTemplate,
   CommunicationTemplatePurpose,
+  ReminderCandidate,
+  ReminderOutboxDelivery,
+  ReminderRuntime,
 } from "./types";
 
 const tenantId = "tenant-1";
@@ -74,6 +81,11 @@ async function fixture() {
   const adapter = new FakeDeliveryAdapter();
   const service = new CommunicationService(repository, adapter, {
     clock: () => new Date(now),
+    senderIdentities: {
+      auth: "login@conference.example",
+      speakers: "program@conference.example",
+      calendar: "schedule@conference.example",
+    },
   });
   const template = await service.createTemplate(organizer, {
     id: "group-template",
@@ -213,18 +225,25 @@ async function expectCode(
 }
 
 describe("communications domain", () => {
-  it("maps every template purpose to its exact sender and rejects legacy or arbitrary identities", async () => {
-    const { service } = await fixture();
+  it("maps every template purpose to runtime-configured sender identities", async () => {
+    const configuredSenders = {
+      auth: "login@conference.example",
+      speakers: "program@conference.example",
+      calendar: "schedule@conference.example",
+    } as const;
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      senderIdentities: configuredSenders,
+    });
     const purposeSenders: readonly [CommunicationTemplatePurpose, CommunicationSenderIdentity][] = [
-      ["verification", "auth@sessionboard.namuh.co"],
-      ["receipt", "speakers@sessionboard.namuh.co"],
-      ["reminder", "speakers@sessionboard.namuh.co"],
-      ["decision", "speakers@sessionboard.namuh.co"],
-      ["task", "speakers@sessionboard.namuh.co"],
-      ["schedule_publish", "calendar@sessionboard.namuh.co"],
-      ["schedule_update", "calendar@sessionboard.namuh.co"],
-      ["schedule_cancel", "calendar@sessionboard.namuh.co"],
-      ["organizer_group_email", "speakers@sessionboard.namuh.co"],
+      ["verification", configuredSenders.auth],
+      ["receipt", configuredSenders.speakers],
+      ["reminder", configuredSenders.speakers],
+      ["decision", configuredSenders.speakers],
+      ["task", configuredSenders.speakers],
+      ["schedule_publish", configuredSenders.calendar],
+      ["schedule_update", configuredSenders.calendar],
+      ["schedule_cancel", configuredSenders.calendar],
+      ["organizer_group_email", configuredSenders.speakers],
     ];
 
     for (const [purpose, sender] of purposeSenders) {
@@ -240,38 +259,128 @@ describe("communications domain", () => {
       expect(template.sender).toBe(sender);
     }
 
-    for (const [id, sender] of [
-      ["legacy", "auth@foreverbrowsing.com"],
-      ["arbitrary", "noreply@sessionboard.namuh.co"],
-    ] as const) {
-      await expectCode(
-        service.createTemplate(organizer, {
-          id: `sender-${id}`,
-          eventId,
-          name: `${id} sender`,
-          purpose: "verification",
-          sender: sender as unknown as CommunicationSenderIdentity,
-          subject: "Subject",
-          html: "<p>Body</p>",
-          text: "Body",
-        }),
-        "COMMUNICATION_INVALID_INPUT",
-      );
-    }
-
     await expectCode(
       service.createTemplate(organizer, {
         id: "sender-wrong-purpose",
         eventId,
         name: "Wrong purpose sender",
         purpose: "verification",
-        sender: "speakers@sessionboard.namuh.co",
+        sender: configuredSenders.speakers,
         subject: "Subject",
         html: "<p>Body</p>",
         text: "Body",
       }),
       "COMMUNICATION_INVALID_INPUT",
     );
+  });
+
+  it("rebinds new lineage versions to the current runtime sender without mutating history", async () => {
+    const repository = new InMemoryCommunicationRepository({
+      recipients,
+      authorizedAudiences: {
+        [`${tenantId}:${eventId}`]: ["all_participants"],
+      },
+    });
+    const originalService = new CommunicationService(repository, undefined, {
+      senderIdentities: {
+        auth: "login@legacy.example",
+        speakers: "program@legacy.example",
+        calendar: "schedule@legacy.example",
+      },
+    });
+    const original = await originalService.createTemplate(organizer, {
+      id: "rotated-group-template",
+      eventId,
+      name: "Rotated group template",
+      purpose: "organizer_group_email",
+      subject: "Original {{displayName}}",
+      html: "<p>Original {{displayName}}</p>",
+      text: "Original {{displayName}}",
+    });
+    await originalService.approveTemplate(organizer, eventId, original.id, original.version);
+
+    const adapter = new FakeDeliveryAdapter();
+    const rotatedService = new CommunicationService(repository, adapter, {
+      senderIdentities: {
+        auth: "login@conference.example",
+        speakers: "program@conference.example",
+        calendar: "schedule@conference.example",
+      },
+    });
+    const rotated = await rotatedService.createTemplateVersion(organizer, {
+      eventId,
+      templateId: original.id,
+      subject: "Rotated {{displayName}}",
+      html: "<p>Rotated {{displayName}}</p>",
+      text: "Rotated {{displayName}}",
+    });
+
+    expect(rotated.sender).toBe("program@conference.example");
+    expect(
+      (await rotatedService.getTemplate(organizer, eventId, original.id, original.version)).sender,
+    ).toBe("program@legacy.example");
+    await expectCode(
+      rotatedService.previewGroupSend(organizer, {
+        eventId,
+        purpose: "organizer_group_email",
+        templateId: original.id,
+        templateVersion: original.version,
+        audience: "all_participants",
+      }),
+      "COMMUNICATION_INVALID_INPUT",
+    );
+
+    await rotatedService.approveTemplate(organizer, eventId, rotated.id, rotated.version);
+    const preview = await rotatedService.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: rotated.id,
+      templateVersion: rotated.version,
+      audience: "all_participants",
+    });
+    expect(preview.template.sender).toBe("program@conference.example");
+    const send = await rotatedService.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "rotated-group-send",
+    });
+    expect(send.template.sender).toBe("program@conference.example");
+    expect(adapter.requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: "program@conference.example",
+          senderPurpose: "speakers",
+        }),
+      ]),
+    );
+  });
+
+  it("requires runtime sender configuration before creating a template", async () => {
+    const service = new CommunicationService(new InMemoryCommunicationRepository());
+    await expectCode(
+      service.createTemplate(organizer, {
+        eventId,
+        name: "Unconfigured sender",
+        purpose: "verification",
+        subject: "Subject",
+        html: "<p>Body</p>",
+        text: "Body",
+      }),
+      "COMMUNICATION_UNAVAILABLE",
+    );
+  });
+
+  it("rejects malformed runtime sender configuration", () => {
+    expect(
+      () =>
+        new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+          senderIdentities: {
+            auth: "not-an-email",
+            speakers: "program@conference.example",
+            calendar: "schedule@conference.example",
+          },
+        }),
+    ).toThrow("Communication auth sender must be a valid email address.");
   });
   it("isolates tenant/event data and keeps template versions immutable", async () => {
     const { service, version } = await fixture();
@@ -304,6 +413,16 @@ describe("communications domain", () => {
       data: { message: "<script>alert('x')</script>" },
     });
     expect(preview.recipientCount).toBe(2);
+    expect(preview.template.sender).toBe("program@conference.example");
+    expect(
+      preview.recipientPreviews.map((recipient) => ({
+        recipientId: recipient.recipientId,
+        subject: recipient.subject,
+      })),
+    ).toEqual([
+      { recipientId: "participant-1", subject: "Updated One" },
+      { recipientId: "participant-2", subject: "Updated Two" },
+    ]);
     expect(preview.html).toContain("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
     expect(preview.html).not.toContain("<script>");
     await expectCode(
@@ -321,12 +440,17 @@ describe("communications domain", () => {
       idempotencyKey: "group-send-1",
     });
     expect(send.templateVersion).toBe(version.version);
+    expect(send.template.sender).toBe("program@conference.example");
     expect(send.previewId).toBe(preview.id);
     expect(send.recipients.map((recipient) => recipient.id)).toEqual([
       "participant-1",
       "participant-2",
     ]);
-    expect(adapter.requests[0]?.html).toContain("&lt;script&gt;");
+    expect(adapter.requests[0]).toMatchObject({
+      from: "program@conference.example",
+      senderPurpose: "speakers",
+      html: expect.stringContaining("&lt;script&gt;"),
+    });
     const firstRecipient = recipients[0];
     if (firstRecipient === undefined) {
       throw new Error("Expected recipient fixture.");
@@ -337,6 +461,143 @@ describe("communications domain", () => {
     });
     const persisted = await service.getSend(organizer, eventId, send.id);
     expect(persisted.recipients[0]?.email).toBe("one@example.test");
+  });
+
+  it("previews an exact recipient set in request order and protects server identity data", async () => {
+    const { service } = await fixture();
+    const template = await service.createTemplate(organizer, {
+      id: "identity-template",
+      eventId,
+      name: "Identity-safe update",
+      purpose: "organizer_group_email",
+      subject: "{{first_name}}|{{display_name}}|{{email}}",
+      html: "<p>{{first_name}}|{{display_name}}|{{email}}</p>",
+      text: "{{first_name}}|{{display_name}}|{{email}}",
+      variables: ["first_name", "display_name", "email"],
+    });
+    await service.approveTemplate(organizer, eventId, template.id, template.version);
+
+    const preview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: template.id,
+      audience: "all_participants",
+      recipientIds: ["participant-2", "participant-1"],
+      data: {
+        first_name: "Attacker",
+        display_name: "Spoofed recipient",
+        email: "spoofed@example.test",
+      },
+    });
+
+    expect(preview.recipientIds).toEqual(["participant-2", "participant-1"]);
+    expect(preview.recipientPreviews.map((recipient) => recipient.subject)).toEqual([
+      "Two|Two|two@example.test",
+      "One|One|one@example.test",
+    ]);
+    await expectCode(
+      service.previewGroupSend(organizer, {
+        eventId,
+        purpose: "organizer_group_email",
+        templateId: template.id,
+        audience: "all_participants",
+        recipientIds: ["participant-1", "participant-1"],
+      }),
+      "COMMUNICATION_INVALID_INPUT",
+    );
+    await expectCode(
+      service.previewGroupSend(organizer, {
+        eventId,
+        purpose: "organizer_group_email",
+        templateId: template.id,
+        audience: "accepted_participants",
+        recipientIds: ["participant-2"],
+      }),
+      "COMMUNICATION_NOT_FOUND",
+    );
+  });
+
+  it("lists event sends newest first and excludes other tenant data", async () => {
+    const { service } = await fixture();
+    const preview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      data: { message: "Listing" },
+    });
+    const first = await service.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "list-first",
+    });
+    const second = await service.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "list-second",
+    });
+
+    const listed = await service.listSends(organizer, eventId);
+    expect(listed.map((send) => send.id)).toEqual(
+      [first, second]
+        .sort(
+          (left, right) =>
+            right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+        )
+        .map((send) => send.id),
+    );
+    expect(await service.listSends(otherTenantOrganizer, eventId)).toEqual([]);
+  });
+
+  it("redacts credentials from provider errors before persisting delivery reasons", async () => {
+    const repository = new InMemoryCommunicationRepository({
+      recipients: recipients.slice(0, 1),
+      authorizedAudiences: { [`${tenantId}:${eventId}`]: ["all_participants"] },
+    });
+    const service = new CommunicationService(
+      repository,
+      {
+        async send() {
+          throw new Error(
+            "provider failed: Bearer super-secret api_key=another-secret https://user:password@mail.example.test",
+          );
+        },
+      },
+      {
+        clock: () => new Date(now),
+        senderIdentities: {
+          auth: "login@conference.example",
+          speakers: "program@conference.example",
+          calendar: "schedule@conference.example",
+        },
+      },
+    );
+    const template = await service.createTemplate(organizer, {
+      id: "redaction-template",
+      eventId,
+      name: "Redaction",
+      purpose: "organizer_group_email",
+      subject: "Update",
+      html: "<p>Update</p>",
+      text: "Update",
+    });
+    await service.approveTemplate(organizer, eventId, template.id, template.version);
+    const preview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: template.id,
+      audience: "all_participants",
+    });
+    const send = await service.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "redacted-provider-error",
+    });
+    const serialized = JSON.stringify(send);
+    expect(serialized).not.toContain("super-secret");
+    expect(serialized).not.toContain("another-secret");
+    expect(serialized).not.toContain("user:password");
+    expect(send.deliveries[0]?.failureReason).toContain("[REDACTED]");
   });
 
   it("is idempotent and records per-recipient provider states and delivery history", async () => {
@@ -359,8 +620,76 @@ describe("communications domain", () => {
       idempotencyKey: "same-key",
     });
     expect(replay.id).toBe(first.id);
+
+    const changedRecipients = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      recipientIds: ["participant-1"],
+      data: { message: "Operational update" },
+    });
+    await expectCode(
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: changedRecipients.id,
+        idempotencyKey: "same-key",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+
+    const changedRenderData = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      data: { message: "Changed operational update" },
+    });
+    await expectCode(
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: changedRenderData.id,
+        idempotencyKey: "same-key",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+
+    const changedTemplate = await service.createTemplateVersion(organizer, {
+      eventId,
+      templateId: "group-template",
+      subject: "Changed {{displayName}}",
+      html: "<p>{{message}}</p>",
+      text: "{{message}}",
+    });
+    await service.approveTemplate(organizer, eventId, changedTemplate.id, changedTemplate.version);
+    const changedTemplatePreview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: changedTemplate.id,
+      templateVersion: changedTemplate.version,
+      audience: "all_participants",
+      data: { message: "Operational update" },
+    });
+    await expectCode(
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: changedTemplatePreview.id,
+        idempotencyKey: "same-key",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+
     expect(adapter.requests).toHaveLength(2);
     expect(first.deliveries.map((delivery) => delivery.status)).toEqual(["queued", "failed"]);
+    expect(first).toMatchObject({
+      status: "queued",
+      recipientCount: 2,
+      queuedCount: 1,
+      deliveredCount: 0,
+      failedCount: 1,
+      terminal: false,
+    });
+    expect(first.deliveries[1]?.failureReason).toBe("temporary provider failure");
 
     const delivered = await service.recordDeliveryStatus(organizer, {
       eventId,
@@ -377,9 +706,37 @@ describe("communications domain", () => {
       reason: "Mailbox unavailable",
     });
     expect(delivered.deliveries[0]?.status).toBe("delivered");
+    expect(delivered).toMatchObject({
+      status: "partial",
+      queuedCount: 0,
+      deliveredCount: 1,
+      failedCount: 1,
+      terminal: true,
+    });
     expect(bounced.deliveries[1]?.status).toBe("bounced");
     expect(bounced.history.some((entry) => entry.action === "delivery_bounced")).toBe(true);
     expect(bounced.deliveries[1]?.history.at(-1)?.reason).toBe("Mailbox unavailable");
+    expect(bounced).toMatchObject({
+      status: "partial",
+      recipientCount: 2,
+      queuedCount: 0,
+      deliveredCount: 1,
+      failedCount: 1,
+      terminal: true,
+    });
+    const history = await service.listDeliveryHistory(organizer, eventId, first.id);
+    expect(history).toMatchObject({
+      recipientCount: 2,
+      queuedCount: 0,
+      deliveredCount: 1,
+      failedCount: 1,
+      terminal: true,
+    });
+    expect(history.deliveries[1]?.history.map((entry) => entry.status)).toEqual([
+      "queued",
+      "failed",
+      "bounced",
+    ]);
   });
 
   it("starts authorization, template, and recipient reads together and bounds preview calls", async () => {
@@ -439,5 +796,246 @@ describe("communications domain", () => {
       }),
       "COMMUNICATION_FORBIDDEN",
     );
+  });
+});
+const automation: CommunicationActor = {
+  tenantId,
+  userId: "reminder-cron",
+  kind: "automation",
+  grants: [{ eventId, role: "delivery" }],
+};
+
+function reminderCandidate(overrides: Partial<ReminderCandidate> = {}): ReminderCandidate {
+  return {
+    id: "candidate-1",
+    organizationId: tenantId,
+    eventId,
+    recipientApplicationId: "application-1",
+    normalizedEmail: "recipient@example.test",
+    displayName: "Recipient",
+    subject: { type: "task", taskId: "task-1" },
+    eligibilityReason: "due",
+    cadenceWindow: "2026-08-09T12:00:00.000Z",
+    nextEligibleAt: null,
+    eligible: true,
+    renderedMessage: {
+      from: "speakers@sessionboard.namuh.co",
+      subject: "Reminder",
+      html: "<p>Reminder</p>",
+      text: "Reminder",
+    },
+    ...overrides,
+  } as ReminderCandidate;
+}
+
+class FakeReminderOutbox implements ReminderOutboxDelivery {
+  readonly requests: Parameters<ReminderOutboxDelivery["enqueue"]>[0][] = [];
+  fail = false;
+
+  async enqueue(request: Parameters<ReminderOutboxDelivery["enqueue"]>[0]) {
+    this.requests.push(request);
+    if (this.fail) throw new Error("outbox unavailable");
+    return { outboxJobId: `job-${this.requests.length}` };
+  }
+}
+
+function reminderFixture(
+  candidates: readonly ReminderCandidate[],
+  audienceRevision = "revision-1",
+  clock: () => Date = () => new Date(now),
+): {
+  service: CommunicationService;
+  repository: InMemoryReminderRepository;
+  outbox: FakeReminderOutbox;
+  runtime: ReminderRuntime;
+} {
+  const repository = new InMemoryReminderRepository();
+  const outbox = new FakeReminderOutbox();
+  const runtime: ReminderRuntime = {
+    repository,
+    source: {
+      async listCandidates() {
+        return {
+          audienceType: "combined",
+          audienceRevision,
+          candidates,
+        };
+      },
+    },
+    outbox,
+  };
+  return {
+    service: new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      clock,
+      reminders: runtime,
+    }),
+    repository,
+    outbox,
+    runtime,
+  };
+}
+
+describe("reminder domain", () => {
+  it("uses one hourly automatic run and one cadence dispatch across later Cron runs", async () => {
+    const candidate = reminderCandidate();
+    const { service, repository, outbox } = reminderFixture([candidate]);
+    const first = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T12:05:00.000Z",
+    });
+    const replay = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T12:55:00.000Z",
+    });
+    const later = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T13:05:00.000Z",
+    });
+    expect(replay.id).toBe(first.id);
+    expect(later.id).not.toBe(first.id);
+    expect(outbox.requests).toHaveLength(1);
+    expect(await repository.listDispatches(tenantId, eventId)).toHaveLength(1);
+  });
+
+  it("persists missing-email skips and keeps queue success queued", async () => {
+    const missing = reminderCandidate({ normalizedEmail: null });
+    const queued = reminderCandidate({
+      id: "candidate-2",
+      recipientApplicationId: "application-2",
+      subject: { type: "review", reviewAssignmentId: "assignment-1" },
+    });
+    const { service, repository } = reminderFixture([missing, queued]);
+    const run = await service.runManualReminders(organizer, {
+      eventId,
+      idempotencyKey: "manual-1",
+      expectedAudienceRevision: "revision-1",
+    });
+    const dispatches = await repository.listDispatches(tenantId, eventId, run.id);
+    expect(dispatches.map((dispatch) => dispatch.status)).toEqual(["skipped", "queued"]);
+    expect(dispatches[0]?.skipMetadata).toEqual({ reason: "missing_email" });
+    expect(run.queuedCount).toBe(1);
+  });
+
+  it("durably fails automatic runs when a runtime component is missing", async () => {
+    const repository = new InMemoryReminderRepository();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      clock: () => new Date(now),
+      reminders: { repository },
+    });
+    const failed = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: now,
+    });
+    expect(failed.state).toBe("failed");
+    expect(failed.configurationFailure).toContain("candidate source");
+    expect(await repository.listRuns(tenantId, eventId)).toHaveLength(1);
+  });
+
+  it("fails stale manual audience revisions durably before reporting a conflict", async () => {
+    const { service, repository } = reminderFixture([], "revision-2");
+    await expectCode(
+      service.runManualReminders(organizer, {
+        eventId,
+        idempotencyKey: "stale-manual",
+        expectedAudienceRevision: "revision-1",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+    const [run] = await repository.listRuns(tenantId, eventId);
+    expect(run).toMatchObject({ state: "failed", audienceRevision: "revision-2" });
+  });
+
+  it("uses one source and outbox boundary for task and review candidates", async () => {
+    const task = reminderCandidate();
+    const review = reminderCandidate({
+      id: "candidate-review",
+      recipientApplicationId: "application-2",
+      subject: { type: "review", reviewAssignmentId: "assignment-1" },
+    });
+    const { service, outbox } = reminderFixture([task, review]);
+    await service.runManualReminders(organizer, {
+      eventId,
+      idempotencyKey: "task-review",
+      expectedAudienceRevision: "revision-1",
+    });
+    expect(outbox.requests).toEqual([
+      expect.objectContaining({ subject: "Reminder", senderPurpose: "speakers" }),
+      expect.objectContaining({ subject: "Reminder", senderPurpose: "speakers" }),
+    ]);
+  });
+
+  it("enforces provider status transitions and correlates provider IDs", async () => {
+    const second = reminderCandidate({
+      id: "candidate-2",
+      recipientApplicationId: "application-2",
+      subject: { type: "review", reviewAssignmentId: "assignment-2" },
+    });
+    const { service, repository } = reminderFixture([reminderCandidate(), second]);
+    await service.runAutomaticReminders(automation, { eventId, scheduledAt: now });
+    const dispatches = await repository.listDispatches(tenantId, eventId);
+    const first = dispatches[0];
+    const other = dispatches[1];
+    if (first === undefined || other === undefined)
+      throw new Error("Expected reminder dispatches.");
+    await expectCode(
+      service.recordReminderDispatchStatus(automation, {
+        eventId,
+        dispatchId: first.id,
+        status: "delivered",
+        providerMessageId: "provider-1",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+    await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      dispatchId: first.id,
+      status: "provider_accepted",
+      providerMessageId: "provider-1",
+    });
+    const delivered = await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      providerMessageId: "provider-1",
+      status: "delivered",
+    });
+    await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      dispatchId: other.id,
+      status: "provider_accepted",
+      providerMessageId: "provider-2",
+    });
+    const bounced = await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      providerMessageId: "provider-2",
+      status: "bounced",
+    });
+    expect(delivered.status).toBe("delivered");
+    expect(bounced.status).toBe("bounced");
+  });
+
+  it("distinguishes automatic/manual facts and computes a future next eligibility", async () => {
+    let current = new Date(now);
+    const candidate = reminderCandidate({
+      nextEligibleAt: "2026-08-10T12:00:00.000Z",
+    });
+    const { service } = reminderFixture([candidate], "revision-1", () => current);
+    const manual = await service.runManualReminders(organizer, {
+      eventId,
+      idempotencyKey: "facts-manual",
+      expectedAudienceRevision: "revision-1",
+    });
+    current = new Date("2026-08-09T13:00:00.000Z");
+    const automatic = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: current.toISOString(),
+    });
+    const facts = await service.getReminderFacts(organizer, {
+      eventId,
+      recipientApplicationId: candidate.recipientApplicationId,
+      subject: candidate.subject,
+    });
+    expect(facts.lastManual?.id).toBe(manual.id);
+    expect(facts.lastAutomatic?.id).toBe(automatic.id);
+    expect(facts.lastOutcome?.status).toBe("queued");
+    expect(facts.nextEligibleAt).toBe(candidate.nextEligibleAt);
   });
 });

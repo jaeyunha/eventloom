@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_OPEN_SEND_SENDERS, OpenSendClient } from "./client";
+import { OpenSendClient, type OpenSendSenderAddresses } from "./client";
 import type { OpenSendError, OpenSendMessage } from "./types";
 
+const senderAddresses: OpenSendSenderAddresses = {
+  auth: "login@self-hosted.example",
+  speakers: "program@self-hosted.example",
+  calendar: "calendar@self-hosted.example",
+};
+
 const message: OpenSendMessage = {
-  from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+  from: senderAddresses.speakers,
   to: ["speaker@example.com"],
   subject: "Session update",
   html: "<p>Your session was updated.</p>",
@@ -12,7 +18,7 @@ const message: OpenSendMessage = {
 };
 
 describe("OpenSendClient production configuration", () => {
-  it("selects the three verified senders and allows only verified overrides", async () => {
+  it("requires and selects the three deployment-provided senders", async () => {
     const requests: RequestInit[] = [];
     const fetch: typeof globalThis.fetch = async (_input, init = {}) => {
       requests.push(init);
@@ -21,30 +27,70 @@ describe("OpenSendClient production configuration", () => {
     const client = new OpenSendClient({
       sendingApiKey: "test-sending-key",
       fetch,
-      senderAddresses: {
-        auth: "auth@sessionboard.namuh.co",
-        speakers: "speakers@sessionboard.namuh.co",
-        calendar: "calendar@sessionboard.namuh.co",
-      },
+      senderAddresses,
     });
 
-    expect(client.senderFor("auth")).toBe("auth@sessionboard.namuh.co");
-    expect(client.senderFor("speakers")).toBe("speakers@sessionboard.namuh.co");
-    expect(client.senderFor("calendar")).toBe("calendar@sessionboard.namuh.co");
+    expect(client.senderFor("auth")).toBe("login@self-hosted.example");
+    expect(client.senderFor("speakers")).toBe("program@self-hosted.example");
+    expect(client.senderFor("calendar")).toBe("calendar@self-hosted.example");
 
     await client.send(message, "calendar");
     const request = requests[0];
     if (request === undefined) throw new Error("Expected an OpenSend request.");
     expect(JSON.parse(String(request.body))).toMatchObject({
-      from: "calendar@sessionboard.namuh.co",
+      from: "calendar@self-hosted.example",
     });
 
     expect(
       () =>
         new OpenSendClient({
           sendingApiKey: "test-sending-key",
-          senderAddresses: { auth: "auth@foreverbrowsing.com" },
+          senderAddresses: { ...senderAddresses, auth: "not-an-email" },
           fetch,
+        }),
+    ).toThrowError(
+      expect.objectContaining<Partial<OpenSendError>>({
+        code: "CONFIGURATION_ERROR",
+        retryable: false,
+      }),
+    );
+  });
+
+  it("uses an optional queued sender purpose for the current envelope sender and keeps audit metadata unchanged", async () => {
+    const requests: RequestInit[] = [];
+    const fetch: typeof globalThis.fetch = async (_input, init = {}) => {
+      requests.push(init);
+      return Response.json({ id: "provider-message-rotated" }, { status: 201 });
+    };
+    const client = new OpenSendClient({
+      sendingApiKey: "test-sending-key",
+      senderAddresses,
+      fetch,
+    });
+    const queued: OpenSendMessage = {
+      ...message,
+      from: "program@legacy.example",
+      senderPurpose: "speakers",
+    };
+
+    await expect(client.send(queued)).resolves.toEqual({
+      providerMessageId: "provider-message-rotated",
+      idempotencyKey: message.idempotencyKey,
+    });
+    expect(queued.from).toBe("program@legacy.example");
+    const request = requests[0];
+    if (request === undefined) throw new Error("Expected an OpenSend request.");
+    const body = JSON.parse(String(request.body)) as Record<string, unknown>;
+    expect(body.from).toBe("program@self-hosted.example");
+    expect(body).not.toHaveProperty("senderPurpose");
+  });
+
+  it("fails closed when a purpose mapping is missing", () => {
+    expect(
+      () =>
+        new OpenSendClient({
+          sendingApiKey: "test-sending-key",
+          senderAddresses: { auth: senderAddresses.auth } as OpenSendSenderAddresses,
         }),
     ).toThrowError(
       expect.objectContaining<Partial<OpenSendError>>({
@@ -60,7 +106,11 @@ describe("OpenSendClient production configuration", () => {
       request = init;
       return Response.json({ id: "provider-message-2" }, { status: 201 });
     };
-    const client = new OpenSendClient({ sendingApiKey: "test-sending-key", fetch });
+    const client = new OpenSendClient({
+      sendingApiKey: "test-sending-key",
+      senderAddresses,
+      fetch,
+    });
 
     await expect(client.send(message)).resolves.toEqual({
       providerMessageId: "provider-message-2",
@@ -84,7 +134,11 @@ describe("OpenSendClient production configuration", () => {
         }),
         { status: 500, headers: { "content-type": "application/json" } },
       );
-    const client = new OpenSendClient({ sendingApiKey: "test-sending-key", fetch });
+    const client = new OpenSendClient({
+      sendingApiKey: "test-sending-key",
+      senderAddresses,
+      fetch,
+    });
 
     const rejection = client.send(message);
     await expect(rejection).rejects.toMatchObject({
@@ -105,7 +159,7 @@ describe("OpenSendClient production configuration", () => {
     };
 
     try {
-      const client = new OpenSendClient({ sendingApiKey: "test-sending-key" });
+      const client = new OpenSendClient({ sendingApiKey: "test-sending-key", senderAddresses });
       await client.send(message);
       expect(observedThis).toBe(globalThis);
     } finally {

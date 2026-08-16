@@ -1,19 +1,26 @@
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { AuthAccessError, type AuthPrincipal } from "../auth/types";
-import { type EventService, EventServiceError, type EventServiceErrorCode } from "./service";
+import {
+  type EventService,
+  EventServiceError,
+  type EventServiceErrorCode,
+  type ProgramPublicationService,
+} from "./service";
 import {
   type CreateEventInput,
+  type EventActor,
+  type EventCfpSettingsInput,
+  type EventDefaultCalendarSettingsInput,
   type EventEmbedConfigurationInput,
   eventEmbedDisplayFields,
   eventEmbedLayouts,
   eventEmbedOutputFormats,
   eventEmbedThemes,
   eventEmbedWidgetIds,
-  type EventActor,
-  type EventCfpSettingsInput,
-  type EventDefaultCalendarSettingsInput,
   eventStatuses,
+  type ProgramPublicationPreviewRequest,
+  programPublicationSourceTriggers,
   type UpdateEventInput,
 } from "./types";
 
@@ -31,6 +38,10 @@ export type EventRouteService = Pick<
 
 export interface EventRouteDependencies {
   readonly service: EventRouteService;
+  readonly publication?: Pick<
+    ProgramPublicationService,
+    "getState" | "requestRebuild" | "rollback" | "resolvePreview"
+  >;
 }
 
 type EventContext = Context<EventRouteEnvironment>;
@@ -60,6 +71,10 @@ const calendarSettingsInputSchema = z
   })
   .strict();
 const eventStatusSchema = z.enum(eventStatuses);
+const scheduleDatesSchema = z
+  .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u))
+  .max(366)
+  .optional();
 const embedConfigurationSchema = z
   .object({
     id: identifierSchema,
@@ -74,8 +89,9 @@ const embedConfigurationSchema = z
     textColor: z.string().regex(/^#[0-9a-f]{6}$/i),
     customCss: z.string().max(20_000),
     displayFields: z.array(z.enum(eventEmbedDisplayFields)).max(eventEmbedDisplayFields.length),
-    tracks: z.array(z.string().trim().min(1).max(128)).max(100),
+    trackIds: z.array(z.string().trim().min(1).max(128)).max(100),
     statuses: z.array(z.string().trim().min(1).max(128)).max(100),
+    revision: z.number().int().positive().optional(),
   })
   .strict();
 const embedConfigurationsSchema = z.array(embedConfigurationSchema).max(100).optional();
@@ -88,6 +104,7 @@ const createEventSchema = z
     timeZone: identifierSchema,
     startsAt: instantSchema,
     endsAt: instantSchema,
+    scheduleDates: scheduleDatesSchema,
     venue: z.string().trim().max(2_000).nullable().optional(),
     cfpSettings: settingsInputSchema.optional(),
     defaultCalendarSettings: calendarSettingsInputSchema.optional(),
@@ -103,6 +120,7 @@ const updateEventSchema = z
     timeZone: identifierSchema.optional(),
     startsAt: instantSchema.optional(),
     endsAt: instantSchema.optional(),
+    scheduleDates: scheduleDatesSchema,
     venue: z.string().trim().max(2_000).nullable().optional(),
     cfpSettings: settingsInputSchema.optional(),
     defaultCalendarSettings: calendarSettingsInputSchema.optional(),
@@ -110,6 +128,106 @@ const updateEventSchema = z
   })
   .strict();
 const archiveEventSchema = z.object({ expectedVersion: expectedVersionSchema }).strict();
+const programRebuildSchema = z
+  .object({
+    trigger: z.enum(programPublicationSourceTriggers),
+    agendaProjectionId: identifierSchema,
+    agendaRevisionNumber: expectedVersionSchema,
+    agendaSourceHash: z.string().trim().min(1).max(256),
+    speakerProjectionId: identifierSchema,
+    speakerRevisionNumber: expectedVersionSchema,
+    speakerSourceHash: z.string().trim().min(1).max(256),
+    approvedContentRevision: expectedVersionSchema,
+    approvedProfileRevision: expectedVersionSchema,
+    releasedAssetRevision: expectedVersionSchema,
+    parentServedRevision: expectedVersionSchema.nullable().optional(),
+  })
+  .strict();
+const programRollbackSchema = z
+  .object({
+    targetRevision: expectedVersionSchema,
+    expectedServedRevision: expectedVersionSchema.nullable(),
+    expectedPublicationVersion: expectedVersionSchema.optional(),
+  })
+  .strict();
+const programManifestSchema = z
+  .object({
+    id: identifierSchema,
+    organizationId: identifierSchema,
+    eventId: identifierSchema,
+    revision: expectedVersionSchema,
+    lifecycle: z.enum(["pending", "served", "failed"]),
+    agendaProjectionId: identifierSchema,
+    agendaRevisionNumber: expectedVersionSchema,
+    agendaSourceHash: z.string().trim().min(1).max(256),
+    speakerProjectionId: identifierSchema,
+    speakerRevisionNumber: expectedVersionSchema,
+    speakerSourceHash: z.string().trim().min(1).max(256),
+    approvedContentRevision: expectedVersionSchema,
+    approvedProfileRevision: expectedVersionSchema,
+    releasedAssetRevision: expectedVersionSchema,
+    actorId: identifierSchema,
+    publishedAt: instantSchema,
+    parentServedRevision: expectedVersionSchema.nullable(),
+    rollbackTargetRevision: expectedVersionSchema.nullable(),
+    cacheRevision: expectedVersionSchema,
+    sourceTrigger: z.enum(programPublicationSourceTriggers),
+    failureReason: z.string().trim().min(1).max(2_000).nullable(),
+  })
+  .strict();
+const programAgendaEntrySchema = z
+  .object({
+    id: identifierSchema,
+    sessionId: identifierSchema,
+    trackIds: z.array(identifierSchema).max(100),
+    status: z.string().trim().min(1).max(128),
+    title: z.string().trim().min(1).max(1_000),
+    summary: z.string().max(20_000).optional(),
+    format: z.string().trim().min(1).max(500).optional(),
+    startsAt: instantSchema.optional(),
+    endsAt: instantSchema.optional(),
+    startsAtLocal: z.string().trim().min(1).max(64).optional(),
+    endsAtLocal: z.string().trim().min(1).max(64).optional(),
+    timeZone: identifierSchema.optional(),
+    roomName: z.string().max(500).optional(),
+    trackNames: z.array(z.string().max(500)).max(100).optional(),
+    speakerNames: z.array(z.string().max(500)).max(100).optional(),
+  })
+  .strict();
+const programSpeakerSchema = z
+  .object({
+    id: identifierSchema,
+    participantId: identifierSchema,
+    sessionIds: z.array(identifierSchema).max(100),
+    displayName: z.string().trim().min(1).max(500),
+    title: z.string().max(500).optional(),
+    company: z.string().max(500).optional(),
+    bio: z.string().max(20_000).optional(),
+    avatarUrl: z.string().max(2_000).nullable().optional(),
+  })
+  .strict();
+const programPreviewSchema = z
+  .object({
+    manifest: programManifestSchema,
+    agendaProjection: z
+      .object({
+        id: identifierSchema,
+        revisionNumber: expectedVersionSchema,
+        sourceHash: z.string().trim().min(1).max(256),
+        entries: z.array(programAgendaEntrySchema).max(2_000),
+      })
+      .strict(),
+    speakerProjection: z
+      .object({
+        id: identifierSchema,
+        revisionNumber: expectedVersionSchema,
+        sourceHash: z.string().trim().min(1).max(256),
+        speakers: z.array(programSpeakerSchema).max(2_000),
+      })
+      .strict(),
+    configuration: embedConfigurationSchema.extend({ revision: expectedVersionSchema }),
+  })
+  .strict();
 type CreateEventBody = z.infer<typeof createEventSchema>;
 type UpdateEventBody = z.infer<typeof updateEventSchema>;
 
@@ -136,11 +254,12 @@ function embedConfigurationsInput(
   value: CreateEventBody["embedConfigurations"],
 ): readonly EventEmbedConfigurationInput[] | undefined {
   if (value === undefined) return undefined;
-  return value.map((configuration) => ({
+  return value.map(({ revision, ...configuration }) => ({
     ...configuration,
     displayFields: [...configuration.displayFields],
-    tracks: [...configuration.tracks],
+    trackIds: [...configuration.trackIds],
     statuses: [...configuration.statuses],
+    ...(revision === undefined ? {} : { revision }),
   }));
 }
 
@@ -155,6 +274,7 @@ function createServiceInput(input: CreateEventBody, organizationId: string): Cre
   if (input.id !== undefined) result.id = input.id;
   if (input.slug !== undefined) result.slug = input.slug;
   if (input.status !== undefined) result.status = input.status;
+  if (input.scheduleDates !== undefined) result.scheduleDates = [...input.scheduleDates];
   if (input.venue !== undefined) result.venue = input.venue;
   const cfpSettings = cfpInput(input.cfpSettings);
   if (cfpSettings !== undefined) result.cfpSettings = cfpSettings;
@@ -183,6 +303,7 @@ function updateServiceInput(
   if (input.timeZone !== undefined) result.timeZone = input.timeZone;
   if (input.startsAt !== undefined) result.startsAt = input.startsAt;
   if (input.endsAt !== undefined) result.endsAt = input.endsAt;
+  if (input.scheduleDates !== undefined) result.scheduleDates = [...input.scheduleDates];
   if (input.venue !== undefined) result.venue = input.venue;
   const cfpSettings = cfpInput(input.cfpSettings);
   if (cfpSettings !== undefined) result.cfpSettings = cfpSettings;
@@ -315,6 +436,68 @@ export function createEventRoutes(
     return context.json({ data }, 201);
   });
 
+  routes.get("/:eventId/publication", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const data = await dependencies.publication.getState(actor, {
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.post("/:eventId/publication/rebuild", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const input = await body(context, programRebuildSchema);
+    const { parentServedRevision, ...rebuild } = input;
+    const data = await dependencies.publication.requestRebuild(actor, {
+      ...rebuild,
+      ...(parentServedRevision === undefined ? {} : { parentServedRevision }),
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data }, 202);
+  });
+
+  routes.post("/:eventId/publication/rollback", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const input = await body(context, programRollbackSchema);
+    const { expectedPublicationVersion, ...rollback } = input;
+    const data = await dependencies.publication.rollback(actor, {
+      ...rollback,
+      ...(expectedPublicationVersion === undefined ? {} : { expectedPublicationVersion }),
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.post("/:eventId/publication/preview", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const input = await body(context, programPreviewSchema);
+    const previewRequest = {
+      ...input,
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    } as unknown as ProgramPublicationPreviewRequest;
+    const data = dependencies.publication.resolvePreview(actor, previewRequest);
+    return context.json({ data });
+  });
   routes.get("/:eventId", async (context) => {
     const organizationId = routeParam(context, "organizationId");
     const actor = organizer(context, organizationId);

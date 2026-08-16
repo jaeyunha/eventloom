@@ -1,0 +1,7 @@
+{
+  "submissions": [{ "accepted": true, "score": 0, "id": "sub-1" }],
+  "events": [
+    { "tags": ["systems", "data"], "name": "First (normalized)", "id": "evt-1" },
+    { "settings": { "timezone": "UTC", "public": false }, "name": "Second", "id": "evt-2" }
+  ]
+}

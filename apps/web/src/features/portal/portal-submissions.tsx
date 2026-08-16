@@ -1,28 +1,18 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
-import { filterSubmissions, submissionStatusPresentation } from "./model";
+import { filterSubmissions, portalSubmissionIdsMatch } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
-import {
-  EmptyState,
-  formatPortalDate,
-  PageHeading,
-  PortalContentState,
-  SubmissionStatusBadge,
-} from "./portal-ui";
+import { PortalSubmissionCard } from "./portal-submission-card";
+import { EmptyState, PageHeading, PortalContentState } from "./portal-ui";
 
-export function portalSubmissionIdsMatch(left: string, right: string): boolean {
-  const normalizedLeft = left.trim();
-  const normalizedRight = right.trim();
-  if (normalizedLeft.length === 0 || normalizedRight.length === 0) return false;
-  return (
-    normalizedLeft === normalizedRight ||
-    normalizedLeft === `speaker-submission:${normalizedRight}` ||
-    normalizedRight === `speaker-submission:${normalizedLeft}`
-  );
-}
+export {
+  canonicalPortalSubmissionId,
+  type PortalSubmissionActionTargets,
+  portalSubmissionActionTargets,
+  portalSubmissionDisplayTitle,
+} from "./portal-submission-model";
 
 export function PortalSubmissions() {
   return (
@@ -33,27 +23,25 @@ export function PortalSubmissions() {
 }
 
 function PortalSubmissionsContent() {
-  const { eventQuery, view } = usePortal();
+  const { eventQuery, view, context, can } = usePortal();
   const [search, setSearch] = useState("");
-  if (!view) {
-    return null;
-  }
+  if (!view) return null;
   const submissions = filterSubmissions(view.submissions, search).filter(
     (candidate, index, all) =>
       all.findIndex((other) => portalSubmissionIdsMatch(other.id, candidate.id)) === index,
   );
 
   return (
-    <>
+    <div className={styles.submissionsPage}>
       <PageHeading
-        eyebrow="Your proposals"
+        eyebrow={context?.name ?? "Selected event"}
         title="Submissions"
-        description="Follow each proposal from submission through the final program decision."
+        description="Follow each proposal from its persisted submission state through the event decision."
       />
       <section className={styles.panel} aria-labelledby="submissions-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="submissions-heading">All submissions</h2>
+            <h2 id="submissions-heading">Submission statuses</h2>
             <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
@@ -69,11 +57,10 @@ function PortalSubmissionsContent() {
             />
           </label>
         </div>
-
         {view.submissions.length === 0 ? (
           <EmptyState
             title="No submissions yet"
-            description="When you submit a proposal, its status will appear here."
+            description="A proposal appears here after it is persisted for this event."
           />
         ) : submissions.length === 0 ? (
           <EmptyState
@@ -91,36 +78,19 @@ function PortalSubmissionsContent() {
           />
         ) : (
           <div className={styles.submissionGrid}>
-            {submissions.map((submission) => {
-              const presentation = submissionStatusPresentation(submission.status);
-              return (
-                <article key={submission.id} className={styles.submissionTile}>
-                  <div className={styles.submissionTileTop}>
-                    <span className={styles.documentIcon} aria-hidden="true">
-                      ▤
-                    </span>
-                    <SubmissionStatusBadge status={submission.status} />
-                  </div>
-                  <div>
-                    <p className={styles.submissionId}>Submission {submission.id}</p>
-                    <h3>{submission.title}</h3>
-                    <p>{presentation.description}</p>
-                  </div>
-                  <footer>
-                    <span>Updated {formatPortalDate(submission.updatedAt) ?? "recently"}</span>
-                    <Link
-                      href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
-                      aria-label={`View status for ${submission.title}`}
-                    >
-                      View status <span aria-hidden="true">→</span>
-                    </Link>
-                  </footer>
-                </article>
-              );
-            })}
+            {submissions.map((submission) => (
+              <PortalSubmissionCard
+                key={submission.id}
+                canEdit={can("submission-edit")}
+                context={context}
+                eventQuery={eventQuery}
+                equivalents={view.submissions}
+                submission={submission}
+              />
+            ))}
           </div>
         )}
       </section>
-    </>
+    </div>
   );
 }

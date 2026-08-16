@@ -89,7 +89,7 @@ const defaultWorkerOptions: Required<
   maxAttempts: 5,
   initialRetryDelayMs: 1_000,
   maxRetryDelayMs: 60 * 60 * 1_000,
-  userAgent: "OpenSessionboard-Webhooks/1",
+  userAgent: "Eventloom-Webhooks/1",
   maxResponseBodyBytes: 4_096,
 };
 

@@ -1,4 +1,6 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
+
+export type { CalendarInvitationPayload };
 
 export type CalendarInvitationMethod = CalendarInvitationPayload["method"];
 
@@ -8,7 +10,15 @@ export interface CalendarInvitationScope {
   sessionId: string;
 }
 
-export type CalendarInvitationDetails = Omit<CalendarInvitationPayload, "uid" | "sequence">;
+export interface CalendarIntegrationOptions {
+  readonly organizer: string;
+  readonly uidDomain: string;
+}
+
+export type CalendarInvitationDetails = Omit<
+  CalendarInvitationPayload,
+  "uid" | "sequence" | "organizer"
+>;
 
 export type CalendarInvitationInput = CalendarInvitationScope & CalendarInvitationDetails;
 export interface CalendarInvitationSerializationOptions {
@@ -58,5 +68,36 @@ export class CalendarInvitationError extends Error {
   }
 }
 
-export const CALENDAR_UID_DOMAIN = "calendar.sessionboard.namuh.co";
-export const CALENDAR_ORGANIZER = "calendar@sessionboard.namuh.co";
+const emailPattern =
+  /^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
+const domainLabelPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+
+export function isCalendarEmailAddress(value: string): boolean {
+  return value.length <= 254 && emailPattern.test(value);
+}
+
+export function validateCalendarIntegrationOptions(options: unknown): CalendarIntegrationOptions {
+  if (options === null || typeof options !== "object") {
+    throw new CalendarInvitationError("INVALID_PAYLOAD", "Calendar options must be an object");
+  }
+  const candidate = options as Partial<CalendarIntegrationOptions>;
+  if (typeof candidate.organizer !== "string" || !isCalendarEmailAddress(candidate.organizer)) {
+    throw new CalendarInvitationError(
+      "INVALID_PAYLOAD",
+      "Calendar organizer must be a valid email address",
+    );
+  }
+  if (
+    typeof candidate.uidDomain !== "string" ||
+    candidate.uidDomain.length > 253 ||
+    candidate.uidDomain.endsWith(".") ||
+    !candidate.uidDomain.includes(".") ||
+    !candidate.uidDomain.split(".").every((label) => domainLabelPattern.test(label))
+  ) {
+    throw new CalendarInvitationError(
+      "INVALID_PAYLOAD",
+      "Calendar UID domain must be a valid domain name",
+    );
+  }
+  return { organizer: candidate.organizer, uidDomain: candidate.uidDomain };
+}

@@ -1,19 +1,54 @@
 import { z } from "zod";
-import { idempotencyKeySchema, jsonValueSchema, timestampSchema } from "./common";
+import {
+  apiScopeSchema,
+  apiScopes,
+  idempotencyKeySchema,
+  jsonValueSchema,
+  timestampSchema,
+} from "./common";
 import {
   agendaVersionIdSchema,
   eventIdSchema,
-  integrationPublicationIdSchema,
   participantIdSchema,
   reviewIdSchema,
-  sessionIdSchema,
   submissionIdSchema,
-  syncAttemptIdSchema,
   taskIdSchema,
   webhookDeliveryIdSchema,
   webhookSubscriptionIdSchema,
 } from "./ids";
-import { integrationPublicationStatusSchema, webhookDeliveryStatusSchema } from "./lifecycle";
+import { webhookDeliveryStatusSchema } from "./lifecycle";
+
+export const organizationApiKeySummarySchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().min(1).max(100),
+  prefix: z.string().trim().min(1),
+  scopes: z.array(apiScopeSchema).min(1),
+  eventId: z.string().trim().min(1).nullable(),
+  createdAt: timestampSchema,
+  lastUsedAt: timestampSchema.nullable(),
+  expiresAt: timestampSchema.nullable(),
+  revokedAt: timestampSchema.nullable(),
+});
+export type OrganizationApiKeySummary = z.infer<typeof organizationApiKeySummarySchema>;
+
+export const createOrganizationApiKeyRequestSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  scopes: z.array(apiScopeSchema).min(1).max(apiScopes.length),
+  expiresAt: z
+    .string()
+    .trim()
+    .max(80)
+    .refine((value) => !Number.isNaN(Date.parse(value)), "The expiration date is invalid.")
+    .nullable(),
+  eventId: z.string().trim().min(1).max(200).nullable().optional(),
+});
+export type CreateOrganizationApiKeyRequest = z.infer<typeof createOrganizationApiKeyRequestSchema>;
+
+export const oneTimeApiKeySecretSchema = z.object({
+  id: z.string().trim().min(1),
+  secret: z.string().trim().min(1),
+});
+export type OneTimeApiKeySecret = z.infer<typeof oneTimeApiKeySecretSchema>;
 
 export const webhookEventTypes = [
   "submission.created",
@@ -26,8 +61,6 @@ export const webhookEventTypes = [
   "task.updated",
   "agenda.published",
   "agenda.rolled_back",
-  "integration.publication_completed",
-  "integration.publication_failed",
 ] as const;
 export const webhookEventTypeSchema = z.enum(webhookEventTypes);
 export type WebhookEventType = z.infer<typeof webhookEventTypeSchema>;
@@ -50,10 +83,6 @@ export const webhookResourceSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("review"), id: reviewIdSchema }),
   z.object({ type: z.literal("task"), id: taskIdSchema }),
   z.object({ type: z.literal("agenda_version"), id: agendaVersionIdSchema }),
-  z.object({
-    type: z.literal("integration_publication"),
-    id: integrationPublicationIdSchema,
-  }),
 ]);
 
 export const webhookEventSchema = z.object({
@@ -87,96 +116,7 @@ export const webhookDeliverySchema = z.object({
 });
 export type WebhookDelivery = z.infer<typeof webhookDeliverySchema>;
 
-export const integrationFieldMappingSchema = z.object({
-  sourceField: z.string().trim().min(1).max(200),
-  destinationField: z.string().trim().min(1).max(200),
-  required: z.boolean(),
-});
-export type IntegrationFieldMapping = z.infer<typeof integrationFieldMappingSchema>;
-
-export const acceleventsSpeakerPayloadSchema = z.object({
-  externalId: participantIdSchema,
-  email: z.email(),
-  firstName: z.string().trim().min(1).max(100),
-  lastName: z.string().trim().min(1).max(100),
-  biography: z.string().trim().max(10_000),
-  company: z.string().trim().max(200).nullable(),
-  jobTitle: z.string().trim().max(200).nullable(),
-  headshotUrl: z.url().nullable(),
-});
-export type AcceleventsSpeakerPayload = z.infer<typeof acceleventsSpeakerPayloadSchema>;
-
-export const acceleventsSessionPayloadSchema = z.object({
-  externalId: sessionIdSchema,
-  title: z.string().trim().min(1).max(300),
-  description: z.string().trim().max(20_000),
-  startsAt: timestampSchema,
-  endsAt: timestampSchema,
-  timeZone: z.string().trim().min(1),
-  location: z.string().trim().max(300).nullable(),
-  room: z.string().trim().min(1).max(200),
-  track: z.string().trim().max(200).nullable(),
-  tags: z.array(z.string().trim().min(1).max(100)),
-  speakerExternalIds: z.array(participantIdSchema).min(1),
-});
-export type AcceleventsSessionPayload = z.infer<typeof acceleventsSessionPayloadSchema>;
-
-export const integrationRecordErrorSchema = z.object({
-  externalId: z.string().trim().min(1),
-  code: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
-  message: z.string().trim().min(1),
-  retryable: z.boolean(),
-});
-export type IntegrationRecordError = z.infer<typeof integrationRecordErrorSchema>;
-
-export const acceleventsPublicationPreviewSchema = z.object({
-  publicationId: integrationPublicationIdSchema,
-  eventId: eventIdSchema,
-  agendaRevisionId: agendaVersionIdSchema,
-  speakers: z.array(acceleventsSpeakerPayloadSchema),
-  sessions: z.array(acceleventsSessionPayloadSchema),
-  mappings: z.array(integrationFieldMappingSchema),
-  validationErrors: z.array(integrationRecordErrorSchema),
-  snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
-  createdAt: timestampSchema,
-});
-export type AcceleventsPublicationPreview = z.infer<typeof acceleventsPublicationPreviewSchema>;
-
-export const publishAcceleventsRequestSchema = z.object({
-  publicationId: integrationPublicationIdSchema,
-  snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
-  idempotencyKey: idempotencyKeySchema,
-});
-export type PublishAcceleventsRequest = z.infer<typeof publishAcceleventsRequestSchema>;
-
-export const integrationPublicationSchema = z.object({
-  id: integrationPublicationIdSchema,
-  eventId: eventIdSchema,
-  provider: z.literal("accelevents"),
-  agendaRevisionId: agendaVersionIdSchema,
-  status: integrationPublicationStatusSchema,
-  snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
-  createdAt: timestampSchema,
-  completedAt: timestampSchema.nullable(),
-});
-export type IntegrationPublication = z.infer<typeof integrationPublicationSchema>;
-
-export const syncAttemptSchema = z.object({
-  id: syncAttemptIdSchema,
-  publicationId: integrationPublicationIdSchema,
-  attempt: z.int().positive(),
-  status: z.enum(["running", "succeeded", "failed"]),
-  errors: z.array(integrationRecordErrorSchema),
-  startedAt: timestampSchema,
-  completedAt: timestampSchema.nullable(),
-});
-export type SyncAttempt = z.infer<typeof syncAttemptSchema>;
-
-export const openSendSenderSchema = z.enum([
-  "auth@sessionboard.namuh.co",
-  "speakers@sessionboard.namuh.co",
-  "calendar@sessionboard.namuh.co",
-]);
+export const openSendSenderSchema = z.email();
 
 export const openSendEmailPayloadSchema = z.object({
   from: openSendSenderSchema,
@@ -195,7 +135,7 @@ export const calendarInvitationPayloadSchema = z.object({
   timeZone: z.string().trim().min(1),
   startsAt: timestampSchema,
   endsAt: timestampSchema,
-  organizer: z.literal("calendar@sessionboard.namuh.co"),
+  organizer: z.email(),
   attendees: z.array(z.email()).min(1),
   summary: z.string().trim().min(1).max(300),
   location: z.string().trim().max(300),
@@ -208,10 +148,6 @@ export const publicationOutboxPayloadSchema = z.discriminatedUnion("effect", [
   z.object({
     effect: z.literal("deliver_calendar_updates"),
     payload: calendarInvitationPayloadSchema,
-  }),
-  z.object({
-    effect: z.literal("publish_accelevents"),
-    payload: publishAcceleventsRequestSchema,
   }),
   z.object({ effect: z.literal("deliver_webhook"), deliveryId: webhookDeliveryIdSchema }),
 ]);

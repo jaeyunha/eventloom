@@ -1,0 +1,56 @@
+.shell {
+  height: 100svh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.account {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--sidebar-border);
+}
+
+.accountCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+  padding-inline: 0.35rem;
+}
+
+.accountCopy strong,
+.accountCopy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCopy strong {
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.accountCopy span {
+  color: var(--muted-foreground);
+  font-size: 0.66rem;
+}
+
+.signOut {
+  width: 100%;
+  height: 1.9rem;
+  justify-content: flex-start;
+  padding-inline: 0.45rem;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 30rem) {
+  .allWorkLabel {
+    display: none;
+  }
+}

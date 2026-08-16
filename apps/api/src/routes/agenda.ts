@@ -1,13 +1,21 @@
-import { apiErrorSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema } from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
-import { type AgendaEngine, AgendaError, AgendaValidationError } from "../features/agenda/engine";
+import {
+  type AgendaEngine,
+  AgendaEntryTemporalValidationError,
+  AgendaError,
+  AgendaValidationError,
+  validateAgendaEntriesWithinEvent,
+} from "../features/agenda/engine";
+import { localDateInTimeZone } from "../features/agenda/timezone";
 import type {
   PublishedAgendaRevision as AgendaPublishedRevision,
   AgendaState,
 } from "../features/agenda/types";
 import type { AuthPrincipal, UserPrincipal } from "../features/auth/types";
 import { AuthAccessError } from "../features/auth/types";
+import type { ProgramPublicationManifest } from "../features/events/types";
 import { escapeIcalText, foldIcalLine } from "../integrations/calendar/ical";
 
 export interface AgendaRouteEnvironment {
@@ -20,8 +28,11 @@ export interface AgendaEventMetadata {
   readonly slug: string;
   readonly name: string;
   readonly timeZone: string;
+  readonly startsAt?: string;
+  readonly endsAt?: string;
   readonly startsOn: string;
   readonly endsOn: string;
+  readonly scheduleDates?: readonly string[];
   readonly venueName: string | null;
 }
 export interface AgendaRouteDependencies {
@@ -29,8 +40,23 @@ export interface AgendaRouteDependencies {
   readonly organizationIdForEvent: (eventId: string) => Promise<string | null>;
   readonly afterPublish?: (eventId: string, revision: AgendaPublishedRevision) => Promise<void>;
   readonly eventMetadataForEvent?: (eventId: string) => Promise<AgendaEventMetadata | null>;
+  readonly eventIdForSlug?: (eventSlug: string) => Promise<string | null>;
+  readonly getProgramPublicationManifest?: (
+    eventSlug: string,
+  ) => Promise<ProgramPublicationManifest | null>;
+  /** Legacy projection selector retained for isolated route adapters. Runtime composition uses manifests. */
+  readonly publicRevisionNumberForEventSlug?: (eventSlug: string) => Promise<number | null>;
+}
+export interface PublishedAgendaRouteOptions {
+  readonly calendarUidDomain: string;
 }
 
+const calendarUidDomainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u);
 const identifierSchema = z.string().trim().min(1).max(200);
 const expectedVersionSchema = z.number().int().positive();
 const sessionSchema = z
@@ -75,10 +101,7 @@ const entrySchema = z
   })
   .strict();
 const createAgendaSchema = catalogSchema
-  .extend({
-    timeZone: z.string().trim().min(1).max(100),
-    minimumTravelMinutes: z.number().int().nonnegative().max(1_440),
-  })
+  .extend({ minimumTravelMinutes: z.number().int().nonnegative().max(1_440) })
   .strict();
 const updateDraftSchema = z
   .object({ expectedVersion: expectedVersionSchema, entries: z.array(entrySchema).max(2_000) })
@@ -145,9 +168,9 @@ async function completePublicationHandoff(
   eventId: string,
   revision: AgendaPublishedRevision,
 ): Promise<void> {
-  await invalidatePublishedAgendaCache(dependencies.engine, eventId, revision);
   try {
     await dependencies.afterPublish?.(eventId, revision);
+    await invalidatePublishedAgendaCache(dependencies.engine, eventId, revision);
   } catch (error) {
     throw publicationProjectionFailure(error);
   }
@@ -201,14 +224,17 @@ function conflictDetails(error: AgendaValidationError): ValidationIssue[] {
     message: conflict.message,
   }));
 }
-function staleRevisionDetails(message: string): ValidationIssue[] {
+function staleRevisionDetails(
+  message: string,
+  field: "baseDraftVersion" | "expectedVersion",
+): ValidationIssue[] {
   const match = /^Expected draft version (\d+), current version is (\d+)$/u.exec(message);
   if (match === null) {
-    return [{ path: ["baseDraftVersion"], code: "stale", message }];
+    return [{ path: [field], code: "stale", message }];
   }
   return [
     {
-      path: ["baseDraftVersion"],
+      path: [field],
       code: "stale",
       message: `Expected draft version ${match[1]}; current draft version is ${match[2]}.`,
     },
@@ -216,6 +242,15 @@ function staleRevisionDetails(message: string): ValidationIssue[] {
 }
 
 function agendaErrorResponse(context: AgendaContext, error: AgendaError): Response {
+  if (error instanceof AgendaEntryTemporalValidationError) {
+    return errorResponse(context, 400, "VALIDATION_FAILED", error.message, [
+      {
+        path: ["entries", error.entryIndex, error.field],
+        code: `agenda.${error.issueCode}`,
+        message: error.message,
+      },
+    ]);
+  }
   if (error instanceof AgendaValidationError) {
     return errorResponse(
       context,
@@ -237,17 +272,21 @@ function agendaErrorResponse(context: AgendaContext, error: AgendaError): Respon
       );
     case "AGENDA_ALREADY_EXISTS":
       return errorResponse(context, 409, "CONFLICT", error.message);
-    case "CONCURRENT_MODIFICATION":
-      if (context.req.path.includes("/suggestions")) {
-        return errorResponse(
-          context,
-          412,
-          "PRECONDITION_FAILED",
-          "The agenda suggestion base draft revision is stale.",
-          staleRevisionDetails(error.message),
-        );
-      }
-      return errorResponse(context, 409, "CONFLICT", error.message);
+    case "CONCURRENT_MODIFICATION": {
+      const suggestionRoute = context.req.path.includes("/suggestions");
+      return errorResponse(
+        context,
+        suggestionRoute ? 412 : 409,
+        suggestionRoute ? "PRECONDITION_FAILED" : "CONFLICT",
+        suggestionRoute
+          ? "The agenda suggestion base draft revision is stale."
+          : "The agenda draft revision is stale.",
+        staleRevisionDetails(
+          error.message,
+          suggestionRoute ? "baseDraftVersion" : "expectedVersion",
+        ),
+      );
+    }
     case "PUBLICATION_BLOCKED":
       return errorResponse(context, 409, "CONFLICT", error.message);
     case "SUGGESTION_NOT_FOUND":
@@ -297,6 +336,17 @@ function routeParam(context: AgendaContext, name: string): string {
   return value;
 }
 
+async function requireEventOrganization(
+  dependencies: AgendaRouteDependencies,
+  organizationId: string,
+  eventId: string,
+): Promise<void> {
+  const eventOrganizationId = await dependencies.organizationIdForEvent(eventId);
+  if (eventOrganizationId === null || eventOrganizationId !== organizationId) {
+    throw new AgendaError("AGENDA_NOT_FOUND", "The event agenda was not found.");
+  }
+}
+
 async function organizerForEvent(
   context: AgendaContext,
   dependencies: AgendaRouteDependencies,
@@ -304,16 +354,98 @@ async function organizerForEvent(
   const organizationId = routeParam(context, "organizationId");
   const eventId = routeParam(context, "eventId");
   const principal = requireOrganizerPrincipal(context, organizationId);
-  const eventOrganizationId = await dependencies.organizationIdForEvent(eventId);
-  if (eventOrganizationId === null || eventOrganizationId !== organizationId) {
-    throw new AgendaError("AGENDA_NOT_FOUND", "The event agenda was not found.");
-  }
+  await requireEventOrganization(dependencies, organizationId, eventId);
   return principal;
 }
 
 async function body<T>(context: AgendaContext, schema: z.ZodType<T>): Promise<T> {
   const payload = await context.req.json().catch(() => undefined);
   return schema.parse(payload);
+}
+type AgendaLocalEntry = Readonly<{
+  id: string;
+  startsAtLocal: string;
+  endsAtLocal: string;
+  startDisambiguation?: "earlier" | "later" | undefined;
+  endDisambiguation?: "earlier" | "later" | undefined;
+}>;
+
+function agendaDate(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (match === null) return null;
+  const [, year, month, day] = match;
+  const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return parsed.getUTCFullYear() === Number(year) &&
+    parsed.getUTCMonth() + 1 === Number(month) &&
+    parsed.getUTCDate() === Number(day)
+    ? value
+    : null;
+}
+
+function agendaDateRange(metadata: AgendaEventMetadata): ReadonlySet<string> {
+  if (metadata.scheduleDates !== undefined && metadata.scheduleDates.length > 0) {
+    const dates = metadata.scheduleDates.map(agendaDate);
+    if (dates.some((date) => date === null)) {
+      throw new AgendaError("INVALID_AGENDA", "The event schedule dates are invalid.");
+    }
+    return new Set(dates as string[]);
+  }
+  const start = agendaDate(metadata.startsOn);
+  const end = agendaDate(metadata.endsOn);
+  if (start === null || end === null || start > end) {
+    throw new AgendaError("INVALID_AGENDA", "The event date range is invalid.");
+  }
+  const dates = new Set<string>();
+  for (
+    let current = Date.parse(`${start}T00:00:00.000Z`);
+    current <= Date.parse(`${end}T00:00:00.000Z`);
+    current += 86_400_000
+  ) {
+    dates.add(new Date(current).toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+function validateAgendaEntryDates(
+  metadata: AgendaEventMetadata | null,
+  entries: readonly AgendaLocalEntry[],
+): void {
+  if (metadata === null) return;
+  if (metadata.startsAt !== undefined && metadata.endsAt !== undefined) {
+    validateAgendaEntriesWithinEvent(entries, {
+      startsAt: metadata.startsAt,
+      endsAt: metadata.endsAt,
+      timeZone: metadata.timeZone,
+      ...(metadata.scheduleDates === undefined ? {} : { scheduleDates: metadata.scheduleDates }),
+    });
+    return;
+  }
+  const allowedDates = agendaDateRange(metadata);
+  for (const entry of entries) {
+    const start = agendaDate(entry.startsAtLocal.slice(0, 10));
+    const end = agendaDate(entry.endsAtLocal.slice(0, 10));
+    if (start === null || end === null || start !== end) {
+      throw new AgendaError(
+        "INVALID_AGENDA",
+        `Agenda entry ${entry.id} must start and end on the same valid calendar date.`,
+      );
+    }
+    if (!allowedDates.has(start)) {
+      throw new AgendaError(
+        "INVALID_AGENDA",
+        `Agenda entry ${entry.id} must fall within event dates ${metadata.startsOn} through ${metadata.endsOn}.`,
+      );
+    }
+  }
+}
+
+async function agendaEventMetadata(
+  dependencies: AgendaRouteDependencies,
+  eventId: string,
+): Promise<AgendaEventMetadata | null> {
+  return dependencies.eventMetadataForEvent === undefined
+    ? null
+    : dependencies.eventMetadataForEvent(eventId);
 }
 function agendaRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -335,6 +467,22 @@ function agendaSessionSpeakerNames(session: unknown): readonly string[] {
   const names = agendaStrings(record, "speakerNames").filter((name) => name.trim().length > 0);
   return names.length > 0 ? names : agendaStrings(record, "participantIds");
 }
+function agendaEntrySpeakerNames(entry: unknown, session: unknown): readonly string[] {
+  const stored = agendaStrings(agendaRecord(entry), "speakerNames").filter(
+    (name) => name.trim().length > 0,
+  );
+  const current = agendaSessionSpeakerNames(session);
+  const participantIds = agendaStrings(agendaRecord(session), "participantIds");
+  const storedAreParticipantIds =
+    stored.length > 0 &&
+    stored.length === participantIds.length &&
+    stored.every((name, index) => name === participantIds[index]);
+  return storedAreParticipantIds && current.some((name, index) => name !== participantIds[index])
+    ? current
+    : stored.length > 0
+      ? stored
+      : current;
+}
 
 function agendaSessionFormat(session: unknown): string {
   const record = agendaRecord(session);
@@ -352,6 +500,7 @@ function adminAgendaPreviewView(
   return {
     draftVersion: preview.draftVersion,
     conflicts: preview.validation.conflicts,
+    releaseConflicts: preview.releaseValidation.conflicts,
     warnings: preview.validation.warnings.map((warning) => {
       const overrideReason = warningOverrides.get(warning.id);
       return {
@@ -368,8 +517,12 @@ function adminAgendaPreviewView(
     validatedAt: new Date().toISOString(),
   };
 }
-function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgendaRevision | null) {
-  const publicEvent = published === null ? null : publishedAgendaView(published, state).event;
+function adminAgendaWorkspaceView(
+  state: AgendaState,
+  published: PublishedAgendaRevision | null,
+  eventMetadata: AgendaEventMetadata | null = null,
+) {
+  const publicEvent = published === null ? null : publishedAgendaView(published).event;
   const sessionById = new Map(state.sessions.map((session) => [session.id, session]));
   const roomById = new Map(state.rooms.map((room) => [room.id, room]));
   const trackById = new Map(state.tracks.map((track) => [track.id, track]));
@@ -378,17 +531,26 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
     .map((entry) => entry.startsAtLocal.slice(0, 10))
     .filter((date) => /^\d{4}-\d{2}-\d{2}$/u.test(date))
     .sort();
-  const startsOn = publicEvent?.startsOn ?? localDates[0] ?? new Date().toISOString().slice(0, 10);
-  const endsOn = publicEvent?.endsOn ?? localDates.at(-1) ?? startsOn;
+  const startsOn =
+    eventMetadata?.startsOn ??
+    publicEvent?.startsOn ??
+    localDates[0] ??
+    localDateInTimeZone(new Date().toISOString(), state.timeZone);
+  const endsOn = eventMetadata?.endsOn ?? publicEvent?.endsOn ?? localDates.at(-1) ?? startsOn;
   const trackColors = ["#4f46e5", "#0f766e", "#b45309", "#be123c", "#6d28d9"];
 
   return {
     event: {
       id: state.eventId,
-      name: publicEvent?.name ?? state.eventId,
-      timeZone: state.timeZone,
+      name: eventMetadata?.name ?? publicEvent?.name ?? state.eventId,
+      timeZone: eventMetadata?.timeZone ?? state.timeZone,
+      ...(eventMetadata?.startsAt === undefined ? {} : { startsAt: eventMetadata.startsAt }),
+      ...(eventMetadata?.endsAt === undefined ? {} : { endsAt: eventMetadata.endsAt }),
       startsOn,
       endsOn,
+      ...(eventMetadata?.scheduleDates === undefined
+        ? {}
+        : { scheduleDates: eventMetadata.scheduleDates }),
     },
     draft: {
       version: state.draft.version,
@@ -402,10 +564,7 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
           sessionId: entry.sessionId,
           title: agendaText(stored, "title", session?.title ?? entry.sessionId),
           format: agendaText(stored, "format", agendaSessionFormat(session)),
-          speakerNames:
-            agendaStrings(stored, "speakerNames").length > 0
-              ? agendaStrings(stored, "speakerNames")
-              : agendaSessionSpeakerNames(session),
+          speakerNames: agendaEntrySpeakerNames(stored, session),
           roomId: entry.roomId,
           roomName: agendaText(
             stored,
@@ -419,6 +578,12 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
               : entry.trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
           startsAtLocal: entry.startsAtLocal,
           endsAtLocal: entry.endsAtLocal,
+          ...(entry.startDisambiguation === undefined
+            ? {}
+            : { startDisambiguation: entry.startDisambiguation }),
+          ...(entry.endDisambiguation === undefined
+            ? {}
+            : { endDisambiguation: entry.endDisambiguation }),
         };
       }),
     },
@@ -428,10 +593,14 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
       name: track.name,
       color: trackColors[index % trackColors.length],
     })),
+    acceptedSessionIds: state.sessions
+      .filter((session) => isAcceptedAgendaSession(session))
+      .map((session) => session.id),
     unscheduledSessions: state.sessions
       .filter((session) => isAcceptedAgendaSession(session) && !scheduledSessionIds.has(session.id))
       .map((session) => {
         const record = agendaRecord(session);
+        const trackIds = agendaStrings(record, "trackIds");
         return {
           id: session.id,
           title: session.title,
@@ -440,6 +609,8 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
             typeof session.durationMinutes === "number" ? session.durationMinutes : 30,
           speakerNames: agendaSessionSpeakerNames(session),
           capacityRequired: session.capacityRequired,
+          trackIds,
+          trackNames: trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
         };
       }),
     revisions: state.revisions.map((revision) => ({
@@ -475,25 +646,40 @@ export function createAgendaAdminRoutes(
     await next();
   });
   routes.get("/", async (context) => {
-    await organizerForEvent(context, dependencies);
+    const organizationId = routeParam(context, "organizationId");
     const eventId = routeParam(context, "eventId");
-    const state = await dependencies.engine.repository.load(eventId);
+    requireOrganizerPrincipal(context, organizationId);
+    const eventAuthorization = requireEventOrganization(dependencies, organizationId, eventId);
+    // Capture the state outcome without letting it outrank event-tenant authorization failures.
+    const stateResultPromise = dependencies.engine.repository.load(eventId).then(
+      (state) => ({ status: "loaded" as const, state }),
+      (error: unknown) => ({ status: "error" as const, error }),
+    );
+    await eventAuthorization;
+    const stateResult = await stateResultPromise;
+    if (stateResult.status === "error") throw stateResult.error;
+    const { state } = stateResult;
     if (state === null) {
       return errorResponse(context, 404, "NOT_FOUND", "The event agenda was not found.");
     }
+    const eventMetadata =
+      dependencies.eventMetadataForEvent === undefined
+        ? null
+        : await dependencies.eventMetadataForEvent(eventId);
     const published =
       state.currentPublishedRevisionId === null
         ? null
         : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
           null);
-    return context.json({ data: adminAgendaWorkspaceView(state, published) });
+    return context.json({ data: adminAgendaWorkspaceView(state, published, eventMetadata) });
   });
 
   routes.post("/", async (context) => {
     const principal = await organizerForEvent(context, dependencies);
     const input = await body(context, createAgendaSchema);
+    const eventId = routeParam(context, "eventId");
     const data = await dependencies.engine.createAgenda({
-      eventId: routeParam(context, "eventId"),
+      eventId,
       actorId: principal.userId,
       ...input,
       sessions: input.sessions.map((session) => ({
@@ -604,8 +790,10 @@ export function createAgendaAdminRoutes(
   routes.put("/draft", async (context) => {
     const principal = await organizerForEvent(context, dependencies);
     const input = await body(context, updateDraftSchema);
+    const eventId = routeParam(context, "eventId");
+    validateAgendaEntryDates(await agendaEventMetadata(dependencies, eventId), input.entries);
     const data = await dependencies.engine.updateDraft({
-      eventId: routeParam(context, "eventId"),
+      eventId,
       actorId: principal.userId,
       expectedVersion: input.expectedVersion,
       entries: input.entries.map((entry) => ({
@@ -648,6 +836,10 @@ export function createAgendaAdminRoutes(
         ? null
         : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
           null);
+    validateAgendaEntryDates(
+      await agendaEventMetadata(dependencies, eventId),
+      state?.draft.entries ?? [],
+    );
     if (current?.sourceDraftVersion === input.expectedVersion) {
       await completePublicationHandoff(dependencies, eventId, current);
       return context.json({ data: current });
@@ -857,17 +1049,8 @@ function entryDate(
 }
 
 function entryMetadataSources(entry: PublishedAgendaRevision["entries"][number]): JsonRecord[] {
-  const record = asRecord(entry);
-  if (record === null) return [];
-  const metadata = asRecord(record.metadata);
-  return [
-    record,
-    metadata,
-    asRecord(record.public),
-    asRecord(record.publicMetadata),
-    asRecord(metadata?.public),
-    asRecord(metadata?.publicMetadata),
-  ].filter(isRecord);
+  const metadata = asRecord(entry.metadata);
+  return metadata === null ? [] : [metadata];
 }
 
 function isRecord(value: JsonRecord | null): value is JsonRecord {
@@ -890,74 +1073,25 @@ function eventMetadataSources(revision: PublishedAgendaRevision): JsonRecord[] {
   ].filter(isRecord);
 }
 
-interface PublishedEntryFallback {
-  readonly session?: unknown;
-  readonly roomName?: string;
-  readonly trackNames?: readonly string[];
-}
-
-function sessionMetadataSources(session: unknown): JsonRecord[] {
-  const record = asRecord(session);
-  if (record === null) return [];
-  const metadata = asRecord(record.metadata);
-  return [record, metadata, asRecord(record.public), asRecord(metadata?.public)].filter(isRecord);
-}
-
-function publishedEntryView(
-  entry: PublishedAgendaRevision["entries"][number],
-  fallback: PublishedEntryFallback = {},
-) {
-  const metadata = [...entryMetadataSources(entry), ...sessionMetadataSources(fallback.session)];
-  const speakerNames =
-    firstSpeakerNamesValue(metadata, ["speakerNames", "presenters", "speakers"]) ?? [];
-  const sessionFormat = firstTextValue(metadata, ["format", "formatName", "formatId"]);
-  const entryFormat = firstTextValue(entryMetadataSources(entry), ["format", "formatName"]);
-  const format =
-    entryFormat !== null && entryFormat !== "Session" ? entryFormat : (sessionFormat ?? "Session");
-  const fallbackTrackNames = fallback.trackNames ?? [];
-  const trackNames =
-    firstStringArrayValue(metadata, ["trackNames"]) ??
-    (fallbackTrackNames.length > 0
-      ? fallbackTrackNames
-      : entry.trackIds.map((trackId) => humanizeIdentifier(trackId)));
+function publishedEntryView(entry: PublishedAgendaRevision["entries"][number]) {
+  const metadata = entryMetadataSources(entry);
   return {
     id: entry.id,
     sessionId: entry.sessionId,
-    title: firstTextValue(metadata, ["title", "name"]) ?? humanizeIdentifier(entry.sessionId),
-    summary: firstTextValue(metadata, ["summary", "description"]) ?? "",
-    format,
-    speakerNames,
-    roomName:
-      firstTextValue(metadata, ["roomName", "room", "location"]) ??
-      fallback.roomName ??
-      humanizeIdentifier(entry.roomId),
-    trackNames,
+    title: firstTextValue(metadata, ["title"]) ?? "",
+    summary: firstTextValue(metadata, ["summary"]) ?? "",
+    format: firstTextValue(metadata, ["format"]) ?? "Session",
+    speakerNames: firstSpeakerNamesValue(metadata, ["speakerNames"]) ?? [],
+    roomName: firstTextValue(metadata, ["roomName"]) ?? "",
+    trackNames: firstStringArrayValue(metadata, ["trackNames"]) ?? [],
     startsAt: entry.startsAt,
     endsAt: entry.endsAt,
   };
 }
 
-function publishedAgendaView(revision: PublishedAgendaRevision, state?: AgendaState) {
+function publishedAgendaView(revision: PublishedAgendaRevision) {
   const eventMetadata = eventMetadataSources(revision);
-  const sessionById = new Map(state?.sessions.map((session) => [session.id, session]));
-  const roomById = new Map(state?.rooms.map((room) => [room.id, room]));
-  const trackById = new Map(state?.tracks.map((track) => [track.id, track]));
-  const eligibleEntries =
-    state === undefined
-      ? revision.entries
-      : revision.entries.filter((entry) => {
-          const session = sessionById.get(entry.sessionId);
-          return session !== undefined && isAcceptedAgendaSession(session);
-        });
-  const entries = eligibleEntries.map((entry) => {
-    const session = sessionById.get(entry.sessionId);
-    const roomName = roomById.get(entry.roomId)?.name;
-    return publishedEntryView(entry, {
-      ...(session === undefined ? {} : { session }),
-      ...(roomName === undefined ? {} : { roomName }),
-      trackNames: entry.trackIds.flatMap((trackId) => trackById.get(trackId)?.name ?? []),
-    });
-  });
+  const entries = revision.entries.map((entry) => publishedEntryView(entry));
   const publishedDate = dateValue(revision.publishedAt);
   const timeZone =
     firstTextValue(eventMetadata, ["timeZone", "eventTimeZone"]) ??
@@ -993,15 +1127,15 @@ function publishedAgendaView(revision: PublishedAgendaRevision, state?: AgendaSt
 
 const PUBLIC_AGENDA_CACHE_CONTROL =
   "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate";
-const PUBLIC_CALENDAR_UID_DOMAIN = "calendar.sessionboard.namuh.co";
 const publicEventSlugSchema = z.string().trim().min(1).max(200);
 type PublishedAgendaProjection = ReturnType<typeof publishedAgendaView>;
 type PublishedAgendaProjectionValue = {
   readonly eventId: string;
   readonly eventSlug: string;
+  readonly revisionNumber: number;
   readonly projection: PublishedAgendaProjection;
 };
-const PUBLIC_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid";
+const PUBLIC_CACHE_ORIGIN = "https://eventloom-public-cache.invalid";
 const PUBLIC_AGENDA_CACHE_TTL_MS = 60_000;
 const PUBLIC_AGENDA_CACHE_MAX_ENTRIES = 128;
 const PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES = 256;
@@ -1023,11 +1157,16 @@ interface AgendaCacheEntry extends AgendaCachedResponse {
   readonly eventId: string;
   readonly eventSlug: string;
   readonly expiresAt: number;
+  readonly revisionNumber: number;
 }
 
 interface AgendaCacheState {
   readonly entries: Map<string, AgendaCacheEntry>;
   readonly bypassed: Set<string>;
+  readonly generations: Map<string, number>;
+  readonly persistence: Map<string, Promise<void>>;
+  readonly minimumRevisions: Map<string, number>;
+  readonly latestRevisions: Map<string, number>;
 }
 
 const agendaCacheStates = new WeakMap<object, AgendaCacheState>();
@@ -1049,7 +1188,14 @@ function agendaCacheState(engine: AgendaEngine): AgendaCacheState {
   const key = engine as unknown as object;
   const existing = agendaCacheStates.get(key);
   if (existing !== undefined) return existing;
-  const created: AgendaCacheState = { entries: new Map(), bypassed: new Set() };
+  const created: AgendaCacheState = {
+    entries: new Map(),
+    bypassed: new Set(),
+    generations: new Map(),
+    persistence: new Map(),
+    minimumRevisions: new Map(),
+    latestRevisions: new Map(),
+  };
   agendaCacheStates.set(key, created);
   return created;
 }
@@ -1118,6 +1264,9 @@ async function readAgendaCacheResponse(
     removeExpiredAgendaEntries(state);
     return null;
   }
+  removeExpiredAgendaEntries(state);
+  const memoryEntry = state.entries.get(path);
+  if (memoryEntry !== undefined) return memoryEntry;
   const workerCache = workerResponseCache();
   if (workerCache !== null) {
     try {
@@ -1137,24 +1286,69 @@ async function readAgendaCacheResponse(
       // Cache API failures must never turn a public read into an error.
     }
   }
-  removeExpiredAgendaEntries(state);
-  return state.entries.get(path) ?? null;
+  return null;
 }
 
-async function writeAgendaCacheResponse(
+function nextAgendaCacheGeneration(state: AgendaCacheState, path: string): number {
+  const generation = (state.generations.get(path) ?? 0) + 1;
+  state.generations.set(path, generation);
+  return generation;
+}
+
+function enqueueAgendaCacheOperation(
+  state: AgendaCacheState,
+  path: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = state.persistence.get(path) ?? Promise.resolve();
+  const persistence = previous
+    .catch(() => undefined)
+    .then(operation)
+    .catch(() => undefined);
+  state.persistence.set(path, persistence);
+  void persistence.finally(() => {
+    if (state.persistence.get(path) === persistence) state.persistence.delete(path);
+  });
+  return persistence;
+}
+
+function scheduleAgendaCachePut(
+  context: AgendaContext,
+  state: AgendaCacheState,
+  workerCache: PublicResponseCache,
+  path: string,
+  entry: AgendaCacheEntry,
+  generation: number,
+): void {
+  const persistence = enqueueAgendaCacheOperation(state, path, async () => {
+    if (state.generations.get(path) !== generation) return;
+    await workerCache.put(publicCacheRequest(path), agendaCacheResponse(entry));
+    if (state.generations.get(path) !== generation && state.bypassed.has(path)) {
+      await workerCache.delete(publicCacheRequest(path));
+    }
+  });
+  try {
+    context.executionCtx.waitUntil(persistence);
+  } catch {
+    // Hono tests and local invocations may not attach an execution context.
+  }
+}
+
+function writeAgendaCacheResponse(
+  context: AgendaContext,
   state: AgendaCacheState,
   path: string,
   entry: AgendaCacheEntry,
-): Promise<void> {
+): void {
+  if ((state.minimumRevisions.get(path) ?? 0) > entry.revisionNumber) return;
+  if ((state.latestRevisions.get(path) ?? 0) > entry.revisionNumber) return;
+  state.latestRevisions.set(path, entry.revisionNumber);
+  const generation = nextAgendaCacheGeneration(state, path);
   state.bypassed.delete(path);
   rememberAgendaCacheEntry(state, path, entry);
   const workerCache = workerResponseCache();
   if (workerCache === null) return;
-  try {
-    await workerCache.put(publicCacheRequest(path), agendaCacheResponse(entry));
-  } catch {
-    // Cache API failures must never turn a successful public read into an error.
-  }
+  scheduleAgendaCachePut(context, state, workerCache, path, entry, generation);
 }
 
 async function invalidatePublishedAgendaCache(
@@ -1189,7 +1383,14 @@ async function invalidatePublishedAgendaCache(
     agendaCacheIndex.delete(path);
   }
   if (state !== undefined) {
-    for (const path of paths) state.bypassed.add(path);
+    for (const path of paths) {
+      state.bypassed.add(path);
+      nextAgendaCacheGeneration(state, path);
+      state.minimumRevisions.set(
+        path,
+        Math.max(state.minimumRevisions.get(path) ?? 0, revision.revisionNumber),
+      );
+    }
     while (state.bypassed.size > PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES) {
       const oldestPath = state.bypassed.values().next().value;
       if (typeof oldestPath !== "string") break;
@@ -1287,10 +1488,14 @@ function encodeCalendarUidPart(value: string): string {
   return encodeURIComponent(value).replaceAll(".", "%2E");
 }
 
-function publicCalendarUid(eventSlug: string, sessionId: string): string {
-  return `${encodeCalendarUidPart(eventSlug)}.${encodeCalendarUidPart(sessionId)}@${
-    PUBLIC_CALENDAR_UID_DOMAIN
-  }`;
+function publicCalendarUid(
+  eventSlug: string,
+  sessionId: string,
+  calendarUidDomain: string,
+): string {
+  return `${encodeCalendarUidPart(eventSlug)}.${encodeCalendarUidPart(
+    sessionId,
+  )}@${calendarUidDomain}`;
 }
 
 interface IcalDateTimeParts {
@@ -1365,11 +1570,15 @@ function formatCalendarUtcDateTime(value: string): string {
   ).padStart(2, "0")}Z`;
 }
 
-function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: string): string {
+function publicAgendaCalendar(
+  projection: PublishedAgendaProjection,
+  eventSlug: string,
+  calendarUidDomain: string,
+): string {
   const timeZone = publicCalendarTimeZone(projection.event.timeZone);
   const lines = [
     "BEGIN:VCALENDAR",
-    "PRODID:-//Open Sessionboard//Public Agenda//EN",
+    "PRODID:-//Eventloom//Public Agenda//EN",
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
@@ -1388,7 +1597,7 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
     const endsAt = formatCalendarDateTime(calendarDateTimeParts(entry.endsAt, timeZone));
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${publicCalendarUid(eventSlug, entry.id)}`,
+      `UID:${publicCalendarUid(eventSlug, entry.sessionId, calendarUidDomain)}`,
       `DTSTAMP:${formatCalendarUtcDateTime(projection.revision.publishedAt)}`,
       `DTSTART;TZID=${timeZone}:${startsAt}`,
       `DTEND;TZID=${timeZone}:${endsAt}`,
@@ -1397,7 +1606,7 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
       `LOCATION:${escapeIcalText(location)}`,
       ...(entry.speakerNames.length === 0
         ? []
-        : [`X-SESSIONBOARD-SPEAKERS:${escapeIcalText(entry.speakerNames.join(", "))}`]),
+        : [`X-EVENTLOOM-SPEAKERS:${escapeIcalText(entry.speakerNames.join(", "))}`]),
       "END:VEVENT",
     );
   }
@@ -1407,22 +1616,46 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
 
 async function publishedProjection(
   context: AgendaContext,
-  dependencies: Pick<AgendaRouteDependencies, "engine" | "eventMetadataForEvent">,
+  dependencies: Pick<
+    AgendaRouteDependencies,
+    | "engine"
+    | "eventMetadataForEvent"
+    | "eventIdForSlug"
+    | "getProgramPublicationManifest"
+    | "publicRevisionNumberForEventSlug"
+  >,
 ): Promise<PublishedAgendaProjectionValue | null> {
   const eventSlug = publicEventSlug(context);
   if (eventSlug === null) return null;
-  const state =
-    dependencies.engine.repository === undefined
-      ? null
-      : await dependencies.engine.repository.load(eventSlug);
-  const revision =
-    state === null
-      ? await dependencies.engine.getPublishedAgenda(eventSlug)
-      : state.currentPublishedRevisionId === null
-        ? null
-        : (state.revisions.find((candidate) => candidate.id === state.currentPublishedRevisionId) ??
-          null);
-  if (revision === null) return null;
+  let revision: PublishedAgendaRevision | null;
+  if (dependencies.getProgramPublicationManifest !== undefined) {
+    const manifest = await dependencies.getProgramPublicationManifest(eventSlug);
+    if (manifest === null || manifest.lifecycle !== "served") return null;
+    const eventId =
+      dependencies.eventIdForSlug === undefined
+        ? manifest.eventId
+        : await dependencies.eventIdForSlug(eventSlug);
+    if (eventId === null || eventId !== manifest.eventId) return null;
+    revision = await dependencies.engine.getPublishedAgendaRevision(
+      eventId,
+      manifest.agendaRevisionNumber,
+    );
+    if (revision === null || revision.id !== manifest.agendaProjectionId) return null;
+  } else {
+    revision = await dependencies.engine.getPublishedAgenda(eventSlug);
+    if (revision === null) return null;
+    if (dependencies.publicRevisionNumberForEventSlug !== undefined) {
+      const publicRevisionNumber = await dependencies.publicRevisionNumberForEventSlug(eventSlug);
+      if (publicRevisionNumber === null) return null;
+      if (publicRevisionNumber !== revision.revisionNumber) {
+        revision = await dependencies.engine.getPublishedAgendaRevision(
+          eventSlug,
+          publicRevisionNumber,
+        );
+        if (revision === null) return null;
+      }
+    }
+  }
   let eventMetadata: AgendaEventMetadata | undefined;
   if (dependencies.eventMetadataForEvent !== undefined) {
     const resolved = await dependencies.eventMetadataForEvent(revision.eventId);
@@ -1430,14 +1663,25 @@ async function publishedProjection(
     eventMetadata = resolved;
   }
   const projection = publicProjectionForSlug(revision, eventSlug, eventMetadata);
-  return projection === null ? null : { eventId: revision.eventId, eventSlug, projection };
+  return projection === null
+    ? null
+    : { eventId: revision.eventId, eventSlug, revisionNumber: revision.revisionNumber, projection };
 }
 
 /** Anonymous routes expose only the immutable current publication, never a draft. */
 export function createPublishedAgendaRoutes(
-  dependencies: Pick<AgendaRouteDependencies, "engine" | "eventMetadataForEvent">,
+  dependencies: Pick<
+    AgendaRouteDependencies,
+    | "engine"
+    | "eventMetadataForEvent"
+    | "eventIdForSlug"
+    | "getProgramPublicationManifest"
+    | "publicRevisionNumberForEventSlug"
+  > &
+    PublishedAgendaRouteOptions,
 ): Hono<AgendaRouteEnvironment> {
   const routes = new Hono<AgendaRouteEnvironment>();
+  const calendarUidDomain = calendarUidDomainSchema.parse(dependencies.calendarUidDomain);
   const cacheState = agendaCacheState(dependencies.engine);
   const projectionForRequest = (
     context: AgendaContext,
@@ -1462,12 +1706,13 @@ export function createPublishedAgendaRoutes(
     const body = render(result);
     const etag = await feedEtag(body);
     if (cacheable) {
-      await writeAgendaCacheResponse(cacheState, path, {
+      writeAgendaCacheResponse(context, cacheState, path, {
         body,
         contentType,
         etag,
         eventId: result.eventId,
         eventSlug: result.eventSlug,
+        revisionNumber: result.revisionNumber,
         expiresAt: Date.now() + PUBLIC_AGENDA_CACHE_TTL_MS,
       });
     }
@@ -1480,7 +1725,7 @@ export function createPublishedAgendaRoutes(
     );
   const icsRoute = (context: AgendaContext): Promise<Response> =>
     cachedFeed(context, "text/calendar; charset=utf-8", (result) =>
-      publicAgendaCalendar(result.projection, result.eventSlug),
+      publicAgendaCalendar(result.projection, result.eventSlug, calendarUidDomain),
     );
   routes.get("/agenda", jsonRoute);
   routes.get("/agenda.json", jsonRoute);

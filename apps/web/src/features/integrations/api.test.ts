@@ -20,6 +20,7 @@ describe("integration admin API", () => {
     });
 
     await api.saveCredential({
+      organizationId: "org/2026",
       eventId: "event/2026",
       provider: "opensend",
       secret: "  opensend_secret_value  ",
@@ -27,7 +28,7 @@ describe("integration admin API", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(
-      "https://api.example.test/api/admin/events/event%2F2026/integrations/opensend/credential",
+      "https://api.example.test/api/admin/organizations/org%2F2026/events/event%2F2026/integrations/opensend/credential",
     );
     expect(calls[0]?.url).not.toContain("opensend_secret_value");
     expect(calls[0]?.init.credentials).toBe("include");
@@ -41,7 +42,12 @@ describe("integration admin API", () => {
     const api = createIntegrationAdminApi("https://api.example.test", fetcher);
 
     await expect(
-      api.saveCredential({ eventId: "event-a", provider: "opensend", secret: "   " }),
+      api.saveCredential({
+        organizationId: "org-a",
+        eventId: "event-a",
+        provider: "opensend",
+        secret: "   ",
+      }),
     ).rejects.toMatchObject({ code: "SECRET_REQUIRED", status: 400 });
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -56,10 +62,10 @@ describe("integration admin API", () => {
       return response(undefined, 204);
     });
 
-    await api.deleteWebhook("event-a", "webhook/1");
+    await api.deleteWebhook("org-a", "event-a", "webhook/1");
 
     expect(calls[0]?.url).toBe(
-      "https://api.example.test/api/admin/events/event-a/webhooks/webhook%2F1",
+      "https://api.example.test/api/admin/organizations/org-a/events/event-a/webhooks/webhook%2F1",
     );
     expect(calls[0]?.init.method).toBe("DELETE");
     expect(calls[0]?.init.body).toBeUndefined();
@@ -82,7 +88,7 @@ describe("integration admin API", () => {
         ),
     );
 
-    const rejection = api.getSnapshot("event-a");
+    const rejection = api.getSnapshot("org-a", "event-a");
     await expect(rejection).rejects.toBeInstanceOf(IntegrationAdminApiError);
     await expect(rejection).rejects.toMatchObject({
       code: "ACCESS_DENIED",
@@ -91,5 +97,64 @@ describe("integration admin API", () => {
       traceId: "trace-1",
     });
     await expect(rejection).rejects.not.toHaveProperty("credential");
+  });
+  it("routes an empty base URL through the same-origin integrations gateway", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createIntegrationAdminApi("", async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return response({ id: "webhook-1", secret: "secret-1" });
+    });
+
+    await expect(
+      api.createWebhook({
+        organizationId: "org/a",
+        eventId: "event/a",
+        endpointUrl: "https://hooks.example.test/eventloom",
+        events: ["submission.created"],
+      }),
+    ).resolves.toEqual({ id: "webhook-1", secret: "secret-1" });
+
+    expect(requestedUrl).toBe("/api/admin/organizations/org%2Fa/events/event%2Fa/webhooks");
+    expect(requestedUrl.startsWith("/api/")).toBe(true);
+    expect(requestedUrl).not.toMatch(/^\/\//);
+    expect(requestedUrl).not.toMatch(/^https?:\/\//);
+    expect(requestInit?.credentials).toBe("include");
+  });
+  it("uses organization-scoped API-key contracts while retaining eventId as metadata", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const api = createIntegrationAdminApi("https://api.example.test", async (input, init = {}) => {
+      calls.push({ url: String(input), init });
+      if (init.method === "DELETE") return response(undefined, 204);
+      if (init.method === "POST") return response({ id: "key-1", secret: "one-time-secret" }, 201);
+      return response([]);
+    });
+
+    await expect(api.listApiKeys("org/a")).resolves.toEqual([]);
+    await expect(
+      api.createApiKey({
+        organizationId: "org/a",
+        eventId: "event/a",
+        label: " Automation ",
+        scopes: ["events:read"],
+        expiresAt: null,
+      }),
+    ).resolves.toEqual({ id: "key-1", secret: "one-time-secret" });
+    await api.revokeApiKey("org/a", "key/1");
+    await api.revokeApiKey("org/a", "event/a", "key/legacy");
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys",
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys",
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys/key%2F1",
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys/key%2Flegacy",
+    ]);
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      label: "Automation",
+      scopes: ["events:read"],
+      expiresAt: null,
+      eventId: "event/a",
+    });
   });
 });

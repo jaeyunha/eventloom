@@ -1,4 +1,4 @@
-import { apiErrorSchema, healthResponseSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema, healthResponseSchema } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import { type ApiBindings, createApp } from "./app";
 import { AuthAccessError, type AuthPrincipal, type UserPrincipal } from "./features/auth/types";
@@ -6,10 +6,11 @@ import { CommunicationError } from "./features/communications/service";
 import { RemixError } from "./features/remix/service";
 import { ReportError } from "./features/reports/service";
 import { SessionServiceError } from "./features/sessions/service";
+import type { AirtableIntegrationRouteDependencies } from "./routes/airtable-integration/routes";
 
 const environment: ApiBindings = {
   APP_ENV: "local",
-  WEB_ORIGIN: "http://localhost:3015",
+  WEB_ORIGIN: "http://127.0.0.1:3015",
 };
 
 const requestId = "65f8d9b5-6862-4bbc-973c-f728e9185c22";
@@ -66,6 +67,53 @@ describe("API foundation", () => {
     expect(rejected.headers.has("access-control-allow-origin")).toBe(false);
   });
 
+  it("blocks hostile-origin text/plain cookie mutations before protected services run", async () => {
+    let closeCalls = 0;
+    const principal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-1",
+      userId: "user-1",
+      email: "organizer@example.test",
+      memberships: [{ organizationId: "org-a", role: "admin" }],
+      speakerGrants: [],
+      reviewerGrants: [],
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      evaluations: {
+        actorFor: async () => ({ kind: "organizer", tenantId: "org-a", userId: "user-1" }) as never,
+        service: {
+          closePlan: async () => {
+            closeCalls += 1;
+            return { id: "plan-1", version: 2, status: "closed" };
+          },
+        } as never,
+      },
+    });
+    const production = { APP_ENV: "production", WEB_ORIGIN: "https://web.example.test" };
+    const request = (origin: string) =>
+      app.request(
+        "/api/admin/evaluations/plans/plan-1/close",
+        {
+          method: "POST",
+          headers: {
+            cookie: "__Secure-better-auth.session_token=opaque",
+            origin,
+            "content-type": "text/plain",
+          },
+          body: JSON.stringify({ expectedVersion: 1 }),
+        },
+        production,
+      );
+
+    const blocked = await request("https://evil.example.test");
+    expect(blocked.status).toBe(403);
+    expect(closeCalls).toBe(0);
+    const allowed = await request(production.WEB_ORIGIN);
+    expect(allowed.status).toBe(200);
+    expect(closeCalls).toBe(1);
+  });
+
   it("uses the same safe error envelope for unknown routes", async () => {
     const response = await createApp().request("/unknown", {}, environment);
     const body = apiErrorSchema.parse(await response.json());
@@ -73,6 +121,106 @@ describe("API foundation", () => {
     expect(response.status).toBe(404);
     expect(body.error.code).toBe("NOT_FOUND");
     expect(response.headers.get("x-request-id")).toBe(body.error.traceId);
+  });
+});
+
+describe("Airtable OAuth callback wiring", () => {
+  it("mounts the provider callback at its static URL and leaves organization routing to opaque state", async () => {
+    let callback: { readonly code: string; readonly state: string } | null = null;
+    const integration: AirtableIntegrationRouteDependencies = {
+      webOrigin: environment.WEB_ORIGIN,
+      requireOrganizationAccess: async () => {},
+      getStatus: async () => null,
+      startOAuth: async () => null,
+      completeOAuth: async (...args: unknown[]) => {
+        callback = args.at(-1) as { readonly code: string; readonly state: string };
+        return new Response(null, { status: 204 });
+      },
+      connectPat: async () => null,
+      selectBase: async () => null,
+      updateMapping: async () => null,
+      pause: async () => null,
+      resume: async () => null,
+      disconnect: async () => null,
+      retry: async () => null,
+      listConflicts: async () => null,
+      resolveConflict: async () => null,
+      handleWebhookNotification: async () => new Response(null, { status: 204 }),
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => null },
+      airtableIntegration: integration,
+    });
+
+    const callbackResponse = await app.request(
+      "/api/integrations/airtable/oauth/callback?code=oauth-code&state=opaque-state",
+      undefined,
+      environment,
+    );
+    const legacyResponse = await app.request(
+      "/api/integrations/airtable/organizations/org-a/oauth/callback?code=oauth-code&state=opaque-state",
+      undefined,
+      environment,
+    );
+
+    expect(callbackResponse.status).toBe(204);
+    expect(callback).toEqual({ code: "oauth-code", state: "opaque-state" });
+    expect(legacyResponse.status).toBe(404);
+  });
+});
+
+describe("Airtable integration origin protection", () => {
+  it("rejects cross-origin session mutations while leaving public provider routes exempt", async () => {
+    const principal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-1",
+      userId: "user-1",
+      email: "organizer@example.test",
+      memberships: [{ organizationId: "org-a", role: "admin" }],
+      speakerGrants: [],
+      reviewerGrants: [],
+    };
+    const integration: AirtableIntegrationRouteDependencies = {
+      webOrigin: environment.WEB_ORIGIN,
+      requireOrganizationAccess: async () => {},
+      getStatus: async () => null,
+      startOAuth: async () => ({ authorizationUrl: "https://airtable.example.test/oauth" }),
+      completeOAuth: async () => new Response(null, { status: 204 }),
+      selectBase: async () => null,
+      updateMapping: async () => null,
+      pause: async () => null,
+      resume: async () => null,
+      disconnect: async () => null,
+      retry: async () => null,
+      listConflicts: async () => null,
+      resolveConflict: async () => null,
+      handleWebhookNotification: async () => new Response(null, { status: 204 }),
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      airtableIntegration: integration,
+    });
+
+    const blocked = await app.request(
+      "/api/admin/organizations/org-a/integrations/airtable/oauth/start",
+      {
+        method: "POST",
+        headers: {
+          "idempotency-key": "command-1",
+          origin: "https://attacker.example.test",
+        },
+      },
+      environment,
+    );
+    const callback = await app.request(
+      "/api/integrations/airtable/oauth/callback?code=oauth-code&state=opaque-state",
+      undefined,
+      environment,
+    );
+
+    expect(blocked.status).toBe(403);
+    expect(apiErrorSchema.parse(await blocked.json()).error.code).toBe("ACCESS_DENIED");
+    expect(callback.status).toBe(204);
   });
 });
 
@@ -90,6 +238,7 @@ describe("authentication session access", () => {
           speakerProfileId: "speaker-1",
         },
       ],
+      reviewerGrants: [],
     };
     const app = createApp({
       auth: {
@@ -137,6 +286,7 @@ describe("canonical organizer workspaces", () => {
       email: "organizer@example.test",
       memberships: [{ organizationId, role: "admin" as const }],
       speakerGrants: [],
+      reviewerGrants: [],
     };
     const organizerHeaders = { authorization: "Bearer organizer" };
     const authenticator = {
@@ -243,6 +393,57 @@ describe("canonical organizer workspaces", () => {
     }
   });
 });
+describe("speaker private-asset route assembly", () => {
+  it("mounts the organizer download grant under the canonical speaker router", async () => {
+    let received: { eventId: string; accountId: string; assetId: string } | undefined;
+    const app = createApp({
+      authenticator: { authenticate: async () => null },
+      speaker: {
+        authenticate: async () => ({ accountId: "organizer-1" }),
+        service: {
+          issueOrganizerDownloadGrant: async (input: {
+            eventId: string;
+            accountId: string;
+            assetId: string;
+          }) => {
+            received = input;
+            return {
+              method: "GET" as const,
+              url: "https://downloads.example.test/capability",
+              expiresAt: "2026-08-10T12:02:00.000Z",
+            };
+          },
+        } as never,
+      },
+    });
+
+    const response = await app.request(
+      "/api/speaker/events/event-1/organizer/assets/asset-1/download",
+      { method: "POST" },
+      environment,
+    );
+    const unmounted = await app.request(
+      "/api/admin/organizations/org-1/events/event-1/organizer/assets/asset-1/download",
+      { method: "POST" },
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        method: "GET",
+        url: "https://downloads.example.test/capability",
+        expiresAt: "2026-08-10T12:02:00.000Z",
+      },
+    });
+    expect(received).toEqual({
+      eventId: "event-1",
+      accountId: "organizer-1",
+      assetId: "asset-1",
+    });
+    expect(unmounted.status).toBe(404);
+  });
+});
 describe("feature-router error normalization", () => {
   it("normalizes feature-router errors into the API error contract", async () => {
     const organizationId = "org-1";
@@ -254,6 +455,7 @@ describe("feature-router error normalization", () => {
       email: "organizer@example.test",
       memberships: [{ organizationId, role: "admin" as const }],
       speakerGrants: [],
+      reviewerGrants: [],
     };
     const actorFor = async (_principal: AuthPrincipal, tenant: string, scopedEvent: string) => ({
       tenantId: tenant,

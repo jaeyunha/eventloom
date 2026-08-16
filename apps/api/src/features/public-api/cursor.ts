@@ -8,7 +8,7 @@ const cursorValueSchema = z.union([z.string(), z.number().finite(), z.boolean(),
 export const cursorPayloadSchema = z
   .object({
     version: z.literal(1),
-    tenantId: z.string().trim().min(1).max(200),
+    organizationId: z.string().trim().min(1).max(200),
     resource: z.string().trim().min(1).max(100),
     sort: z.string().trim().min(1).max(100),
     direction: cursorDirectionSchema,

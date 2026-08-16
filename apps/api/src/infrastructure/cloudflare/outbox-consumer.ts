@@ -1,16 +1,16 @@
 import {
   type CalendarInvitationPayload,
-  calendarInvitationPayloadSchema,
-  openSendEmailPayloadSchema,
-} from "@open-sessionboard/contracts";
-import { createCalendarInvitation } from "../../integrations/calendar/ical";
+  createCalendarInvitation,
+  validateCalendarInvitationPayload,
+} from "../../integrations/calendar";
 import {
-  DEFAULT_OPEN_SEND_SENDERS,
   OpenSendClient,
   type OpenSendMessage,
+  type OpenSendSenderAddresses,
+  type OpenSendSenderPurpose,
 } from "../../integrations/opensend";
 import { createCalendarOpenSendMessage } from "../../integrations/opensend/calendar-email";
-import { OpenSendError } from "../../integrations/opensend/types";
+import { OpenSendError, openSendMessageSchema } from "../../integrations/opensend/types";
 import {
   type CloudflareBindings,
   type CloudflareOutboxInvitationTransient,
@@ -372,11 +372,48 @@ export interface OutboxDeliveryContext {
   readonly attempt: number;
   readonly idempotencyKey: string;
 }
+export interface OutboxDeliveryReceipt {
+  readonly providerMessageId?: string;
+}
+
+export type OutboxCommunicationStatusTarget =
+  | {
+      readonly kind: "communication";
+      readonly eventId: string;
+      readonly sendId: string;
+      readonly recipientId: string;
+    }
+  | {
+      readonly kind: "crm_outreach";
+      readonly eventId: string | null;
+      readonly outreachId: string;
+      readonly contactId: string;
+      readonly idempotencyKey: string;
+    }
+  | {
+      readonly kind: "reminder";
+      readonly eventId: string;
+      readonly runId: string;
+      readonly dispatchId: string;
+    };
+
+export interface OutboxCommunicationStatusUpdate {
+  readonly tenantId: string;
+  readonly target: OutboxCommunicationStatusTarget;
+  readonly status: "delivered" | "provider_accepted" | "failed" | "bounced" | "complained";
+  readonly providerMessageId?: string;
+  readonly reason?: string;
+  readonly occurredAt: string;
+}
+
+export interface OutboxDeliveryStatusRecorder {
+  recordCommunicationStatus(input: OutboxCommunicationStatusUpdate): Promise<void>;
+}
 
 type TopicAdapter<TPayload = unknown> = (
   payload: TPayload,
   context: OutboxDeliveryContext,
-) => Promise<void>;
+) => Promise<OutboxDeliveryReceipt | undefined>;
 
 /** Adapters are intentionally injectable so production can bind persisted provider services. */
 export interface OutboxAdapters {
@@ -393,6 +430,9 @@ export interface OutboxConsumerBindings extends CloudflareBindings {
   readonly OPENSEND_API_KEY?: string;
   readonly OPENSEND_SENDING_API_KEY?: string;
   readonly OPENSEND_API_URL?: string;
+  readonly AUTH_FROM_EMAIL?: string;
+  readonly SPEAKERS_FROM_EMAIL?: string;
+  readonly CALENDAR_FROM_EMAIL?: string;
   readonly WEBHOOK_DELIVERY_URL?: string;
   readonly WEBHOOK_DELIVERY_TOKEN?: string;
   readonly CACHE_INVALIDATION_URL?: string;
@@ -408,6 +448,7 @@ export interface OutboxConsumerLogger {
 export interface OutboxConsumerOptions {
   readonly repository?: OutboxJobRepository;
   readonly adapters?: OutboxAdapters;
+  readonly statusRecorder?: OutboxDeliveryStatusRecorder;
   readonly now?: () => Date;
   readonly logger?: OutboxConsumerLogger;
   readonly maxAttempts?: number;
@@ -447,6 +488,7 @@ function isOutboxOptions(value: unknown): value is OutboxConsumerOptions {
   return [
     "repository",
     "adapters",
+    "statusRecorder",
     "now",
     "logger",
     "maxAttempts",
@@ -517,11 +559,10 @@ function parseInvitationTransient(value: unknown): CloudflareOutboxInvitationTra
   ) {
     return null;
   }
-  const result = openSendEmailPayloadSchema.safeParse(value.message);
+  const result = openSendMessageSchema.safeParse(value.message);
   if (!result.success) return null;
   const message = value.message as unknown as OpenSendMessage;
   if (
-    message.from !== DEFAULT_OPEN_SEND_SENDERS.auth ||
     message.to.length !== 1 ||
     message.to[0] !== value.recipient ||
     message.idempotencyKey !== `member-invitation:${value.invitationId}`
@@ -596,19 +637,108 @@ function malformedPayload(topic: CloudflareOutboxTopic): never {
   });
 }
 
+function emailPayloadEnvelope(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return value.effect === "send_email" ||
+    value.effect === "send_communication" ||
+    value.effect === "send_crm_outreach" ||
+    value.effect === "send_reminder"
+    ? value.payload
+    : value;
+}
+
+function senderPurposeFromMachineMetadata(
+  value: Record<string, unknown>,
+): OpenSendSenderPurpose | undefined {
+  if (value.effect === "send_reminder" || value.effect === "send_crm_outreach") {
+    return "speakers";
+  }
+  if (
+    value.effect === "send_email" &&
+    typeof value.planId === "string" &&
+    typeof value.reviewerId === "string"
+  ) {
+    return "speakers";
+  }
+  switch (value.purpose ?? value.templatePurpose) {
+    case "verification":
+      return "auth";
+    case "schedule_publish":
+    case "schedule_update":
+    case "schedule_cancel":
+      return "calendar";
+    case "receipt":
+    case "reminder":
+    case "decision":
+    case "task":
+    case "organizer_group_email":
+      return "speakers";
+    default:
+      return undefined;
+  }
+}
+
 function parseEmailPayload(value: unknown): OpenSendMessage {
-  const candidate = isRecord(value) && value.effect === "send_email" ? value.payload : value;
-  const result = openSendEmailPayloadSchema.safeParse(candidate);
-  if (!result.success || !isRecord(candidate)) malformedPayload("communications");
-  return candidate as unknown as OpenSendMessage;
+  const candidate = emailPayloadEnvelope(value);
+  if (!isRecord(candidate)) malformedPayload("communications");
+  const senderPurpose =
+    candidate.senderPurpose ??
+    (isRecord(value)
+      ? (value.senderPurpose ?? senderPurposeFromMachineMetadata(value))
+      : undefined);
+  const message = senderPurpose === undefined ? candidate : { ...candidate, senderPurpose };
+  const result = openSendMessageSchema.safeParse(message);
+  if (!result.success) malformedPayload("communications");
+  return message as unknown as OpenSendMessage;
+}
+
+function payloadString(value: Record<string, unknown>, key: string): string {
+  const candidate = value[key];
+  if (typeof candidate !== "string" || candidate.trim().length === 0) {
+    malformedPayload("communications");
+  }
+  return candidate.trim();
+}
+
+function communicationStatusTarget(value: unknown): OutboxCommunicationStatusTarget | null {
+  if (!isRecord(value)) return null;
+  if (value.effect === "send_communication") {
+    return {
+      kind: "communication",
+      eventId: payloadString(value, "eventId"),
+      sendId: payloadString(value, "sendId"),
+      recipientId: payloadString(value, "recipientId"),
+    };
+  }
+  if (value.effect === "send_crm_outreach") {
+    return {
+      kind: "crm_outreach",
+      eventId: value.eventId === null ? null : payloadString(value, "eventId"),
+      outreachId: payloadString(value, "outreachId"),
+      contactId: payloadString(value, "contactId"),
+      idempotencyKey: payloadString(value, "idempotencyKey"),
+    };
+  }
+  if (value.effect === "send_reminder") {
+    return {
+      kind: "reminder",
+      eventId: payloadString(value, "eventId"),
+      runId: payloadString(value, "runId"),
+      dispatchId: payloadString(value, "dispatchId"),
+    };
+  }
+  return null;
 }
 
 function parseCalendarPayload(value: unknown): CalendarInvitationPayload {
   const candidate =
     isRecord(value) && value.effect === "deliver_calendar_updates" ? value.payload : value;
-  const result = calendarInvitationPayloadSchema.safeParse(candidate);
-  if (!result.success) malformedPayload("calendar");
-  return result.data;
+  if (!isRecord(candidate)) malformedPayload("calendar");
+  try {
+    return validateCalendarInvitationPayload(candidate as unknown as CalendarInvitationPayload);
+  } catch {
+    return malformedPayload("calendar");
+  }
 }
 
 function parseWebhookPayload(value: unknown): { readonly deliveryId: string } {
@@ -725,8 +855,11 @@ function requireUrl(value: string | undefined, label: string): URL {
       cause,
     });
   }
+  const localHttp =
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
   if (
-    (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) ||
+    (url.protocol !== "https:" && !localHttp) ||
     url.username.length > 0 ||
     url.password.length > 0 ||
     url.search.length > 0 ||
@@ -749,11 +882,25 @@ function responseFailure(status: number, label: string): OutboxDeliveryError | n
   );
 }
 
+function senderPurposeForMessage(message: OpenSendMessage): OpenSendSenderPurpose {
+  if (message.senderPurpose !== undefined) return message.senderPurpose;
+  throw new OutboxDeliveryError(
+    "SENDER_PURPOSE_UNRESOLVED",
+    "The persisted email sender purpose cannot be determined safely.",
+    { retryable: false },
+  );
+}
+
 function createConfiguredAdapters(
   bindings: OutboxConsumerBindings,
   now: () => Date,
 ): OutboxAdapters {
   let client: OpenSendClient | undefined;
+  const senderAddresses: OpenSendSenderAddresses = {
+    auth: bindings.AUTH_FROM_EMAIL ?? "",
+    speakers: bindings.SPEAKERS_FROM_EMAIL ?? "",
+    calendar: bindings.CALENDAR_FROM_EMAIL ?? "",
+  };
   const openSend = (): OpenSendClient => {
     if (client !== undefined) return client;
     const key = bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY;
@@ -765,13 +912,15 @@ function createConfiguredAdapters(
     client = new OpenSendClient({
       sendingApiKey: key,
       ...(bindings.OPENSEND_API_URL === undefined ? {} : { baseUrl: bindings.OPENSEND_API_URL }),
+      senderAddresses,
     });
     return client;
   };
 
   const sendCalendar: TopicAdapter<CalendarInvitationPayload> = async (payload) => {
     const invitation = createCalendarInvitation(payload, { generatedAt: now().toISOString() });
-    await openSend().send(createCalendarOpenSendMessage(payload, invitation));
+    await openSend().send(createCalendarOpenSendMessage(payload, invitation), "calendar");
+    return undefined;
   };
 
   // The configured delivery service owns the persisted subscription allowlist and signing secret.
@@ -802,6 +951,7 @@ function createConfiguredAdapters(
     }
     const failure = responseFailure(response.status, "Webhook delivery");
     if (failure !== null) throw failure;
+    return undefined;
   };
   const invalidateCache: TopicAdapter<{ readonly eventId: string }> = async (payload, context) => {
     const url = requireUrl(bindings.CACHE_INVALIDATION_URL, "CACHE_INVALIDATION_URL");
@@ -824,11 +974,14 @@ function createConfiguredAdapters(
     }
     const failure = responseFailure(response.status, "Cache invalidation");
     if (failure !== null) throw failure;
+    return undefined;
   };
 
   return {
     communications: async (payload) => {
-      await openSend().send(payload);
+      const purpose = senderPurposeForMessage(payload);
+      const result = await openSend().send(payload, purpose);
+      return { providerMessageId: result.providerMessageId };
     },
     calendar: sendCalendar,
     webhooks: deliverWebhook,
@@ -839,6 +992,7 @@ function createConfiguredAdapters(
 export class OutboxConsumer {
   readonly #repository: OutboxJobRepository;
   readonly #adapters: OutboxAdapters;
+  readonly #statusRecorder: OutboxDeliveryStatusRecorder | undefined;
   readonly #now: () => Date;
   readonly #logger: OutboxConsumerLogger;
   readonly #maxAttempts: number;
@@ -855,6 +1009,7 @@ export class OutboxConsumer {
     const bindings = optionsOnly ? ({} as OutboxConsumerBindings) : bindingsOrOptions;
     const effectiveOptions = optionsOnly ? bindingsOrOptions : options;
     this.#repository = effectiveOptions.repository ?? new D1OutboxJobRepository(bindings.DB);
+    this.#statusRecorder = effectiveOptions.statusRecorder;
     this.#now = effectiveOptions.now ?? (() => new Date());
     this.#logger = effectiveOptions.logger ?? defaultLogger();
     this.#maxAttempts = positiveInteger(
@@ -980,7 +1135,16 @@ export class OutboxConsumer {
       idempotencyKey: job.deduplicationKey ?? `${job.tenantId}:${job.id}`,
     };
     try {
-      await this.dispatch(job, context, queueMessage.transient);
+      const receipt = await this.dispatch(job, context, queueMessage.transient);
+      await this.recordCommunicationStatus(job, {
+        status:
+          isRecord(job.payload) && job.payload.effect === "send_reminder"
+            ? "provider_accepted"
+            : "delivered",
+        ...(receipt?.providerMessageId === undefined
+          ? {}
+          : { providerMessageId: receipt.providerMessageId }),
+      });
       await this.#repository.markDelivered(job.id, this.#now());
       log(this.#logger, "info", "outbox side effect delivered", {
         topic: job.topic,
@@ -993,6 +1157,10 @@ export class OutboxConsumer {
       const exhausted = !failure.retryable || job.attemptCount >= this.#maxAttempts;
       if (exhausted) {
         try {
+          await this.recordCommunicationStatus(job, {
+            status: "failed",
+            reason: failure.code,
+          });
           await this.#repository.markFailed(job.id, failure.code, failure.retryable);
         } catch (markCause) {
           const markFailure = normalizeFailure(markCause);
@@ -1060,6 +1228,29 @@ export class OutboxConsumer {
     }
   }
 
+  private async recordCommunicationStatus(
+    job: OutboxJob,
+    input: {
+      readonly status: "delivered" | "provider_accepted" | "failed" | "bounced" | "complained";
+      readonly providerMessageId?: string;
+      readonly reason?: string;
+    },
+  ): Promise<void> {
+    if (job.topic !== "communications" || this.#statusRecorder === undefined) return;
+    const target = communicationStatusTarget(job.payload);
+    if (target === null) return;
+    await this.#statusRecorder.recordCommunicationStatus({
+      tenantId: job.tenantId,
+      target,
+      status: input.status,
+      ...(input.providerMessageId === undefined
+        ? {}
+        : { providerMessageId: input.providerMessageId }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      occurredAt: this.#now().toISOString(),
+    });
+  }
+
   private retryForMessage(
     message: OutboxQueueMessage,
     retryAfterMs: number | undefined,
@@ -1082,7 +1273,7 @@ export class OutboxConsumer {
     job: OutboxJob,
     context: OutboxDeliveryContext,
     transient?: CloudflareOutboxInvitationTransient,
-  ): Promise<void> {
+  ): Promise<OutboxDeliveryReceipt | undefined> {
     switch (job.topic) {
       case "communications": {
         let payload: OpenSendMessage;
@@ -1090,12 +1281,11 @@ export class OutboxConsumer {
           payload = parseEmailPayload(job.payload);
         } else {
           assertInvitationTransientMatches(job, transient);
-          payload = transient.message;
+          payload = { ...transient.message, senderPurpose: "auth" };
         }
         const adapter = this.#adapters.communications ?? this.#adapters.email;
         if (adapter === undefined) throw adapterError(job.topic);
-        await adapter(payload, context);
-        return;
+        return adapter(payload, context);
       }
       case "calendar": {
         const payload = parseCalendarPayload(job.payload);

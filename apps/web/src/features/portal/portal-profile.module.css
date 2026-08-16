@@ -1,0 +1,169 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 5fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.editor,
+.sections,
+.previewContent,
+.facts {
+  display: grid;
+}
+
+.editor,
+.sections,
+.previewContent {
+  gap: var(--space-4);
+}
+
+.previewContent {
+  padding-top: 0;
+}
+
+.identity {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.identity p,
+.statusText,
+.fieldMeta,
+.facts dt {
+  color: var(--muted-foreground);
+}
+
+.avatar {
+  display: grid;
+  width: var(--space-8);
+  height: var(--space-8);
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  color: var(--foreground);
+  object-fit: cover;
+}
+
+.facts {
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.facts > div {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.previewActions,
+.actions,
+.sectionHeader,
+.fieldMeta {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.previewActions,
+.actions {
+  flex-wrap: wrap;
+}
+
+.sectionHeader,
+.fieldMeta {
+  justify-content: space-between;
+}
+
+.sectionHeader > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.visibilityBadge {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.readOnlyValue {
+  min-height: var(--space-7);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.biography {
+  min-height: calc(var(--space-8) * 2);
+}
+
+.fieldMeta {
+  font-size: var(--text-sm);
+}
+
+.checkboxField {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+}
+
+.checkboxField > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.errorText {
+  color: var(--destructive);
+}
+
+.saveStatus {
+  min-height: var(--space-5);
+  color: var(--muted-foreground);
+}
+
+.saveStatus[data-state="saved"] {
+  color: var(--color-success);
+}
+
+@media (max-width: 48rem) {
+  .layout,
+  .fieldGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sectionHeader,
+  .fieldMeta {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 36rem) {
+  .sectionHeader {
+    flex-direction: column;
+  }
+
+  .actions > * {
+    flex: 1 1 auto;
+  }
+}

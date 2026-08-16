@@ -1,0 +1,148 @@
+.progressSummary {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.progressHeading {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.progressLabel {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.progressDetail {
+  margin: 0.25rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.progressStatus {
+  flex: none;
+}
+
+.listDetail {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(14rem, 0.7fr) minmax(0, 1.5fr);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+}
+
+.listDetail.withInspector {
+  grid-template-columns: minmax(14rem, 0.7fr) minmax(0, 1.5fr) minmax(14rem, 0.6fr);
+}
+
+.list,
+.detail,
+.inspector {
+  min-width: 0;
+}
+
+.list {
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.detail {
+  background: var(--background);
+}
+
+.inspector {
+  border-left: 1px solid var(--border);
+  background: var(--muted);
+}
+
+.metadataList {
+  display: grid;
+  margin: 0;
+  border-top: 1px solid var(--border);
+}
+
+.metadataRow {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(6rem, 0.7fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.metadataLabel,
+.metadataValue {
+  min-width: 0;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.metadataLabel {
+  color: var(--muted-foreground);
+}
+
+.metadataValue {
+  color: var(--foreground);
+  font-weight: 520;
+}
+
+@media (max-width: 62rem) {
+  .listDetail.withInspector {
+    grid-template-columns: minmax(13rem, 0.65fr) minmax(0, 1.35fr);
+  }
+
+  .inspector {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 48rem) {
+  .progressHeading,
+  .metadataRow {
+    grid-template-columns: 1fr;
+  }
+
+  .progressHeading {
+    display: grid;
+  }
+
+  .listDetail,
+  .listDetail.withInspector {
+    grid-template-columns: 1fr;
+  }
+
+  .list,
+  .inspector {
+    border-right: 0;
+    border-left: 0;
+  }
+
+  .list {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .inspector {
+    grid-column: auto;
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressSummary {
+    scroll-behavior: auto;
+  }
+}

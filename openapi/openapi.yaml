@@ -1,42 +1,37 @@
 openapi: 3.1.0
 info:
-  title: Open Sessionboard API
+  title: Eventloom API
   version: 1.0.0
-  summary: Organization-scoped event operations, public-v1 resources, and published projections.
+  summary: Organization-scoped application operations, webhook administration, and published projections.
   description: |
-    The production API Worker is the canonical direct API origin:
-    `https://open-sessionboard-api-production.ashleyha0317.workers.dev`. Browser traffic may use the
-    production web app's same-origin `/api/*` proxy at
-    `https://open-sessionboard-web-production.ashleyha0317.workers.dev`; it forwards to this Worker
-    and is not a separate API origin. A custom `api.sessionboard.namuh.co` hostname is recommended
-    but pending/unconfigured, so it is not canonical.
+    Direct clients use the operator's configured API origin. Browser traffic
+    may use the deployed web app's same-origin `/api/*` proxy; it forwards to
+    the API Worker and is not a separate API origin.
 
-    The checked-in document intentionally combines the broader internal application API paths
-    (`/api/admin/...`, `/api/speaker/...`, and `/api/public/...`) with the public-v1 contract.
-    Public-v1 is limited to four resource families—events, speakers, agenda, and sessions—under
-    `/api/v1/organizations/{organizationId}`; webhook administration is separately mounted under
-    that prefix. Internal routes may require organizer or participant session authentication and
-    are not public-v1 guarantees.
+    The checked-in document intentionally combines a substantial set of internal application API paths
+    (`/api/admin/...`, `/api/speaker/...`, and `/api/public/...`) with tenant-scoped public-v1
+    webhook administration. It is not an exhaustive inventory of every mounted
+    session-authenticated application route. Internal routes may require
+    organizer or participant session authentication and are not public-v1 guarantees.
 
     Organizer routes are qualified by organizationId and eventId and require an authenticated
-    organizer session. Participant routes require the authenticated account's event grant. The
-    `/api/v1` public resource surface is API-key authenticated and tenant-bound by organizationId.
+    organizer session. Participant routes require the authenticated account's event grant.
+    Public-v1 webhook routes are API-key authenticated and tenant-bound by organizationId.
     Separate public embeds and feeds expose immutable published projections only; they never expose
     organizer drafts, private assets, recipient data, evaluation notes, advisory candidates, or
     internal storage coordinates.
 
-    Generic public-v1 mutations require Idempotency-Key and updates require If-Match. Webhook
-    subscription administration is the exception: its implemented POST/PATCH/PUT/DELETE routes
-    do not require either header. A request may not select a tenant or event outside the
+    Generic public-v1 events, sessions, speakers, and agenda routes are intentionally not mounted.
+    They require publication-safe field allowlists, bounded projection reads, and durable
+    concurrency coordination before they can be advertised. Webhook POST/PATCH/PUT/DELETE routes do
+    not require Idempotency-Key or If-Match. A request may not select a tenant or event outside the
     authenticated principal's grants.
   license:
-    name: AGPL-3.0-or-later
-    identifier: AGPL-3.0-or-later
+    name: Elastic License 2.0
+    identifier: Elastic-2.0
 servers:
-  - url: https://open-sessionboard-api-production.ashleyha0317.workers.dev
-    description: Canonical production API Worker origin
-  - url: http://127.0.0.1:8787
-    description: Local API origin
+  - url: /
+    description: API origin
 tags:
   - name: System
   - name: Organizations
@@ -72,7 +67,7 @@ paths:
       tags: [System]
       operationId: getRuntimeOpenApi
       summary: Describe mounted runtime adapters
-      description: Runtime discovery is prefix-correct and describes the mounted public-v1 resource operations; the checked-in contract also documents the separately mounted webhooks.
+      description: Runtime discovery describes the mounted public-v1 webhook operations and omits withheld generic program-resource routes.
       security: []
       responses:
         "200":
@@ -1711,6 +1706,29 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
       - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [Communications]
+      operationId: listCommunicationSends
+      summary: List durable event-scoped communication sends newest first
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Immutable send snapshots ordered by createdAt descending, then id descending.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sends]
+                properties:
+                  sends:
+                    type: array
+                    items: { $ref: "#/components/schemas/CommunicationSend" }
+                additionalProperties: false
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
     post:
       tags: [Communications]
       operationId: sendCommunication
@@ -3090,382 +3108,6 @@ paths:
                 additionalProperties: false
         "404": { $ref: "#/components/responses/NotFoundError" }
 
-  /api/v1/organizations/{organizationId}/events:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-    get:
-      tags: [Public]
-      operationId: listEvents
-      summary: List tenant events
-      security:
-        - apiKey: ["events:read"]
-      parameters:
-        - $ref: "#/components/parameters/PublicCursor"
-        - $ref: "#/components/parameters/PublicLimit"
-        - $ref: "#/components/parameters/PublicEventsSort"
-        - $ref: "#/components/parameters/PublicDirection"
-        - $ref: "#/components/parameters/PublicFilter"
-      responses:
-        "200":
-          description: A stable cursor page.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiEventsPage" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    post:
-      tags: [Public]
-      operationId: createEvents
-      summary: Create an event
-      security:
-        - apiKey: ["events:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiEventsCreate" }
-      responses:
-        "201":
-          description: Event created.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiEventsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/events/{id}:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-      - $ref: "#/components/parameters/PublicResourceId"
-    get:
-      tags: [Public]
-      operationId: getEvents
-      summary: Get an event
-      security:
-        - apiKey: ["events:read"]
-      responses:
-        "200":
-          description: The tenant-scoped event.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiEventsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    patch:
-      tags: [Public]
-      operationId: updateEvents
-      summary: Update an event with optimistic concurrency
-      security:
-        - apiKey: ["events:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiEventsUpdate" }
-      responses:
-        "200":
-          description: Event updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiEventsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    put:
-      tags: [Public]
-      operationId: replaceEvents
-      summary: Replace an event with optimistic concurrency
-      security:
-        - apiKey: ["events:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiEventsUpdate" }
-      responses:
-        "200":
-          description: Event updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiEventsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/speakers:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-    get:
-      tags: [Public]
-      operationId: listSpeakers
-      summary: List tenant speaker projections
-      security:
-        - apiKey: ["submissions:read"]
-      parameters:
-        - $ref: "#/components/parameters/PublicCursor"
-        - $ref: "#/components/parameters/PublicLimit"
-        - $ref: "#/components/parameters/PublicSpeakersSort"
-        - $ref: "#/components/parameters/PublicDirection"
-        - $ref: "#/components/parameters/PublicFilter"
-      responses:
-        "200":
-          description: A stable cursor page.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSpeakersPage" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/speakers/{id}:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-      - $ref: "#/components/parameters/PublicResourceId"
-    get:
-      tags: [Public]
-      operationId: getSpeakers
-      summary: Get a speaker projection
-      security:
-        - apiKey: ["submissions:read"]
-      responses:
-        "200":
-          description: The tenant-scoped speaker projection.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSpeakersRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/agenda:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-    get:
-      tags: [Public]
-      operationId: listAgenda
-      summary: List read-only agenda projections
-      description: Agenda is a read-only projection; generic create and update operations are not mounted.
-      security:
-        - apiKey: ["agenda:read"]
-      parameters:
-        - $ref: "#/components/parameters/PublicCursor"
-        - $ref: "#/components/parameters/PublicLimit"
-        - $ref: "#/components/parameters/PublicAgendaSort"
-        - $ref: "#/components/parameters/PublicDirection"
-        - $ref: "#/components/parameters/PublicFilter"
-      responses:
-        "200":
-          description: A stable cursor page.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiAgendaPage" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/agenda/{id}:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-      - $ref: "#/components/parameters/PublicResourceId"
-    get:
-      tags: [Public]
-      operationId: getAgenda
-      summary: Get an agenda projection
-      security:
-        - apiKey: ["agenda:read"]
-      responses:
-        "200":
-          description: The tenant-scoped agenda projection.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiAgendaRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/sessions:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-    get:
-      tags: [Public]
-      operationId: listSessions
-      summary: List tenant sessions
-      security:
-        - apiKey: ["agenda:read"]
-      parameters:
-        - $ref: "#/components/parameters/PublicCursor"
-        - $ref: "#/components/parameters/PublicLimit"
-        - $ref: "#/components/parameters/PublicSessionsSort"
-        - $ref: "#/components/parameters/PublicDirection"
-        - $ref: "#/components/parameters/PublicFilter"
-      responses:
-        "200":
-          description: A stable cursor page.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSessionsPage" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    post:
-      tags: [Public]
-      operationId: createSessions
-      summary: Create a session
-      security:
-        - apiKey: ["agenda:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiSessionsCreate" }
-      responses:
-        "201":
-          description: Session created.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSessionsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-
-  /api/v1/organizations/{organizationId}/sessions/{id}:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-      - $ref: "#/components/parameters/PublicResourceId"
-    get:
-      tags: [Public]
-      operationId: getSessions
-      summary: Get a session
-      security:
-        - apiKey: ["agenda:read"]
-      responses:
-        "200":
-          description: The tenant-scoped session.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSessionsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    patch:
-      tags: [Public]
-      operationId: updateSessions
-      summary: Update a session with optimistic concurrency
-      security:
-        - apiKey: ["agenda:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiSessionsUpdate" }
-      responses:
-        "200":
-          description: Session updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSessionsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    put:
-      tags: [Public]
-      operationId: replaceSessions
-      summary: Replace a session with optimistic concurrency
-      security:
-        - apiKey: ["agenda:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiSessionsUpdate" }
-      responses:
-        "200":
-          description: Session updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSessionsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
   /api/v1/organizations/{organizationId}/webhooks:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
@@ -3474,7 +3116,7 @@ paths:
       operationId: listWebhookSubscriptions
       summary: List event webhook subscriptions
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:read"]
       responses:
         "200":
           description: Subscriptions without signing secrets.
@@ -3497,7 +3139,7 @@ paths:
       operationId: createWebhookSubscription
       summary: Create an event webhook subscription
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       requestBody:
         required: true
         content:
@@ -3525,7 +3167,7 @@ paths:
       operationId: getWebhookSubscription
       summary: Read a webhook subscription without its secret
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:read"]
       responses:
         "200":
           description: Subscription metadata.
@@ -3542,7 +3184,7 @@ paths:
       operationId: updateWebhookSubscription
       summary: Update a webhook subscription
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       requestBody:
         required: true
         content:
@@ -3566,7 +3208,7 @@ paths:
       operationId: putWebhookSubscription
       summary: Update a webhook subscription through the PUT alias
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       requestBody:
         required: true
         content:
@@ -3590,7 +3232,7 @@ paths:
       operationId: deleteWebhookSubscription
       summary: Delete a webhook subscription
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       responses:
         "200":
           description: Subscription deleted.
@@ -3622,8 +3264,8 @@ components:
     apiKey:
       type: http
       scheme: bearer
-      bearerFormat: Open Sessionboard scoped API key
-      description: Organization-scoped API key for public-v1 resources and webhook administration.
+      bearerFormat: Eventloom scoped API key
+      description: Organization-scoped API key for mounted public-v1 webhook administration.
     capabilityToken:
       type: apiKey
       in: header
@@ -3686,7 +3328,7 @@ components:
       name: filter
       in: query
       required: false
-      description: JSON object filter. Dotted and bracketed filter keys are also accepted.
+      description: "JSON object filter, or dotted (filter.field) / bracketed (filter[field]) encoding. Only these resource-specific fields are documented and accepted: events (status, slug), speakers (eventId, displayName), agenda (revision), and sessions (eventId, status). Unsupported filter fields and unrelated query parameters are rejected."
       schema: { type: string }
     EventId:
       name: eventId
@@ -3834,7 +3476,7 @@ components:
       name: If-Match
       in: header
       required: true
-      description: Strong or weak quoted positive resource version from the latest ETag.
+      description: Required header-only positive resource version from the latest ETag; a body expectedVersion value is not a substitute. Strong or weak quoted values are accepted.
       schema: { type: string, pattern: '^(W/)?"?[1-9][0-9]*"?$' }
     RequestId:
       name: X-Request-ID
@@ -4565,7 +4207,7 @@ components:
       enum: [verification, receipt, reminder, decision, task, schedule_publish, schedule_update, schedule_cancel, organizer_group_email]
     CommunicationSender:
       type: string
-      enum: [auth@sessionboard.namuh.co, speakers@sessionboard.namuh.co, calendar@sessionboard.namuh.co]
+      format: email
     CommunicationAudience:
       type: string
       enum: [all_participants, accepted_participants, waitlisted_participants, rejected_participants, task_assignees, scheduled_participants]
@@ -4631,6 +4273,12 @@ components:
         templateId: { $ref: "#/components/schemas/Identifier" }
         templateVersion: { $ref: "#/components/schemas/Version" }
         audience: { $ref: "#/components/schemas/CommunicationAudience" }
+        recipientIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          description: Exact event-scoped recipients to preview, rendered and returned in the supplied order. Every ID must belong to the selected audience.
+          items: { $ref: "#/components/schemas/Identifier" }
         data: { $ref: "#/components/schemas/JsonObject" }
       additionalProperties: false
     CommunicationRecipient:
@@ -4645,7 +4293,7 @@ components:
       additionalProperties: false
     CommunicationPreview:
       type: object
-      required: [id, eventId, purpose, templateId, templateVersion, audience, recipientCount, recipients, createdAt]
+      required: [id, eventId, purpose, templateId, templateVersion, audience, recipientCount, recipientIds, recipients, createdAt]
       properties:
         id: { $ref: "#/components/schemas/Identifier" }
         eventId: { $ref: "#/components/schemas/Identifier" }
@@ -4654,6 +4302,11 @@ components:
         templateVersion: { $ref: "#/components/schemas/Version" }
         audience: { $ref: "#/components/schemas/CommunicationAudience" }
         recipientCount: { type: integer, minimum: 0 }
+        recipientIds:
+          type: array
+          description: Exact immutable recipient IDs in preview and delivery order.
+          items: { $ref: "#/components/schemas/Identifier" }
+          maxItems: 100_000
         recipients: { type: array, items: { $ref: "#/components/schemas/CommunicationRecipient" }, maxItems: 100_000 }
         createdAt: { $ref: "#/components/schemas/Timestamp" }
       additionalProperties: false

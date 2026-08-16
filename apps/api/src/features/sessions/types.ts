@@ -21,7 +21,8 @@ export type SessionResourceType =
   | "level"
   | "tag"
   | "settings";
-export type SessionContentStatus = "Approved" | "Needs changes";
+export const sessionContentStatuses = ["Approved", "Needs changes"] as const;
+export type SessionContentStatus = (typeof sessionContentStatuses)[number];
 export type SessionMutationAction =
   | "created"
   | "updated"
@@ -49,6 +50,29 @@ export interface SessionContentSnapshot {
   speakerIds: readonly string[];
   speakerRoster: readonly SessionSpeakerReference[];
   resourceIds: readonly string[];
+}
+
+export interface PublishedSessionContent {
+  readonly id: string;
+  readonly title: string;
+  readonly abstract: string;
+  readonly contentStatus: "Approved";
+  readonly durationMinutes: number;
+  readonly capacityRequired: number;
+  readonly roomId?: string;
+  readonly trackIds: readonly string[];
+  readonly formatId?: string;
+  readonly speakerIds: readonly string[];
+  readonly speakerNames: readonly string[];
+  readonly resourceIds: readonly string[];
+  readonly version: number;
+  readonly updatedAt: string;
+}
+
+export interface PublishedSessionContentHandoff {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly sessions: readonly PublishedSessionContent[];
 }
 export type SessionSortField =
   | "title"
@@ -108,6 +132,7 @@ export interface SessionAuditEntry {
 
 export interface SessionSpeakerReference {
   id: string;
+  displayName?: string;
   role?: string;
 }
 
@@ -253,6 +278,7 @@ export interface UpdateSessionInput {
   title?: string;
   description?: string;
   status?: SessionStatus;
+  contentStatus?: SessionContentStatus;
   durationMinutes?: number;
   capacityRequired?: number;
   roomId?: string | null;
@@ -344,7 +370,91 @@ export interface SessionListPage {
   offset: number;
 }
 
+export type SessionRepositoryCommand =
+  | {
+      operation: "putSession";
+      value: Session;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteSession";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | { operation: "putRoom"; value: Room; expectedVersion: number | null; audit: SessionAuditEntry }
+  | {
+      operation: "deleteRoom";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putTrack";
+      value: Track;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteTrack";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putFormat";
+      value: Format;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteFormat";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putLevel";
+      value: Level;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteLevel";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | { operation: "putTag"; value: Tag; expectedVersion: number | null; audit: SessionAuditEntry }
+  | {
+      operation: "deleteTag";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putSettings";
+      value: SessionSettings;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    };
+
 export interface SessionRepository {
+  /** Optional atomic domain + audit + sync-job command used by transactional providers. */
+  commit?(command: SessionRepositoryCommand): Promise<void>;
   getSession(tenantId: string, eventId: string, sessionId: string): Promise<Session | null>;
   listSessions(tenantId: string, eventId: string): Promise<readonly Session[]>;
   putSession(session: Session, expectedVersion: number | null): Promise<void>;
@@ -431,6 +541,13 @@ export interface SessionRepositorySeed {
   speakerIds?: Readonly<Record<string, readonly string[]>>;
 }
 
+export interface PublishedSessionContentReader {
+  /** Approval-gated, tenant/event-scoped source for agenda and deliverables consumers. */
+  getPublishedSessionContent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<PublishedSessionContentHandoff>;
+}
 export interface AgendaCatalogReader {
   /** Organization-qualified, read-only catalog contract consumed by agenda scheduling. */
   getAgendaCatalog(tenantId: string, eventId: string): Promise<AgendaCatalog>;

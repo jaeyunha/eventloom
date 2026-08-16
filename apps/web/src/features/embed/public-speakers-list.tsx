@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./embed.module.css";
 import {
-  formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
+  publicPhotoUrl,
   publishedSpeakerSessions,
   sortSpeakersBySurname,
   speakerInitials,
@@ -11,16 +12,6 @@ import {
 import type { PublishedProgram, PublishedSpeaker } from "./types";
 
 const BIOGRAPHY_LIMIT = 320;
-
-function safePhotoUrl(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
 
 function speakerTitle(speaker: PublishedSpeaker): string {
   return speaker.jobTitle?.trim() || "Title not published";
@@ -44,55 +35,20 @@ function biographyText(speaker: PublishedSpeaker, expanded: boolean): string {
   return `${biography.slice(0, BIOGRAPHY_LIMIT).trimEnd()}…`;
 }
 
-function sessionEntryBelongsToSpeaker(
-  entry: PublishedProgram["agenda"]["entries"][number],
-  speaker: PublishedSpeaker,
-): boolean {
-  const normalizedName = speaker.displayName.trim().toLocaleLowerCase();
-  const normalizedId = speaker.id.trim().toLocaleLowerCase();
-  return (
-    speaker.sessionIds.includes(entry.id) ||
-    entry.speakerNames.some((name) => {
-      const normalizedNameValue = name.trim().toLocaleLowerCase();
-      return normalizedNameValue === normalizedName || normalizedNameValue === normalizedId;
-    })
-  );
-}
-
 function SpeakerHeadshot({ speaker }: Readonly<{ speaker: PublishedSpeaker }>) {
-  const photoUrl = safePhotoUrl(speaker.photoUrl);
+  const photoUrl = publicPhotoUrl(speaker.photoUrl);
   const initials = speakerInitials(speaker.displayName) || "?";
   return (
     <div
       aria-label={`${speaker.displayName} headshot`}
       role="img"
-      style={{
-        display: "grid",
-        width: "5.25rem",
-        height: "5.25rem",
-        flex: "0 0 auto",
-        placeItems: "center",
-        overflow: "hidden",
-        border: "1px solid var(--embed-border)",
-        borderRadius: "50%",
-        background:
-          "linear-gradient(135deg, rgb(79 94 232 / 15%), rgb(16 155 107 / 13%)), var(--embed-surface-muted)",
-        color: "var(--embed-brand-strong)",
-        fontSize: "1.45rem",
-        fontWeight: 850,
-      }}
+      className={styles.speakerHeadshot}
     >
       {photoUrl ? (
         <span
           aria-hidden="true"
-          style={{
-            display: "block",
-            width: "100%",
-            height: "100%",
-            backgroundImage: `url(${JSON.stringify(photoUrl)})`,
-            backgroundPosition: "center",
-            backgroundSize: "cover",
-          }}
+          className={styles.speakerHeadshotPhoto}
+          style={{ backgroundImage: `url(${JSON.stringify(photoUrl)})` }}
         />
       ) : (
         <span aria-hidden="true">{initials}</span>
@@ -110,57 +66,27 @@ function SpeakerEntry({
   eventSlug: string;
   speaker: PublishedSpeaker;
   program: PublishedProgram;
-  onSelect?: () => void;
+  onSelect?: (target: HTMLButtonElement) => void;
 }>) {
   const [biographyExpanded, setBiographyExpanded] = useState(false);
   const biography = speaker.biography.trim();
   const hasLongBiography = biography.length > BIOGRAPHY_LIMIT;
-  const sessions = useMemo(() => {
-    const agendaSessions = program.agenda.entries.filter((entry) =>
-      sessionEntryBelongsToSpeaker(entry, speaker),
-    );
-    if (agendaSessions.length > 0) {
-      return agendaSessions.map((entry) => ({
-        id: entry.id,
-        title: entry.title,
-        startsAt: entry.startsAt || null,
-        endsAt: entry.endsAt || null,
-        roomName: entry.roomName || null,
-      }));
-    }
-    return publishedSpeakerSessions(speaker, program.speakers);
-  }, [program.agenda.entries, program.speakers, speaker]);
+  const sessions = useMemo(
+    () => publishedSpeakerSessions(speaker, program.agenda.entries),
+    [program.agenda.entries, speaker],
+  );
 
   return (
     <li>
-      <article
-        className={styles.speakerCard}
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(5.25rem, 6.5rem) minmax(0, 1fr)",
-          gap: "1rem",
-          alignItems: "start",
-          padding: "1rem",
-        }}
-      >
+      <article className={styles.speakerCard}>
         <SpeakerHeadshot speaker={speaker} />
-        <div className={styles.speakerCopy} style={{ padding: 0 }}>
+        <div className={styles.speakerCopy}>
           <h3>
             {onSelect ? (
               <button
                 type="button"
-                onClick={onSelect}
-                style={{
-                  padding: 0,
-                  border: 0,
-                  background: "none",
-                  color: "var(--embed-brand-strong)",
-                  font: "inherit",
-                  fontWeight: 800,
-                  textAlign: "left",
-                  textDecoration: "underline",
-                  cursor: "pointer",
-                }}
+                id={`speaker-list-trigger-${speaker.id}`}
+                onClick={(event) => onSelect(event.currentTarget)}
               >
                 {speaker.displayName}
               </button>
@@ -206,19 +132,24 @@ function SpeakerEntry({
                       {session.title}
                     </a>
                     <br />
-                    {session.startsAt && session.endsAt ? (
-                      <time dateTime={session.startsAt}>
-                        {formatPublishedDateTimeRange(
+                    <time dateTime={session.startsAt}>
+                      {[
+                        formatPublishedSessionSchedule(
                           session.startsAt,
                           session.endsAt,
                           program.agenda.event.timeZone,
-                        )}
-                      </time>
-                    ) : (
-                      <span>Date and time not published</span>
-                    )}
+                        ).dateLabel,
+                        formatPublishedSessionSchedule(
+                          session.startsAt,
+                          session.endsAt,
+                          program.agenda.event.timeZone,
+                        ).timeLabel,
+                      ].join(" · ")}
+                    </time>
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
+                    <br />
+                    <span>Track: {session.trackNames.join(", ") || "Track not published"}</span>
                     <br />
                     <span>Roles: speaker</span>
                   </li>
@@ -237,6 +168,8 @@ function SpeakerEntry({
 export function PublicSpeakersListView({ program }: Readonly<{ program: PublishedProgram }>) {
   const [query, setQuery] = useState("");
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string | null>(null);
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
   const speakers = useMemo(() => {
     const sorted = sortSpeakersBySurname(program.speakers.speakers);
     return sorted.filter((speaker) => speakerMatchesName(speaker, query));
@@ -245,6 +178,26 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
     ? program.speakers.speakers.find((speaker) => speaker.id === selectedSpeakerId)
     : undefined;
   const totalSpeakers = program.speakers.speakers.length;
+
+  useEffect(() => {
+    if (selectedSpeaker) {
+      backButtonRef.current?.focus();
+      return;
+    }
+    const returnFocusTarget = returnFocusRef.current;
+    if (returnFocusTarget?.isConnected) {
+      returnFocusTarget.focus();
+    } else if (returnFocusTarget?.id) {
+      document.getElementById(returnFocusTarget.id)?.focus();
+    }
+    returnFocusRef.current = null;
+  }, [selectedSpeaker]);
+
+  const openSpeaker = (speakerId: string, target: HTMLButtonElement) => {
+    returnFocusRef.current = target;
+    setSelectedSpeakerId(speakerId);
+  };
+  const closeSpeaker = () => setSelectedSpeakerId(null);
 
   if (selectedSpeaker) {
     return (
@@ -256,9 +209,10 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
             <p>Published profile and sessions from the current program projection.</p>
           </div>
           <button
+            ref={backButtonRef}
             className={styles.clearButton}
             type="button"
-            onClick={() => setSelectedSpeakerId(null)}
+            onClick={closeSpeaker}
           >
             Back to speakers
           </button>
@@ -319,18 +273,14 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
           <p>Try another name or clear the search to browse every published speaker.</p>
         </div>
       ) : (
-        <ul
-          className={styles.publicSessionList}
-          aria-label="Published speakers and sessions"
-          style={{ gap: "1rem" }}
-        >
+        <ul className={styles.publicSessionList} aria-label="Published speakers and sessions">
           {speakers.map((speaker) => (
             <SpeakerEntry
               key={speaker.id}
               eventSlug={program.agenda.event.slug}
               speaker={speaker}
               program={program}
-              onSelect={() => setSelectedSpeakerId(speaker.id)}
+              onSelect={(target) => openSpeaker(speaker.id, target)}
             />
           ))}
         </ul>

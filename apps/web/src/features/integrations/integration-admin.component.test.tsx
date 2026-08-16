@@ -72,6 +72,7 @@ describe("integration admin UI", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "overview",
         initialSnapshot: snapshot,
       }),
@@ -84,13 +85,38 @@ describe("integration admin UI", () => {
     expect(markup).toContain("API keys");
     expect(markup).toContain("Webhooks");
     expect(markup).toContain("Needs attention");
-    expect(markup).toContain("Source-of-truth boundary");
+    expect(markup.match(/data-slot="card"/g) ?? []).toHaveLength(3);
+    expect(markup).not.toContain("Integration settings unavailable");
+    expect(markup).not.toContain('role="alert"');
+  });
+
+  it("keeps scoped tabs inside the selected organization and event", () => {
+    const markup = renderToStaticMarkup(
+      createElement(IntegrationAdmin, {
+        eventId: "event-a",
+        organizationId: "ai-engineer",
+        section: "overview",
+        initialSnapshot: snapshot,
+      }),
+    );
+
+    expect(markup).toContain(
+      "/admin/organizations/ai-engineer/events/event-a/integrations/api-keys",
+    );
+    expect(markup).toContain(
+      "/admin/organizations/ai-engineer/events/event-a/integrations/webhooks",
+    );
+    expect(markup).toContain(
+      "/admin/organizations/ai-engineer/events/event-a/integrations/delivery",
+    );
+    expect(markup).not.toContain('href="/admin/events/event-a/integrations');
   });
 
   it("renders the scoped API-key surface", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "api-keys",
         initialSnapshot: snapshot,
       }),
@@ -99,20 +125,25 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Create a scoped API key");
     expect(markup).toContain("Agenda export");
     expect(markup).toContain("events:read");
+    expect(markup).toContain("Expiration date and time");
+    expect(markup).toContain("Time");
+    expect(markup).not.toContain('type="date"');
     expect(markup).toContain("Revoke");
   });
 
-  it("uses non-prefilled password controls for replacement credentials", () => {
+  it("keeps provider credentials deployment managed", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "delivery",
         initialSnapshot: snapshot,
       }),
     );
 
-    expect(markup).toContain('type="password"');
-    expect(markup).toMatch(/autocomplete="off"/i);
+    expect(markup).not.toContain('type="password"');
+    expect(markup).toContain("Deployment managed");
+    expect(markup).toContain("cannot replace provider secrets here");
     expect(markup).not.toContain("os_sending_secret");
     expect(markup).not.toContain('2468" value=');
     expect(markup).toContain("Google or Microsoft Calendar OAuth is not required");
@@ -122,6 +153,7 @@ describe("integration admin UI", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "webhooks",
         initialSnapshot: snapshot,
       }),

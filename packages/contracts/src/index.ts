@@ -14,6 +14,7 @@ export const healthResponseSchema = z.object({
   service: z.enum(serviceNames),
   version: z.string().min(1),
   environment: deploymentEnvironmentSchema,
+  runtimeProfile: z.enum(["integrated", "fixture"]).optional(),
   timestamp: z.iso.datetime(),
   traceId: z.uuid(),
 });
@@ -23,4 +24,5 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export const apiErrorSchema = apiErrorResponseSchema;
 
 export type ApiError = z.infer<typeof apiErrorSchema>;
+export * from "./agent/index";
 export * from "./domain/index";

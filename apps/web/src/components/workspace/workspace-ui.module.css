@@ -1,0 +1,278 @@
+.page {
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.header {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem var(--workspace-heading-padding-inline, 1.5rem) 1.15rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--background) 96%, transparent), transparent),
+    var(--background);
+}
+
+.headerTop,
+.titleRow,
+.headerActions,
+.meta,
+.toolbar,
+.toolbarGroup,
+.status,
+.emptyActions {
+  display: flex;
+  align-items: center;
+}
+
+.headerTop,
+.titleRow {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.eyebrow,
+.breadcrumb {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+
+.breadcrumb {
+  display: flex;
+  gap: 0.38rem;
+  align-items: center;
+}
+
+.titleRow {
+  min-width: 0;
+}
+
+.titleBlock {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: clamp(1.35rem, 2vw, 1.75rem);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.12;
+}
+
+.description {
+  max-width: 52rem;
+  margin: 0.35rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.headerActions,
+.meta,
+.toolbar,
+.toolbarGroup,
+.emptyActions {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.meta {
+  gap: 0.45rem 0.9rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.metaItem {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.toolbar {
+  justify-content: space-between;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--card) 94%, var(--background));
+}
+
+.toolbarGroup {
+  min-width: 0;
+}
+
+.toolbarLabel {
+  padding: 0 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.69rem;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.status {
+  width: fit-content;
+  min-height: 1.4rem;
+  gap: 0.35rem;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.69rem;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.statusDot {
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.neutral {
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--muted) 56%, transparent);
+}
+
+.info {
+  border-color: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.success {
+  border-color: color-mix(in srgb, var(--success) 22%, transparent);
+  color: var(--success);
+  background: var(--success-surface);
+}
+
+.warning {
+  border-color: color-mix(in srgb, var(--warning) 24%, transparent);
+  color: var(--warning);
+  background: var(--warning-surface);
+}
+
+.danger {
+  border-color: color-mix(in srgb, var(--failure) 22%, transparent);
+  color: var(--failure);
+  background: var(--failure-surface);
+}
+
+.surface {
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 0.65rem;
+  background: var(--card);
+}
+
+.surfaceHeader {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+.surfaceTitle {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.surfaceDescription {
+  margin: 0.2rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.surfaceContent {
+  min-width: 0;
+}
+
+.inspector {
+  min-width: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--muted) 24%, var(--card));
+}
+
+.inspectorSection {
+  display: grid;
+  gap: 0.65rem;
+  padding: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.inspectorTitle {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  font-weight: 680;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.empty {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  padding: 2rem;
+  text-align: center;
+}
+
+.emptyInner {
+  display: grid;
+  max-width: 26rem;
+  gap: 0.6rem;
+  justify-items: center;
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.emptyDescription {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.emptyActions {
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+@media (max-width: 760px) {
+  .header {
+    padding: 1rem;
+  }
+
+  .headerTop,
+  .titleRow {
+    align-items: flex-start;
+  }
+
+  .titleRow {
+    flex-direction: column;
+  }
+
+  .headerActions {
+    width: 100%;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

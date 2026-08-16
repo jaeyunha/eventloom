@@ -1,23 +1,19 @@
-import { openSendEmailPayloadSchema, openSendSenderSchema } from "@open-sessionboard/contracts";
 import {
   OpenSendError,
   type OpenSendErrorCode,
   type OpenSendMessage,
   type OpenSendSender,
+  type OpenSendSenderPurpose,
   type OpenSendSendResult,
+  openSendMessageSchema,
+  openSendSenderAddressSchema,
 } from "./types";
 
-export type OpenSendSenderPurpose = "auth" | "speakers" | "calendar";
+export type { OpenSendSenderPurpose } from "./types";
 export type OpenSendSenderAddress = OpenSendMessage["from"];
 export type OpenSendSenderAddresses = Readonly<
   Record<OpenSendSenderPurpose, OpenSendSenderAddress>
 >;
-
-export const DEFAULT_OPEN_SEND_SENDERS: OpenSendSenderAddresses = {
-  auth: "auth@sessionboard.namuh.co",
-  speakers: "speakers@sessionboard.namuh.co",
-  calendar: "calendar@sessionboard.namuh.co",
-};
 
 const DEFAULT_BASE_URL = "https://opensend.namuh.co";
 const MAX_ATTACHMENT_BASE64_BYTES = 40 * 1024 * 1024;
@@ -27,7 +23,7 @@ export interface OpenSendClientOptions {
   readonly baseUrl?: string;
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => Date;
-  readonly senderAddresses?: Partial<Record<OpenSendSenderPurpose, string>>;
+  readonly senderAddresses: OpenSendSenderAddresses;
 }
 
 export class OpenSendClient implements OpenSendSender {
@@ -56,9 +52,13 @@ export class OpenSendClient implements OpenSendSender {
     message: OpenSendMessage,
     purpose?: OpenSendSenderPurpose,
   ): Promise<OpenSendSendResult> {
+    assertMessageShape(message);
+    const selectedPurpose = purpose ?? message.senderPurpose;
     const selectedMessage =
-      purpose === undefined ? message : { ...message, from: this.senderFor(purpose) };
-    assertMessage(selectedMessage);
+      selectedPurpose === undefined
+        ? message
+        : { ...message, from: this.senderFor(selectedPurpose) };
+    assertMessage(selectedMessage, this.#senderAddresses);
 
     let response: Response;
     try {
@@ -134,30 +134,34 @@ function normalizeBaseUrl(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-function resolveSenderAddresses(
-  overrides: Partial<Record<OpenSendSenderPurpose, string>> | undefined,
-): OpenSendSenderAddresses {
-  const configured = { ...DEFAULT_OPEN_SEND_SENDERS };
-  for (const [purpose, address] of Object.entries(overrides ?? {})) {
-    if (address !== undefined) {
-      configured[purpose as OpenSendSenderPurpose] = address.trim() as OpenSendSenderAddress;
-    }
-  }
-  for (const [purpose, address] of Object.entries(configured)) {
-    if (!openSendSenderSchema.safeParse(address).success) {
+function resolveSenderAddresses(senderAddresses: OpenSendSenderAddresses): OpenSendSenderAddresses {
+  const configured = {} as Record<OpenSendSenderPurpose, OpenSendSenderAddress>;
+  for (const purpose of ["auth", "speakers", "calendar"] as const) {
+    const result = openSendSenderAddressSchema.safeParse(senderAddresses?.[purpose]);
+    if (!result.success) {
       throw new OpenSendError(
         "CONFIGURATION_ERROR",
-        `OpenSend ${purpose} sender is not a verified sender address.`,
+        `OpenSend ${purpose} sender must be a valid email address.`,
         { retryable: false },
       );
     }
+    configured[purpose] = result.data;
   }
   return configured;
 }
 
-function assertMessage(message: OpenSendMessage): void {
-  const parsed = openSendEmailPayloadSchema.safeParse(message);
+function assertMessageShape(message: OpenSendMessage): void {
+  const parsed = openSendMessageSchema.safeParse(message);
   if (!parsed.success) {
+    throw new OpenSendError("VALIDATION_ERROR", "The OpenSend email payload is invalid.", {
+      retryable: false,
+    });
+  }
+}
+
+function assertMessage(message: OpenSendMessage, senderAddresses: OpenSendSenderAddresses): void {
+  const parsed = openSendMessageSchema.safeParse(message);
+  if (!parsed.success || !Object.values(senderAddresses).includes(message.from)) {
     throw new OpenSendError("VALIDATION_ERROR", "The OpenSend email payload is invalid.", {
       retryable: false,
     });

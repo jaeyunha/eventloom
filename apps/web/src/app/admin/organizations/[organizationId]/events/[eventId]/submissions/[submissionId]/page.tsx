@@ -1,4 +1,4 @@
-import { SubmissionDetailWorkspace } from "@/features/admin/submission-workspace";
+import { SubmissionListWorkspace } from "@/features/admin/submission-workspace";
 
 interface SubmissionDetailPageProps {
   readonly params: Promise<{
@@ -11,10 +11,10 @@ interface SubmissionDetailPageProps {
 export default async function OrganizerSubmissionDetailPage({ params }: SubmissionDetailPageProps) {
   const { organizationId, eventId, submissionId } = await params;
   return (
-    <SubmissionDetailWorkspace
+    <SubmissionListWorkspace
       organizationId={organizationId}
       eventId={eventId}
-      submissionId={submissionId}
+      selectedSubmissionId={submissionId}
     />
   );
 }

@@ -1,4 +1,6 @@
+import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { type CrmRouteEnvironment, createCrmRoutes } from "./routes";
 import { CrmService, InMemoryCrmRepository } from "./service";
 import type { CrmActor, CrmContact } from "./types";
 
@@ -19,6 +21,24 @@ function service() {
       generateId: (prefix) => `${prefix}-${++sequence}`,
     },
   );
+}
+
+function crmRouteApp(crm: CrmService): Hono<CrmRouteEnvironment> {
+  const app = new Hono<CrmRouteEnvironment>();
+  app.use("*", async (context, next) => {
+    context.set("authPrincipal", {
+      kind: "user",
+      sessionId: "crm-test-session",
+      userId: actor.userId,
+      email: "owner@example.test",
+      memberships: [{ organizationId: actor.organizationId, role: "owner" }],
+      speakerGrants: [],
+      reviewerGrants: [],
+    });
+    await next();
+  });
+  app.route("/api/admin/organizations/:organizationId/crm", createCrmRoutes({ service: crm }));
+  return app;
 }
 
 class FailPrimaryMergeRepository extends InMemoryCrmRepository {
@@ -42,6 +62,92 @@ class FailPrimaryMergeRepository extends InMemoryCrmRepository {
     if (contact.status === "merged" && contact.mergedIntoId === this.primaryContactId)
       this.duplicateRetirementWrites += 1;
     return super.saveContact(contact, expectedVersion);
+  }
+}
+type CountedCrmRead =
+  | "listContacts"
+  | "listProjections"
+  | "listOutreach"
+  | "getContact"
+  | "getCommandResult"
+  | "getProjection";
+
+class CountingDelayedCrmRepository extends InMemoryCrmRepository {
+  readonly calls: Record<CountedCrmRead, number> = {
+    listContacts: 0,
+    listProjections: 0,
+    listOutreach: 0,
+    getContact: 0,
+    getCommandResult: 0,
+    getProjection: 0,
+  };
+  readonly started = new Set<CountedCrmRead>();
+  activeReads = 0;
+  maxConcurrentReads = 0;
+  readonly #delays: Record<CountedCrmRead, number>;
+
+  constructor(delays: Partial<Record<CountedCrmRead, number>> = {}) {
+    super();
+    this.#delays = {
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 0,
+      getCommandResult: 0,
+      getProjection: 0,
+      ...delays,
+    };
+  }
+
+  resetReads(): void {
+    for (const kind of Object.keys(this.calls) as CountedCrmRead[]) this.calls[kind] = 0;
+    this.started.clear();
+    this.activeReads = 0;
+    this.maxConcurrentReads = 0;
+  }
+
+  private async delayed<T>(kind: CountedCrmRead, read: () => Promise<T>): Promise<T> {
+    this.calls[kind] += 1;
+    this.started.add(kind);
+    this.activeReads += 1;
+    this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, this.#delays[kind]));
+      return await read();
+    } finally {
+      this.activeReads -= 1;
+    }
+  }
+
+  override listContacts(
+    organizationId: string,
+    filter?: Parameters<InMemoryCrmRepository["listContacts"]>[1],
+  ) {
+    return this.delayed("listContacts", () => super.listContacts(organizationId, filter));
+  }
+
+  override listProjections(organizationId: string) {
+    return this.delayed("listProjections", () => super.listProjections(organizationId));
+  }
+
+  override listOutreach(organizationId: string) {
+    return this.delayed("listOutreach", () => super.listOutreach(organizationId));
+  }
+
+  override getContact(organizationId: string, contactId: string) {
+    return this.delayed("getContact", () => super.getContact(organizationId, contactId));
+  }
+
+  override getProjection(organizationId: string, eventId: string, contactId: string) {
+    return this.delayed("getProjection", () =>
+      super.getProjection(organizationId, eventId, contactId),
+    );
+  }
+
+  override getCommandResult<T>(organizationId: string, command: string, key: string) {
+    return this.delayed("getCommandResult", () =>
+      super.getCommandResult<T>(organizationId, command, key),
+    );
   }
 }
 
@@ -85,6 +191,35 @@ describe("CrmService", () => {
       csv: "name,email,topics\nGrace Hopper,grace@example.com,compiler\nAlan Turing,alan@example.com,security",
     });
     expect(first.created).toBe(2);
+    expect(first.mapping).toEqual([
+      { sourceColumn: "name", targetField: "displayName", custom: false },
+      { sourceColumn: "email", targetField: "email", custom: false },
+      { sourceColumn: "topics", targetField: "custom.topics", custom: true },
+    ]);
+    expect(first.rows).toEqual([
+      {
+        rowNumber: 1,
+        identity: "grace@example.com",
+        status: "created",
+        contactId: first.contacts[0]?.id,
+        reason: null,
+      },
+      {
+        rowNumber: 2,
+        identity: "alan@example.com",
+        status: "created",
+        contactId: first.contacts[1]?.id,
+        reason: null,
+      },
+    ]);
+    const createOnly = await crm.importCsv(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "csv-create-only",
+      mode: "create",
+      csv: "name,email\nGrace Duplicate, GRACE@example.com\nNo identity,",
+    });
+    expect(createOnly).toMatchObject({ created: 0, updated: 0, skipped: 1, errors: 1 });
+    expect(createOnly.rows.map((row) => row.status)).toEqual(["skipped", "error"]);
     expect(replay.id).toBe(first.id);
     expect(replay.idempotent).toBe(true);
 
@@ -98,6 +233,88 @@ describe("CrmService", () => {
     ).toEqual(["Grace Hopper"]);
   });
 
+  it("imports same-name contacts by normalized email and preserves speaker metadata on partial updates", async () => {
+    const crm = service();
+    const result = await crm.importCsv(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "speaker-import-identity",
+      csv: [
+        "name,email,jobTitle,company,source",
+        "Priya Raman,priya@example.com,Principal Engineer,Latticework Systems,speaker",
+        "Priya Raman,priya.second@example.com,Community Lead,Northstar,speaker",
+        "Priya Updated, PRIYA@example.com, , ,speaker",
+      ].join("\n"),
+    });
+
+    expect(result).toMatchObject({ created: 2, updated: 1, skipped: 0 });
+    const contacts = await crm.listContacts(actor, "org-a", { limit: 10 });
+    expect(contacts).toHaveLength(2);
+    expect(contacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          displayName: "Priya Updated",
+          email: "priya@example.com",
+          company: "Latticework Systems",
+          title: "Principal Engineer",
+          source: "speaker",
+        }),
+        expect.objectContaining({
+          displayName: "Priya Raman",
+          email: "priya.second@example.com",
+          company: "Northstar",
+          title: "Community Lead",
+          source: "speaker",
+        }),
+      ]),
+    );
+    expect(result.rows[0]?.contactId).toBe(result.rows[2]?.contactId);
+  });
+
+  it("maps speaker row metadata without clearing fields omitted by a later email upsert", async () => {
+    const crm = service();
+    const created = await crm.importContacts(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "speaker-row-create",
+      rows: [
+        {
+          displayName: "Marcus Okafor",
+          email: "MARCUS@example.com",
+          company: "Northstar",
+          jobTitle: "Community Lead",
+          source: "speaker",
+        },
+      ],
+    });
+    const contactId = created.rows[0]?.contactId;
+    expect(contactId).not.toBeNull();
+
+    const updated = await crm.importContacts(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "speaker-row-update",
+      rows: [
+        {
+          displayName: "Marcus O.",
+          email: " marcus@example.com ",
+          company: " ",
+          jobTitle: " ",
+          source: "speaker",
+        },
+      ],
+    });
+
+    expect(updated).toMatchObject({ created: 0, updated: 1, skipped: 0 });
+    expect(updated.contacts).toEqual([
+      expect.objectContaining({
+        id: contactId,
+        displayName: "Marcus O.",
+        email: "marcus@example.com",
+        company: "Northstar",
+        title: "Community Lead",
+        source: "speaker",
+      }),
+    ]);
+    await expect(crm.listContacts(actor, "org-a")).resolves.toHaveLength(1);
+  });
   it("detects and merges duplicates, retaining tags and custom fields", async () => {
     const crm = service();
     const primary = await crm.createContact(actor, {
@@ -325,6 +542,22 @@ describe("CrmService", () => {
         })
       ).idempotent,
     ).toBe(true);
+    const existingEvent = await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      eventId: "event-a",
+      idempotencyKey: "event-2",
+    });
+    expect(existingEvent).toMatchObject({ idempotent: true, outcome: "existing" });
+    await expect(
+      crm.addContactToEvent(actor, {
+        organizationId: "org-a",
+        contactId: contact.id,
+        eventId: "event-a",
+        role: "speaker",
+        idempotencyKey: "event-1",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_CONFLICT" });
     const outreach = await crm.sendPersonalizedOutreach(actor, {
       organizationId: "org-a",
       contactId: contact.id,
@@ -333,14 +566,293 @@ describe("CrmService", () => {
       idempotencyKey: "outreach-1",
     });
     expect(outreach.renderedBody).toBe("Hi Grace");
+    expect(outreach).toMatchObject({
+      subject: "Hello",
+      status: "failed",
+      queuedCount: 0,
+      sentCount: 0,
+      failedCount: 1,
+      terminal: true,
+    });
     const history = await crm.getContactHistory(actor, "org-a", contact.id);
     expect(history.map((entry) => entry.kind)).toEqual(
-      expect.arrayContaining(["pipeline", "note", "event"]),
+      expect.arrayContaining(["pipeline", "note", "event", "communication"]),
     );
     expect((await crm.analytics(actor, "org-a")).contactsByEvent).toEqual([
       { eventId: "event-a", count: 1 },
     ]);
     expect(event.projection.contactId).toBe(contact.id);
+    expect(event.outcome).toBe("created");
+    await expect(
+      crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: contact.id,
+        subject: "Hello {{unknownTag}}",
+        body: "Body",
+        idempotencyKey: "outreach-unknown",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
+  });
+  it("keeps built-in outreach merge tags server-owned with deterministic name fallback", async () => {
+    const repository = new InMemoryCrmRepository();
+    const crm = new CrmService(
+      {
+        repository,
+        outreach: {
+          async send(command) {
+            return { ...command, status: "queued" };
+          },
+        },
+      },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (() => {
+          let sequence = 0;
+          return (prefix: string) => `${prefix}-${++sequence}`;
+        })(),
+      },
+    );
+    const displayNameOnly = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Dana Kowalski",
+      email: "dana@example.com",
+    });
+    const explicitFirstName = await crm.createContact(actor, {
+      organizationId: "org-a",
+      firstName: "Ada",
+      displayName: "Ada Lovelace",
+      email: "ada@example.com",
+    });
+
+    const fallback = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: displayNameOnly.id,
+      subject: "Hello {{first_name}}",
+      body: "Hi {{first_name}} / {{display_name}} / {{firstName}}",
+      variables: {
+        first_name: "",
+        firstName: "Caller override",
+        display_name: "Caller display override",
+      },
+      idempotencyKey: "outreach-merge-fallback",
+    });
+    expect(fallback.renderedBody).toBe("Hi Dana / Dana Kowalski / Dana");
+    expect(fallback.status).toBe("queued");
+
+    const explicit = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: explicitFirstName.id,
+      subject: "Hello {{first_name}}",
+      body: "Hi {{first_name}}",
+      variables: { first_name: "" },
+      idempotencyKey: "outreach-merge-explicit",
+    });
+    expect(explicit.renderedBody).toBe("Hi Ada");
+
+    await expect(
+      crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: displayNameOnly.id,
+        subject: "Hello {{unknown_tag}}",
+        body: "Body",
+        idempotencyKey: "outreach-merge-unknown",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
+  });
+  it("renders outreach names from explicit fields and trimmed display names", async () => {
+    const crm = service();
+    const explicit = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Display Person",
+      firstName: "Explicit",
+      lastName: "Names",
+      email: "explicit@example.com",
+    });
+    const explicitOutreach = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: explicit.id,
+      subject: "Subject {{first_name}} {{firstName}}",
+      body: "Hi {{last_name}} {{lastName}}",
+      variables: {
+        first_name: "Ignored",
+        firstName: "Ignored",
+        last_name: "Ignored",
+        lastName: "Ignored",
+      },
+      idempotencyKey: "outreach-explicit-names",
+    });
+    expect(explicitOutreach.subject).toBe("Subject Explicit Explicit");
+    expect(explicitOutreach.renderedBody).toBe("Hi Names Names");
+
+    for (const [id, displayName, firstName, lastName] of [
+      ["dana", " Dana   Okafor ", "Dana", "Okafor"],
+      ["marcus", "Marcus Chen", "Marcus", "Chen"],
+    ] as const) {
+      const displayNameOnly = await crm.createContact(actor, {
+        organizationId: "org-a",
+        displayName,
+        email: `${id}@example.com`,
+      });
+      const fallbackOutreach = await crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: displayNameOnly.id,
+        subject: "Subject {{first_name}} {{firstName}}",
+        body: "Hi {{last_name}} {{lastName}}",
+        variables: {
+          first_name: "",
+          firstName: "",
+          last_name: "",
+          lastName: "",
+        },
+        idempotencyKey: `outreach-${id}-names`,
+      });
+      expect(fallbackOutreach.subject).toBe(`Subject ${firstName} ${firstName}`);
+      expect(fallbackOutreach.renderedBody).toBe(`Hi ${lastName} ${lastName}`);
+    }
+  });
+  it("starts analytics reads together and scopes each source to the organization", async () => {
+    const repository = new CountingDelayedCrmRepository({
+      listContacts: 25,
+      listProjections: 75,
+      listOutreach: 150,
+    });
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Analytics Contact",
+      email: "analytics@example.com",
+    });
+    const otherContact = await crm.createContact(otherActor, {
+      organizationId: "org-b",
+      displayName: "Other Analytics Contact",
+      email: "other-analytics@example.com",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      eventId: "event-a",
+      idempotencyKey: "analytics-event-a",
+    });
+    await crm.addContactToEvent(otherActor, {
+      organizationId: "org-b",
+      contactId: otherContact.id,
+      eventId: "event-b",
+      idempotencyKey: "analytics-event-b",
+    });
+    await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      subject: "Analytics",
+      body: "Hello",
+      idempotencyKey: "analytics-outreach-a",
+    });
+    await crm.sendPersonalizedOutreach(otherActor, {
+      organizationId: "org-b",
+      contactId: otherContact.id,
+      subject: "Other Analytics",
+      body: "Hello",
+      idempotencyKey: "analytics-outreach-b",
+    });
+    repository.resetReads();
+
+    const analytics = await crm.analytics(actor, "org-a");
+
+    expect(repository.calls).toEqual({
+      listContacts: 1,
+      listProjections: 1,
+      listOutreach: 1,
+      getContact: 0,
+      getCommandResult: 0,
+      getProjection: 0,
+    });
+    expect(repository.started).toEqual(
+      new Set(["listContacts", "listProjections", "listOutreach"]),
+    );
+    expect(repository.maxConcurrentReads).toBe(3);
+    expect(analytics).toMatchObject({
+      organizationId: "org-a",
+      totalContacts: 1,
+      activeContacts: 1,
+      contactsByEvent: [{ eventId: "event-a", count: 1 }],
+      outreach: { queued: 0, sent: 0, failed: 1 },
+      contactsByPipelineStage: { new: 1 },
+      contactsBySource: { manual: 1 },
+    });
+  });
+
+  it("reuses add-to-event receipts without rereading the contact or projection", async () => {
+    const repository = new CountingDelayedCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Event Contact",
+      email: "event@example.com",
+    });
+    const input = {
+      organizationId: "org-a",
+      contactId: contact.id,
+      eventId: "event-a",
+      idempotencyKey: "event-reuse",
+    } as const;
+
+    repository.resetReads();
+    const created = await crm.addContactToEvent(actor, input);
+    expect(created).toMatchObject({ outcome: "created", idempotent: false });
+    expect(repository.calls).toEqual({
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 1,
+      getCommandResult: 1,
+      getProjection: 0,
+    });
+
+    repository.resetReads();
+    const replay = await crm.addContactToEvent(actor, input);
+    expect(replay).toEqual({ ...created, idempotent: true });
+    expect(repository.calls).toEqual({
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 0,
+      getCommandResult: 1,
+      getProjection: 0,
+    });
+
+    repository.resetReads();
+    const reused = await crm.addContactToEvent(actor, {
+      ...input,
+      idempotencyKey: "event-reuse-alias",
+    });
+    expect(reused).toMatchObject({
+      outcome: "existing",
+      idempotent: true,
+      projection: created.projection,
+    });
+    expect(repository.calls).toEqual({
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 1,
+      getCommandResult: 1,
+      getProjection: 0,
+    });
+    expect(await repository.listProjections("org-a")).toHaveLength(1);
+    expect(await repository.listHistory("org-a", contact.id)).toHaveLength(1);
   });
   it("keeps same-name event projections keyed by contact identity", async () => {
     const repository = new InMemoryCrmRepository();
@@ -420,10 +932,501 @@ describe("CrmService", () => {
     const first = await crm.sendPersonalizedOutreach(actor, input);
     const replay = await crm.sendPersonalizedOutreach(actor, input);
     expect(first.status).toBe("queued");
+    expect(first).toMatchObject({
+      status: "queued",
+      queuedCount: 1,
+      sentCount: 0,
+      failedCount: 0,
+      terminal: false,
+      recipientEmail: "recipient@example.com",
+      subject: "Follow up",
+    });
     expect(replay).toEqual(first);
     expect(sent).toEqual(["outreach-boundary-1"]);
     await expect(
       repository.getOutreachByIdempotencyKey("org-a", input.idempotencyKey),
     ).resolves.toEqual(expect.objectContaining({ contactId: contact.id, status: "queued" }));
+    expect(
+      (await repository.listHistory("org-a", contact.id)).filter(
+        (entry) => entry.kind === "communication",
+      ),
+    ).toHaveLength(1);
+
+    const delivered = await crm.recordOutreachDeliveryStatus({
+      organizationId: "org-a",
+      outreachId: first.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "delivered",
+      providerMessageId: "provider-message-1",
+      occurredAt: "2026-01-01T00:01:00.000Z",
+    });
+    expect(delivered).toMatchObject({
+      status: "delivered",
+      queuedCount: 0,
+      sentCount: 1,
+      failedCount: 0,
+      terminal: true,
+      providerMessageId: "provider-message-1",
+      completedAt: "2026-01-01T00:01:00.000Z",
+    });
+    await expect(
+      crm.recordOutreachDeliveryStatus({
+        organizationId: "org-a",
+        outreachId: first.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "delivered",
+        providerMessageId: "provider-message-1",
+      }),
+    ).resolves.toEqual(delivered);
+    await expect(
+      crm.recordOutreachDeliveryStatus({
+        organizationId: "org-a",
+        outreachId: first.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "bounced",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_CONFLICT" });
+    expect(
+      (await repository.listHistory("org-a", contact.id)).filter(
+        (entry) => entry.kind === "communication",
+      ),
+    ).toHaveLength(2);
+  });
+  it.each(["failed", "bounced", "complained"] as const)(
+    "persists terminal %s outreach completion",
+    async (status) => {
+      const repository = new InMemoryCrmRepository();
+      const crm = new CrmService(
+        {
+          repository,
+          outreach: {
+            async send(command) {
+              return { ...command, status: "queued" };
+            },
+          },
+        },
+        {
+          clock: () => new Date("2026-01-01T00:00:00.000Z"),
+          generateId: (prefix) => `${prefix}-${status}`,
+        },
+      );
+      const contact = await crm.createContact(actor, {
+        organizationId: "org-a",
+        displayName: "Terminal Recipient",
+        email: `${status}@example.com`,
+      });
+      const outreach = await crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: contact.id,
+        subject: "Follow up",
+        body: "Hello",
+        idempotencyKey: `outreach-${status}`,
+      });
+
+      const completed = await crm.recordOutreachDeliveryStatus({
+        organizationId: "org-a",
+        outreachId: outreach.id,
+        idempotencyKey: `outreach-${status}`,
+        status,
+        providerMessageId: `provider-${status}`,
+        reason: `provider reported ${status}`,
+      });
+
+      expect(completed).toMatchObject({
+        status,
+        queuedCount: 0,
+        sentCount: 0,
+        failedCount: 1,
+        terminal: true,
+        failureReason: `provider reported ${status}`,
+        providerMessageId: `provider-${status}`,
+      });
+    },
+  );
+  it("previews CSV without mutation and persists authoritative row outcomes across reload", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const existing = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Existing",
+      email: "existing@example.com",
+    });
+    const rows = [
+      { displayName: "Created", email: "created@example.com" },
+      { displayName: "Updated", email: "existing@example.com", company: "Northstar" },
+      { displayName: "Updated", email: "existing@example.com", company: "Northstar" },
+      { displayName: "Malformed", email: "not-an-email" },
+    ] as const;
+    const before = await repository.listContacts("org-a");
+    const preview = await crm.previewImport(actor, {
+      organizationId: "org-a",
+      rows,
+    });
+    expect(preview.preview).toBe(true);
+    expect(preview.rows.map((row) => row.status)).toEqual([
+      "created",
+      "updated",
+      "skipped",
+      "error",
+    ]);
+    expect(preview.errors).toBe(1);
+    expect(await repository.listContacts("org-a")).toEqual(before);
+
+    const committed = await crm.importContacts(actor, {
+      organizationId: "org-a",
+      rows,
+      idempotencyKey: "csv-reconcile-1",
+    });
+    expect(committed).toMatchObject({ created: 1, updated: 1, skipped: 1, errors: 1 });
+    expect(committed.rows.map((row) => row.rowNumber)).toEqual([1, 2, 3, 4]);
+    const reloaded = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-reload-${++sequence}`,
+      },
+    );
+    const replay = await reloaded.importContacts(actor, {
+      organizationId: "org-a",
+      rows,
+      idempotencyKey: "csv-reconcile-1",
+    });
+    expect(replay).toEqual({ ...committed, idempotent: true });
+    expect(replay.contacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: existing.id, company: "Northstar" })]),
+    );
+  });
+
+  it("reconciles safe CRM relationships while retaining tombstone provenance", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const survivor = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Survivor",
+      email: "survivor@example.com",
+    });
+    const retired = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Retired",
+      email: "retired@example.com",
+    });
+    await crm.addNote(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      body: "Historical note",
+    });
+    await crm.setPipelineStage(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      stage: "qualified",
+    });
+    const projection = await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      participantId: "participant-a",
+      eventId: "event-a",
+      idempotencyKey: "link-retired",
+    });
+    const segment = await crm.createSegment(actor, {
+      organizationId: "org-a",
+      name: "Retired segment",
+      rules: [{ field: "custom.contactId", operator: "eq", value: retired.id }],
+    });
+    const outreach = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      subject: "Historical recipient",
+      body: "Do not rewire",
+      idempotencyKey: "retired-recipient-snapshot",
+    });
+
+    const preview = await crm.previewMergeContacts(actor, {
+      organizationId: "org-a",
+      primaryContactId: survivor.id,
+      duplicateContactIds: [retired.id],
+    });
+    expect(preview.canCommit).toBe(true);
+    expect(preview.rewired).toEqual({
+      participantContactLinks: 1,
+      notes: 1,
+      segments: 1,
+      pipelineHistory: 1,
+    });
+    expect((await repository.getContact("org-a", retired.id))?.status).toBe("active");
+
+    const merged = await crm.mergeContacts(actor, {
+      organizationId: "org-a",
+      primaryContactId: survivor.id,
+      duplicateContactIds: [retired.id],
+      idempotencyKey: "merge-reconcile-1",
+    });
+    expect(merged).toMatchObject({
+      survivorId: survivor.id,
+      retiredIds: [retired.id],
+      auditId: expect.any(String),
+      rewired: {
+        participantContactLinks: 1,
+        notes: 1,
+        segments: 1,
+        pipelineHistory: 1,
+      },
+    });
+    expect(merged.merged[0]).toMatchObject({
+      id: retired.id,
+      status: "merged",
+      mergedIntoId: survivor.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect((await repository.listNotes("org-a", survivor.id))[0]).toMatchObject({
+      body: "Historical note",
+      contactId: survivor.id,
+      sourceCrmContactId: retired.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect((await repository.listPipelineHistory("org-a", survivor.id))[0]).toMatchObject({
+      contactId: survivor.id,
+      sourceCrmContactId: retired.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect((await repository.listParticipantContactLinks("org-a"))[0]).toMatchObject({
+      participantId: "participant-a",
+      eventId: "event-a",
+      crmContactId: survivor.id,
+      sourceCrmContactId: retired.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect(await repository.getProjection("org-a", "event-a", retired.id)).toBeNull();
+    expect(await repository.getProjection("org-a", "event-a", survivor.id)).toMatchObject({
+      participantId: "participant-a",
+      crmContactId: survivor.id,
+    });
+    expect(await repository.getSegment("org-a", segment.id)).toMatchObject({
+      rules: [expect.objectContaining({ value: survivor.id })],
+      mergeAuditIds: [merged.auditId],
+    });
+    expect(
+      await repository.getOutreachByIdempotencyKey("org-a", "retired-recipient-snapshot"),
+    ).toMatchObject({
+      id: outreach.id,
+      contactId: retired.id,
+      recipientEmail: "retired@example.com",
+    });
+    expect(projection.projection.participantId).toBe("participant-a");
+  });
+
+  it("fails same-event distinct-participant collisions before any CRM mutation", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-collision-${++sequence}`,
+      },
+    );
+    const survivor = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Survivor",
+      email: "collision-survivor@example.com",
+    });
+    const retired = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Retired",
+      email: "collision-retired@example.com",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: survivor.id,
+      participantId: "participant-one",
+      eventId: "event-collision",
+      idempotencyKey: "collision-one",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      participantId: "participant-two",
+      eventId: "event-collision",
+      idempotencyKey: "collision-two",
+    });
+
+    const preview = await crm.previewMergeContacts(actor, {
+      organizationId: "org-a",
+      primaryContactId: survivor.id,
+      duplicateContactIds: [retired.id],
+    });
+    expect(preview.participantConflicts).toEqual([
+      expect.objectContaining({
+        eventId: "event-collision",
+        participantIds: ["participant-one", "participant-two"],
+      }),
+    ]);
+    await expect(
+      crm.mergeContacts(actor, {
+        organizationId: "org-a",
+        primaryContactId: survivor.id,
+        duplicateContactIds: [retired.id],
+        idempotencyKey: "collision-commit",
+      }),
+    ).rejects.toMatchObject({
+      code: "CRM_CONFLICT",
+      details: { participantConflicts: expect.any(Array) },
+    });
+    expect(await crm.getContact(actor, "org-a", survivor.id)).toMatchObject({ status: "active" });
+    expect(await crm.getContact(actor, "org-a", retired.id)).toMatchObject({ status: "active" });
+    expect(
+      (await repository.listParticipantContactLinks("org-a")).map((link) => link.crmContactId),
+    ).toEqual(expect.arrayContaining([survivor.id, retired.id]));
+  });
+  it("exposes read-only import preview and requires idempotency for route commits", async () => {
+    const repository = new InMemoryCrmRepository();
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-route`,
+      },
+    );
+    const app = crmRouteApp(crm);
+    const base = "/api/admin/organizations/org-a/crm";
+
+    const preview = await app.request(`${base}/contacts/import/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        csv: "name,email\nRoute Preview,route-preview@example.com",
+      }),
+    });
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      data: {
+        preview: true,
+        created: 1,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+        rows: [{ rowNumber: 1, status: "created" }],
+      },
+    });
+    expect(await repository.listContacts("org-a")).toEqual([]);
+
+    const missingKey = await app.request(`${base}/contacts/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        csv: "name,email\nRoute Commit,route-commit@example.com",
+      }),
+    });
+    expect(missingKey.status).toBe(400);
+    await expect(missingKey.json()).resolves.toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+
+    const committed = await app.request(`${base}/contacts/import`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "route-import-commit",
+      },
+      body: JSON.stringify({
+        csv: "name,email\nRoute Commit,route-commit@example.com",
+      }),
+    });
+    expect(committed.status).toBe(201);
+    await expect(committed.json()).resolves.toMatchObject({
+      data: {
+        preview: false,
+        created: 1,
+        rows: [{ rowNumber: 1, status: "created" }],
+      },
+    });
+  });
+
+  it("returns participant merge collisions through route preview and commit", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-route-${++sequence}`,
+      },
+    );
+    const survivor = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Route Survivor",
+      email: "route-survivor@example.com",
+    });
+    const retired = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Route Retired",
+      email: "route-retired@example.com",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: survivor.id,
+      participantId: "route-participant-one",
+      eventId: "route-event",
+      idempotencyKey: "route-link-one",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      participantId: "route-participant-two",
+      eventId: "route-event",
+      idempotencyKey: "route-link-two",
+    });
+    const app = crmRouteApp(crm);
+    const mergePath = `/api/admin/organizations/org-a/crm/contacts/${survivor.id}/merge`;
+
+    const preview = await app.request(`${mergePath}/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ duplicateContactIds: [retired.id] }),
+    });
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      data: {
+        canCommit: false,
+        participantConflicts: [
+          {
+            eventId: "route-event",
+            participantIds: ["route-participant-one", "route-participant-two"],
+          },
+        ],
+      },
+    });
+
+    const committed = await app.request(mergePath, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "route-merge-collision",
+      },
+      body: JSON.stringify({ duplicateContactIds: [retired.id] }),
+    });
+    expect(committed.status).toBe(409);
+    await expect(committed.json()).resolves.toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: { participantConflicts: expect.any(Array) },
+      },
+    });
+    expect(await repository.getContact("org-a", retired.id)).toMatchObject({
+      status: "active",
+    });
   });
 });

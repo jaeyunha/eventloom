@@ -10,404 +10,65 @@ import {
   useRef,
   useState,
 } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button as UiButton } from "@/components/ui/button";
+import {
+  Card as UiCard,
+  CardContent as UiCardContent,
+  CardHeader as UiCardHeader,
+  CardTitle as UiCardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import styles from "./crm-workspace.module.css";
-
-export const CRM_PIPELINE_STAGES = [
-  "new",
-  "contacted",
-  "qualified",
-  "invited",
-  "registered",
-  "accepted",
-  "declined",
-  "won",
-  "lost",
-] as const;
-export type CrmPipelineStage = (typeof CRM_PIPELINE_STAGES)[number];
-export type CrmContactStatus = "active" | "merged";
-export type CrmContactSource = "manual" | "csv" | "speaker" | "import";
-export type CrmSegmentOperator =
-  | "eq"
-  | "neq"
-  | "contains"
-  | "startsWith"
-  | "endsWith"
-  | "in"
-  | "notIn"
-  | "exists";
-
-export interface CrmContact {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly firstName: string | null;
-  readonly lastName: string | null;
-  readonly displayName: string;
-  readonly email: string | null;
-  readonly phone: string | null;
-  readonly company: string | null;
-  readonly title: string | null;
-  readonly website: string | null;
-  readonly bio?: string | null;
-  readonly linkedinUrl: string | null;
-  readonly headshotUrl?: string | null;
-  readonly notes: string | null;
-  readonly tags: readonly string[];
-  readonly customFields: Readonly<Record<string, unknown>>;
-  readonly source: CrmContactSource;
-  readonly status: CrmContactStatus;
-  readonly mergedIntoId: string | null;
-  readonly pipelineStage: CrmPipelineStage;
-  readonly version: number;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface CrmSegmentRule {
-  readonly field: string;
-  readonly operator: CrmSegmentOperator;
-  readonly value?: unknown;
-}
-
-export interface CrmSegment {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly name: string;
-  readonly description: string | null;
-  readonly rules: readonly CrmSegmentRule[];
-  readonly createdBy: string;
-  readonly version: number;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface CrmHistoryEntry {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly contactId: string;
-  readonly kind: string;
-  readonly eventId: string | null;
-  readonly sessionId: string | null;
-  readonly title: string;
-  readonly detail: string | null;
-  readonly occurredAt: string;
-  readonly metadata: Readonly<Record<string, unknown>>;
-}
-
-export interface CrmPipelineEntry {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly contactId: string;
-  readonly fromStage: CrmPipelineStage | null;
-  readonly toStage: CrmPipelineStage;
-  readonly note: string | null;
-  readonly actorId: string;
-  readonly createdAt: string;
-}
-
-export interface CrmNote {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly contactId: string;
-  readonly body: string;
-  readonly authorId: string;
-  readonly createdAt: string;
-}
-
-export interface CrmEvent {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly name: string;
-  readonly slug?: string;
-  readonly status?: string;
-  readonly startsAt?: string;
-  readonly endsAt?: string;
-}
-
-export interface CrmDuplicateMatch {
-  readonly contact: CrmContact;
-  readonly score: number;
-  readonly matchedFields: readonly string[];
-}
-
-export interface CrmDuplicateReport {
-  readonly contactId: string;
-  readonly matches: readonly CrmDuplicateMatch[];
-}
-export type CrmMergeScalarField =
-  | "email"
-  | "phone"
-  | "name"
-  | "company"
-  | "title"
-  | "bio"
-  | "headshot";
-
-export type CrmMergeField = CrmMergeScalarField | "customFields";
-
-export interface CrmMergeWinners {
-  readonly fieldWinners: Readonly<Record<CrmMergeScalarField, string>>;
-  readonly customFieldWinners: Readonly<Record<string, string>>;
-}
-
-export interface CrmMergePlan extends CrmMergeWinners {
-  readonly duplicateContactIds: readonly string[];
-}
-
-export interface CrmAnalytics {
-  readonly organizationId: string;
-  readonly totalContacts: number;
-  readonly activeContacts: number;
-  readonly contactsByPipelineStage: Readonly<Record<string, number>>;
-  readonly contactsByEvent: readonly { readonly eventId: string; readonly count: number }[];
-  readonly contactsBySource: Readonly<Record<string, number>>;
-  readonly outreach: { readonly queued: number; readonly sent: number; readonly failed: number };
-  readonly generatedAt: string;
-}
-
-export interface ContactDraft {
-  readonly firstName: string;
-  readonly lastName: string;
-  readonly displayName: string;
-  readonly email: string;
-  readonly phone: string;
-  readonly company: string;
-  readonly title: string;
-  readonly website: string;
-  readonly linkedinUrl: string;
-  readonly bio: string;
-  readonly headshotUrl: string;
-  readonly tags: string;
-  readonly customFields: string;
-  readonly notes: string;
-}
-
-export interface CrmApi {
-  listContacts(filter?: {
-    readonly query?: string;
-    readonly company?: string;
-    readonly pipelineStage?: CrmPipelineStage | "";
-    readonly status?: CrmContactStatus | "";
-    readonly tags?: string;
-  }): Promise<readonly CrmContact[]>;
-  getContact(contactId: string): Promise<CrmContact>;
-  createContact(input: Record<string, unknown>): Promise<CrmContact>;
-  updateContact(contactId: string, input: Record<string, unknown>): Promise<CrmContact>;
-  importContacts(csv: string, idempotencyKey: string): Promise<unknown>;
-  listSegments(): Promise<readonly CrmSegment[]>;
-  createSegment(input: {
-    name: string;
-    description?: string;
-    rules: readonly CrmSegmentRule[];
-  }): Promise<CrmSegment>;
-  listSegmentContacts(segmentId: string): Promise<readonly CrmContact[]>;
-  findDuplicates(contactId: string): Promise<CrmDuplicateReport>;
-  mergeContacts(
-    contactId: string,
-    duplicateContactIds: readonly string[],
-    idempotencyKey: string,
-    winners?: CrmMergeWinners,
-  ): Promise<unknown>;
-  getContactHistory(contactId: string): Promise<readonly CrmHistoryEntry[]>;
-  getPipelineHistory(contactId: string): Promise<readonly CrmPipelineEntry[]>;
-  updatePipeline(contactId: string, stage: CrmPipelineStage, note?: string): Promise<CrmContact>;
-  listNotes(contactId: string): Promise<readonly CrmNote[]>;
-  addNote(contactId: string, body: string): Promise<CrmNote>;
-  addContactToEvent(
-    contactId: string,
-    input: {
-      eventId: string;
-      role: "speaker" | "prospect" | "attendee" | "sponsor";
-      note?: string;
-    },
-    idempotencyKey: string,
-  ): Promise<unknown>;
-  sendOutreach(
-    input: {
-      contactId: string;
-      eventId?: string;
-      segmentId?: string;
-      subject: string;
-      body: string;
-      variables: Record<string, string>;
-    },
-    idempotencyKey: string,
-  ): Promise<unknown>;
-  analytics(): Promise<CrmAnalytics>;
-  listEvents(): Promise<readonly CrmEvent[]>;
-}
-
-type CrmFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
-export class CrmApiError extends Error {
-  constructor(
-    readonly code: string,
-    readonly status: number,
-    message: string,
-    readonly traceId?: string,
-  ) {
-    super(message);
-    this.name = "CrmApiError";
-  }
-}
-
-function encode(value: string, label: string): string {
-  const normalized = value.trim();
-  if (normalized.length === 0) throw new TypeError(`A ${label} is required.`);
-  return encodeURIComponent(normalized);
-}
-
-function unwrap<T>(payload: unknown): T {
-  if (typeof payload !== "object" || payload === null || !("data" in payload)) {
-    throw new CrmApiError(
-      "INVALID_RESPONSE",
-      200,
-      "The CRM response did not include a data envelope.",
-    );
-  }
-  return (payload as { data: T }).data;
-}
-
-function errorFromPayload(payload: unknown, status: number): CrmApiError {
-  if (typeof payload === "object" && payload !== null && "error" in payload) {
-    const error = (payload as { error?: { code?: string; message?: string; traceId?: string } })
-      .error;
-    return new CrmApiError(
-      error?.code ?? "CRM_REQUEST_FAILED",
-      status,
-      error?.message ?? "The CRM request could not be completed.",
-      error?.traceId,
-    );
-  }
-  return new CrmApiError("CRM_REQUEST_FAILED", status, "The CRM request could not be completed.");
-}
-
-function idempotencyKey(prefix: string): string {
-  const random =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `${prefix}-${random}`;
-}
-
-export function createCrmApi(
-  apiBaseUrl: string,
-  organizationId: string,
-  fetcher: CrmFetcher = globalThis.fetch,
-): CrmApi {
-  const base = apiBaseUrl.trim().replace(/\/+$/u, "");
-  const organizationSegment = encode(organizationId, "organization ID");
-  const crmBase = `${base}/api/admin/organizations/${organizationSegment}/crm`;
-  const eventsBase = `${base}/api/admin/organizations/${organizationSegment}/events`;
-
-  async function request<T>(path: string, init: RequestInit = {}, endpoint = crmBase): Promise<T> {
-    const headers = new Headers(init.headers);
-    headers.set("accept", "application/json");
-    if (init.body !== undefined) headers.set("content-type", "application/json");
-    const response = await fetcher(`${endpoint}${path}`, {
-      ...init,
-      credentials: "include",
-      cache: "no-store",
-      headers: Object.fromEntries(headers.entries()),
-    });
-    const payload = await response.json().catch(() => undefined);
-    if (!response.ok) throw errorFromPayload(payload, response.status);
-    return unwrap<T>(payload);
-  }
-
-  const json = (value: unknown, key?: string): RequestInit => ({
-    method: "POST",
-    ...(key === undefined ? {} : { headers: { "idempotency-key": key } }),
-    body: JSON.stringify(value),
-  });
-
-  return {
-    listContacts(filter = {}) {
-      const query = new URLSearchParams();
-      if (filter.query?.trim()) query.set("query", filter.query.trim());
-      if (filter.company?.trim()) query.set("company", filter.company.trim());
-      if (filter.pipelineStage) query.set("pipelineStage", filter.pipelineStage);
-      if (filter.status) query.set("status", filter.status);
-      if (filter.tags?.trim()) query.set("tags", filter.tags.trim());
-      const suffix = query.toString() ? `?${query.toString()}` : "";
-      return request<readonly CrmContact[]>(`/contacts${suffix}`);
-    },
-    getContact(contactId) {
-      return request<CrmContact>(`/contacts/${encode(contactId, "contact ID")}`);
-    },
-    createContact(input) {
-      return request<CrmContact>("/contacts", json(input));
-    },
-    updateContact(contactId, input) {
-      return request<CrmContact>(`/contacts/${encode(contactId, "contact ID")}`, {
-        ...json(input),
-        method: "PATCH",
-      });
-    },
-    importContacts(csv, key) {
-      return request<unknown>("/contacts/import", json({ csv, idempotencyKey: key }, key));
-    },
-    listSegments() {
-      return request<readonly CrmSegment[]>("/segments");
-    },
-    createSegment(input) {
-      return request<CrmSegment>("/segments", json(input));
-    },
-    listSegmentContacts(segmentId) {
-      return request<readonly CrmContact[]>(
-        `/segments/${encode(segmentId, "segment ID")}/contacts`,
-      );
-    },
-    findDuplicates(contactId) {
-      return request<CrmDuplicateReport>(`/contacts/${encode(contactId, "contact ID")}/duplicates`);
-    },
-    mergeContacts(contactId, duplicateContactIds, key, winners) {
-      return request<unknown>(
-        `/contacts/${encode(contactId, "contact ID")}/merge`,
-        json({ duplicateContactIds, ...(winners ?? {}), idempotencyKey: key }, key),
-      );
-    },
-    getContactHistory(contactId) {
-      return request<readonly CrmHistoryEntry[]>(
-        `/contacts/${encode(contactId, "contact ID")}/history`,
-      );
-    },
-    getPipelineHistory(contactId) {
-      return request<readonly CrmPipelineEntry[]>(
-        `/contacts/${encode(contactId, "contact ID")}/pipeline/history`,
-      );
-    },
-    updatePipeline(contactId, stage, note) {
-      return request<CrmContact>(
-        `/contacts/${encode(contactId, "contact ID")}/pipeline`,
-        json({ stage, ...(note?.trim() ? { note: note.trim() } : {}) }),
-      );
-    },
-    listNotes(contactId) {
-      return request<readonly CrmNote[]>(`/contacts/${encode(contactId, "contact ID")}/notes`);
-    },
-    addNote(contactId, body) {
-      return request<CrmNote>(`/contacts/${encode(contactId, "contact ID")}/notes`, json({ body }));
-    },
-    addContactToEvent(contactId, input, key) {
-      return request<unknown>(
-        `/contacts/${encode(contactId, "contact ID")}/events`,
-        json({ ...input, idempotencyKey: key }, key),
-      );
-    },
-    sendOutreach(input, key) {
-      return request<unknown>("/outreach", json({ ...input, idempotencyKey: key }, key));
-    },
-    analytics() {
-      return request<CrmAnalytics>("/analytics");
-    },
-    listEvents() {
-      return request<readonly CrmEvent[]>("", {}, eventsBase);
-    },
-  };
-}
+import { createCrmApi, idempotencyKey } from "./crm-workspace-api";
+import {
+  type ContactDraft,
+  CRM_PIPELINE_STAGES,
+  type CrmAnalytics,
+  type CrmApi,
+  type CrmContact,
+  type CrmContactStatus,
+  type CrmDuplicateReport,
+  type CrmEvent,
+  type CrmEventProjectionResult,
+  type CrmHistoryEntry,
+  type CrmImportPreviewResult,
+  type CrmImportResult,
+  type CrmMergePlan,
+  type CrmMergePreview,
+  type CrmMergeResult,
+  type CrmMergeScalarField,
+  type CrmNote,
+  type CrmOutreachCommand,
+  type CrmOutreachPreview,
+  type CrmPipelineEntry,
+  type CrmPipelineStage,
+  type CrmSegment,
+  type CrmSegmentOperator,
+  type CrmSegmentRule,
+  type CrmWorkspaceContactFilter,
+  createCrmWorkspaceReadCoordinator,
+  mergePlanKey,
+  messageFromError,
+  refreshCrmAnalyticsAfterContactSave,
+  refreshCrmDuplicatesAfterContactSave,
+} from "./crm-workspace-model";
 
 function displayName(contact: Pick<CrmContact, "displayName" | "email" | "id">): string {
   return contact.displayName.trim() || contact.email?.trim() || contact.id;
+}
+function outreachNameParts(contact: Pick<CrmContact, "firstName" | "lastName" | "displayName">): {
+  readonly firstName: string;
+  readonly lastName: string;
+} {
+  const displayParts = contact.displayName.trim().split(/\s+/u).filter(Boolean);
+  const fallbackFirstName = displayParts[0] ?? "";
+  const fallbackLastName = displayParts.slice(1).join(" ");
+  return {
+    firstName: contact.firstName?.trim() || fallbackFirstName,
+    lastName: contact.lastName?.trim() || fallbackLastName,
+  };
 }
 
 function formatDate(value: string | undefined): string {
@@ -415,13 +76,25 @@ function formatDate(value: string | undefined): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
-
-function messageFromError(error: unknown): string {
-  if (error instanceof CrmApiError) {
-    const suffix = error.traceId === undefined ? "" : ` (trace ${error.traceId})`;
-    return `${error.message}${suffix}`;
+function focusAndScroll(target: HTMLElement | null): void {
+  if (target === null) return;
+  if (typeof target.scrollIntoView === "function") {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-  return error instanceof Error ? error.message : "The CRM request could not be completed.";
+  target.focus({ preventScroll: true });
+}
+
+function humanErrorSummary(error: string): string {
+  const summary =
+    error
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.replace(/\s*\(trace(?:\s+id)?\s*[:#]?\s*[^)]+\)/gi, "")
+      .replace(/\s+trace(?:\s+id)?\s*[:#]?\s*[a-z0-9-]+/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() ?? "";
+  return summary || "The CRM request could not be completed.";
 }
 
 function customFieldText(contact: CrmContact | undefined, aliases: readonly string[]): string {
@@ -626,17 +299,57 @@ function draftInput(draft: ContactDraft): Record<string, unknown> {
   };
 }
 
-function renderVariablePreview(body: string, contact: CrmContact): string {
-  return body
-    .replace(/\{\{\s*first_name\s*\}\}/giu, contact.firstName ?? "")
-    .replace(/\{\{\s*firstName\s*\}\}/gu, contact.firstName ?? "")
-    .replace(/\{\{\s*last_name\s*\}\}/giu, contact.lastName ?? "")
-    .replace(/\{\{\s*company\s*\}\}/giu, contact.company ?? "");
+function contactMergeTagValues(contact: CrmContact): Readonly<Record<string, string>> {
+  const displayName = contact.displayName.trim();
+  const firstName = contact.firstName?.trim() || displayName.split(/\s+/u)[0] || displayName;
+  const lastName = contact.lastName?.trim() ?? "";
+  return {
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+    display_name: displayName,
+    displayName,
+    email: contact.email?.trim() ?? "",
+    company: contact.company?.trim() ?? "",
+    title: contact.title?.trim() ?? "",
+  };
+}
+
+function renderVariablePreview(
+  content: string,
+  contact: CrmContact,
+): { readonly value: string; readonly unknownTags: readonly string[] } {
+  const { firstName, lastName } = outreachNameParts(contact);
+  const values: Readonly<Record<string, string>> = {
+    ...contactMergeTagValues(contact),
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+  };
+  const unknown = new Set<string>();
+  const value = content.replace(
+    /\{\{\s*([A-Za-z][A-Za-z0-9_.-]{0,99})\s*\}\}/gu,
+    (token, key: string) => {
+      if (!Object.hasOwn(values, key)) {
+        unknown.add(key);
+        return token;
+      }
+      return values[key] ?? "";
+    },
+  );
+  return { value, unknownTags: [...unknown].sort() };
 }
 
 function parseCsvPreview(csv: string): {
   readonly headers: readonly string[];
   readonly rows: readonly (readonly string[])[];
+  readonly mapping: readonly {
+    readonly sourceColumn: string;
+    readonly targetField: string;
+    readonly custom: boolean;
+  }[];
   readonly issues: readonly string[];
 } {
   const records: string[][] = [];
@@ -669,37 +382,63 @@ function parseCsvPreview(csv: string): {
     }
   }
   if (quoted)
-    return { headers: [], rows: [], issues: ["CSV contains an unterminated quoted field."] };
+    return {
+      headers: [],
+      rows: [],
+      mapping: [],
+      issues: ["CSV contains an unterminated quoted field."],
+    };
   if (cell.length > 0 || record.length > 0) {
     record.push(cell.replace(/\r$/u, ""));
     records.push(record);
   }
   const headers = (records[0] ?? []).map((header) => header.trim());
   const normalizedHeaders = headers.map((header) => header.toLowerCase());
-  const emailIndex = normalizedHeaders.indexOf("email");
-  const nameIndex = normalizedHeaders.findIndex((header) =>
-    ["name", "displayname", "display name", "first name", "firstname"].includes(header),
-  );
+  const hasEmailColumn = normalizedHeaders.includes("email");
+  const importTargets: Readonly<Record<string, string>> = {
+    firstname: "firstName",
+    "first name": "firstName",
+    lastname: "lastName",
+    "last name": "lastName",
+    name: "displayName",
+    displayname: "displayName",
+    "display name": "displayName",
+    email: "email",
+    phone: "phone",
+    company: "company",
+    title: "title",
+    jobtitle: "title",
+    "job title": "title",
+    website: "website",
+    linkedin: "linkedinUrl",
+    linkedinurl: "linkedinUrl",
+    notes: "notes",
+    tags: "tags",
+    source: "source",
+    pipelinestage: "pipelineStage",
+    stage: "pipelineStage",
+  };
   const issues: string[] = [];
   if (headers.length === 0) issues.push("Add a header row before importing.");
-  if (emailIndex < 0) issues.push("No Email column was detected.");
+  if (!hasEmailColumn) issues.push("No Email column was detected.");
   if (new Set(normalizedHeaders).size !== normalizedHeaders.length) {
     issues.push("CSV column names must be unique.");
   }
-  for (const [index, values] of records.slice(1).entries()) {
-    if (emailIndex >= 0 && !(values[emailIndex] ?? "").trim()) {
-      issues.push(`Row ${index + 2} is missing an email address.`);
-    }
-    if (nameIndex >= 0 && !(values[nameIndex] ?? "").trim()) {
-      issues.push(`Row ${index + 2} is missing a contact name.`);
-    }
-  }
+  const mapping = headers.map((sourceColumn, index) => {
+    const target = importTargets[normalizedHeaders[index] ?? ""];
+    return {
+      sourceColumn,
+      targetField: target ?? `custom.${sourceColumn}`,
+      custom: target === undefined,
+    };
+  });
   return {
     headers,
     rows: records
       .slice(1)
       .filter((values) => values.some((value) => value.trim()))
       .slice(0, 5),
+    mapping,
     issues,
   };
 }
@@ -710,16 +449,18 @@ function Card({
   actions,
 }: Readonly<{ title: string; eyebrow?: string; children: ReactNode; actions?: ReactNode }>) {
   return (
-    <section className={styles.card}>
-      <div className={styles.cardHeader}>
+    <UiCard className={styles.card}>
+      <UiCardHeader className={styles.cardHeader}>
         <div>
           {eyebrow ? <p className={styles.eyebrow}>{eyebrow}</p> : null}
-          <h2>{title}</h2>
+          <UiCardTitle>
+            <h2>{title}</h2>
+          </UiCardTitle>
         </div>
         {actions ? <div className={styles.actions}>{actions}</div> : null}
-      </div>
-      {children}
-    </section>
+      </UiCardHeader>
+      <UiCardContent className={styles.cardContent}>{children}</UiCardContent>
+    </UiCard>
   );
 }
 
@@ -821,18 +562,13 @@ function ContactEditor({
         </p>
       ) : null}
       <div className={styles.actions}>
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <UiButton type="submit" disabled={busy}>
           {busy ? "Saving…" : contact ? "Save contact" : "Add contact"}
-        </button>
+        </UiButton>
         {onCancel ? (
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-          >
+          <UiButton variant="outline" type="button" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
+          </UiButton>
         ) : null}
       </div>
     </form>
@@ -843,6 +579,7 @@ function DirectoryTable({
   contacts,
   selectedContactId,
   selectedContactIds,
+  loading,
   onSelect,
   onToggleSelection,
   onToggleAll,
@@ -850,10 +587,24 @@ function DirectoryTable({
   contacts: readonly CrmContact[];
   selectedContactId: string | null;
   selectedContactIds: readonly string[];
+  loading: boolean;
   onSelect: (contactId: string) => void;
   onToggleSelection: (contactId: string) => void;
   onToggleAll: (checked: boolean) => void;
 }>) {
+  if (loading) {
+    return (
+      <div
+        className={styles.loading}
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        aria-label="Loading contact directory"
+      >
+        Updating the contact directory for the current filters…
+      </div>
+    );
+  }
   return contacts.length === 0 ? (
     <p className={styles.emptyState}>
       No contacts match these filters. Add a contact or import a CSV directory.
@@ -873,6 +624,7 @@ function DirectoryTable({
                   contacts.every((contact) => selectedContactIds.includes(contact.id))
                 }
                 onChange={(event) => onToggleAll(event.currentTarget.checked)}
+                disabled={loading}
               />
             </th>
             <th scope="col">Contact</th>
@@ -896,6 +648,7 @@ function DirectoryTable({
                   aria-label={`Select ${displayName(contact)}`}
                   checked={selectedContactIds.includes(contact.id)}
                   onChange={() => onToggleSelection(contact.id)}
+                  disabled={loading}
                 />
               </td>
               <th scope="row">
@@ -903,6 +656,7 @@ function DirectoryTable({
                   className={styles.tableLink}
                   type="button"
                   onClick={() => onSelect(contact.id)}
+                  disabled={loading}
                 >
                   {displayName(contact)}
                 </button>
@@ -913,21 +667,24 @@ function DirectoryTable({
                 <div className={styles.tagList}>
                   {contact.tags.length > 0
                     ? contact.tags.map((tag) => (
-                        <span className={styles.tag} key={tag}>
+                        <Badge variant="secondary" className={styles.tag} key={tag}>
                           {tag}
-                        </span>
+                        </Badge>
                       ))
                     : "—"}
                 </div>
               </td>
               <td>
-                <span className={styles.stageBadge}>{contact.pipelineStage}</span>
+                <Badge variant="outline" className={styles.stageBadge}>
+                  {contact.pipelineStage}
+                </Badge>
               </td>
               <td>
                 <button
                   className={styles.secondaryButtonSmall}
                   type="button"
                   onClick={() => onSelect(contact.id)}
+                  disabled={loading}
                 >
                   Open
                 </button>
@@ -1342,6 +1099,7 @@ export interface CrmWorkspaceViewProps {
   readonly analytics: CrmAnalytics | null;
   readonly loading?: boolean;
   readonly initialImportOpen?: boolean;
+  readonly initialImportCsv?: string;
   readonly busy?: boolean;
   readonly error?: string | null;
   readonly statusMessage?: string | null;
@@ -1363,7 +1121,13 @@ export interface CrmWorkspaceViewProps {
   readonly onStartAdd?: () => void;
   readonly onSaveContact?: (draft: ContactDraft) => Promise<void>;
   readonly onCancelEdit?: () => void;
+  readonly onPreviewImport?: (csv: string) => Promise<void>;
+  readonly importPreviewResult?: CrmImportPreviewResult | null;
+  readonly importPreviewLoading?: boolean;
+  readonly importPreviewError?: string | null;
+  readonly importPreviewSource?: string | null;
   readonly onImport?: (csv: string) => Promise<void>;
+  readonly importResult?: CrmImportResult | null;
   readonly onCreateSegment?: (input: {
     name: string;
     description: string;
@@ -1372,6 +1136,12 @@ export interface CrmWorkspaceViewProps {
   readonly onSelectSegment?: (segmentId: string) => void;
   readonly onFindDuplicates?: () => void;
   readonly onMerge?: (plan: CrmMergePlan) => Promise<void>;
+  readonly onPreviewMerge?: (plan: CrmMergePlan) => Promise<void>;
+  readonly mergePreview?: CrmMergePreview | null;
+  readonly mergePreviewLoading?: boolean;
+  readonly mergePreviewError?: string | null;
+  readonly mergePreviewPlanKey?: string | null;
+  readonly mergeResult?: CrmMergeResult | null;
   readonly onMovePipeline?: (contactId: string, stage: CrmPipelineStage) => void;
   readonly onEnrollPipeline?: (input: {
     contactId: string;
@@ -1387,6 +1157,7 @@ export interface CrmWorkspaceViewProps {
     note: string;
   }) => Promise<void>;
   readonly lastAddedEventId?: string | null;
+  readonly lastEventResult?: CrmEventProjectionResult | null;
   readonly onPreviewOutreach?: (input: {
     subject: string;
     body: string;
@@ -1394,16 +1165,10 @@ export interface CrmWorkspaceViewProps {
     segmentId?: string;
     eventId?: string;
   }) => Promise<void>;
-  readonly outreachPreview?: {
-    subject: string;
-    body: string;
-    count: number;
-    sample: string;
-    segmentId?: string;
-    eventId?: string;
-  } | null;
+  readonly outreachPreview?: CrmOutreachPreview | null;
   readonly outreachRecipients?: readonly CrmContact[];
   readonly onSendOutreach?: () => Promise<void>;
+  readonly outreachResults?: readonly CrmOutreachCommand[];
   readonly onAnalyticsEventDrillThrough?: (eventId: string) => void;
 }
 
@@ -1420,6 +1185,7 @@ export function CrmWorkspaceView({
   analytics,
   loading = false,
   initialImportOpen = false,
+  initialImportCsv = "",
   busy = false,
   error = null,
   statusMessage = null,
@@ -1442,28 +1208,40 @@ export function CrmWorkspaceView({
   onSaveContact,
   onCancelEdit,
   onImport,
+  onPreviewImport,
+  importPreviewResult = null,
+  importPreviewLoading = false,
+  importPreviewError = null,
+  importPreviewSource = null,
+  importResult = null,
   onCreateSegment,
   onSelectSegment,
   onFindDuplicates,
   onMerge,
+  onPreviewMerge,
+  mergePreview = null,
+  mergePreviewLoading = false,
+  mergePreviewError = null,
+  mergePreviewPlanKey = null,
+  mergeResult = null,
   onMovePipeline,
   onEnrollPipeline,
   onSavePipeline,
   onAddNote,
   onAddToEvent,
   lastAddedEventId = null,
+  lastEventResult = null,
   onPreviewOutreach,
   outreachPreview = null,
   onSendOutreach,
+  outreachResults = [],
   onAnalyticsEventDrillThrough,
 }: CrmWorkspaceViewProps) {
-  const [importCsv, setImportCsv] = useState("");
+  const [importCsv, setImportCsv] = useState(initialImportCsv);
   const [importFileName, setImportFileName] = useState("");
-  const [importPreview, setImportPreview] = useState<{
-    readonly headers: readonly string[];
-    readonly rows: readonly (readonly string[])[];
-    readonly issues: readonly string[];
-  } | null>(null);
+  const [importPreview, setImportPreview] = useState<ReturnType<typeof parseCsvPreview> | null>(
+    initialImportCsv.trim() ? parseCsvPreview(initialImportCsv) : null,
+  );
   const [noteBody, setNoteBody] = useState("");
   const [pipelineStage, setPipelineStage] = useState<CrmPipelineStage>(
     selectedContact?.pipelineStage ?? "new",
@@ -1482,6 +1260,7 @@ export function CrmWorkspaceView({
     "Hi {{first_name}},\n\nWe would love to have you join us.",
   );
   const [mergeSelection, setMergeSelection] = useState<readonly string[]>([]);
+  const [mergeReviewPlanKey, setMergeReviewPlanKey] = useState<string | null>(null);
   const [mergeReviewOpen, setMergeReviewOpen] = useState(false);
   const [mergeConfirmed, setMergeConfirmed] = useState(false);
   const [mergeSubmitting, setMergeSubmitting] = useState(false);
@@ -1494,12 +1273,26 @@ export function CrmWorkspaceView({
     {},
   );
   const mergeSubmitRef = useRef(false);
+  const duplicateReviewRef = useRef<HTMLDivElement>(null);
+  const outreachComposerRef = useRef<HTMLDivElement>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showImport, setShowImport] = useState(initialImportOpen);
   const [noteError, setNoteError] = useState<string | null>(null);
+  const initialImportPreviewRequested = useRef(false);
+  useEffect(() => {
+    if (
+      !initialImportPreviewRequested.current &&
+      initialImportCsv.trim() &&
+      onPreviewImport !== undefined
+    ) {
+      initialImportPreviewRequested.current = true;
+      void onPreviewImport(initialImportCsv);
+    }
+  }, [initialImportCsv, onPreviewImport]);
   useEffect(() => {
     if (selectedContact) setPipelineStage(selectedContact.pipelineStage);
     setMergeSelection([]);
+    setMergeReviewPlanKey(null);
     setMergeReviewOpen(false);
     setMergeConfirmed(false);
     setMergeFieldWinners({});
@@ -1520,15 +1313,23 @@ export function CrmWorkspaceView({
       setImportFileName(file.name);
       setImportCsv(csv);
       setImportPreview(parseCsvPreview(csv));
+      if (csv.trim() && onPreviewImport !== undefined) void onPreviewImport(csv);
     } catch (reason) {
       setImportFileName("");
       setImportCsv("");
       setImportPreview({
         headers: [],
         rows: [],
+        mapping: [],
         issues: [messageFromError(reason)],
       });
     }
+  }
+  function updateImportCsv(csv: string): void {
+    setImportCsv(csv);
+    setImportFileName("");
+    setImportPreview(csv.trim() ? parseCsvPreview(csv) : null);
+    if (csv.trim() && onPreviewImport !== undefined) void onPreviewImport(csv);
   }
   async function saveNote(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -1602,6 +1403,52 @@ export function CrmWorkspaceView({
   const conflictingCustomKeys = mergeCustomKeys.filter((key) =>
     mergeCustomFieldHasConflict(mergeReviewContacts, key),
   );
+  const outreachHasUnknownTags =
+    outreachPreview?.recipients.some((recipient) => recipient.unknownTags.length > 0) ?? false;
+  const noteIds = new Set(notes.map((note) => note.id));
+  const timelineHistory = history.filter((entry) => {
+    if (entry.kind !== "note") return true;
+    const noteId = entry.metadata.noteId;
+    return typeof noteId !== "string" || !noteIds.has(noteId);
+  });
+  const importPreviewCurrent =
+    importPreviewResult !== null &&
+    importPreviewResult.preview === true &&
+    importPreviewSource === importCsv;
+  const importPreviewHasErrors =
+    (importPreviewResult?.errors ?? 0) > 0 ||
+    (importPreviewResult?.rows.some((row) => row.status === "error") ?? false);
+  const mergePreviewCurrent =
+    mergePreview !== null &&
+    mergePreview.preview === true &&
+    mergePreviewPlanKey !== null &&
+    mergePreviewPlanKey === mergeReviewPlanKey;
+  const mergePreviewHasConflicts = (mergePreview?.participantConflicts.length ?? 0) > 0;
+  const mergeCommitReady =
+    mergePreviewCurrent &&
+    mergePreview?.canCommit === true &&
+    !mergePreviewHasConflicts &&
+    !mergePreviewLoading &&
+    mergePreviewError === null;
+
+  function requestMergePreview(
+    fieldWinners: Partial<Record<CrmMergeScalarField, string>>,
+    customFieldWinners: Readonly<Record<string, string>>,
+  ): void {
+    if (!selectedContact || selectedMergeContacts.length === 0 || onPreviewMerge === undefined) {
+      setMergeReviewPlanKey(null);
+      return;
+    }
+    const plan: CrmMergePlan = {
+      duplicateContactIds: selectedMergeContacts.map((match) => match.contact.id),
+      fieldWinners: Object.fromEntries(
+        CRM_MERGE_SCALAR_FIELDS.map(({ key }) => [key, fieldWinners[key] ?? selectedContact.id]),
+      ) as Record<CrmMergeScalarField, string>,
+      customFieldWinners: { ...customFieldWinners },
+    };
+    setMergeReviewPlanKey(mergePlanKey(plan));
+    void onPreviewMerge(plan);
+  }
 
   function openMergeReview(): void {
     if (!selectedContact || selectedMergeContacts.length === 0) return;
@@ -1635,6 +1482,7 @@ export function CrmWorkspaceView({
     setMergeCompleted(false);
     setMergeCompletedContactId(null);
     setMergeReviewOpen(true);
+    requestMergePreview(nextFieldWinners, nextCustomFieldWinners);
   }
 
   function closeMergeReview(): void {
@@ -1650,6 +1498,7 @@ export function CrmWorkspaceView({
       !selectedContact ||
       selectedMergeContacts.length === 0 ||
       !mergeConfirmed ||
+      !mergeCommitReady ||
       onMerge === undefined
     ) {
       return;
@@ -1675,6 +1524,13 @@ export function CrmWorkspaceView({
       mergeSubmitRef.current = false;
       setMergeSubmitting(false);
     }
+  }
+  function focusDuplicateReview(): void {
+    focusAndScroll(duplicateReviewRef.current);
+  }
+
+  function focusOutreachComposer(): void {
+    focusAndScroll(outreachComposerRef.current);
   }
   return (
     <div className={styles.page}>
@@ -1708,17 +1564,65 @@ export function CrmWorkspaceView({
         </div>
       </header>
       <main id="crm-content" className={styles.content} tabIndex={-1}>
+        {analytics && contacts.length > 0 ? (
+          <section className={styles.summaryBar} aria-labelledby="crm-analytics-summary-title">
+            <div>
+              <p className={styles.eyebrow}>CRM analytics</p>
+              <h2 id="crm-analytics-summary-title">Contact snapshot</h2>
+              <p className={styles.resultCount}>
+                {analytics.totalContacts} total contacts · {analytics.activeContacts} active
+              </p>
+              <p className={styles.muted}>
+                Pipeline:{" "}
+                {CRM_PIPELINE_STAGES.map(
+                  (stage) => `${stage}: ${analytics.contactsByPipelineStage[stage] ?? 0}`,
+                ).join(" · ")}
+              </p>
+            </div>
+            <a
+              className={styles.secondaryButton}
+              href="#crm-analytics"
+              aria-controls="crm-analytics"
+            >
+              Open CRM analytics
+            </a>
+          </section>
+        ) : null}
         {error ? (
-          <div className={styles.alert} role="alert">
-            <strong>CRM action was not completed.</strong>
-            <p>{error}</p>
-          </div>
+          <Alert className={styles.alert} variant="destructive">
+            <AlertTitle>We couldn't complete that CRM action.</AlertTitle>
+            <AlertDescription>
+              <p>{humanErrorSummary(error)}</p>
+              {onRefresh ? (
+                <UiButton
+                  className={styles.alertAction}
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={busy}
+                >
+                  Try again
+                </UiButton>
+              ) : null}
+              {error.includes("\n") ? (
+                <details className={styles.errorDetails}>
+                  <summary>Show technical details</summary>
+                  <pre>{error}</pre>
+                </details>
+              ) : null}
+            </AlertDescription>
+          </Alert>
         ) : null}
         <div className={styles.status} role="status" aria-live="polite">
           {statusMessage}
         </div>
         {loading ? (
-          <div className={styles.loading} role="status" aria-busy="true">
+          <div
+            className={styles.loading}
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+            aria-label="Loading organization CRM data"
+          >
             Loading organization CRM data…
           </div>
         ) : null}
@@ -1726,94 +1630,128 @@ export function CrmWorkspaceView({
           title="Contact directory"
           eyebrow="Search, filter, add, edit, or import"
           actions={
-            <div className={styles.actions}>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                onClick={() => {
-                  setShowAddForm(true);
-                  onStartAdd?.();
-                }}
-                disabled={busy}
-              >
-                Add contact
-              </button>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => setShowImport((current) => !current)}
-              >
-                {showImport ? "Hide import" : "Import CSV"}
-              </button>
-            </div>
+            contacts.length > 0 ? (
+              <div className={styles.actions}>
+                <UiButton
+                  type="button"
+                  onClick={() => {
+                    setShowAddForm(true);
+                    onStartAdd?.();
+                  }}
+                  disabled={busy}
+                >
+                  Add contact
+                </UiButton>
+                <UiButton
+                  variant="outline"
+                  type="button"
+                  onClick={() => setShowImport((current) => !current)}
+                >
+                  {showImport ? "Hide import" : "Import CSV"}
+                </UiButton>
+              </div>
+            ) : null
           }
         >
-          <div className={styles.filterGrid}>
-            <label className={styles.field}>
-              <span>Search contacts</span>
-              <input
-                aria-label="Search contacts"
-                value={query}
-                onChange={(event) => onQueryChange?.(event.currentTarget.value)}
-                placeholder="Name, email, company"
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Company</span>
-              <input
-                aria-label="Filter by company"
-                value={companyFilter}
-                onChange={(event) => onCompanyChange?.(event.currentTarget.value)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Tags</span>
-              <input
-                aria-label="Filter by tags"
-                value={tagsFilter}
-                onChange={(event) => onTagsChange?.(event.currentTarget.value)}
-                placeholder="speaker,west"
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Pipeline stage</span>
-              <select
-                aria-label="Filter by pipeline stage"
-                value={pipelineFilter}
-                onChange={(event) =>
-                  onPipelineFilterChange?.(event.currentTarget.value as CrmPipelineStage | "")
-                }
-              >
-                <option value="">All stages</option>
-                {CRM_PIPELINE_STAGES.map((stage) => (
-                  <option value={stage} key={stage}>
-                    {stage}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Record status</span>
-              <select
-                aria-label="Filter by contact status"
-                value={statusFilter}
-                onChange={(event) =>
-                  onStatusFilterChange?.(event.currentTarget.value as CrmContactStatus | "")
-                }
-              >
-                <option value="">All records</option>
-                <option value="active">Active</option>
-                <option value="merged">Merged</option>
-              </select>
-            </label>
-          </div>
+          {contacts.length > 0 ? (
+            <div className={styles.filterGrid}>
+              <label className={styles.field} htmlFor="crm-search">
+                <span>Search contacts</span>
+                <Input
+                  id="crm-search"
+                  aria-label="Search contacts"
+                  value={query}
+                  onChange={(event) => onQueryChange?.(event.currentTarget.value)}
+                  placeholder="Name, email, company"
+                />
+              </label>
+              <label className={styles.field} htmlFor="crm-company-filter">
+                <span>Company</span>
+                <Input
+                  id="crm-company-filter"
+                  aria-label="Filter by company"
+                  value={companyFilter}
+                  onChange={(event) => onCompanyChange?.(event.currentTarget.value)}
+                />
+              </label>
+              <label className={styles.field} htmlFor="crm-tags-filter">
+                <span>Tags</span>
+                <Input
+                  id="crm-tags-filter"
+                  aria-label="Filter by tags"
+                  value={tagsFilter}
+                  onChange={(event) => onTagsChange?.(event.currentTarget.value)}
+                  placeholder="speaker,west"
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Pipeline stage</span>
+                <select
+                  aria-label="Filter by pipeline stage"
+                  value={pipelineFilter}
+                  onChange={(event) =>
+                    onPipelineFilterChange?.(event.currentTarget.value as CrmPipelineStage | "")
+                  }
+                >
+                  <option value="">All stages</option>
+                  {CRM_PIPELINE_STAGES.map((stage) => (
+                    <option value={stage} key={stage}>
+                      {stage}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Record status</span>
+                <select
+                  aria-label="Filter by contact status"
+                  value={statusFilter}
+                  onChange={(event) =>
+                    onStatusFilterChange?.(event.currentTarget.value as CrmContactStatus | "")
+                  }
+                >
+                  <option value="">All records</option>
+                  <option value="active">Active</option>
+                  <option value="merged">Merged</option>
+                </select>
+              </label>
+            </div>
+          ) : (
+            <div className={styles.emptyDirectory} role="status">
+              <h3>Your directory is empty</h3>
+              <p>
+                Add a contact manually or import a CSV to start building your organization
+                directory.
+              </p>
+              <div className={styles.actions}>
+                <UiButton
+                  type="button"
+                  onClick={() => {
+                    setShowAddForm(true);
+                    onStartAdd?.();
+                  }}
+                  disabled={busy}
+                >
+                  Add contact
+                </UiButton>
+                <UiButton variant="outline" type="button" onClick={() => setShowImport(true)}>
+                  Import CSV
+                </UiButton>
+              </div>
+            </div>
+          )}
           {selectedContactIds.length > 0 ? (
             <div className={styles.bulkToolbar} role="status">
               <strong>{selectedContactIds.length} selected</strong>
               <button
                 className={styles.primaryButton}
                 type="button"
-                onClick={() => setOutreachSegmentId("__selected__")}
+                onClick={() => {
+                  setOutreachSegmentId("__selected__");
+                  focusOutreachComposer();
+                }}
+                aria-controls="crm-outreach-composer"
+                disabled={loading}
               >
                 Communicate with selected
               </button>
@@ -1831,7 +1769,19 @@ export function CrmWorkspaceView({
               className={styles.importBox}
               onSubmit={(event) => {
                 event.preventDefault();
-                if (importCsv.trim() && onImport) void onImport(importCsv);
+                if (
+                  importCsv.trim() &&
+                  importPreview !== null &&
+                  importPreview.rows.length > 0 &&
+                  importPreview.issues.length === 0 &&
+                  importPreviewCurrent &&
+                  !importPreviewHasErrors &&
+                  !importPreviewLoading &&
+                  importPreviewError === null &&
+                  onImport
+                ) {
+                  void onImport(importCsv);
+                }
               }}
             >
               <label className={styles.field}>
@@ -1856,12 +1806,7 @@ export function CrmWorkspaceView({
                 <textarea
                   rows={4}
                   value={importCsv}
-                  onChange={(event) => {
-                    const csv = event.currentTarget.value;
-                    setImportCsv(csv);
-                    setImportFileName("");
-                    setImportPreview(csv.trim() ? parseCsvPreview(csv) : null);
-                  }}
+                  onChange={(event) => updateImportCsv(event.currentTarget.value)}
                   placeholder="Select a .csv file to preview its mapped rows"
                 />
               </label>
@@ -1880,6 +1825,30 @@ export function CrmWorkspaceView({
                   ) : (
                     <p className={styles.success}>No mapping issues detected in the preview.</p>
                   )}
+                  {importPreview.mapping.length > 0 ? (
+                    <div className={styles.tableWrap}>
+                      <table className={styles.importTable}>
+                        <caption>Detected CSV column mapping</caption>
+                        <thead>
+                          <tr>
+                            <th scope="col">Source column</th>
+                            <th scope="col">CRM field</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importPreview.mapping.map((column) => (
+                            <tr key={column.sourceColumn}>
+                              <th scope="row">{column.sourceColumn}</th>
+                              <td>
+                                {column.targetField}
+                                {column.custom ? " (custom field)" : ""}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
                   {importPreview.headers.length > 0 ? (
                     <div className={styles.tableWrap}>
                       <table className={styles.importTable}>
@@ -1907,22 +1876,142 @@ export function CrmWorkspaceView({
                   ) : null}
                 </div>
               ) : null}
+              {importCsv.trim() ? (
+                <section className={styles.previewBox} aria-live="polite">
+                  <h3>Authoritative CRM import preview</h3>
+                  {importPreviewLoading ? (
+                    <p className={styles.muted} role="status" aria-busy="true">
+                      Checking this CSV against the organization CRM…
+                    </p>
+                  ) : importPreviewError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Authoritative preview unavailable</AlertTitle>
+                      <AlertDescription>
+                        <p>{humanErrorSummary(importPreviewError)}</p>
+                        <details className={styles.errorDetails}>
+                          <summary>Show preview error details</summary>
+                          <pre>{importPreviewError}</pre>
+                        </details>
+                      </AlertDescription>
+                    </Alert>
+                  ) : !importPreviewCurrent ? (
+                    <p className={styles.muted} role="status">
+                      Preview pending. The server must classify this exact CSV before it can be
+                      committed.
+                    </p>
+                  ) : importPreviewHasErrors ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Import preview contains row errors</AlertTitle>
+                      <AlertDescription>
+                        <p>
+                          Resolve the authoritative error rows before committing. No local parse
+                          result can override server classification.
+                        </p>
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
+                    <p className={styles.success} role="status">
+                      Authoritative preview ready. Commit uses this exact normalized CSV plan.
+                    </p>
+                  )}
+                  {importPreviewCurrent && importPreviewResult ? (
+                    <>
+                      <p className={styles.resultCount}>
+                        {importPreviewResult.created} created · {importPreviewResult.updated}{" "}
+                        updated · {importPreviewResult.skipped} skipped ·{" "}
+                        {importPreviewResult.errors} errors
+                      </p>
+                      <p className={styles.muted}>
+                        {importPreviewResult.preview ? "Preview" : "Receipt"}{" "}
+                        {importPreviewResult.id}
+                        {importPreviewResult.planFingerprint
+                          ? ` · plan ${importPreviewResult.planFingerprint}`
+                          : ""}
+                        {` · generated ${formatDate(importPreviewResult.createdAt)}`} ·{" "}
+                        {importPreviewResult.contacts.length} authoritative contact
+                        {importPreviewResult.contacts.length === 1 ? "" : "s"} ·{" "}
+                        {importPreviewResult.mapping.length} mapped column
+                        {importPreviewResult.mapping.length === 1 ? "" : "s"}
+                      </p>
+                      <ol className={styles.historyList}>
+                        {importPreviewResult.rows.map((row) => (
+                          <li key={`${row.rowNumber}-${row.identity ?? "missing"}`}>
+                            <strong>
+                              Row {row.rowNumber}: {row.status}
+                            </strong>
+                            <small>
+                              {row.identity ?? "No canonical email"}
+                              {row.contactId ? ` · contact ${row.contactId}` : ""}
+                              {row.reason ? ` · ${row.reason}` : ""}
+                            </small>
+                          </li>
+                        ))}
+                      </ol>
+                    </>
+                  ) : null}
+                </section>
+              ) : null}
               <button
                 className={styles.primaryButton}
                 type="submit"
-                disabled={busy || !importCsv.trim() || onImport === undefined}
+                disabled={
+                  busy ||
+                  !importCsv.trim() ||
+                  importPreview === null ||
+                  importPreview.rows.length === 0 ||
+                  importPreview.issues.length > 0 ||
+                  !importPreviewCurrent ||
+                  importPreviewHasErrors ||
+                  importPreviewLoading ||
+                  importPreviewError !== null ||
+                  onImport === undefined
+                }
               >
                 {busy ? "Importing…" : "Import directory"}
               </button>
             </form>
           ) : null}
-          <p className={styles.resultCount}>
-            {contacts.length} contact{contacts.length === 1 ? "" : "s"} shown
-          </p>
+          {importResult ? (
+            <section className={styles.importPreview} aria-labelledby="crm-import-result-title">
+              <h3 id="crm-import-result-title">Import result</h3>
+              <p className={styles.resultCount}>
+                {importResult.created} created · {importResult.updated} updated ·{" "}
+                {importResult.skipped} skipped · {importResult.errors} errors
+                {importResult.idempotent ? " · idempotent replay" : ""}
+              </p>
+              <p className={styles.muted}>
+                Receipt {importResult.id} · organization {importResult.organizationId} · generated{" "}
+                {formatDate(importResult.createdAt)}
+                {importResult.planFingerprint ? ` · plan ${importResult.planFingerprint}` : ""} ·{" "}
+                {importResult.contacts.length} authoritative contact
+                {importResult.contacts.length === 1 ? "" : "s"}
+              </p>
+              <ol className={styles.historyList}>
+                {importResult.rows.map((row) => (
+                  <li key={`${row.rowNumber}-${row.identity ?? "missing"}`}>
+                    <strong>
+                      Row {row.rowNumber}: {row.status}
+                    </strong>
+                    <small>
+                      {row.identity ?? "No canonical email"}
+                      {row.contactId ? ` · contact ${row.contactId}` : ""}
+                      {row.reason ? ` · ${row.reason}` : ""}
+                    </small>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
+          {!loading ? (
+            <p className={styles.resultCount}>
+              {contacts.length} contact{contacts.length === 1 ? "" : "s"} shown
+            </p>
+          ) : null}
           <DirectoryTable
             contacts={contacts}
             selectedContactId={selectedContactId}
             selectedContactIds={selectedContactIds}
+            loading={loading}
             onSelect={(id) => {
               setShowAddForm(false);
               setMergeCompleted(false);
@@ -1965,7 +2054,30 @@ export function CrmWorkspaceView({
           <Card
             title={displayName(selectedContact)}
             eyebrow="Pipeline card detail · identity, tags, custom fields, and notes"
-            actions={<span className={styles.stageBadge}>{selectedContact.pipelineStage}</span>}
+            actions={
+              <div className={styles.actions}>
+                <Badge variant="outline" className={styles.stageBadge}>
+                  {selectedContact.pipelineStage}
+                </Badge>
+                {mergeCandidates.length > 0 ? (
+                  <>
+                    <span className={styles.muted}>
+                      {mergeCandidates.length} possible duplicate
+                      {mergeCandidates.length === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      className={styles.secondaryButtonSmall}
+                      type="button"
+                      onClick={focusDuplicateReview}
+                      aria-controls="crm-duplicate-review"
+                      disabled={busy}
+                    >
+                      Review possible duplicates
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            }
           >
             <div className={styles.detailGrid}>
               <div className={styles.detailIdentity}>
@@ -2020,9 +2132,9 @@ export function CrmWorkspaceView({
                 </div>
                 <div className={styles.tagList}>
                   {selectedContact.tags.map((tag) => (
-                    <span className={styles.tag} key={tag}>
+                    <Badge variant="secondary" className={styles.tag} key={tag}>
                       {tag}
-                    </span>
+                    </Badge>
                   ))}
                 </div>
                 <h3>Custom fields</h3>
@@ -2048,6 +2160,18 @@ export function CrmWorkspaceView({
             </div>
             <div className={styles.detailActions}>
               <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={() => {
+                  setOutreachSegmentId("");
+                  focusOutreachComposer();
+                }}
+                aria-controls="crm-outreach-composer"
+                disabled={busy || loading}
+              >
+                Open outreach composer
+              </button>
+              <button
                 className={styles.secondaryButton}
                 type="button"
                 onClick={onFindDuplicates}
@@ -2066,8 +2190,14 @@ export function CrmWorkspaceView({
                 </div>
               ) : null}
               {duplicates && mergeCandidates.length > 0 ? (
-                <div className={styles.duplicateBox}>
-                  <strong>
+                <section
+                  id="crm-duplicate-review"
+                  ref={duplicateReviewRef}
+                  className={styles.duplicateBox}
+                  tabIndex={-1}
+                  aria-labelledby="crm-duplicate-review-title"
+                >
+                  <strong id="crm-duplicate-review-title">
                     {mergeCandidates.length} possible duplicate
                     {mergeCandidates.length === 1 ? "" : "s"}
                   </strong>
@@ -2091,6 +2221,7 @@ export function CrmWorkspaceView({
                           setMergeReviewOpen(false);
                           setMergeConfirmed(false);
                           setMergeCompleted(false);
+                          setMergeReviewPlanKey(null);
                           setMergeCompletedContactId(null);
                         }}
                       />
@@ -2106,6 +2237,140 @@ export function CrmWorkspaceView({
                   >
                     Review selected merge
                   </button>
+                  {mergeReviewOpen ||
+                  mergePreview !== null ||
+                  mergePreviewLoading ||
+                  mergePreviewError ? (
+                    <section className={styles.previewBox} aria-live="polite">
+                      <h3>Authoritative relationship-aware merge preview</h3>
+                      <p className={styles.muted}>
+                        CRM contact merge rewires CRM relationships only. It never merges
+                        participant identity, authorization, portal grants, task ownership, asset
+                        ownership, roster membership, reviewer access, or historical recipient
+                        snapshots.
+                      </p>
+                      {mergePreviewLoading ? (
+                        <p className={styles.muted} role="status" aria-busy="true">
+                          Checking relationship links and participant conflicts…
+                        </p>
+                      ) : mergePreviewError ? (
+                        <Alert variant="destructive">
+                          <AlertTitle>Merge preview unavailable</AlertTitle>
+                          <AlertDescription>
+                            <p>{humanErrorSummary(mergePreviewError)}</p>
+                            <details className={styles.errorDetails}>
+                              <summary>Show preview error details</summary>
+                              <pre>{mergePreviewError}</pre>
+                            </details>
+                          </AlertDescription>
+                        </Alert>
+                      ) : !mergePreviewCurrent ? (
+                        <p className={styles.muted} role="status">
+                          Preview pending or stale. A current server preview is required before this
+                          merge can be committed.
+                        </p>
+                      ) : mergePreview ? (
+                        <>
+                          <p className={styles.resultCount}>
+                            Survivor{" "}
+                            <strong>
+                              {displayName(mergePreview.survivor)} ({mergePreview.survivorId})
+                            </strong>{" "}
+                            · retired {mergePreview.retiredIds.length} contact
+                            {mergePreview.retiredIds.length === 1 ? "" : "s"}
+                          </p>
+                          <p className={styles.muted}>
+                            Retired contacts:{" "}
+                            {mergePreview.tombstones
+                              .map((candidate) => `${displayName(candidate)} (${candidate.id})`)
+                              .join(", ") || "—"}
+                          </p>
+                          <ul className={styles.metricList}>
+                            <li>
+                              <span>Participant CRM links rewired</span>
+                              <strong>{mergePreview.rewired.participantContactLinks}</strong>
+                            </li>
+                            <li>
+                              <span>Notes rewired</span>
+                              <strong>{mergePreview.rewired.notes}</strong>
+                            </li>
+                            <li>
+                              <span>Segments rewired</span>
+                              <strong>{mergePreview.rewired.segments}</strong>
+                            </li>
+                            <li>
+                              <span>Pipeline history rewired</span>
+                              <strong>{mergePreview.rewired.pipelineHistory}</strong>
+                            </li>
+                          </ul>
+                          <p className={styles.muted}>
+                            Stable audit reference <strong>{mergePreview.auditId}</strong> · plan{" "}
+                            {mergePreview.planFingerprint}
+                          </p>
+                          {mergePreviewHasConflicts ? (
+                            <Alert variant="destructive">
+                              <AlertTitle>
+                                Participant conflict blocks this merge (
+                                {mergePreview.participantConflicts.length})
+                              </AlertTitle>
+                              <AlertDescription>
+                                <p>
+                                  Distinct participants are linked to contacts in this merge. CRM
+                                  merge cannot choose a participant identity or change
+                                  authorization.
+                                </p>
+                                <ul>
+                                  {mergePreview.participantConflicts.map((conflict) => (
+                                    <li
+                                      key={`${conflict.eventId}-${conflict.participantIds.join(",")}`}
+                                    >
+                                      Event {conflict.eventId}: participants{" "}
+                                      {conflict.participantIds.join(", ")} share CRM contacts{" "}
+                                      {conflict.crmContactIds.join(", ")}.
+                                    </li>
+                                  ))}
+                                </ul>
+                              </AlertDescription>
+                            </Alert>
+                          ) : mergePreview.canCommit ? (
+                            <p className={styles.success} role="status">
+                              Relationship preview is clear and current. The commit remains
+                              idempotent and will use this plan.
+                            </p>
+                          ) : (
+                            <Alert variant="destructive">
+                              <AlertTitle>Merge preview conflict</AlertTitle>
+                              <AlertDescription>
+                                The server marked this relationship plan as non-committable.
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </>
+                      ) : null}
+                      {mergeResult ? (
+                        <div className={styles.success} role="status">
+                          <strong>
+                            Merge committed{mergeResult.idempotent ? " (idempotent replay)" : ""}.
+                          </strong>
+                          <p>
+                            Audit {mergeResult.auditId}: survivor {mergeResult.survivorId}; retired{" "}
+                            {mergeResult.retiredIds.length} contact
+                            {mergeResult.retiredIds.length === 1 ? "" : "s"}.
+                          </p>
+                          <p>
+                            Rewired {mergeResult.rewired.participantContactLinks} participant CRM
+                            link{mergeResult.rewired.participantContactLinks === 1 ? "" : "s"},{" "}
+                            {mergeResult.rewired.notes} note
+                            {mergeResult.rewired.notes === 1 ? "" : "s"},{" "}
+                            {mergeResult.rewired.segments} segment
+                            {mergeResult.rewired.segments === 1 ? "" : "s"}, and{" "}
+                            {mergeResult.rewired.pipelineHistory} pipeline history record
+                            {mergeResult.rewired.pipelineHistory === 1 ? "" : "s"}.
+                          </p>
+                        </div>
+                      ) : null}
+                    </section>
+                  ) : null}
                   {mergeReviewOpen && selectedMergeContacts.length > 0 ? (
                     <section
                       className={styles.mergeReview}
@@ -2189,11 +2454,16 @@ export function CrmWorkspaceView({
                                         candidate.id
                                       }
                                       onChange={() => {
-                                        setMergeFieldWinners((current) => ({
-                                          ...current,
+                                        const nextFieldWinners = {
+                                          ...mergeFieldWinners,
                                           [field]: candidate.id,
-                                        }));
+                                        };
+                                        setMergeFieldWinners(nextFieldWinners);
                                         setMergeConfirmed(false);
+                                        requestMergePreview(
+                                          nextFieldWinners,
+                                          mergeCustomFieldWinners,
+                                        );
                                       }}
                                     />
                                     <span>
@@ -2225,11 +2495,16 @@ export function CrmWorkspaceView({
                                         candidate.id
                                       }
                                       onChange={() => {
-                                        setMergeCustomFieldWinners((current) => ({
-                                          ...current,
+                                        const nextCustomFieldWinners = {
+                                          ...mergeCustomFieldWinners,
                                           [key]: candidate.id,
-                                        }));
+                                        };
+                                        setMergeCustomFieldWinners(nextCustomFieldWinners);
                                         setMergeConfirmed(false);
+                                        requestMergePreview(
+                                          mergeFieldWinners,
+                                          nextCustomFieldWinners,
+                                        );
                                       }}
                                     />
                                     <span>
@@ -2286,6 +2561,7 @@ export function CrmWorkspaceView({
                             busy ||
                             mergeSubmitting ||
                             !mergeConfirmed ||
+                            !mergeCommitReady ||
                             onMerge === undefined ||
                             mergeCompleted
                           }
@@ -2295,7 +2571,7 @@ export function CrmWorkspaceView({
                       </div>
                     </section>
                   ) : null}
-                </div>
+                </section>
               ) : duplicates ? (
                 <p className={styles.muted}>No eligible duplicates found.</p>
               ) : null}
@@ -2404,11 +2680,14 @@ export function CrmWorkspaceView({
                   Add contact to event
                 </button>
               </form>
-              {lastAddedEventId ? (
+              {lastAddedEventId && lastEventResult ? (
                 <p className={styles.success}>
-                  Added to {selectedEvent?.name ?? lastAddedEventId}.{" "}
+                  Canonical relationship{" "}
+                  {lastEventResult.outcome === "created" ? "created" : "already existed"} for{" "}
+                  {selectedEvent?.name ?? lastAddedEventId}
+                  {lastEventResult.idempotent ? " (idempotent)." : "."}{" "}
                   <Link
-                    href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(lastAddedEventId)}`}
+                    href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(selectedEvent?.id ?? lastAddedEventId)}`}
                   >
                     Open event workspace
                   </Link>
@@ -2448,7 +2727,7 @@ export function CrmWorkspaceView({
                     <small>{formatDate(note.createdAt)}</small>
                   </article>
                 ))}
-                {history.map((entry) => (
+                {timelineHistory.map((entry) => (
                   <article key={entry.id}>
                     <strong>{entry.title}</strong>
                     <p>
@@ -2458,152 +2737,217 @@ export function CrmWorkspaceView({
                     <small>{formatDate(entry.occurredAt)}</small>
                   </article>
                 ))}
-                {notes.length === 0 && history.length === 0 ? (
+                {notes.length === 0 && timelineHistory.length === 0 ? (
                   <p className={styles.muted}>No history has been recorded for this contact.</p>
                 ) : null}
               </div>
             </Card>
           </div>
-        ) : (
+        ) : contacts.length > 0 ? (
           <div className={styles.callout}>
             Select a contact to view identity, history, pipeline, event relationships, and outreach
             controls.
           </div>
-        )}
+        ) : null}
         {selectedContact || selectedContactIds.length > 0 ? (
-          <Card
-            title="Personalized outreach"
-            eyebrow={
-              selectedContactIds.length > 0
-                ? `Communicate with ${selectedContactIds.length} selected contacts`
-                : "Preview before sending"
-            }
+          <section
+            id="crm-outreach-composer"
+            ref={outreachComposerRef}
+            tabIndex={-1}
+            aria-label="Personalized outreach composer"
           >
-            <form className={styles.form} onSubmit={(event) => void previewOutreach(event)}>
-              <label className={styles.field}>
-                <span>Audience</span>
-                <select
-                  aria-label="Outreach audience"
-                  value={outreachSegmentId}
-                  onChange={(event) => setOutreachSegmentId(event.currentTarget.value)}
-                >
-                  <option value="">This contact</option>
-                  {selectedContactIds.length > 0 ? (
-                    <option value="__selected__">
-                      Selected directory contacts ({selectedContactIds.length})
-                    </option>
-                  ) : null}
-                  {segments.map((segment) => (
-                    <option key={segment.id} value={segment.id}>
-                      Segment: {segment.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {selectedContactIds.length > 0 ? (
+            <Card
+              title="Personalized outreach"
+              eyebrow={
+                outreachSegmentId === "__selected__" && selectedContactIds.length > 0
+                  ? `Communicate with ${selectedContactIds.length} selected contacts`
+                  : "Preview before queueing"
+              }
+            >
+              <form className={styles.form} onSubmit={(event) => void previewOutreach(event)}>
                 <label className={styles.field}>
-                  <span>Segment context (optional)</span>
+                  <span>Audience</span>
                   <select
-                    aria-label="Outreach segment context"
-                    value={outreachContextSegmentId}
-                    onChange={(event) => setOutreachContextSegmentId(event.currentTarget.value)}
+                    aria-label="Outreach audience"
+                    value={outreachSegmentId}
+                    onChange={(event) => setOutreachSegmentId(event.currentTarget.value)}
                   >
-                    <option value="">No segment context</option>
+                    <option value="">This contact</option>
+                    {selectedContactIds.length > 0 ? (
+                      <option value="__selected__">
+                        Selected directory contacts ({selectedContactIds.length})
+                      </option>
+                    ) : null}
                     {segments.map((segment) => (
                       <option key={segment.id} value={segment.id}>
-                        {segment.name}
+                        Segment: {segment.name}
                       </option>
                     ))}
                   </select>
                 </label>
-              ) : null}
-              <label className={styles.field}>
-                <span>Event context (optional)</span>
-                <select
-                  aria-label="Outreach event"
-                  value={outreachEventId}
-                  onChange={(event) => setOutreachEventId(event.currentTarget.value)}
-                >
-                  <option value="">No event</option>
-                  {events.map((event) => (
-                    <option value={event.id} key={event.id}>
-                      {event.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className={styles.field}>
-                <span>Subject</span>
-                <input
-                  value={outreachSubject}
-                  onChange={(event) => setOutreachSubject(event.currentTarget.value)}
-                  required
-                />
-              </label>
-              <label className={styles.field}>
-                <span>Message</span>
-                <textarea
-                  rows={5}
-                  value={outreachBody}
-                  onChange={(event) => setOutreachBody(event.currentTarget.value)}
-                  required
-                />
-                <small className={styles.muted}>
-                  Use <code>{"{{first_name}}"}</code> for safe per-contact personalization.
-                </small>
-              </label>
-              <button className={styles.primaryButton} type="submit" disabled={busy}>
-                {busy ? "Preparing…" : "Preview personalized outreach"}
-              </button>
-            </form>
-            {outreachPreview ? (
-              <div className={styles.previewBox}>
-                <h3>Outreach preview</h3>
-                <p>
-                  <strong>{outreachPreview.count}</strong> recipient
-                  {outreachPreview.count === 1 ? "" : "s"} will receive this message.
-                </p>
-                {outreachPreview.eventId ? <p>Event context: {outreachPreview.eventId}</p> : null}
-                {outreachPreview.segmentId ? (
-                  <p>Segment context: {outreachPreview.segmentId}</p>
+                {selectedContactIds.length > 0 ? (
+                  <label className={styles.field}>
+                    <span>Segment context (optional)</span>
+                    <select
+                      aria-label="Outreach segment context"
+                      value={outreachContextSegmentId}
+                      onChange={(event) => setOutreachContextSegmentId(event.currentTarget.value)}
+                    >
+                      <option value="">No segment context</option>
+                      {segments.map((segment) => (
+                        <option key={segment.id} value={segment.id}>
+                          {segment.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 ) : null}
-                <p>
-                  <strong>{outreachPreview.subject}</strong>
-                </p>
-                <pre>{outreachPreview.sample}</pre>
-                <button
-                  className={styles.primaryButton}
-                  aria-label="Send Now"
-                  type="button"
-                  onClick={() => onSendOutreach?.()}
-                  disabled={busy || outreachPreview.count === 0}
-                >
-                  {busy
-                    ? "Queueing…"
-                    : `Queue outreach (Send Now to ${outreachPreview.count} contact${outreachPreview.count === 1 ? "" : "s"})`}
+                <label className={styles.field}>
+                  <span>Event context (optional)</span>
+                  <select
+                    aria-label="Outreach event"
+                    value={outreachEventId}
+                    onChange={(event) => setOutreachEventId(event.currentTarget.value)}
+                  >
+                    <option value="">No event</option>
+                    {events.map((event) => (
+                      <option value={event.id} key={event.id}>
+                        {event.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.field}>
+                  <span>Subject</span>
+                  <input
+                    value={outreachSubject}
+                    onChange={(event) => setOutreachSubject(event.currentTarget.value)}
+                    required
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>Message</span>
+                  <textarea
+                    rows={5}
+                    value={outreachBody}
+                    onChange={(event) => setOutreachBody(event.currentTarget.value)}
+                    required
+                  />
+                  <small className={styles.muted}>
+                    Use <code>{"{{first_name}}"}</code> for safe per-contact personalization.
+                  </small>
+                </label>
+                <button className={styles.primaryButton} type="submit" disabled={busy}>
+                  {busy ? "Preparing…" : "Preview personalized outreach"}
                 </button>
-              </div>
-            ) : null}
-          </Card>
+              </form>
+              {outreachPreview ? (
+                <div className={styles.previewBox}>
+                  <h3>Outreach preview</h3>
+                  <p>
+                    <strong>{outreachPreview.count}</strong> recipient
+                    {outreachPreview.count === 1 ? "" : "s"} will be queued for delivery.
+                  </p>
+                  {outreachPreview.eventId ? <p>Event context: {outreachPreview.eventId}</p> : null}
+                  {outreachPreview.segmentId ? (
+                    <p>Segment context: {outreachPreview.segmentId}</p>
+                  ) : null}
+                  {outreachHasUnknownTags ? (
+                    <p className={styles.error} role="alert">
+                      Queueing is blocked because one or more recipients have unknown merge tags.
+                    </p>
+                  ) : null}
+                  <div className={styles.timeline}>
+                    {outreachPreview.recipients.map((recipient) => (
+                      <article key={recipient.contactId}>
+                        <h4>
+                          {recipient.displayName} · {recipient.email}
+                        </h4>
+                        <p>
+                          <strong>Subject:</strong> {recipient.subject}
+                        </p>
+                        <pre>{recipient.body}</pre>
+                        {recipient.unknownTags.length > 0 ? (
+                          <p className={styles.error}>
+                            Unknown merge tags: {recipient.unknownTags.join(", ")}
+                          </p>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                  <button
+                    className={styles.primaryButton}
+                    aria-label="Queue outreach for delivery"
+                    type="button"
+                    onClick={() => onSendOutreach?.()}
+                    disabled={
+                      busy ||
+                      outreachPreview.count === 0 ||
+                      outreachHasUnknownTags ||
+                      onSendOutreach === undefined
+                    }
+                  >
+                    {busy
+                      ? "Queueing…"
+                      : `Queue outreach for delivery to ${outreachPreview.count} contact${outreachPreview.count === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+              ) : null}
+              {outreachResults.length > 0 ? (
+                <section className={styles.previewBox} aria-labelledby="crm-outreach-result-title">
+                  <h3 id="crm-outreach-result-title">Outreach queue result</h3>
+                  <p className={styles.resultCount}>
+                    {outreachResults.reduce((count, result) => count + result.sentCount, 0)} sent ·{" "}
+                    {outreachResults.reduce((count, result) => count + result.queuedCount, 0)}{" "}
+                    queued ·{" "}
+                    {outreachResults.reduce((count, result) => count + result.failedCount, 0)}{" "}
+                    failed
+                  </p>
+                  <ol className={styles.historyList}>
+                    {outreachResults.map((result) => (
+                      <li key={result.id}>
+                        <strong>
+                          {result.recipientEmail}: {result.status}
+                        </strong>
+                        <small>
+                          queue {result.id}
+                          {result.terminal ? " · terminal" : " · awaiting delivery"}
+                          {result.failureReason ? ` · ${result.failureReason}` : ""}
+                        </small>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+            </Card>
+          </section>
         ) : null}
-        <SegmentManager
-          segments={segments}
-          busy={busy}
-          currentRules={currentFilterRules}
-          onCreate={onCreateSegment ?? (async () => undefined)}
-          onSelect={onSelectSegment ?? (() => undefined)}
-        />
-        <PipelineBoard
-          contacts={contacts}
-          onMove={onMovePipeline ?? (() => undefined)}
-          onSelect={(id) => onSelectContact?.(id)}
-          onEnroll={onEnrollPipeline ?? (async () => undefined)}
-        />
-        <AnalyticsPanel
-          analytics={analytics}
-          events={events}
-          onEventDrillThrough={onAnalyticsEventDrillThrough ?? (() => undefined)}
-        />
+        {contacts.length > 0 ? (
+          <>
+            <SegmentManager
+              segments={segments}
+              busy={busy}
+              currentRules={currentFilterRules}
+              onCreate={onCreateSegment ?? (async () => undefined)}
+              onSelect={onSelectSegment ?? (() => undefined)}
+            />
+            <PipelineBoard
+              contacts={contacts}
+              onMove={onMovePipeline ?? (() => undefined)}
+              onSelect={(id) => onSelectContact?.(id)}
+              onEnroll={onEnrollPipeline ?? (async () => undefined)}
+            />
+            {analytics ? (
+              <section id="crm-analytics" tabIndex={-1} aria-label="CRM analytics panel">
+                <AnalyticsPanel
+                  analytics={analytics}
+                  events={events}
+                  onEventDrillThrough={onAnalyticsEventDrillThrough ?? (() => undefined)}
+                />
+              </section>
+            ) : null}
+          </>
+        ) : null}
       </main>
     </div>
   );
@@ -2624,94 +2968,171 @@ export function CrmWorkspace({
   initialContacts,
   initialSegments,
   initialEvents,
-  initialAnalytics = null,
+  initialAnalytics,
 }: CrmWorkspaceProps) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
+  const apiBaseUrl = "";
   const api = useMemo(
     () => providedApi ?? createCrmApi(apiBaseUrl, organizationId),
-    [apiBaseUrl, organizationId, providedApi],
+    [organizationId, providedApi],
   );
   const [contacts, setContacts] = useState<readonly CrmContact[]>(initialContacts ?? []);
   const [segments, setSegments] = useState<readonly CrmSegment[]>(initialSegments ?? []);
   const [events, setEvents] = useState<readonly CrmEvent[]>(initialEvents ?? []);
-  const [analytics, setAnalytics] = useState<CrmAnalytics | null>(initialAnalytics);
+  const [analytics, setAnalytics] = useState<CrmAnalytics | null>(initialAnalytics ?? null);
   const [selectedContact, setSelectedContact] = useState<CrmContact | undefined>();
   const [selectedContactIds, setSelectedContactIds] = useState<readonly string[]>([]);
   const [history, setHistory] = useState<readonly CrmHistoryEntry[]>([]);
   const [pipelineHistory, setPipelineHistory] = useState<readonly CrmPipelineEntry[]>([]);
   const [notes, setNotes] = useState<readonly CrmNote[]>([]);
   const [duplicates, setDuplicates] = useState<CrmDuplicateReport | null>(null);
+  const [importResult, setImportResult] = useState<CrmImportResult | null>(null);
+  const [importPreviewResult, setImportPreviewResult] = useState<CrmImportPreviewResult | null>(
+    null,
+  );
+  const [importPreviewLoading, setImportPreviewLoading] = useState(false);
+  const [importPreviewError, setImportPreviewError] = useState<string | null>(null);
+  const [importPreviewSource, setImportPreviewSource] = useState<string | null>(null);
   const [outreachRecipients, setOutreachRecipients] = useState<readonly CrmContact[]>([]);
-  const [outreachPreview, setOutreachPreview] = useState<{
-    subject: string;
-    body: string;
-    count: number;
-    sample: string;
-    segmentId?: string;
-    eventId?: string;
-  } | null>(null);
+  const [outreachPreview, setOutreachPreview] = useState<CrmOutreachPreview | null>(null);
+  const [outreachResults, setOutreachResults] = useState<readonly CrmOutreachCommand[]>([]);
   const [lastAddedEventId, setLastAddedEventId] = useState<string | null>(null);
+  const [lastEventResult, setLastEventResult] = useState<CrmEventProjectionResult | null>(null);
+  const [mergePreview, setMergePreview] = useState<CrmMergePreview | null>(null);
+  const [mergePreviewLoading, setMergePreviewLoading] = useState(false);
+  const [mergePreviewError, setMergePreviewError] = useState<string | null>(null);
+  const [mergePreviewPlanKey, setMergePreviewPlanKey] = useState<string | null>(null);
+  const [mergeResult, setMergeResult] = useState<CrmMergeResult | null>(null);
   const [query, setQuery] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
   const [tagsFilter, setTagsFilter] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<CrmPipelineStage | "">("");
   const [statusFilter, setStatusFilter] = useState<CrmContactStatus | "">("active");
-  const [loading, setLoading] = useState(
-    initialContacts === undefined || initialSegments === undefined || initialEvents === undefined,
-  );
+  const [contactsLoading, setContactsLoading] = useState(initialContacts === undefined);
+  const [segmentsLoading, setSegmentsLoading] = useState(initialSegments === undefined);
+  const [eventsLoading, setEventsLoading] = useState(initialEvents === undefined);
+  const [analyticsLoading, setAnalyticsLoading] = useState(initialAnalytics === undefined);
+  const loading = contactsLoading || segmentsLoading || eventsLoading || analyticsLoading;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const loadGeneration = useRef(0);
+  const selectionGeneration = useRef(0);
+  const initialContactsRead = useRef<{ api: CrmApi; filterKey: string } | null>(
+    initialContacts === undefined
+      ? null
+      : {
+          api,
+          filterKey: JSON.stringify([
+            query,
+            companyFilter,
+            tagsFilter,
+            pipelineFilter,
+            statusFilter,
+          ]),
+        },
+  );
+  const initialSegmentsRead = useRef<CrmApi | null>(initialSegments === undefined ? null : api);
+  const initialEventsRead = useRef<CrmApi | null>(initialEvents === undefined ? null : api);
+  const initialAnalyticsRead = useRef<CrmApi | null>(initialAnalytics === undefined ? null : api);
+  const importIdentityRef = useRef<{ csv: string; key: string } | null>(null);
+  const importPreviewRequestRef = useRef<string | null>(null);
+  const mergePreviewRequestRef = useRef<string | null>(null);
+  const eventIdentityRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
-  const loadDirectory = useCallback(async () => {
-    const generation = ++loadGeneration.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const [nextContacts, nextSegments, nextEvents, nextAnalytics] = await Promise.all([
-        api.listContacts({
-          query,
-          company: companyFilter,
-          tags: tagsFilter,
-          pipelineStage: pipelineFilter,
-          status: statusFilter,
-        }),
-        api.listSegments(),
-        api.listEvents(),
-        api.analytics(),
-      ]);
-      if (generation !== loadGeneration.current) return;
-      setContacts(nextContacts);
-      setSegments(nextSegments);
-      setEvents(nextEvents);
-      setAnalytics(nextAnalytics);
-    } catch (reason) {
-      if (generation === loadGeneration.current) setError(messageFromError(reason));
-    } finally {
-      if (generation === loadGeneration.current) setLoading(false);
-    }
-  }, [api, companyFilter, pipelineFilter, query, statusFilter, tagsFilter]);
+  const contactFilter = useMemo<CrmWorkspaceContactFilter>(
+    () => ({
+      query,
+      company: companyFilter,
+      tags: tagsFilter,
+      pipelineStage: pipelineFilter,
+      status: statusFilter,
+    }),
+    [companyFilter, pipelineFilter, query, statusFilter, tagsFilter],
+  );
+  const contactFilterKey = useMemo(
+    () => JSON.stringify([query, companyFilter, tagsFilter, pipelineFilter, statusFilter]),
+    [companyFilter, pipelineFilter, query, statusFilter, tagsFilter],
+  );
+  const workspaceReadCoordinator = useMemo(
+    () =>
+      createCrmWorkspaceReadCoordinator(api, {
+        setContacts,
+        setSegments,
+        setEvents,
+        setAnalytics,
+        setContactsLoading,
+        setSegmentsLoading,
+        setEventsLoading,
+        setAnalyticsLoading,
+        setError,
+      }),
+    [api],
+  );
+
+  const loadContacts = useCallback(
+    () => workspaceReadCoordinator.loadContacts(contactFilter),
+    [contactFilter, workspaceReadCoordinator],
+  );
+  const loadSegments = useCallback(
+    () => workspaceReadCoordinator.loadSegments(),
+    [workspaceReadCoordinator],
+  );
+  const loadEvents = useCallback(
+    () => workspaceReadCoordinator.loadEvents(),
+    [workspaceReadCoordinator],
+  );
+  const loadAnalytics = useCallback(
+    () => workspaceReadCoordinator.loadAnalytics(),
+    [workspaceReadCoordinator],
+  );
 
   useEffect(() => {
-    if (
-      initialContacts !== undefined &&
-      initialSegments !== undefined &&
-      initialEvents !== undefined
-    )
-      return;
-    void loadDirectory();
-  }, [initialContacts, initialEvents, initialSegments, loadDirectory]);
+    workspaceReadCoordinator.activate();
+    return () => workspaceReadCoordinator.dispose();
+  }, [workspaceReadCoordinator]);
+
+  useEffect(() => {
+    const previous = initialContactsRead.current;
+    if (previous?.api === api && previous.filterKey === contactFilterKey) return;
+    initialContactsRead.current = { api, filterKey: contactFilterKey };
+    void loadContacts();
+  }, [api, contactFilterKey, loadContacts]);
+
+  useEffect(() => {
+    if (initialSegmentsRead.current === api) return;
+    initialSegmentsRead.current = api;
+    void loadSegments();
+  }, [api, loadSegments]);
+
+  useEffect(() => {
+    if (initialEventsRead.current === api) return;
+    initialEventsRead.current = api;
+    void loadEvents();
+  }, [api, loadEvents]);
+
+  useEffect(() => {
+    if (initialAnalyticsRead.current === api) return;
+    initialAnalyticsRead.current = api;
+    void loadAnalytics();
+  }, [api, loadAnalytics]);
+
+  useEffect(() => {
+    return () => {
+      selectionGeneration.current += 1;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
-    await loadDirectory();
-  }, [loadDirectory]);
+    await workspaceReadCoordinator.refresh(contactFilter);
+  }, [contactFilter, workspaceReadCoordinator]);
 
   const selectContact = useCallback(
-    async (contactId: string) => {
-      setBusy(true);
-      setError(null);
-      setStatusMessage(null);
+    async (contactId: string, manageBusy = true) => {
+      const generation = ++selectionGeneration.current;
+      if (manageBusy) {
+        setBusy(true);
+        setError(null);
+        setStatusMessage(null);
+      }
       try {
         const [contact, nextHistory, nextPipelineHistory, nextNotes, nextDuplicates] =
           await Promise.all([
@@ -2721,6 +3142,7 @@ export function CrmWorkspace({
             api.listNotes(contactId),
             api.findDuplicates(contactId),
           ]);
+        if (generation !== selectionGeneration.current) return;
         setSelectedContact(contact);
         setHistory(nextHistory);
         setPipelineHistory(nextPipelineHistory);
@@ -2728,26 +3150,29 @@ export function CrmWorkspace({
         setDuplicates(nextDuplicates);
         setOutreachRecipients([contact]);
         setOutreachPreview(null);
+        setOutreachResults([]);
         setLastAddedEventId(null);
+        setLastEventResult(null);
       } catch (reason) {
-        setError(messageFromError(reason));
+        if (generation === selectionGeneration.current) setError(messageFromError(reason));
       } finally {
-        setBusy(false);
+        if (manageBusy && generation === selectionGeneration.current) setBusy(false);
       }
     },
     [api],
   );
 
   async function saveContact(draft: ContactDraft): Promise<void> {
+    const existingContact = selectedContact;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const input = draftInput(draft);
-      const next = selectedContact
-        ? await api.updateContact(selectedContact.id, {
+      const next = existingContact
+        ? await api.updateContact(existingContact.id, {
             ...input,
-            expectedVersion: selectedContact.version,
+            expectedVersion: existingContact.version,
           })
         : await api.createContact(input);
       setSelectedContact(next);
@@ -2759,17 +3184,68 @@ export function CrmWorkspace({
       });
       setOutreachRecipients([next]);
       setStatusMessage(
-        selectedContact ? "Contact changes saved." : "Contact added to the organization directory.",
+        existingContact ? "Contact changes saved." : "Contact added to the organization directory.",
       );
-      setAnalytics((current) =>
-        current
-          ? {
-              ...current,
-              totalContacts: selectedContact ? current.totalContacts : current.totalContacts + 1,
-              activeContacts: selectedContact ? current.activeContacts : current.activeContacts + 1,
-            }
-          : current,
+      const [nextDuplicates] = await Promise.all([
+        refreshCrmDuplicatesAfterContactSave(existingContact, next, (contactId) =>
+          api.findDuplicates(contactId),
+        ),
+        refreshCrmAnalyticsAfterContactSave(existingContact, loadAnalytics),
+      ]);
+      if (nextDuplicates !== null) setDuplicates(nextDuplicates);
+    } catch (reason) {
+      setError(messageFromError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function previewImport(csv: string): Promise<void> {
+    importPreviewRequestRef.current = csv;
+    setImportPreviewResult(null);
+    setImportPreviewSource(null);
+    setImportPreviewError(null);
+    setImportPreviewLoading(true);
+    try {
+      const result = await api.previewImport(csv);
+      if (importPreviewRequestRef.current !== csv) return;
+      setImportPreviewResult(result);
+      setImportPreviewSource(csv);
+    } catch (reason) {
+      if (importPreviewRequestRef.current === csv) {
+        setImportPreviewError(messageFromError(reason));
+      }
+    } finally {
+      if (importPreviewRequestRef.current === csv) setImportPreviewLoading(false);
+    }
+  }
+
+  async function importContacts(csv: string): Promise<void> {
+    const authoritativePreview =
+      importPreviewRequestRef.current === csv &&
+      importPreviewSource === csv &&
+      importPreviewResult?.preview === true
+        ? importPreviewResult
+        : null;
+    if (authoritativePreview === null) {
+      setError("Import commit is blocked until a current authoritative CSV preview is ready.");
+      return;
+    }
+    if (authoritativePreview.errors > 0) {
+      setError("Import commit is blocked because the authoritative preview contains row errors.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const existingIdentity = importIdentityRef.current;
+    const key = existingIdentity?.csv === csv ? existingIdentity.key : idempotencyKey("crm-import");
+    importIdentityRef.current = { csv, key };
+    try {
+      const result = await api.importContacts(csv, key);
+      setImportResult(result);
+      setStatusMessage(
+        `Import ${result.id}: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped, ${result.errors} errors${result.idempotent ? " (idempotent replay)" : ""}.`,
       );
+      await Promise.all([loadContacts(), loadAnalytics()]);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -2777,20 +3253,26 @@ export function CrmWorkspace({
     }
   }
 
-  async function importContacts(csv: string): Promise<void> {
-    setBusy(true);
-    setError(null);
+  async function previewMerge(plan: CrmMergePlan): Promise<void> {
+    if (!selectedContact || plan.duplicateContactIds.length === 0) return;
+    const key = mergePlanKey(plan);
+    mergePreviewRequestRef.current = key;
+    setMergePreview(null);
+    setMergePreviewPlanKey(null);
+    setMergePreviewError(null);
+    setMergePreviewLoading(true);
     try {
-      const result = await api.importContacts(csv, idempotencyKey("crm-import"));
-      setStatusMessage(
-        `Import completed. ${typeof result === "object" && result !== null && "created" in result ? String((result as { created: unknown }).created) : "Directory"} records were processed.`,
-      );
-      setBusy(false);
-      void refresh();
+      const result = await api.previewMerge(selectedContact.id, plan.duplicateContactIds, {
+        fieldWinners: plan.fieldWinners,
+        customFieldWinners: plan.customFieldWinners,
+      });
+      if (mergePreviewRequestRef.current !== key) return;
+      setMergePreview(result);
+      setMergePreviewPlanKey(key);
     } catch (reason) {
-      setError(messageFromError(reason));
+      if (mergePreviewRequestRef.current === key) setMergePreviewError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (mergePreviewRequestRef.current === key) setMergePreviewLoading(false);
     }
   }
 
@@ -2866,18 +3348,45 @@ export function CrmWorkspace({
       setError(reason.message);
       throw reason;
     }
+    const planKey = mergePlanKey(plan);
+    if (
+      mergePreview === null ||
+      mergePreviewPlanKey !== planKey ||
+      !mergePreview.canCommit ||
+      mergePreview.participantConflicts.length > 0 ||
+      mergePreview.planFingerprint.length === 0
+    ) {
+      const reason = new Error(
+        "Merge commit is blocked until a current authoritative relationship preview is ready.",
+      );
+      setError(reason.message);
+      throw reason;
+    }
+    const primaryContactId = selectedContact.id;
+    const selectionIntent = selectionGeneration.current;
     setBusy(true);
     setError(null);
     try {
-      await api.mergeContacts(selectedContact.id, duplicateIds, idempotencyKey("crm-merge"), {
-        fieldWinners: plan.fieldWinners,
-        customFieldWinners: plan.customFieldWinners,
-      });
-      setStatusMessage(
-        "Duplicate contacts merged into the selected primary contact. This CRM has no undo endpoint; review retained tags and history on the primary contact.",
+      const result = await api.mergeContacts(
+        primaryContactId,
+        duplicateIds,
+        idempotencyKey("crm-merge"),
+        {
+          fieldWinners: plan.fieldWinners,
+          customFieldWinners: plan.customFieldWinners,
+        },
       );
-      await refresh();
-      await selectContact(selectedContact.id);
+      setMergeResult(result);
+      setStatusMessage(
+        `Merge committed: survivor ${result.survivorId}; audit ${result.auditId}${result.idempotent ? " (idempotent replay)" : ""}.`,
+      );
+      await Promise.all([
+        loadContacts(),
+        loadAnalytics(),
+        selectionGeneration.current === selectionIntent
+          ? selectContact(primaryContactId, false)
+          : Promise.resolve(),
+      ]);
     } catch (reason) {
       setError(messageFromError(reason));
       throw reason;
@@ -2895,10 +3404,12 @@ export function CrmWorkspace({
       setContacts((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      if (selectedContact?.id === next.id) {
-        setSelectedContact(next);
-        setPipelineHistory(await api.getPipelineHistory(next.id));
-      }
+      if (selectedContact?.id === next.id) setSelectedContact(next);
+      const [, nextPipelineHistory] = await Promise.all([
+        loadAnalytics(),
+        selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
+      ]);
+      if (nextPipelineHistory !== null) setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`${displayName(next)} moved to ${stage}.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -2937,10 +3448,13 @@ export function CrmWorkspace({
       setContacts((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      if (selectedContact?.id === next.id) {
-        setSelectedContact(next);
-        setPipelineHistory(await api.getPipelineHistory(next.id));
-      }
+      if (selectedContact?.id === next.id) setSelectedContact(next);
+      const stageChanged = contact.pipelineStage !== next.pipelineStage;
+      const [, nextPipelineHistory] = await Promise.all([
+        stageChanged ? loadAnalytics() : Promise.resolve(),
+        selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
+      ]);
+      if (nextPipelineHistory !== null) setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`${displayName(next)} enrolled in the ${input.stage} pipeline stage.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -2959,7 +3473,11 @@ export function CrmWorkspace({
       setContacts((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      setPipelineHistory(await api.getPipelineHistory(next.id));
+      const [nextPipelineHistory] = await Promise.all([
+        api.getPipelineHistory(next.id),
+        selectedContact.pipelineStage === next.pipelineStage ? Promise.resolve() : loadAnalytics(),
+      ]);
+      setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`Pipeline stage saved as ${stage}.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -2991,12 +3509,27 @@ export function CrmWorkspace({
     if (!selectedContact) return;
     setBusy(true);
     setError(null);
+    const fingerprint = JSON.stringify({ contactId: selectedContact.id, ...input });
+    const existingIdentity = eventIdentityRef.current;
+    const key =
+      existingIdentity?.fingerprint === fingerprint
+        ? existingIdentity.key
+        : idempotencyKey("crm-event");
+    eventIdentityRef.current = { fingerprint, key };
     try {
-      await api.addContactToEvent(selectedContact.id, input, idempotencyKey("crm-event"));
+      const result = await api.addContactToEvent(selectedContact.id, input, key);
       setLastAddedEventId(input.eventId);
-      setStatusMessage("Contact added to the event.");
-      setHistory(await api.getContactHistory(selectedContact.id));
-      setAnalytics(await api.analytics());
+      setLastEventResult(result);
+      setStatusMessage(
+        result.outcome === "created"
+          ? "Canonical event relationship created."
+          : "The canonical event relationship already existed; no duplicate was created.",
+      );
+      const [nextHistory] = await Promise.all([
+        api.getContactHistory(selectedContact.id),
+        loadAnalytics(),
+      ]);
+      setHistory(nextHistory);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -3029,32 +3562,64 @@ export function CrmWorkspace({
       setError("Choose a contact or a segment with at least one active contact.");
       return;
     }
-    const first = recipients[0];
-    if (first === undefined) {
-      setError("The selected audience did not return a preview recipient.");
-      return;
-    }
+    const recipientPreviews = recipients.map((contact) => {
+      const subject = renderVariablePreview(input.subject, contact);
+      const body = renderVariablePreview(input.body, contact);
+      return {
+        contactId: contact.id,
+        email: contact.email ?? "Missing recipient email",
+        displayName: displayName(contact),
+        subject: subject.value,
+        body: body.value,
+        unknownTags: [
+          ...new Set([
+            ...subject.unknownTags,
+            ...body.unknownTags,
+            ...(contact.email === null ? ["recipient_email"] : []),
+          ]),
+        ].sort(),
+        idempotencyKey: idempotencyKey("crm-outreach"),
+      };
+    });
+    setOutreachResults([]);
     setOutreachPreview({
       subject: input.subject,
       body: input.body,
-      count: recipients.length,
-      sample: renderVariablePreview(input.body, first),
+      count: recipientPreviews.length,
+      recipients: recipientPreviews,
       ...(input.segmentId ? { segmentId: input.segmentId } : {}),
       ...(input.eventId ? { eventId: input.eventId } : {}),
     });
+    const issueCount = recipientPreviews.filter(
+      (recipient) => recipient.unknownTags.length > 0,
+    ).length;
     setStatusMessage(
-      `Preview ready for ${recipients.length} personalized recipient${recipients.length === 1 ? "" : "s"}.`,
+      issueCount === 0
+        ? `Preview ready for ${recipients.length} personalized recipient${recipients.length === 1 ? "" : "s"}.`
+        : `Preview found merge-tag or recipient issues for ${issueCount} recipient${issueCount === 1 ? "" : "s"}; queueing is blocked.`,
     );
   }
 
   async function sendOutreach(): Promise<void> {
-    if (!outreachPreview || outreachRecipients.length === 0) return;
+    if (
+      !outreachPreview ||
+      outreachPreview.recipients.length === 0 ||
+      outreachPreview.recipients.some((recipient) => recipient.unknownTags.length > 0)
+    ) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await Promise.all(
-        outreachRecipients.map((contact) =>
-          api.sendOutreach(
+      const contactsById = new Map(outreachRecipients.map((contact) => [contact.id, contact]));
+      const results = await Promise.all(
+        outreachPreview.recipients.map((recipient) => {
+          const contact = contactsById.get(recipient.contactId);
+          if (contact === undefined) {
+            throw new Error(`Preview recipient ${recipient.contactId} is no longer selected.`);
+          }
+          const { firstName, lastName } = outreachNameParts(contact);
+          return api.sendOutreach(
             {
               contactId: contact.id,
               subject: outreachPreview.subject,
@@ -3062,30 +3627,35 @@ export function CrmWorkspace({
               ...(outreachPreview.eventId ? { eventId: outreachPreview.eventId } : {}),
               ...(outreachPreview.segmentId ? { segmentId: outreachPreview.segmentId } : {}),
               variables: {
-                first_name: contact.firstName ?? "",
-                firstName: contact.firstName ?? "",
+                first_name: firstName,
+                firstName,
+                last_name: lastName,
+                lastName,
               },
             },
-            idempotencyKey("crm-outreach"),
-          ),
-        ),
+            recipient.idempotencyKey,
+          );
+        }),
       );
+      setOutreachResults(results);
+      const queuedCount = results.reduce((count, result) => count + result.queuedCount, 0);
+      const sentCount = results.reduce((count, result) => count + result.sentCount, 0);
+      const failedCount = results.reduce((count, result) => count + result.failedCount, 0);
+      const terminal = results.every((result) => result.terminal);
+      setStatusMessage(
+        `Outreach queue result: ${sentCount} sent, ${queuedCount} queued, ${failedCount} failed; ${terminal ? "terminal" : "delivery still in progress"}.`,
+      );
+      const [, historyResult] = await Promise.allSettled([
+        loadAnalytics(),
+        selectedContact ? api.getContactHistory(selectedContact.id) : Promise.resolve(null),
+      ]);
+      if (historyResult.status === "fulfilled" && historyResult.value !== null) {
+        setHistory(historyResult.value);
+      }
     } catch (reason) {
       setError(messageFromError(reason));
+    } finally {
       setBusy(false);
-      return;
-    }
-
-    const queuedCount = outreachRecipients.length;
-    setBusy(false);
-    setStatusMessage(`Outreach queued for ${queuedCount} contact${queuedCount === 1 ? "" : "s"}.`);
-    const [analyticsResult, historyResult] = await Promise.allSettled([
-      api.analytics(),
-      selectedContact ? api.getContactHistory(selectedContact.id) : Promise.resolve(null),
-    ]);
-    if (analyticsResult.status === "fulfilled") setAnalytics(analyticsResult.value);
-    if (historyResult.status === "fulfilled" && historyResult.value !== null) {
-      setHistory(historyResult.value);
     }
   }
 
@@ -3124,18 +3694,35 @@ export function CrmWorkspace({
         const selected = new Set(contactIds);
         setOutreachRecipients(contacts.filter((contact) => selected.has(contact.id)));
         setOutreachPreview(null);
+        setOutreachResults([]);
       }}
       onStartAdd={() => {
+        selectionGeneration.current += 1;
         setSelectedContactIds([]);
         setSelectedContact(undefined);
         setDuplicates(null);
       }}
       onSaveContact={saveContact}
-      onCancelEdit={() => setSelectedContact(undefined)}
+      onCancelEdit={() => {
+        selectionGeneration.current += 1;
+        setSelectedContact(undefined);
+      }}
       onImport={importContacts}
+      onPreviewImport={previewImport}
+      importPreviewResult={importPreviewResult}
+      importPreviewLoading={importPreviewLoading}
+      importPreviewError={importPreviewError}
+      importPreviewSource={importPreviewSource}
+      importResult={importResult}
       onCreateSegment={createSegment}
       onSelectSegment={(segmentId) => void selectSegment(segmentId)}
       onFindDuplicates={() => void findDuplicates()}
+      onPreviewMerge={previewMerge}
+      mergePreview={mergePreview}
+      mergePreviewLoading={mergePreviewLoading}
+      mergePreviewError={mergePreviewError}
+      mergePreviewPlanKey={mergePreviewPlanKey}
+      mergeResult={mergeResult}
       onMerge={mergeContacts}
       onMovePipeline={(contactId, stage) => void movePipeline(contactId, stage)}
       onEnrollPipeline={enrollPipeline}
@@ -3143,10 +3730,12 @@ export function CrmWorkspace({
       onAddNote={addNote}
       onAddToEvent={addToEvent}
       lastAddedEventId={lastAddedEventId}
+      lastEventResult={lastEventResult}
       onPreviewOutreach={previewOutreach}
       outreachPreview={outreachPreview}
       outreachRecipients={outreachRecipients}
       onSendOutreach={sendOutreach}
+      outreachResults={outreachResults}
       onAnalyticsEventDrillThrough={(eventId) => {
         setQuery(eventId);
         setStatusMessage(`Directory filter set to event ${eventId}.`);

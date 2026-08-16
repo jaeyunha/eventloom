@@ -5,11 +5,12 @@ import {
   apiErrorSchema,
   type HealthResponse,
   healthResponseSchema,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import { parseApiEnvironment } from "./env";
+import { type AccessRouteDependencies, createAccessRoutes } from "./features/access/routes";
 import type { RequestAuthenticator } from "./features/auth/authenticator";
 import { AuthAccessError, type AuthPrincipal } from "./features/auth/types";
 import {
@@ -28,6 +29,10 @@ import {
 } from "./features/evaluations/routes";
 import type { EvaluationService } from "./features/evaluations/service";
 import type { EvaluationActor } from "./features/evaluations/types";
+import {
+  createEventInvitationRoutes,
+  type EventInvitationRouteDependencies,
+} from "./features/event-invitations/routes";
 import { createEventAdminRoutes, type EventRouteDependencies } from "./features/events/routes";
 import { createMemberAdminRoutes, type MemberRouteDependencies } from "./features/members/routes";
 import { createPublicApiV1Routes, type PublicApiRoutesOptions } from "./features/public-api/routes";
@@ -47,21 +52,37 @@ import {
   createSpeakerTaskAdminRoutes,
   type SpeakerRouteDependencies,
 } from "./features/speaker/routes";
-import { createWebhookSubscriptionRoutes } from "./integrations/webhooks/routes";
+import {
+  createWebhookSubscriptionRoutes,
+  webhookSubscriptionOpenApiPaths,
+} from "./integrations/webhooks/routes";
 import type { WebhookSubscriptionRepository } from "./integrations/webhooks/types";
+import { browserCookieMutationOriginProtection } from "./middleware/browser-cookie-mutation-origin";
 import {
   type AgendaRouteDependencies,
   createAgendaAdminRoutes,
   createPublishedAgendaRoutes,
+  type PublishedAgendaRouteOptions,
 } from "./routes/agenda";
 import {
+  type AirtableIntegrationRouteDependencies,
+  createAirtableIntegrationRoutes,
+  createAirtableOAuthCallbackRoutes,
+  createAirtableWebhookRoutes,
+} from "./routes/airtable-integration/routes";
+import {
   createIntegrationAdminRoutes,
+  createOrganizationApiKeyAdminRoutes,
   type IntegrationAdminRouteDependencies,
 } from "./routes/integrations";
 import {
   createOrganizerOverviewRoutes,
   type OrganizerOverviewRouteDependencies,
 } from "./routes/organizer-overview";
+import {
+  createPublishedEventDirectoryRoutes,
+  type PublishedEventDirectoryRouteDependencies,
+} from "./routes/public-events";
 import {
   createPublishedSpeakerRoutes,
   type PublishedSpeakerRouteDependencies,
@@ -70,6 +91,7 @@ import {
 export interface ApiBindings {
   APP_ENV: string;
   WEB_ORIGIN: string;
+  RUNTIME_PROFILE?: string;
 }
 
 type ApiVariables = {
@@ -133,16 +155,20 @@ export interface ApiDependencies<
 > {
   readonly authenticator?: Pick<RequestAuthenticator, "authenticate">;
   readonly auth?: AuthRouteDependencies;
+  readonly access?: AccessRouteDependencies;
   readonly publicApi?: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>;
   readonly webhooks?: WebhookSubscriptionRepository;
   readonly integrations?: IntegrationAdminRouteDependencies;
+  readonly airtableIntegration?: AirtableIntegrationRouteDependencies;
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
-  readonly agenda?: AgendaRouteDependencies;
+  readonly agenda?: AgendaRouteDependencies & PublishedAgendaRouteOptions;
+  readonly publishedEvents?: PublishedEventDirectoryRouteDependencies;
   readonly publishedSpeakers?: PublishedSpeakerRouteDependencies;
   readonly cfp?: CfpRouteDependencies;
   readonly organizerOverview?: OrganizerOverviewRouteDependencies;
   readonly events?: EventRouteDependencies;
+  readonly eventInvitations?: EventInvitationRouteDependencies;
   readonly sessions?: SessionRouteDependencies;
   readonly communications?: CommunicationRouteDependencies;
   readonly reports?: ReportRouteDependencies;
@@ -395,13 +421,16 @@ function assertAuthenticationConfigured(
 } {
   if (
     dependencies.authenticator === undefined &&
-    (dependencies.publicApi !== undefined ||
+    (dependencies.access !== undefined ||
+      dependencies.publicApi !== undefined ||
       dependencies.integrations !== undefined ||
+      dependencies.airtableIntegration !== undefined ||
       dependencies.webhooks !== undefined ||
       dependencies.evaluations !== undefined ||
       dependencies.agenda !== undefined ||
       dependencies.cfp !== undefined ||
       dependencies.events !== undefined ||
+      dependencies.eventInvitations !== undefined ||
       dependencies.organizerOverview !== undefined ||
       dependencies.sessions !== undefined ||
       dependencies.speaker !== undefined ||
@@ -446,6 +475,8 @@ export function createApp<
       context.header("cache-control", "no-store");
     }
   });
+
+  app.use("/api/*", browserCookieMutationOriginProtection());
 
   app.use(
     "*",
@@ -497,6 +528,7 @@ export function createApp<
         JSON.stringify({
           ...payload,
           memberships: principal.memberships,
+          reviewerGrants: principal.reviewerGrants,
           speakerGrants: principal.speakerGrants,
         }),
         { status: response.status, headers },
@@ -508,6 +540,7 @@ export function createApp<
   if (authenticator !== undefined) {
     const authenticate = authenticationMiddleware(authenticator);
     app.use("/api/v1/organizations/*", authenticate);
+    app.use("/api/account/*", authenticate);
     app.use("/api/admin/*", async (context, next) => {
       if (context.req.path.endsWith("/members/setup/activate")) {
         context.set("authPrincipal", null);
@@ -521,6 +554,15 @@ export function createApp<
   if (dependencies.evaluations !== undefined) {
     app.use("/api/admin/evaluations/*", evaluationActorMiddleware(dependencies.evaluations));
   }
+  if (dependencies.access !== undefined) {
+    app.route("/api/account", createAccessRoutes(dependencies.access));
+  }
+  if (dependencies.eventInvitations !== undefined) {
+    app.route(
+      "/api/account/event-invitations",
+      createEventInvitationRoutes(dependencies.eventInvitations),
+    );
+  }
 
   if (dependencies.webhooks !== undefined) {
     app.route(
@@ -529,12 +571,51 @@ export function createApp<
     );
   }
   if (dependencies.publicApi !== undefined) {
-    app.route("/api/v1", createPublicApiV1Routes(dependencies.publicApi));
+    const configuredOpenApiPaths = dependencies.publicApi.openApi?.paths ?? {};
+    app.route(
+      "/api/v1",
+      createPublicApiV1Routes({
+        ...dependencies.publicApi,
+        openApi: {
+          ...dependencies.publicApi.openApi,
+          ...(dependencies.publicApi.openApi?.description === undefined &&
+          dependencies.publicApi.resources.length === 0 &&
+          dependencies.webhooks !== undefined
+            ? {
+                description:
+                  "Tenant-scoped public-v1 webhook administration. Generic program-resource routes are not mounted.",
+              }
+            : {}),
+          paths:
+            dependencies.webhooks === undefined
+              ? configuredOpenApiPaths
+              : { ...configuredOpenApiPaths, ...webhookSubscriptionOpenApiPaths },
+        },
+      }),
+    );
   }
   if (dependencies.integrations !== undefined) {
     app.route(
-      "/api/admin/events/:eventId",
+      "/api/admin/organizations/:organizationId/events/:eventId",
       createIntegrationAdminRoutes(dependencies.integrations),
+    );
+    app.route(
+      "/api/admin/organizations/:organizationId/api-keys",
+      createOrganizationApiKeyAdminRoutes(dependencies.integrations),
+    );
+  }
+  if (dependencies.airtableIntegration !== undefined) {
+    app.route(
+      "/api/admin/organizations/:organizationId/integrations/airtable",
+      createAirtableIntegrationRoutes(dependencies.airtableIntegration),
+    );
+    app.route(
+      "/api/integrations/airtable",
+      createAirtableOAuthCallbackRoutes(dependencies.airtableIntegration),
+    );
+    app.route(
+      "/api/integrations/airtable/organizations/:organizationId",
+      createAirtableWebhookRoutes(dependencies.airtableIntegration),
     );
   }
   if (dependencies.evaluations !== undefined) {
@@ -579,6 +660,12 @@ export function createApp<
       createAgendaAdminRoutes(dependencies.agenda),
     );
     app.route("/api/public/events/:eventSlug", createPublishedAgendaRoutes(dependencies.agenda));
+  }
+  if (dependencies.publishedEvents !== undefined) {
+    app.route(
+      "/api/public/events",
+      createPublishedEventDirectoryRoutes(dependencies.publishedEvents),
+    );
   }
   if (dependencies.events !== undefined) {
     app.route(
@@ -659,6 +746,14 @@ export function createApp<
       service: "api",
       version: "0.1.0",
       environment: environment.data.APP_ENV,
+      ...(environment.data.APP_ENV === "local"
+        ? {
+            runtimeProfile:
+              context.env.RUNTIME_PROFILE?.trim().toLowerCase() === "fixture"
+                ? ("fixture" as const)
+                : ("integrated" as const),
+          }
+        : {}),
       timestamp: new Date().toISOString(),
       traceId,
     };
@@ -684,11 +779,11 @@ export function createApp<
         method: context.req.method,
         path: context.req.path,
         errorName: error.name,
+        errorMessage: error.message.slice(0, 500),
         ...(error.name === "AgendaError"
           ? {
               errorCode:
                 "code" in error && typeof error.code === "string" ? error.code : "AGENDA_ERROR",
-              errorMessage: error.message.slice(0, 500),
             }
           : {}),
       }),

@@ -5,7 +5,8 @@ import {
   apiScopes,
   type WebhookEventType,
   webhookEventTypes,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
+import Link from "next/link";
 import { type FormEvent, useState } from "react";
 import {
   Badge,
@@ -17,8 +18,12 @@ import {
   CardHeader,
   CardTitle,
   Field,
+  FieldDescription,
+  FieldLabel,
   Input,
+  TemporalPicker,
 } from "../../components/ui";
+import { apiKeyExpirationInstant, minimumApiKeyExpirationLocal } from "./api-key-expiration-model";
 import styles from "./integrations.module.css";
 import type {
   ApiKeySummary,
@@ -49,10 +54,10 @@ interface IntegrationActions {
 
 const statusPresentation: Record<
   ConnectionState,
-  { readonly label: string; readonly variant: "success" | "warning" | "outline" }
+  { readonly label: string; readonly variant: "default" | "secondary" | "outline" }
 > = {
-  connected: { label: "Connected", variant: "success" },
-  degraded: { label: "Needs attention", variant: "warning" },
+  connected: { label: "Connected", variant: "default" },
+  degraded: { label: "Needs attention", variant: "secondary" },
   not_configured: { label: "Not configured", variant: "outline" },
 };
 
@@ -73,10 +78,6 @@ function formatDate(value: string | null): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(parsed);
-}
-
-function secretEnding(lastFour: string | null): string {
-  return lastFour ? `•••• ${lastFour}` : "No credential saved";
 }
 
 export function OneTimeSecretPanel({
@@ -100,14 +101,14 @@ export function OneTimeSecretPanel({
       <div>
         <p className={styles.eyebrow}>Shown once</p>
         <h2 id="one-time-secret-heading">Save this {label} now</h2>
-        <p>For security, Open Sessionboard will not display this value again.</p>
+        <p>For security, Eventloom will not display this value again.</p>
       </div>
       <code className={styles.secretValue}>{secret.secret}</code>
       <div className={styles.actionRow}>
-        <Button type="button" variant="secondary" size="small" onClick={() => void copySecret()}>
+        <Button type="button" variant="secondary" size="sm" onClick={() => void copySecret()}>
           Copy secret
         </Button>
-        <Button type="button" variant="ghost" size="small" onClick={onDismiss}>
+        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
           I saved it
         </Button>
       </div>
@@ -120,57 +121,13 @@ export function OneTimeSecretPanel({
   );
 }
 
-function CredentialForm({
-  provider,
-  label,
-  hint,
-  busy,
-  onSave,
-}: Readonly<{
-  provider: "opensend";
-  label: string;
-  hint: string;
-  busy: boolean;
-  onSave(provider: "opensend", secret: string): Promise<boolean>;
-}>) {
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const secret = String(new FormData(form).get("secret") ?? "");
-    if (await onSave(provider, secret)) {
-      form.reset();
-    }
-  }
-
-  return (
-    <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
-      <Field label={label} name={`${provider}-secret`} hint={hint} required>
-        {(control) => (
-          <Input
-            {...control}
-            name="secret"
-            type="password"
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            required
-          />
-        )}
-      </Field>
-      <p className={styles.securityNote}>
-        Credentials are encrypted at rest. Existing values are never returned to this browser.
-      </p>
-      <Button type="submit" variant="secondary" disabled={busy}>
-        {busy ? "Saving…" : "Save credential"}
-      </Button>
-    </form>
-  );
-}
-
-export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAdminSnapshot }>) {
+export function OverviewSection({
+  snapshot,
+  basePath,
+}: Readonly<{ snapshot: IntegrationAdminSnapshot; basePath: string }>) {
   const activeKeys = snapshot.apiKeys.filter((key) => key.revokedAt === null).length;
   const activeWebhooks = snapshot.webhooks.filter((webhook) => webhook.active).length;
-  const base = `/admin/events/${encodeURIComponent(snapshot.event.id)}/integrations`;
+  const base = basePath;
   const deliveryStates = [snapshot.delivery.openSend.state, snapshot.delivery.calendar.state];
   const deliveryState: ConnectionState = deliveryStates.includes("degraded")
     ? "degraded"
@@ -181,15 +138,15 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
   return (
     <div className={styles.sectionStack}>
       <div className={styles.statusGrid}>
-        <a className={styles.statusCardLink} href={`${base}/delivery`}>
-          <Card interactive>
+        <Link className={styles.statusCardLink} href={`${base}/delivery`}>
+          <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
                 <CardTitle>Email &amp; calendar</CardTitle>
                 <StatusBadge state={deliveryState} />
               </div>
               <CardDescription>
-                OpenSend delivery and provider-neutral calendar invitations.
+                Deployment-managed email delivery and provider-neutral calendar invitations.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -199,18 +156,18 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
               <p className={styles.muted}>in the last 24 hours</p>
             </CardContent>
           </Card>
-        </a>
-        <a className={styles.statusCardLink} href={`${base}/api-keys`}>
-          <Card interactive>
+        </Link>
+        <Link className={styles.statusCardLink} href={`${base}/api-keys`}>
+          <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
-                <CardTitle>API keys</CardTitle>
-                <Badge variant={activeKeys > 0 ? "success" : "outline"}>
+                <CardTitle>Organization API keys</CardTitle>
+                <Badge variant={activeKeys > 0 ? "default" : "outline"}>
                   {activeKeys > 0 ? "Active" : "None"}
                 </Badge>
               </div>
               <CardDescription>
-                Scoped credentials for tenant-owned public API access.
+                Organization-scoped credentials for public API access.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -218,13 +175,13 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
               <p className={styles.muted}>active key{activeKeys === 1 ? "" : "s"}</p>
             </CardContent>
           </Card>
-        </a>
-        <a className={styles.statusCardLink} href={`${base}/webhooks`}>
-          <Card interactive>
+        </Link>
+        <Link className={styles.statusCardLink} href={`${base}/webhooks`}>
+          <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
                 <CardTitle>Webhooks</CardTitle>
-                <Badge variant={activeWebhooks > 0 ? "success" : "outline"}>
+                <Badge variant={activeWebhooks > 0 ? "default" : "outline"}>
                   {activeWebhooks > 0 ? "Delivering" : "None"}
                 </Badge>
               </div>
@@ -235,17 +192,8 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
               <p className={styles.muted}>active endpoint{activeWebhooks === 1 ? "" : "s"}</p>
             </CardContent>
           </Card>
-        </a>
+        </Link>
       </div>
-      <Card flat>
-        <CardHeader>
-          <CardTitle>Source-of-truth boundary</CardTitle>
-          <CardDescription>
-            Airtable remains authoritative for event and program records. Integrations may publish
-            outward, but they cannot overwrite source records.
-          </CardDescription>
-        </CardHeader>
-      </Card>
     </div>
   );
 }
@@ -255,6 +203,8 @@ export function ApiKeysSection({
   actions,
 }: Readonly<{ keys: readonly ApiKeySummary[]; actions: IntegrationActions }>) {
   const [selectedScopes, setSelectedScopes] = useState<ReadonlySet<ApiScope>>(new Set());
+  const [expiresAt, setExpiresAt] = useState("");
+  const [expirationError, setExpirationError] = useState<string | null>(null);
 
   function toggleScope(scope: ApiScope) {
     setSelectedScopes((current) => {
@@ -272,14 +222,23 @@ export function ApiKeysSection({
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    let expirationInstant: string | null;
+    try {
+      expirationInstant = apiKeyExpirationInstant(expiresAt);
+      setExpirationError(null);
+    } catch (error) {
+      setExpirationError(error instanceof Error ? error.message : "The expiration is invalid.");
+      return;
+    }
     const created = await actions.createApiKey({
       label: String(data.get("label") ?? ""),
       scopes: [...selectedScopes],
-      expiresAt: String(data.get("expiresAt") ?? "").trim() || null,
+      expiresAt: expirationInstant,
     });
     if (created) {
       form.reset();
       setSelectedScopes(new Set());
+      setExpiresAt("");
     }
   }
 
@@ -296,23 +255,34 @@ export function ApiKeysSection({
         <CardContent>
           <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
             <div className={styles.formGrid}>
-              <Field label="Key name" name="api-key-label" required>
-                {(control) => (
-                  <Input
-                    {...control}
-                    name="label"
-                    maxLength={100}
-                    placeholder="Agenda export"
-                    required
-                  />
-                )}
+              <Field>
+                <FieldLabel htmlFor="api-key-label">Key name</FieldLabel>
+                <Input
+                  id="api-key-label"
+                  name="label"
+                  maxLength={100}
+                  placeholder="Agenda export"
+                  required
+                />
               </Field>
-              <Field
-                label="Expires"
-                name="api-key-expiry"
-                hint="Leave blank only for long-running server integrations."
-              >
-                {(control) => <Input {...control} name="expiresAt" type="date" />}
+              <Field style={{ gridColumn: "1 / -1" }}>
+                <TemporalPicker
+                  id="api-key-expiry"
+                  mode="single"
+                  precision="date-time"
+                  value={expiresAt}
+                  label="Expiration date and time"
+                  name="expiresAt"
+                  eyebrow="Access lifetime"
+                  description="Choose the local date and time when this key should stop working, or leave it unset."
+                  minimumDateTime={minimumApiKeyExpirationLocal()}
+                  clearable
+                  onChange={setExpiresAt}
+                />
+                <FieldDescription>
+                  Leave blank only for long-running server integrations.
+                </FieldDescription>
+                {expirationError === null ? null : <p role="alert">{expirationError}</p>}
               </Field>
             </div>
             <fieldset className={styles.checkboxFieldset}>
@@ -337,7 +307,7 @@ export function ApiKeysSection({
         </CardContent>
       </Card>
 
-      <Card flat>
+      <Card>
         <CardHeader>
           <CardTitle>API keys</CardTitle>
           <CardDescription>
@@ -374,7 +344,7 @@ export function ApiKeysSection({
                       <td>{key.scopes.join(", ")}</td>
                       <td>{formatDate(key.lastUsedAt)}</td>
                       <td>
-                        <Badge variant={key.revokedAt ? "outline" : "success"}>
+                        <Badge variant={key.revokedAt ? "outline" : "default"}>
                           {key.revokedAt ? "Revoked" : "Active"}
                         </Badge>
                       </td>
@@ -385,8 +355,8 @@ export function ApiKeysSection({
                             <p>Requests using this key will immediately fail.</p>
                             <Button
                               type="button"
-                              size="small"
-                              variant="danger"
+                              size="sm"
+                              variant="destructive"
                               disabled={actions.busy}
                               onClick={() => void actions.revokeApiKey(key.id)}
                             >
@@ -409,18 +379,21 @@ export function ApiKeysSection({
 
 function deliveryBadge(status: WebhookSubscriptionSummary["lastDelivery"]): {
   label: string;
-  variant: "success" | "warning" | "danger" | "outline";
+  variant: "default" | "secondary" | "destructive" | "outline";
 } {
   if (!status) {
     return { label: "No attempts", variant: "outline" };
   }
   if (status.status === "succeeded") {
-    return { label: "Delivered", variant: "success" };
+    return { label: "Delivered", variant: "default" };
   }
   if (status.status === "failed") {
-    return { label: "Failed", variant: "danger" };
+    return { label: "Failed", variant: "destructive" };
   }
-  return { label: status.status === "retrying" ? "Retrying" : "In progress", variant: "warning" };
+  return {
+    label: status.status === "retrying" ? "Retrying" : "In progress",
+    variant: "secondary",
+  };
 }
 
 export function WebhooksSection({
@@ -463,23 +436,20 @@ export function WebhooksSection({
         </CardHeader>
         <CardContent>
           <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
-            <Field
-              label="Endpoint URL"
-              name="webhook-endpoint"
-              hint="Use a public HTTPS endpoint. Redirects are not followed."
-              required
-            >
-              {(control) => (
-                <Input
-                  {...control}
-                  name="endpointUrl"
-                  type="url"
-                  inputMode="url"
-                  placeholder="https://example.com/open-sessionboard"
-                  pattern="https://.*"
-                  required
-                />
-              )}
+            <Field>
+              <FieldLabel htmlFor="webhook-endpoint">Endpoint URL</FieldLabel>
+              <Input
+                id="webhook-endpoint"
+                name="endpointUrl"
+                type="url"
+                inputMode="url"
+                placeholder="https://example.com/eventloom"
+                pattern="https://.*"
+                required
+              />
+              <FieldDescription>
+                Use a public HTTPS endpoint. Redirects are not followed.
+              </FieldDescription>
             </Field>
             <fieldset className={styles.checkboxFieldset}>
               <legend>Events</legend>
@@ -504,7 +474,7 @@ export function WebhooksSection({
       </Card>
 
       {webhooks.length === 0 ? (
-        <Card flat>
+        <Card>
           <CardContent>
             <p className={styles.empty}>No webhook endpoints are configured for this event.</p>
           </CardContent>
@@ -520,7 +490,7 @@ export function WebhooksSection({
                     <CardTitle>
                       <code>{webhook.endpointUrl}</code>
                     </CardTitle>
-                    <Badge variant={webhook.active ? "success" : "outline"}>
+                    <Badge variant={webhook.active ? "default" : "outline"}>
                       {webhook.active ? "Active" : "Paused"}
                     </Badge>
                   </div>
@@ -553,7 +523,7 @@ export function WebhooksSection({
                 <CardFooter>
                   <Button
                     type="button"
-                    size="small"
+                    size="sm"
                     variant="secondary"
                     disabled={actions.busy}
                     onClick={() => void actions.setWebhookActive(webhook.id, !webhook.active)}
@@ -565,8 +535,8 @@ export function WebhooksSection({
                     <p>The current signing secret stops working immediately.</p>
                     <Button
                       type="button"
-                      size="small"
-                      variant="danger"
+                      size="sm"
+                      variant="destructive"
                       disabled={actions.busy}
                       onClick={() => void actions.rotateWebhookSecret(webhook.id)}
                     >
@@ -578,8 +548,8 @@ export function WebhooksSection({
                     <p>Pending deliveries stop and this endpoint is permanently removed.</p>
                     <Button
                       type="button"
-                      size="small"
-                      variant="danger"
+                      size="sm"
+                      variant="destructive"
                       disabled={actions.busy}
                       onClick={() => void actions.deleteWebhook(webhook.id)}
                     >
@@ -608,18 +578,19 @@ export function DeliverySection({
         <Card>
           <CardHeader>
             <div className={styles.cardTitleRow}>
-              <CardTitle>OpenSend</CardTitle>
+              <CardTitle>Email delivery provider</CardTitle>
               <StatusBadge state={openSend.state} />
             </div>
             <CardDescription>
-              Transactional delivery through sending-scoped credentials and approved identities.
+              Delivery uses deployment-managed provider credentials and verified sender identities.
+              Event organizers can inspect operations but cannot replace provider secrets here.
             </CardDescription>
           </CardHeader>
           <CardContent className={styles.formStack}>
             <dl className={styles.definitionList}>
               <div>
-                <dt>Credential</dt>
-                <dd>{secretEnding(openSend.credentialLastFour)}</dd>
+                <dt>Credential ownership</dt>
+                <dd>Deployment managed</dd>
               </div>
               <div>
                 <dt>Delivered, 24 hours</dt>
@@ -630,13 +601,6 @@ export function DeliverySection({
                 <dd>{openSend.failedLast24Hours}</dd>
               </div>
             </dl>
-            <CredentialForm
-              provider="opensend"
-              label="Replace OpenSend sending key"
-              hint="Sending-scoped keys only. Account administration keys are rejected."
-              busy={actions.busy}
-              onSave={actions.saveCredential}
-            />
           </CardContent>
         </Card>
 
@@ -674,7 +638,7 @@ export function DeliverySection({
         </Card>
       </div>
 
-      <Card flat>
+      <Card>
         <CardHeader>
           <CardTitle>Verified sender identities</CardTitle>
           <CardDescription>
@@ -689,10 +653,10 @@ export function DeliverySection({
                 <Badge
                   variant={
                     sender.status === "verified"
-                      ? "success"
+                      ? "default"
                       : sender.status === "failed"
-                        ? "danger"
-                        : "warning"
+                        ? "destructive"
+                        : "secondary"
                   }
                 >
                   {sender.status === "verified"

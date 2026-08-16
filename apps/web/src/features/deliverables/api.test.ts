@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeliverablesApi } from "./api";
+import { createDeliverablesApi, resolveDeliverablesUploadGrantUrl } from "./api";
 
 const restoredSession = {
   id: "session-1",
@@ -12,8 +12,50 @@ const restoredSession = {
   speakerRoster: [{ id: "participant-1", role: "primary" }],
   version: 4,
 };
+function storedManifestZip(manifest: unknown): ArrayBuffer {
+  const payload = new TextEncoder().encode(`${JSON.stringify(manifest)}\n`);
+  const name = new TextEncoder().encode("manifest.json");
+  const localSize = 30 + name.byteLength + payload.byteLength;
+  const centralSize = 46 + name.byteLength;
+  const body = new Uint8Array(localSize + centralSize + 22);
+  const view = new DataView(body.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint16(8, 0, true);
+  view.setUint32(18, payload.byteLength, true);
+  view.setUint32(22, payload.byteLength, true);
+  view.setUint16(26, name.byteLength, true);
+  body.set(name, 30);
+  body.set(payload, 30 + name.byteLength);
+  const centralOffset = localSize;
+  view.setUint32(centralOffset, 0x02014b50, true);
+  view.setUint16(centralOffset + 4, 20, true);
+  view.setUint16(centralOffset + 6, 20, true);
+  view.setUint16(centralOffset + 8, 0x0800, true);
+  view.setUint32(centralOffset + 20, payload.byteLength, true);
+  view.setUint32(centralOffset + 24, payload.byteLength, true);
+  view.setUint16(centralOffset + 28, name.byteLength, true);
+  view.setUint32(centralOffset + 42, 0, true);
+  body.set(name, centralOffset + 46);
+  const endOffset = centralOffset + centralSize;
+  view.setUint32(endOffset, 0x06054b50, true);
+  view.setUint16(endOffset + 8, 1, true);
+  view.setUint16(endOffset + 10, 1, true);
+  view.setUint32(endOffset + 12, centralSize, true);
+  view.setUint32(endOffset + 16, centralOffset, true);
+  return body.buffer;
+}
 
 describe("deliverables API", () => {
+  it("keeps relative private-upload grants on the browser same origin", () => {
+    expect(resolveDeliverablesUploadGrantUrl("/api/private-assets/grant-1", "")).toBe(
+      "/api/private-assets/grant-1",
+    );
+    expect(
+      resolveDeliverablesUploadGrantUrl("/api/private-assets/grant-1", "https://eventloom.example"),
+    ).toBe("https://eventloom.example/api/private-assets/grant-1");
+  });
   it("restores immutable session content through the canonical admin mutation envelope", async () => {
     const requests: Array<{ url: string; method: string; body: unknown }> = [];
     const api = createDeliverablesApi(
@@ -63,30 +105,63 @@ describe("deliverables API", () => {
             eventId: "event-1",
             submissionId: "submission-1",
             participantId: "participant-1",
+            subject: {
+              type: "session",
+              participantId: "participant-1",
+              submissionId: "submission-1",
+            },
             type: "upload",
             owner: "speaker",
             title: "Upload slides",
+            description: "PDF only",
+            instructions: "PDF only",
+            status: "not_started",
+            dueAt: "2026-08-22",
+            dependencyIds: [],
+            reminderOffsetsMinutes: [],
+            allowedMimeTypes: ["application/pdf"],
+            maxBytes: 5_000_000,
+            acceptedAssetKinds: ["slides", "supporting_file"],
+            version: 1,
+            updatedAt: "2026-08-12T00:00:00.000Z",
           },
         });
       },
     );
 
     if (api.createTask === undefined) throw new Error("Expected organizer task adapter.");
-    await api.createTask({
+    const created = await api.createTask({
       title: "Upload slides",
       description: "PDF only",
       dueAt: "2026-08-22",
-      allowedMimeTypes: ["application/pdf"],
+      allowedMimeTypes: ["Application/PDF"],
       maxSizeBytes: 5_000_000,
       acceptedAssetKinds: ["slides", "supporting_file"],
-      assigneeIds: ["participant-1"],
+      assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
+    });
+    expect(created).toMatchObject({
+      subject: {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "submission-1",
+      },
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
     });
 
-    expect(requests[0]).toMatchObject({
+    expect(requests[0]).toEqual({
       url: "https://api.example.test/api/speaker/events/event-1/organizer/tasks",
       method: "POST",
       body: {
+        type: "upload",
+        title: "Upload slides",
+        instructions: "PDF only",
+        description: "PDF only",
+        dueAt: "2026-08-22",
+        allowedMimeTypes: ["application/pdf"],
+        maxBytes: 5_000_000,
         acceptedAssetKinds: ["slides", "supporting_file"],
+        assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
       },
     });
     await expect(
@@ -97,12 +172,97 @@ describe("deliverables API", () => {
         allowedMimeTypes: ["application/pdf"],
         maxSizeBytes: 5_000_000,
         acceptedAssetKinds: [],
-        assigneeIds: ["participant-1"],
+        assignments: [{ participantId: "participant-1", submissionId: null }],
       }),
     ).rejects.toThrow("accepted asset kind");
+    await expect(
+      api.createTask({
+        title: "Missing assignment",
+        description: "No subject",
+        dueAt: "2026-08-22",
+        allowedMimeTypes: ["application/pdf"],
+        maxSizeBytes: 5_000_000,
+        acceptedAssetKinds: ["slides"],
+        assignments: [{ participantId: "", submissionId: null }],
+      }),
+    ).rejects.toThrow("assignment");
     expect(requests).toHaveLength(1);
   });
 
+  it("retains authoritative asset lineage pointers without exposing private storage fields", async () => {
+    const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", async () =>
+      Response.json({
+        data: [
+          {
+            id: "asset-v2",
+            eventId: "event-1",
+            participantId: "participant-1",
+            kind: "slides",
+            fileName: "slides.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 10,
+            state: "ready",
+            createdAt: "2026-08-12T00:00:00.000Z",
+            version: 2,
+            versionFamilyId: "family-1",
+            versionId: "version-2",
+            latestVersionId: "asset-v2",
+            currentVersionId: "asset-v2",
+            approvedVersionId: "asset-v1",
+            releasedVersionId: "asset-v1",
+            objectKey: "private/object",
+            tenantId: "private-tenant",
+          },
+        ],
+      }),
+    );
+    const assets = await api.listAssets?.();
+    expect(assets?.[0]).toMatchObject({
+      versionId: "version-2",
+      latestVersionId: "asset-v2",
+      currentVersionId: "asset-v2",
+      approvedVersionId: "asset-v1",
+      releasedVersionId: "asset-v1",
+    });
+    expect(assets?.[0]).not.toHaveProperty("objectKey");
+    expect(assets?.[0]).not.toHaveProperty("tenantId");
+  });
+  it("exposes synchronous ZIP response and authoritative manifest facts only", async () => {
+    const manifest = {
+      format: "speaker-deliverables-export",
+      version: 1,
+      organizationId: "org-1",
+      eventId: "event-1",
+      entries: [],
+    };
+    const api = createDeliverablesApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async () =>
+        new Response(storedManifestZip(manifest), {
+          status: 200,
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": 'attachment; filename="event-1-deliverables.zip"',
+          },
+        }),
+    );
+    const result = await api.exportDeliverables?.({ status: "all" });
+    expect(result).toMatchObject({
+      fileName: "event-1-deliverables.zip",
+      contentType: "application/zip",
+      sizeBytes: expect.any(Number),
+      manifest,
+      response: {
+        kind: "synchronous_zip",
+        status: 200,
+        contentType: "application/zip",
+      },
+    });
+    expect(result).not.toHaveProperty("jobId");
+    expect(result).not.toHaveProperty("status");
+  });
   it("replaces a headshot through the organizer grant, private upload, finalization, and profile relink", async () => {
     const pendingAsset = {
       id: "asset-headshot-v2",
@@ -165,6 +325,7 @@ describe("deliverables API", () => {
 
     if (api.replaceHeadshot === undefined) throw new Error("Expected organizer headshot adapter.");
     const result = await api.replaceHeadshot({
+      submissionId: "submission-1",
       participantId: "participant-1",
       file: new File(["headshot-v2"], "speaker.png", { type: "image/png" }),
       supersedesAssetId: "asset-headshot-v1",
@@ -179,6 +340,7 @@ describe("deliverables API", () => {
       "https://api.example.test/api/speaker/events/event-1/organizer/profiles/participant-1",
     ]);
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      submissionId: "submission-1",
       participantId: "participant-1",
       kind: "headshot",
       fileName: "speaker.png",
@@ -251,7 +413,7 @@ describe("deliverables API", () => {
     const approved = await api.updateSession({
       sessionId: second.id,
       expectedVersion: second.version,
-      status: "Approved",
+      contentStatus: "Approved",
     });
 
     expect(first).toMatchObject({ title: "Prefixed title", version: 2, updatedBy: "organizer-1" });
@@ -271,7 +433,7 @@ describe("deliverables API", () => {
         title: "Prefixed title",
         description: "Original abstract with appended detail",
       },
-      { expectedVersion: 3, status: "Approved" },
+      { expectedVersion: 3, contentStatus: "Approved" },
     ]);
   });
 
@@ -319,6 +481,105 @@ describe("deliverables API", () => {
     ]);
   });
 
+  it("uses the exact organizer matrix query and keeps server status/current asset authoritative", async () => {
+    const requests: string[] = [];
+    const currentAsset = {
+      id: "asset-2",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      taskId: "task-1",
+      kind: "slides",
+      fileName: "current.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 2048,
+      state: "ready",
+      createdAt: "2026-08-11T12:00:00.000Z",
+      version: 2,
+      versionFamilyId: "family-1",
+      objectKey: "private/object-key",
+      tenantId: "private-tenant",
+      capabilityToken: "private-capability",
+      signedDownloadUrl: "https://private.example.test/file",
+    };
+    const task = {
+      id: "task-1",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      subject: {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "submission-1",
+      },
+      type: "upload",
+      owner: "speaker",
+      title: "Upload slides",
+      description: "Upload slides",
+      instructions: "Upload slides",
+      status: "submitted",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
+      dependencyIds: [],
+      reminderOffsetsMinutes: [],
+      version: 1,
+      updatedAt: "2026-08-11T12:00:00.000Z",
+    };
+    const api = createDeliverablesApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async (input) => {
+        requests.push(String(input));
+        return Response.json({
+          data: {
+            organizationId: "org-1",
+            eventId: "event-1",
+            total: 1,
+            filters: {
+              participantId: "participant-1",
+              taskId: "task-1",
+              status: "incomplete",
+              objectKey: "must-not-cross-boundary",
+            },
+            items: [
+              {
+                task,
+                participantId: "participant-1",
+                participantName: "Priya Raman",
+                assets: [currentAsset],
+                currentAsset,
+                status: "needs_changes",
+              },
+            ],
+          },
+        });
+      },
+    );
+
+    const matrix = await api.listDeliverableMatrix?.({
+      participantId: "participant-1",
+      taskId: "task-1",
+      status: "incomplete",
+    });
+
+    expect(requests).toEqual([
+      "https://api.example.test/api/speaker/events/event-1/organizer/deliverables?participantId=participant-1&taskId=task-1&status=incomplete",
+    ]);
+    expect(matrix?.filters).toEqual({
+      participantId: "participant-1",
+      taskId: "task-1",
+      status: "incomplete",
+    });
+    expect(matrix?.items[0]).toMatchObject({
+      status: "needs_changes",
+      currentAsset: { id: "asset-2", version: 2 },
+    });
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("objectKey");
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("tenantId");
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("capabilityToken");
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("signedDownloadUrl");
+  });
   it("surfaces optimistic concurrency conflicts without hiding the server error", async () => {
     const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", async () =>
       Response.json(
@@ -334,5 +595,22 @@ describe("deliverables API", () => {
       status: 409,
       message: "Session version 3 is current.",
     });
+  });
+  it("routes an empty base URL through the same-origin deliverables gateway", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createDeliverablesApi("", "org/one", "event/one", async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return Response.json({ data: { items: [] } });
+    });
+
+    await expect(api.listSessions()).resolves.toEqual([]);
+
+    expect(requestedUrl).toBe("/api/admin/organizations/org%2Fone/events/event%2Fone/sessions");
+    expect(requestedUrl.startsWith("/api/")).toBe(true);
+    expect(requestedUrl).not.toMatch(/^\/\//);
+    expect(requestedUrl).not.toMatch(/^https?:\/\//);
+    expect(requestInit?.credentials).toBe("include");
   });
 });

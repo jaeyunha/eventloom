@@ -142,19 +142,19 @@ describe("local speaker portal demo adapter", () => {
 });
 
 describe("local speaker portal fallback", () => {
-  it("reads the API APP_ENV without sending portal credentials", async () => {
+  it("requires the explicit fixture profile without sending portal credentials", async () => {
     const fetcher = vi.fn(
       async () =>
-        new Response(JSON.stringify({ environment: "local" }), {
+        new Response(JSON.stringify({ environment: "local", runtimeProfile: "fixture" }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
     );
 
-    await expect(isLocalApiEnvironment("http://localhost:8787/", undefined, fetcher)).resolves.toBe(
+    await expect(isLocalApiEnvironment("http://127.0.0.1:8787/", undefined, fetcher)).resolves.toBe(
       true,
     );
-    expect(fetcher).toHaveBeenCalledWith("http://localhost:8787/api/health", {
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:8787/api/health", {
       method: "GET",
       credentials: "omit",
       cache: "no-store",
@@ -177,7 +177,7 @@ describe("local speaker portal fallback", () => {
       loadPortalWithLocalDemo({
         api,
         demoApi: createLocalPortalDemoApi(eventId),
-        apiBaseUrl: "http://localhost:8787",
+        apiBaseUrl: "http://127.0.0.1:8787",
         eventId,
         checkEnvironment,
       }),
@@ -210,7 +210,7 @@ describe("local speaker portal fallback", () => {
           throw unauthorized;
         }),
         demoApi: createLocalPortalDemoApi(eventId),
-        apiBaseUrl: "http://localhost:8787",
+        apiBaseUrl: "http://127.0.0.1:8787",
         eventId,
         checkEnvironment,
       }),

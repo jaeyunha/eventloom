@@ -1,5 +1,8 @@
 "use client";
 
+import { uploadMimeTypeLabels } from "@eventloom/contracts";
+import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   type ChangeEvent,
@@ -10,30 +13,56 @@ import {
   useRef,
   useState,
 } from "react";
+import { ThemeToggle } from "../../components/product-shell/theme-toggle";
 import { Button } from "../../components/ui/button";
-import { CharacterCount, Field, Input, Select } from "../../components/ui/field";
+import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
-import { Stepper } from "../../components/ui/stepper";
+import { Separator } from "../../components/ui/separator";
+import { WorkspaceBrandMark } from "../../components/workspace/workspace-brand-mark";
+import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
-  CfpMutationGate,
-  type CfpMutationLease,
   type CfpApi,
   CfpApiError,
   type CfpAuthenticatedSession,
   type CfpFileUploadResult,
   type CfpFormField,
+  CfpMutationGate,
+  type CfpMutationLease,
   type CfpPublishedForm,
   type CfpServerSubmission,
   createCfpApi,
   isCfpSchemaVersionConflict,
   type PublishedCfp,
 } from "./api";
+import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
+import { CharacterCount, Field, Input } from "./cfp-field";
+import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
+import { useCfpStartupStore } from "./cfp-startup-provider";
+import { CfpSubmissionWindow } from "./cfp-submission-window";
 import styles from "./cfp-wizard.module.css";
-import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
-import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
 import {
-  CFP_STEPS,
+  canSaveCfpDraftAtStep,
+  cfpConfirmationEmailMessage,
+  cfpHttpUrlIsValid,
+  cfpPublishedFieldIsVisible,
+  cfpReviewSubmissionDetails,
+  cfpSubmissionErrorKey,
+  cfpSubmissionFieldValue,
+  cfpSubmissionPayload,
+  shouldAuthenticateCfpAccount,
+} from "./cfp-wizard-model";
+
+export { cfpHttpUrlIsValid, cfpPublishedFieldIsVisible };
+
+import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
+import {
+  cfpStepRequiresAuthentication,
+  getCfpStepRoute,
+  getNextCfpStep,
+  getPreviousCfpStep,
+} from "./routes";
+import {
   type CfpDraft,
   type CfpParticipant,
   type CfpSecondaryContact,
@@ -48,20 +77,58 @@ import {
   type ValidationErrors,
   validateStep,
 } from "./validation";
+import {
+  clearCfpVerificationContinuation,
+  createCfpVerificationCallbackUrl,
+  readCfpVerificationContinuation,
+  writeCfpVerificationContinuation,
+} from "./verification-continuation";
 
-const STEP_LABELS: Record<CfpStep, string> = {
-  welcome: "Welcome!",
-  account: "Account",
-  submission: "Submission",
-  participants: "Participant",
-  review: "Review",
-};
+const LOCAL_MAIL_INBOX_URL =
+  process.env.NODE_ENV === "development" ? "http://127.0.0.1:8025/" : null;
 
-const FORMAT_OPTIONS = ["Featured Keynote", "Breakout Session", "Panel", "Workshop"];
-const TRACK_OPTIONS = ["Track 1", "Track 2", "Track 3", "Community"];
-const LEVEL_OPTIONS = ["Introductory", "Intermediate", "Advanced", "All levels"];
-const LANGUAGE_OPTIONS = ["English"];
-const TAG_OPTIONS = ["Tag A", "Tag B", "Tag C", "Leadership"];
+const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
+
+export function getCfpCompletionHandoffStorageKey(
+  organizationId: string,
+  eventId: string,
+  formId: string,
+): string {
+  return `${CFP_COMPLETION_HANDOFF_PREFIX}:${encodeURIComponent(
+    organizationId,
+  )}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
+}
+export function getCfpPortalHandoffHref(
+  path: "/portal" | "/portal/submissions",
+  eventId?: string,
+): string {
+  const normalizedEventId = eventId?.trim();
+  return normalizedEventId ? `${path}?event=${encodeURIComponent(normalizedEventId)}` : path;
+}
+
+export function canResumeCfpSubmission(
+  status: CfpServerSubmission["status"],
+  step: CfpStep,
+): boolean {
+  return (
+    status === "draft" || status === "reopened" || (status === "submitted" && step === "submission")
+  );
+}
+
+export function rotateCfpCompletionIdentity(
+  identity: { organizationId: string; eventId: string; formId: string },
+  submissionId: string,
+  localStorage: Pick<Storage, "removeItem">,
+  sessionStorage: Pick<Storage, "setItem">,
+): void {
+  localStorage.removeItem(
+    getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, identity.formId),
+  );
+  sessionStorage.setItem(
+    getCfpCompletionHandoffStorageKey(identity.organizationId, identity.eventId, identity.formId),
+    submissionId.trim(),
+  );
+}
 type FormFieldOption =
   | string
   | {
@@ -256,6 +323,39 @@ function fileStateKey(fieldKey: string, participantIndex?: number): string {
   return participantIndex === undefined ? fieldKey : `participants.${participantIndex}.${fieldKey}`;
 }
 
+function fileNameStorageKey(assetId: string): string {
+  return `eventloom:cfp-upload-name:v1:${assetId}`;
+}
+function clearCfpVerificationContinuationFromBrowser(
+  identity: { organizationId: string; eventId: string; formId: string } | null,
+): void {
+  if (identity === null || typeof window === "undefined") return;
+  clearCfpVerificationContinuation(identity, window.localStorage);
+}
+
+function readPersistedFileNames(
+  form: CfpPublishedForm | undefined,
+  answers: DynamicAnswers,
+  storage: Pick<Storage, "getItem">,
+): Record<string, string> {
+  const fileNames: Record<string, string> = {};
+  for (const field of form?.submissionFields ?? []) {
+    if (field.kind !== "file_request") continue;
+    const answer = answers[field.key];
+    const persistedAssetId =
+      typeof answer === "object" &&
+      answer !== null &&
+      "assetId" in answer &&
+      typeof answer.assetId === "string"
+        ? answer.assetId
+        : undefined;
+    if (persistedAssetId === undefined) continue;
+    const persistedFileName = storage.getItem(fileNameStorageKey(persistedAssetId));
+    if (persistedFileName !== null) fileNames[persistedAssetId] = persistedFileName;
+  }
+  return fileNames;
+}
+
 interface CfpWizardProps {
   eventSlug: string;
   step: CfpStep;
@@ -264,10 +364,100 @@ interface CfpWizardProps {
   api?: CfpApi;
 }
 
-const WIZARD_STEPS = CFP_STEPS.map((step) => ({
-  id: step,
-  label: STEP_LABELS[step],
-}));
+function PublicCfpShell({
+  children,
+  organization,
+  event,
+  eventName,
+  form,
+  formName,
+  step,
+  className,
+}: {
+  children: ReactNode;
+  organization?: PublishedCfp["organization"] | undefined;
+  event?: PublishedCfp["event"] | undefined;
+  eventName?: string | undefined;
+  form?: CfpPublishedForm | undefined;
+  formName?: string | undefined;
+  step?: CfpStep | undefined;
+  className?: string | undefined;
+}) {
+  const resolvedOrganizationName = organization?.name ?? "Eventloom";
+  const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
+  const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
+  const resolvedStepName = step === undefined ? "Submission complete" : CFP_STEP_LABELS[step];
+  const now = Date.now();
+  const opensAt = event ? Date.parse(event.opensAt) : Number.NaN;
+  const closesAt = event ? Date.parse(event.closesAt) : Number.NaN;
+  const windowStatus =
+    Number.isFinite(closesAt) && closesAt <= now
+      ? "closed"
+      : Number.isFinite(opensAt) && opensAt > now
+        ? "upcoming"
+        : "open";
+
+  return (
+    <WorkspaceShell
+      className={styles.publicWorkspace ?? ""}
+      contentBodyClassName={styles.publicContentBody ?? ""}
+      contextBar={
+        <WorkspaceContextBar
+          actions={
+            <div className={styles.publicThemeAction}>
+              <ThemeToggle />
+            </div>
+          }
+          className={styles.publicContextBar ?? ""}
+          event={resolvedEventName}
+          metadata={resolvedStepName}
+          organization={resolvedOrganizationName}
+        />
+      }
+      mainClassName={styles.publicMain ?? ""}
+      mainId="cfp-main"
+      navigation={
+        <div className={styles.contextRail} data-cfp-context-rail>
+          <div className={styles.publicBrand}>
+            <WorkspaceBrandMark />
+            <span className={styles.publicBrandCopy}>
+              <strong>{resolvedOrganizationName}</strong>
+              <span>Applicant workspace</span>
+            </span>
+          </div>
+          <Separator className={styles.railSeparator} />
+          <div className={styles.railIntro}>
+            <p className={styles.railKicker}>Call for proposals</p>
+            <p className={styles.railEventName}>{resolvedEventName}</p>
+            <p className={styles.railFormName}>{resolvedFormName}</p>
+          </div>
+          {step ? <CfpProgress step={step} /> : <CfpProgress complete />}
+        </div>
+      }
+    >
+      <div className={styles.viewport}>
+        <Card className={`${styles.card} ${className ?? ""}`}>
+          <div className={styles.formColumn} data-cfp-main-flow>
+            {event ? (
+              <div className={styles.submissionWindow}>
+                <CfpSubmissionWindow
+                  opensAt={event.opensAt}
+                  opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
+                  closesAt={event.closesAt}
+                  closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
+                  {...(form ? { limit: formSubmissionLimit(form) } : {})}
+                  status={windowStatus}
+                />
+              </div>
+            ) : null}
+            {step ? <CfpProgress mobile step={step} /> : <CfpProgress complete mobile />}
+            {children}
+          </div>
+        </Card>
+      </div>
+    </WorkspaceShell>
+  );
+}
 
 function ErrorSummary({ errors }: { errors: ValidationErrors }) {
   const messages = [...new Set(Object.values(errors))];
@@ -308,6 +498,16 @@ class CfpVerificationRequiredError extends Error {
     this.name = "CfpVerificationRequiredError";
   }
 }
+
+type CfpVerificationState =
+  | {
+      readonly status: "waiting";
+      readonly email: string;
+    }
+  | {
+      readonly status: "resuming";
+      readonly email: string;
+    };
 
 function mutationIdempotencyKey(prefix: string): string {
   const suffix =
@@ -359,6 +559,8 @@ function mergeSecondaryContact(
   };
 }
 
+type CfpAccountMode = "sign_in" | "sign_up";
+
 function configuredCfpIdentity(
   eventSlug: string,
   organizationId?: string,
@@ -366,24 +568,13 @@ function configuredCfpIdentity(
 ): { organizationId: string; eventId: string; formId?: string } {
   const normalizedEventSlug = eventSlug.trim();
   const resolvedOrganizationId =
-    organizationId?.trim() || process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim() || "";
-  const resolvedFormId = formId?.trim() || process.env.NEXT_PUBLIC_CFP_FORM_ID?.trim() || undefined;
+    organizationId?.trim() || (process.env.NODE_ENV === "test" ? "organization-1" : "");
+  const resolvedFormId = formId?.trim() || undefined;
   if (!normalizedEventSlug) {
     throw new Error("CFP identity is not configured because the event slug is missing.");
   }
   if (!resolvedOrganizationId) {
-    const localMode =
-      process.env.NEXT_PUBLIC_APP_ENV === "local" || process.env.APP_ENV === "local";
-    if (localMode) {
-      return {
-        organizationId: "local-organization",
-        eventId: normalizedEventSlug,
-        formId: normalizedEventSlug === "demo-event" ? "main-cfp" : `${normalizedEventSlug}-cfp`,
-      };
-    }
-    throw new Error(
-      `CFP identity is not configured for '${normalizedEventSlug}'. Set NEXT_PUBLIC_ORGANIZATION_ID.`,
-    );
+    throw new Error(`CFP identity is not configured for '${normalizedEventSlug}'.`);
   }
   return {
     organizationId: resolvedOrganizationId,
@@ -485,88 +676,6 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
   );
 }
 
-function submissionPayload(
-  draft: CfpDraft,
-  dynamicAnswers: DynamicAnswers,
-  participantAnswers: ParticipantAnswers,
-): {
-  answers: Record<string, unknown>;
-  participants: CfpServerSubmission["participants"];
-  secondaryContacts: CfpServerSubmission["secondaryContacts"];
-} {
-  const answers = { ...dynamicAnswers };
-  return {
-    answers: {
-      ...answers,
-      title: draft.submission.title,
-      abstract: draft.submission.description,
-      description: draft.submission.description,
-      format: draft.submission.format,
-      tags: draft.submission.tags,
-      track: draft.submission.track,
-      level: draft.submission.level,
-      language: draft.submission.language,
-      accountEmail: draft.account.email,
-      accountFirstName: draft.account.firstName,
-      accountLastName: draft.account.lastName,
-      accountAcceptedTerms: draft.account.acceptedTerms,
-    },
-    participants: draft.participants.map((participant) => {
-      const customAnswers = participantAnswers[participant.id] ?? {};
-      return {
-        id: participant.id,
-        firstName: participant.firstName,
-        lastName: participant.lastName,
-        email: participant.email,
-        role: participant.role === "Speaker" ? "primary" : "co_speaker",
-        biography: participant.biography,
-        answers: { ...customAnswers },
-      };
-    }),
-    secondaryContacts: draft.secondaryContacts.map((contact) => ({
-      id: contact.id,
-      name: `${contact.firstName} ${contact.lastName}`.trim(),
-      email: contact.email,
-    })),
-  };
-}
-
-function publishedOptions(form: CfpPublishedForm, key: string, fallback: string[]): string[] {
-  const field = form.submissionFields.find((candidate) => candidate.key === key);
-  const options = field ? fieldOptions(field).map((option) => option.label) : [];
-  return options.length > 0 ? options : fallback;
-}
-
-function submissionValue(draft: CfpDraft, answers: DynamicAnswers, key: string): unknown {
-  switch (key) {
-    case "title":
-      return draft.submission.title;
-    case "abstract":
-    case "description":
-      return draft.submission.description;
-    case "format":
-      return draft.submission.format;
-    case "tags":
-      return draft.submission.tags;
-    case "track":
-      return draft.submission.track;
-    case "level":
-      return draft.submission.level;
-    case "language":
-      return draft.submission.language;
-    case "accountEmail":
-      return draft.account.email;
-    case "accountFirstName":
-      return draft.account.firstName;
-    case "accountLastName":
-      return draft.account.lastName;
-    case "accountAcceptedTerms":
-      return draft.account.acceptedTerms;
-    default:
-      return answers[key];
-  }
-}
-
 function participantValue(
   participant: CfpParticipant,
   answers: DynamicAnswers,
@@ -586,11 +695,6 @@ function participantValue(
     default:
       return answers[key];
   }
-}
-function formSubmissionErrorKey(key: string): string {
-  if (key === "title") return "submission.title";
-  if (key === "abstract" || key === "description") return "submission.description";
-  return `submission.${key}`;
 }
 
 function fieldIsEmpty(value: unknown): boolean {
@@ -628,8 +732,11 @@ function dynamicFormErrors(
         required: fieldRequired(field),
       };
       if (!state.visible) continue;
-      const value = fieldValueForValidation(field, submissionValue(draft, answers, field.key));
-      const key = formSubmissionErrorKey(field.key);
+      const value = fieldValueForValidation(
+        field,
+        cfpSubmissionFieldValue(draft, answers, field.key),
+      );
+      const key = cfpSubmissionErrorKey(field.key);
       const fileState = fileStates[fileStateKey(field.key)];
       if (isFileField(field) && fileState?.status === "error") {
         errors[key] = fileState.message ?? `${field.label} could not be uploaded.`;
@@ -646,6 +753,11 @@ function dynamicFormErrors(
       if (field.kind === "email" && typeof value === "string" && value.trim()) {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
           errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
+        }
+      }
+      if (field.kind === "url" && typeof value === "string" && value.trim()) {
+        if (!cfpHttpUrlIsValid(value)) {
+          errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
         }
       }
       if (["select", "multi_select"].includes(field.kind) && field.options.length > 0) {
@@ -696,6 +808,11 @@ function dynamicFormErrors(
             errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
           }
         }
+        if (field.kind === "url" && typeof value === "string" && value.trim()) {
+          if (!cfpHttpUrlIsValid(value)) {
+            errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
+          }
+        }
       }
     }
   }
@@ -713,7 +830,8 @@ function removeFixedErrorsForDynamicForm(
   const keys = new Set(form.submissionFields.map((field) => field.key));
   const aliases: Record<string, string[]> = {
     "submission.title": ["title"],
-    "submission.description": ["abstract", "description"],
+    "submission.abstract": ["abstract"],
+    "submission.description": ["description"],
     "submission.format": ["format"],
     "submission.tags": ["tags"],
     "submission.track": ["track"],
@@ -779,32 +897,47 @@ export function CfpWizard({
 }: CfpWizardProps) {
   const router = useRouter();
   const initialDraft = useMemo(() => createEmptyDraft(eventSlug), [eventSlug]);
-  const identity = useMemo(() => {
+  const routeIdentity = useMemo(() => {
     try {
       return configuredCfpIdentity(eventSlug, organizationId, formId);
     } catch {
       return null;
     }
   }, [eventSlug, organizationId, formId]);
-  const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
-    [providedApi],
-  );
+  const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
+  const startupStore = useCfpStartupStore();
   const [draft, setDraft] = useState<CfpDraft>(initialDraft);
   const [dynamicAnswers, setDynamicAnswers] = useState<DynamicAnswers>({});
   const [participantAnswers, setParticipantAnswers] = useState<ParticipantAnswers>({});
   const [fileUploadStates, setFileUploadStates] = useState<FileUploadStates>({});
   const [published, setPublished] = useState<PublishedCfp | null>(null);
+  const identity = useMemo(() => {
+    if (routeIdentity === null || published === null) return null;
+    return {
+      organizationId: routeIdentity.organizationId,
+      eventId: published.event.id,
+      formId: published.form.id,
+    };
+  }, [published, routeIdentity]);
   const [authenticatedSession, setAuthenticatedSession] = useState<CfpAuthenticatedSession | null>(
     null,
   );
+  const [verificationState, setVerificationState] = useState<CfpVerificationState | null>(null);
+  const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
+  const requiresApplicantContextConfirmation =
+    authenticatedSession !== null &&
+    identity !== null &&
+    shouldConfirmCfpApplicantContext(authenticatedSession, identity.organizationId);
   const [password, setPassword] = useState("");
+  const [accountMode, setAccountMode] = useState<CfpAccountMode>("sign_in");
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [mutationPending, setMutationPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const submissionIdRef = useRef<string | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const verificationResumeRequestedRef = useRef(false);
   const fileDraftCreationRef = useRef<Promise<CfpServerSubmission> | null>(null);
   const versionRef = useRef(1);
   const formVersionRef = useRef<number | null>(null);
@@ -895,9 +1028,11 @@ export function CfpWizard({
 
   useEffect(() => {
     setAuthenticatedSession(null);
+    setVerificationState(null);
+    verificationResumeRequestedRef.current = false;
     let active = true;
     const controller = new AbortController();
-    if (!identity) {
+    if (!routeIdentity) {
       setSaveState("error");
       setHydrated(true);
       return () => {
@@ -910,46 +1045,74 @@ export function CfpWizard({
 
     void (async () => {
       try {
-        const publishedCfp = await api.getPublished({ ...identity, signal: controller.signal });
-        let session: CfpAuthenticatedSession | null = null;
-        try {
-          session =
-            typeof api.getSession === "function"
-              ? await api.getSession({ signal: controller.signal })
-              : null;
-        } catch {
-          // A session lookup failure must not block anonymous CFP access.
-        }
+        const startup = startupStore.load(api, routeIdentity);
+        const [publishedCfp, session] = await Promise.all([startup.published, startup.session]);
         if (!active) return;
         setAuthenticatedSession(session);
         setPublished(publishedCfp);
-        const activeFormId = identity.formId ?? publishedCfp.form.id;
+        const canonicalIdentity = {
+          organizationId: routeIdentity.organizationId,
+          eventId: publishedCfp.event.id,
+          formId: publishedCfp.form.id,
+        };
+        const verificationContinuation =
+          step === "account"
+            ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
+            : null;
+        const activeFormId = canonicalIdentity.formId;
         const pointerKey = getCfpSubmissionPointerStorageKey(
-          identity.organizationId,
-          identity.eventId,
+          canonicalIdentity.organizationId,
+          canonicalIdentity.eventId,
           activeFormId,
         );
+        if (step === "welcome" || step === "account") {
+          window.sessionStorage.removeItem(
+            getCfpCompletionHandoffStorageKey(
+              canonicalIdentity.organizationId,
+              canonicalIdentity.eventId,
+              activeFormId,
+            ),
+          );
+        }
         const pointer = window.localStorage.getItem(pointerKey);
         if (pointer) {
           try {
             const saved = await api.loadDraft({
-              organizationId: identity.organizationId,
-              eventId: identity.eventId,
+              organizationId: canonicalIdentity.organizationId,
+              eventId: canonicalIdentity.eventId,
               submissionId: pointer,
               signal: controller.signal,
             });
             if (!active) return;
-            submissionIdRef.current = saved.id;
-            versionRef.current = saved.version;
-            formVersionRef.current = saved.formVersion;
-            setStaleFormConflict(null);
-            setDynamicAnswers(submissionAnswersFromServer(saved));
-            setParticipantAnswers(participantAnswersFromServer(saved));
-            setDraft(
-              session
-                ? draftWithAuthenticatedSession(draftFromSubmission(eventSlug, saved), session)
-                : draftFromSubmission(eventSlug, saved),
-            );
+            if (canResumeCfpSubmission(saved.status, step)) {
+              submissionIdRef.current = saved.id;
+              versionRef.current = saved.version;
+              formVersionRef.current = saved.formVersion;
+              setStaleFormConflict(null);
+              setDynamicAnswers(submissionAnswersFromServer(saved));
+              setParticipantAnswers(participantAnswersFromServer(saved));
+              setDraft(
+                session
+                  ? draftWithAuthenticatedSession(draftFromSubmission(eventSlug, saved), session)
+                  : draftFromSubmission(eventSlug, saved),
+              );
+            } else {
+              window.localStorage.removeItem(pointerKey);
+              submissionIdRef.current = null;
+              versionRef.current = 1;
+              formVersionRef.current = publishedCfp.form.version;
+              setStaleFormConflict(null);
+              setDynamicAnswers({});
+              setParticipantAnswers({});
+              setFileUploadStates({});
+              setErrors({});
+              setPassword("");
+              setSaveState("idle");
+              setSaveError(null);
+              setDraft(
+                session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft,
+              );
+            }
           } catch (error) {
             if (isCfpSchemaVersionConflict(error)) {
               formVersionRef.current = null;
@@ -988,6 +1151,34 @@ export function CfpWizard({
           setSaveState("idle");
           setSaveError(null);
         }
+        if (verificationContinuation !== null) {
+          const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
+          if (session === null) {
+            setDraft((current) => ({
+              ...current,
+              account: verificationContinuation.account,
+            }));
+            setVerificationState({
+              status: "waiting",
+              email: verificationContinuation.account.email,
+            });
+          } else if (session.email === continuationEmail) {
+            setDraft((current) =>
+              syncPrimaryParticipant(
+                draftWithAuthenticatedSession(
+                  {
+                    ...current,
+                    account: verificationContinuation.account,
+                  },
+                  session,
+                ),
+              ),
+            );
+            setVerificationState({ status: "resuming", email: session.email });
+          } else {
+            clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
+          }
+        }
         setHydrated(true);
       } catch (error) {
         if (!active) return;
@@ -1015,7 +1206,7 @@ export function CfpWizard({
       controller.abort();
       mutationGateRef.current?.invalidate();
     };
-  }, [api, eventSlug, identity, initialDraft]);
+  }, [api, eventSlug, initialDraft, routeIdentity, startupStore, step]);
 
   function updateDraft(update: (current: CfpDraft) => CfpDraft): void {
     setDraft((current) => ({ ...update(current), updatedAt: new Date().toISOString() }));
@@ -1034,10 +1225,15 @@ export function CfpWizard({
           return { ...current, submission: { ...current.submission, title: String(value ?? "") } };
         }
         if (key === "abstract" || key === "description") {
-          return {
-            ...current,
-            submission: { ...current.submission, description: String(value ?? "") },
-          };
+          const hasPublishedAbstract =
+            published?.form.submissionFields.some((field) => field.key === "abstract") ?? false;
+          if (key === "abstract" || !hasPublishedAbstract) {
+            return {
+              ...current,
+              submission: { ...current.submission, description: String(value ?? "") },
+            };
+          }
+          return current;
         }
         if (key === "tags") {
           return {
@@ -1075,6 +1271,9 @@ export function CfpWizard({
 
   function setFileUploadState(key: string, state: FileUploadState): void {
     setFileUploadStates((current) => ({ ...current, [key]: state }));
+    if (state.status === "ready" && state.assetId && state.name) {
+      window.sessionStorage.setItem(fileNameStorageKey(state.assetId), state.name);
+    }
     noteLocalChange();
     setErrors({});
   }
@@ -1175,7 +1374,7 @@ export function CfpWizard({
       }
     }
     if (formVersion === null) throw new Error("The CFP form version is unavailable.");
-    const payload = submissionPayload(nextDraft, dynamicAnswers, participantAnswers);
+    const payload = cfpSubmissionPayload(nextDraft, dynamicAnswers, participantAnswers);
     const saved = await api.saveDraft({
       organizationId: identity.organizationId,
       eventId: identity.eventId,
@@ -1202,7 +1401,7 @@ export function CfpWizard({
   async function saveAndNavigate(
     nextDraft: CfpDraft,
     targetStep: CfpStep | "complete",
-    beforePersist?: () => Promise<void>,
+    beforePersist?: (draft: CfpDraft) => Promise<CfpDraft | undefined>,
   ): Promise<void> {
     if (staleFormConflict) return;
     if (step === "welcome" && submissionsClosed) {
@@ -1214,13 +1413,18 @@ export function CfpWizard({
     setDraft(nextDraft);
     draftRevisionRef.current += 1;
     operation.localRevision = draftRevisionRef.current;
+    let draftToPersist = nextDraft;
     let keepForRetry = false;
     try {
       setSaveState("saving");
-      await beforePersist?.();
+      const preparedDraft = await beforePersist?.(draftToPersist);
+      if (preparedDraft !== undefined) {
+        draftToPersist = preparedDraft;
+        setDraft(preparedDraft);
+      }
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (targetStep === "complete") {
-        const saved = await persistServerDraft(nextDraft, "review", operation);
+        const saved = await persistServerDraft(draftToPersist, "review", operation);
         if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
         if (draftRevisionRef.current !== operation.localRevision) {
           setSaveError(
@@ -1259,6 +1463,18 @@ export function CfpWizard({
         if (result.submission.formVersion !== formVersion) {
           throw new CfpApiError("CONFLICT", "The submission schema version is stale.", 409);
         }
+        const activeFormId = identity.formId ?? published?.form.id;
+        if (!activeFormId) throw new Error("The published CFP form is unavailable.");
+        rotateCfpCompletionIdentity(
+          {
+            organizationId: identity.organizationId,
+            eventId: identity.eventId,
+            formId: activeFormId,
+          },
+          result.submission.id,
+          window.localStorage,
+          window.sessionStorage,
+        );
         versionRef.current = result.submission.version;
         if (draftRevisionRef.current === submitRevision) {
           setDynamicAnswers(submissionAnswersFromServer(result.submission));
@@ -1281,7 +1497,7 @@ export function CfpWizard({
               : step === "participants"
                 ? "participant"
                 : undefined;
-        await persistServerDraft(nextDraft, completedStep, operation);
+        await persistServerDraft(draftToPersist, completedStep, operation);
       }
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (draftRevisionRef.current !== operation.localRevision) {
@@ -1290,18 +1506,18 @@ export function CfpWizard({
         return;
       }
       setSaveState("saved");
-      router.push(getCfpStepRoute(eventSlug, targetStep));
+      if (!identity) throw new Error("The CFP identity is not configured.");
+      if (step === "account") {
+        clearCfpVerificationContinuation(identity, window.localStorage);
+        setVerificationState(null);
+      }
+      router.push(getCfpStepRoute(identity.organizationId, eventSlug, targetStep));
     } catch (error) {
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (error instanceof CfpVerificationRequiredError) {
-        const authErrors = {
-          "account.auth":
-            "Check your email to verify your account, then submit this step again to continue.",
-        };
-        setErrors(authErrors);
+        setErrors({});
         setSaveState("idle");
         setSaveError(null);
-        focusFirstError(authErrors);
         return;
       }
       if (isCfpSchemaVersionConflict(error)) {
@@ -1366,6 +1582,13 @@ export function CfpWizard({
     if (step === "account" && authenticatedSession) {
       delete nextErrors["account.password"];
     }
+    if (step === "account" && !authenticatedSession && accountMode === "sign_in") {
+      for (const key of Object.keys(nextErrors)) {
+        if (key !== "account.email" && key !== "account.password") {
+          delete nextErrors[key];
+        }
+      }
+    }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
       focusFirstError(nextErrors);
@@ -1374,22 +1597,37 @@ export function CfpWizard({
 
     let nextDraft = draft;
     if (step === "account") nextDraft = syncPrimaryParticipant(draft);
-    const authenticateBeforePersist =
-      step === "account" && !authenticatedSession && process.env.NEXT_PUBLIC_APP_ENV !== "local"
-        ? async () => {
-            const authentication = await api.authenticateAccount({
-              email: nextDraft.account.email,
-              password,
-              name: `${nextDraft.account.firstName} ${nextDraft.account.lastName}`.trim(),
-              ...(typeof window === "undefined"
-                ? {}
-                : { verificationCallbackUrl: window.location.href }),
+    const authenticateBeforePersist = shouldAuthenticateCfpAccount(step, authenticatedSession)
+      ? async (candidateDraft: CfpDraft) => {
+          const authentication = await api.authenticateAccount({
+            email: candidateDraft.account.email,
+            mode: accountMode,
+            password,
+            name: `${candidateDraft.account.firstName} ${candidateDraft.account.lastName}`.trim(),
+            ...(typeof window === "undefined"
+              ? {}
+              : {
+                  verificationCallbackUrl: createCfpVerificationCallbackUrl(window.location.href),
+                }),
+          });
+          if (authentication.status === "verification_required") {
+            if (!identity) throw new Error("The CFP identity is not configured.");
+            writeCfpVerificationContinuation(identity, candidateDraft.account, window.localStorage);
+            setVerificationState({
+              status: "waiting",
+              email: candidateDraft.account.email.trim().toLowerCase(),
             });
-            if (authentication.status === "verification_required") {
-              throw new CfpVerificationRequiredError();
-            }
+            throw new CfpVerificationRequiredError();
           }
-        : undefined;
+          setAuthenticatedSession(authentication.session);
+          if (routeIdentity !== null) {
+            startupStore.updateSession(routeIdentity, authentication.session);
+          }
+          return syncPrimaryParticipant(
+            draftWithAuthenticatedSession(candidateDraft, authentication.session),
+          );
+        }
+      : undefined;
     if (step === "review") {
       const invalidStep = published
         ? firstInvalidPublishedStep(
@@ -1401,7 +1639,13 @@ export function CfpWizard({
           )
         : getFirstInvalidStep(draft);
       if (invalidStep) {
-        router.push(getCfpStepRoute(eventSlug, invalidStep));
+        router.push(
+          getCfpStepRoute(
+            identity?.organizationId ?? organizationId?.trim() ?? "",
+            eventSlug,
+            invalidStep,
+          ),
+        );
         return;
       }
     }
@@ -1465,7 +1709,15 @@ export function CfpWizard({
   function goBack(): void {
     if (mutationGateRef.current?.isActive()) return;
     const previous = getPreviousCfpStep(step);
-    if (previous) router.push(getCfpStepRoute(eventSlug, previous));
+    if (previous) {
+      router.push(
+        getCfpStepRoute(
+          identity?.organizationId ?? organizationId?.trim() ?? "",
+          eventSlug,
+          previous,
+        ),
+      );
+    }
   }
 
   function reloadPinnedDraft(): void {
@@ -1488,176 +1740,258 @@ export function CfpWizard({
     window.location.reload();
   }
 
+  function useDifferentVerificationEmail(): void {
+    if (identity) clearCfpVerificationContinuationFromBrowser(identity);
+    setVerificationState(null);
+    setPassword("");
+    updateDraft((current) => ({
+      ...current,
+      account: { ...current.account, email: "" },
+    }));
+  }
+
+  useEffect(() => {
+    if (
+      step !== "account" ||
+      !hydrated ||
+      authenticatedSession === null ||
+      verificationState?.status !== "resuming" ||
+      verificationResumeRequestedRef.current
+    ) {
+      return;
+    }
+    verificationResumeRequestedRef.current = true;
+    formRef.current?.requestSubmit();
+  }, [authenticatedSession, hydrated, step, verificationState]);
+
+  useEffect(() => {
+    if (
+      hydrated &&
+      cfpStepRequiresAuthentication(step) &&
+      authenticatedSession === null &&
+      routeIdentity !== null
+    ) {
+      router.replace(getCfpStepRoute(routeIdentity.organizationId, eventSlug, "account"));
+    }
+  }, [authenticatedSession, eventSlug, hydrated, routeIdentity, router, step]);
+
+  if (cfpStepRequiresAuthentication(step) && (!hydrated || authenticatedSession === null)) {
+    return <span aria-hidden="true" data-cfp-route-state="checking-session" hidden />;
+  }
+
   if (!hydrated) {
     return (
-      <main className={styles.viewport}>
-        <section aria-busy="true" aria-live="polite" className={styles.card}>
-          <p className={styles.loading}>Loading your submission draft…</p>
+      <PublicCfpShell step={step}>
+        <div aria-busy="true" aria-live="polite" className={styles.loading}>
+          Loading your submission draft…
+        </div>
+      </PublicCfpShell>
+    );
+  }
+  if (published === null) {
+    return (
+      <PublicCfpShell step={step}>
+        <section className={styles.errorSummary} role="alert">
+          <h2>Submission form unavailable</h2>
+          <p>{saveError ?? "The published submission form could not be loaded."}</p>
         </section>
-      </main>
+      </PublicCfpShell>
     );
   }
 
   return (
-    <main className={styles.viewport}>
-      <section className={styles.card}>
-        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
-        <div className={styles.limitBanner}>
-          Submission Limit: {formSubmissionLimit(published?.form)} submissions per user
-        </div>
-        <ErrorSummary errors={errors} />
-        {staleFormConflict ? (
-          <section className={styles.errorSummary} role="alert">
-            <h2>This form has changed</h2>
+    <PublicCfpShell
+      organization={published.organization}
+      event={published.event}
+      form={published.form}
+      step={step}
+    >
+      <ErrorSummary errors={errors} />
+      {staleFormConflict ? (
+        <section className={styles.errorSummary} role="alert">
+          <h2>This form has changed</h2>
+          <p>
+            The organizer updated this submission form. Reload the latest form before continuing;
+            your existing server draft will not be silently migrated.
+          </p>
+          {staleFormConflict.pinnedDraftUnavailable ? (
             <p>
-              The organizer updated this submission form. Reload the latest form before continuing;
-              your existing server draft will not be silently migrated.
+              The pinned server draft cannot be loaded with this form version. Discard it only when
+              you are ready to start a new submission.
             </p>
-            {staleFormConflict.pinnedDraftUnavailable ? (
-              <p>
-                The pinned server draft cannot be loaded with this form version. Discard it only
-                when you are ready to start a new submission.
-              </p>
-            ) : null}
-            <div className={styles.forwardActions}>
-              <Button
-                disabled={
-                  staleFormConflict.pinnedDraftUnavailable ||
-                  staleFormConflict.submissionId === null
-                }
-                onClick={reloadPinnedDraft}
-                variant="secondary"
-              >
-                Reload pinned draft
-              </Button>
-              <Button onClick={discardStaleDraftAndStartNew} variant="danger">
-                Discard stale draft and start new
-              </Button>
-            </div>
-          </section>
-        ) : null}
-        {submissionsClosed ? (
-          <p className={styles.fieldError} role="status">
-            CFP closed at{" "}
-            {published?.event
-              ? formatCfpWindowDate(published.event.closesAt, published.event.timezone)
-              : "the server-recorded close instant"}{" "}
-            ({published?.event?.timezone ?? "event timezone"}). New draft creation and proposal
-            edits are locked after close; the server enforces this saved status.
-          </p>
-        ) : null}
-        {!published && saveState === "error" ? (
-          <p className={styles.fieldError} role="alert">
-            {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
-          </p>
-        ) : null}
-        <form noValidate onSubmit={(event) => void continueFlow(event)}>
-          {step === "welcome" ? (
-            <WelcomeStep
-              {...(published === null ? {} : { event: published.event, form: published.form })}
-              closed={submissionsClosed}
-            />
           ) : null}
-          {step === "account" ? (
-            <AccountStep
-              authenticatedSession={authenticatedSession}
-              draft={draft}
-              errors={errors}
-              password={password}
-              setPassword={setPassword}
-              updateDraft={updateDraft}
-            />
-          ) : null}
-          {step === "submission" ? (
-            <SubmissionStep
-              draft={draft}
-              errors={errors}
-              {...(published === null ? {} : { form: published.form })}
-              answers={dynamicAnswers}
-              fileUploadStates={fileUploadStates}
-              onAnswerChange={setSubmissionAnswer}
-              onFileUploadStateChange={setFileUploadState}
-              onFileUpload={(field, file) => handleFileUpload(field, undefined, file)}
-              updateDraft={updateDraft}
-            />
-          ) : null}
-          {step === "participants" ? (
-            <ParticipantsStep
-              draft={draft}
-              errors={errors}
-              {...(published === null ? {} : { form: published.form })}
-              answers={participantAnswers}
-              fileUploadStates={fileUploadStates}
-              onAnswerChange={setParticipantAnswer}
-              onFileUpload={(field, participantId, file) =>
-                handleFileUpload(field, participantId, file)
+          <div className={styles.forwardActions}>
+            <Button
+              disabled={
+                staleFormConflict.pinnedDraftUnavailable || staleFormConflict.submissionId === null
               }
-              onFileUploadStateChange={setFileUploadState}
-              updateDraft={updateDraft}
-            />
-          ) : null}
-          {step === "review" ? <ReviewStep draft={draft} eventSlug={eventSlug} /> : null}
-
-          <div className={styles.actions}>
-            {step !== "welcome" ? (
-              <Button
-                className={styles.backButton}
-                disabled={mutationPending}
-                onClick={goBack}
-                variant="accent"
-              >
-                ← Back
-              </Button>
-            ) : (
-              <span />
-            )}
-            <div className={styles.forwardActions}>
-              {step !== "welcome" &&
-              (step !== "account" || process.env.NEXT_PUBLIC_APP_ENV === "local") ? (
-                <Button
-                  className={styles.draftButton}
-                  onClick={() => void saveNow()}
-                  variant="secondary"
-                  disabled={mutationPending || submissionsClosed}
-                >
-                  Save as draft
-                </Button>
-              ) : null}
-              {!submissionsClosed ? (
-                <Button className={styles.primaryButton} disabled={mutationPending} type="submit">
-                  {step === "welcome" ? "Continue →" : null}
-                  {step === "account"
-                    ? authenticatedSession
-                      ? "Continue →"
-                      : "Continue with email →"
-                    : null}
-                  {step === "submission" ? "Next step →" : null}
-                  {step === "participants" ? "Continue to review →" : null}
-                  {step === "review" ? "Submit" : null}
-                </Button>
-              ) : null}
-            </div>
+              onClick={reloadPinnedDraft}
+              type="button"
+              variant="secondary"
+            >
+              Reload pinned draft
+            </Button>
+            <Button onClick={discardStaleDraftAndStartNew} type="button" variant="destructive">
+              Discard stale draft and start new
+            </Button>
           </div>
-        </form>
-        {step !== "welcome" ? (
-          <div className={styles.sessionFooter}>
-            {authenticatedSession
-              ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
-              : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
-          </div>
-        ) : null}
-        <p
-          aria-live="polite"
-          className={saveState === "error" ? styles.saveError : styles.saveStatus}
-        >
-          {saveState === "saving" ? "Saving draft…" : null}
-          {saveState === "saved" ? "Draft saved" : null}
-          {saveState === "error" && staleFormConflict === null
-            ? (saveError ?? "Draft could not be saved. Check your connection and try again.")
-            : null}
+        </section>
+      ) : null}
+      {submissionsClosed ? (
+        <p className={styles.fieldError} role="status">
+          CFP closed at{" "}
+          {published?.event
+            ? formatCfpWindowDate(published.event.closesAt, published.event.timezone)
+            : "the server-recorded close instant"}{" "}
+          ({published?.event?.timezone ?? "event timezone"}). New draft creation and proposal edits
+          are locked after close; the server enforces this saved status.
         </p>
-      </section>
-    </main>
+      ) : null}
+      {!published && saveState === "error" ? (
+        <p className={styles.fieldError} role="alert">
+          {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
+        </p>
+      ) : null}
+      <form ref={formRef} noValidate onSubmit={(event) => void continueFlow(event)}>
+        {step === "welcome" ? (
+          <WelcomeStep
+            {...(published === null ? {} : { event: published.event, form: published.form })}
+            closed={submissionsClosed}
+          />
+        ) : null}
+        {step === "account" ? (
+          <AccountStep
+            accountMode={accountMode}
+            authenticatedSession={authenticatedSession}
+            confirmedApplicantContext={confirmedApplicantContext}
+            draft={draft}
+            errors={errors}
+            onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
+            password={password}
+            requiresApplicantContextConfirmation={requiresApplicantContextConfirmation}
+            setAccountMode={setAccountMode}
+            setPassword={setPassword}
+            updateDraft={updateDraft}
+            verificationState={verificationState}
+            onUseDifferentEmail={useDifferentVerificationEmail}
+          />
+        ) : null}
+        {step === "submission" ? (
+          <SubmissionStep
+            draft={draft}
+            errors={errors}
+            form={published.form}
+            answers={dynamicAnswers}
+            fileUploadStates={fileUploadStates}
+            onAnswerChange={setSubmissionAnswer}
+            onFileUploadStateChange={setFileUploadState}
+            onFileUpload={(field, file) => handleFileUpload(field, undefined, file)}
+            updateDraft={updateDraft}
+          />
+        ) : null}
+        {step === "participants" ? (
+          <ParticipantsStep
+            draft={draft}
+            errors={errors}
+            {...(published === null ? {} : { form: published.form })}
+            answers={participantAnswers}
+            fileUploadStates={fileUploadStates}
+            onAnswerChange={setParticipantAnswer}
+            onFileUpload={(field, participantId, file) =>
+              handleFileUpload(field, participantId, file)
+            }
+            onFileUploadStateChange={setFileUploadState}
+            updateDraft={updateDraft}
+          />
+        ) : null}
+        {step === "review" ? (
+          <ReviewStep
+            draft={draft}
+            eventSlug={eventSlug}
+            fileUploadStates={fileUploadStates}
+            organizationId={identity?.organizationId ?? ""}
+            {...(published === null ? {} : { form: published.form })}
+            answers={dynamicAnswers}
+          />
+        ) : null}
+
+        <div
+          className={`${styles.actions} ${step === "account" ? styles.actionsSingleSecondary : ""}`}
+        >
+          {step !== "welcome" ? (
+            <Button
+              className={styles.backButton}
+              disabled={mutationPending}
+              onClick={goBack}
+              type="button"
+              variant="outline"
+            >
+              ← Back
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className={styles.forwardActions}>
+            {canSaveCfpDraftAtStep(step) ? (
+              <Button
+                className={styles.draftButton}
+                onClick={() => void saveNow()}
+                type="button"
+                variant="secondary"
+                disabled={mutationPending || submissionsClosed}
+              >
+                Save as draft
+              </Button>
+            ) : null}
+            {!submissionsClosed && verificationState === null ? (
+              <Button
+                className={styles.primaryButton}
+                disabled={
+                  mutationPending ||
+                  (step === "account" &&
+                    requiresApplicantContextConfirmation &&
+                    !confirmedApplicantContext)
+                }
+                type="submit"
+              >
+                {step === "welcome" ? "Continue →" : null}
+                {step === "account"
+                  ? authenticatedSession
+                    ? "Continue →"
+                    : accountMode === "sign_in"
+                      ? "Sign in →"
+                      : "Create account →"
+                  : null}
+                {step === "submission" ? "Next step →" : null}
+                {step === "participants" ? "Continue to review →" : null}
+                {step === "review" ? "Submit" : null}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </form>
+      {step !== "welcome" ? (
+        <div className={styles.sessionFooter}>
+          {verificationState?.status === "waiting"
+            ? `Verification email sent to ${verificationState.email}.`
+            : verificationState?.status === "resuming"
+              ? `Email verified for ${verificationState.email}. Continuing to your proposal…`
+              : authenticatedSession
+                ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
+                : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
+        </div>
+      ) : null}
+      <p
+        aria-live="polite"
+        className={saveState === "error" ? styles.saveError : styles.saveStatus}
+      >
+        {saveState === "saving" ? "Saving draft…" : null}
+        {saveState === "saved" ? "Draft saved" : null}
+        {saveState === "error" && staleFormConflict === null
+          ? (saveError ?? "Draft could not be saved. Check your connection and try again.")
+          : null}
+      </p>
+    </PublicCfpShell>
   );
 }
 
@@ -1674,36 +2008,29 @@ function WelcomeStep({
     form?.welcomeContent || "Our event welcomes leaders, practitioners, and change-makers.";
   return (
     <div className={styles.welcomeContent}>
+      <p className={styles.welcomeEyebrow}>{form?.name ?? "Call for Speakers"}</p>
       <h1>{event?.name ?? "Welcome to our event!"}</h1>
-      <h2>{form?.name ?? "Call for Speakers"}</h2>
-      <p>{content}</p>
-      <p>
-        Use this form to propose a topic. Your speaker portal will show the status of your
-        submission and any tasks assigned after acceptance.
+      <p className={styles.welcomePurpose}>{content}</p>
+      <p className={styles.welcomeNote}>
+        Your speaker portal will show the status of your submission and any tasks assigned after
+        acceptance.
       </p>
-      <h2>Helpful Tips and Important Information</h2>
-      <ul>
-        <li>
-          <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
-        </li>
-        <li>
-          <a href="#application-faq">FAQs for the Speaker Application Process</a>
-        </li>
-        <li>
-          <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
-        </li>
-      </ul>
-      {event ? (
-        <>
-          <h2>Dates and Deadlines</h2>
-          <p>
-            {formatCfpWindowDate(event.opensAt, event.timezone)} –{" "}
-            {formatCfpWindowDate(event.closesAt, event.timezone)} ({event.timezone})
-          </p>
-        </>
-      ) : null}
+      <section aria-labelledby="resources-title" className={styles.welcomeResources}>
+        <h2 id="resources-title">Resources</h2>
+        <ul>
+          <li>
+            <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
+          </li>
+          <li>
+            <a href="#application-faq">FAQs for the Speaker Application Process</a>
+          </li>
+          <li>
+            <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
+          </li>
+        </ul>
+      </section>
       {closed ? (
-        <p role="status">
+        <p className={styles.closedNotice} role="status">
           Submissions are closed. Existing submissions remain available in your speaker portal.
         </p>
       ) : null}
@@ -1718,30 +2045,137 @@ interface StepFormProps {
 }
 
 function AccountStep({
+  accountMode,
   draft,
   errors,
+  confirmedApplicantContext,
+  onConfirmApplicantContext,
   password,
+  requiresApplicantContextConfirmation,
+  setAccountMode,
   setPassword,
   updateDraft,
   authenticatedSession,
+  verificationState,
+  onUseDifferentEmail,
 }: StepFormProps & {
+  accountMode: CfpAccountMode;
+  confirmedApplicantContext: boolean;
+  onConfirmApplicantContext: () => void;
   password: string;
+  requiresApplicantContextConfirmation: boolean;
+  setAccountMode: (mode: CfpAccountMode) => void;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
+  verificationState: CfpVerificationState | null;
+  onUseDifferentEmail: () => void;
 }) {
+  if (verificationState !== null) {
+    const resuming = verificationState.status === "resuming";
+    return (
+      <section aria-live="polite" className={styles.verificationPending} role="status">
+        <span aria-hidden="true" className={styles.verificationIcon}>
+          <MailCheck />
+        </span>
+        <p className={styles.verificationEyebrow}>Email verification</p>
+        <h1>{resuming ? "Email verified" : "Check your inbox"}</h1>
+        {resuming ? (
+          <p>Verification is complete. We’re taking you to your proposal now.</p>
+        ) : (
+          <>
+            <p>We sent a verification link to:</p>
+            <strong className={styles.verificationRecipient}>{verificationState.email}</strong>
+            <p>After verification, you’ll return here and continue automatically.</p>
+            <p className={styles.verificationHint}>
+              {LOCAL_MAIL_INBOX_URL
+                ? "Local development captures this message in Mailpit instead of sending it to Gmail."
+                : "Open the link in this browser. If it is not in your inbox, check spam or promotions."}
+            </p>
+            <div className={styles.verificationActions}>
+              {LOCAL_MAIL_INBOX_URL ? (
+                <Button asChild className={styles.verificationAction} variant="secondary">
+                  <a data-local-mail-inbox href={LOCAL_MAIL_INBOX_URL}>
+                    Open local inbox
+                  </a>
+                </Button>
+              ) : null}
+              <Button
+                className={styles.verificationAction}
+                onClick={onUseDifferentEmail}
+                type="button"
+                variant="outline"
+              >
+                Use a different email
+              </Button>
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
   const checks = getPasswordChecks(password);
   return (
     <div>
       <h1>
         {authenticatedSession
           ? `Continue as ${authenticatedSession.name}`
-          : "Create account or sign in"}
+          : accountMode === "sign_in"
+            ? "Sign in"
+            : "Create account"}
       </h1>
+      {authenticatedSession !== null &&
+      requiresApplicantContextConfirmation &&
+      !confirmedApplicantContext ? (
+        <div className={styles.identityBoundary} data-cfp-applicant-context-boundary role="note">
+          <strong>You are entering the applicant portal</strong>
+          <p>
+            This proposal will belong to {authenticatedSession.email}. Organizer and reviewer
+            permissions are not used here.
+          </p>
+          <div className={styles.identityBoundaryActions}>
+            <Button
+              data-cfp-applicant-context-confirm
+              onClick={onConfirmApplicantContext}
+              type="button"
+            >
+              Continue as applicant
+            </Button>
+            <Button asChild type="button" variant="outline">
+              <Link href="/admin">Return to organizer workspace</Link>
+            </Button>
+            <Button asChild type="button" variant="ghost">
+              <a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {!authenticatedSession ? (
         <p>
-          Enter an existing account password to sign in. If the email is new, the same action
-          creates the account.
+          {accountMode === "sign_in"
+            ? "Enter the email and password for your existing Eventloom account."
+            : "Create an Eventloom account to own this proposal and receive submission updates."}
         </p>
+      ) : null}
+      {!authenticatedSession ? (
+        <fieldset className={styles.accountModeSwitch}>
+          <legend className="sr-only">Account mode</legend>
+          <Button
+            aria-pressed={accountMode === "sign_in"}
+            onClick={() => setAccountMode("sign_in")}
+            type="button"
+            variant={accountMode === "sign_in" ? "default" : "outline"}
+          >
+            Sign in
+          </Button>
+          <Button
+            aria-pressed={accountMode === "sign_up"}
+            onClick={() => setAccountMode("sign_up")}
+            type="button"
+            variant={accountMode === "sign_up" ? "default" : "outline"}
+          >
+            Create account
+          </Button>
+        </fieldset>
       ) : null}
       <div className={styles.sectionPanel}>
         <Field
@@ -1788,95 +2222,101 @@ function AccountStep({
                 />
               )}
             </Field>
-            <ul className={styles.passwordChecks}>
-              <PasswordCheck passed={checks.minimumLength}>
-                Password includes at least 8 characters
-              </PasswordCheck>
-              <PasswordCheck passed={checks.specialCharacter}>
-                Password includes at least 1 special character
-              </PasswordCheck>
-              <PasswordCheck passed={checks.number}>
-                Password includes at least 1 number
-              </PasswordCheck>
-              <PasswordCheck passed={checks.capitalLetter}>
-                Password includes at least 1 capital letter
-              </PasswordCheck>
-            </ul>
+            {accountMode === "sign_up" ? (
+              <ul className={styles.passwordChecks}>
+                <PasswordCheck passed={checks.minimumLength}>
+                  Password includes at least 8 characters
+                </PasswordCheck>
+                <PasswordCheck passed={checks.specialCharacter}>
+                  Password includes at least 1 special character
+                </PasswordCheck>
+                <PasswordCheck passed={checks.number}>
+                  Password includes at least 1 number
+                </PasswordCheck>
+                <PasswordCheck passed={checks.capitalLetter}>
+                  Password includes at least 1 capital letter
+                </PasswordCheck>
+              </ul>
+            ) : null}
           </>
         )}
-        <div className={styles.twoColumns}>
-          <Field
-            error={errors["account.firstName"]}
-            label="First Name"
-            name="account.firstName"
-            required
-          >
-            {(controlProps) => (
-              <>
-                <Input
-                  {...controlProps}
-                  maxLength={255}
-                  onChange={(event) =>
-                    updateDraft((current) => ({
-                      ...current,
-                      account: { ...current.account, firstName: event.target.value },
-                    }))
-                  }
-                  value={draft.account.firstName}
-                />
-                <CharacterCount current={draft.account.firstName.length} maximum={255} />
-              </>
-            )}
-          </Field>
-          <Field
-            error={errors["account.lastName"]}
-            label="Last Name"
-            name="account.lastName"
-            required
-          >
-            {(controlProps) => (
-              <>
-                <Input
-                  {...controlProps}
-                  maxLength={255}
-                  onChange={(event) =>
-                    updateDraft((current) => ({
-                      ...current,
-                      account: { ...current.account, lastName: event.target.value },
-                    }))
-                  }
-                  value={draft.account.lastName}
-                />
-                <CharacterCount current={draft.account.lastName.length} maximum={255} />
-              </>
-            )}
-          </Field>
-        </div>
-        <label className={styles.consent} data-error-key="account.acceptedTerms">
-          <input
-            aria-invalid={Boolean(errors["account.acceptedTerms"])}
-            checked={draft.account.acceptedTerms}
-            id="account.acceptedTerms"
-            onChange={(event) =>
-              updateDraft((current) => ({
-                ...current,
-                account: { ...current.account, acceptedTerms: event.target.checked },
-              }))
-            }
-            type="checkbox"
-          />
-          <span>
-            I agree to the <a href="#terms">Terms of Service</a> and{" "}
-            <a href="#privacy">Privacy Policy</a>.{" "}
-            <span aria-hidden="true" className={styles.required}>
-              *
-            </span>
-          </span>
-        </label>
-        {errors["account.acceptedTerms"] ? (
-          <span className={styles.fieldError} role="alert">
-            {errors["account.acceptedTerms"]}
-          </span>
+        {authenticatedSession || accountMode === "sign_up" ? (
+          <>
+            <div className={styles.twoColumns}>
+              <Field
+                error={errors["account.firstName"]}
+                label="First Name"
+                name="account.firstName"
+                required
+              >
+                {(controlProps) => (
+                  <>
+                    <Input
+                      {...controlProps}
+                      maxLength={255}
+                      onChange={(event) =>
+                        updateDraft((current) => ({
+                          ...current,
+                          account: { ...current.account, firstName: event.target.value },
+                        }))
+                      }
+                      value={draft.account.firstName}
+                    />
+                    <CharacterCount current={draft.account.firstName.length} maximum={255} />
+                  </>
+                )}
+              </Field>
+              <Field
+                error={errors["account.lastName"]}
+                label="Last Name"
+                name="account.lastName"
+                required
+              >
+                {(controlProps) => (
+                  <>
+                    <Input
+                      {...controlProps}
+                      maxLength={255}
+                      onChange={(event) =>
+                        updateDraft((current) => ({
+                          ...current,
+                          account: { ...current.account, lastName: event.target.value },
+                        }))
+                      }
+                      value={draft.account.lastName}
+                    />
+                    <CharacterCount current={draft.account.lastName.length} maximum={255} />
+                  </>
+                )}
+              </Field>
+            </div>
+            <label className={styles.consent} data-error-key="account.acceptedTerms">
+              <input
+                aria-invalid={Boolean(errors["account.acceptedTerms"])}
+                checked={draft.account.acceptedTerms}
+                id="account.acceptedTerms"
+                onChange={(event) =>
+                  updateDraft((current) => ({
+                    ...current,
+                    account: { ...current.account, acceptedTerms: event.target.checked },
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>
+                I agree to the <a href="#terms">Terms of Service</a> and{" "}
+                <a href="#privacy">Privacy Policy</a>.{" "}
+                <span aria-hidden="true" className={styles.required}>
+                  *
+                </span>
+              </span>
+            </label>
+            {errors["account.acceptedTerms"] ? (
+              <span className={styles.fieldError} role="alert">
+                {errors["account.acceptedTerms"]}
+              </span>
+            ) : null}
+          </>
         ) : null}
         {errors["account.auth"] ? (
           <p id="account.auth" className={styles.fieldError} role="alert">
@@ -1905,215 +2345,36 @@ function SubmissionStep({
   onAnswerChange,
   onFileUpload,
   onFileUploadStateChange,
-  updateDraft,
 }: StepFormProps & {
-  form?: CfpPublishedForm;
+  form: CfpPublishedForm;
   answers: DynamicAnswers;
   fileUploadStates: FileUploadStates;
   onAnswerChange: (key: string, value: unknown) => void;
   onFileUpload: (field: CfpFormField, file: File) => Promise<CfpFileUploadResult>;
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
-  if (form && form.submissionFields.length > 0) {
+  if (form.submissionFields.length === 0) {
     return (
-      <DynamicSubmissionFields
-        answers={answers}
-        draft={draft}
-        errors={errors}
-        fileUploadStates={fileUploadStates}
-        form={form}
-        onAnswerChange={onAnswerChange}
-        onFileUpload={onFileUpload}
-        onFileUploadStateChange={onFileUploadStateChange}
-      />
+      <section className={styles.errorSummary} role="alert">
+        <h2>Submission form unavailable</h2>
+        <p>The published form does not contain any proposal fields.</p>
+      </section>
     );
   }
-  const formatOptions = form ? publishedOptions(form, "format", FORMAT_OPTIONS) : FORMAT_OPTIONS;
-  const trackOptions = form ? publishedOptions(form, "track", TRACK_OPTIONS) : TRACK_OPTIONS;
-  const levelOptions = form ? publishedOptions(form, "level", LEVEL_OPTIONS) : LEVEL_OPTIONS;
-  const languageOptions = form
-    ? publishedOptions(form, "language", LANGUAGE_OPTIONS)
-    : LANGUAGE_OPTIONS;
-  const tagOptions = form ? publishedOptions(form, "tags", TAG_OPTIONS) : TAG_OPTIONS;
-  function toggleTag(tag: string): void {
-    updateDraft((current) => ({
-      ...current,
-      submission: {
-        ...current.submission,
-        tags: current.submission.tags.includes(tag)
-          ? current.submission.tags.filter((item) => item !== tag)
-          : [...current.submission.tags, tag],
-      },
-    }));
-  }
-
   return (
-    <div>
-      <h1>Tell us about your submission</h1>
-      <p>What do you want to present? Fill out the following information to tell us more.</p>
-      <Field error={errors["submission.title"]} label="Title" name="submission.title" required>
-        {(controlProps) => (
-          <>
-            <Input
-              {...controlProps}
-              maxLength={255}
-              onChange={(event) =>
-                updateDraft((current) => ({
-                  ...current,
-                  submission: { ...current.submission, title: event.target.value },
-                }))
-              }
-              value={draft.submission.title}
-            />
-            <CharacterCount current={draft.submission.title.length} maximum={255} />
-          </>
-        )}
-      </Field>
-      <Field
-        error={errors["submission.description"]}
-        label="Description"
-        name="submission.description"
-        required
-      >
-        {(controlProps) => (
-          <RichTextArea
-            {...controlProps}
-            maxLength={5000}
-            onValueChange={(value) =>
-              updateDraft((current) => ({
-                ...current,
-                submission: { ...current.submission, description: value },
-              }))
-            }
-            placeholder="Enter text here…"
-            rows={8}
-            value={draft.submission.description}
-          />
-        )}
-      </Field>
-      <SearchableField
-        errorKey="submission.format"
-        errors={errors}
-        label="Format"
-        options={formatOptions}
-        required
-        value={draft.submission.format}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, format: value },
-          }))
-        }
-      />
-      <fieldset
-        className={errors["submission.tags"] ? styles.invalidFieldset : styles.tagFieldset}
-        id="submission.tags"
-        tabIndex={-1}
-      >
-        <legend>
-          Tags{" "}
-          <span aria-hidden="true" className={styles.required}>
-            *
-          </span>
-        </legend>
-        <div className={styles.tagOptions}>
-          {tagOptions.map((tag) => (
-            <label key={tag}>
-              <input
-                checked={draft.submission.tags.includes(tag)}
-                onChange={() => toggleTag(tag)}
-                type="checkbox"
-              />{" "}
-              {tag}
-            </label>
-          ))}
-        </div>
-        {errors["submission.tags"] ? (
-          <span className={styles.fieldError} role="alert">
-            {errors["submission.tags"]}
-          </span>
-        ) : null}
-      </fieldset>
-      <SearchableField
-        errorKey="submission.track"
-        errors={errors}
-        label="Track"
-        options={trackOptions}
-        required
-        value={draft.submission.track}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, track: value },
-          }))
-        }
-      />
-      <SearchableField
-        errorKey="submission.level"
-        errors={errors}
-        label="Level"
-        options={levelOptions}
-        value={draft.submission.level}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, level: value },
-          }))
-        }
-      />
-      <SearchableField
-        errorKey="submission.language"
-        errors={errors}
-        label="Language"
-        options={languageOptions}
-        value={draft.submission.language}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, language: value },
-          }))
-        }
-      />
-    </div>
+    <DynamicSubmissionFields
+      answers={answers}
+      draft={draft}
+      errors={errors}
+      fileUploadStates={fileUploadStates}
+      form={form}
+      onAnswerChange={onAnswerChange}
+      onFileUpload={onFileUpload}
+      onFileUploadStateChange={onFileUploadStateChange}
+    />
   );
 }
 
-function SearchableField({
-  errorKey,
-  errors,
-  label,
-  onChange,
-  options,
-  required = false,
-  value,
-}: {
-  errorKey: string;
-  errors: ValidationErrors;
-  label: string;
-  onChange: (value: string) => void;
-  options: string[];
-  required?: boolean;
-  value: string;
-}) {
-  return (
-    <Field error={errors[errorKey]} label={label} name={errorKey} required={required}>
-      {(controlProps) => (
-        <SearchableSelect
-          {...(controlProps["aria-describedby"]
-            ? { describedBy: controlProps["aria-describedby"] }
-            : {})}
-          id={controlProps.id}
-          invalid={Boolean(controlProps["aria-invalid"])}
-          onValueChange={onChange}
-          options={options.map((option) => ({ label: option, value: option }))}
-          placeholder="Search or select…"
-          required={required}
-          value={value}
-        />
-      )}
-    </Field>
-  );
-}
 function FileRequestControl({
   field,
   state,
@@ -2148,6 +2409,29 @@ function FileRequestControl({
       ? undefined
       : { status: "ready" as const, assetId: persistedAssetId });
   const uploadSequenceRef = useRef(0);
+  const acceptedTypeLabels = uploadMimeTypeLabels(acceptedTypes);
+  const maxSizeLabel =
+    maxSize === undefined
+      ? undefined
+      : maxSize >= 1024 * 1024
+        ? `${maxSize / (1024 * 1024)} MB`
+        : `${Math.ceil(maxSize / 1024)} KB`;
+  const requirementParts = [
+    ...(acceptedTypeLabels.length > 0 ? [`Accepted: ${acceptedTypeLabels.join(", ")}`] : []),
+    ...(maxSizeLabel ? [`Max ${maxSizeLabel}`] : []),
+  ];
+  const helpId = `${field.key}-file-help`;
+  const errorId = `${field.key}-file-error`;
+  const statusId = `${field.key}-file-status`;
+  const hasUploadedFile = displayState?.status === "ready";
+  const uploadButtonLabel =
+    displayState?.status === "pending"
+      ? "Uploading…"
+      : hasUploadedFile
+        ? "Replace file"
+        : acceptedTypeLabels.length === 1 && acceptedTypeLabels[0] === "PDF"
+          ? "Choose PDF"
+          : "Choose file";
 
   function mimeTypeAllowed(contentType: string): boolean {
     const normalized = contentType.trim().toLowerCase();
@@ -2198,7 +2482,7 @@ function FileRequestControl({
           );
         }
         onChange({ assetId: result.assetId });
-        onStateChange({ status: "ready", name: file.name, assetId: result.assetId });
+        onStateChange({ status: "ready", name: result.fileName, assetId: result.assetId });
       })
       .catch((error) => {
         if (sequence !== uploadSequenceRef.current) return;
@@ -2211,26 +2495,66 @@ function FileRequestControl({
   }
 
   return (
-    <div>
-      <input
-        id={id}
-        accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
-        aria-describedby={displayState?.status === "error" ? `${field.key}-file-error` : undefined}
-        onChange={handleFileChange}
-        type="file"
-      />
-      {displayState?.status === "pending" ? (
-        <p aria-live="polite" className={styles.fieldHint}>
-          {displayState.name} is uploading…
+    <div className={styles.fileRequestControl}>
+      {requirementParts.length > 0 ? (
+        <p className={styles.fieldHint} id={helpId}>
+          {requirementParts.join(" · ")}
         </p>
+      ) : null}
+      <div className={styles.filePicker}>
+        <input
+          id={id}
+          accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
+          aria-describedby={[
+            ...(requirementParts.length > 0 ? [helpId] : []),
+            ...(displayState?.status === "error" ? [errorId] : []),
+            ...(displayState?.status === "pending" || displayState?.status === "ready"
+              ? [statusId]
+              : []),
+          ].join(" ")}
+          className={styles.fileInput}
+          disabled={displayState?.status === "pending"}
+          onChange={handleFileChange}
+          type="file"
+        />
+        <label
+          aria-disabled={displayState?.status === "pending"}
+          className={styles.fileButton}
+          htmlFor={id}
+        >
+          <Upload aria-hidden="true" size={18} />
+          {uploadButtonLabel}
+        </label>
+        <span className={styles.filePickerHint}>
+          {hasUploadedFile
+            ? "Choose a new file to replace this upload."
+            : "Select a file from your device."}
+        </span>
+      </div>
+      {displayState?.status === "pending" ? (
+        <div aria-live="polite" className={styles.fileStatus} id={statusId}>
+          <FileText aria-hidden="true" size={20} />
+          <div>
+            <strong>{displayState.name}</strong>
+            <span>Uploading securely…</span>
+          </div>
+        </div>
       ) : null}
       {displayState?.status === "ready" ? (
-        <p aria-live="polite" className={styles.fieldHint}>
-          {displayState.name ?? "The selected file"} is uploaded and ready.
-        </p>
+        <div
+          aria-live="polite"
+          className={`${styles.fileStatus} ${styles.fileStatusReady}`}
+          id={statusId}
+        >
+          <CheckCircle2 aria-hidden="true" size={20} />
+          <div>
+            <strong>{displayState.name ?? "Uploaded file"}</strong>
+            <span>Uploaded and ready</span>
+          </div>
+        </div>
       ) : null}
       {displayState?.status === "error" ? (
-        <p className={styles.fieldError} id={`${field.key}-file-error`} role="alert">
+        <p className={styles.fieldError} id={errorId} role="alert">
           {displayState.message}
         </p>
       ) : null}
@@ -2343,7 +2667,7 @@ function PublishedFieldControl({
               maxLength={typeof maxLength === "number" ? maxLength : 10000}
               onValueChange={onChange}
               placeholder={placeholder}
-              rows={7}
+              rows={field.key === "abstract" ? 6 : 4}
               value={valueString}
             />
           );
@@ -2467,8 +2791,12 @@ function DynamicSubmissionFields({
         const fields = form.submissionFields.filter((field) => field.sectionId === section.id);
         if (fields.length === 0) return null;
         return (
-          <section className={styles.sectionPanel} key={section.id}>
-            <h2>{section.title}</h2>
+          <section
+            aria-labelledby={`cfp-section-${section.id}`}
+            className={styles.sectionPanel}
+            key={section.id}
+          >
+            <h2 id={`cfp-section-${section.id}`}>{section.title}</h2>
             {section.description ? <p>{section.description}</p> : null}
             {fields.map((field) => {
               const fieldState = evaluated.fields.get(field.key) ?? {
@@ -2480,7 +2808,7 @@ function DynamicSubmissionFields({
                 fieldState.required === field.required
                   ? field
                   : { ...field, required: fieldState.required };
-              const errorKey = formSubmissionErrorKey(field.key);
+              const errorKey = cfpSubmissionErrorKey(field.key);
               return (
                 <PublishedFieldControl
                   key={field.id}
@@ -2493,7 +2821,7 @@ function DynamicSubmissionFields({
                   onFileStateChange={(state) =>
                     onFileUploadStateChange(fileStateKey(field.key), state)
                   }
-                  value={submissionValue(draft, answers, field.key)}
+                  value={cfpSubmissionFieldValue(draft, answers, field.key)}
                 />
               );
             })}
@@ -2565,7 +2893,8 @@ function ParticipantsStep({
           className={styles.addButton}
           disabled={draft.participants.length >= 15}
           onClick={addParticipant}
-          size="small"
+          size="sm"
+          type="button"
           variant="secondary"
         >
           ＋ Add participant
@@ -2579,9 +2908,7 @@ function ParticipantsStep({
       {draft.participants.map((participant, index) => (
         <section className={styles.participantCard} key={participant.id}>
           <div className={styles.participantCardHeading}>
-            <h2>
-              Participant {index + 1} of {draft.participants.length}
-            </h2>
+            <h2>{index === 0 ? "Primary speaker" : `Additional speaker ${index}`}</h2>
             {index > 0 ? (
               <Button
                 className={styles.removeButton}
@@ -2593,32 +2920,22 @@ function ParticipantsStep({
                     ),
                   }))
                 }
-                size="small"
+                size="sm"
+                type="button"
                 variant="ghost"
               >
                 Remove
               </Button>
             ) : null}
           </div>
-          <Field label="Role for this participant" name={`participants.${index}.role`}>
-            {(controlProps) => (
-              <Select
-                {...controlProps}
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeParticipant(current, index, {
-                      role: event.target.value as CfpParticipant["role"],
-                    }),
-                  )
-                }
-                value={participant.role}
-              >
-                <option>Speaker</option>
-                <option>Co-speaker</option>
-                <option>Moderator</option>
-              </Select>
-            )}
-          </Field>
+          <div className={styles.participantRole}>
+            <span>{index === 0 ? "Primary speaker" : "Co-speaker"}</span>
+            <p>
+              {index === 0
+                ? "This person is the main contact and presenter for the proposal."
+                : "This person will be listed as an additional presenter."}
+            </p>
+          </div>
           <div className={styles.twoColumns}>
             <Field
               error={errors[`participants.${index}.firstName`]}
@@ -2675,22 +2992,6 @@ function ParticipantsStep({
                 }
                 type="email"
                 value={participant.email}
-              />
-            )}
-          </Field>
-          <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
-            {(controlProps) => (
-              <Input
-                {...controlProps}
-                autoComplete="tel"
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeParticipant(current, index, { mobilePhone: event.target.value }),
-                  )
-                }
-                placeholder="+1"
-                type="tel"
-                value={participant.mobilePhone}
               />
             )}
           </Field>
@@ -2813,7 +3114,8 @@ function DynamicParticipantsFields({
           className={styles.addButton}
           disabled={draft.participants.length >= 15}
           onClick={addParticipant}
-          size="small"
+          size="sm"
+          type="button"
           variant="secondary"
         >
           ＋ Add participant
@@ -2835,10 +3137,14 @@ function DynamicParticipantsFields({
           mobilePhone: participant.mobilePhone,
         });
         return (
-          <section className={styles.participantCard} key={participant.id}>
+          <section
+            aria-labelledby={`participant-${participant.id}-heading`}
+            className={styles.participantCard}
+            key={participant.id}
+          >
             <div className={styles.participantCardHeading}>
-              <h2>
-                Participant {index + 1} of {draft.participants.length}
+              <h2 id={`participant-${participant.id}-heading`}>
+                {index === 0 ? "Primary speaker" : `Additional speaker ${index}`}
               </h2>
               {index > 0 ? (
                 <Button
@@ -2851,32 +3157,22 @@ function DynamicParticipantsFields({
                       ),
                     }))
                   }
-                  size="small"
+                  size="sm"
+                  type="button"
                   variant="ghost"
                 >
                   Remove
                 </Button>
               ) : null}
             </div>
-            <Field label="Role for this participant" name={`participants.${index}.role`}>
-              {(controlProps) => (
-                <Select
-                  {...controlProps}
-                  onChange={(event) =>
-                    updateDraft((current) =>
-                      mergeParticipant(current, index, {
-                        role: event.target.value as CfpParticipant["role"],
-                      }),
-                    )
-                  }
-                  value={participant.role}
-                >
-                  <option>Speaker</option>
-                  <option>Co-speaker</option>
-                  <option>Moderator</option>
-                </Select>
-              )}
-            </Field>
+            <div className={styles.participantRole}>
+              <span>{index === 0 ? "Primary speaker" : "Co-speaker"}</span>
+              <p>
+                {index === 0
+                  ? "This person is the main contact and presenter for the proposal."
+                  : "This person will be listed as an additional presenter."}
+              </p>
+            </div>
             {fields.map((field) => {
               const state = evaluated.fields.get(field.key) ?? {
                 visible: true,
@@ -2919,20 +3215,6 @@ function DynamicParticipantsFields({
                 )}
               </Field>
             ) : null}
-            {!configuredIdentityKeys.has("mobilePhone") ? (
-              <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
-                {(controlProps) => (
-                  <Input
-                    {...controlProps}
-                    onChange={(event) =>
-                      updateParticipantField(index, "mobilePhone", event.target.value)
-                    }
-                    type="tel"
-                    value={participant.mobilePhone}
-                  />
-                )}
-              </Field>
-            ) : null}
           </section>
         );
       })}
@@ -2956,7 +3238,13 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
 
   return (
     <section className={styles.secondaryContacts}>
-      <Button className={styles.textButton} onClick={addContact} size="small" variant="ghost">
+      <Button
+        className={styles.textButton}
+        onClick={addContact}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
         ＋ Add Secondary Contact
       </Button>
       <p>Secondary contacts can assist with tasks and communication.</p>
@@ -2974,7 +3262,8 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
                   ),
                 }))
               }
-              size="small"
+              size="sm"
+              type="button"
               variant="ghost"
             >
               Remove
@@ -3043,8 +3332,53 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
   );
 }
 
-function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }) {
+function ReviewStep({
+  draft,
+  eventSlug,
+  fileUploadStates,
+  organizationId,
+  form,
+  answers,
+}: {
+  draft: CfpDraft;
+  eventSlug: string;
+  fileUploadStates: FileUploadStates;
+  organizationId: string;
+  form?: CfpPublishedForm;
+  answers: DynamicAnswers;
+}) {
   const router = useRouter();
+  const submissionDetails = cfpReviewSubmissionDetails(form, draft, answers);
+  const [persistedFileNames, setPersistedFileNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setPersistedFileNames(readPersistedFileNames(form, answers, window.sessionStorage));
+  }, [answers, form]);
+  const uploadedFiles =
+    form?.submissionFields.flatMap((field) => {
+      if (field.kind !== "file_request") return [];
+      const uploadState = fileUploadStates[fileStateKey(field.key)];
+      const answer = answers[field.key];
+      const persistedAssetId =
+        typeof answer === "object" &&
+        answer !== null &&
+        "assetId" in answer &&
+        typeof answer.assetId === "string"
+          ? answer.assetId
+          : undefined;
+      if (uploadState?.status !== "ready" && persistedAssetId === undefined) return [];
+      const persistedFileName =
+        persistedAssetId === undefined ? undefined : persistedFileNames[persistedAssetId];
+      return [
+        {
+          key: field.key,
+          label: field.label,
+          name:
+            uploadState?.status === "ready" && uploadState.name
+              ? uploadState.name
+              : (persistedFileName ?? "Uploaded file"),
+        },
+      ];
+    }) ?? [];
   return (
     <div>
       <h1>Review your submission</h1>
@@ -3054,28 +3388,44 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
           <h2>Tell us about your submission</h2>
           <Button
             className={styles.textButton}
-            onClick={() => router.push(getCfpStepRoute(eventSlug, "submission"))}
-            size="small"
+            onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "submission"))}
+            size="sm"
+            type="button"
             variant="ghost"
           >
             ✎ Edit session
           </Button>
         </div>
-        <ReviewValue label="Title" value={draft.submission.title} />
-        <ReviewValue label="Description" value={draft.submission.description} />
-        <ReviewValue label="Format" value={draft.submission.format} />
-        <ReviewValue label="Tags" value={draft.submission.tags.join(", ")} />
-        <ReviewValue label="Track" value={draft.submission.track} />
-        <ReviewValue label="Level" value={draft.submission.level || "Not specified"} />
-        <ReviewValue label="Language" value={draft.submission.language || "Not specified"} />
+        {submissionDetails.map((detail) => (
+          <ReviewValue key={detail.key} label={detail.label} value={detail.value} />
+        ))}
+        {uploadedFiles.length > 0 ? (
+          <div className={styles.reviewFiles}>
+            <p className={styles.reviewFilesLabel}>Uploaded files</p>
+            {uploadedFiles.map((file) => (
+              <div className={styles.reviewFile} key={file.key}>
+                <FileText aria-hidden="true" size={20} />
+                <div>
+                  <span>{file.label}</span>
+                  <strong>{file.name}</strong>
+                </div>
+                <span className={styles.reviewFileStatus}>
+                  <CheckCircle2 aria-hidden="true" size={16} />
+                  Ready
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
       <section className={styles.reviewCard}>
         <div className={styles.reviewHeading}>
           <h2>Tell us about you</h2>
           <Button
             className={styles.textButton}
-            onClick={() => router.push(getCfpStepRoute(eventSlug, "participants"))}
-            size="small"
+            onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "participants"))}
+            size="sm"
+            type="button"
             variant="ghost"
           >
             ✎ Edit participants
@@ -3087,7 +3437,6 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
               {participant.firstName} {participant.lastName} <span>{participant.role}</span>
             </h3>
             <ReviewValue label="Email" value={participant.email} />
-            <ReviewValue label="Mobile Phone" value={participant.mobilePhone || "Not provided"} />
             <ReviewValue label="Biography" value={participant.biography || "Not provided"} />
           </div>
         ))}
@@ -3097,6 +3446,7 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
 }
 
 function ReviewValue({ label, value }: { label: string; value: string }) {
+  if (value.trim().length === 0) return null;
   return (
     <dl className={styles.reviewValue}>
       <dt>{label}</dt>
@@ -3129,11 +3479,12 @@ export function CfpComplete({
     organizationId: string;
     eventId: string;
     formId: string;
+    submissionId: string;
+    canEdit: boolean;
   } | null>(null);
-  const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
-    [providedApi],
-  );
+  const [publishedCfp, setPublishedCfp] = useState<PublishedCfp | null>(null);
+  const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
+  const startupStore = useCfpStartupStore();
 
   useEffect(() => {
     let active = true;
@@ -3141,38 +3492,41 @@ export function CfpComplete({
     try {
       identity = configuredCfpIdentity(eventSlug, organizationId, formId);
     } catch {
-      router.replace(getCfpStepRoute(eventSlug, "review"));
+      const scopedOrganizationId = organizationId?.trim() ?? "";
+      if (scopedOrganizationId.length > 0) {
+        router.replace(getCfpStepRoute(scopedOrganizationId, eventSlug, "review"));
+      }
       return () => {
         active = false;
       };
     }
     void (async () => {
       try {
-        const published = await api.getPublished({
-          organizationId: identity.organizationId,
-          eventId: identity.eventId,
-          ...(identity.formId === undefined ? {} : { formId: identity.formId }),
-        });
-        const activeFormId = identity.formId ?? published.form.id;
-        const pointer = window.localStorage.getItem(
-          getCfpSubmissionPointerStorageKey(
+        const published = await startupStore.load(api, identity).published;
+        if (!active) return;
+        setPublishedCfp(published);
+        const canonicalEventId = published.event.id;
+        const activeFormId = published.form.id;
+        const handoff = window.sessionStorage.getItem(
+          getCfpCompletionHandoffStorageKey(
             identity.organizationId,
-            identity.eventId,
+            canonicalEventId,
             activeFormId,
           ),
         );
-        if (!pointer) {
-          router.replace(getCfpStepRoute(eventSlug, "review"));
+        const submissionId = handoff?.trim() ?? "";
+        if (!submissionId) {
+          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
           return;
         }
         const receipt = await api.getReceipt({
           organizationId: identity.organizationId,
-          eventId: identity.eventId,
-          submissionId: pointer,
+          eventId: canonicalEventId,
+          submissionId,
         });
         if (!active) return;
         if (!receipt.submissionId || !receipt.submittedAt) {
-          router.replace(getCfpStepRoute(eventSlug, "review"));
+          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
           return;
         }
         let submissionTitle = "";
@@ -3180,8 +3534,8 @@ export function CfpComplete({
         try {
           const submission = await api.loadDraft({
             organizationId: identity.organizationId,
-            eventId: identity.eventId,
-            submissionId: pointer,
+            eventId: canonicalEventId,
+            submissionId,
           });
           const title = submission.answers.title;
           submissionTitle = typeof title === "string" ? title : "";
@@ -3199,8 +3553,10 @@ export function CfpComplete({
         if (!active) return;
         setCompletionIdentity({
           organizationId: identity.organizationId,
-          eventId: identity.eventId,
+          eventId: canonicalEventId,
           formId: activeFormId,
+          submissionId,
+          canEdit: !cfpIsClosed(published.event),
         });
         setConfirmationDetails({
           eventName: published.event.name,
@@ -3213,33 +3569,61 @@ export function CfpComplete({
         });
         setConfirmed(true);
       } catch {
-        router.replace(getCfpStepRoute(eventSlug, "review"));
+        router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
       }
     })();
 
     return () => {
       active = false;
     };
-  }, [api, eventSlug, formId, organizationId, router]);
+  }, [api, eventSlug, formId, organizationId, router, startupStore]);
+  function editSubmission(): void {
+    if (completionIdentity === null || !completionIdentity.canEdit) return;
+    window.localStorage.setItem(
+      getCfpSubmissionPointerStorageKey(
+        completionIdentity.organizationId,
+        completionIdentity.eventId,
+        completionIdentity.formId,
+      ),
+      completionIdentity.submissionId,
+    );
+    router.push(getCfpStepRoute(completionIdentity.organizationId, eventSlug, "submission"));
+  }
   function submitAnotherSession(): void {
     if (completionIdentity === null) return;
     clearCfpSubmissionState(eventSlug, completionIdentity, window.localStorage);
-    router.push(getCfpStepRoute(eventSlug, "welcome"));
+    window.sessionStorage.removeItem(
+      getCfpCompletionHandoffStorageKey(
+        completionIdentity.organizationId,
+        completionIdentity.eventId,
+        completionIdentity.formId,
+      ),
+    );
+    router.push(getCfpStepRoute(completionIdentity.organizationId, eventSlug, "welcome"));
   }
 
   if (!confirmed) {
     return (
-      <main className={styles.viewport}>
-        <section aria-busy="true" aria-live="polite" className={styles.card}>
-          <p className={styles.loading}>Confirming your submission…</p>
-        </section>
-      </main>
+      <PublicCfpShell
+        event={publishedCfp?.event}
+        form={publishedCfp?.form}
+        organization={publishedCfp?.organization}
+      >
+        <div aria-busy="true" aria-live="polite" className={styles.loading}>
+          Confirming your submission…
+        </div>
+      </PublicCfpShell>
     );
   }
 
   return (
-    <main className={styles.viewport}>
-      <section className={`${styles.card} ${styles.completeCard}`}>
+    <PublicCfpShell
+      className={styles.completeCard}
+      event={publishedCfp?.event}
+      form={publishedCfp?.form}
+      organization={publishedCfp?.organization}
+    >
+      <div className={styles.completeContent}>
         <div aria-hidden="true" className={styles.successMarker}>
           ✓
         </div>
@@ -3249,12 +3633,8 @@ export function CfpComplete({
             : "Submission received"}
         </h1>
         <p>
-          {confirmationDetails?.eventName ?? "Your event"} received your proposal. A confirmation
-          email
-          {confirmationDetails?.recipient
-            ? ` is queued for ${confirmationDetails.recipient}`
-            : " is queued"}
-          and will include the event name and talk title.
+          {confirmationDetails?.eventName ?? "Your event"} received your proposal.{" "}
+          {cfpConfirmationEmailMessage(confirmationDetails?.recipient ?? "")}
         </p>
         <p>{confirmationDetails?.confirmationMessage ?? "Your proposal has been received."}</p>
         <p>{confirmationDetails?.successContent ?? "Thank you for contributing to the program."}</p>
@@ -3262,14 +3642,34 @@ export function CfpComplete({
           Check your speaker status dashboard for the submission and any tasks that need to be
           completed.
         </p>
-        <a href="/portal/submissions">View submission status dashboard</a>
-        <Button className={styles.textButton} onClick={submitAnotherSession} variant="ghost">
+        {completionIdentity?.canEdit ? (
+          <Button
+            className={styles.textButton}
+            onClick={editSubmission}
+            type="button"
+            variant="ghost"
+          >
+            Edit submission
+          </Button>
+        ) : null}
+        <Button
+          className={styles.textButton}
+          onClick={submitAnotherSession}
+          type="button"
+          variant="ghost"
+        >
           Submit another session
         </Button>
-        <Button className={styles.primaryButton} onClick={() => router.push("/portal")}>
-          Continue to portal →
+        <Button
+          className={styles.primaryButton}
+          onClick={() =>
+            router.push(getCfpPortalHandoffHref("/portal/submissions", completionIdentity?.eventId))
+          }
+          type="button"
+        >
+          View submission status dashboard
         </Button>
-      </section>
-    </main>
+      </div>
+    </PublicCfpShell>
   );
 }

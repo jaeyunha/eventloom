@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { qualifiedEventContext } from "../admin/admin-shell";
+import { OrganizerEventWorkspaceProvider } from "../admin/organizer-event-workspace";
 import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
@@ -15,10 +16,20 @@ import {
   validateRoomInput,
 } from "./api";
 import {
-  EventSettingsWorkspaceView,
+  createEventSettingsNavigationCache,
+  EVENT_SETTINGS_NAVIGATION_CACHE_TTL_MS,
+  isCompleteEventSettingsNavigationCacheSnapshot,
+} from "./event-settings-navigation-cache-model";
+import { eventSettingsSectionHref } from "./event-settings-sections";
+import { EventSettingsWorkspaceView } from "./event-settings-workspace";
+import {
+  canCommitEventSettingsAsyncCompletion,
+  eventSettingsSectionNavigation,
+  eventSettingsWorkspaceScopeKey,
+  loadEventSettingsProgressively,
   persistEventSettingsMutation,
   validateRoomForm,
-} from "./event-settings-workspace";
+} from "./event-settings-workspace-model";
 
 const settings: SessionSettingsRecord = {
   id: "settings_event-a",
@@ -98,6 +109,16 @@ function response<T>(data: T, status = 200): Response {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("event settings mutation persistence", () => {
   it("keeps a durable write successful when its authoritative refresh fails", async () => {
     let writes = 0;
@@ -129,8 +150,185 @@ describe("event settings mutation persistence", () => {
     expect(refreshed).toBe(false);
   });
 });
+describe("event settings navigation cache", () => {
+  it("normalizes scopes without allowing one organization or event to reuse another", () => {
+    const cache = createEventSettingsNavigationCache({ now: () => 10 });
+    const snapshot = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "loaded" as const },
+      eventIdentity: { id: "event-a", name: "Summit 2026", slug: "summit-2026" },
+    };
+
+    cache.set({ organizationId: " org_a ", eventId: " event-a " }, snapshot);
+
+    expect(cache.get({ organizationId: "org_a", eventId: "event-a" })).toEqual(snapshot);
+    expect(cache.get({ organizationId: "org_b", eventId: "event-a" })).toBeUndefined();
+    expect(cache.get({ organizationId: "org_a", eventId: "event-b" })).toBeUndefined();
+  });
+
+  it("expires entries at the bounded navigation-cache lifetime", () => {
+    let now = 100;
+    const cache = createEventSettingsNavigationCache({ now: () => now });
+    const snapshot = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "loaded" as const },
+    };
+
+    cache.set({ organizationId: "org_a", eventId: "event-a" }, snapshot);
+    expect(cache.get({ organizationId: "org_a", eventId: "event-a" })).toEqual(snapshot);
+
+    now += EVENT_SETTINGS_NAVIGATION_CACHE_TTL_MS;
+    expect(cache.get({ organizationId: "org_a", eventId: "event-a" })).toBeUndefined();
+  });
+
+  it("reuses complete entries but keeps incomplete data reloadable and supports invalidation", () => {
+    const cache = createEventSettingsNavigationCache({ now: () => 1 });
+    const scope = { organizationId: "org_a", eventId: "event-a" };
+    const identity = { id: "event-a", name: "Summit 2026", slug: "summit-2026" };
+    const partial = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "error" as const },
+      eventIdentity: identity,
+    };
+    const completeWithoutIdentity = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "loaded" as const },
+    };
+    const complete = {
+      ...completeWithoutIdentity,
+      eventIdentity: identity,
+    };
+
+    cache.set(scope, partial);
+    expect(isCompleteEventSettingsNavigationCacheSnapshot(cache.get(scope))).toBe(false);
+    expect(cache.get(scope)).toEqual(partial);
+    cache.set(scope, completeWithoutIdentity);
+    expect(isCompleteEventSettingsNavigationCacheSnapshot(cache.get(scope))).toBe(false);
+
+    cache.set(scope, complete);
+    expect(isCompleteEventSettingsNavigationCacheSnapshot(cache.get(scope))).toBe(true);
+    cache.invalidate(scope);
+    expect(cache.get(scope)).toBeUndefined();
+  });
+});
+
+describe("event settings progressive loading", () => {
+  it("starts every independent read together and exposes core settings before optional details", async () => {
+    const paths = [
+      "/sessions/settings",
+      "/sessions/rooms",
+      "/sessions/tracks",
+      "/sessions/formats",
+      "/sessions/levels",
+      "/sessions/tags",
+      "/sessions/audit",
+    ] as const;
+    const pending = new Map(paths.map((path) => [path, deferred<Response>()]));
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const path = paths.find((candidate) => url.endsWith(candidate));
+      if (!path) throw new Error(`Unexpected request ${url}`);
+      calls.push(path);
+      const request = pending.get(path);
+      if (!request) throw new Error(`Missing deferred request ${path}`);
+      return request.promise;
+    };
+    const api = createEventSettingsApi("", "org_a", fetcher);
+    const coreRendered = deferred<EventSettingsData>();
+    let settled = false;
+
+    const completion = loadEventSettingsProgressively(api, "org_a", "event-a", (core) =>
+      coreRendered.resolve(core),
+    ).then((loaded) => {
+      settled = true;
+      return loaded;
+    });
+
+    expect(calls).toEqual(paths);
+    pending.get("/sessions/settings")?.resolve(response(settings));
+    pending.get("/sessions/rooms")?.resolve(response(rooms));
+
+    const core = await coreRendered.promise;
+    expect(core.settings.version).toBe(3);
+    expect(core.rooms).toEqual(rooms);
+    expect(core.tracks).toEqual([]);
+    expect(core.audit).toEqual([]);
+    expect(settled).toBe(false);
+
+    const coreMarkup = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "workflow",
+        state: { status: "loaded", data: core, detailsStatus: "loading" },
+      }),
+    );
+    expect(coreMarkup).toContain("Session workflow");
+    expect(coreMarkup).toContain("Session statuses");
+    expect(coreMarkup).toContain("Accepted");
+    expect(coreMarkup).not.toContain("Main room");
+    expect(coreMarkup).not.toContain("Loading session classification");
+    expect(coreMarkup).not.toContain("Loading change history");
+    expect(coreMarkup).not.toContain("One track");
+
+    pending.get("/sessions/tracks")?.resolve(response(overview.tracks));
+    pending.get("/sessions/formats")?.resolve(response(overview.formats));
+    pending.get("/sessions/levels")?.resolve(response(overview.levels));
+    pending.get("/sessions/tags")?.resolve(response(overview.tags));
+    pending.get("/sessions/audit")?.resolve(response(audit));
+
+    await expect(completion).resolves.toMatchObject({
+      tracks: overview.tracks,
+      formats: overview.formats,
+      audit,
+    });
+  });
+
+  it("rejects stale, aborted, and unmounted completions across event scopes", async () => {
+    const scopeA = eventSettingsWorkspaceScopeKey("org_a", "event-a");
+    const scopeB = eventSettingsWorkspaceScopeKey("org_a", "event-b");
+    const pendingCompletion = deferred<string>();
+    let currentRequestId = 1;
+    let committed: string | null = null;
+    const completion = pendingCompletion.promise.then((value) => {
+      if (canCommitEventSettingsAsyncCompletion(1, currentRequestId, true)) committed = value;
+    });
+
+    currentRequestId = 2;
+    pendingCompletion.resolve("event-a");
+    await completion;
+
+    expect(scopeA).not.toBe(scopeB);
+    expect(committed).toBeNull();
+    expect(canCommitEventSettingsAsyncCompletion(2, 2, true)).toBe(true);
+    expect(canCommitEventSettingsAsyncCompletion(2, 2, false)).toBe(false);
+    expect(canCommitEventSettingsAsyncCompletion(2, 2, true, true)).toBe(false);
+  });
+});
 
 describe("event settings API", () => {
+  it("resolves the human event identity from the organizer event collection", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return response([
+        {
+          id: "event-a",
+          organizationId: "org_a",
+          name: "Summit 2026",
+          slug: "summit-2026",
+        },
+      ]);
+    };
+
+    const api = createEventSettingsApi("", "org_a", fetcher);
+
+    await expect(api.getEventIdentity("event-a")).resolves.toEqual({
+      id: "event-a",
+      name: "Summit 2026",
+      slug: "summit-2026",
+    });
+    expect(calls).toEqual(["/api/admin/organizations/org_a/events"]);
+  });
+
   it("reads organization/event-qualified settings and library resources", async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -303,18 +501,96 @@ describe("event settings view", () => {
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
+        eventIdentity: {
+          id: "event-a",
+          name: "Summit 2026",
+          slug: "summit-2026",
+        },
+        section: "history",
         state: { status: "loaded", data: overview },
       }),
     );
     expect(output).toContain('aria-label="Event settings sections"');
+    expect(output).toContain("Configure this event");
     expect(output).toContain("Event setup");
-    expect(output).toContain("Library");
-    expect(output).toContain("Communications");
-    expect(output).toContain("Calendar");
-    expect(output).toContain("Accepted");
-    expect(output).toContain("Settings audit history");
-    expect(output).toContain("Agenda eligibility and status settings updated to version 3.");
-    expect(output).toContain("Organization org_a · Event event-a");
+    expect(output).toContain("Governance");
+    expect(output).toContain("Session classification");
+    expect(output).toContain("Change history");
+    expect(output).toContain("Session statuses");
+    expect(output).toContain("Updated");
+    expect(output).toContain('data-change-kind="updated"');
+    expect(output).toContain("Summit 2026");
+    expect(output).toContain("Organization org_a · Public slug summit-2026");
+    expect(output).not.toContain("Organization org_a · Event event-a");
+  });
+  it("keeps section links on the canonical event ID when the public slug differs", () => {
+    const organizationId = "org_a";
+    const eventId = "87aadc17-ec67-4f29-8b0f-8fc6733da05d";
+    const eventSlug = "test-summit-local";
+    const output = renderToStaticMarkup(
+      createElement(
+        OrganizerEventWorkspaceProvider,
+        {
+          event: {
+            id: eventId,
+            name: "Test Summit",
+            slug: eventSlug,
+          },
+          organizationId,
+        },
+        createElement(EventSettingsWorkspaceView, {
+          organizationId,
+          eventId,
+          eventIdentity: {
+            id: eventId,
+            name: "Test Summit",
+            slug: eventSlug,
+          },
+          state: { status: "loaded", data: { ...overview, eventId, organizationId } },
+        }),
+      ),
+    );
+
+    for (const section of eventSettingsSectionNavigation) {
+      expect(output).toContain(
+        `href="${eventSettingsSectionHref(organizationId, eventId, section.id)}"`,
+      );
+      expect(output).not.toContain(
+        `href="${eventSettingsSectionHref(organizationId, eventSlug, section.id)}"`,
+      );
+    }
+  });
+
+  it("explains how session classification values affect the program", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "classification",
+        state: {
+          status: "loaded",
+          data: {
+            ...overview,
+            tracks: [],
+            formats: [],
+            levels: [],
+            tags: [],
+          },
+        },
+        actions: {
+          createResource: async () => undefined,
+          updateResource: async () => undefined,
+          deleteResource: async () => undefined,
+        },
+      }),
+    );
+    expect(output).toContain("Define how sessions are organized and discovered.");
+    expect(output).toContain("Primary topic or program stream");
+    expect(output).toContain("How the session is delivered");
+    expect(output).toContain("Recommended");
+    expect(output).toContain("Optional");
+    expect(output).toContain("Add your first track");
+    expect(output).not.toContain("event-scoped value");
   });
 
   it("renders loading, empty, and error states without inventing records", () => {
@@ -326,26 +602,33 @@ describe("event settings view", () => {
       }),
     );
     expect(loading).toContain("Loading event settings");
-    const empty = renderToStaticMarkup(
+    const emptyData = {
+      ...overview,
+      rooms: [],
+      tracks: [],
+      formats: [],
+      levels: [],
+      tags: [],
+      audit: [],
+    };
+    const emptyRooms = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
-        state: {
-          status: "loaded",
-          data: {
-            ...overview,
-            rooms: [],
-            tracks: [],
-            formats: [],
-            levels: [],
-            tags: [],
-            audit: [],
-          },
-        },
+        section: "rooms",
+        state: { status: "loaded", data: emptyData },
       }),
     );
-    expect(empty).toContain("No rooms configured yet.");
-    expect(empty).toContain("No settings changes have been audited");
+    const emptyHistory = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "history",
+        state: { status: "loaded", data: emptyData },
+      }),
+    );
+    expect(emptyRooms).toContain("No rooms configured yet.");
+    expect(emptyHistory).toContain("No configuration changes have been audited");
     const notice = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
@@ -364,6 +647,89 @@ describe("event settings view", () => {
       }),
     );
     expect(error).toContain("The settings API is unavailable.");
+  });
+  it("exposes the shared section metadata as qualified routed destinations", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "loaded", data: overview },
+      }),
+    );
+    for (const section of eventSettingsSectionNavigation) {
+      expect(output).toContain(eventSettingsSectionHref("org_a", "event-a", section.id));
+      expect(output).toContain(section.label);
+    }
+    expect(output).toContain('data-slot="collapsible"');
+    expect(output).toContain('id="workflow"');
+    expect(output).not.toContain('href="#workflow"');
+    expect(output).not.toContain("Open Communications");
+    expect(output).not.toContain("Open Agenda &amp; Calendar");
+  });
+
+  it("keeps core failures full width and free of dead section anchors", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "error", message: "Core settings failed." },
+        onRetry: () => undefined,
+      }),
+    );
+    expect(output).toContain("Core settings failed.");
+    expect(output).toContain("Try again");
+    expect(output).not.toContain("Event settings sections");
+    expect(output).not.toContain('href="#session-settings"');
+    expect(output).not.toContain('href="#rooms"');
+  });
+
+  it("keeps progressive details failure separate from loaded core settings", () => {
+    const classification = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "classification",
+        state: {
+          status: "loaded",
+          data: overview,
+          detailsStatus: "error",
+          detailsMessage: "Library reads timed out.",
+        },
+      }),
+    );
+    const history = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "history",
+        state: {
+          status: "loaded",
+          data: overview,
+          detailsStatus: "error",
+          detailsMessage: "Library reads timed out.",
+        },
+      }),
+    );
+    expect(classification).toContain("Library reads timed out.");
+    expect(classification).toContain("Session classification unavailable.");
+    expect(history).toContain("Library reads timed out.");
+    expect(history).toContain("Change history unavailable.");
+  });
+
+  it("renders compact status rows with labelled eligibility and honest disabled actions", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "loaded", data: overview },
+        actions: {},
+      }),
+    );
+    expect(output).toContain("Configured session statuses and agenda eligibility");
+    expect(output).toContain("Can Accepted appear on the private agenda");
+    expect(output).toContain("More actions for Accepted");
+    expect(output).toContain("Session settings are read-only.");
+    expect(output).toMatch(/data-slot="button"[^>]*disabled/);
   });
   it("adds settings navigation context only for qualified event routes", () => {
     expect(qualifiedEventContext("/admin/organizations/org_a/events/event-a/settings")).toEqual({

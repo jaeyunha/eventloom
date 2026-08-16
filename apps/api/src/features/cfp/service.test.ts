@@ -7,7 +7,7 @@ import type {
   SubmissionStep,
   SubmissionVersion,
 } from "./model";
-import { evaluateFormRules, validateCfpForm } from "./rules";
+import { evaluateFormRules, validateCfpForm, validateSubmissionAnswers } from "./rules";
 import {
   CfpError,
   type CfpFileAssetAuthorizer,
@@ -24,6 +24,7 @@ const event: EventCfp = {
   slug: "future-conf",
   name: "Future Conf",
   timezone: "America/Los_Angeles",
+  eventStartsAt: "2026-08-12T16:00:00.000Z",
   opensAt: "2026-08-01T07:00:00.000Z",
   closesAt: "2026-08-10T07:00:00.000Z",
 };
@@ -39,7 +40,7 @@ function buildForm(overrides: Partial<CfpForm> = {}): CfpForm {
     welcomeContent: "Welcome",
     settings: {
       speakerLimit: 3,
-      maxSubmissionsPerAccount: 2,
+      maxSubmissionsPerAccount: 3,
       remindersEnabled: true,
       adminNotificationsEnabled: true,
       confirmationMessage: "Received",
@@ -160,9 +161,17 @@ class MemoryRepository implements CfpRepository {
     return found?.tenantId === tenantId ? structuredClone(found) : null;
   }
 
+  async getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp | null> {
+    const found = [...this.events.values()].find(
+      (candidate) => candidate.tenantId === tenantId && candidate.slug === eventSlug,
+    );
+    return found === undefined ? null : structuredClone(found);
+  }
+
   async saveEvent(value: EventCfp, expectedVersion: number | null): Promise<void> {
     const current = this.events.get(value.id);
-    if ((current?.version ?? null) !== expectedVersion) {
+    if (current === undefined) throw new CfpError("NOT_FOUND", "event not found");
+    if (current.version !== expectedVersion) {
       throw new CfpError("CONFLICT", "event version conflict");
     }
     this.events.set(value.id, structuredClone(value));
@@ -204,7 +213,11 @@ class MemoryRepository implements CfpRepository {
     const found = this.submissions.get(submissionId);
     return found?.tenantId === tenantId ? structuredClone(found) : null;
   }
-
+  async listSubmissionsForEvent(tenantId: string, eventId: string): Promise<Submission[]> {
+    return [...this.submissions.values()]
+      .filter((submission) => submission.tenantId === tenantId && submission.eventId === eventId)
+      .map((submission) => structuredClone(submission));
+  }
   async countOwnedSubmissions(input: {
     tenantId: string;
     eventId: string;
@@ -237,6 +250,77 @@ class MemoryRepository implements CfpRepository {
     }
   }
 }
+class BatchedMemoryRepository extends MemoryRepository {
+  readonly listFormsByIdsCalls: string[][] = [];
+
+  async listFormsByIds(ids: readonly string[]): Promise<readonly CfpForm[]> {
+    this.listFormsByIdsCalls.push([...ids]);
+    const requested = new Set(ids);
+    return [...this.forms.values()]
+      .filter((form) => requested.has(form.id))
+      .map((form) => structuredClone(form));
+  }
+}
+class OrganizerReadModelRepository extends MemoryRepository {
+  readonly organizerReadModelCalls: Array<{ tenantId: string; eventId: string }> = [];
+
+  async getOrganizerSubmissionsReadModel(tenantId: string, eventId: string) {
+    this.organizerReadModelCalls.push({ tenantId, eventId });
+    return {
+      submissions: [...this.submissions.values()].map((submission) => structuredClone(submission)),
+      forms: [...this.forms.values()].map((form) => structuredClone(form)),
+    };
+  }
+
+  override async listSubmissionsForEvent(
+    _tenantId: string,
+    _eventId: string,
+  ): Promise<Submission[]> {
+    throw new Error("The legacy submission listing must not be used.");
+  }
+}
+
+class DualRejectingOrganizerRepository extends MemoryRepository {
+  override async getEvent(_tenantId: string, _eventId: string): Promise<EventCfp | null> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return null;
+  }
+
+  override async listSubmissionsForEvent(
+    _tenantId: string,
+    _eventId: string,
+  ): Promise<Submission[]> {
+    throw new CfpError("CONFLICT", "submission read failed");
+  }
+}
+class DualRejectingReadModelRepository extends MemoryRepository {
+  override async getEvent(_tenantId: string, _eventId: string): Promise<EventCfp | null> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return null;
+  }
+
+  async getOrganizerSubmissionsReadModel(): Promise<never> {
+    throw new CfpError("CONFLICT", "organizer read failed");
+  }
+}
+
+class ParallelFormRepository extends MemoryRepository {
+  readonly formReadIds: string[] = [];
+  activeFormReads = 0;
+  maxConcurrentFormReads = 0;
+
+  async getForm(tenantId: string, formId: string): Promise<CfpForm | null> {
+    this.formReadIds.push(formId);
+    this.activeFormReads += 1;
+    this.maxConcurrentFormReads = Math.max(this.maxConcurrentFormReads, this.activeFormReads);
+    try {
+      await Promise.resolve();
+      return await super.getForm(tenantId, formId);
+    } finally {
+      this.activeFormReads -= 1;
+    }
+  }
+}
 
 class MemoryIdempotency implements CfpIdempotencyCoordinator {
   readonly #operations = new Map<string, Promise<unknown>>();
@@ -252,8 +336,11 @@ class MemoryIdempotency implements CfpIdempotencyCoordinator {
   }
 }
 
-function createFixture(now = "2026-08-08T12:00:00.000Z", fileAssets?: CfpFileAssetAuthorizer) {
-  const repository = new MemoryRepository();
+function createFixture(
+  now = "2026-08-08T12:00:00.000Z",
+  fileAssets?: CfpFileAssetAuthorizer,
+  repository: MemoryRepository = new MemoryRepository(),
+) {
   const confirmations: string[] = [];
   const confirmationPayloads: Array<{ eventName: string; submissionTitle: string }> = [];
   const confirmationKeys = new Set<string>();
@@ -261,6 +348,13 @@ function createFixture(now = "2026-08-08T12:00:00.000Z", fileAssets?: CfpFileAss
   const clock = { current: new Date(now), now: () => clock.current };
   const service = new CfpService({
     repository,
+    organization: {
+      getPublicOrganization: async (tenantId) => ({
+        id: tenantId,
+        slug: "eventloom",
+        name: "Eventloom",
+      }),
+    },
     idempotency: new MemoryIdempotency(),
     effects: {
       enqueueSubmissionConfirmation: async ({
@@ -286,6 +380,116 @@ function createFixture(now = "2026-08-08T12:00:00.000Z", fileAssets?: CfpFileAss
   return { service, repository, confirmations, confirmationPayloads, clock };
 }
 
+function buildOrganizerSubmission(overrides: Partial<Submission> = {}): Submission {
+  return {
+    id: "submission_1",
+    tenantId: "tenant_1",
+    eventId: "event_1",
+    formId: "form_1",
+    ownerAccountId: "account_1",
+    formVersion: 1,
+    version: 1,
+    status: "submitted",
+    completedSteps: ["welcome", "account", "submission", "participant", "review"],
+    answers: { title: "A submission" },
+    participants: [
+      {
+        id: "participant_1",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@example.com",
+        role: "primary",
+        biography: "Engineer",
+        answers: { firstName: "Ada" },
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2026-08-08T12:00:00.000Z",
+    updatedAt: "2026-08-08T12:00:00.000Z",
+    submittedAt: "2026-08-08T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("CFP event schedule integrity", () => {
+  it("requires an existing authoritative event", async () => {
+    const { service, repository } = createFixture();
+    repository.events.delete(event.id);
+    const { eventStartsAt: _omitted, ...newEvent } = event;
+
+    await expect(service.saveEvent(newEvent, null)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(repository.events.size).toBe(0);
+  });
+
+  it("preserves authoritative event identity while updating CFP-owned fields", async () => {
+    const { service } = createFixture();
+
+    await expect(
+      service.saveEvent(
+        {
+          ...event,
+          version: 2,
+          slug: "forged-slug",
+          name: "Forged name",
+          timezone: "UTC",
+          eventStartsAt: "2026-08-20T16:00:00.000Z",
+          opensAt: "2026-08-09T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).resolves.toEqual({
+      ...event,
+      version: 2,
+      opensAt: "2026-08-09T07:00:00.000Z",
+    });
+  });
+
+  it("preserves unchanged historical CFP dates but rejects changed past dates", async () => {
+    const { service } = createFixture();
+
+    await expect(service.saveEvent(event, event.version)).resolves.toEqual(event);
+    await expect(
+      service.saveEvent(
+        {
+          ...event,
+          opensAt: "2026-08-02T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects a CFP close after the authoritative event start when request metadata is omitted", async () => {
+    const { service } = createFixture();
+    const { eventStartsAt: _omitted, ...request } = event;
+
+    await expect(
+      service.saveEvent(
+        {
+          ...request,
+          closesAt: "2026-08-13T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects CFP boundaries after the authoritative event start despite fabricated request metadata", async () => {
+    const { service } = createFixture();
+
+    await expect(
+      service.saveEvent(
+        {
+          ...event,
+          eventStartsAt: "2026-08-20T16:00:00.000Z",
+          opensAt: "2026-08-13T07:00:00.000Z",
+          closesAt: "2026-08-14T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+});
 async function completeValidDraft(
   service: CfpService,
   idempotencyPrefix = "flow",
@@ -465,6 +669,127 @@ describe("CFP rules and configuration", () => {
     expect(published.form.settings).not.toHaveProperty("remindersEnabled");
   });
 
+  it("saves a fully configured draft, publishes it with CAS, and resolves it by public slug", async () => {
+    const { service, repository } = createFixture();
+    const draft = buildForm({
+      version: 2,
+      status: "draft",
+      submissionFields: [
+        ...buildForm().submissionFields,
+        {
+          id: "proposal_website",
+          sectionId: "session",
+          key: "proposal_website",
+          label: "Proposal website",
+          kind: "url",
+          required: false,
+          options: [],
+        },
+        {
+          id: "workshop_prerequisites",
+          sectionId: "session",
+          key: "workshop_prerequisites",
+          label: "Workshop prerequisites",
+          kind: "rich_text",
+          required: false,
+          options: [],
+        },
+      ],
+      rules: [
+        {
+          id: "workshop_prerequisites_rule",
+          priority: 100,
+          when: {
+            type: "group",
+            operator: "all",
+            conditions: [
+              {
+                type: "predicate",
+                fieldKey: "format",
+                operator: "equals",
+                value: "workshop",
+              },
+            ],
+          },
+          actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+        },
+      ],
+    });
+
+    await expect(service.saveForm(draft, 1)).resolves.toMatchObject({
+      version: 2,
+      status: "draft",
+    });
+    const published = await service.publishForm({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      organizerId: "organizer_1",
+      expectedVersion: 2,
+      idempotencyKey: "publish-complete-cfp",
+    });
+    expect(published).toMatchObject({ version: 3, status: "published" });
+    expect(repository.forms.get("form_1")).toMatchObject({ version: 3, status: "published" });
+
+    const publicCfp = await service.getPublishedCfp({
+      tenantId: "tenant_1",
+      eventSlug: "future-conf",
+    });
+    expect(publicCfp).toMatchObject({
+      event: { id: "event_1", slug: "future-conf" },
+      form: {
+        id: "form_1",
+        version: 3,
+        status: "published",
+        rules: [
+          {
+            when: {
+              conditions: [{ fieldKey: "format", operator: "equals", value: "workshop" }],
+            },
+            actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+          },
+        ],
+      },
+    });
+  });
+
+  it("resolves a public CFP by organization-scoped slug and returns canonical IDs", async () => {
+    const { service } = createFixture();
+
+    const published = await service.getPublishedCfp({
+      tenantId: "tenant_1",
+      eventSlug: "future-conf",
+    });
+
+    expect(published.event).toMatchObject({ id: "event_1", slug: "future-conf" });
+    expect(published.organization).toEqual({
+      id: "tenant_1",
+      slug: "eventloom",
+      name: "Eventloom",
+    });
+    expect(published.form.id).toBe("form_1");
+    await expect(
+      service.getPublishedCfp({ tenantId: "tenant_2", eventSlug: "future-conf" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("fails closed when a public event has multiple published forms", async () => {
+    const { service, repository } = createFixture();
+    const second = buildForm({ id: "form_2", name: "Secondary CFP" });
+    repository.forms.set(second.id, second);
+
+    await expect(
+      service.getPublishedCfp({ tenantId: "tenant_1", eventSlug: "future-conf" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      service.getPublishedCfp({
+        tenantId: "tenant_1",
+        eventSlug: "future-conf",
+        formId: "form_1",
+      }),
+    ).resolves.toMatchObject({ form: { id: "form_1" } });
+  });
+
   it("authorizes reusable field versions within the tenant", async () => {
     const { service, repository } = createFixture();
     repository.reusableFields.push({
@@ -495,6 +820,59 @@ describe("CFP rules and configuration", () => {
     await expect(crossTenant.service.saveForm(crossTenantForm, 1)).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
     });
+  });
+
+  it("allows incremental draft progress before a required file is uploaded", async () => {
+    const { service } = createFixture();
+    const form = buildForm({
+      version: 2,
+      status: "published",
+      submissionFields: [
+        ...buildForm().submissionFields,
+        {
+          id: "proposal-deck",
+          sectionId: "session",
+          key: "proposal_deck",
+          label: "Session proposal deck",
+          kind: "file_request",
+          required: true,
+          options: [],
+          fileRequest: {
+            allowedMimeTypes: ["application/pdf"],
+            maxBytes: 25 * 1024 * 1024,
+            required: true,
+            owner: "submission",
+          },
+        },
+      ],
+    });
+    await service.saveForm(form, 1);
+    const draft = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "create-incremental-file-draft",
+    });
+
+    const saved = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: draft.id,
+      ownerAccountId: "account_1",
+      expectedVersion: draft.version,
+      formVersion: 2,
+      completedStep: "account",
+      answers: {
+        accountEmail: "speaker@example.test",
+        accountFirstName: "Rina",
+        accountLastName: "Speaker",
+        accountAcceptedTerms: true,
+      },
+      participants: [],
+      idempotencyKey: "save-account-before-file-upload",
+    });
+
+    expect(saved.completedSteps).toContain("account");
   });
 
   it("accepts only authorized finalized file assets and preserves schema versions", async () => {
@@ -599,6 +977,10 @@ describe("CFP submission lifecycle", () => {
     });
     expect(repeatedCreate.id).toBe(firstCreate.id);
     expect(firstCreate.completedSteps).toEqual(["welcome"]);
+    expect(repository.submissions.size).toBe(1);
+    expect(
+      repository.versions.filter((version) => version.reason === "draft_created"),
+    ).toHaveLength(1);
 
     const ready = await completeValidDraft(service);
     expect(ready.completedSteps).toEqual([
@@ -712,6 +1094,91 @@ describe("CFP submission lifecycle", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
+  it("accepts HTTP URLs and rejects malformed URL answers at the API boundary", () => {
+    const websiteField = {
+      id: "field_website",
+      sectionId: "session",
+      key: "website",
+      label: "Project website",
+      kind: "url" as const,
+      required: false,
+      options: [],
+    };
+    const urlForm = buildForm({
+      submissionFields: [websiteField],
+      participantFields: [],
+      rules: [],
+    });
+
+    expect(
+      validateSubmissionAnswers(urlForm, { website: "https://example.test/project" }, []),
+    ).toEqual([]);
+    expect(validateSubmissionAnswers(urlForm, { website: "not a URL" }, [])).toEqual([
+      {
+        path: "answers.website",
+        code: "invalid_type",
+        message: "Project website must be a valid HTTP or HTTPS URL.",
+      },
+    ]);
+    expect(validateSubmissionAnswers(urlForm, { website: 42 }, [])).toEqual([
+      {
+        path: "answers.website",
+        code: "invalid_type",
+        message: "Project website must be a valid HTTP or HTTPS URL.",
+      },
+    ]);
+  });
+
+  it("rejects submission without a title even when the form marks title optional", async () => {
+    const { service } = createFixture();
+    await service.saveForm(
+      buildForm({
+        version: 2,
+        submissionFields: buildForm().submissionFields.map((field) =>
+          field.key === "title" ? { ...field, required: false } : field,
+        ),
+      }),
+      1,
+    );
+    const ready = await completeValidDraft(service, "optional-title");
+    const untitled = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: ready.id,
+      ownerAccountId: "account_1",
+      expectedVersion: ready.version,
+      formVersion: ready.formVersion,
+      idempotencyKey: "optional-title-empty",
+      answers: { ...ready.answers, title: "   " },
+    });
+
+    const review = await service.review({
+      tenantId: "tenant_1",
+      submissionId: untitled.id,
+      ownerAccountId: "account_1",
+      idempotencyKey: "optional-title-review",
+    });
+    expect(review).toMatchObject({
+      canSubmit: false,
+      issues: [
+        expect.objectContaining({
+          path: "answers.title",
+          code: "required",
+          message: "Title is required.",
+        }),
+      ],
+    });
+    await expect(
+      service.submit({
+        tenantId: "tenant_1",
+        submissionId: untitled.id,
+        ownerAccountId: "account_1",
+        expectedVersion: untitled.version,
+        formVersion: untitled.formVersion,
+        idempotencyKey: "optional-title-submit",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
   it("enforces open dates, per-account limits, ownership, and step order", async () => {
     const { service, clock } = createFixture("2026-07-31T12:00:00.000Z");
     await expect(
@@ -732,20 +1199,40 @@ describe("CFP submission lifecycle", () => {
       ownerAccountId: "account_1",
       idempotencyKey: "limit-1",
     });
-    await service.createDraft({
+    const editedFirst = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: first.id,
+      ownerAccountId: "account_1",
+      expectedVersion: first.version,
+      idempotencyKey: "limit-1-edit",
+      answers: { title: "Edited proposal" },
+    });
+    expect(editedFirst).toMatchObject({
+      id: first.id,
+      version: first.version + 1,
+    });
+    const second = await service.createDraft({
       tenantId: "tenant_1",
       eventId: "event_1",
       formId: "form_1",
       ownerAccountId: "account_1",
       idempotencyKey: "limit-2",
     });
+    const third = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "limit-3",
+    });
+    expect(new Set([first.id, second.id, third.id])).toHaveLength(3);
     await expect(
       service.createDraft({
         tenantId: "tenant_1",
         eventId: "event_1",
         formId: "form_1",
         ownerAccountId: "account_1",
-        idempotencyKey: "limit-3",
+        idempotencyKey: "limit-4",
       }),
     ).rejects.toMatchObject({ code: "SUBMISSION_LIMIT_REACHED" });
     await expect(
@@ -762,7 +1249,7 @@ describe("CFP submission lifecycle", () => {
         tenantId: "tenant_1",
         submissionId: first.id,
         ownerAccountId: "account_1",
-        expectedVersion: first.version,
+        expectedVersion: editedFirst.version,
         idempotencyKey: "skip-step",
         completedStep: "submission",
       }),
@@ -821,6 +1308,7 @@ describe("CFP submission lifecycle", () => {
 
     const reopened = await service.reopen({
       tenantId: "tenant_1",
+      eventId: "event_1",
       submissionId: ready.id,
       organizerId: "organizer_1",
       expectedVersion: submitted.submission.version,
@@ -854,6 +1342,32 @@ describe("CFP submission lifecycle", () => {
     });
     expect(withdrawn.status).toBe("withdrawn");
     expect(repository.audits.at(-1)).toMatchObject({ action: "submission_withdrawn" });
+  });
+  it("does not let an event organizer reopen a submission from another event", async () => {
+    const repository = new MemoryRepository();
+    const foreignSubmission = buildOrganizerSubmission({
+      id: "submission_event_b",
+      eventId: "event_b",
+      version: 7,
+    });
+    repository.submissions.set(foreignSubmission.id, structuredClone(foreignSubmission));
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.reopen({
+        tenantId: "tenant_1",
+        eventId: "event_1",
+        submissionId: foreignSubmission.id,
+        organizerId: "event_a_organizer",
+        expectedVersion: foreignSubmission.version,
+        reason: "Cross-event reopen attempt",
+        idempotencyKey: "cross-event-reopen",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(repository.submissions.get(foreignSubmission.id)).toEqual(foreignSubmission);
+    expect(repository.versions).toEqual([]);
+    expect(repository.audits).toEqual([]);
   });
   it("creates a new authenticated submission with authoritative versions before review", async () => {
     const { service, repository } = createFixture();
@@ -989,5 +1503,470 @@ describe("CFP submission lifecycle", () => {
       ownerAccountId: "speaker_account",
       answers: { title: "Reliable APIs" },
     });
+  });
+  it("saves and reloads a title-only incomplete draft for its owner", async () => {
+    const { service } = createFixture();
+    const created = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "title-only-create",
+    });
+    const accountStep = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: created.id,
+      ownerAccountId: "account_1",
+      expectedVersion: created.version,
+      formVersion: created.formVersion,
+      completedStep: "account",
+      idempotencyKey: "title-only-account",
+    });
+    const saved = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: created.id,
+      ownerAccountId: "account_1",
+      expectedVersion: accountStep.version,
+      formVersion: accountStep.formVersion,
+      completedStep: "submission",
+      answers: { title: "Title-only draft" },
+      idempotencyKey: "title-only-save",
+    });
+
+    const loaded = await service.loadDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: saved.id,
+      ownerAccountId: "account_1",
+    });
+    expect(loaded).toEqual(saved);
+    expect(loaded).toMatchObject({
+      status: "draft",
+      completedSteps: ["welcome", "account", "submission"],
+      answers: { title: "Title-only draft" },
+    });
+    await expect(
+      service.loadDraft({
+        tenantId: "tenant_1",
+        eventId: "event_other",
+        submissionId: saved.id,
+        ownerAccountId: "account_1",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const edited = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: loaded.id,
+      ownerAccountId: "account_1",
+      expectedVersion: loaded.version,
+      formVersion: loaded.formVersion,
+      answers: { abstract: "A partial edit must preserve the saved title." },
+      idempotencyKey: "title-only-edit",
+    });
+    const reloaded = await service.loadDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: edited.id,
+      ownerAccountId: "account_1",
+    });
+    expect(reloaded).toEqual(edited);
+    expect(reloaded.answers).toEqual({
+      title: "Title-only draft",
+      abstract: "A partial edit must preserve the saved title.",
+    });
+  });
+
+  it("deduplicates organizer form enrichment through the optional batch lookup", async () => {
+    const repository = new BatchedMemoryRepository();
+    const { service } = createFixture(undefined, undefined, repository);
+    for (let index = 1; index <= 4; index += 1) {
+      repository.submissions.set(
+        `submission_${index}`,
+        buildOrganizerSubmission({ id: `submission_${index}` }),
+      );
+    }
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(records).toHaveLength(4);
+    expect(repository.listFormsByIdsCalls).toEqual([["form_1"]]);
+    expect(records[0]).toEqual({
+      submission: expect.objectContaining({ id: "submission_1" }),
+      submissionFields: repository.forms.get("form_1")?.submissionFields,
+      participantFields: repository.forms.get("form_1")?.participantFields,
+    });
+    expect(records[0]?.submission.participants).toEqual(buildOrganizerSubmission().participants);
+  });
+  it("uses one organizer submission read model for scoped enrichment", async () => {
+    const repository = new OrganizerReadModelRepository();
+    repository.forms.set(
+      "form_other_event",
+      buildForm({ id: "form_other_event", eventId: "event_other" }),
+    );
+    repository.forms.set(
+      "form_other_tenant",
+      buildForm({ id: "form_other_tenant", tenantId: "tenant_other" }),
+    );
+    repository.submissions.set("submission_a", buildOrganizerSubmission({ id: "submission_a" }));
+    repository.submissions.set("submission_b", buildOrganizerSubmission({ id: "submission_b" }));
+    repository.submissions.set(
+      "submission_wrong_tenant",
+      buildOrganizerSubmission({ id: "submission_wrong_tenant", tenantId: "tenant_other" }),
+    );
+    repository.submissions.set(
+      "submission_wrong_event",
+      buildOrganizerSubmission({ id: "submission_wrong_event", eventId: "event_other" }),
+    );
+    repository.submissions.set(
+      "submission_wrong_form_event",
+      buildOrganizerSubmission({
+        id: "submission_wrong_form_event",
+        formId: "form_other_event",
+      }),
+    );
+    const { service } = createFixture(undefined, undefined, repository);
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(repository.organizerReadModelCalls).toEqual([
+      { tenantId: "tenant_1", eventId: "event_1" },
+    ]);
+    expect(records.map(({ submission }) => submission.id)).toEqual([
+      "submission_a",
+      "submission_b",
+    ]);
+    expect(records[0]).toEqual({
+      submission: expect.objectContaining({ id: "submission_a" }),
+      submissionFields: repository.forms.get("form_1")?.submissionFields,
+      participantFields: repository.forms.get("form_1")?.participantFields,
+    });
+  });
+
+  it("prioritizes event ownership failure when both organizer reads reject", async () => {
+    const repository = new DualRejectingOrganizerRepository();
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_other", eventId: "event_1" }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "The event was not found.",
+    });
+  });
+  it("prioritizes event ownership failure when the batch organizer read rejects", async () => {
+    const repository = new DualRejectingReadModelRepository();
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_other", eventId: "event_1" }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "The event was not found.",
+    });
+  });
+  it("keeps cross-tenant forms returned by a batch lookup out of organizer enrichment", async () => {
+    const repository = new BatchedMemoryRepository();
+    repository.forms.set("form_1", buildForm({ tenantId: "tenant_other" }));
+    repository.submissions.set("submission_1", buildOrganizerSubmission());
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_1", eventId: "event_1" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(repository.listFormsByIdsCalls).toEqual([["form_1"]]);
+  });
+
+  it("parallelizes fallback form lookup across unique form ids", async () => {
+    const repository = new ParallelFormRepository();
+    repository.forms.set("form_2", buildForm({ id: "form_2" }));
+    repository.submissions.set(
+      "submission_1",
+      buildOrganizerSubmission({ id: "submission_1", formId: "form_1" }),
+    );
+    repository.submissions.set(
+      "submission_2",
+      buildOrganizerSubmission({ id: "submission_2", formId: "form_2" }),
+    );
+    const { service } = createFixture(undefined, undefined, repository);
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(records).toHaveLength(2);
+    expect(repository.formReadIds).toEqual(["form_1", "form_2"]);
+    expect(repository.maxConcurrentFormReads).toBe(2);
+  });
+  it("lists canonical organizer submissions with scoped forms and current schema metadata", async () => {
+    const { service, repository } = createFixture();
+    const organizerForm = buildForm();
+    repository.forms.set(organizerForm.id, structuredClone(organizerForm));
+    const canonicalSubmission: Submission = {
+      id: "submission_canonical",
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: organizerForm.id,
+      ownerAccountId: "account_1",
+      formVersion: organizerForm.version,
+      version: 4,
+      status: "submitted",
+      completedSteps: ["welcome", "account", "submission", "participant", "review"],
+      answers: {
+        title: "Canonical submission",
+        abstract: "Exact server-owned answers",
+        format: "talk",
+      },
+      participants: [
+        {
+          id: "participant_primary",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          email: "ada@example.com",
+          role: "primary",
+          biography: "Primary speaker",
+          answers: { firstName: "Ada" },
+        },
+        {
+          id: "participant_co",
+          firstName: "Grace",
+          lastName: "Hopper",
+          email: "grace@example.com",
+          role: "co_speaker",
+          biography: "Co-speaker",
+          answers: { firstName: "Grace" },
+        },
+      ],
+      secondaryContacts: [],
+      createdAt: "2026-08-08T12:00:00.000Z",
+      updatedAt: "2026-08-08T12:30:00.000Z",
+      submittedAt: "2026-08-08T12:30:00.000Z",
+    };
+    repository.submissions.set(canonicalSubmission.id, structuredClone(canonicalSubmission));
+    repository.submissions.set(
+      "submission_other_event",
+      structuredClone({
+        ...canonicalSubmission,
+        id: "submission_other_event",
+        eventId: "event_other",
+      }),
+    );
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+    expect(records).toEqual([
+      {
+        submission: canonicalSubmission,
+        submissionFields: organizerForm.submissionFields,
+        participantFields: organizerForm.participantFields,
+      },
+    ]);
+    expect(records[0]?.submission.participants).toEqual(canonicalSubmission.participants);
+  });
+  it("loads and rebases a historical draft after a compatible form revision", async () => {
+    const { service, repository } = createFixture();
+    const previousForm = buildForm();
+    const currentForm = buildForm({
+      version: previousForm.version + 1,
+      submissionFields: [
+        ...previousForm.submissionFields.map((field) => ({
+          ...field,
+          label: `Current ${field.label}`,
+        })),
+        {
+          id: "field_session_goal",
+          sectionId: "session",
+          key: "sessionGoal",
+          label: "Session goal",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+      participantFields: [
+        ...previousForm.participantFields.map((field) => ({
+          ...field,
+          label: `Current ${field.label}`,
+        })),
+        {
+          id: "participant_pronouns",
+          sectionId: "people",
+          key: "pronouns",
+          label: "Pronouns",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+    });
+    repository.forms.set(currentForm.id, structuredClone(currentForm));
+    repository.events.set(
+      event.id,
+      structuredClone({
+        ...event,
+        closesAt: "2026-08-12T07:00:00.000Z",
+      }),
+    );
+
+    const originalSubmission = buildOrganizerSubmission();
+    const primaryParticipant = originalSubmission.participants.at(0);
+    if (primaryParticipant === undefined) {
+      throw new Error("The organizer submission fixture requires a primary participant.");
+    }
+    const storedSubmission = structuredClone({
+      ...originalSubmission,
+      id: "submission_old_schema",
+      formVersion: previousForm.version,
+      status: "draft" as const,
+      submittedAt: undefined,
+      answers: {
+        title: "Legacy title",
+        format: "talk",
+        legacyAnswer: "  preserve <exactly>  ",
+      },
+      participants: [
+        primaryParticipant,
+        {
+          ...primaryParticipant,
+          id: "participant_2",
+          firstName: "Grace",
+          lastName: "Hopper",
+          email: "grace@example.com",
+          answers: { firstName: "Grace", legacyRole: "co-speaker" },
+        },
+      ],
+    });
+    repository.submissions.set(storedSubmission.id, storedSubmission);
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(records).toEqual([
+      {
+        submission: storedSubmission,
+        submissionFields: currentForm.submissionFields,
+        participantFields: currentForm.participantFields,
+      },
+    ]);
+    expect(records[0]?.submission.answers).toEqual(storedSubmission.answers);
+    expect(records[0]?.submission.participants).toEqual(storedSubmission.participants);
+    expect(records[0]?.submissionFields.map(({ id }) => id)).toEqual(
+      currentForm.submissionFields.map(({ id }) => id),
+    );
+    expect(records[0]?.participantFields.map(({ id }) => id)).toEqual(
+      currentForm.participantFields.map(({ id }) => id),
+    );
+
+    const loaded = await service.loadDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: storedSubmission.id,
+      ownerAccountId: storedSubmission.ownerAccountId,
+    });
+    expect(loaded).toEqual({
+      ...storedSubmission,
+      formVersion: currentForm.version,
+    });
+    expect(repository.submissions.get(storedSubmission.id)).toEqual(storedSubmission);
+
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_1",
+        eventId: "event_1",
+        submissionId: storedSubmission.id,
+        ownerAccountId: storedSubmission.ownerAccountId,
+        expectedVersion: loaded.version + 1,
+        formVersion: loaded.formVersion,
+        idempotencyKey: "legacy-form-stale-submission-version",
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "The submission has changed since it was loaded.",
+    });
+    expect(repository.submissions.get(storedSubmission.id)).toEqual(storedSubmission);
+
+    const coAuthor = {
+      id: "participant_3",
+      firstName: " Marcus ",
+      lastName: " Okafor ",
+      email: "MARCUS@EXAMPLE.COM",
+      role: "co_speaker" as const,
+      biography: "<b>Co-author</b>",
+      answers: { pronouns: "he/him" },
+    };
+    const rebased = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: storedSubmission.id,
+      ownerAccountId: storedSubmission.ownerAccountId,
+      expectedVersion: loaded.version,
+      formVersion: loaded.formVersion,
+      idempotencyKey: "legacy-form-add-co-author",
+      completedStep: "participant",
+      answers: loaded.answers,
+      participants: [...loaded.participants, coAuthor],
+    });
+    expect(rebased.formVersion).toBe(currentForm.version);
+    expect(rebased.answers).toEqual(storedSubmission.answers);
+    expect(rebased.participants.slice(0, 2)).toEqual(storedSubmission.participants);
+    expect(rebased.participants[2]).toEqual({
+      ...coAuthor,
+      firstName: "Marcus",
+      lastName: "Okafor",
+      email: "marcus@example.com",
+      biography: "bCo-author/b",
+    });
+    expect(repository.submissions.get(storedSubmission.id)).toEqual(rebased);
+  });
+
+  it("rejects a historical draft when a populated stable field key becomes incompatible", async () => {
+    const { service, repository } = createFixture();
+    const staleSubmission = buildOrganizerSubmission({
+      id: "submission_incompatible_schema",
+      status: "draft",
+      submittedAt: undefined,
+      answers: { title: "Legacy title", format: "talk" },
+    });
+    repository.submissions.set(staleSubmission.id, structuredClone(staleSubmission));
+    repository.forms.set(
+      "form_1",
+      buildForm({
+        version: 2,
+        submissionFields: buildForm().submissionFields.map((field) =>
+          field.key === "format" ? { ...field, options: ["workshop"] } : field,
+        ),
+      }),
+    );
+
+    await expect(
+      service.loadDraft({
+        tenantId: "tenant_1",
+        eventId: "event_1",
+        submissionId: staleSubmission.id,
+        ownerAccountId: staleSubmission.ownerAccountId,
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "The CFP form is incompatible with this historical draft.",
+      details: {
+        submissionFormVersion: 1,
+        currentFormVersion: 2,
+        issues: [expect.objectContaining({ path: "answers.format", code: "invalid_option" })],
+      },
+    });
+    expect(repository.submissions.get(staleSubmission.id)).toEqual(staleSubmission);
   });
 });

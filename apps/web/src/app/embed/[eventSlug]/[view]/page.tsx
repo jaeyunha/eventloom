@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
 import { getPublishedProgram } from "@/features/embed/api";
-import {
-  getPublishedAgendaOrLocalDemo,
-  getPublishedSpeakersOrLocalDemo,
-} from "@/features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
-import { embedTheme } from "@/features/embed/model";
+import { parseEmbedQuery } from "@/features/embed/model";
 import { PublicItineraryView } from "@/features/embed/public-itinerary";
 import { PublicSessionsView } from "@/features/embed/public-sessions";
 import { PublicSpeakersListView } from "@/features/embed/public-speakers-list";
-import type { PublishedProgram } from "@/features/embed/types";
 
 export const metadata: Metadata = {
   title: "Published event program",
@@ -22,39 +17,33 @@ interface PublicWidgetPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-async function loadProgram(
-  apiBaseUrl: string,
-  eventSlug: string,
-  appEnv: string | undefined,
-): Promise<PublishedProgram> {
-  try {
-    return await getPublishedProgram(apiBaseUrl, eventSlug);
-  } catch {
-    const [agenda, speakers] = await Promise.all([
-      getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, appEnv),
-      getPublishedSpeakersOrLocalDemo(apiBaseUrl, eventSlug, appEnv),
-    ]);
-    return { agenda, speakers };
-  }
-}
-
 export default async function PublicWidgetPage({ params, searchParams }: PublicWidgetPageProps) {
   const [{ eventSlug, view }, query] = await Promise.all([params, searchParams]);
   if (view !== "sessions" && view !== "speakers-list" && view !== "itinerary") {
     return <EmbedUnavailable message="This published program view does not exist." />;
   }
 
-  const apiBaseUrl =
-    process.env.API_UPSTREAM_ORIGIN?.trim() ?? process.env.NEXT_PUBLIC_API_URL?.trim();
+  const apiBaseUrl = process.env.API_UPSTREAM_ORIGIN?.trim();
   if (!apiBaseUrl) {
     return <EmbedUnavailable message="The public program endpoint is not configured." />;
   }
 
   try {
-    const program = await loadProgram(apiBaseUrl, eventSlug, process.env.APP_ENV);
-    const theme = embedTheme(query.theme);
+    const program = await getPublishedProgram(apiBaseUrl, eventSlug, fetch, process.env.APP_ENV);
+    const embedQuery = parseEmbedQuery(query);
     return (
-      <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view={view}>
+      <EmbedFrame
+        event={program.agenda.event}
+        eventSlug={eventSlug}
+        theme={embedQuery.theme}
+        view={view}
+        layout={embedQuery.layout}
+        accent={embedQuery.accent}
+        backgroundColor={embedQuery.backgroundColor}
+        textColor={embedQuery.textColor}
+        tracks={embedQuery.tracks}
+        displayFields={embedQuery.displayFields}
+      >
         {view === "sessions" ? (
           <PublicSessionsView program={program} />
         ) : view === "speakers-list" ? (

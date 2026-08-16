@@ -61,6 +61,7 @@ function validSession(): AuthSession {
     expiresAt: new Date("2026-08-08T13:00:00.000Z"),
     memberships: [{ organizationId: "organization-1", role: "admin" }],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 

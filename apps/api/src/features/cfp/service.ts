@@ -1,3 +1,4 @@
+import { localDateInTimeZone } from "@eventloom/contracts";
 import {
   type AuditEntry,
   type CfpForm,
@@ -12,7 +13,12 @@ import {
   submissionSchema,
   submissionSteps,
 } from "./model";
-import { evaluateFormRules, validateCfpForm, validateSubmissionAnswers } from "./rules";
+import {
+  evaluateFormRules,
+  validateCfpForm,
+  validateSubmissionAnswerCompatibility,
+  validateSubmissionAnswers,
+} from "./rules";
 import { sanitizeForm, sanitizePlainText, sanitizeRichText, sanitizeSubmission } from "./sanitize";
 
 export type CfpErrorCode =
@@ -42,8 +48,10 @@ export class CfpError extends Error {
 
 export interface CfpRepository {
   getEvent(tenantId: string, eventId: string): Promise<EventCfp | null>;
+  getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp | null>;
   saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void>;
   getForm(tenantId: string, formId: string): Promise<CfpForm | null>;
+  listFormsByIds?(ids: readonly string[]): Promise<readonly CfpForm[]>;
   listForms(tenantId: string, eventId: string): Promise<CfpForm[]>;
   saveForm(form: CfpForm, expectedVersion: number | null): Promise<void>;
   /**
@@ -67,6 +75,11 @@ export interface CfpRepository {
     expectedVersion: number | null,
     audit?: AuditEntry,
   ): Promise<void>;
+  getOrganizerSubmissionsReadModel?(
+    tenantId: string,
+    eventId: string,
+  ): Promise<CfpOrganizerSubmissionsReadModel>;
+  listSubmissionsForEvent?(tenantId: string, eventId: string): Promise<Submission[]>;
 }
 
 export interface CfpReusableField {
@@ -182,7 +195,15 @@ export interface CfpReceipt {
   version: number;
   submittedAt: string;
 }
-
+export interface CfpOrganizerSubmission {
+  submission: Submission;
+  submissionFields: CfpForm["submissionFields"];
+  participantFields: CfpForm["participantFields"];
+}
+export interface CfpOrganizerSubmissionsReadModel {
+  readonly submissions: readonly Submission[];
+  readonly forms: readonly CfpForm[];
+}
 export interface PublicCfpEvent {
   id: EventCfp["id"];
   slug: EventCfp["slug"];
@@ -190,6 +211,11 @@ export interface PublicCfpEvent {
   timezone: EventCfp["timezone"];
   opensAt: EventCfp["opensAt"];
   closesAt: EventCfp["closesAt"];
+}
+export interface PublicCfpOrganization {
+  id: string;
+  slug: string;
+  name: string;
 }
 
 export type PublicFormRuleAction = Exclude<FormRuleAction, { type: "route" }>;
@@ -214,6 +240,7 @@ export type PublicCfpForm = Omit<
 };
 
 export interface PublishedCfp {
+  organization: PublicCfpOrganization;
   event: PublicCfpEvent;
   form: PublicCfpForm;
 }
@@ -289,6 +316,13 @@ function addCompletedStep(
 
 function validateReview(submission: Submission, form: CfpForm): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
+  if (submissionTitle(submission).length === 0) {
+    issues.push({
+      path: "answers.title",
+      code: "required",
+      message: "Title is required.",
+    });
+  }
   if (submission.participants.length === 0) {
     issues.push({
       path: "participants",
@@ -369,7 +403,15 @@ function submissionTitle(submission: Submission): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function validateFileRequestShapes(form: CfpForm, submission: Submission): ReviewIssue[] {
+function validateFileRequestShapes(
+  form: CfpForm,
+  submission: Submission,
+  options: {
+    enforceRequired: boolean;
+  } = {
+    enforceRequired: true,
+  },
+): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
 
   const inspect = (field: FormField, value: unknown, path: string): void => {
@@ -378,7 +420,7 @@ function validateFileRequestShapes(form: CfpForm, submission: Submission): Revie
     }
     const required = field.required || field.fileRequest.required;
     if (isEmptyAnswer(value)) {
-      if (required) {
+      if (options.enforceRequired && required) {
         issues.push({
           path,
           code: "required",
@@ -405,6 +447,22 @@ function validateFileRequestShapes(form: CfpForm, submission: Submission): Revie
     }
   }
   return issues;
+}
+
+function rebaseDraftToCurrentForm(submission: Submission, form: CfpForm): Submission {
+  if (submission.formVersion === form.version) return submission;
+  const issues = [
+    ...validateSubmissionAnswerCompatibility(form, submission.answers, submission.participants),
+    ...validateFileRequestShapes(form, submission, { enforceRequired: false }),
+  ];
+  if (submission.formVersion > form.version || issues.length > 0) {
+    throw new CfpError("CONFLICT", "The CFP form is incompatible with this historical draft.", {
+      submissionFormVersion: submission.formVersion,
+      currentFormVersion: form.version,
+      issues,
+    });
+  }
+  return { ...submission, formVersion: form.version };
 }
 
 function allowedMimeType(allowed: string, actual: string): boolean {
@@ -452,6 +510,104 @@ function ensureSubmissionSchemaVersion(submission: Submission, form: CfpForm): v
       },
     );
   }
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => valuesEqual(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.hasOwn(rightRecord, key) && valuesEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
+function preserveUnchangedAnswers(
+  sanitized: Record<string, unknown>,
+  candidate: Record<string, unknown>,
+  current: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(sanitized).map(([key, value]) => [
+      key,
+      Object.hasOwn(current, key) && valuesEqual(candidate[key], current[key])
+        ? current[key]
+        : value,
+    ]),
+  );
+}
+
+function sanitizeDraftChanges(
+  candidate: Submission,
+  current: Submission,
+  form: CfpForm,
+): Submission {
+  const sanitized = sanitizeSubmission(candidate, form);
+  const currentParticipants = new Map(
+    current.participants.map((participant) => [participant.id, participant]),
+  );
+  const currentContacts = new Map(
+    current.secondaryContacts.map((contact) => [contact.id, contact]),
+  );
+  return {
+    ...sanitized,
+    answers: preserveUnchangedAnswers(sanitized.answers, candidate.answers, current.answers),
+    participants: sanitized.participants.map((participant, index) => {
+      const candidateParticipant = candidate.participants[index];
+      const currentParticipant = currentParticipants.get(participant.id);
+      if (candidateParticipant === undefined || currentParticipant === undefined)
+        return participant;
+      return {
+        ...participant,
+        firstName: valuesEqual(candidateParticipant.firstName, currentParticipant.firstName)
+          ? currentParticipant.firstName
+          : participant.firstName,
+        lastName: valuesEqual(candidateParticipant.lastName, currentParticipant.lastName)
+          ? currentParticipant.lastName
+          : participant.lastName,
+        email: valuesEqual(candidateParticipant.email, currentParticipant.email)
+          ? currentParticipant.email
+          : participant.email,
+        biography: valuesEqual(candidateParticipant.biography, currentParticipant.biography)
+          ? currentParticipant.biography
+          : participant.biography,
+        answers: preserveUnchangedAnswers(
+          participant.answers,
+          candidateParticipant.answers,
+          currentParticipant.answers,
+        ),
+      };
+    }),
+    secondaryContacts: sanitized.secondaryContacts.map((contact, index) => {
+      const candidateContact = candidate.secondaryContacts[index];
+      const currentContact = currentContacts.get(contact.id);
+      if (candidateContact === undefined || currentContact === undefined) return contact;
+      return {
+        ...contact,
+        name: valuesEqual(candidateContact.name, currentContact.name)
+          ? currentContact.name
+          : contact.name,
+        email: valuesEqual(candidateContact.email, currentContact.email)
+          ? currentContact.email
+          : contact.email,
+      };
+    }),
+  };
 }
 interface CfpFileUploadContext {
   event: EventCfp;
@@ -612,11 +768,17 @@ export class CfpService {
         Partial<Pick<CfpFileAssetGateway, "issueUpload" | "finalizeUpload">>)
     | undefined;
   readonly #ids: CfpIdGenerator;
+  readonly #organization: {
+    getPublicOrganization(tenantId: string): Promise<PublicCfpOrganization>;
+  };
 
   constructor(dependencies: {
     repository: CfpRepository;
     idempotency: CfpIdempotencyCoordinator;
     effects: CfpEffects;
+    organization: {
+      getPublicOrganization(tenantId: string): Promise<PublicCfpOrganization>;
+    };
     clock?: CfpClock;
     ids?: CfpIdGenerator;
     fileAssets?: CfpFileAssetAuthorizer &
@@ -625,6 +787,7 @@ export class CfpService {
     this.#repository = dependencies.repository;
     this.#idempotency = dependencies.idempotency;
     this.#effects = dependencies.effects;
+    this.#organization = dependencies.organization;
     this.#clock = dependencies.clock ?? { now: () => new Date() };
     this.#fileAssets = dependencies.fileAssets;
     this.#ids =
@@ -652,18 +815,119 @@ export class CfpService {
         );
       });
   }
-
-  async getPublishedCfp(input: {
+  async listOrganizerSubmissions(input: {
     tenantId: string;
     eventId: string;
+  }): Promise<CfpOrganizerSubmission[]> {
+    const eventRead = this.#getEvent(input.tenantId, input.eventId);
+    const readModel = this.#repository.getOrganizerSubmissionsReadModel;
+    let submissions: readonly Submission[];
+    let batchForms: readonly CfpForm[] | undefined;
+    if (readModel !== undefined) {
+      const [eventResult, readModelResult] = await Promise.allSettled([
+        eventRead,
+        readModel.call(this.#repository, input.tenantId, input.eventId),
+      ]);
+      if (eventResult.status === "rejected") {
+        throw eventResult.reason;
+      }
+      if (readModelResult.status === "rejected") {
+        throw readModelResult.reason;
+      }
+      submissions = readModelResult.value.submissions;
+      batchForms = readModelResult.value.forms;
+    } else {
+      const listSubmissions = this.#repository.listSubmissionsForEvent;
+      if (listSubmissions === undefined) {
+        await eventRead;
+        throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
+      }
+      const [eventResult, submissionsResult] = await Promise.allSettled([
+        eventRead,
+        listSubmissions.call(this.#repository, input.tenantId, input.eventId),
+      ]);
+      if (eventResult.status === "rejected") {
+        throw eventResult.reason;
+      }
+      if (submissionsResult.status === "rejected") {
+        throw submissionsResult.reason;
+      }
+      submissions = submissionsResult.value;
+    }
+
+    const scopedSubmissions = submissions.filter(
+      (submission) =>
+        submission.tenantId === input.tenantId && submission.eventId === input.eventId,
+    );
+    const formIds = [...new Set(scopedSubmissions.map((submission) => submission.formId))];
+    const formsById = new Map<string, CfpForm>();
+    if (formIds.length > 0) {
+      if (batchForms !== undefined) {
+        for (const form of batchForms) {
+          if (form.tenantId === input.tenantId) {
+            formsById.set(form.id, form);
+          }
+        }
+      } else {
+        const listFormsByIds = this.#repository.listFormsByIds;
+        if (listFormsByIds !== undefined) {
+          const forms = await listFormsByIds.call(this.#repository, formIds);
+          for (const form of forms) {
+            if (form.tenantId === input.tenantId) {
+              formsById.set(form.id, form);
+            }
+          }
+        } else {
+          const forms = await Promise.all(
+            formIds.map((formId) => this.#getForm(input.tenantId, formId)),
+          );
+          for (const [index, formId] of formIds.entries()) {
+            const form = forms[index];
+            if (form !== undefined) {
+              formsById.set(formId, form);
+            }
+          }
+        }
+      }
+    }
+
+    const records: CfpOrganizerSubmission[] = [];
+    for (const submission of scopedSubmissions) {
+      const form = formsById.get(submission.formId);
+      if (form === undefined) {
+        throw new CfpError("NOT_FOUND", "The CFP form was not found.");
+      }
+      ensureTenant(form.tenantId, input.tenantId);
+      if (form.eventId !== input.eventId) {
+        continue;
+      }
+      records.push({
+        submission,
+        submissionFields: form.submissionFields,
+        participantFields: form.participantFields,
+      });
+    }
+    return records;
+  }
+  async getPublishedCfp(input: {
+    tenantId: string;
+    eventId?: string;
+    eventSlug?: string;
     formId?: string;
   }): Promise<PublishedCfp> {
-    const event = await this.#getEvent(input.tenantId, input.eventId);
-    const form = input.formId
-      ? await this.#getForm(input.tenantId, input.formId)
-      : (await this.#repository.listForms(input.tenantId, input.eventId)).find(
-          (candidate) => candidate.status === "published",
-        );
+    const event =
+      input.eventSlug === undefined
+        ? await this.#getEvent(input.tenantId, input.eventId ?? "")
+        : await this.#getEventBySlug(input.tenantId, input.eventSlug);
+    const publishedForms = (await this.#repository.listForms(input.tenantId, event.id)).filter(
+      (candidate) => candidate.status === "published",
+    );
+    const form =
+      input.formId === undefined
+        ? publishedForms.length === 1
+          ? publishedForms[0]
+          : undefined
+        : publishedForms.find((candidate) => candidate.id === input.formId);
     if (!form) {
       throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
     }
@@ -681,6 +945,7 @@ export class CfpService {
       ...publicForm
     } = sanitizedForm;
     return {
+      organization: await this.#organization.getPublicOrganization(input.tenantId),
       event: {
         id: event.id,
         slug: event.slug,
@@ -705,13 +970,15 @@ export class CfpService {
   }
   async getPublishedForm(input: {
     tenantId: string;
-    eventId: string;
+    eventId?: string;
+    eventSlug?: string;
     formId?: string;
   }): Promise<PublishedCfp> {
     return this.getPublishedCfp(input);
   }
   async getReceipt(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
   }): Promise<CfpReceipt> {
@@ -729,6 +996,7 @@ export class CfpService {
 
   async loadDraft(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
   }): Promise<Submission> {
@@ -736,8 +1004,8 @@ export class CfpService {
     const event = await this.#getEvent(input.tenantId, submission.eventId);
     const form = await this.#getForm(input.tenantId, submission.formId);
     ensureEventFormMatch(event, form);
-    ensureSubmissionSchemaVersion(submission, form);
-    return sanitizeSubmission(submission, form);
+    const rebased = rebaseDraftToCurrentForm(submission, form);
+    return submission.formVersion === form.version ? sanitizeSubmission(rebased, form) : rebased;
   }
 
   async createForm(input: {
@@ -785,10 +1053,49 @@ export class CfpService {
         issues: parsed.error.issues,
       });
     }
-    const event = {
+    const requestedEvent = {
       ...parsed.data,
       name: sanitizePlainText(parsed.data.name),
     };
+    const current = await this.#repository.getEvent(requestedEvent.tenantId, requestedEvent.id);
+    if (current === null) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
+    }
+    const event = {
+      ...requestedEvent,
+      slug: current.slug,
+      name: current.name,
+      timezone: current.timezone,
+      eventStartsAt: current.eventStartsAt,
+    };
+    if (current.eventStartsAt === undefined) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "The authoritative event start is unavailable for CFP schedule validation.",
+      );
+    }
+    const today = localDateInTimeZone(this.#clock.now().toISOString(), event.timezone);
+    const changedPastBoundary =
+      (event.opensAt !== current.opensAt &&
+        localDateInTimeZone(event.opensAt, event.timezone) < today) ||
+      (event.closesAt !== current.closesAt &&
+        localDateInTimeZone(event.closesAt, event.timezone) < today);
+    if (changedPastBoundary) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "New CFP dates cannot be before today in the event time zone.",
+      );
+    }
+    if (
+      event.eventStartsAt !== undefined &&
+      (Date.parse(event.opensAt) > Date.parse(event.eventStartsAt) ||
+        Date.parse(event.closesAt) > Date.parse(event.eventStartsAt))
+    ) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "The CFP window must finish before the event begins.",
+      );
+    }
     await this.#repository.saveEvent(event, expectedVersion);
     return event;
   }
@@ -843,8 +1150,10 @@ export class CfpService {
       `${input.tenantId}:cfp:create:${input.formId}:${input.ownerAccountId}:${key}`,
       key,
       async () => {
-        const event = await this.#getEvent(input.tenantId, input.eventId);
-        const form = await this.#getForm(input.tenantId, input.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, input.eventId),
+          this.#getForm(input.tenantId, input.formId),
+        ]);
         ensureEventFormMatch(event, form);
         await this.#validateReusableFields(form);
         if (form.status !== "published") {
@@ -1078,6 +1387,7 @@ export class CfpService {
 
   async saveDraft(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
     expectedVersion: number;
@@ -1097,40 +1407,54 @@ export class CfpService {
         if (current.version !== input.expectedVersion) {
           throw new CfpError("CONFLICT", "The submission has changed since it was loaded.");
         }
-        const event = await this.#getEvent(input.tenantId, current.eventId);
-        const form = await this.#getForm(input.tenantId, current.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, current.eventId),
+          this.#getForm(input.tenantId, current.formId),
+        ]);
         ensureEventFormMatch(event, form);
-        ensureSubmissionSchemaVersion(current, form);
-        if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
+        const rebasedCurrent = rebaseDraftToCurrentForm(current, form);
+        if (input.formVersion !== undefined && input.formVersion !== form.version) {
           throw new CfpError("CONFLICT", "The submission schema version is stale.", {
             expectedFormVersion: input.formVersion,
-            currentFormVersion: current.formVersion,
+            currentFormVersion: form.version,
           });
         }
         this.#ensureEditable(current, event);
 
-        const next = sanitizeSubmission(
-          submissionSchema.parse({
-            ...current,
-            version: current.version + 1,
-            completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
-            answers: input.answers ?? current.answers,
-            participants: input.participants ?? current.participants,
-            secondaryContacts: input.secondaryContacts ?? current.secondaryContacts,
-            updatedAt: this.#clock.now().toISOString(),
-          }),
-          form,
-        );
+        const parsed = submissionSchema.parse({
+          ...rebasedCurrent,
+          version: current.version + 1,
+          formVersion: form.version,
+          completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
+          answers:
+            input.answers === undefined
+              ? rebasedCurrent.answers
+              : { ...rebasedCurrent.answers, ...input.answers },
+          participants: input.participants ?? rebasedCurrent.participants,
+          secondaryContacts: input.secondaryContacts ?? rebasedCurrent.secondaryContacts,
+          updatedAt: this.#clock.now().toISOString(),
+        });
+        const compatibilityIssues = [
+          ...validateSubmissionAnswerCompatibility(form, parsed.answers, parsed.participants),
+          ...validateFileRequestShapes(form, parsed, { enforceRequired: false }),
+        ];
+        if (compatibilityIssues.length > 0) {
+          throw new CfpError(
+            "VALIDATION_FAILED",
+            "The draft answers are incompatible with the CFP form.",
+            {
+              issues: compatibilityIssues,
+            },
+          );
+        }
+        const next = sanitizeDraftChanges(parsed, current, form);
         if (next.participants.length > form.settings.speakerLimit) {
           throw new CfpError(
             "VALIDATION_FAILED",
             `This form allows at most ${form.settings.speakerLimit} speakers.`,
           );
         }
-        const fileIssues = [
-          ...validateFileRequestShapes(form, next),
-          ...(await this.#validateFileRequestAssets(form, next)),
-        ];
+        const fileIssues = await this.#validateFileRequestAssets(form, next);
         if (fileIssues.length > 0) {
           throw new CfpError("VALIDATION_FAILED", "The file request payload is invalid.", {
             issues: fileIssues,
@@ -1152,6 +1476,7 @@ export class CfpService {
 
   async review(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
     idempotencyKey: string;
@@ -1165,8 +1490,10 @@ export class CfpService {
         if (submission.status === "withdrawn") {
           throw new CfpError("INVALID_TRANSITION", "A withdrawn submission cannot be reviewed.");
         }
-        const event = await this.#getEvent(input.tenantId, submission.eventId);
-        const form = await this.#getForm(input.tenantId, submission.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, submission.eventId),
+          this.#getForm(input.tenantId, submission.formId),
+        ]);
         ensureEventFormMatch(event, form);
         ensureSubmissionSchemaVersion(submission, form);
         if (submission.status !== "reopened") {
@@ -1193,6 +1520,7 @@ export class CfpService {
 
   async submit(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
     expectedVersion: number;
@@ -1206,8 +1534,10 @@ export class CfpService {
       async () => {
         const current = await this.#getOwnedSubmission(input);
         if (current.status === "submitted") {
-          const event = await this.#getEvent(input.tenantId, current.eventId);
-          const form = await this.#getForm(input.tenantId, current.formId);
+          const [event, form] = await Promise.all([
+            this.#getEvent(input.tenantId, current.eventId),
+            this.#getForm(input.tenantId, current.formId),
+          ]);
           ensureEventFormMatch(event, form);
           ensureSubmissionSchemaVersion(current, form);
           await this.#effects.enqueueSubmissionConfirmation({
@@ -1234,8 +1564,10 @@ export class CfpService {
         if (current.version !== input.expectedVersion) {
           throw new CfpError("CONFLICT", "The submission has changed since it was loaded.");
         }
-        const event = await this.#getEvent(input.tenantId, current.eventId);
-        const form = await this.#getForm(input.tenantId, current.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, current.eventId),
+          this.#getForm(input.tenantId, current.formId),
+        ]);
         ensureEventFormMatch(event, form);
         ensureSubmissionSchemaVersion(current, form);
         if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
@@ -1302,6 +1634,7 @@ export class CfpService {
 
   async reopen(input: {
     tenantId: string;
+    eventId: string;
     submissionId: string;
     organizerId: string;
     expectedVersion: number;
@@ -1314,6 +1647,9 @@ export class CfpService {
       key,
       async () => {
         const current = await this.#getSubmission(input.tenantId, input.submissionId);
+        if (current.eventId !== input.eventId) {
+          throw new CfpError("FORBIDDEN", "The submission does not belong to this event.");
+        }
         if (current.status !== "submitted") {
           throw new CfpError("INVALID_TRANSITION", "Only a submitted record can be reopened.");
         }
@@ -1653,6 +1989,15 @@ export class CfpService {
     return event;
   }
 
+  async #getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp> {
+    const event = await this.#repository.getEventBySlug(tenantId, eventSlug);
+    if (!event) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
+    }
+    ensureTenant(event.tenantId, tenantId);
+    return event;
+  }
+
   async #getForm(tenantId: string, formId: string): Promise<CfpForm> {
     const form = await this.#repository.getForm(tenantId, formId);
     if (!form) {
@@ -1673,12 +2018,16 @@ export class CfpService {
 
   async #getOwnedSubmission(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
   }): Promise<Submission> {
     const submission = await this.#getSubmission(input.tenantId, input.submissionId);
     if (submission.ownerAccountId !== input.ownerAccountId) {
       throw new CfpError("FORBIDDEN", "The submission is not owned by this account.");
+    }
+    if (input.eventId !== undefined && submission.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The submission does not belong to this event.");
     }
     return submission;
   }

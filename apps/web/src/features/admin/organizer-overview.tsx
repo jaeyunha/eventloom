@@ -1,78 +1,92 @@
 "use client";
 
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
-  type CSSProperties,
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
+import {
+  createScopedReadFlightCoordinator,
+  type ScopedReadFlightCoordinator,
+} from "@/lib/scoped-read-flight";
+import { useOrganizerOrganizationId } from "./admin-shell";
 import styles from "./admin-shell.module.css";
+import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
+import {
+  createOrganizerEventsApi,
+  createOrganizerOverviewApi,
+  getCalendarMonthCells,
+  initialCalendarMonth,
+  normalizeOrganizerEventSlug,
+  type OrganizerEventCreateInput,
+  type OrganizerEventFormValues,
+  type OrganizerEventRecord,
+  type OrganizerEventStatus,
+  type OrganizerEventsApi,
+  OrganizerEventsApiError,
+  type OrganizerOverviewActionType,
+  type OrganizerOverviewActivityData,
+  type OrganizerOverviewActivityMetrics,
+  type OrganizerOverviewApi,
+  type OrganizerOverviewConfigResult,
+  type OrganizerOverviewCoreData,
+  type OrganizerOverviewEvent,
+  organizerEventEditorFormValues,
+  organizerEventIntersectsCalendarDate,
+  organizerEventMinimumDateTimeLocal,
+  eventStatusClass as organizerEventStatusClass,
+  parseCalendarInstant,
+  resolveOrganizerOverviewConfig,
+  validateOrganizerEventForm,
+} from "./organizer-overview-model";
 
-export interface OrganizerOverviewMetrics {
-  readonly eventCount: number;
-  readonly submissionCount: number;
-  readonly pendingReviewCount: number;
-  readonly outstandingSpeakerTaskCount: number;
-  readonly publishedSessionCount: number;
-}
-
-export interface OrganizerOverviewEvent {
-  readonly id: string;
-  readonly name: string;
-  readonly slug: string | null;
-  readonly status: string | null;
-  readonly startsAt: string | null;
-  readonly endsAt: string | null;
-}
-
-export type OrganizerOverviewActionType = "reviews" | "speaker_tasks" | "agenda";
-
-export interface OrganizerOverviewActionItem {
-  readonly id: string;
-  readonly type: OrganizerOverviewActionType;
-  readonly eventId: string;
-  readonly title: string;
-  readonly description: string;
-  readonly count: number;
-  readonly priority: number;
-  readonly dueAt: string | null;
-  readonly href: string;
-}
-
-export interface OrganizerOverviewData {
-  readonly organizationId: string;
-  readonly metrics: OrganizerOverviewMetrics;
-  readonly events: readonly OrganizerOverviewEvent[];
-  readonly actionItems: readonly OrganizerOverviewActionItem[];
-}
-
-export interface OrganizerOverviewApi {
-  getOverview(): Promise<OrganizerOverviewData>;
-}
-
-export interface OrganizerOverviewConfig {
-  readonly apiBaseUrl: string;
-  readonly organizationId: string;
-}
-
-export type OrganizerOverviewConfigResult = OrganizerOverviewConfig | { readonly error: string };
+export type OrganizerOverviewRequestState<T> =
+  | { readonly status: "loading"; readonly data: T | null }
+  | { readonly status: "loaded"; readonly data: T }
+  | {
+      readonly status: "error";
+      readonly data: T | null;
+      readonly message: string;
+    };
 
 export type OrganizerOverviewViewState =
-  | { readonly status: "loading" }
-  | { readonly status: "config-error"; readonly message: string }
-  | { readonly status: "error"; readonly message: string }
-  | { readonly status: "loaded"; readonly data: OrganizerOverviewData };
-
-type OrganizerOverviewEnvironment = {
-  readonly NEXT_PUBLIC_API_URL?: string | undefined;
-  readonly NEXT_PUBLIC_APP_ENV?: string | undefined;
-  readonly NEXT_PUBLIC_ORGANIZATION_ID?: string | undefined;
-};
-
-type UnknownRecord = Record<string, unknown>;
+  | {
+      readonly status: "loading";
+      readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
+      readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+    }
+  | {
+      readonly status: "config-error";
+      readonly message: string;
+    }
+  | {
+      readonly status: "error";
+      readonly message: string;
+      readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
+      readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+    }
+  | {
+      readonly status: "loaded";
+      readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
+      readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+    };
 
 const actionTypeLabels: Record<OrganizerOverviewActionType, string> = {
   reviews: "Reviews",
@@ -80,221 +94,38 @@ const actionTypeLabels: Record<OrganizerOverviewActionType, string> = {
   agenda: "Agenda",
 };
 
-const metricDefinitions: readonly {
+const coreMetricDefinition = {
+  label: "Events",
+  key: "eventCount" as const,
+  detail: "Live event records",
+};
+
+const activityMetricDefinitions: readonly {
   readonly label: string;
-  readonly key: keyof OrganizerOverviewMetrics;
-  readonly icon: string;
+  readonly key: keyof OrganizerOverviewActivityMetrics;
   readonly detail: string;
 }[] = [
-  { label: "Events", key: "eventCount", icon: "▦", detail: "Live event records" },
-  { label: "Submissions", key: "submissionCount", icon: "▤", detail: "Across this organization" },
+  {
+    label: "Submissions",
+    key: "submissionCount",
+    detail: "Across this organization",
+  },
   {
     label: "Pending reviews",
     key: "pendingReviewCount",
-    icon: "◌",
     detail: "Awaiting organizer attention",
   },
   {
     label: "Speaker tasks",
     key: "outstandingSpeakerTaskCount",
-    icon: "✓",
     detail: "Open speaker work items",
   },
   {
     label: "Published sessions",
     key: "publishedSessionCount",
-    icon: "▥",
     detail: "Included in published agendas",
   },
 ] as const;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null;
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`The organizer overview response is missing ${field}.`);
-  }
-  return value;
-}
-
-function nullableString(value: unknown, field: string): string | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  if (typeof value !== "string") {
-    throw new Error(`The organizer overview response contains an invalid ${field}.`);
-  }
-  return value;
-}
-
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(`The organizer overview response contains an invalid ${field}.`);
-  }
-  return value;
-}
-
-function integer(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new Error(`The organizer overview response contains an invalid ${field}.`);
-  }
-  return value;
-}
-
-/** Parse the API envelope instead of trusting unvalidated client data. */
-export function parseOrganizerOverviewResponse(payload: unknown): OrganizerOverviewData {
-  if (!isRecord(payload) || !isRecord(payload.data)) {
-    throw new Error("The organizer overview response was not valid.");
-  }
-
-  const data = payload.data;
-  if (!isRecord(data.metrics) || !Array.isArray(data.events) || !Array.isArray(data.actionItems)) {
-    throw new Error("The organizer overview response was not valid.");
-  }
-
-  const events = data.events.map((event, index) => {
-    if (!isRecord(event)) {
-      throw new Error(
-        `The organizer overview response contains an invalid event at index ${index}.`,
-      );
-    }
-    return {
-      id: requiredString(event.id, `events[${index}].id`),
-      name: requiredString(event.name, `events[${index}].name`),
-      slug: nullableString(event.slug, `events[${index}].slug`),
-      status: nullableString(event.status, `events[${index}].status`),
-      startsAt: nullableString(event.startsAt, `events[${index}].startsAt`),
-      endsAt: nullableString(event.endsAt, `events[${index}].endsAt`),
-    };
-  });
-
-  const actionItems = data.actionItems.map((item, index) => {
-    if (!isRecord(item)) {
-      throw new Error(
-        `The organizer overview response contains an invalid action item at index ${index}.`,
-      );
-    }
-    const type = requiredString(item.type, `actionItems[${index}].type`);
-    if (type !== "reviews" && type !== "speaker_tasks" && type !== "agenda") {
-      throw new Error(`The organizer overview response contains an invalid action item type.`);
-    }
-    const actionType = type as OrganizerOverviewActionType;
-    return {
-      id: requiredString(item.id, `actionItems[${index}].id`),
-      type: actionType,
-      eventId: requiredString(item.eventId, `actionItems[${index}].eventId`),
-      title: requiredString(item.title, `actionItems[${index}].title`),
-      description: requiredString(item.description, `actionItems[${index}].description`),
-      count: nonNegativeInteger(item.count, `actionItems[${index}].count`),
-      priority: integer(item.priority, `actionItems[${index}].priority`),
-      dueAt: nullableString(item.dueAt, `actionItems[${index}].dueAt`),
-      href: requiredString(item.href, `actionItems[${index}].href`),
-    };
-  });
-
-  return {
-    organizationId: requiredString(data.organizationId, "organizationId"),
-    metrics: {
-      eventCount: nonNegativeInteger(data.metrics.eventCount, "metrics.eventCount"),
-      submissionCount: nonNegativeInteger(data.metrics.submissionCount, "metrics.submissionCount"),
-      pendingReviewCount: nonNegativeInteger(
-        data.metrics.pendingReviewCount,
-        "metrics.pendingReviewCount",
-      ),
-      outstandingSpeakerTaskCount: nonNegativeInteger(
-        data.metrics.outstandingSpeakerTaskCount,
-        "metrics.outstandingSpeakerTaskCount",
-      ),
-      publishedSessionCount: nonNegativeInteger(
-        data.metrics.publishedSessionCount,
-        "metrics.publishedSessionCount",
-      ),
-    },
-    events,
-    actionItems,
-  };
-}
-
-export function resolveOrganizerOverviewConfig(
-  environment: OrganizerOverviewEnvironment = {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
-    NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV,
-    NEXT_PUBLIC_ORGANIZATION_ID: process.env.NEXT_PUBLIC_ORGANIZATION_ID,
-  },
-): OrganizerOverviewConfigResult {
-  const apiBaseUrl = environment.NEXT_PUBLIC_API_URL?.trim().replace(/\/+$/u, "") ?? "";
-  const appEnv = environment.NEXT_PUBLIC_APP_ENV?.trim() ?? "";
-  const configuredOrganizationId = environment.NEXT_PUBLIC_ORGANIZATION_ID?.trim() ?? "";
-  const organizationId =
-    configuredOrganizationId || (appEnv === "local" ? "local-organization" : "");
-
-  if (!apiBaseUrl) {
-    return {
-      error:
-        "Organizer overview is unavailable because NEXT_PUBLIC_API_URL is missing. Configure the API origin for this web deployment.",
-    };
-  }
-  if (!organizationId) {
-    return {
-      error:
-        "Organizer overview is unavailable because NEXT_PUBLIC_ORGANIZATION_ID is missing. Set the explicit tenant ID for this deployment; only local mode may use local-organization automatically.",
-    };
-  }
-  if (organizationId === "local-organization" && appEnv !== "local") {
-    return {
-      error:
-        "Organizer overview is unavailable because local-organization is only valid when NEXT_PUBLIC_APP_ENV=local. Set NEXT_PUBLIC_ORGANIZATION_ID to this deployment's tenant ID.",
-    };
-  }
-
-  return { apiBaseUrl, organizationId };
-}
-
-async function responseErrorMessage(response: Response): Promise<string> {
-  try {
-    const payload: unknown = await response.json();
-    if (isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string") {
-      return payload.error.message;
-    }
-  } catch {
-    // Use the status fallback below when the response is not JSON.
-  }
-  return `The organizer overview request failed (HTTP ${response.status}).`;
-}
-
-export function createOrganizerOverviewApi(
-  apiBaseUrl: string,
-  organizationId: string,
-  fetcher: typeof fetch = globalThis.fetch,
-): OrganizerOverviewApi {
-  const endpoint = `${apiBaseUrl.replace(/\/+$/u, "")}/api/admin/organizations/${encodeURIComponent(organizationId)}/overview`;
-  let inFlight: Promise<OrganizerOverviewData> | null = null;
-  return {
-    getOverview() {
-      if (inFlight !== null) {
-        return inFlight;
-      }
-      inFlight = (async () => {
-        const response = await fetcher(endpoint, {
-          method: "GET",
-          credentials: "include",
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error(await responseErrorMessage(response));
-        }
-        return parseOrganizerOverviewResponse(await response.json());
-      })().finally(() => {
-        inFlight = null;
-      });
-      return inFlight;
-    },
-  };
-}
-
 function formatDate(value: string | null): string | null {
   if (!value) {
     return null;
@@ -325,18 +156,14 @@ function formatDueDate(value: string | null): string | null {
   return formatted ? `Due ${formatted}` : null;
 }
 
+const organizerEventStatusClasses = {
+  statusLive: styles.statusLive,
+  statusDraft: styles.statusDraft,
+  statusArchived: styles.statusArchived,
+} as const;
+
 function eventStatusClass(status: string | null): string {
-  switch (status?.toLowerCase()) {
-    case "live":
-    case "published":
-      return styles.statusLive ?? "";
-    case "draft":
-      return styles.statusDraft ?? "";
-    case "archived":
-      return styles.statusArchived ?? "";
-    default:
-      return styles.statusArchived ?? "";
-  }
+  return organizerEventStatusClasses[organizerEventStatusClass(status)] ?? "";
 }
 
 function eventStatusLabel(status: string | null): string {
@@ -362,99 +189,45 @@ function LoadingState() {
             Organization overview
           </h1>
           <p className={styles.pageDescription}>
-            Loading live event, submission, review, and speaker data.
+            Loading live operational data for your organization.
           </p>
         </div>
         <div className={styles.headerActions}>
           <Link className={styles.primaryButton} href="/admin/events">
-            View events <span aria-hidden="true">→</span>
+            Manage events
           </Link>
         </div>
       </header>
 
-      <section className={styles.metricsGrid} aria-label="Loading organization metrics">
-        {metricDefinitions.map((metric) => (
-          <article className={styles.metricCard} key={metric.key}>
-            <div className={styles.metricTop}>
-              <span
-                className={`${styles.metricIcon} ${styles.skeletonCircle}`}
-                aria-hidden="true"
-              />
-            </div>
-            <div>
-              <span className={styles.metricLabel}>{metric.label}</span>
-              <span className={styles.skeletonValue} aria-hidden="true" />
-              <span className={styles.skeletonLine} aria-hidden="true" />
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <div className={styles.dashboardGrid}>
+      <div className={styles.overviewStack}>
         <section className={styles.panel} aria-labelledby="organizer-overview-loading-actions">
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Action queue</p>
+              <p className={styles.panelEyebrow}>Needs attention</p>
               <h2 className={styles.panelTitle} id="organizer-overview-loading-actions">
-                Tasks that need you
+                Needs attention
               </h2>
             </div>
             <span className={styles.skeletonInline} aria-hidden="true" />
           </div>
           <div className={styles.panelContent} aria-hidden="true">
-            <div className={styles.skeletonTask}>
-              <span className={styles.skeletonCircle} />
-              <span className={styles.skeletonTaskCopy}>
-                <span className={styles.skeletonLine} />
-                <span className={styles.skeletonLineShort} />
-              </span>
-              <span className={styles.skeletonAction} />
-            </div>
-            <div className={styles.skeletonTask}>
-              <span className={styles.skeletonCircle} />
-              <span className={styles.skeletonTaskCopy}>
-                <span className={styles.skeletonLine} />
-                <span className={styles.skeletonLineShort} />
-              </span>
-              <span className={styles.skeletonAction} />
-            </div>
-            <div className={styles.skeletonTask}>
-              <span className={styles.skeletonCircle} />
-              <span className={styles.skeletonTaskCopy}>
-                <span className={styles.skeletonLine} />
-                <span className={styles.skeletonLineShort} />
-              </span>
-              <span className={styles.skeletonAction} />
-            </div>
+            {[1, 2, 3].map((item) => (
+              <div className={styles.skeletonTask} key={item}>
+                <span className={styles.skeletonCircle} />
+                <span className={styles.skeletonTaskCopy}>
+                  <span className={styles.skeletonLine} />
+                  <span className={styles.skeletonLineShort} />
+                </span>
+                <span className={styles.skeletonAction} />
+              </div>
+            ))}
           </div>
         </section>
 
-        <section
-          className={`${styles.panel} ${styles.guidancePanel}`}
-          aria-labelledby="organizer-overview-loading-guidance"
-        >
+        <section className={styles.panel} aria-labelledby="organizer-overview-loading-events">
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Organization</p>
-              <h2 className={styles.panelTitle} id="organizer-overview-loading-guidance">
-                Keep your program moving
-              </h2>
-            </div>
-          </div>
-          <div className={styles.panelContent} aria-hidden="true">
-            <span className={styles.skeletonLine} />
-            <span className={styles.skeletonLine} />
-            <span className={styles.skeletonLineShort} />
-          </div>
-        </section>
-
-        <section
-          className={`${styles.panel} ${styles.widePanel}`}
-          aria-labelledby="organizer-overview-loading-events"
-        >
-          <div className={styles.panelHeader}>
-            <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Live event data</p>
+              <p className={styles.panelEyebrow}>Current and upcoming</p>
               <h2 className={styles.panelTitle} id="organizer-overview-loading-events">
                 Events
               </h2>
@@ -482,6 +255,26 @@ function LoadingState() {
             </div>
           </div>
         </section>
+
+        <section className={styles.metricsSection} aria-label="Loading organization metrics">
+          <div className={styles.metricsGrid}>
+            {[coreMetricDefinition, ...activityMetricDefinitions].map((metric) => (
+              <article className={styles.metricCard} key={metric.key}>
+                <div className={styles.metricTop}>
+                  <span
+                    className={`${styles.metricIcon} ${styles.skeletonCircle}`}
+                    aria-hidden="true"
+                  />
+                </div>
+                <div>
+                  <span className={styles.metricLabel}>{metric.label}</span>
+                  <span className={styles.skeletonValue} aria-hidden="true" />
+                  <span className={styles.skeletonLine} aria-hidden="true" />
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       </div>
       <span className={styles.srOnly}>Loading organizer overview…</span>
     </div>
@@ -492,11 +285,13 @@ function MessageState({
   message,
   title,
   onRetry,
+  retryLabel = "Try again",
   role,
 }: Readonly<{
   message: string;
   title: string;
   onRetry?: (() => void) | undefined;
+  retryLabel?: string | undefined;
   role: "alert" | "status";
 }>) {
   return (
@@ -514,7 +309,7 @@ function MessageState({
               void onRetry();
             }}
           >
-            Try again
+            {retryLabel}
           </button>
         ) : null}
       </div>
@@ -522,92 +317,186 @@ function MessageState({
   );
 }
 
-function ActionItems({ data }: Readonly<{ data: OrganizerOverviewData }>) {
-  const actionItems = [...data.actionItems].sort((left, right) => {
-    const priorityDifference = right.priority - left.priority;
-    if (priorityDifference !== 0) {
-      return priorityDifference;
-    }
-    if (left.dueAt && !right.dueAt) {
-      return -1;
-    }
-    if (!left.dueAt && right.dueAt) {
-      return 1;
-    }
-    return 0;
-  });
-
+function ActivityMetricCards({
+  state,
+  onRetry,
+}: Readonly<{
+  state: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+  onRetry?: (() => void) | undefined;
+}>) {
   return (
-    <section className={styles.panel} aria-labelledby="action-items-title">
-      <div className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Action queue</p>
-          <h2 className={styles.panelTitle} id="action-items-title">
-            Tasks that need you
-          </h2>
-        </div>
-        <div className={styles.panelHeaderActions}>
-          <span className={styles.panelCount}>
-            {data.actionItems.length} {data.actionItems.length === 1 ? "task" : "tasks"}
-          </span>
-          <Link className={styles.panelLink} href="/admin/events">
-            View events <span aria-hidden="true">→</span>
-          </Link>
-        </div>
-      </div>
-      <div className={styles.panelContent}>
-        {actionItems.length === 0 ? (
-          <div className={styles.emptyState}>
-            <p className={styles.emptyStateTitle}>You&apos;re all caught up</p>
-            <p className={styles.muted} role="status">
-              No action items are waiting for this organization.
-            </p>
-          </div>
-        ) : (
-          <ul className={styles.taskList} aria-label="Prioritized organizer tasks">
-            {actionItems.map((item) => {
-              const dueDate = formatDueDate(item.dueAt);
-              const critical = item.priority >= 80;
-              return (
-                <li
-                  className={`${styles.taskItem} ${critical ? styles.taskItemCritical : ""}`}
-                  key={item.id}
+    <>
+      {activityMetricDefinitions.map((metric, index) => {
+        const data = state.data;
+        const value = data?.metrics[metric.key];
+        const hasError = state.status === "error";
+        const isLoading = state.status === "loading";
+        return (
+          <Card className={styles.metricDataCard} key={metric.key}>
+            <CardHeader className={styles.metricDataHeader}>
+              <CardDescription className={styles.metricLabel}>{metric.label}</CardDescription>
+              {value === undefined ? (
+                <CardTitle className={styles.metricValue} role={hasError ? "alert" : "status"}>
+                  {hasError ? "Unavailable" : "Loading…"}
+                </CardTitle>
+              ) : (
+                <CardTitle className={styles.metricValue}>{value}</CardTitle>
+              )}
+            </CardHeader>
+            <CardContent className={styles.metricDetail}>
+              {data && isLoading ? <p role="status">Refreshing secondary metrics…</p> : null}
+              {data && hasError ? <p role="alert">Stale data. {state.message}</p> : null}
+              {!data && state.status === "error" ? <p role="alert">{state.message}</p> : null}
+              {index === 0 && hasError && onRetry ? (
+                <Button
+                  className="mt-3"
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={() => void onRetry()}
                 >
-                  <span className={styles.taskIcon} aria-hidden="true">
-                    {critical ? "!" : "·"}
-                  </span>
-                  <div className={styles.taskContent}>
-                    <h3 className={styles.taskTitle}>{item.title}</h3>
-                    <p className={styles.taskDescription}>{item.description}</p>
-                    <p className={styles.taskMeta}>
-                      <span className={styles.taskPriority}>
-                        {critical ? "High priority" : "Priority queued"}
-                      </span>
-                      <span aria-hidden="true"> · </span>
-                      {actionTypeLabels[item.type]} · {item.count}{" "}
-                      {item.count === 1 ? "item" : "items"}
-                      {dueDate ? ` · ${dueDate}` : ""}
-                    </p>
-                  </div>
-                  <Link
-                    aria-label={`Open ${item.title}`}
-                    className={`${styles.alertTag} ${critical ? styles.alertTagCritical : ""}`}
-                    href={item.href}
-                  >
-                    Open
-                    <span className={styles.srOnly}> {item.title}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-    </section>
+                  Retry activity
+                </Button>
+              ) : null}
+              {value !== undefined && !isLoading && !hasError ? <p>{metric.detail}</p> : null}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </>
   );
 }
 
-function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
+function ActionItems({
+  state,
+  onRetry,
+}: Readonly<{
+  state: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+  onRetry?: (() => void) | undefined;
+}>) {
+  const data = state.data;
+  const actionItems = data
+    ? [...data.actionItems].sort((left, right) => {
+        const priorityDifference = right.priority - left.priority;
+        if (priorityDifference !== 0) {
+          return priorityDifference;
+        }
+        if (left.dueAt && !right.dueAt) {
+          return -1;
+        }
+        if (!left.dueAt && right.dueAt) {
+          return 1;
+        }
+        return 0;
+      })
+    : [];
+
+  return (
+    <Card className={styles.overviewPanel} role="region" aria-labelledby="action-items-title">
+      <CardHeader className={styles.overviewPanelHeader}>
+        <div>
+          <CardDescription className={styles.panelEyebrow}>Prioritized work</CardDescription>
+          <CardTitle
+            aria-level={2}
+            className={styles.panelTitle}
+            id="action-items-title"
+            role="heading"
+          >
+            Needs attention
+          </CardTitle>
+        </div>
+        <Badge variant="secondary">
+          {data
+            ? `${data.actionItems.length} ${data.actionItems.length === 1 ? "task" : "tasks"}`
+            : state.status === "loading"
+              ? "Loading…"
+              : "Unavailable"}
+        </Badge>
+      </CardHeader>
+      <CardContent className={styles.overviewPanelContent}>
+        {!data && state.status === "loading" ? (
+          <p className={styles.muted} role="status" aria-live="polite">
+            Loading action items…
+          </p>
+        ) : !data && state.status === "error" ? (
+          <div className={styles.emptyState} role="alert">
+            <p className={styles.emptyStateTitle}>Action items unavailable</p>
+            <p className={styles.muted}>{state.message}</p>
+            {onRetry ? (
+              <Button size="sm" type="button" variant="outline" onClick={() => void onRetry()}>
+                Retry activity
+              </Button>
+            ) : null}
+          </div>
+        ) : (
+          <>
+            {state.status === "loading" ? (
+              <p className={styles.muted} role="status" aria-live="polite">
+                Refreshing action items…
+              </p>
+            ) : null}
+            {state.status === "error" && onRetry ? (
+              <div role="alert">
+                <p className={styles.muted}>Stale action items. {state.message}</p>
+                <Button size="sm" type="button" variant="outline" onClick={() => void onRetry()}>
+                  Retry activity
+                </Button>
+              </div>
+            ) : state.status === "error" ? (
+              <p className={styles.muted} role="alert">
+                Stale action items. {state.message}
+              </p>
+            ) : null}
+            {actionItems.length === 0 ? (
+              <div className={styles.emptyState}>
+                <p className={styles.emptyStateTitle}>You&apos;re all caught up</p>
+                <p className={styles.muted} role="status">
+                  No action items are waiting for this organization.
+                </p>
+              </div>
+            ) : (
+              <ul className={styles.taskList} aria-label="Prioritized organizer tasks">
+                {actionItems.map((item) => {
+                  const dueDate = formatDueDate(item.dueAt);
+                  const critical = item.priority >= 80;
+                  return (
+                    <li
+                      className={`${styles.taskItem} ${critical ? styles.taskItemCritical : ""}`}
+                      key={item.id}
+                    >
+                      <span className={styles.taskIcon} aria-hidden="true" />
+                      <div className={styles.taskContent}>
+                        <h3 className={styles.taskTitle}>{item.title}</h3>
+                        <p className={styles.taskDescription}>{item.description}</p>
+                        <p className={styles.taskMeta}>
+                          <span className={styles.taskPriority}>
+                            {critical ? "High priority" : "Priority queued"}
+                          </span>
+                          <span aria-hidden="true"> · </span>
+                          {actionTypeLabels[item.type]} · {item.count}{" "}
+                          {item.count === 1 ? "item" : "items"}
+                          {dueDate ? ` · ${dueDate}` : ""}
+                        </p>
+                      </div>
+                      <Button asChild size="sm" variant={critical ? "destructive" : "outline"}>
+                        <Link aria-label={`Open ${item.title}`} href={item.href}>
+                          Open
+                          <span className="sr-only"> {item.title}</span>
+                        </Link>
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
   if (data.events.length === 0) {
     return (
       <div className={styles.panelContent}>
@@ -616,8 +505,8 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
           <p className={styles.muted} role="status">
             No events are available for this organization yet.
           </p>
-          <Link className={styles.primaryButton} href="/admin/events">
-            Manage events <span aria-hidden="true">→</span>
+          <Link className={styles.primaryButton} href="/admin/events?create=1">
+            Create event
           </Link>
         </div>
       </div>
@@ -626,7 +515,7 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
 
   return (
     <>
-      <div className={styles.tableWrap}>
+      <div className={`${styles.tableWrap} ${styles.overviewTableWrap}`}>
         <table className={styles.eventsTable}>
           <caption>Organization events and their current status</caption>
           <thead>
@@ -648,7 +537,8 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
                 </td>
                 <td>
                   <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
-                    <span aria-hidden="true">●</span>&nbsp;{eventStatusLabel(event.status)}
+                    <span className={styles.statusDot} aria-hidden="true" />
+                    {eventStatusLabel(event.status)}
                   </span>
                 </td>
                 <td className={styles.eventDateCell}>{formatEventDates(event)}</td>
@@ -659,14 +549,14 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
                       className={styles.primaryButton}
                       href={agendaHref(data.organizationId, event.id)}
                     >
-                      Open agenda <span aria-hidden="true">→</span>
+                      Open agenda
                     </Link>
                     <Link
                       aria-label={`Open settings for ${event.name}`}
                       className={styles.outlineButton}
                       href={eventSettingsHref(data.organizationId, event.id)}
                     >
-                      Settings <span aria-hidden="true">→</span>
+                      Settings
                     </Link>
                   </div>
                 </td>
@@ -684,7 +574,8 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
                 {event.slug ? <p className={styles.eventSlug}>/{event.slug}</p> : null}
               </div>
               <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
-                <span aria-hidden="true">●</span>&nbsp;{eventStatusLabel(event.status)}
+                <span className={styles.statusDot} aria-hidden="true" />
+                {eventStatusLabel(event.status)}
               </span>
             </div>
             <div className={styles.eventCardMeta}>
@@ -698,14 +589,14 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
                 className={styles.primaryButton}
                 href={agendaHref(data.organizationId, event.id)}
               >
-                Open agenda <span aria-hidden="true">→</span>
+                Open agenda
               </Link>
               <Link
                 aria-label={`Open settings for ${event.name}`}
                 className={styles.secondaryButton}
                 href={eventSettingsHref(data.organizationId, event.id)}
               >
-                Settings <span aria-hidden="true">→</span>
+                Settings
               </Link>
             </div>
           </article>
@@ -715,16 +606,51 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
   );
 }
 
+function stateWithCore(
+  previous: OrganizerOverviewViewState,
+  core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>,
+): OrganizerOverviewViewState {
+  if (previous.status === "config-error") {
+    return previous;
+  }
+  if (core.data === null) {
+    if (core.status === "error") {
+      return {
+        status: "error",
+        message: core.message,
+        core,
+        activity: previous.activity,
+      };
+    }
+    return { status: "loading", core, activity: previous.activity };
+  }
+  return { status: "loaded", core, activity: previous.activity };
+}
+
+function stateWithActivity(
+  previous: OrganizerOverviewViewState,
+  activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>,
+): OrganizerOverviewViewState {
+  if (previous.status === "config-error") {
+    return previous;
+  }
+  if (previous.core.data === null) {
+    return previous.status === "error"
+      ? { ...previous, activity }
+      : { status: "loading", core: previous.core, activity };
+  }
+  return { status: "loaded", core: previous.core, activity };
+}
+
 export function OrganizerOverviewView({
   state,
-  onRetry,
+  onRetryCore,
+  onRetryActivity,
 }: Readonly<{
   state: OrganizerOverviewViewState;
-  onRetry?: (() => void) | undefined;
+  onRetryCore?: (() => void) | undefined;
+  onRetryActivity?: (() => void) | undefined;
 }>) {
-  if (state.status === "loading") {
-    return <LoadingState />;
-  }
   if (state.status === "config-error") {
     return (
       <MessageState
@@ -734,18 +660,36 @@ export function OrganizerOverviewView({
       />
     );
   }
-  if (state.status === "error") {
+  if (state.status === "loading" && state.core.data === null) {
+    return <LoadingState />;
+  }
+  if (state.status === "error" || state.core.data === null) {
     return (
       <MessageState
-        message={state.message}
+        message={
+          state.status === "error" ? state.message : "The core overview data was not loaded."
+        }
         title="Unable to load organizer overview"
-        onRetry={onRetry}
+        onRetry={onRetryCore}
+        retryLabel="Retry core"
         role="alert"
       />
     );
   }
 
-  const { data } = state;
+  const core = state.core.data;
+  if (core === null) {
+    return (
+      <MessageState
+        message="The core overview data was not loaded."
+        title="Unable to load organizer overview"
+        onRetry={onRetryCore}
+        retryLabel="Retry core"
+        role="alert"
+      />
+    );
+  }
+  const activity = state.activity;
   return (
     <>
       <header className={styles.pageHeader}>
@@ -753,74 +697,89 @@ export function OrganizerOverviewView({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Organization overview</h1>
           <p className={styles.pageDescription}>
-            Live operational data for your organization, including events, submissions, reviews, and
-            speaker work.
+            A calm view of what needs attention and which event to open next.
           </p>
+          {state.core.status === "loading" ? (
+            <p className={styles.taskMeta} role="status" aria-live="polite">
+              Refreshing core event data…
+            </p>
+          ) : null}
+          {state.core.status === "error" ? (
+            <Alert variant="destructive">
+              <AlertTitle>Event data could not refresh</AlertTitle>
+              <AlertDescription>Showing previous event data. {state.core.message}</AlertDescription>
+              {onRetryCore ? (
+                <Button
+                  className="mt-3"
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={() => void onRetryCore()}
+                >
+                  Retry core
+                </Button>
+              ) : null}
+            </Alert>
+          ) : null}
         </div>
         <div className={styles.headerActions}>
-          <Link className={styles.primaryButton} href="/admin/events">
-            View events <span aria-hidden="true">→</span>
-          </Link>
+          <Button asChild>
+            <Link href="/admin/events">Manage events</Link>
+          </Button>
         </div>
       </header>
 
-      <section className={styles.metricsGrid} aria-labelledby="overview-metrics-title">
-        <h2 className={styles.srOnly} id="overview-metrics-title">
-          Live organization metrics
-        </h2>
-        {metricDefinitions.map((metric) => (
-          <article className={styles.metricCard} key={metric.key}>
-            <div className={styles.metricTop}>
-              <span className={styles.metricIcon} aria-hidden="true">
-                {metric.icon}
-              </span>
-            </div>
+      <div className={styles.overviewStack}>
+        <section className={styles.metricsSection} aria-labelledby="overview-metrics-title">
+          <div className={styles.sectionIntro}>
             <div>
-              <span className={styles.metricLabel}>{metric.label}</span>
-              <strong className={styles.metricValue}>{data.metrics[metric.key]}</strong>
-              <p className={styles.metricDetail}>{metric.detail}</p>
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <div className={styles.dashboardGrid}>
-        <ActionItems data={data} />
-        <section
-          className={`${styles.panel} ${styles.guidancePanel}`}
-          aria-labelledby="overview-guidance-title"
-        >
-          <div className={styles.panelHeader}>
-            <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Organization</p>
-              <h2 className={styles.panelTitle} id="overview-guidance-title">
-                Keep your program moving
+              <p className={styles.panelEyebrow}>Organization snapshot</p>
+              <h2 className={styles.sectionTitle} id="overview-metrics-title">
+                Metrics
               </h2>
             </div>
           </div>
-          <div className={styles.panelContent}>
-            <p className={styles.muted}>
-              Open an event agenda from the live event list below to review and publish its current
-              program.
-            </p>
+          <div className={styles.metricsGrid}>
+            <Card className={styles.metricDataCard} key={coreMetricDefinition.key}>
+              <CardHeader className={styles.metricDataHeader}>
+                <CardDescription className={styles.metricLabel}>
+                  {coreMetricDefinition.label}
+                </CardDescription>
+                <CardTitle className={styles.metricValue}>{core.metrics.eventCount}</CardTitle>
+              </CardHeader>
+              <CardContent className={styles.metricDetail}>
+                {coreMetricDefinition.detail}
+              </CardContent>
+            </Card>
+            <ActivityMetricCards state={activity} onRetry={onRetryActivity} />
           </div>
         </section>
 
-        <section
-          className={`${styles.panel} ${styles.widePanel}`}
+        <ActionItems state={activity} onRetry={onRetryActivity} />
+
+        <Card
+          className={styles.overviewPanel}
+          role="region"
           aria-labelledby="overview-events-title"
         >
-          <div className={styles.panelHeader}>
-            <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Live event data</p>
-              <h2 className={styles.panelTitle} id="overview-events-title">
+          <CardHeader className={styles.overviewPanelHeader}>
+            <div>
+              <CardDescription className={styles.panelEyebrow}>
+                Current and upcoming
+              </CardDescription>
+              <CardTitle
+                aria-level={2}
+                className={styles.panelTitle}
+                id="overview-events-title"
+                role="heading"
+              >
                 Events
-              </h2>
+              </CardTitle>
             </div>
-            <span className={styles.panelCount}>{data.events.length} total</span>
-          </div>
-          <EventsTable data={data} />
-        </section>
+            <Badge variant="secondary">{core.events.length} total</Badge>
+          </CardHeader>
+          <EventsTable data={core} />
+        </Card>
       </div>
     </>
   );
@@ -833,6 +792,23 @@ function errorMessage(error: unknown): string {
   return "The organizer overview could not be loaded. Check your connection and try again.";
 }
 
+type OrganizerOverviewCacheResource = "activity" | "core" | "events";
+
+export function organizerOverviewCacheKey(
+  organizationId: string,
+  resource: OrganizerOverviewCacheResource,
+): string {
+  return `organizer-overview:${organizationId.trim()}:${resource}`;
+}
+
+export function organizerOverviewCacheTags(organizationId: string): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `organizer-overview:${normalizedOrganizationId}`,
+  ];
+}
+
 export function OrganizerOverview({
   api: providedApi,
   config: providedConfig,
@@ -840,9 +816,11 @@ export function OrganizerOverview({
   readonly api?: OrganizerOverviewApi;
   readonly config?: OrganizerOverviewConfigResult;
 }> = {}) {
+  const authenticatedOrganizationId = useOrganizerOrganizationId();
   const config = useMemo(
-    () => providedConfig ?? resolveOrganizerOverviewConfig(),
-    [providedConfig],
+    () =>
+      providedConfig ?? resolveOrganizerOverviewConfig(authenticatedOrganizationId ?? undefined),
+    [authenticatedOrganizationId, providedConfig],
   );
   const api = useMemo(() => {
     if (providedApi) {
@@ -853,780 +831,211 @@ export function OrganizerOverview({
     }
     return createOrganizerOverviewApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
+  const navigationCache = useNavigationDataCache();
+  const cacheOrganizationId = "error" in config ? null : config.organizationId.trim();
+  const coreCacheKey =
+    cacheOrganizationId === null ? null : organizerOverviewCacheKey(cacheOrganizationId, "core");
+  const activityCacheKey =
+    cacheOrganizationId === null
+      ? null
+      : organizerOverviewCacheKey(cacheOrganizationId, "activity");
+  const cacheTags = useMemo(
+    () => (cacheOrganizationId === null ? [] : organizerOverviewCacheTags(cacheOrganizationId)),
+    [cacheOrganizationId],
+  );
+  const cachedCore =
+    coreCacheKey === null
+      ? undefined
+      : navigationCache?.peek<OrganizerOverviewCoreData>(coreCacheKey);
+  const cachedActivity =
+    activityCacheKey === null
+      ? undefined
+      : navigationCache?.peek<OrganizerOverviewActivityData>(activityCacheKey);
   const [state, setState] = useState<OrganizerOverviewViewState>(() =>
-    "error" in config ? { status: "config-error", message: config.error } : { status: "loading" },
+    "error" in config
+      ? { status: "config-error", message: config.error }
+      : {
+          status: cachedCore === undefined ? "loading" : "loaded",
+          core:
+            cachedCore === undefined
+              ? { status: "loading", data: null }
+              : { status: "loaded", data: cachedCore },
+          activity:
+            cachedActivity === undefined
+              ? { status: "loading", data: null }
+              : { status: "loaded", data: cachedActivity },
+        },
+  );
+  const generationRef = useRef(0);
+
+  const loadCore = useCallback(
+    async (fresh = false) => {
+      if (!api || "error" in config) {
+        return;
+      }
+      const generation = generationRef.current;
+      setState((previous) => {
+        if (previous.status === "config-error") {
+          return previous;
+        }
+        return stateWithCore(previous, {
+          status: "loading",
+          data: previous.core.data,
+        });
+      });
+      try {
+        const data =
+          navigationCache === null || coreCacheKey === null
+            ? await api.getCore()
+            : await navigationCache.read({
+                key: coreCacheKey,
+                tags: cacheTags,
+                fresh,
+                load: async () => {
+                  const data = await api.getCore();
+                  if (data.organizationId !== config.organizationId) {
+                    throw new Error(
+                      "The organizer overview returned data for another organization.",
+                    );
+                  }
+                  return data;
+                },
+              });
+        if (generationRef.current !== generation) {
+          return;
+        }
+        if (data.organizationId !== config.organizationId) {
+          throw new Error("The organizer overview returned data for another organization.");
+        }
+        setState((previous) =>
+          stateWithCore(previous, {
+            status: "loaded",
+            data,
+          }),
+        );
+      } catch (error) {
+        if (generationRef.current !== generation) {
+          return;
+        }
+        setState((previous) =>
+          stateWithCore(previous, {
+            status: "error",
+            data: previous.status === "config-error" ? null : previous.core.data,
+            message: errorMessage(error),
+          }),
+        );
+      }
+    },
+    [api, cacheTags, config, coreCacheKey, navigationCache],
   );
 
-  const load = useCallback(async () => {
-    if (!api || "error" in config) {
-      return;
-    }
-    setState({ status: "loading" });
-    try {
-      const data = await api.getOverview();
-      if (data.organizationId !== config.organizationId) {
-        throw new Error("The organizer overview returned data for another organization.");
+  const loadActivity = useCallback(
+    async (fresh = false) => {
+      if (!api || "error" in config) {
+        return;
       }
-      setState({ status: "loaded", data });
-    } catch (error) {
-      setState({ status: "error", message: errorMessage(error) });
-    }
-  }, [api, config]);
+      const generation = generationRef.current;
+      setState((previous) => {
+        if (previous.status === "config-error") {
+          return previous;
+        }
+        return stateWithActivity(previous, {
+          status: "loading",
+          data: previous.activity.data,
+        });
+      });
+      try {
+        const data =
+          navigationCache === null || activityCacheKey === null
+            ? await api.getActivity()
+            : await navigationCache.read({
+                key: activityCacheKey,
+                tags: cacheTags,
+                fresh,
+                load: async () => {
+                  const data = await api.getActivity();
+                  if (data.organizationId !== config.organizationId) {
+                    throw new Error(
+                      "The organizer overview returned data for another organization.",
+                    );
+                  }
+                  return data;
+                },
+              });
+        if (generationRef.current !== generation) {
+          return;
+        }
+        if (data.organizationId !== config.organizationId) {
+          throw new Error("The organizer overview returned data for another organization.");
+        }
+        setState((previous) =>
+          stateWithActivity(previous, {
+            status: "loaded",
+            data,
+          }),
+        );
+      } catch (error) {
+        if (generationRef.current !== generation) {
+          return;
+        }
+        setState((previous) =>
+          stateWithActivity(previous, {
+            status: "error",
+            data: previous.status === "config-error" ? null : previous.activity.data,
+            message: errorMessage(error),
+          }),
+        );
+      }
+    },
+    [activityCacheKey, api, cacheTags, config, navigationCache],
+  );
 
   useEffect(() => {
-    if (api && !("error" in config)) {
-      void load();
+    generationRef.current += 1;
+    if (!api || "error" in config) {
+      setState(
+        "error" in config
+          ? { status: "config-error", message: config.error }
+          : {
+              status: "config-error",
+              message: "Organizer overview is not configured.",
+            },
+      );
+      return;
     }
-  }, [api, config, load]);
-
-  return <OrganizerOverviewView state={state} onRetry={api ? load : undefined} />;
-}
-const organizerEventStatuses = ["draft", "active", "archived"] as const;
-
-export type OrganizerEventStatus = (typeof organizerEventStatuses)[number];
-
-export interface OrganizerEventCfpSettings {
-  readonly enabled: boolean;
-  readonly opensAt: string | null;
-  readonly closesAt: string | null;
-}
-
-export interface OrganizerEventDefaultCalendarSettings {
-  readonly durationMinutes: number;
-  readonly timeZone: string;
-  readonly location: string | null;
-}
-
-export type OrganizerEventEmbedWidgetId =
-  | "sessions"
-  | "speakers"
-  | "agenda"
-  | "itinerary"
-  | "gallery";
-export type OrganizerEventEmbedTheme = "auto" | "light" | "dark";
-export type OrganizerEventEmbedOutputFormat =
-  | "styled-html"
-  | "basic-html"
-  | "json"
-  | "xml"
-  | "ical";
-export type OrganizerEventEmbedLayout = "comfortable" | "compact" | "list" | "grid" | "timeline";
-
-export interface OrganizerEventEmbedConfiguration {
-  readonly id: string;
-  readonly name: string;
-  readonly widgetId: OrganizerEventEmbedWidgetId;
-  readonly enabled: boolean;
-  readonly theme: OrganizerEventEmbedTheme;
-  readonly outputFormat: OrganizerEventEmbedOutputFormat;
-  readonly layout: OrganizerEventEmbedLayout;
-  readonly accent: string;
-  readonly backgroundColor: string;
-  readonly textColor: string;
-  readonly customCss: string;
-  readonly displayFields: readonly string[];
-  readonly tracks: readonly string[];
-  readonly statuses: readonly string[];
-}
-export type EventEmbedConfiguration = OrganizerEventEmbedConfiguration;
-
-export interface OrganizerEventRecord {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly slug: string;
-  readonly name: string;
-  readonly status: OrganizerEventStatus;
-  readonly timeZone: string;
-  readonly startsAt: string;
-  readonly endsAt: string;
-  readonly venue: string | null;
-  readonly cfpSettings: OrganizerEventCfpSettings;
-  readonly defaultCalendarSettings: OrganizerEventDefaultCalendarSettings;
-  readonly embedConfigurations?: readonly OrganizerEventEmbedConfiguration[];
-  readonly version: number;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly createdBy: string;
-  readonly updatedBy: string;
-}
-
-export type EventRecord = OrganizerEventRecord;
-
-export interface OrganizerEventCreateInput {
-  readonly name: string;
-  readonly timeZone: string;
-  readonly startsAt: string;
-  readonly endsAt: string;
-  readonly venue?: string | null;
-  readonly cfpSettings: OrganizerEventCfpSettings;
-  readonly defaultCalendarSettings: OrganizerEventDefaultCalendarSettings;
-  readonly slug?: string;
-  readonly status?: OrganizerEventStatus;
-}
-
-export interface OrganizerEventUpdateInput {
-  readonly expectedVersion: number;
-  readonly name?: string;
-  readonly slug?: string;
-  readonly status?: OrganizerEventStatus;
-  readonly timeZone?: string;
-  readonly startsAt?: string;
-  readonly endsAt?: string;
-  readonly venue?: string | null;
-  readonly cfpSettings?: OrganizerEventCfpSettings;
-  readonly defaultCalendarSettings?: OrganizerEventDefaultCalendarSettings;
-  readonly embedConfigurations?: readonly OrganizerEventEmbedConfiguration[];
-}
-
-export interface OrganizerEventsApi {
-  listEvents(signal?: AbortSignal): Promise<readonly OrganizerEventRecord[]>;
-  getEvent(eventId: string, signal?: AbortSignal): Promise<OrganizerEventRecord>;
-  createEvent(input: OrganizerEventCreateInput): Promise<OrganizerEventRecord>;
-  updateEvent(eventId: string, input: OrganizerEventUpdateInput): Promise<OrganizerEventRecord>;
-  archiveEvent(eventId: string, expectedVersion: number): Promise<OrganizerEventRecord>;
-}
-
-type OrganizerEventsFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
-interface OrganizerEventsErrorBody {
-  readonly error?: {
-    readonly code?: string;
-    readonly message?: string;
-    readonly traceId?: string;
-    readonly details?: readonly {
-      readonly path?: readonly (string | number)[];
-      readonly message?: string;
-    }[];
-  };
-}
-
-export class OrganizerEventsApiError extends Error {
-  readonly code: string;
-  readonly status: number;
-  readonly traceId: string | undefined;
-  readonly details:
-    | readonly {
-        readonly path?: readonly (string | number)[];
-        readonly message?: string;
-      }[]
-    | undefined;
-
-  constructor(
-    code: string,
-    message: string,
-    status: number,
-    traceId?: string,
-    details?: readonly {
-      readonly path?: readonly (string | number)[];
-      readonly message?: string;
-    }[],
-  ) {
-    super(message);
-    this.name = "OrganizerEventsApiError";
-    this.code = code;
-    this.status = status;
-    this.traceId = traceId;
-    this.details = details;
-  }
-}
-
-function eventRecordError(message: string): TypeError {
-  return new TypeError(`The organizer event response is invalid: ${message}`);
-}
-
-function eventRequiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw eventRecordError(`${field} is required.`);
-  }
-  return value;
-}
-
-function eventNullableString(value: unknown, field: string): string | null {
-  if (value === null) return null;
-  if (typeof value !== "string") {
-    throw eventRecordError(`${field} must be a string or null.`);
-  }
-  return value;
-}
-
-function eventRequiredInteger(value: unknown, field: string, minimum = 0): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
-    throw eventRecordError(`${field} must be an integer of at least ${minimum}.`);
-  }
-  return value;
-}
-
-function eventStatus(value: unknown, field: string): OrganizerEventStatus {
-  if (
-    typeof value !== "string" ||
-    !organizerEventStatuses.includes(value as OrganizerEventStatus)
-  ) {
-    throw eventRecordError(`${field} must be draft, active, or archived.`);
-  }
-  return value as OrganizerEventStatus;
-}
-
-function parseOrganizerEventEmbedConfiguration(
-  value: unknown,
-  field: string,
-): OrganizerEventEmbedConfiguration {
-  if (!isRecord(value)) {
-    throw eventRecordError(`${field} must be an object.`);
-  }
-  const id = eventRequiredString(value.id, `${field}.id`);
-  const name = eventRequiredString(value.name, `${field}.name`);
-  const widgetId = eventRequiredString(value.widgetId, `${field}.widgetId`);
-  const theme = eventRequiredString(value.theme, `${field}.theme`);
-  const outputFormat = eventRequiredString(value.outputFormat, `${field}.outputFormat`);
-  const layout = eventRequiredString(value.layout, `${field}.layout`);
-  const accent = eventRequiredString(value.accent, `${field}.accent`);
-  const backgroundColor = eventRequiredString(value.backgroundColor, `${field}.backgroundColor`);
-  const textColor = eventRequiredString(value.textColor, `${field}.textColor`);
-  const customCss = typeof value.customCss === "string" ? value.customCss : null;
-
-  if (
-    !["sessions", "speakers", "agenda", "itinerary", "gallery"].includes(widgetId) ||
-    !["auto", "light", "dark"].includes(theme) ||
-    !["styled-html", "basic-html", "json", "xml", "ical"].includes(outputFormat) ||
-    !["comfortable", "compact", "list", "grid", "timeline"].includes(layout) ||
-    !/^#[0-9a-f]{6}$/iu.test(accent) ||
-    !/^#[0-9a-f]{6}$/iu.test(backgroundColor) ||
-    !/^#[0-9a-f]{6}$/iu.test(textColor) ||
-    customCss === null ||
-    typeof value.enabled !== "boolean"
-  ) {
-    throw eventRecordError(`${field} contains an unsupported embed configuration value.`);
-  }
-
-  const stringList = (listValue: unknown, listField: string): readonly string[] => {
-    if (!Array.isArray(listValue) || !listValue.every((item) => typeof item === "string")) {
-      throw eventRecordError(`${listField} must be an array of strings.`);
-    }
-    return listValue
-      .map((item) => item.trim())
-      .filter((item, index, list) => {
-        return item.length > 0 && list.indexOf(item) === index;
-      });
-  };
-
-  return {
-    id,
-    name,
-    widgetId: widgetId as OrganizerEventEmbedWidgetId,
-    enabled: value.enabled,
-    theme: theme as OrganizerEventEmbedTheme,
-    outputFormat: outputFormat as OrganizerEventEmbedOutputFormat,
-    layout: layout as OrganizerEventEmbedLayout,
-    accent: accent.toLowerCase(),
-    backgroundColor: backgroundColor.toLowerCase(),
-    textColor: textColor.toLowerCase(),
-    customCss,
-    displayFields: stringList(value.displayFields, `${field}.displayFields`),
-    tracks: stringList(value.tracks, `${field}.tracks`),
-    statuses: stringList(value.statuses, `${field}.statuses`),
-  };
-}
-
-function parseOrganizerEventEmbedConfigurations(
-  value: unknown,
-  field: string,
-): readonly OrganizerEventEmbedConfiguration[] {
-  if (!Array.isArray(value)) {
-    throw eventRecordError(`${field} must be an array.`);
-  }
-  const configurations = value.map((configuration, index) =>
-    parseOrganizerEventEmbedConfiguration(configuration, `${field}[${index}]`),
-  );
-  if (
-    new Set(configurations.map((configuration) => configuration.id)).size !== configurations.length
-  ) {
-    throw eventRecordError(`${field} must not contain duplicate configuration IDs.`);
-  }
-  return configurations;
-}
-
-function parseOrganizerEventCfpSettings(value: unknown, field: string): OrganizerEventCfpSettings {
-  if (!isRecord(value)) {
-    throw eventRecordError(`${field} must be an object.`);
-  }
-  if (typeof value.enabled !== "boolean") {
-    throw eventRecordError(`${field}.enabled must be a boolean.`);
-  }
-  return {
-    enabled: value.enabled,
-    opensAt: eventNullableString(value.opensAt, `${field}.opensAt`),
-    closesAt: eventNullableString(value.closesAt, `${field}.closesAt`),
-  };
-}
-
-function parseOrganizerEventCalendarSettings(
-  value: unknown,
-  field: string,
-): OrganizerEventDefaultCalendarSettings {
-  if (!isRecord(value)) {
-    throw eventRecordError(`${field} must be an object.`);
-  }
-  if ("timezone" in value) {
-    throw eventRecordError(`${field}.timeZone is required; timezone is not supported.`);
-  }
-  return {
-    durationMinutes: eventRequiredInteger(value.durationMinutes, `${field}.durationMinutes`, 1),
-    timeZone: eventRequiredString(value.timeZone, `${field}.timeZone`),
-    location: eventNullableString(value.location, `${field}.location`),
-  };
-}
-
-export function parseOrganizerEventRecord(payload: unknown): OrganizerEventRecord {
-  if (!isRecord(payload)) {
-    throw eventRecordError("the event must be an object.");
-  }
-  return {
-    id: eventRequiredString(payload.id, "id"),
-    organizationId: eventRequiredString(payload.organizationId, "organizationId"),
-    slug: eventRequiredString(payload.slug, "slug"),
-    name: eventRequiredString(payload.name, "name"),
-    status: eventStatus(payload.status, "status"),
-    timeZone: eventRequiredString(payload.timeZone, "timeZone"),
-    startsAt: eventRequiredString(payload.startsAt, "startsAt"),
-    endsAt: eventRequiredString(payload.endsAt, "endsAt"),
-    venue: eventNullableString(payload.venue, "venue"),
-    cfpSettings: parseOrganizerEventCfpSettings(payload.cfpSettings, "cfpSettings"),
-    defaultCalendarSettings: parseOrganizerEventCalendarSettings(
-      payload.defaultCalendarSettings,
-      "defaultCalendarSettings",
-    ),
-    version: eventRequiredInteger(payload.version, "version", 1),
-    createdAt: eventRequiredString(payload.createdAt, "createdAt"),
-    updatedAt: eventRequiredString(payload.updatedAt, "updatedAt"),
-    createdBy: eventRequiredString(payload.createdBy, "createdBy"),
-    updatedBy: eventRequiredString(payload.updatedBy, "updatedBy"),
-    ...("embedConfigurations" in payload
-      ? {
-          embedConfigurations: parseOrganizerEventEmbedConfigurations(
-            payload.embedConfigurations,
-            "embedConfigurations",
-          ),
-        }
-      : {}),
-  };
-}
-
-export function parseOrganizerEventsResponse(payload: unknown): readonly OrganizerEventRecord[] {
-  if (!isRecord(payload) || !Array.isArray(payload.data)) {
-    throw eventRecordError("data must be an array.");
-  }
-  return payload.data.map((event, index) => {
-    try {
-      return parseOrganizerEventRecord(event);
-    } catch (error) {
-      if (error instanceof TypeError) {
-        throw new TypeError(`${error.message} (events[${index}])`);
-      }
-      throw error;
-    }
-  });
-}
-
-export function parseOrganizerEventResponse(payload: unknown): OrganizerEventRecord {
-  if (!isRecord(payload) || !("data" in payload)) {
-    throw eventRecordError("data must contain one event.");
-  }
-  return parseOrganizerEventRecord(payload.data);
-}
-
-async function organizerEventsApiError(response: Response): Promise<OrganizerEventsApiError> {
-  const body = (await response.json().catch(() => undefined)) as
-    | OrganizerEventsErrorBody
-    | undefined;
-  return new OrganizerEventsApiError(
-    body?.error?.code ?? "EVENT_REQUEST_FAILED",
-    body?.error?.message ?? `The event request failed (HTTP ${response.status}).`,
-    response.status,
-    body?.error?.traceId,
-    body?.error?.details,
-  );
-}
-
-function eventPathSegment(value: string, field: string): string {
-  const normalized = value.trim();
-  if (normalized.length === 0) {
-    throw new TypeError(`An ${field} is required for organizer event requests.`);
-  }
-  return encodeURIComponent(normalized);
-}
-
-function eventCreateBody(input: OrganizerEventCreateInput): Record<string, unknown> {
-  return {
-    name: input.name,
-    timeZone: input.timeZone,
-    startsAt: input.startsAt,
-    endsAt: input.endsAt,
-    venue: input.venue ?? null,
-    cfpSettings: {
-      enabled: input.cfpSettings.enabled,
-      opensAt: input.cfpSettings.opensAt,
-      closesAt: input.cfpSettings.closesAt,
-    },
-    defaultCalendarSettings: {
-      durationMinutes: input.defaultCalendarSettings.durationMinutes,
-      timeZone: input.defaultCalendarSettings.timeZone,
-      location: input.defaultCalendarSettings.location,
-    },
-    ...(input.slug === undefined ? {} : { slug: input.slug }),
-    ...(input.status === undefined ? {} : { status: input.status }),
-  };
-}
-
-function eventUpdateBody(input: OrganizerEventUpdateInput): Record<string, unknown> {
-  return {
-    expectedVersion: input.expectedVersion,
-    ...(input.name === undefined ? {} : { name: input.name }),
-    ...(input.slug === undefined ? {} : { slug: input.slug }),
-    ...(input.status === undefined ? {} : { status: input.status }),
-    ...(input.timeZone === undefined ? {} : { timeZone: input.timeZone }),
-    ...(input.startsAt === undefined ? {} : { startsAt: input.startsAt }),
-    ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
-    ...(input.venue === undefined ? {} : { venue: input.venue }),
-    ...(input.cfpSettings === undefined
-      ? {}
-      : {
-          cfpSettings: {
-            enabled: input.cfpSettings.enabled,
-            opensAt: input.cfpSettings.opensAt,
-            closesAt: input.cfpSettings.closesAt,
-          },
-        }),
-    ...(input.defaultCalendarSettings === undefined
-      ? {}
-      : {
-          defaultCalendarSettings: {
-            durationMinutes: input.defaultCalendarSettings.durationMinutes,
-            timeZone: input.defaultCalendarSettings.timeZone,
-            location: input.defaultCalendarSettings.location,
-          },
-        }),
-    ...(input.embedConfigurations === undefined
-      ? {}
-      : { embedConfigurations: input.embedConfigurations }),
-  };
-}
-
-export function createOrganizerEventsApi(
-  apiBaseUrl: string,
-  organizationId: string,
-  fetcher: OrganizerEventsFetcher = globalThis.fetch,
-): OrganizerEventsApi {
-  const normalizedBaseUrl = apiBaseUrl.trim().replace(/\/+$/u, "");
-  if (normalizedBaseUrl.length === 0) {
-    throw new TypeError("An API URL is required for organizer event requests.");
-  }
-  const normalizedOrganizationId = organizationId.trim();
-  if (normalizedOrganizationId.length === 0) {
-    throw new TypeError("An organization ID is required for organizer event requests.");
-  }
-  const collectionEndpoint = `${normalizedBaseUrl}/api/admin/organizations/${eventPathSegment(normalizedOrganizationId, "organization ID")}/events`;
-
-  async function request<T>(
-    path: string,
-    parser: (payload: unknown) => T,
-    init: RequestInit = {},
-  ): Promise<T> {
-    const headers = new Headers(init.headers);
-    headers.set("accept", "application/json");
-    if (init.body !== undefined) headers.set("content-type", "application/json");
-    const response = await fetcher(`${collectionEndpoint}${path}`, {
-      ...init,
-      credentials: "include",
-      headers: Object.fromEntries(headers.entries()),
+    const nextCore =
+      coreCacheKey === null
+        ? undefined
+        : navigationCache?.peek<OrganizerOverviewCoreData>(coreCacheKey);
+    const nextActivity =
+      activityCacheKey === null
+        ? undefined
+        : navigationCache?.peek<OrganizerOverviewActivityData>(activityCacheKey);
+    setState({
+      status: nextCore === undefined ? "loading" : "loaded",
+      core:
+        nextCore === undefined
+          ? { status: "loading", data: null }
+          : { status: "loaded", data: nextCore },
+      activity:
+        nextActivity === undefined
+          ? { status: "loading", data: null }
+          : { status: "loaded", data: nextActivity },
     });
-    if (!response.ok) {
-      throw await organizerEventsApiError(response);
-    }
-    const payload: unknown = await response.json().catch(() => undefined);
-    return parser(payload);
-  }
+    if (nextCore === undefined) void loadCore();
+    if (nextActivity === undefined) void loadActivity();
+  }, [activityCacheKey, api, config, coreCacheKey, loadActivity, loadCore, navigationCache]);
 
-  return {
-    listEvents(signal) {
-      return request(
-        "",
-        parseOrganizerEventsResponse,
-        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
-      );
-    },
-    getEvent(eventId, signal) {
-      return request(
-        `/${eventPathSegment(eventId, "event ID")}`,
-        parseOrganizerEventResponse,
-        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
-      );
-    },
-    createEvent(input) {
-      return request("", parseOrganizerEventResponse, {
-        method: "POST",
-        body: JSON.stringify(eventCreateBody(input)),
-      });
-    },
-    updateEvent(eventId, input) {
-      return request(`/${eventPathSegment(eventId, "event ID")}`, parseOrganizerEventResponse, {
-        method: "PATCH",
-        body: JSON.stringify(eventUpdateBody(input)),
-      });
-    },
-    archiveEvent(eventId, expectedVersion) {
-      return request(
-        `/${eventPathSegment(eventId, "event ID")}/archive`,
-        parseOrganizerEventResponse,
-        { method: "POST", body: JSON.stringify({ expectedVersion }) },
-      );
-    },
-  };
-}
-
-export interface OrganizerEventFormValues {
-  readonly name: string;
-  readonly slug: string;
-  readonly status: OrganizerEventStatus;
-  readonly timeZone: string;
-  readonly startsAt: string;
-  readonly endsAt: string;
-  readonly venue: string;
-  readonly cfpEnabled: boolean;
-  readonly cfpOpensAt: string;
-  readonly cfpClosesAt: string;
-  readonly defaultCalendarDurationMinutes: string;
-  readonly defaultCalendarTimeZone: string;
-  readonly defaultCalendarLocation: string;
-}
-
-function browserEventTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
-
-function validEventTimeZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function localDateTimeToIso(value: string, timeZone: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6] ?? "0");
-  if (
-    year < 1000 ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59 ||
-    !validEventTimeZone(timeZone)
-  ) {
-    return null;
-  }
-  const localMilliseconds = Date.UTC(year, month - 1, day, hour, minute, second);
-  if (!Number.isFinite(localMilliseconds)) return null;
-  let candidate = localMilliseconds;
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  for (let iteration = 0; iteration < 3; iteration += 1) {
-    const parts = Object.fromEntries(
-      formatter
-        .formatToParts(new Date(candidate))
-        .filter((part) => part.type !== "literal")
-        .map((part) => [part.type, part.value]),
-    );
-    const wallMilliseconds = Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second),
-    );
-    candidate = localMilliseconds - (wallMilliseconds - candidate);
-  }
-  const result = new Date(candidate);
-  return Number.isFinite(result.getTime()) ? result.toISOString() : null;
-}
-
-function isoToLocalDateTime(value: string, timeZone: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf()) || !validEventTimeZone(timeZone)) return "";
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
+  return (
+    <OrganizerOverviewView
+      state={state}
+      onRetryCore={api ? () => void loadCore(true) : undefined}
+      onRetryActivity={api ? () => void loadActivity(true) : undefined}
+    />
   );
-  if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) return "";
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
-function eventEditorFormValues(event?: OrganizerEventRecord): OrganizerEventFormValues {
-  const timeZone = event?.timeZone ?? browserEventTimeZone();
-  return {
-    name: event?.name ?? "",
-    slug: event?.slug ?? "",
-    status: event?.status ?? "draft",
-    timeZone,
-    startsAt: event ? isoToLocalDateTime(event.startsAt, timeZone) : "",
-    endsAt: event ? isoToLocalDateTime(event.endsAt, timeZone) : "",
-    venue: event?.venue ?? "",
-    cfpEnabled: event?.cfpSettings.enabled ?? false,
-    cfpOpensAt: event?.cfpSettings.opensAt
-      ? isoToLocalDateTime(event.cfpSettings.opensAt, timeZone)
-      : "",
-    cfpClosesAt: event?.cfpSettings.closesAt
-      ? isoToLocalDateTime(event.cfpSettings.closesAt, timeZone)
-      : "",
-    defaultCalendarDurationMinutes: String(event?.defaultCalendarSettings.durationMinutes ?? 30),
-    defaultCalendarTimeZone: event?.defaultCalendarSettings.timeZone ?? timeZone,
-    defaultCalendarLocation: event?.defaultCalendarSettings.location ?? "",
-  };
-}
-
-export const organizerEventEditorFormValues = eventEditorFormValues;
-
-export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
-  readonly input?: OrganizerEventCreateInput;
-  readonly error?: string;
-} {
-  const name = values.name.trim();
-  if (!name) return { error: "Event name is required." };
-  const timeZone = values.timeZone.trim();
-  if (!validEventTimeZone(timeZone)) return { error: "Enter a valid IANA time zone." };
-  const startsAt = localDateTimeToIso(values.startsAt, timeZone);
-  if (!startsAt) return { error: "Enter a valid event start date and time." };
-  const endsAt = localDateTimeToIso(values.endsAt, timeZone);
-  if (!endsAt) return { error: "Enter a valid event end date and time." };
-  if (Date.parse(startsAt) >= Date.parse(endsAt)) {
-    return { error: "Event end must be after event start." };
-  }
-
-  const slug = values.slug.trim().toLowerCase();
-  if (slug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(slug)) {
-    return { error: "Slug must use lowercase letters, numbers, and single hyphens." };
-  }
-
-  const defaultCalendarTimeZone = values.defaultCalendarTimeZone.trim() || timeZone;
-  if (!validEventTimeZone(defaultCalendarTimeZone)) {
-    return { error: "Enter a valid default calendar time zone." };
-  }
-  const durationMinutes = Number(values.defaultCalendarDurationMinutes);
-  if (!Number.isSafeInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1_440) {
-    return { error: "Default calendar duration must be between 1 and 1440 minutes." };
-  }
-
-  const cfpOpensAt = values.cfpOpensAt.trim()
-    ? localDateTimeToIso(values.cfpOpensAt, timeZone)
-    : null;
-  if (values.cfpOpensAt.trim() && !cfpOpensAt) {
-    return { error: "Enter a valid CFP opening date and time." };
-  }
-  const cfpClosesAt = values.cfpClosesAt.trim()
-    ? localDateTimeToIso(values.cfpClosesAt, timeZone)
-    : null;
-  if (values.cfpClosesAt.trim() && !cfpClosesAt) {
-    return { error: "Enter a valid CFP closing date and time." };
-  }
-  if (
-    cfpOpensAt !== null &&
-    cfpClosesAt !== null &&
-    Date.parse(cfpOpensAt) >= Date.parse(cfpClosesAt)
-  ) {
-    return { error: "CFP closing must be after CFP opening." };
-  }
-
-  const input: OrganizerEventCreateInput = {
-    name,
-    timeZone,
-    startsAt,
-    endsAt,
-    venue: values.venue.trim() || null,
-    cfpSettings: {
-      enabled: values.cfpEnabled,
-      opensAt: cfpOpensAt,
-      closesAt: cfpClosesAt,
-    },
-    defaultCalendarSettings: {
-      durationMinutes,
-      timeZone: defaultCalendarTimeZone,
-      location: values.defaultCalendarLocation.trim() || null,
-    },
-    ...(slug ? { slug } : {}),
-    status: values.status,
-  };
-  return { input };
-}
-
-export const validateEventForm = validateOrganizerEventForm;
-
-const eventFieldStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.35rem",
-};
-
-const eventFieldLabelStyle: CSSProperties = {
-  color: "var(--admin-ink)",
-  fontSize: "0.78rem",
-  fontWeight: 750,
-};
-
-const eventInputStyle: CSSProperties = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-};
-
-const eventTwoColumnStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(15rem, 1fr))",
-  gap: "1rem",
-};
-
-const eventInlineActionsStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.55rem",
-  alignItems: "center",
-};
+const organizerEventStatuses = ["draft", "active", "archived"] as const;
 
 export interface OrganizerEventEditorProps {
   readonly event?: OrganizerEventRecord | undefined;
@@ -1642,12 +1051,15 @@ export function OrganizerEventEditor({
   onCancel,
 }: OrganizerEventEditorProps) {
   const [values, setValues] = useState<OrganizerEventFormValues>(() =>
-    eventEditorFormValues(event),
+    organizerEventEditorFormValues(event),
   );
   const [formError, setFormError] = useState<string | null>(null);
+  const eventSlugPreview = normalizeOrganizerEventSlug(values.slug || values.name);
+  const minimumDateTime = organizerEventMinimumDateTimeLocal(values.timeZone);
+  const originalValues = event === undefined ? undefined : organizerEventEditorFormValues(event);
 
   useEffect(() => {
-    setValues(eventEditorFormValues(event));
+    setValues(organizerEventEditorFormValues(event));
     setFormError(null);
   }, [event]);
 
@@ -1661,7 +1073,18 @@ export function OrganizerEventEditor({
 
   async function submit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
-    const result = validateOrganizerEventForm(values);
+    const result = validateOrganizerEventForm(values, {
+      ...(event === undefined
+        ? {}
+        : {
+            currentEvent: {
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+              cfpOpensAt: event.cfpSettings.opensAt,
+              cfpClosesAt: event.cfpSettings.closesAt,
+            },
+          }),
+    });
     if (!result.input) {
       setFormError(result.error ?? "Check the event fields.");
       return;
@@ -1676,24 +1099,22 @@ export function OrganizerEventEditor({
   }
 
   return (
-    <form onSubmit={(formEvent) => void submit(formEvent)} style={{ display: "grid", gap: "1rem" }}>
-      <div>
+    <form className={styles.eventForm} onSubmit={(formEvent) => void submit(formEvent)}>
+      <div className={styles.eventEditorIntro}>
         <h2
-          className={styles.panelTitle}
+          className={`${styles.panelTitle} ${styles.eventEditorTitle}`}
           id="organizer-event-editor-title"
-          style={{ marginBottom: "0.35rem" }}
         >
-          {event ? "Configure event" : "Create an event"}
+          {event ? "Configure event" : "Create event"}
         </h2>
         <p className={styles.muted}>
-          Event dates are entered in the event time zone and saved as canonical ISO instants.
+          Add the public identity, schedule, and location. New events start as drafts.
         </p>
       </div>
-      <div style={eventTwoColumnStyle}>
-        <label style={eventFieldStyle} htmlFor="organizer-event-name">
-          <span style={eventFieldLabelStyle}>Event name</span>
-          <input
-            style={eventInputStyle}
+      <div className={`${styles.eventTwoColumn} ${styles.eventIdentityFields}`}>
+        <label className={styles.eventField} htmlFor="organizer-event-name">
+          <span className={styles.eventFieldLabel}>Event name</span>
+          <Input
             id="organizer-event-name"
             name="name"
             type="text"
@@ -1702,11 +1123,13 @@ export function OrganizerEventEditor({
             required
             onChange={(formEvent) => updateValue("name", formEvent.target.value)}
           />
+          <span className={styles.eventFieldDescription}>
+            The display title organizers and attendees will see.
+          </span>
         </label>
-        <label style={eventFieldStyle} htmlFor="organizer-event-slug">
-          <span style={eventFieldLabelStyle}>URL slug</span>
-          <input
-            style={eventInputStyle}
+        <label className={styles.eventField} htmlFor="organizer-event-slug">
+          <span className={styles.eventFieldLabel}>Public URL slug</span>
+          <Input
             id="organizer-event-slug"
             name="slug"
             type="text"
@@ -1715,31 +1138,46 @@ export function OrganizerEventEditor({
             placeholder="summit-2026"
             onChange={(formEvent) => updateValue("slug", formEvent.target.value)}
           />
+          <span className={styles.eventFieldDescription}>
+            {eventSlugPreview ? (
+              <>
+                Public slug: <code>{eventSlugPreview}</code>.{" "}
+              </>
+            ) : null}
+            Leave blank to generate it from the event name. The private event ID is generated
+            separately after creation.
+          </span>
         </label>
       </div>
-      <div style={eventTwoColumnStyle}>
-        <label style={eventFieldStyle} htmlFor="organizer-event-status">
-          <span style={eventFieldLabelStyle}>Status</span>
-          <select
-            style={eventInputStyle}
-            id="organizer-event-status"
-            name="status"
-            value={values.status}
-            onChange={(formEvent) =>
-              updateValue("status", formEvent.target.value as OrganizerEventStatus)
-            }
-          >
-            {organizerEventStatuses.map((status) => (
-              <option key={status} value={status}>
-                {status === "active" ? "Active" : status.charAt(0).toUpperCase() + status.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={eventFieldStyle} htmlFor="organizer-event-time-zone">
-          <span style={eventFieldLabelStyle}>Event time zone</span>
-          <input
-            style={eventInputStyle}
+      <div className={styles.eventTwoColumn}>
+        {event ? (
+          <label className={styles.eventField} htmlFor="organizer-event-status">
+            <span className={styles.eventFieldLabel}>Status</span>
+            <select
+              className={styles.eventInput}
+              id="organizer-event-status"
+              name="status"
+              value={values.status}
+              onChange={(formEvent) =>
+                updateValue("status", formEvent.target.value as OrganizerEventStatus)
+              }
+            >
+              {organizerEventStatuses.map((status) => (
+                <option key={status} value={status}>
+                  {status === "active"
+                    ? "Active"
+                    : status.charAt(0).toUpperCase() + status.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <label
+          className={`${styles.eventField} ${event ? "" : styles.eventFieldFull}`}
+          htmlFor="organizer-event-time-zone"
+        >
+          <span className={styles.eventFieldLabel}>Event time zone</span>
+          <Input
             id="organizer-event-time-zone"
             name="timeZone"
             type="text"
@@ -1747,8 +1185,22 @@ export function OrganizerEventEditor({
             value={values.timeZone}
             placeholder="America/Los_Angeles"
             required
-            onChange={(formEvent) => updateValue("timeZone", formEvent.target.value)}
+            onChange={(formEvent) => {
+              const timeZone = formEvent.target.value;
+              setValues((current) => ({
+                ...current,
+                timeZone,
+                startDisambiguation: undefined,
+                endDisambiguation: undefined,
+                cfpOpenDisambiguation: undefined,
+                cfpCloseDisambiguation: undefined,
+              }));
+              if (formError) setFormError(null);
+            }}
           />
+          <span className={styles.eventFieldDescription}>
+            All event and agenda times are entered and shown in this time zone.
+          </span>
           <datalist id="organizer-event-time-zones">
             <option value="UTC" />
             <option value="America/Los_Angeles" />
@@ -1758,189 +1210,137 @@ export function OrganizerEventEditor({
           </datalist>
         </label>
       </div>
-      <div style={eventTwoColumnStyle}>
-        <label style={eventFieldStyle} htmlFor="organizer-event-starts-at">
-          <span style={eventFieldLabelStyle}>Starts</span>
-          <input
-            style={eventInputStyle}
-            id="organizer-event-starts-at"
-            name="startsAt"
-            type="datetime-local"
-            value={values.startsAt}
-            required
-            onChange={(formEvent) => updateValue("startsAt", formEvent.target.value)}
-          />
-        </label>
-        <label style={eventFieldStyle} htmlFor="organizer-event-ends-at">
-          <span style={eventFieldLabelStyle}>Ends</span>
-          <input
-            style={eventInputStyle}
-            id="organizer-event-ends-at"
-            name="endsAt"
-            type="datetime-local"
-            value={values.endsAt}
-            required
-            onChange={(formEvent) => updateValue("endsAt", formEvent.target.value)}
-          />
-        </label>
-      </div>
-      <label style={eventFieldStyle} htmlFor="organizer-event-venue">
-        <span style={eventFieldLabelStyle}>Venue</span>
-        <input
-          style={eventInputStyle}
+      <EventDatePicker
+        mode={values.dateMode}
+        startsAt={values.startsAt}
+        endsAt={values.endsAt}
+        scheduleDates={values.scheduleDates}
+        minimumDateTime={minimumDateTime}
+        unchangedValues={
+          originalValues === undefined
+            ? undefined
+            : [originalValues.startsAt, originalValues.endsAt]
+        }
+        timeZone={values.timeZone}
+        startDisambiguation={values.startDisambiguation}
+        endDisambiguation={values.endDisambiguation}
+        onStartDisambiguationChange={(value) =>
+          setValues((current) => ({ ...current, startDisambiguation: value }))
+        }
+        onEndDisambiguationChange={(value) =>
+          setValues((current) => ({ ...current, endDisambiguation: value }))
+        }
+        onChange={(selection: EventDateSelectionValue) => {
+          setValues((current) => ({
+            ...current,
+            dateMode: selection.mode,
+            startsAt: selection.startsAt,
+            endsAt: selection.endsAt,
+            scheduleDates: selection.scheduleDates,
+          }));
+          if (formError) setFormError(null);
+        }}
+      />
+      <label className={styles.eventField} htmlFor="organizer-event-venue">
+        <span className={styles.eventFieldLabel}>Event location</span>
+        <Input
           id="organizer-event-venue"
           name="venue"
           type="text"
           value={values.venue}
           maxLength={2_000}
+          placeholder="Pier 27, San Francisco or Online"
           onChange={(formEvent) => updateValue("venue", formEvent.target.value)}
         />
+        <span className={styles.eventFieldDescription}>
+          Shown on the event. Session rooms and join links can be more specific.
+        </span>
       </label>
-      <fieldset
-        style={{
-          display: "grid",
-          gap: "0.8rem",
-          border: "1px solid var(--admin-border)",
-          borderRadius: "var(--admin-radius-sm)",
-          padding: "0.95rem",
-          margin: 0,
-        }}
-      >
-        <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
-          CFP settings
-        </legend>
-        <label
-          style={{
-            display: "flex",
-            gap: "0.55rem",
-            alignItems: "center",
-            color: "var(--admin-ink)",
-            fontSize: "0.82rem",
-          }}
-        >
-          <input
-            type="checkbox"
-            name="cfpSettings.enabled"
-            checked={values.cfpEnabled}
-            onChange={(formEvent) => updateValue("cfpEnabled", formEvent.target.checked)}
-          />
-          <span>Enable call for proposals</span>
-        </label>
-        <div style={eventTwoColumnStyle}>
-          <label style={eventFieldStyle} htmlFor="organizer-event-cfp-opens-at">
-            <span style={eventFieldLabelStyle}>CFP opens</span>
-            <input
-              style={eventInputStyle}
-              id="organizer-event-cfp-opens-at"
-              name="cfpSettings.opensAt"
-              type="datetime-local"
-              value={values.cfpOpensAt}
-              onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
+      <details className={styles.eventAdvanced} open={values.cfpEnabled || undefined}>
+        <summary className={styles.eventAdvancedSummary}>
+          <span>Advanced setup</span>
+          <small>Optional call-for-proposals scheduling</small>
+        </summary>
+        <fieldset className={styles.eventFieldset}>
+          <legend className={styles.eventLegend}>Call for proposals</legend>
+          <div className={styles.eventCheckboxLabel}>
+            <Checkbox
+              aria-label="Open a call for proposals"
+              name="cfpSettings.enabled"
+              checked={values.cfpEnabled}
+              onCheckedChange={(checked) => updateValue("cfpEnabled", checked === true)}
             />
-          </label>
-          <label style={eventFieldStyle} htmlFor="organizer-event-cfp-closes-at">
-            <span style={eventFieldLabelStyle}>CFP closes</span>
-            <input
-              style={eventInputStyle}
-              id="organizer-event-cfp-closes-at"
-              name="cfpSettings.closesAt"
-              type="datetime-local"
-              value={values.cfpClosesAt}
-              onChange={(formEvent) => updateValue("cfpClosesAt", formEvent.target.value)}
-            />
-          </label>
-        </div>
-      </fieldset>
-      <fieldset
-        style={{
-          display: "grid",
-          gap: "0.8rem",
-          border: "1px solid var(--admin-border)",
-          borderRadius: "var(--admin-radius-sm)",
-          padding: "0.95rem",
-          margin: 0,
-        }}
-      >
-        <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
-          Default calendar settings
-        </legend>
-        <div style={eventTwoColumnStyle}>
-          <label style={eventFieldStyle} htmlFor="organizer-event-calendar-duration">
-            <span style={eventFieldLabelStyle}>Default duration (minutes)</span>
-            <input
-              style={eventInputStyle}
-              id="organizer-event-calendar-duration"
-              name="defaultCalendarSettings.durationMinutes"
-              type="number"
-              min={1}
-              max={1440}
-              step={1}
-              value={values.defaultCalendarDurationMinutes}
-              required
-              onChange={(formEvent) =>
-                updateValue("defaultCalendarDurationMinutes", formEvent.target.value)
-              }
-            />
-          </label>
-          <label style={eventFieldStyle} htmlFor="organizer-event-calendar-time-zone">
-            <span style={eventFieldLabelStyle}>Calendar time zone</span>
-            <input
-              style={eventInputStyle}
-              id="organizer-event-calendar-time-zone"
-              name="defaultCalendarSettings.timeZone"
-              type="text"
-              value={values.defaultCalendarTimeZone}
-              required
-              onChange={(formEvent) =>
-                updateValue("defaultCalendarTimeZone", formEvent.target.value)
-              }
-            />
-          </label>
-        </div>
-        <label style={eventFieldStyle} htmlFor="organizer-event-calendar-location">
-          <span style={eventFieldLabelStyle}>Default calendar location</span>
-          <input
-            style={eventInputStyle}
-            id="organizer-event-calendar-location"
-            name="defaultCalendarSettings.location"
-            type="text"
-            value={values.defaultCalendarLocation}
-            maxLength={2_000}
-            onChange={(formEvent) => updateValue("defaultCalendarLocation", formEvent.target.value)}
-          />
-        </label>
-      </fieldset>
+            <span>
+              Open a call for proposals
+              <small>Collect session proposals for this event.</small>
+            </span>
+          </div>
+          {values.cfpEnabled ? (
+            <div style={{ gridColumn: "1 / -1" }}>
+              <TemporalPicker
+                id="organizer-event-cfp-window"
+                mode="range"
+                precision="date-time"
+                startValue={values.cfpOpensAt}
+                endValue={values.cfpClosesAt}
+                startLabel="CFP opens"
+                endLabel="CFP closes"
+                startName="cfpSettings.opensAt"
+                endName="cfpSettings.closesAt"
+                minimumDateTime={minimumDateTime}
+                maximumDateTime={values.startsAt}
+                unchangedValues={
+                  originalValues === undefined
+                    ? undefined
+                    : [originalValues.cfpOpensAt, originalValues.cfpClosesAt].filter(
+                        (value) => value !== "",
+                      )
+                }
+                timeZone={values.timeZone}
+                startDisambiguation={values.cfpOpenDisambiguation}
+                endDisambiguation={values.cfpCloseDisambiguation}
+                onStartDisambiguationChange={(value) =>
+                  setValues((current) => ({
+                    ...current,
+                    cfpOpenDisambiguation: value,
+                  }))
+                }
+                onEndDisambiguationChange={(value) =>
+                  setValues((current) => ({
+                    ...current,
+                    cfpCloseDisambiguation: value,
+                  }))
+                }
+                eyebrow="CFP schedule"
+                description="Set the proposal window directly on the calendar."
+                clearable
+                onChange={({ start, end }) => {
+                  updateValue("cfpOpensAt", start);
+                  updateValue("cfpClosesAt", end);
+                }}
+              />
+            </div>
+          ) : null}
+        </fieldset>
+      </details>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
-          {formError}
-        </p>
+        <Alert variant="destructive">
+          <AlertTitle>Check the event details</AlertTitle>
+          <AlertDescription>{formError}</AlertDescription>
+        </Alert>
       ) : null}
-      <div style={eventInlineActionsStyle}>
+      <div className={styles.eventInlineActions}>
         {onCancel ? (
-          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
+          <Button variant="outline" type="button" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? "Saving event…" : event ? "Save event" : "Create event"}
-        </button>
+        </Button>
       </div>
     </form>
   );
-}
-
-function eventManagementStatusClass(status: OrganizerEventStatus): string {
-  switch (status) {
-    case "active":
-      return styles.statusLive ?? "";
-    case "draft":
-      return styles.statusDraft ?? "";
-    case "archived":
-      return styles.statusArchived ?? "";
-  }
 }
 
 function eventManagementStatusLabel(status: OrganizerEventStatus): string {
@@ -1977,15 +1377,20 @@ export interface OrganizerEventsData {
 }
 
 export type OrganizerEventsViewState =
-  | { readonly status: "loading" }
+  | { readonly status: "loading"; readonly data?: OrganizerEventsData }
   | { readonly status: "config-error"; readonly message: string }
-  | { readonly status: "error"; readonly message: string }
+  | {
+      readonly status: "error";
+      readonly message: string;
+      readonly data?: OrganizerEventsData;
+    }
   | { readonly status: "loaded"; readonly data: OrganizerEventsData };
 
 export interface OrganizerEventsViewProps {
   readonly state: OrganizerEventsViewState;
   readonly busy?: boolean;
   readonly notice?: string | null;
+  readonly initialEditor?: "create" | undefined;
   readonly onRetry?: (() => void) | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
@@ -2036,11 +1441,34 @@ function EventsMessageState({
     </section>
   );
 }
+function EventsRefreshState({
+  message,
+  onRetry,
+  status,
+}: Readonly<{
+  readonly message: string;
+  readonly onRetry?: (() => void) | undefined;
+  readonly status: "loading" | "error";
+}>) {
+  return (
+    <section className={styles.panel} role={status === "error" ? "alert" : "status"}>
+      <div className={styles.panelContent}>
+        <p className={styles.muted}>{message}</p>
+        {status === "error" && onRetry ? (
+          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+            Retry event refresh
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
 
 function OrganizerEventsLoaded({
   data,
   busy,
   notice,
+  initialEditor,
   onCreate,
   onUpdate,
   onArchive,
@@ -2048,6 +1476,7 @@ function OrganizerEventsLoaded({
   readonly data: OrganizerEventsData;
   readonly busy: boolean;
   readonly notice: string | null;
+  readonly initialEditor?: "create" | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
     | ((
@@ -2058,11 +1487,34 @@ function OrganizerEventsLoaded({
     | undefined;
   readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }>) {
-  const [editor, setEditor] = useState<"create" | string | null>(null);
+  const [editor, setEditor] = useState<"create" | string | null>(initialEditor ?? null);
+  const [view, setView] = useState<"calendar" | "list">("calendar");
+  const [visibleMonth, setVisibleMonth] = useState(() => initialCalendarMonth(data.events));
+  const [archiveTarget, setArchiveTarget] = useState<OrganizerEventRecord | null>(null);
   const editingEvent =
     editor !== null && editor !== "create"
       ? data.events.find((event) => event.id === editor)
       : undefined;
+  const calendarCells = getCalendarMonthCells(visibleMonth);
+  const monthLabel = new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    year: "numeric",
+  }).format(visibleMonth);
+  const upcomingEvents = [...data.events]
+    .filter((event) => {
+      const startsAt = parseCalendarInstant(event.startsAt);
+      return event.status !== "archived" && startsAt !== null && startsAt >= new Date();
+    })
+    .sort((left, right) => {
+      const leftStart = parseCalendarInstant(left.startsAt)?.valueOf() ?? Number.POSITIVE_INFINITY;
+      const rightStart =
+        parseCalendarInstant(right.startsAt)?.valueOf() ?? Number.POSITIVE_INFINITY;
+      return leftStart - rightStart;
+    })
+    .slice(0, 5);
+  useEffect(() => {
+    if (!onCreate || !onUpdate) setEditor(null);
+  }, [onCreate, onUpdate]);
 
   async function create(input: OrganizerEventCreateInput) {
     if (!onCreate) return;
@@ -2076,155 +1528,339 @@ function OrganizerEventsLoaded({
     setEditor(null);
   }
 
-  async function archive(event: OrganizerEventRecord) {
-    if (!onArchive) return;
-    if (typeof window !== "undefined" && !window.confirm(`Archive ${event.name}?`)) return;
-    await onArchive(event.id, event.version);
+  async function archive() {
+    if (!onArchive || archiveTarget === null) return;
+    await onArchive(archiveTarget.id, archiveTarget.version);
+    setArchiveTarget(null);
   }
 
   return (
     <>
-      <header className={styles.pageHeader}>
+      <header className={`${styles.pageHeader} ${editor === null ? "" : styles.eventEditorHeader}`}>
         <div className={styles.pageHeaderCopy}>
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Event management</h1>
           <p className={styles.pageDescription}>
-            Create events, configure their dates and defaults, and choose an event workspace.
+            {editor === null
+              ? "Keep event dates visible at a glance, then switch to List for configuration and actions."
+              : "Complete the event setup below. The event collection returns when this editor closes."}
           </p>
         </div>
-        <div className={styles.headerActions}>
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={() => setEditor((current) => (current === "create" ? null : "create"))}
-            aria-expanded={editor === "create"}
-            aria-controls="organizer-event-editor"
-          >
-            {editor === "create" ? "Close create form" : "Create event"}
-          </button>
-        </div>
+        {onCreate ? (
+          <div className={styles.headerActions}>
+            <Button
+              type="button"
+              onClick={() => setEditor((current) => (current === "create" ? null : "create"))}
+              aria-expanded={editor === "create"}
+              aria-controls="organizer-event-editor"
+            >
+              {editor === "create" ? "Close create form" : "Create event"}
+            </Button>
+          </div>
+        ) : null}
       </header>
 
       {notice ? (
-        <p className={styles.callout} role="status" style={{ marginBottom: "1.25rem" }}>
-          {notice}
-        </p>
+        <Alert role="status">
+          <AlertTitle>Event updated</AlertTitle>
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
       ) : null}
 
-      {editor !== null ? (
-        <section
-          className={styles.panel}
+      {editor !== null && onCreate && onUpdate ? (
+        <Card
+          className={styles.eventEditorCard}
           id="organizer-event-editor"
           aria-labelledby="organizer-event-editor-title"
         >
-          <div className={styles.panelContent}>
+          <CardContent className="pt-6">
             <OrganizerEventEditor
               event={editingEvent}
               busy={busy}
               onCancel={() => setEditor(null)}
               onSave={editor === "create" ? create : update}
             />
-          </div>
-        </section>
+          </CardContent>
+        </Card>
       ) : null}
 
-      <section className={styles.panel} aria-labelledby="organizer-events-title">
-        <div className={styles.panelHeader}>
-          <div className={styles.panelHeading}>
-            <p className={styles.panelEyebrow}>Live organization data</p>
-            <h2 className={styles.panelTitle} id="organizer-events-title">
-              Events
-            </h2>
-          </div>
-          <span className={styles.muted}>{data.events.length} total</span>
-        </div>
-        {data.events.length === 0 ? (
-          <div className={styles.panelContent}>
-            <p className={styles.muted} role="status">
-              No events are available for this organization yet. Create an event to begin.
-            </p>
-          </div>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.eventsTable}>
-              <caption>Organization events and their current status</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Event</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Event dates</th>
-                  <th scope="col">
-                    <span className={styles.srOnly}>Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.events.map((event) => (
-                  <tr key={event.id}>
-                    <td className={styles.eventNameCell}>
-                      <Link
-                        className={styles.eventName}
-                        href={eventSettingsHref(data.organizationId, event.id)}
-                      >
-                        {event.name}
-                      </Link>
-                      <p className={styles.eventSlug}>/{event.slug}</p>
-                    </td>
-                    <td>
-                      <span
-                        className={`${styles.statusBadge} ${eventManagementStatusClass(event.status)}`}
-                      >
-                        <span aria-hidden="true">●</span>&nbsp;
-                        {eventManagementStatusLabel(event.status)}
-                      </span>
-                    </td>
-                    <td className={styles.eventDateCell}>
-                      {formatEventManagementDates(event)}
-                      <span className={styles.eventSlug}>{event.timeZone}</span>
-                    </td>
-                    <td>
-                      <div className={styles.eventActions}>
-                        <Link
-                          className={styles.outlineButton}
-                          href={agendaHref(data.organizationId, event.id)}
-                        >
-                          Agenda <span aria-hidden="true">→</span>
-                        </Link>
-                        <Link
-                          className={styles.outlineButton}
-                          href={eventSettingsHref(data.organizationId, event.id)}
-                        >
-                          Settings <span aria-hidden="true">→</span>
-                        </Link>
-                        <button
-                          className={styles.secondaryButton}
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            setEditor((current) => (current === event.id ? null : event.id))
-                          }
-                        >
-                          {editor === event.id ? "Close editor" : "Edit"}
-                        </button>
-                        {event.status !== "archived" && onArchive ? (
-                          <button
-                            className={styles.secondaryButton}
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void archive(event)}
+      <Tabs
+        hidden={editor !== null}
+        value={view}
+        onValueChange={(value) => setView(value === "list" ? "list" : "calendar")}
+      >
+        <Card className={styles.eventsCard} aria-labelledby="organizer-events-title">
+          <CardHeader className="flex-row items-start justify-between">
+            <div>
+              <CardDescription>Live organization data</CardDescription>
+              <CardTitle>
+                <h2 id="organizer-events-title">Events</h2>
+              </CardTitle>
+            </div>
+            <TabsList aria-label="Event display">
+              <TabsTrigger value="calendar">Calendar</TabsTrigger>
+              <TabsTrigger value="list">List</TabsTrigger>
+            </TabsList>
+          </CardHeader>
+
+          {data.events.length === 0 ? (
+            <CardContent>
+              <p className={styles.muted} role="status">
+                No events are available for this organization yet. Create an event to begin.
+              </p>
+            </CardContent>
+          ) : view === "calendar" ? (
+            <TabsContent value="calendar" className={`${styles.calendarWorkspace} mt-0`}>
+              <aside className={styles.calendarRail} aria-label="Calendar summary">
+                <div className={styles.calendarRailSection}>
+                  <p className={styles.panelEyebrow}>Upcoming events</p>
+                  {upcomingEvents.length === 0 ? (
+                    <p className={styles.muted}>No upcoming events to show.</p>
+                  ) : (
+                    <ul className={styles.upcomingList}>
+                      {upcomingEvents.map((event) => (
+                        <li key={event.id}>
+                          <Link
+                            className={styles.upcomingLink}
+                            href={eventSettingsHref(data.organizationId, event.id)}
                           >
-                            Archive
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                            <span className={styles.upcomingTitleRow}>
+                              <strong>{event.name}</strong>
+                              <Badge className={eventStatusClass(event.status)} variant="outline">
+                                {eventManagementStatusLabel(event.status)}
+                              </Badge>
+                            </span>
+                            <code className={styles.eventIdentifier}>{event.id}</code>
+                            <span>
+                              {formatEventManagementDate(event.startsAt, event.timeZone)} ·{" "}
+                              {event.timeZone}
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className={styles.calendarRailSection}>
+                  <p className={styles.panelEyebrow}>Event identity</p>
+                  <p className={styles.muted}>
+                    The event name is the display title. Its ID stays stable in URLs and keeps each
+                    event&apos;s data isolated.
+                  </p>
+                </div>
+              </aside>
+
+              <div className={styles.calendarMain}>
+                <div className={styles.calendarToolbar}>
+                  <div className={styles.calendarMonthControls}>
+                    <Button
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                      aria-label="Previous month"
+                      onClick={() =>
+                        setVisibleMonth(
+                          (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1),
+                        )
+                      }
+                    >
+                      <ChevronLeft aria-hidden="true" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      onClick={() =>
+                        setVisibleMonth(
+                          new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+                        )
+                      }
+                    >
+                      Today
+                    </Button>
+                    <Button
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                      aria-label="Next month"
+                      onClick={() =>
+                        setVisibleMonth(
+                          (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1),
+                        )
+                      }
+                    >
+                      <ChevronRight aria-hidden="true" />
+                    </Button>
+                    <h3 className={styles.calendarMonthLabel}>{monthLabel}</h3>
+                  </div>
+                  <Badge variant="secondary">{data.events.length} total</Badge>
+                </div>
+
+                <div className={styles.calendarScroll}>
+                  <table className={styles.calendarGrid}>
+                    <caption className={styles.srOnly}>{monthLabel} events</caption>
+                    <thead>
+                      <tr className={styles.weekdayRow}>
+                        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((weekday) => (
+                          <th className={styles.weekday} scope="col" key={weekday}>
+                            {weekday}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className={styles.calendarCells}>
+                      {Array.from({ length: 6 }, (_, weekIndex) => (
+                        <tr key={calendarCells[weekIndex * 7]?.dateKey}>
+                          {calendarCells.slice(weekIndex * 7, weekIndex * 7 + 7).map((cell) => {
+                            const cellEvents = data.events.filter(
+                              (event) =>
+                                event.status !== "archived" &&
+                                organizerEventIntersectsCalendarDate(event, cell.date),
+                            );
+                            return (
+                              <td
+                                className={`${styles.calendarCell} ${cell.isCurrentMonth ? "" : styles.calendarCellOutside}`}
+                                key={cell.dateKey}
+                              >
+                                <time dateTime={cell.dateKey} className={styles.calendarDate}>
+                                  <span className={styles.srOnly}>
+                                    {cell.date.toLocaleDateString(undefined, {
+                                      month: "long",
+                                      day: "numeric",
+                                      year: "numeric",
+                                    })}
+                                  </span>
+                                  <span aria-hidden="true">{cell.date.getDate()}</span>
+                                </time>
+                                <div className={styles.calendarEventList}>
+                                  {cellEvents.map((event) => (
+                                    <Link
+                                      className={styles.calendarEvent}
+                                      href={eventSettingsHref(data.organizationId, event.id)}
+                                      key={event.id}
+                                      aria-label={event.name}
+                                    >
+                                      <span className={styles.calendarEventName}>{event.name}</span>
+                                      <span className={styles.calendarEventStatus}>
+                                        {eventManagementStatusLabel(event.status)}
+                                      </span>
+                                    </Link>
+                                  ))}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </TabsContent>
+          ) : (
+            <TabsContent value="list" className="mt-0">
+              <div className={styles.tableWrap}>
+                <table className={styles.eventsTable}>
+                  <caption>Organization events and their current status</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Event</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Event dates</th>
+                      <th scope="col">
+                        <span className={styles.srOnly}>Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.events.map((event) => (
+                      <tr key={event.id}>
+                        <td className={styles.eventNameCell}>
+                          <Link
+                            className={styles.eventName}
+                            href={eventSettingsHref(data.organizationId, event.id)}
+                          >
+                            {event.name}
+                          </Link>
+                          <p className={styles.eventSlug}>/{event.slug}</p>
+                        </td>
+                        <td>
+                          <Badge className={eventStatusClass(event.status)} variant="outline">
+                            {eventManagementStatusLabel(event.status)}
+                          </Badge>
+                        </td>
+                        <td className={styles.eventDateCell}>
+                          {formatEventManagementDates(event)}
+                          <span className={styles.eventSlug}>{event.timeZone}</span>
+                        </td>
+                        <td>
+                          <div className={styles.eventActions}>
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={agendaHref(data.organizationId, event.id)}>Agenda</Link>
+                            </Button>
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={eventSettingsHref(data.organizationId, event.id)}>
+                                Settings
+                              </Link>
+                            </Button>
+                            {onUpdate ? (
+                              <Button
+                                size="sm"
+                                type="button"
+                                variant="secondary"
+                                disabled={busy}
+                                onClick={() =>
+                                  setEditor((current) => (current === event.id ? null : event.id))
+                                }
+                              >
+                                {editor === event.id ? "Close editor" : "Edit"}
+                              </Button>
+                            ) : null}
+                            {event.status !== "archived" && onArchive ? (
+                              <Button
+                                size="sm"
+                                type="button"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => setArchiveTarget(event)}
+                              >
+                                Archive
+                              </Button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TabsContent>
+          )}
+        </Card>
+      </Tabs>
+      <AlertDialog
+        open={archiveTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setArchiveTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive this event?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {archiveTarget
+                ? `${archiveTarget.name} will leave active event workflows.`
+                : "This event will leave active event workflows."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} variant="destructive" onClick={() => void archive()}>
+              Archive event
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -2233,31 +1869,47 @@ export function OrganizerEventsView({
   state,
   busy = false,
   notice = null,
+  initialEditor,
   onRetry,
   onCreate,
   onUpdate,
   onArchive,
 }: OrganizerEventsViewProps) {
-  if (state.status === "loading") return <EventsLoadingState />;
+  if (state.status === "loading" && state.data === undefined) return <EventsLoadingState />;
   if (state.status === "config-error") {
     return (
       <EventsMessageState title="Event management is not configured" message={state.message} />
     );
   }
-  if (state.status === "error") {
+  if (state.status === "error" && state.data === undefined) {
     return (
       <EventsMessageState title="Unable to load events" message={state.message} onRetry={onRetry} />
     );
   }
+  const data = state.data;
+  if (data === undefined) return <EventsLoadingState />;
+  const authoritative = state.status === "loaded";
   return (
-    <OrganizerEventsLoaded
-      data={state.data}
-      busy={busy}
-      notice={notice}
-      onCreate={onCreate}
-      onUpdate={onUpdate}
-      onArchive={onArchive}
-    />
+    <>
+      {state.status === "loading" ? (
+        <EventsRefreshState message="Refreshing event records…" status="loading" />
+      ) : state.status === "error" ? (
+        <EventsRefreshState
+          message={`Showing previous event data. ${state.message}`}
+          onRetry={onRetry}
+          status="error"
+        />
+      ) : null}
+      <OrganizerEventsLoaded
+        data={data}
+        busy={busy}
+        notice={notice}
+        {...(initialEditor === undefined ? {} : { initialEditor })}
+        onCreate={authoritative ? onCreate : undefined}
+        onUpdate={authoritative ? onUpdate : undefined}
+        onArchive={authoritative ? onArchive : undefined}
+      />
+    </>
   );
 }
 
@@ -2272,52 +1924,175 @@ function organizerEventsErrorMessage(error: unknown): string {
 export function OrganizerEvents({
   api: providedApi,
   config: providedConfig,
+  initialEditor,
 }: Readonly<{
   readonly api?: OrganizerEventsApi;
   readonly config?: OrganizerOverviewConfigResult;
+  readonly initialEditor?: "create" | undefined;
 }> = {}) {
+  const authenticatedOrganizationId = useOrganizerOrganizationId();
   const config = useMemo(
-    () => providedConfig ?? resolveOrganizerOverviewConfig(),
-    [providedConfig],
+    () =>
+      providedConfig ?? resolveOrganizerOverviewConfig(authenticatedOrganizationId ?? undefined),
+    [authenticatedOrganizationId, providedConfig],
   );
   const api = useMemo(() => {
     if (providedApi) return providedApi;
     if ("error" in config) return null;
     return createOrganizerEventsApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
+  const navigationCache = useNavigationDataCache();
+  const cacheOrganizationId = "error" in config ? null : config.organizationId.trim();
+  const eventsCacheKey =
+    cacheOrganizationId === null ? null : organizerOverviewCacheKey(cacheOrganizationId, "events");
+  const eventsCacheTags = useMemo(
+    () => (cacheOrganizationId === null ? [] : organizerOverviewCacheTags(cacheOrganizationId)),
+    [cacheOrganizationId],
+  );
+  const cachedEvents =
+    eventsCacheKey === null
+      ? undefined
+      : navigationCache?.peek<readonly OrganizerEventRecord[]>(eventsCacheKey);
+  const initialReadKey = useMemo(
+    () => (api && !("error" in config) ? { api, organizationId: config.organizationId } : null),
+    [api, config],
+  );
   const [state, setState] = useState<OrganizerEventsViewState>(() =>
-    "error" in config ? { status: "config-error", message: config.error } : { status: "loading" },
+    "error" in config
+      ? { status: "config-error", message: config.error }
+      : cachedEvents === undefined
+        ? { status: "loading" }
+        : {
+            status: "loaded",
+            data: { organizationId: config.organizationId, events: cachedEvents },
+          },
   );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const generationRef = useRef(0);
+  const initialReadCoordinatorRef = useRef<ScopedReadFlightCoordinator<
+    object,
+    readonly OrganizerEventRecord[]
+  > | null>(null);
+  if (initialReadCoordinatorRef.current === null) {
+    initialReadCoordinatorRef.current = createScopedReadFlightCoordinator();
+  }
+  const initialReadCoordinator = initialReadCoordinatorRef.current;
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (
+      signal?: AbortSignal,
+      initialRead?: Promise<readonly OrganizerEventRecord[]>,
+      fresh = false,
+    ) => {
       if (!api || "error" in config) return;
-      setState({ status: "loading" });
+      const generation = generationRef.current;
+      setState((current) => {
+        if (current.status === "config-error") return { status: "loading" };
+        return current.data === undefined
+          ? { status: "loading" }
+          : { status: "loading", data: current.data };
+      });
       setNotice(null);
       try {
-        const events = await api.listEvents(signal);
+        const events = await (initialRead ??
+          (navigationCache === null || eventsCacheKey === null
+            ? api.listEvents(signal)
+            : navigationCache.read({
+                key: eventsCacheKey,
+                tags: eventsCacheTags,
+                fresh,
+                load: async () => {
+                  const events = await api.listEvents();
+                  if (events.some((event) => event.organizationId !== config.organizationId)) {
+                    throw new Error(
+                      "The organizer event response belongs to another organization.",
+                    );
+                  }
+                  return events;
+                },
+              })));
+        if (signal?.aborted || generationRef.current !== generation) return;
         if (events.some((event) => event.organizationId !== config.organizationId)) {
           throw new Error("The organizer event response belongs to another organization.");
         }
-        setState({ status: "loaded", data: { organizationId: config.organizationId, events } });
+        setState({
+          status: "loaded",
+          data: { organizationId: config.organizationId, events },
+        });
       } catch (error) {
-        if (signal?.aborted) return;
-        setState({ status: "error", message: organizerEventsErrorMessage(error) });
+        if (signal?.aborted || generationRef.current !== generation) return;
+        setState((current) => {
+          const message = organizerEventsErrorMessage(error);
+          return current.status !== "config-error" && current.data !== undefined
+            ? { status: "error", message, data: current.data }
+            : { status: "error", message };
+        });
       }
     },
-    [api, config],
+    [api, config, eventsCacheKey, eventsCacheTags, navigationCache],
   );
 
   useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
+    generationRef.current += 1;
+    if (!api || "error" in config || !initialReadKey) {
+      setState(
+        "error" in config
+          ? { status: "config-error", message: config.error }
+          : {
+              status: "config-error",
+              message: "Event management is not configured.",
+            },
+      );
+      return;
+    }
+    const cached =
+      eventsCacheKey === null
+        ? undefined
+        : navigationCache?.peek<readonly OrganizerEventRecord[]>(eventsCacheKey);
+    if (cached?.every((event) => event.organizationId === config.organizationId) === true) {
+      setState({
+        status: "loaded",
+        data: { organizationId: config.organizationId, events: cached },
+      });
+      return;
+    }
+    setState({ status: "loading" });
+    const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
+      navigationCache === null || eventsCacheKey === null
+        ? api.listEvents(signal)
+        : navigationCache.read({
+            key: eventsCacheKey,
+            tags: eventsCacheTags,
+            load: async () => {
+              const events = await api.listEvents();
+              if (events.some((event) => event.organizationId !== config.organizationId)) {
+                throw new Error("The organizer event response belongs to another organization.");
+              }
+              return events;
+            },
+          }),
+    );
+    void load(lease.signal, lease.promise);
+    return () => {
+      generationRef.current += 1;
+      lease.release();
+    };
+  }, [
+    api,
+    config,
+    eventsCacheKey,
+    eventsCacheTags,
+    initialReadCoordinator,
+    initialReadKey,
+    load,
+    navigationCache,
+  ]);
 
   async function create(input: OrganizerEventCreateInput) {
     if (!api || "error" in config) return;
+    generationRef.current += 1;
+    navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
     setNotice(null);
     try {
@@ -2327,7 +2102,13 @@ export function OrganizerEvents({
       }
       setState((current) =>
         current.status === "loaded"
-          ? { ...current, data: { ...current.data, events: [event, ...current.data.events] } }
+          ? {
+              ...current,
+              data: {
+                ...current.data,
+                events: [event, ...current.data.events],
+              },
+            }
           : current,
       );
       setNotice("Event created.");
@@ -2344,6 +2125,8 @@ export function OrganizerEvents({
     expectedVersion: number,
   ) {
     if (!api || "error" in config) return;
+    generationRef.current += 1;
+    navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
     setNotice(null);
     try {
@@ -2385,6 +2168,8 @@ export function OrganizerEvents({
 
   async function archive(eventId: string, expectedVersion: number) {
     if (!api || "error" in config) return;
+    generationRef.current += 1;
+    navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
     setNotice(null);
     try {
@@ -2418,7 +2203,8 @@ export function OrganizerEvents({
       state={state}
       busy={busy}
       notice={notice}
-      onRetry={() => void load()}
+      {...(initialEditor === undefined ? {} : { initialEditor })}
+      onRetry={() => void load(undefined, undefined, true)}
       onCreate={api ? create : undefined}
       onUpdate={api ? update : undefined}
       onArchive={api ? archive : undefined}

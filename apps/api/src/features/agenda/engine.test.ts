@@ -13,6 +13,7 @@ import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
   resolveLocalDateTime,
+  validateAgendaEntriesWithinEvent,
 } from "./index";
 
 const catalog: AgendaCatalog = {
@@ -77,13 +78,17 @@ function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
     clock,
     idGenerator,
     ...(provider === undefined ? {} : { suggestionProvider: provider }),
+    eventScheduleForEvent: async () => ({
+      startsAt: "2026-01-01T08:00:00.000Z",
+      endsAt: "2028-01-01T07:59:59.999Z",
+      timeZone: "America/Los_Angeles",
+    }),
   });
 }
 
 async function initialize(engine: AgendaEngine): Promise<void> {
   await engine.createAgenda({
     eventId: "event-1",
-    timeZone: "America/Los_Angeles",
     minimumTravelMinutes: 15,
     actorId: "organizer-1",
     ...catalog,
@@ -106,6 +111,58 @@ function suggestionInput(baseDraftVersion = 1) {
 }
 
 describe("agenda time zones", () => {
+  it("derives timezone from event authority, migrates empty state, and rejects stale temporal state", async () => {
+    let timeZone = "America/New_York";
+    const repository = new InMemoryAgendaRepository();
+    const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock(), {
+      eventScheduleForEvent: async () => ({
+        startsAt: "2026-01-01T00:00:00.000Z",
+        endsAt: "2027-01-01T00:00:00.000Z",
+        timeZone,
+      }),
+    });
+    const created = await engine.createAgenda({
+      eventId: "event-authority",
+      minimumTravelMinutes: 0,
+      actorId: "organizer-1",
+      ...catalog,
+    });
+    expect(created.timeZone).toBe("America/New_York");
+
+    timeZone = "UTC";
+    const migrated = await engine.updateCatalog({
+      eventId: "event-authority",
+      expectedVersion: created.version,
+      minimumTravelMinutes: 0,
+      actorId: "organizer-1",
+      ...catalog,
+    });
+    expect(migrated.timeZone).toBe("UTC");
+    expect(await repository.load("event-authority")).toMatchObject({
+      timeZone: "UTC",
+      draft: { timeZone: "UTC" },
+    });
+
+    await engine.updateDraft({
+      eventId: "event-authority",
+      expectedVersion: migrated.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    timeZone = "America/Los_Angeles";
+    await expect(
+      engine.updateCatalog({
+        eventId: "event-authority",
+        expectedVersion: migrated.version + 1,
+        minimumTravelMinutes: 0,
+        actorId: "organizer-1",
+        ...catalog,
+      }),
+    ).rejects.toMatchObject({ code: "CONCURRENT_MODIFICATION" });
+  });
+
   it("rejects nonexistent DST wall times and requires fall-back disambiguation", () => {
     expect(() => resolveLocalDateTime("2026-03-08T02:30", "America/Los_Angeles")).toThrowError(
       expect.objectContaining<Partial<AgendaTimeZoneError>>({ code: "NONEXISTENT_LOCAL_TIME" }),
@@ -121,6 +178,79 @@ describe("agenda time zones", () => {
 });
 
 describe("agenda validation", () => {
+  it("enforces exact event instants, sparse local dates, and explicit DST resolution", () => {
+    const event = {
+      startsAt: "2026-11-01T05:30:00.000Z",
+      endsAt: "2026-11-03T02:00:00.000Z",
+      timeZone: "America/New_York",
+      scheduleDates: ["2026-11-01", "2026-11-02"],
+    };
+    const input = (
+      startsAtLocal: string,
+      endsAtLocal: string,
+      startDisambiguation?: "earlier" | "later",
+    ) => ({
+      ...entry("entry-1", "session-1", "room-large", startsAtLocal, endsAtLocal),
+      ...(startDisambiguation === undefined ? {} : { startDisambiguation }),
+    });
+
+    expect(() =>
+      validateAgendaEntriesWithinEvent(
+        [input("2026-11-01T01:30", "2026-11-01T02:15", "earlier")],
+        event,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateAgendaEntriesWithinEvent([input("2026-11-01T01:30", "2026-11-01T02:15", "later")], {
+        ...event,
+        endsAt: "2026-11-01T06:45:00.000Z",
+      }),
+    ).toThrowError(expect.objectContaining({ field: "endsAtLocal", issueCode: "after_event_end" }));
+    expect(() =>
+      validateAgendaEntriesWithinEvent([input("2026-11-01T01:30", "2026-11-01T02:15")], event),
+    ).toThrowError(
+      expect.objectContaining({
+        field: "startsAtLocal",
+        issueCode: "ambiguous_local_time",
+      }),
+    );
+    expect(() =>
+      validateAgendaEntriesWithinEvent([input("2026-11-03T10:00", "2026-11-03T11:00")], {
+        ...event,
+        endsAt: "2026-11-04T02:00:00.000Z",
+      }),
+    ).toThrowError(
+      expect.objectContaining({ field: "startsAtLocal", issueCode: "date_not_allowed" }),
+    );
+  });
+
+  it("enforces event boundaries for direct engine mutations, including non-route callers", async () => {
+    const engine = new AgendaEngine(
+      new InMemoryAgendaRepository(),
+      new InMemoryAgendaMutationLock(),
+      {
+        eventScheduleForEvent: async () => ({
+          startsAt: "2026-08-10T16:00:00.000Z",
+          endsAt: "2026-08-10T18:00:00.000Z",
+          timeZone: "America/Los_Angeles",
+          scheduleDates: ["2026-08-10"],
+        }),
+      },
+    );
+    await initialize(engine);
+
+    await expect(
+      engine.updateDraft({
+        eventId: "event-1",
+        expectedVersion: 1,
+        actorId: "organizer-1",
+        entries: [
+          entry("entry-1", "session-1", "room-large", "2026-08-10T08:30", "2026-08-10T09:30"),
+        ],
+      }),
+    ).rejects.toMatchObject({ field: "startsAtLocal", issueCode: "before_event_start" });
+  });
+
   it("detects room, participant, and resource overlaps as hard blockers", async () => {
     const engine = createEngine();
     await initialize(engine);
@@ -178,6 +308,18 @@ describe("agenda validation", () => {
     );
     expect(trackReport.conflicts).toEqual([]);
     expect(travelReport.conflicts).toEqual([]);
+    expect(trackReport.warnings.find((warning) => warning.kind === "track")).toEqual({
+      id: "track:entry-1:entry-2:track-a",
+      kind: "track",
+      entryIds: ["entry-1", "entry-2"],
+      message: 'Track "Track A" contains overlapping sessions',
+    });
+    expect(travelReport.warnings.find((warning) => warning.kind === "travel")).toEqual({
+      id: "travel:entry-1:entry-3:speaker-1",
+      kind: "travel",
+      entryIds: ["entry-1", "entry-3"],
+      message: 'Speaker "Ada Lovelace" has 5 minutes to change rooms; 15 required',
+    });
   });
   it("requires reasoned warning overrides before atomic publication", async () => {
     const engine = createEngine();
@@ -316,6 +458,88 @@ describe("agenda concurrency and revisions", () => {
     expect(await engine.getOutbox("event-1")).toHaveLength(9);
   });
 
+  it("blocks a new session on another session's active released speaker commitment", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const releasedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    const released = await engine.publish({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+    });
+    const candidateDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-3", "session-3", "room-large", "2026-08-10T09:15", "2026-08-10T09:45"),
+      ],
+    });
+
+    const preview = await engine.preview("event-1");
+    expect(preview.validation.conflicts).toEqual([]);
+    expect(preview.releaseValidation.conflicts).toEqual([
+      expect.objectContaining({
+        kind: "participant",
+        entryIds: ["entry-3", "entry-1"],
+        message: expect.stringContaining('active released commitment for "Opening"'),
+      }),
+    ]);
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: candidateDraft.version,
+        actorId: "organizer-1",
+      }),
+    ).rejects.toBeInstanceOf(AgendaValidationError);
+    expect(await engine.getPublishedAgenda("event-1")).toEqual(released);
+  });
+
+  it("excludes a session's own released slot when publishing its update", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const releasedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+    });
+    const updatedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:30", "2026-08-10T10:30"),
+      ],
+    });
+
+    expect((await engine.preview("event-1")).releaseValidation.conflicts).toEqual([]);
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: updatedDraft.version,
+        actorId: "organizer-1",
+      }),
+    ).resolves.toMatchObject({
+      revisionNumber: 2,
+      entries: [expect.objectContaining({ sessionId: "session-1" })],
+    });
+  });
+
   it("executes a Durable Object lock contract one mutation at a time", async () => {
     const lock = new InMemoryAgendaMutationLock();
     let active = 0;
@@ -365,6 +589,38 @@ describe("advisory agenda suggestions", () => {
     });
     expect(run.criteria.orderedRules).toEqual(["avoid hard conflicts", "prefer larger rooms"]);
     expect(run.diff.summary).toContain("proposed agenda change");
+  });
+  it("returns candidate diagnostics without polluting the authoritative saved preview", async () => {
+    const provider: AgendaSuggestionProvider = {
+      suggest: () => ({
+        placements: [
+          {
+            sessionId: "session-2",
+            roomId: "room-large",
+            startsAtLocal: "2026-08-10T09:30",
+            endsAtLocal: "2026-08-10T10:30",
+          },
+        ],
+      }),
+    };
+    const engine = createEngine(provider);
+    await initialize(engine);
+    const savedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+
+    const run = await engine.generateSuggestion(suggestionInput(savedDraft.version));
+    const savedPreview = await engine.preview("event-1");
+
+    expect(run.candidateDiagnostics.conflicts).toEqual([expect.objectContaining({ kind: "room" })]);
+    expect(run).not.toHaveProperty("validation");
+    expect(savedPreview.validation.conflicts).toEqual([]);
+    expect(await engine.getDraft("event-1")).toEqual(savedDraft);
   });
 
   it("rejects applying a run after its base draft revision becomes stale", async () => {

@@ -1,16 +1,22 @@
 import type { Page, Request, Route } from "@playwright/test";
 import { E2E_SESSION_COOKIE, type E2eAuthSession } from "./auth";
 
-const DEFAULT_ORGANIZATION_ID = "ai-engineer";
+const DEFAULT_ORGANIZATION_ID = "evaluator-org";
 const DEFAULT_FORM_VERSION = 1;
 const UPDATED_AT = "2026-08-08T12:00:00.000Z";
 
 export interface CfpFixtureOptions {
   eventId: string;
+  eventSlug?: string;
   formId?: string;
   eventName?: string;
   formName?: string;
   formVersion?: number;
+  initiallyAuthenticated?: boolean;
+  memberships?: readonly {
+    organizationId: string;
+    role: "owner" | "admin" | "reviewer";
+  }[];
 }
 
 export interface CfpFixtureHarness {
@@ -80,11 +86,16 @@ function errorBody(code: string, message: string): string {
   return JSON.stringify({ error: { code, message, traceId: "trace-cfp-fixture" } });
 }
 
-async function fulfillJson(route: Route, data: unknown, status = 200): Promise<void> {
+async function fulfillJson(
+  route: Route,
+  data: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Promise<void> {
   await route.fulfill({
     status,
     contentType: "application/json",
-    headers: CORS_HEADERS,
+    headers: { ...CORS_HEADERS, ...headers },
     body: JSON.stringify({ data }),
   });
 }
@@ -110,9 +121,15 @@ export async function installCfpApi(
 ): Promise<CfpFixtureHarness> {
   const formId = options.formId ?? `${options.eventId}-cfp`;
   const formVersion = options.formVersion ?? DEFAULT_FORM_VERSION;
+  const eventSlug = options.eventSlug ?? options.eventId;
+  const organization = {
+    id: DEFAULT_ORGANIZATION_ID,
+    slug: DEFAULT_ORGANIZATION_ID,
+    name: DEFAULT_ORGANIZATION_ID,
+  };
   const event = {
     id: options.eventId,
-    slug: options.eventId,
+    slug: eventSlug,
     name: options.eventName ?? "Welcome to our event!",
     timezone: "America/Los_Angeles",
     opensAt: "2026-08-01T07:00:00.000Z",
@@ -131,7 +148,71 @@ export async function installCfpApi(
       successContent: "Thank you for contributing to the program.",
     },
     sections: [],
-    submissionFields: [],
+    submissionFields: [
+      {
+        id: "field-title",
+        sectionId: "submission",
+        key: "title",
+        label: "Title",
+        kind: "text",
+        required: true,
+        options: [],
+      },
+      {
+        id: "field-abstract",
+        sectionId: "submission",
+        key: "abstract",
+        label: "Description",
+        kind: "rich_text",
+        required: true,
+        options: [],
+      },
+      {
+        id: "field-format",
+        sectionId: "submission",
+        key: "format",
+        label: "Format",
+        kind: "select",
+        required: true,
+        options: ["Featured Keynote", "Breakout Session", "Panel", "Workshop"],
+      },
+      {
+        id: "field-tags",
+        sectionId: "submission",
+        key: "tags",
+        label: "Tags",
+        kind: "multi_select",
+        required: false,
+        options: ["Leadership", "Platform", "Community"],
+      },
+      {
+        id: "field-track",
+        sectionId: "submission",
+        key: "track",
+        label: "Track",
+        kind: "select",
+        required: true,
+        options: ["Track 1", "Track 2", "Track 3"],
+      },
+      {
+        id: "field-level",
+        sectionId: "submission",
+        key: "level",
+        label: "Level",
+        kind: "select",
+        required: true,
+        options: ["Introductory", "Intermediate", "Advanced"],
+      },
+      {
+        id: "field-language",
+        sectionId: "submission",
+        key: "language",
+        label: "Language",
+        kind: "select",
+        required: true,
+        options: ["English"],
+      },
+    ],
     participantFields: [],
     rules: [],
   };
@@ -152,17 +233,63 @@ export async function installCfpApi(
     updatedAt: UPDATED_AT,
   };
   const requests: Request[] = [];
-  const publicPath = `/api/public/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
+  let authenticated = options.initiallyAuthenticated ?? false;
+  const publicPath = `/api/public/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${eventSlug}`;
   const apiPath = `/api/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
   const draftPath = `${apiPath}/submissions/${submission.id}/draft`;
 
-  await page.route("http://127.0.0.1:8787/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());
 
     if (request.method() === "OPTIONS") {
       await route.fulfill({ status: 204, headers: CORS_HEADERS });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === "/api/auth/get-session") {
+      if (!authenticated) {
+        await fulfillJson(route, null);
+        return;
+      }
+      await fulfillJson(route, {
+        session: {
+          id: session.token,
+          userId: session.userId,
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        },
+        user: {
+          id: session.userId,
+          email: session.email,
+          name: session.displayName,
+          emailVerified: true,
+        },
+        memberships: options.memberships ?? [],
+        speakerGrants: [],
+      });
+      return;
+    }
+    if (
+      request.method() === "POST" &&
+      (url.pathname === "/api/auth/sign-in/email" || url.pathname === "/api/auth/sign-up/email")
+    ) {
+      authenticated = true;
+      await fulfillJson(
+        route,
+        {
+          token: session.token,
+          user: {
+            id: session.userId,
+            email: session.email,
+            name: session.displayName,
+            emailVerified: true,
+          },
+        },
+        200,
+        {
+          "set-cookie": `${E2E_SESSION_COOKIE}=${session.token}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      );
       return;
     }
     if (request.headers().cookie?.includes(`${E2E_SESSION_COOKIE}=${session.token}`) !== true) {
@@ -174,7 +301,11 @@ export async function installCfpApi(
       request.method() === "GET" &&
       (url.pathname === publicPath || url.pathname === `${publicPath}/forms/${formId}`)
     ) {
-      await fulfillJson(route, { event: clone(event), form: clone(form) });
+      await fulfillJson(route, {
+        organization: clone(organization),
+        event: clone(event),
+        form: clone(form),
+      });
       return;
     }
     if (request.method() === "GET" && url.pathname === draftPath) {

@@ -27,7 +27,6 @@ const ownerHeaders = {
 };
 
 const catalog = {
-  timeZone: "America/New_York",
   minimumTravelMinutes: 10,
   sessions: [
     {
@@ -117,6 +116,11 @@ function fixture() {
     {
       clock: { now: () => new Date("2026-08-08T12:00:00.000Z") },
       idGenerator: { nextId: (prefix) => `${prefix}-${++id}` },
+      eventScheduleForEvent: async () => ({
+        startsAt: "2026-01-01T05:00:00.000Z",
+        endsAt: "2027-01-01T04:59:59.999Z",
+        timeZone: "America/New_York",
+      }),
     },
   );
   const app = createApp({
@@ -124,6 +128,7 @@ function fixture() {
     agenda: {
       engine,
       organizationIdForEvent: async (eventId) => (eventId === "event-1" ? "org-1" : null),
+      calendarUidDomain: "calendar.example.test",
     },
   });
   return { app, engine };
@@ -308,7 +313,10 @@ describe("agenda API authorization and publication safety", () => {
 
     const publishedBefore = await app.request(publicPath, {}, environment);
     const publishedBeforeBody = (await publishedBefore.json()) as {
-      data: { sourceDraftVersion: number; entries: (typeof entryA)[] };
+      data: {
+        revision: { number: number };
+        entries: { startsAt: string }[];
+      };
     };
     const changedDraft = await app.request(
       `${adminPath}/draft`,
@@ -333,10 +341,14 @@ describe("agenda API authorization and publication safety", () => {
 
     expect(changedDraft.status).toBe(200);
     expect(publishedBefore.status).toBe(200);
-    expect(publishedBefore.headers.get("cache-control")).toContain("max-age=60");
-    expect(publishedBeforeBody.data.sourceDraftVersion).toBe(2);
-    expect(publishedBeforeBody.data.entries[0]?.startsAtLocal).toBe("2026-11-10T09:00:00");
+    expect(publishedBefore.headers.get("cache-control")).toBe(
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate",
+    );
+    expect(publishedBeforeBody.data.revision.number).toBe(1);
+    expect(publishedBeforeBody.data.entries[0]?.startsAt).toBe("2026-11-10T14:00:00.000Z");
     expect(publishedAfterBody).toEqual(publishedBeforeBody);
+    expect(JSON.stringify(publishedAfterBody)).not.toContain("sourceDraftVersion");
+    expect(JSON.stringify(publishedAfterBody)).not.toContain("startsAtLocal");
     expect(JSON.stringify(publishedAfterBody)).not.toContain("owner-user");
     expect(JSON.stringify(publishedAfterBody)).not.toContain("publishedBy");
     expect(JSON.stringify(publishedAfterBody)).not.toContain("warningOverrides");

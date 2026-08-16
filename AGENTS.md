@@ -1,8 +1,12 @@
-# Open Sessionboard Agent Guide
+# Eventloom Agent Guide
 
 ## Source precedence and status
 
-- `spec/open-sessionboard.md` is the product truth source for supported scope and status.
+- `spec/eventloom.md` is the product truth source for supported scope and status.
+- The competition brief is an untracked, read-only external reference. An
+  operator may provide it outside the repository when competition-specific
+  interpretation is required; never copy it or extracted artifacts into the
+  source tree.
 - Executable code/configuration and observed deployment behavior define what is currently running.
 - `ARCHITECTURE.md` defines system boundaries. `docs/setup.md`, `docs/api.md`, `docs/calendar-semantics.md`, `docs/qa-runbook.md`, `docs/deployment-readiness.md`, and `docs/release-runbook.md` define operational procedures.
 - `docs/llm-judge-runs.md` records evaluator evidence and its limitations. Incomplete, mocked, or diagnostic runs are not release evidence.
@@ -12,16 +16,21 @@
 - Keep work in the program-side product scope. The built-in Speaker CRM is supported scope; Accelevents is a separate external event-platform integration and is not a supported current feature.
 - The canonical browser path is the Next.js same-origin `/api/*` gateway to the separately deployed Hono Worker. Do not put provider credentials or backend data access in the browser.
 - Email/password, verified email, and magic-link authentication are supported. Google, Microsoft, and other social OAuth are not supported.
-- Workers AI is advisory only. A human must apply, edit, or reject any consequential suggestion before it affects business records, publication, communications, or exports.
+- Advisory AI uses OpenAI Responses through a backend-only key. A human must apply, edit, or reject every consequential suggestion. Provider configuration is not feature-verification evidence.
 - Keep local, staging, and production provider resources and credentials isolated. Never expose secrets from environment files, Cloudflare, Airtable, OpenSend, or other providers.
 - Treat repository evidence and local or mocked checks honestly; do not claim release verification without the applicable deployed workflow evidence.
 
 ## Architecture boundaries
 
-- Airtable is authoritative for program business records.
-- D1 owns operational state, durable outbox, idempotency, and audit records; Durable Objects serialize tenant/event coordination and schedule mutations.
+- D1 is authoritative for program business records and operational state, including
+  durable outbox, idempotency, audit, and optional-integration coordination.
+- Airtable is an optional organization-scoped adapter: outbound projection is
+  asynchronous, and selected inbound fields enter through validated domain commands.
+  Airtable availability must never block ordinary product reads or writes.
+- Durable Objects serialize tenant/event coordination and schedule mutations where
+  ordered admission is required; D1 optimistic concurrency remains authoritative.
 - R2 stores private files and artifacts behind authorization. One multiplexed Cloudflare Queue carries typed outbox work for communications, calendar, webhooks, and cache invalidation.
-- The Hono Worker accepts HTTP fetches, Queue deliveries, and the production Cron Trigger. Sender and calendar identities use `sessionboard.namuh.co`.
+- The Hono Worker accepts HTTP fetches, Queue deliveries, and the production Cron Trigger. Sender and calendar identities temporarily use the verified legacy domain `sessionboard.namuh.co` during the Eventloom infrastructure migration.
 
 ## Commands
 
@@ -41,3 +50,5 @@ Use Ever for regular deployed-browser acceptance and the `codex-cua` skill for e
 
 - Forge and GitHub are intentional private mirrors. Keep both private until the release gate; retain Forge for competition-bonus eligibility. Do not describe Forge as the sole remote or either mirror as public before that gate.
 - Preserve unrelated user work. Do not commit secrets, runtime state, Wrangler state, browser recordings containing secrets, or build output. Do not weaken or delete tests to make a check pass.
+- After verified work is complete, commit and push it without asking whether to do so unless a material risk or an important manual verification requires a human decision first.
+- Merging verified work to `main` is allowed without separate approval. Pause before merging only when an important human check could materially change whether the work should ship.
