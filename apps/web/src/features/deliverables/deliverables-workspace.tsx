@@ -81,7 +81,11 @@ import {
   deliverableAssetKinds,
 } from "./api";
 import styles from "./deliverables-workspace.module.css";
-import { type FileFamilyProjection, projectFileFamilies } from "./file-family-model";
+import {
+  type FileFamilyProjection,
+  fileFamilyPointers,
+  projectFileFamilies,
+} from "./file-family-model";
 import { FileLibrary } from "./file-library";
 import { FileReviewDrawer } from "./file-review-drawer";
 
@@ -470,37 +474,11 @@ function reviewStateForAsset(asset: DeliverableAsset): string {
   if (asset.reviewState !== undefined) return formatStatus(asset.reviewState);
   return asset.state === "ready" ? "Pending review" : formatStatus(asset.state);
 }
-function authoritativeAssetPointerIds(versions: readonly DeliverableAsset[]): Readonly<{
-  latest?: string;
-  current?: string;
-  approved?: string;
-  released?: string;
-}> {
-  const pointerSources = versions.filter(
-    (version) =>
-      version.latestVersionId !== undefined ||
-      version.currentVersionId !== undefined ||
-      version.approvedVersionId !== undefined ||
-      version.releasedVersionId !== undefined,
-  );
-  const source =
-    pointerSources.find((version) => version.latestVersionId === version.id) ??
-    (pointerSources.length === 1 ? pointerSources[0] : undefined);
-  return source === undefined
-    ? {}
-    : {
-        ...(source.latestVersionId === undefined ? {} : { latest: source.latestVersionId }),
-        ...(source.currentVersionId === undefined ? {} : { current: source.currentVersionId }),
-        ...(source.approvedVersionId === undefined ? {} : { approved: source.approvedVersionId }),
-        ...(source.releasedVersionId === undefined ? {} : { released: source.releasedVersionId }),
-      };
-}
-
 function authoritativeAssetBadges(
   asset: DeliverableAsset,
   versions: readonly DeliverableAsset[],
 ): readonly string[] {
-  const pointers = authoritativeAssetPointerIds(versions);
+  const pointers = fileFamilyPointers(versions);
   return [
     ...(pointers.latest === asset.id ? ["Latest"] : []),
     ...(pointers.current === asset.id ? ["Current"] : []),

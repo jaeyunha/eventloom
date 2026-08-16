@@ -4,7 +4,7 @@ import type {
   DeliverableSpeakerProfile,
   DeliverableTask,
 } from "./api";
-import type { FileFamilyProjection } from "./file-family-model";
+import { type FileFamilyProjection, fileFamilyPointers } from "./file-family-model";
 import type { FileLibraryFilters, FileLibraryRow } from "./file-library-types";
 
 export function formatFileStatus(value: string): string {
@@ -43,23 +43,12 @@ export function filePointerLabels(
   asset: DeliverableAsset,
   versions: readonly DeliverableAsset[],
 ): readonly string[] {
-  const source =
-    versions.find((version) => version.latestVersionId === asset.id) ??
-    versions.find(
-      (version) =>
-        version.latestVersionId !== undefined ||
-        version.currentVersionId !== undefined ||
-        version.approvedVersionId !== undefined ||
-        version.releasedVersionId !== undefined,
-    );
-
-  if (source === undefined) return [];
-
+  const pointers = fileFamilyPointers(versions);
   return [
-    ...(source.latestVersionId === asset.id ? ["Latest"] : []),
-    ...(source.currentVersionId === asset.id ? ["Current"] : []),
-    ...(source.approvedVersionId === asset.id ? ["Approved"] : []),
-    ...(source.releasedVersionId === asset.id ? ["Released"] : []),
+    ...(pointers.latest === asset.id ? ["Latest"] : []),
+    ...(pointers.current === asset.id ? ["Current"] : []),
+    ...(pointers.approved === asset.id ? ["Approved"] : []),
+    ...(pointers.released === asset.id ? ["Released"] : []),
   ];
 }
 

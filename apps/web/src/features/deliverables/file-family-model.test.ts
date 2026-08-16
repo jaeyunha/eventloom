@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { DeliverableAsset, DeliverableMatrixItem, DeliverableTask } from "./api";
-import { exportAssetIdsForFamilies, fileFamilyId, projectFileFamilies } from "./file-family-model";
+import {
+  exportAssetIdsForFamilies,
+  fileFamilyId,
+  fileFamilyPointers,
+  projectFileFamilies,
+} from "./file-family-model";
+import { filePointerLabels } from "./file-library-model";
 
 const task: DeliverableTask = {
   id: "task-1",
@@ -123,23 +129,53 @@ describe("file family projection", () => {
     expect(family?.exportAssetId).toBe(first.id);
   });
 
-  it("retains a family with missing or conflicting current metadata but disables export", () => {
+  it("uses only the newest self-identifying pointer source when historical rows are stale", () => {
     const first = asset("asset-v1", {
       version: 1,
       currentVersionId: "asset-v1",
+      latestVersionId: "asset-v1",
     });
     const second = asset("asset-v2", {
       version: 2,
       currentVersionId: "asset-v2",
+      latestVersionId: "asset-v2",
     });
 
     const family = projectFileFamilies([first, second])[0];
 
     expect(family).toBeDefined();
+    expect(family?.latestVersion.id).toBe(second.id);
+    expect(family?.currentVersion?.id).toBe(second.id);
     expect(family?.displayVersion.id).toBe(second.id);
-    expect(family?.currentVersion).toBeUndefined();
-    expect(family?.authoritative).toBe(false);
-    expect(family?.exportAssetId).toBeUndefined();
+    expect(family?.authoritative).toBe(true);
+    expect(family?.exportAssetId).toBe(second.id);
+    expect(filePointerLabels(first, [first, second])).toEqual([]);
+    expect(filePointerLabels(second, [first, second])).toEqual(["Latest", "Current"]);
+  });
+
+  it("uses one deterministic pointer source and latest fallback for every consumer", () => {
+    const oldest = asset("asset-oldest", {
+      version: 1,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      latestVersionId: "missing-version",
+      currentVersionId: "asset-oldest",
+    });
+    const newest = asset("asset-newest", {
+      version: 3,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      approvedVersionId: "asset-newest",
+    });
+    const middle = asset("asset-middle", {
+      version: 2,
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+
+    expect(fileFamilyPointers([middle, oldest, newest])).toEqual({
+      latest: newest.id,
+      approved: newest.id,
+    });
+    expect(projectFileFamilies([middle, oldest, newest])[0]?.latestVersion.id).toBe(newest.id);
+    expect(filePointerLabels(newest, [middle, oldest, newest])).toEqual(["Latest", "Approved"]);
   });
 
   it("deduplicates assets merged from list and matrix projections", () => {

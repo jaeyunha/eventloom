@@ -24,17 +24,33 @@ export function compareFileVersions(left: DeliverableAsset, right: DeliverableAs
   );
 }
 
-function uniquePointerId(
-  versions: readonly DeliverableAsset[],
-  field: "latestVersionId" | "currentVersionId",
-): string | undefined {
-  const ids = new Set(
-    versions.flatMap((version) => {
-      const value = version[field]?.trim();
-      return value === undefined || value.length === 0 ? [] : [value];
-    }),
+export interface FileFamilyPointers {
+  readonly latest?: string;
+  readonly current?: string;
+  readonly approved?: string;
+  readonly released?: string;
+}
+
+export function fileFamilyPointers(versions: readonly DeliverableAsset[]): FileFamilyPointers {
+  const sortedVersions = [...versions].sort(compareFileVersions);
+  const latestFallback = sortedVersions[0];
+  const pointerSources = sortedVersions.filter(
+    (version) =>
+      version.latestVersionId !== undefined ||
+      version.currentVersionId !== undefined ||
+      version.approvedVersionId !== undefined ||
+      version.releasedVersionId !== undefined,
   );
-  return ids.size === 1 ? ids.values().next().value : undefined;
+  const source =
+    pointerSources.find((version) => version.latestVersionId === version.id) ?? pointerSources[0];
+  const referencedLatest = sortedVersions.find((version) => version.id === source?.latestVersionId);
+  const latest = referencedLatest?.id ?? latestFallback?.id;
+  return {
+    ...(latest === undefined ? {} : { latest }),
+    ...(source?.currentVersionId === undefined ? {} : { current: source.currentVersionId }),
+    ...(source?.approvedVersionId === undefined ? {} : { approved: source.approvedVersionId }),
+    ...(source?.releasedVersionId === undefined ? {} : { released: source.releasedVersionId }),
+  };
 }
 
 export function projectFileFamilies(
@@ -67,11 +83,10 @@ export function projectFileFamilies(
       const sortedLatest = versions[0];
       if (sortedLatest === undefined) throw new Error("A file family must contain a version.");
 
-      const latestPointerId = uniquePointerId(versions, "latestVersionId");
-      const currentPointerId = uniquePointerId(versions, "currentVersionId");
+      const pointers = fileFamilyPointers(versions);
       const latestVersion =
-        versions.find((version) => version.id === latestPointerId) ?? sortedLatest;
-      const authoritativeCurrentId = matrixCurrentByFamily.get(familyId) ?? currentPointerId;
+        versions.find((version) => version.id === pointers.latest) ?? sortedLatest;
+      const authoritativeCurrentId = matrixCurrentByFamily.get(familyId) ?? pointers.current;
       const currentVersion = versions.find((version) => version.id === authoritativeCurrentId);
       const displayVersion = currentVersion ?? latestVersion;
       const exportAssetId = currentVersion?.state === "ready" ? currentVersion.id : undefined;
