@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { WorkspaceBrandMark } from "./workspace-brand-mark";
 import styles from "./role-workspace-shell.module.css";
 
 export interface RoleWorkspaceNavigationItem {
@@ -100,9 +101,7 @@ export function RoleWorkspaceShell({
                   tooltip={roleLabel}
                 >
                   <Link href={brandHref}>
-                    <span className={styles.brandMark} aria-hidden="true">
-                      EL
-                    </span>
+                    <WorkspaceBrandMark />
                     <span className={styles.brandCopy}>
                       <strong>Eventloom</strong>
                       <small>{roleLabel}</small>

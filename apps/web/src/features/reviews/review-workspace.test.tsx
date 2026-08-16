@@ -1212,13 +1212,12 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Only your assigned submission is available");
-    expect(markup).toContain("Blind review is on");
-    expect(markup).toContain("Author identity is hidden from reviewers");
+    expect(markup).toContain('id="review-content"');
     expect(markup).toContain('aria-labelledby="assigned-submission-heading"');
+    expect(markup.match(/data-score-anchor=/gu)).toHaveLength(testCriteria.length);
     expect(markup).not.toContain("Riley");
-    expect(markup).not.toContain("review plan status");
     expect(markup).not.toContain("Create evaluation plan");
+    expect(markup).not.toContain('data-reviewer-collection="true"');
   });
   it("does not render account identity fields from blind submission answers", () => {
     const markup = renderToStaticMarkup(
@@ -1389,27 +1388,24 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(evaluatorMarkup).toContain("<h1>Designing resilient public services</h1>");
-    expect(evaluatorMarkup).not.toContain("Speaker / participants");
-    expect(evaluatorMarkup).not.toContain("Priya Raman");
-    expect(evaluatorMarkup).not.toContain("Marcus Okafor");
-    expect(evaluatorMarkup).toContain("Public services");
-    expect(evaluatorMarkup).toContain("Rubric progress");
+    expect(evaluatorMarkup).toContain('aria-labelledby="blind-review-heading"');
+    expect(evaluatorMarkup).toContain('data-score-anchor="audience-impact"');
+    expect(evaluatorMarkup).toContain('data-reviewer-scorecard-footer="true"');
     expect(queueMarkup).not.toContain("Queue position");
     expect(queueMarkup).toContain('data-reviewer-collection="true"');
+    expect(queueMarkup).toContain('data-reviewer-column-headings="true"');
+    expect(queueMarkup).toContain('data-reviewer-assignment-id="assignment-test"');
     expect(evaluatorMarkup).not.toContain(">Previous<");
     expect(evaluatorMarkup).not.toContain(">Next<");
     expect(evaluatorMarkup).not.toContain("Evaluation actions");
     expect(evaluatorMarkup).not.toContain("Save draft");
-    expect(evaluatorMarkup).toContain("Submit review");
-    expect(evaluatorMarkup).toContain("rating choices");
+    expect(evaluatorMarkup).toContain('role="radiogroup"');
     expect(evaluatorMarkup).toContain("<fieldset");
     expect(evaluatorMarkup).toContain('aria-live="polite"');
-    expect(evaluatorMarkup).toContain("Autosave ready");
     expect(organizerMarkup).toContain('role="tablist"');
-    expect(organizerMarkup).toContain("Setup");
-    expect(organizerMarkup).toContain("Assignments");
-    expect(organizerMarkup).toContain("Results");
+    expect(organizerMarkup).toContain('id="review-tab-setup"');
+    expect(organizerMarkup).toContain('id="review-tab-assignments"');
+    expect(organizerMarkup).toContain('id="review-tab-decisions"');
     expect(organizerMarkup).not.toContain("criteriaList");
     expect(organizerMarkup).not.toContain("criterionEditor");
     expect(organizerMarkup).not.toContain("criteria authoring</caption>");
@@ -1737,7 +1733,7 @@ describe("review workspace", () => {
       expect(requests.some((request) => request.includes("/assignments/"))).toBe(false);
       expect(markup).toContain("Canonical submission title");
       expect(markup).toContain('data-reviewer-collection="true"');
-      expect(markup).toContain("Submitted");
+      expect(markup).toContain('data-reviewer-assignment-id="assignment-canonical"');
       expect(markup).toContain('data-assignment-status="submitted"');
     } finally {
       vi.unstubAllGlobals();
@@ -1752,13 +1748,14 @@ describe("review workspace", () => {
     );
     const pageMarkup = renderToStaticMarkup(await ReviewerPage());
 
-    expect(markup).toContain("Reviewer queue");
+    expect(markup).toContain('data-reviewer-collection="true"');
+    expect(markup).toContain('data-reviewer-column-headings="true"');
     expect(markup).toContain('aria-label="Assigned reviews"');
-    expect(markup).toContain("Designing resilient public services");
-    expect(markup).toContain("Start review");
+    expect(markup).toContain('data-reviewer-assignment-id="assignment-test"');
     expect(markup).not.toContain("Create evaluation plan");
     expect(markup).not.toContain("/admin/");
-    expect(pageMarkup).toContain("Reviewer queue");
+    expect(pageMarkup).toContain('id="review-content"');
+    expect(pageMarkup).toContain('role="status"');
     expect(pageMarkup).not.toContain("Create evaluation plan");
   });
   it("locks a scorecard and labels its queue entry from authoritative submitted state", () => {

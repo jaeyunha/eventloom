@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DesktopNavigation } from "@/components/workspace";
+import { WorkspaceBrandMark } from "@/components/workspace/workspace-brand-mark";
 import { AdminCommandPalette } from "./admin-command-palette";
 import { organizationOverviewHref, workspaceNavigationItemsForGroup } from "./admin-navigation";
 import { AdminNavigationIcon } from "./admin-navigation-icon";
@@ -45,9 +46,7 @@ export function AdminShellRail({ controller }: Readonly<{ controller: AdminShell
               : organizationOverviewHref(currentOrganizationId)
           }
         >
-          <span className={styles.brandMark} aria-hidden="true">
-            EL
-          </span>
+          <WorkspaceBrandMark />
           <span className={styles.brandCopy}>
             <strong>Eventloom</strong>
             <small>Organizer workspace</small>

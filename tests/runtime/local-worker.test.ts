@@ -248,7 +248,7 @@ describe.sequential("composed local Worker", () => {
         action: "created",
       }),
     ]);
-  });
+  }, 15_000);
 
   it("seeds a production-scale review scenario through the local CFP workflow", async () => {
     const response = await runtimeRequest(

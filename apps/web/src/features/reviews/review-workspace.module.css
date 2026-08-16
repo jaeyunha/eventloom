@@ -2789,7 +2789,7 @@
 }
 
 .authoringSection {
-  padding: 0;
+  padding: var(--space-5);
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -3286,6 +3286,10 @@
 }
 
 @media (max-width: 48rem) {
+  .authoringSection {
+    padding: var(--space-4);
+  }
+
   .workspaceTabList {
     overflow-x: hidden;
   }

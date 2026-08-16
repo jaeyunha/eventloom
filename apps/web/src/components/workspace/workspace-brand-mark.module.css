@@ -1,0 +1,12 @@
+.mark {
+  display: grid;
+  width: var(--space-7);
+  height: var(--space-7);
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+}

@@ -988,6 +988,50 @@ test("plan and rubric renders an open plan as a focused read-only workbench", as
     ).toBeVisible();
     await expect(page.getByLabel("Overall review deadline")).toBeEnabled();
 
+    const authoringSection = page.locator('section[aria-labelledby="authoring-heading"]');
+    const authoringGutter = await authoringSection.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        left: Number.parseFloat(style.paddingLeft),
+        right: Number.parseFloat(style.paddingRight),
+      };
+    });
+    const expectedAuthoringGutter = viewport.name === "desktop" ? 24 : 16;
+    expect(authoringGutter.left).toBeCloseTo(expectedAuthoringGutter, 1);
+    expect(authoringGutter.right).toBeCloseTo(expectedAuthoringGutter, 1);
+
+    if (viewport.name === "desktop") {
+      const layers = await page.evaluate(() => {
+        const shell = document.querySelector<HTMLElement>('[data-role-workspace-shell="true"]');
+        const navigation = shell?.children.item(1) as HTMLElement | null;
+        const inset = shell?.children.item(2) as HTMLElement | null;
+        const shellStyle = shell ? getComputedStyle(shell) : null;
+        const insetStyle = inset ? getComputedStyle(inset) : null;
+        const navigationRect = navigation?.getBoundingClientRect();
+        const insetRect = inset?.getBoundingClientRect();
+
+        return {
+          outer: shellStyle?.getPropertyValue("--workspace-outer").trim(),
+          pane: shellStyle?.getPropertyValue("--workspace-pane").trim(),
+          surface: shellStyle?.getPropertyValue("--workspace-surface").trim(),
+          insetBackground: insetStyle?.backgroundColor,
+          insetTop: insetRect?.top,
+          insetRight: insetRect ? window.innerWidth - insetRect.right : undefined,
+          insetBottom: insetRect ? window.innerHeight - insetRect.bottom : undefined,
+          navigationGap:
+            insetRect && navigationRect ? insetRect.left - navigationRect.right : undefined,
+        };
+      });
+
+      expect(layers.outer).not.toBe(layers.pane);
+      expect(layers.pane).not.toBe(layers.surface);
+      expect(layers.insetBackground).toBe("rgb(247, 247, 248)");
+      expect(layers.insetTop).toBeCloseTo(8, 1);
+      expect(layers.insetRight).toBeCloseTo(8, 1);
+      expect(layers.insetBottom).toBeCloseTo(8, 1);
+      expect(layers.navigationGap).toBeCloseTo(8, 1);
+    }
+
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
       viewportWidth: document.documentElement.clientWidth,

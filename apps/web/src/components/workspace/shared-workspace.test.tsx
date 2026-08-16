@@ -48,6 +48,7 @@ describe("shared workspace shell", () => {
     expect(markup).toContain('aria-label="Mobile navigation"');
     expect(markup).toContain('aria-current="page"');
     expect(markup).toContain('id="workspace-main"');
+    expect(markup).toContain('data-role-workspace-shell="true"');
     expect(markup).toContain("Open Events Foundation");
     expect(markup).toContain("Open Source Summit 2026");
   });
@@ -79,9 +80,11 @@ describe("shared workspace shell", () => {
     );
 
     expect(source).toContain("styles.insetPanel");
-    expect(css).toMatch(/\.desktopNavigation\s*\{[\s\S]*border-right:\s*0;/u);
     expect(css).toMatch(
-      /\.insetPanel\s*\{[\s\S]*margin:\s*var\(--space-2\);[\s\S]*border:\s*1px solid var\(--border\);[\s\S]*border-radius:\s*var\(--radius-lg\);/u,
+      /\.desktopNavigation\s*\{[^}]*border-right:\s*0;[^}]*background:\s*var\(--workspace-outer\)/u,
+    );
+    expect(css).toMatch(
+      /\.insetPanel\s*\{[^}]*margin:\s*var\(--space-2\);[^}]*border:\s*1px solid var\(--workspace-pane-edge\);[^}]*border-radius:\s*var\(--radius-lg\);[^}]*background:\s*var\(--workspace-pane\);/u,
     );
   });
 });

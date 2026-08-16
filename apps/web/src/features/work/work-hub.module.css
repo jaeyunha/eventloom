@@ -1,13 +1,16 @@
 .shell {
   min-height: 100dvh;
-  background:
-    radial-gradient(
-      circle at top left,
-      color-mix(in srgb, var(--primary) 8%, transparent),
-      transparent 34%
-    ),
-    var(--background);
+  padding: var(--space-2);
+  background: var(--workspace-outer);
   color: var(--foreground);
+}
+.frame {
+  min-height: calc(100dvh - (2 * var(--space-2)));
+  overflow: clip;
+  border: 1px solid var(--workspace-pane-edge);
+  border-radius: var(--radius-lg);
+  background: var(--workspace-pane);
+  box-shadow: var(--workspace-pane-shadow);
 }
 .skipLink {
   position: fixed;
@@ -29,8 +32,8 @@
   position: sticky;
   z-index: 30;
   top: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--background) 88%, transparent);
+  border-bottom: 1px solid var(--workspace-divider);
+  background: var(--workspace-pane);
   backdrop-filter: blur(var(--space-4));
 }
 .topbarInner,
@@ -348,6 +351,15 @@
   }
 }
 @media (max-width: 40rem) {
+  .shell {
+    padding: 0;
+  }
+  .frame {
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .topbarInner,
   .main,
   .state {

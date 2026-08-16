@@ -1247,7 +1247,12 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await expect(completedProgress).toBeVisible();
   await expect(completedProgress.getByText("Submission complete", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Open for submissions", { exact: true }).filter({ visible: true }),
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]').filter({
+      visible: true,
+    }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
   ).toHaveCount(0);
   expect(
     await page.evaluate(

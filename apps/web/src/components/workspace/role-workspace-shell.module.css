@@ -3,7 +3,7 @@
   height: 100svh;
   min-height: 0;
   overflow: hidden;
-  background: var(--sidebar);
+  background: var(--workspace-outer);
   color: var(--foreground);
 }
 
@@ -42,21 +42,6 @@
 .brandButton {
   height: 2.5rem;
   padding: 0.3rem 0.4rem;
-}
-
-.brandMark {
-  display: grid;
-  width: 1.8rem;
-  height: 1.8rem;
-  flex: none;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--sidebar-border) 84%, transparent);
-  border-radius: 0.45rem;
-  background: var(--sidebar-primary);
-  color: var(--sidebar-primary-foreground);
-  font-size: 0.65rem;
-  font-weight: 780;
-  letter-spacing: -0.02em;
 }
 
 .brandCopy {
@@ -123,12 +108,10 @@
   min-height: 0;
   margin: 0.5rem 0.5rem 0.5rem 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid var(--workspace-pane-edge);
   border-radius: 0.75rem;
-  background: var(--background);
-  box-shadow:
-    0 1px 2px rgb(15 23 42 / 5%),
-    0 12px 32px rgb(15 23 42 / 4%);
+  background: var(--workspace-pane);
+  box-shadow: var(--workspace-pane-shadow);
 }
 
 .topbar {
@@ -139,8 +122,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--background) 96%, transparent);
+  border-bottom: 1px solid var(--workspace-divider);
+  background: var(--workspace-pane);
 }
 
 .topbarContext,
