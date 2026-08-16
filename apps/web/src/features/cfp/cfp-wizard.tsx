@@ -416,7 +416,7 @@ function PublicCfpShell({
       mainClassName={styles.publicMain ?? ""}
       mainId="cfp-main"
       navigation={
-        <div className={styles.contextRail}>
+        <div className={styles.contextRail} data-cfp-context-rail>
           <div className={styles.publicBrand}>
             <span aria-hidden="true" className={styles.brandMark}>
               E
@@ -433,27 +433,14 @@ function PublicCfpShell({
             <p className={styles.railFormName}>{resolvedFormName}</p>
           </div>
           {step ? <CfpProgress step={step} /> : <CfpProgress complete />}
-          {event ? (
-            <>
-              <Separator className={styles.railSeparator} />
-              <CfpSubmissionWindow
-                opensAt={event.opensAt}
-                opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
-                closesAt={event.closesAt}
-                closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
-                {...(form ? { limit: formSubmissionLimit(form) } : {})}
-                status={windowStatus}
-              />
-            </>
-          ) : null}
         </div>
       }
     >
       <div className={styles.viewport}>
         <Card className={`${styles.card} ${className ?? ""}`}>
-          <div className={styles.formColumn}>
-            {event && step ? (
-              <div className={styles.mobileSubmissionWindow}>
+          <div className={styles.formColumn} data-cfp-main-flow>
+            {event ? (
+              <div className={styles.submissionWindow}>
                 <CfpSubmissionWindow
                   opensAt={event.opensAt}
                   opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
