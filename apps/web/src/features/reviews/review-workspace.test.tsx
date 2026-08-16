@@ -1742,14 +1742,14 @@ describe("review workspace", () => {
       vi.unstubAllGlobals();
     }
   });
-  it("keeps reviewer root queue mode free of organizer creation controls", () => {
+  it("keeps reviewer root queue mode free of organizer creation controls", async () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         mode: "evaluator",
         initialState: reviewerQueueState,
       }),
     );
-    const pageMarkup = renderToStaticMarkup(createElement(ReviewerPage));
+    const pageMarkup = renderToStaticMarkup(await ReviewerPage());
 
     expect(markup).toContain("Reviewer queue");
     expect(markup).toContain("Submissions to review");
