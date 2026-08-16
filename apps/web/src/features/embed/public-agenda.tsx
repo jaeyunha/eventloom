@@ -172,6 +172,7 @@ export interface PublicAgendaViewProps {
   readonly tracks?: readonly string[];
   readonly displayFields?: readonly EmbedDisplayField[] | null;
 }
+const EMPTY_TRACK_LIST: readonly string[] = [];
 
 const DEFAULT_AGENDA_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "title",
@@ -193,7 +194,7 @@ function agendaIncludeField(
 export function PublicAgendaView({
   program,
   layout = null,
-  tracks: trackList = [],
+  tracks: trackList = EMPTY_TRACK_LIST,
   displayFields = null,
 }: Readonly<PublicAgendaViewProps>) {
   const { agenda } = program;

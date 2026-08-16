@@ -67,6 +67,7 @@ const DEFAULT_SESSIONS_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "track",
   "summary",
 ];
+const EMPTY_TRACK_LIST: readonly string[] = [];
 
 function sessionsIncludeField(
   displayFields: readonly EmbedDisplayField[],
@@ -78,7 +79,7 @@ function sessionsIncludeField(
 export function PublicSessionsView({
   program,
   layout = null,
-  tracks: trackList = [],
+  tracks: trackList = EMPTY_TRACK_LIST,
   displayFields = null,
 }: Readonly<PublicSessionsViewProps>) {
   const { agenda, speakers } = program;

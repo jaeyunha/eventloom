@@ -20,6 +20,7 @@ type SpeakerGalleryDetailView = PublishedSpeakerGallery & {
     readonly entries: readonly PublishedAgendaEntry[];
   };
 };
+const EMPTY_TRACK_LIST: readonly string[] = [];
 
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
@@ -146,7 +147,7 @@ export function SpeakerProfileDetail({
 export function SpeakerGallery({
   gallery,
   agenda,
-  tracks: configuredTracks = [],
+  tracks: configuredTracks = EMPTY_TRACK_LIST,
   layout = null,
   displayFields = null,
 }: Readonly<{

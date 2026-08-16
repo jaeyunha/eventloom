@@ -115,6 +115,8 @@ const dangerClass = styles.danger;
 const tableWrapClass = styles.tableWrap;
 const statusClass = styles.status;
 const bytesPerMegabyte = 1024 * 1024;
+const EMPTY_ASSET_HISTORY: readonly DeliverableAssetHistoryEntry[] = [];
+const EMPTY_COMMENTS: readonly DeliverableComment[] = [];
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
 export function deliverablesCoreCacheKey(
@@ -2125,8 +2127,8 @@ export function DeliverablesWorkspaceView({
   sessionHistory,
   sessionHistoryError,
   onSelectSession,
-  assetHistory = [],
-  comments = [],
+  assetHistory = EMPTY_ASSET_HISTORY,
+  comments = EMPTY_COMMENTS,
   loadingAssetDetails = false,
   assetHistoryError,
   commentsError,
