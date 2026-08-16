@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui";
 import { WorkspaceState } from "@/components/workspace";
 import { AssetDetails } from "./portal-asset-details";
@@ -99,7 +100,7 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
         description="Track your proposal in My submissions. Sessions, tasks, and files unlock after an organizer accepts it."
         action={
           <Button asChild>
-            <a href="/portal/submissions">View my submissions</a>
+            <Link href="/portal/submissions">View my submissions</Link>
           </Button>
         }
       />
@@ -133,13 +134,13 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
     <div className={styles.page}>
       <nav className={styles.navigation} aria-label="Accepted session tools">
         {workspaceNavigation.map((item) => (
-          <a
+          <Link
             key={item.surface}
             href={item.href}
             aria-current={item.surface === surface ? "page" : undefined}
           >
             {item.label}
-          </a>
+          </Link>
         ))}
       </nav>
 

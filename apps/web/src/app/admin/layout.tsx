@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { AdminShell } from "@/features/admin/admin-shell";
+import { NavigationDataCacheProvider } from "@/lib/navigation-data-cache-provider";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
@@ -9,5 +10,9 @@ export const metadata: Metadata = {
 };
 
 export default function AdminLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <AdminShell>{children}</AdminShell>;
+  return (
+    <NavigationDataCacheProvider>
+      <AdminShell>{children}</AdminShell>
+    </NavigationDataCacheProvider>
+  );
 }

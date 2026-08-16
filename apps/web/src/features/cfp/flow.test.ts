@@ -6,11 +6,13 @@ import {
   type CfpPublishedForm,
   type PublishedCfp,
 } from "./api";
-import { createCfpStartupStore } from "./cfp-startup-provider";
+import { createCfpStartupStore } from "./cfp-startup-store";
 import {
   canResumeCfpSubmission,
   canSaveCfpDraftAtStep,
   cfpConfirmationEmailMessage,
+  cfpHttpUrlIsValid,
+  cfpPublishedFieldIsVisible,
   cfpReviewAudienceLevel,
   cfpSubmissionErrorKey,
   cfpSubmissionFieldValue,
@@ -19,7 +21,7 @@ import {
   getCfpPortalHandoffHref,
   rotateCfpCompletionIdentity,
   shouldAuthenticateCfpAccount,
-} from "./cfp-wizard";
+} from "./cfp-wizard-model";
 import {
   clearCfpSubmissionState,
   getCfpDraftStorageKey,
@@ -36,6 +38,12 @@ import {
 const cfpWizardSource = readFileSync(new URL("./cfp-wizard.tsx", import.meta.url), "utf8");
 
 describe("CFP flow", () => {
+  it("matches server URL validation for absolute HTTP and HTTPS values", () => {
+    expect(cfpHttpUrlIsValid("https://example.test/project")).toBe(true);
+    expect(cfpHttpUrlIsValid("http://localhost:3000/demo")).toBe(true);
+    expect(cfpHttpUrlIsValid("not a URL")).toBe(false);
+    expect(cfpHttpUrlIsValid("javascript:alert(1)")).toBe(false);
+  });
   it("mounts the public application flow inside the shared workspace shell", () => {
     expect(cfpWizardSource).toContain(
       'import { ThemeToggle } from "../../components/product-shell/theme-toggle";',
@@ -69,6 +77,69 @@ describe("CFP flow", () => {
     expect(cfpSubmissionFieldValue(draft, answers, "abstract")).toBe(answers.abstract);
     expect(cfpSubmissionFieldValue(draft, answers, "description")).toBe(answers.description);
     expect(cfpSubmissionPayload(draft, answers, {}).answers).toMatchObject(answers);
+  });
+  it("shows workshop prerequisites only when the published format equals Workshop", () => {
+    const form = {
+      id: "devflow-cfp",
+      name: "DevFlow Conf 2027 CFP",
+      version: 3,
+      status: "published" as const,
+      welcomeContent: "Share your proposal",
+      settings: {
+        speakerLimit: 3,
+        maxSubmissionsPerAccount: 3,
+        confirmationMessage: "Proposal received",
+        successContent: "Thank you",
+      },
+      sections: [{ id: "proposal", title: "Proposal", description: "" }],
+      submissionFields: [
+        {
+          id: "format",
+          sectionId: "proposal",
+          key: "format",
+          label: "Format",
+          kind: "select",
+          required: false,
+          options: ["Talk (30 min)", "Workshop (120 min)"],
+        },
+        {
+          id: "workshop_prerequisites",
+          sectionId: "proposal",
+          key: "workshop_prerequisites",
+          label: "Workshop prerequisites",
+          kind: "rich_text",
+          required: false,
+          options: [],
+        },
+      ],
+      participantFields: [],
+      rules: [
+        {
+          id: "workshop-prerequisites",
+          priority: 100,
+          when: {
+            type: "group",
+            operator: "all",
+            conditions: [
+              {
+                type: "predicate",
+                fieldKey: "format",
+                operator: "equals",
+                value: "Workshop (120 min)",
+              },
+            ],
+          },
+          actions: [{ type: "show_field", fieldKey: "workshop_prerequisites" }],
+        },
+      ],
+    } as CfpPublishedForm;
+
+    expect(
+      cfpPublishedFieldIsVisible(form, { format: "Workshop (120 min)" }, "workshop_prerequisites"),
+    ).toBe(true);
+    expect(
+      cfpPublishedFieldIsVisible(form, { format: "Talk (30 min)" }, "workshop_prerequisites"),
+    ).toBe(false);
   });
 
   it("deduplicates published form and session reads across step remounts", async () => {

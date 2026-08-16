@@ -6,7 +6,7 @@
 }
 
 .content {
-  width: min(100%, 86rem);
+  width: min(100%, 68rem);
   margin: 0 auto;
 }
 
@@ -46,8 +46,7 @@
 }
 
 .eyebrow,
-.cardEyebrow,
-.navEyebrow {
+.cardEyebrow {
   margin: 0;
   color: var(--color-muted, #697181);
   font-size: 0.75rem;
@@ -103,15 +102,21 @@
   line-height: 1.45;
 }
 
-.workflowNavigation {
-  position: sticky;
-  top: 1rem;
-  z-index: 10;
-  margin-bottom: 1rem;
+.tabs {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
 }
 
-.desktopWorkflow {
-  padding: 0.85rem 1rem;
+.tabList {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  height: auto;
+  padding: 0.25rem;
   border: 1px solid var(--color-border, #dfe2e8);
   border-radius: 0.75rem;
   background: color-mix(in srgb, var(--color-surface, #fff) 94%, transparent);
@@ -119,82 +124,118 @@
   backdrop-filter: blur(10px);
 }
 
-.desktopWorkflow ol {
+.tabTrigger {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.35rem;
-  padding: 0;
-  margin: 0.5rem 0 0;
-  list-style: none;
+  align-content: center;
+  justify-items: start;
+  min-height: 3.5rem;
+  height: auto;
+  padding: 0.55rem 0.75rem;
+  white-space: normal;
+  text-align: left;
 }
 
-.desktopWorkflow li {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-width: 0;
+.tabTriggerLabel {
+  font-weight: 700;
 }
 
-.desktopWorkflow a,
-.mobileWorkflowList a {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  min-width: 0;
-  color: inherit;
-  font-size: 0.82rem;
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.desktopWorkflow a:hover,
-.mobileWorkflowList a:hover {
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-}
-
-.desktopWorkflow a span,
-.mobileWorkflowList a span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 1.5rem;
-  width: 1.5rem;
-  height: 1.5rem;
-  border: 1px solid var(--color-border-strong, #cdd1da);
-  border-radius: 999px;
+.tabTriggerDescription {
   color: var(--color-muted, #697181);
   font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.3;
 }
 
-.desktopWorkflow .badge {
-  margin-left: auto;
-}
-
-.mobileWorkflow {
-  display: none;
-}
-
-.mobileWorkflowTrigger {
-  display: flex;
-  width: 100%;
-  justify-content: space-between;
-}
-
-.mobileWorkflowList {
+.tabContent {
   display: grid;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  margin: 0;
+  gap: 1rem;
+  min-width: 0;
+  outline: none;
+}
+
+.readiness {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
   border: 1px solid var(--color-border, #dfe2e8);
-  border-top: 0;
-  border-radius: 0 0 0.75rem 0.75rem;
+  border-radius: 0.75rem;
   background: var(--color-surface, #fff);
+}
+
+.readinessHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.readinessHeading > div {
+  min-width: 0;
+  flex: 1 1 24rem;
+}
+
+.readinessHeading h3 {
+  margin: 0.25rem 0 0.2rem;
+}
+
+.readinessHeading p {
+  margin: 0;
+}
+
+.readinessList {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  padding: 0;
+  margin: 0;
   list-style: none;
 }
 
-.mobileWorkflowList a {
-  padding: 0.45rem;
+.readinessItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.55rem;
+  background: var(--color-canvas, #f5f6f9);
+}
+
+.readinessItem > span:nth-child(2) {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.readinessItem strong {
+  font-size: 0.85rem;
+}
+
+.readinessDetail {
+  color: var(--color-muted, #697181);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.readinessIndicatorReady,
+.readinessIndicatorPending {
+  flex: 0 0 0.55rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-top: 0.3rem;
+  border-radius: 999px;
+}
+
+.readinessIndicatorReady {
+  background: #277b59;
+}
+
+.readinessIndicatorPending {
+  background: #b7791f;
 }
 
 .main {
@@ -499,14 +540,6 @@
   .header {
     grid-template-columns: 1fr;
   }
-
-  .desktopWorkflow {
-    display: none;
-  }
-
-  .mobileWorkflow {
-    display: block;
-  }
 }
 
 @media (max-width: 42rem) {
@@ -523,6 +556,9 @@
   .sampleGrid {
     grid-template-columns: 1fr;
   }
+  .readinessList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
   .metricRow {
     display: grid;
@@ -537,17 +573,18 @@
   .metricRow span:nth-child(-n + 2) {
     border-bottom: 1px solid var(--color-border, #dfe2e8);
   }
+  .tabTrigger {
+    padding: 0.5rem;
+  }
+  .tabTriggerDescription {
+    display: none;
+  }
 }
 
 .page {
   min-height: auto;
-  padding: 0 0 3rem;
+  padding: 0 1rem 3rem;
   background: transparent;
-}
-
-.content {
-  width: 100%;
-  margin: 0;
 }
 
 .header {
@@ -561,8 +598,4 @@
 
 .header h1 {
   font-size: clamp(1.5rem, 3vw, 2.25rem);
-}
-
-.workflowNavigation {
-  top: 0.75rem;
 }

@@ -21,6 +21,7 @@ const ORGANIZATION_ID = "local-organization";
 const PRIMARY_EVENT_ID = "open-sessionboard-conf";
 const SECONDARY_EVENT_ID = "devflow-conf-2027";
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
+const DISTINCT_PRIMARY_EVENT_SLUG = "test-summit-local";
 
 const corsHeaders = {
   "access-control-allow-credentials": "true",
@@ -37,6 +38,7 @@ interface OrganizerApiHarness {
 interface InstallOrganizerApiOptions {
   readonly includeSecondaryEvent?: boolean;
   readonly primaryEndsAt?: string;
+  readonly primaryEventSlug?: string;
 }
 
 function eventRecord(input: {
@@ -323,7 +325,7 @@ async function installOrganizerApi(
 ): Promise<OrganizerApiHarness> {
   const primaryEvent = eventRecord({
     id: PRIMARY_EVENT_ID,
-    slug: PRIMARY_EVENT_ID,
+    slug: options.primaryEventSlug ?? PRIMARY_EVENT_ID,
     name: "Eventloom Conference",
     startsAt: "2026-09-18T16:00:00.000Z",
     endsAt: options.primaryEndsAt ?? "2026-09-19T23:00:00.000Z",
@@ -580,7 +582,7 @@ function settingsUrl(eventId: string): string {
 
 async function expectAgendaWorkspace(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Build the event day" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Build the agenda" })).toBeVisible();
   await expect(page.getByLabel("Agenda release center")).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Schedule view" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview and validate" })).toBeVisible();
@@ -839,7 +841,9 @@ test("canonical Settings navigation stays organization and event qualified", asy
   authSession,
   page,
 }) => {
-  const api = await installOrganizerApi(page, authSession);
+  const api = await installOrganizerApi(page, authSession, {
+    primaryEventSlug: DISTINCT_PRIMARY_EVENT_SLUG,
+  });
 
   await page.goto(organizationEventsUrl());
   const eventSettingsLink = page
@@ -852,18 +856,37 @@ test("canonical Settings navigation stays organization and event qualified", asy
     timeout: 15_000,
   });
   await expect(
-    page.getByText(`Organization ${ORGANIZATION_ID} · Public slug ${PRIMARY_EVENT_ID}`, {
+    page.getByText(`Organization ${ORGANIZATION_ID} · Public slug ${DISTINCT_PRIMARY_EVENT_SLUG}`, {
       exact: true,
     }),
   ).toBeVisible();
-  const settingsNavigation = page.getByRole("complementary", {
-    name: "Event settings sections",
-  });
-  await expect(settingsNavigation).toBeVisible();
-  await expect(settingsNavigation.getByRole("link", { name: /Session workflow/u })).toHaveAttribute(
+  const visibleSettingsSectionLink = async (name: RegExp) => {
+    const desktopNavigation = page.getByRole("complementary", {
+      name: "Event settings sections",
+    });
+    if (!(await desktopNavigation.isVisible())) {
+      const trigger = page.getByRole("button", { name: "Choose event settings section" });
+      await expect(trigger).toBeVisible();
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+    }
+    return page.getByRole("link", { name });
+  };
+  const initialWorkflowSettingsLink = await visibleSettingsSectionLink(/Session workflow/u);
+  await expect(initialWorkflowSettingsLink).toHaveAttribute(
     "href",
     `${settingsUrl(PRIMARY_EVENT_ID)}/workflow`,
   );
+  for (const [name, section] of [
+    [/Session workflow/u, "workflow"],
+    [/Rooms and venues/u, "rooms"],
+    [/Session classification/u, "classification"],
+    [/Change history/u, "history"],
+  ] as const) {
+    const link = await visibleSettingsSectionLink(name);
+    const href = await link.getAttribute("href");
+    expect(href).toBe(`${settingsUrl(PRIMARY_EVENT_ID)}/${section}`);
+    expect(href).not.toContain(DISTINCT_PRIMARY_EVENT_SLUG);
+  }
 
   const programNavigation = page.getByRole("navigation", { name: "Program organizer navigation" });
   const agendaLink = programNavigation.getByRole("link", { name: "Agenda", exact: true });
@@ -885,6 +908,46 @@ test("canonical Settings navigation stays organization and event qualified", asy
     programSettingsLink.click(),
   ]);
   await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  const eventCollectionPath = `/api/admin/organizations/${ORGANIZATION_ID}/events`;
+  const settingsWorkspaceReadCount = () =>
+    api.requests.filter((request) => {
+      if (request.method() !== "GET") return false;
+      const pathname = new URL(request.url()).pathname;
+      return pathname === eventCollectionPath || pathname.includes("/sessions/");
+    }).length;
+  const readsBeforeSectionNavigation = settingsWorkspaceReadCount();
+
+  const roomsSettingsLink = await visibleSettingsSectionLink(/Rooms and venues/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/rooms$`)),
+    roomsSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Rooms and venues" })).toBeVisible();
+
+  const classificationSettingsLink = await visibleSettingsSectionLink(/Session classification/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/classification$`)),
+    classificationSettingsLink.click(),
+  ]);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Session classification" }),
+  ).toBeVisible();
+
+  const historySettingsLink = await visibleSettingsSectionLink(/Change history/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/history$`)),
+    historySettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Change history" })).toBeVisible();
+
+  const workflowSettingsLink = await visibleSettingsSectionLink(/Session workflow/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/workflow$`)),
+    workflowSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
+  expect(settingsWorkspaceReadCount()).toBe(readsBeforeSectionNavigation);
   const settingsRequests = api.requests.filter(
     (request) =>
       request.method() === "GET" && new URL(request.url()).pathname.includes("/sessions/"),
@@ -1006,24 +1069,37 @@ test("agenda day navigation supports direct multi-day jumps at responsive widths
     await page.goto(agendaUrl(PRIMARY_EVENT_ID));
     await expectAgendaWorkspace(page);
 
-    const dayChooser = page.getByRole("navigation", { name: "Choose an event day" });
+    const dayChooser = page.getByRole("radiogroup", { name: "Choose an event day" });
     await expect(dayChooser).toBeVisible();
-    await expect(dayChooser.getByRole("button")).toHaveCount(7);
-    await expect(
-      dayChooser.getByRole("button", { name: /Day 1.*Fri, Sep 18.*1 session/u }),
-    ).toHaveAttribute("aria-current", "date");
+    await expect(dayChooser.getByRole("radio")).toHaveCount(7);
+    const dayOne = dayChooser.getByRole("radio", {
+      name: /Day 1.*Friday, September 18.*1 session/u,
+    });
+    const daySeven = dayChooser.getByRole("radio", {
+      name: /Day 7.*Thursday, September 24.*0 sessions/u,
+    });
+    await expect(dayOne).toHaveAttribute("aria-current", "date");
 
-    await dayChooser.getByRole("button", { name: /Day 7.*Thu, Sep 24.*0 sessions/u }).click();
+    await daySeven.click();
+    await expect(daySeven).toHaveAttribute("aria-current", "date");
+    await daySeven.press("Home");
+    await expect(dayOne).toBeChecked();
+    await dayOne.press("End");
+    await expect(daySeven).toBeChecked();
+    const dayNavigation = page.getByRole("region", { name: "Event day navigation" });
     await expect(
-      dayChooser.getByRole("button", { name: /Day 7.*Thu, Sep 24.*0 sessions/u }),
-    ).toHaveAttribute("aria-current", "date");
-    const dayNavigation = page.getByRole("navigation", { name: "Event day navigation" });
-    await expect(
-      dayNavigation.getByText("Thursday, September 24 · Day 7 of 7", { exact: true }),
+      dayNavigation.getByText("Thursday, September 24 · Day 7 of 7 · 0 sessions", {
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(
       page.getByText("No sessions scheduled on this day.", { exact: true }),
     ).toBeVisible();
+
+    await page.getByRole("button", { name: "Schedule session" }).click();
+    await expect(page.getByLabel("Starts")).toHaveValue(/^2026-09-24T/u);
+    await expect(page.getByLabel("Ends")).toHaveValue(/^2026-09-24T/u);
+    await page.keyboard.press("Escape");
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,

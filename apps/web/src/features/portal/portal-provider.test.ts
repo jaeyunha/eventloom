@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { type PortalApi, PortalApiError } from "./api";
 import {
@@ -270,5 +272,36 @@ describe("speaker portal provider", () => {
     );
     expect(crossIdentity.entries).toEqual([]);
     expect(crossIdentity.failures[0]).toBeInstanceOf(PortalApiError);
+  });
+  it("keeps participant switching scoped to state updates while the workspace view owns loading", () => {
+    const providerSource = readFileSync(
+      fileURLToPath(new URL("./portal-provider.tsx", import.meta.url)),
+      "utf8",
+    );
+    const workspaceSource = readFileSync(
+      fileURLToPath(new URL("./portal-workspace.tsx", import.meta.url)),
+      "utf8",
+    );
+    const switchStart = providerSource.indexOf("const switchParticipant = useCallback(");
+    const workspaceLoadStart = providerSource.indexOf(
+      "const loadWorkspace = useCallback(",
+      switchStart,
+    );
+
+    expect(switchStart).toBeGreaterThanOrEqual(0);
+    expect(workspaceLoadStart).toBeGreaterThan(switchStart);
+    expect(providerSource.slice(switchStart, workspaceLoadStart)).not.toContain(
+      "loadWorkspaceFor(",
+    );
+    expect(providerSource.slice(switchStart, workspaceLoadStart)).toContain("setWorkspace(");
+    expect(providerSource.slice(switchStart, workspaceLoadStart)).toContain(
+      "loadGeneration.current += 1;",
+    );
+    expect(workspaceSource).toContain(
+      "if (context && view) void portal.loadWorkspace();",
+    );
+    expect(
+      workspaceSource.split("if (context && view) void portal.loadWorkspace();"),
+    ).toHaveLength(2);
   });
 });

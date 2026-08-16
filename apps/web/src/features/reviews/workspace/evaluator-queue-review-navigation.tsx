@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Button } from "../../../components/ui/button";
-import { useOrganizerEventSlug } from "../../admin/organizer-event-workspace";
 import styles from ".././review-workspace.module.css";
 import { configuredOrganizationId } from "./model-configured-organization-id";
 import type { ReviewWorkspaceMode } from "./workspace-review-workspace-mode";
@@ -18,12 +17,11 @@ export function ReviewNavigation({
   organizationId?: string | undefined;
   showPlanLink?: boolean;
 }>) {
-  const eventSlug = useOrganizerEventSlug(eventId ?? "");
   if (mode === "evaluator") return null;
   if (eventId === undefined) return null;
   const resolvedOrganizationId = configuredOrganizationId(organizationId);
   if (resolvedOrganizationId === null) return null;
-  const reviewBase = `/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`;
+  const reviewBase = `/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/events/${encodeURIComponent(eventId)}/reviews`;
   return (
     <nav className={styles.reviewNavigation} aria-label="Review workspace">
       {showPlanLink ? (

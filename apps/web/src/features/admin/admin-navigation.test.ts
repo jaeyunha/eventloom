@@ -31,7 +31,10 @@ describe("organizer navigation model", () => {
     expect(groups.flatMap((group) => group.items).map((item) => item.href)).toEqual(
       eventNavigationFor(context).map((item) => item.href),
     );
-    expect(groups.flatMap((group) => group.items)).toHaveLength(15);
+    expect(groups.flatMap((group) => group.items)).toHaveLength(14);
+    expect(
+      groups.flatMap((group) => group.items).filter((item) => item.label === "Content collection"),
+    ).toHaveLength(1);
   });
 
   it("adapts route matches to the shared navigation contract", () => {
@@ -44,6 +47,16 @@ describe("organizer navigation model", () => {
     expect(items.find((item) => item.label === "Agenda")?.current).toBe(true);
     expect(items.find((item) => item.label === "Program overview")?.current).toBe(false);
     expect(items.every((item) => item.icon !== undefined)).toBe(true);
+  });
+
+  it("keeps content collection active for the files view", () => {
+    const items = workspaceNavigationItems(
+      organizerNavigationGroupsFor({ organizationId: "org", eventId: "event" }, "org"),
+      "/admin/organizations/org/events/event/files",
+    );
+
+    expect(items.find((item) => item.label === "Content collection")?.current).toBe(true);
+    expect(items.some((item) => item.label === "Files")).toBe(false);
   });
 
   it("preserves organization workspace destinations from event routes", () => {

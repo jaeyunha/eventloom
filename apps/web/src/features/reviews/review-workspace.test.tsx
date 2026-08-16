@@ -39,6 +39,7 @@ import {
   reviseEvaluationPlan,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
+import { ReviewNavigation } from "./workspace/evaluator-queue-review-navigation";
 
 const organizerEventWorkspace = vi.hoisted(() => ({
   current: null as {
@@ -52,8 +53,6 @@ const organizerEventWorkspace = vi.hoisted(() => ({
 vi.mock("@/features/admin/organizer-event-workspace", () => ({
   useOrganizerEventId: (fallbackEventId?: string) =>
     organizerEventWorkspace.current?.id ?? fallbackEventId,
-  useOrganizerEventSlug: (fallbackEventReference: string) =>
-    organizerEventWorkspace.current?.slug ?? fallbackEventReference,
   useOrganizerEventWorkspace: () => organizerEventWorkspace.current,
 }));
 
@@ -1034,6 +1033,22 @@ describe("review workspace", () => {
       organizerEventWorkspace.current = null;
     }
   });
+  it("builds private review-plan hrefs from canonical event IDs", () => {
+    const eventId = "87aad17-5e75-4732-9085-65df6b8e9a9b";
+    const eventSlug = "summit-2026";
+    const markup = renderToStaticMarkup(
+      createElement(ReviewNavigation, {
+        eventId,
+        mode: "organizer",
+        organizationId: "org-selected",
+      }),
+    );
+
+    expect(markup).toContain(
+      `href="/admin/organizations/org-selected/events/${eventId}/reviews"`,
+    );
+    expect(markup).not.toContain(eventSlug);
+  });
 
   it("omits redundant reviewer navigation in evaluator mode", () => {
     const markup = renderToStaticMarkup(
@@ -1934,7 +1949,6 @@ describe("review workspace", () => {
       });
       vi.doMock("@/features/admin/organizer-event-workspace", () => ({
         useOrganizerEventId: (fallbackEventId?: string) => fallbackEventId,
-        useOrganizerEventSlug: (fallbackEventReference: string) => fallbackEventReference,
         useOrganizerEventWorkspace: () => null,
       }));
       vi.doMock("./workspace/organizer-reviewer-pool-controller", () => ({

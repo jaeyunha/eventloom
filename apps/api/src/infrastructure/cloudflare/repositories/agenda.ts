@@ -403,7 +403,7 @@ export class D1AgendaRepository implements AgendaRepository {
             eventId,
             next.draft.version,
             next.draft.timeZone,
-            token,
+            next.draft.updatedAt,
             next.draft.updatedBy,
             this.organizationId,
             eventId,
@@ -457,7 +457,7 @@ export class D1AgendaRepository implements AgendaRepository {
           [
             next.draft.version,
             next.draft.timeZone,
-            token,
+            next.draft.updatedAt,
             next.draft.updatedBy,
             this.organizationId,
             eventId,

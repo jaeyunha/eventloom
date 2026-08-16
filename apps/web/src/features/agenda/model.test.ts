@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agendaDays, eventDates, publicationReadiness } from "./model";
+import { agendaDays, eventDates, publicationReadiness, resolveAgendaPlacementDate } from "./model";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const data: AgendaWorkspaceData = {
@@ -63,6 +63,11 @@ function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
 }
 
 describe("agenda workspace model", () => {
+  it("uses the selected event day as the placement context", () => {
+    expect(resolveAgendaPlacementDate("2026-09-19", "2026-09-18")).toBe("2026-09-19");
+    expect(resolveAgendaPlacementDate("", "2026-09-18")).toBe("2026-09-18");
+  });
+
   it("groups and orders draft entries by local event day", () => {
     const days = agendaDays(data.draft.entries);
 

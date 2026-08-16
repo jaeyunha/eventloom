@@ -1,6 +1,5 @@
 "use client";
 
-import { standardFileRequestMimeTypes } from "@eventloom/contracts";
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
@@ -12,1002 +11,124 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
-  type CfpFormField as ApiCfpFormField,
-  type CfpApi,
-  CfpApiError,
   type CfpEventConfiguration,
   type CfpFormConfiguration,
   createCfpApi,
 } from "../cfp/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
+import { CfpEditorMasthead, CfpSectionNavigation, CfpStepActions } from "./cfp-editor-chrome";
+import { CfpOptionListEditor } from "./cfp-option-list-editor";
 import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import { useOrganizerEventId } from "./organizer-event-workspace";
+import {
+  closeCfpNowConfiguration,
+  configurationFromServer,
+  createEmptyCfpConfiguration,
+  cfpMinimumDate,
+  ORGANIZER_SCROLL_CONTAINER_ID,
+  dateFromInstant,
+  fieldKeyForRuleField,
+  editorFieldType,
+  fieldKeyFromLabel,
+  fieldOptionValues,
+  fieldReferenceLabel,
+  fieldTypeLabel,
+  firstRuleCondition,
+  isCfpCloseDatePast,
+  loadCfpEditorConfiguration,
+  persistCfpConfiguration,
+  resolveCfpEditorStepIndex,
+  ruleKey,
+  ruleMatches,
+  SECTION_LINKS,
+  summarizeRule,
+  TIMEZONE_OPTIONS,
+  validateCfpDateRange,
+  type CfpCondition,
+  type CfpConfiguration,
+  type CfpEditorProps,
+  type CfpFormField,
+  type CfpRule,
+} from "./cfp-editor-model";
 
-const ORGANIZER_SCROLL_CONTAINER_ID = "admin-content";
-const STICKY_SECTION_GAP = 16;
-const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = standardFileRequestMimeTypes;
-const DEFAULT_FILE_REQUEST_MAX_BYTES = 25 * 1024 * 1024;
-
-export function cfpSectionScrollOffset(
-  organizerHeaderHeight: number,
-  navigationHeight: number,
-): number {
-  return organizerHeaderHeight + navigationHeight + STICKY_SECTION_GAP;
-}
-
-export function cfpActiveSectionThreshold(
-  organizerHeaderHeight: number,
-  navigationHeight: number,
-): number {
-  return cfpSectionScrollOffset(organizerHeaderHeight, navigationHeight) + 24;
-}
-
-export function cfpContainerScrollTop(
-  containerScrollTop: number,
-  targetTop: number,
-  containerTop: number,
-  navigationHeight: number,
-): number {
-  return Math.max(
-    0,
-    containerScrollTop + targetTop - containerTop - cfpSectionScrollOffset(0, navigationHeight),
-  );
-}
-
-type FieldType =
-  | "text"
-  | "email"
-  | "url"
-  | "textarea"
-  | "select"
-  | "multi_select"
-  | "rich_text"
-  | "boolean"
-  | "number"
-  | "file_request";
-
-export interface CfpFormField {
-  id: string;
-  label: string;
-  type: FieldType;
-  required: boolean;
-  visible: boolean;
-  placeholder: string;
-  sectionId?: string;
-  key?: string;
-  kind?: string;
-  options?: ApiCfpFormField["options"];
-  fieldRef?: NonNullable<ApiCfpFormField["fieldRef"]>;
-  fieldVersion?: number;
-  fileRequest?: NonNullable<ApiCfpFormField["fileRequest"]>;
-  config?: Record<string, unknown>;
-  description?: string;
-}
-
-export interface CfpCondition {
-  type: "condition";
-  field: string;
-  operator: "is" | "is not";
-  value: string;
-}
-
-export interface CfpConditionGroup {
-  type: "group";
-  operator: "AND" | "OR";
-  conditions: CfpRule[];
-}
-
-export type CfpRule = CfpCondition | CfpConditionGroup;
-
-export interface CfpConfiguration {
-  eventName: string;
-  slug: string;
-  timezone: string;
-  opensAt: string;
-  closesAt: string;
-  participantLimit: number;
-  proposalLimit: number;
-  reminderEmails: boolean;
-  adminNotifications: boolean;
-  welcomeTitle: string;
-  welcomeBody: string;
-  confirmationTitle: string;
-  confirmationBody: string;
-  successMessage: string;
-  redirectUrl: string;
-  tracks: string[];
-  tags: string[];
-  formats: string[];
-  levels: string[];
-  helpfulLinks: Array<{ label: string; href: string }>;
-  fields: CfpFormField[];
-  participantFields?: CfpFormField[];
-  sections?: CfpFormConfiguration["sections"];
-  rules?: CfpFormConfiguration["rules"];
-  rule: CfpRule;
-  ruleAction: string;
-  ruleTargetField?: string;
-  editorRuleId?: string;
-  id?: string;
-  status?: "draft" | "published" | "closed";
-  eventVersion?: number;
-  formVersion?: number;
-}
-
-const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
-  {
-    id: "title",
-    key: "title",
-    label: "Session title",
-    type: "text",
-    required: true,
-    visible: true,
-    placeholder: "A clear, specific title",
-    options: [],
-  },
-  {
-    id: "abstract",
-    key: "abstract",
-    label: "Abstract",
-    type: "textarea",
-    required: false,
-    visible: true,
-    placeholder: "A concise summary for reviewers and attendees",
-    options: [],
-  },
-  {
-    id: "description",
-    key: "description",
-    label: "Description",
-    type: "textarea",
-    required: false,
-    visible: true,
-    placeholder: "Objectives, outline, and expected audience takeaways",
-    options: [],
-  },
-];
-
-function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
-  const coreKeys = new Set(CORE_PROPOSAL_FIELDS.map((field) => field.key));
-  const fieldsByKey = new Map(fields.map((field) => [field.key ?? field.id, field]));
-  return [
-    ...CORE_PROPOSAL_FIELDS.map((field) => {
-      const existing = fieldsByKey.get(field.key ?? field.id);
-      return existing === undefined ? { ...field, options: [...(field.options ?? [])] } : existing;
-    }),
-    ...fields.filter((field) => !coreKeys.has(field.key ?? field.id)),
-  ];
-}
-
-export function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
+function updateCfpShowWhenCondition(
+  configuration: CfpConfiguration,
+  patch: Partial<Omit<CfpCondition, "type" | "operator">>,
+): CfpConfiguration {
   return {
-    eventName: "",
-    slug: "",
-    timezone: "UTC",
-    opensAt: "",
-    closesAt: "",
-    participantLimit: 1,
-    proposalLimit: 20,
-    reminderEmails: false,
-    adminNotifications: false,
-    welcomeTitle: "",
-    welcomeBody: "",
-    confirmationTitle: "",
-    confirmationBody: "",
-    successMessage: "",
-    redirectUrl: "",
-    tracks: [],
-    tags: [],
-    formats: [],
-    levels: [],
-    helpfulLinks: [],
-    fields: withCoreProposalFields([]),
+    ...configuration,
     rule: {
-      type: "condition",
-      field: "title",
-      operator: "is not",
-      value: "",
+      ...firstRuleCondition(configuration.rule),
+      ...patch,
+      operator: "is",
     },
-    ruleAction: "",
-    id: `${eventId}-cfp`,
-    status: "draft",
   };
 }
 
-const SECTION_LINKS = [
-  { id: "event-details", label: "Event details" },
-  { id: "messaging", label: "Messaging" },
-  { id: "taxonomy", label: "Taxonomy & links" },
-  { id: "fields-rules", label: "Fields & rules" },
-  { id: "public-preview", label: "Public preview" },
-] as const;
-
-export function resolveCfpEditorStepIndex(input: {
-  currentIndex: number;
-  requestedIndex: number;
-  currentStepValid: boolean;
-}): number {
-  const lastIndex = SECTION_LINKS.length - 1;
-  const requestedIndex = Math.min(lastIndex, Math.max(0, input.requestedIndex));
-  if (requestedIndex > input.currentIndex && !input.currentStepValid) {
-    return input.currentIndex;
-  }
-  return requestedIndex;
-}
-
-const TIMEZONE_OPTIONS = [
-  "UTC",
-  "America/Los_Angeles",
-  "America/New_York",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Singapore",
-];
-
-function validCfpTimeZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
-    return true;
-  } catch {
-    return false;
-  }
-}
-export function cfpMinimumDate(now = new Date(), timeZone = "UTC"): string {
-  if (!Number.isFinite(now.getTime())) return "";
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: validCfpTimeZone(timeZone) ? timeZone : "UTC",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = formatter.formatToParts(now);
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  return year && month && day ? `${year}-${month}-${day}` : "";
-}
-
-function localCfpDateToIso(value: string, timeZone: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-  if (!match || !validCfpTimeZone(timeZone)) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-
-  const localMilliseconds = Date.UTC(year, month - 1, day);
-  if (!Number.isFinite(localMilliseconds)) return null;
-  let candidate = localMilliseconds;
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  for (let iteration = 0; iteration < 3; iteration += 1) {
-    const parts = Object.fromEntries(
-      formatter
-        .formatToParts(new Date(candidate))
-        .filter((part) => part.type !== "literal")
-        .map((part) => [part.type, part.value]),
-    );
-    const wallMilliseconds = Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second),
-    );
-    candidate = localMilliseconds - (wallMilliseconds - candidate);
-  }
-  const result = new Date(candidate);
-  return Number.isFinite(result.getTime()) ? result.toISOString() : null;
-}
-
-function instantFromDate(value: string, timeZone = "UTC"): string {
-  if (value.includes("T")) return value;
-  return localCfpDateToIso(value, timeZone) ?? `${value}T00:00:00.000Z`;
-}
-
-function dateFromInstant(value: string): string {
-  return value.length >= 10 ? value.slice(0, 10) : value;
-}
-
-export function validateCfpDateRange(
-  opensAt: string,
-  closesAt: string,
-  timeZone = "UTC",
-): string | null {
-  const openTime = Date.parse(instantFromDate(opensAt, timeZone));
-  const closeTime = Date.parse(instantFromDate(closesAt, timeZone));
-  if (!Number.isFinite(openTime) || !Number.isFinite(closeTime)) {
-    return "Enter valid open and close dates.";
-  }
-  if (openTime >= closeTime) {
-    return "The close date must be after the open date.";
-  }
-  return null;
-}
-
-export function isCfpCloseDatePast(value: string, now = new Date(), timeZone = "UTC"): boolean {
-  const closeTime = Date.parse(instantFromDate(value, timeZone));
-  return Number.isFinite(closeTime) && closeTime < now.getTime();
-}
-export function closeCfpNowInstant(
-  opensAt: string,
-  now = new Date(),
-  timeZone = "UTC",
-): string | null {
-  const openTime = Date.parse(instantFromDate(opensAt, timeZone));
-  const nowTime = now.getTime();
-  if (!Number.isFinite(openTime) || !Number.isFinite(nowTime)) return null;
-
-  // The API rejects an instant before the opening instant. When an organizer
-  // closes a not-yet-open CFP, use the first valid instant after opening.
-  return new Date(Math.max(nowTime, openTime + 1)).toISOString();
-}
-
-export function closeCfpNowConfiguration(
-  configuration: CfpConfiguration,
-  now = new Date(),
-): CfpConfiguration {
-  const closesAt = closeCfpNowInstant(configuration.opensAt, now, configuration.timezone);
-  if (closesAt === null) {
-    throw new Error("The CFP cannot be closed because its opening instant is invalid.");
-  }
-  return { ...configuration, closesAt };
-}
-export function selectEditorForm(
-  forms: CfpFormConfiguration[],
-  organizationId: string,
-  eventId: string,
-): CfpFormConfiguration | undefined {
-  const statusOrder = { published: 0, draft: 1, closed: 2 } as const;
-  return forms
-    .filter((form) => form.tenantId === organizationId && form.eventId === eventId)
-    .slice()
-    .sort((left, right) => {
-      return (
-        statusOrder[left.status] - statusOrder[right.status] ||
-        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
-      );
-    })[0];
-}
-
-type CfpEditorLoadResult = {
-  readonly event: CfpEventConfiguration;
-  readonly form: CfpFormConfiguration | undefined;
-};
-
-const inFlightCfpEditorLoads = new WeakMap<CfpApi, Map<string, Promise<CfpEditorLoadResult>>>();
-
-export async function loadCfpEditorConfiguration(
-  api: CfpApi,
-  input: { readonly organizationId: string; readonly eventId: string; readonly formId?: string },
-): Promise<CfpEditorLoadResult> {
-  const cacheKey = `${input.organizationId}\u0000${input.eventId}\u0000${input.formId ?? ""}`;
-  const apiLoads =
-    inFlightCfpEditorLoads.get(api) ?? new Map<string, Promise<CfpEditorLoadResult>>();
-  inFlightCfpEditorLoads.set(api, apiLoads);
-  const existing = apiLoads.get(cacheKey);
-  if (existing !== undefined) return existing;
-
-  const request = (async (): Promise<CfpEditorLoadResult> => {
-    const event = await api.getEvent({
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-    });
-    if (input.formId !== undefined) {
-      try {
-        const form = await api.getForm({
-          organizationId: input.organizationId,
-          eventId: input.eventId,
-          formId: input.formId,
-        });
-        return { event, form };
-      } catch (error) {
-        if (!(error instanceof CfpApiError) || error.status !== 404) throw error;
-        return { event, form: undefined };
-      }
-    }
-    const forms = await api.listForms({
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-    });
-    return {
-      event,
-      form: selectEditorForm(forms, input.organizationId, input.eventId),
-    };
-  })();
-  apiLoads.set(cacheKey, request);
-
-  try {
-    return await request;
-  } finally {
-    if (apiLoads.get(cacheKey) === request) apiLoads.delete(cacheKey);
-  }
-}
-
-function editorFieldType(kind: string): FieldType {
-  switch (kind) {
-    case "email":
-      return "email";
-    case "url":
-      return "url";
-    case "rich_text":
-      return "textarea";
-    case "textarea":
-      return "textarea";
-    case "select":
-      return "select";
-    case "multi_select":
-      return "multi_select";
-    case "boolean":
-      return "boolean";
-    case "number":
-      return "number";
-    case "file_request":
-      return "file_request";
-    default:
-      return "text";
-  }
-}
-
-function toEditorField(field: ApiCfpFormField): CfpFormField {
-  const { config, description, fieldRef, fieldVersion, fileRequest, ...canonicalField } = field;
-  return {
-    ...canonicalField,
-    type: editorFieldType(field.kind),
-    required: field.required,
-    visible: true,
-    placeholder: field.placeholder ?? "",
-    options: [...field.options],
-    ...(description === undefined ? {} : { description }),
-    ...(fieldRef === undefined ? {} : { fieldRef }),
-    ...(fieldVersion === undefined ? {} : { fieldVersion }),
-    ...(fileRequest === undefined ? {} : { fileRequest }),
-    ...(config === undefined ? {} : { config }),
-  };
-}
-function fieldKeyForRuleField(field: string, fields: CfpFormField[]): string {
-  const normalized = field.trim().toLocaleLowerCase();
-  const matched = fields.find(
-    (candidate) =>
-      candidate.key?.toLocaleLowerCase() === normalized ||
-      candidate.id.toLocaleLowerCase() === normalized ||
-      candidate.label.toLocaleLowerCase() === normalized,
-  );
-  if (matched?.key) return matched.key;
-  if (["format", "track", "tags", "level", "language"].includes(normalized)) return normalized;
-  return field.trim();
-}
-
-function serverRuleCondition(rule: CfpRule, fields: CfpFormField[]): Record<string, unknown> {
+function replaceRuleField(rule: CfpRule, currentKey: string, nextKey: string): CfpRule {
   if (rule.type === "condition") {
-    return {
-      type: "predicate",
-      fieldKey: fieldKeyForRuleField(rule.field, fields),
-      operator: rule.operator === "is not" ? "not_equals" : "equals",
-      value: rule.value,
-    };
+    return rule.field === currentKey ? { ...rule, field: nextKey } : rule;
   }
   return {
-    type: "group",
-    operator: rule.operator === "OR" ? "any" : "all",
-    conditions: rule.conditions.map((condition) => serverRuleCondition(condition, fields)),
-  };
-}
-
-function editorConditionalRule(
-  configuration: CfpConfiguration,
-  fields: CfpFormField[],
-): Record<string, unknown> | null {
-  const targetField = configuration.ruleTargetField?.trim();
-  if (!targetField) return null;
-  const target = fields.find(
-    (field) => field.key === targetField || field.id === targetField || field.label === targetField,
-  );
-  if (!target?.key) return null;
-  const serverRule = serverRuleCondition(configuration.rule, fields);
-  return {
-    id: configuration.editorRuleId ?? "editor-conditional-rule",
-    priority: 100,
-    when:
-      serverRule.type === "group"
-        ? serverRule
-        : {
-            type: "group",
-            operator: "all",
-            conditions: [serverRule],
-          },
-    actions: [{ type: "show_field", fieldKey: target.key }],
-  };
-}
-
-function toEventConfiguration(
-  configuration: CfpConfiguration,
-  organizationId: string,
-  eventId: string,
-): CfpEventConfiguration {
-  return {
-    id: eventId,
-    tenantId: organizationId,
-    version: configuration.eventVersion ?? 1,
-    slug: configuration.slug,
-    name: configuration.eventName,
-    timezone: configuration.timezone,
-    opensAt: instantFromDate(configuration.opensAt, configuration.timezone),
-    closesAt: instantFromDate(configuration.closesAt, configuration.timezone),
-  };
-}
-
-export function toFormConfiguration(
-  configuration: CfpConfiguration,
-  organizationId: string,
-  eventId: string,
-): CfpFormConfiguration {
-  const toServerField = (
-    field: CfpFormField,
-    fallbackSectionId: string,
-    fileOwner: "submission" | "participant",
-  ): ApiCfpFormField => {
-    const kind =
-      field.kind ??
-      (field.type === "textarea" ? "rich_text" : field.type === "email" ? "email" : field.type);
-    const fileRequest =
-      kind === "file_request"
-        ? {
-            allowedMimeTypes: field.fileRequest?.allowedMimeTypes ?? [
-              ...DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES,
-            ],
-            maxBytes: field.fileRequest?.maxBytes ?? DEFAULT_FILE_REQUEST_MAX_BYTES,
-            required: field.required,
-            owner: fileOwner,
-          }
-        : undefined;
-    return {
-      id: field.id,
-      sectionId: field.sectionId ?? fallbackSectionId,
-      key: field.key ?? field.id,
-      label: field.label,
-      kind,
-      ...(field.description === undefined ? {} : { description: field.description }),
-      ...(field.placeholder === undefined ? {} : { placeholder: field.placeholder }),
-      required: field.required,
-      options: field.options ?? [],
-      ...(field.fieldRef === undefined ? {} : { fieldRef: field.fieldRef }),
-      ...(field.fieldVersion === undefined ? {} : { fieldVersion: field.fieldVersion }),
-      ...(fileRequest === undefined ? {} : { fileRequest }),
-      ...(field.config === undefined ? {} : { config: field.config }),
-    };
-  };
-  const defaultSectionId = configuration.sections?.[0]?.id ?? "session";
-  const taxonomyOptions: Record<string, string[]> = {
-    format: configuration.formats,
-    tags: configuration.tags,
-    track: configuration.tracks,
-    level: configuration.levels,
-    language: ["English"],
-  };
-  const fields = configuration.fields.map((field) => {
-    const options = field.key === undefined ? undefined : taxonomyOptions[field.key];
-    return toServerField(
-      options === undefined ? field : { ...field, options },
-      defaultSectionId,
-      "submission",
-    );
-  });
-  const existingFieldKeys = new Set(fields.map((field) => field.key));
-  const taxonomyFields = [
-    { key: "format", label: "Format", kind: "select", options: configuration.formats },
-    { key: "tags", label: "Tags", kind: "multi_select", options: configuration.tags },
-    { key: "track", label: "Track", kind: "select", options: configuration.tracks },
-    { key: "level", label: "Level", kind: "select", options: configuration.levels },
-    { key: "language", label: "Language", kind: "select", options: ["English"] },
-  ]
-    .filter((field) => field.options.length > 0)
-    .map((field) =>
-      toServerField(
-        {
-          id: `server-${field.key}`,
-          key: field.key,
-          label: field.label,
-          type: editorFieldType(field.kind),
-          kind: field.kind,
-          required: false,
-          visible: true,
-          placeholder: "",
-          options: field.options,
-        },
-        defaultSectionId,
-        "submission",
-      ),
-    );
-  const editorRuleId = configuration.editorRuleId ?? "editor-conditional-rule";
-  const ruleRecords = [...(configuration.rules ?? [])].filter(
-    (rule) => !(typeof rule === "object" && rule !== null && rule.id === editorRuleId),
-  );
-  const editorFields = [...fields, ...taxonomyFields].map(toEditorField);
-  const generatedRule = editorConditionalRule(configuration, editorFields);
-  const sections =
-    configuration.sections && configuration.sections.length > 0
-      ? configuration.sections.map((section) => ({ ...section }))
-      : [{ id: defaultSectionId, title: "Proposal", description: configuration.welcomeBody }];
-  const participantFields =
-    configuration.participantFields && configuration.participantFields.length > 0
-      ? [
-          ...configuration.participantFields.map((field) =>
-            toServerField(field, defaultSectionId, "participant"),
-          ),
-          ...(configuration.participantFields.some(
-            (field) => (field.key ?? field.id) === "biography",
-          )
-            ? []
-            : [
-                {
-                  id: "participant-bio",
-                  sectionId: defaultSectionId,
-                  key: "biography",
-                  label: "Speaker bio",
-                  kind: "rich_text" as const,
-                  required: false,
-                  options: [] as string[],
-                },
-              ]),
-        ]
-      : [
-          {
-            id: "participant-first-name",
-            sectionId: defaultSectionId,
-            key: "firstName",
-            label: "First name",
-            kind: "text" as const,
-            required: true,
-            options: [] as string[],
-          },
-          {
-            id: "participant-last-name",
-            sectionId: defaultSectionId,
-            key: "lastName",
-            label: "Last name",
-            kind: "text" as const,
-            required: true,
-            options: [] as string[],
-          },
-          {
-            id: "participant-email",
-            sectionId: defaultSectionId,
-            key: "email",
-            label: "Email",
-            kind: "email" as const,
-            required: true,
-            options: [] as string[],
-          },
-          {
-            id: "participant-bio",
-            sectionId: defaultSectionId,
-            key: "biography",
-            label: "Speaker bio",
-            kind: "rich_text" as const,
-            required: false,
-            options: [] as string[],
-          },
-        ];
-  return {
-    id: configuration.id ?? `${eventId}-cfp`,
-    tenantId: organizationId,
-    eventId,
-    name: configuration.welcomeTitle,
-    version: configuration.formVersion ?? 1,
-    status: configuration.status ?? "draft",
-    welcomeContent: `${configuration.welcomeTitle}\n${configuration.welcomeBody}`,
-    settings: {
-      speakerLimit: configuration.participantLimit,
-      maxSubmissionsPerAccount: configuration.proposalLimit,
-      remindersEnabled: configuration.reminderEmails,
-      adminNotificationsEnabled: configuration.adminNotifications,
-      confirmationMessage: `${configuration.confirmationTitle}\n${configuration.confirmationBody}`,
-      successContent: configuration.successMessage,
-      ...(configuration.redirectUrl ? { redirectUrl: configuration.redirectUrl } : {}),
-    },
-    sections,
-    submissionFields: [
-      ...fields,
-      ...taxonomyFields.filter((field) => !existingFieldKeys.has(field.key)),
-    ],
-    rules: [...ruleRecords, ...(generatedRule === null ? [] : [generatedRule])],
-    participantFields,
-  };
-}
-export interface PersistCfpConfigurationInput {
-  configuration: CfpConfiguration;
-  organizationId: string;
-  eventId: string;
-  formId: string;
-}
-
-export async function persistCfpConfiguration(
-  api: CfpApi,
-  input: PersistCfpConfigurationInput,
-): Promise<{ event: CfpEventConfiguration; form: CfpFormConfiguration }> {
-  const dateError = validateCfpDateRange(
-    input.configuration.opensAt,
-    input.configuration.closesAt,
-    input.configuration.timezone,
-  );
-  if (dateError !== null) throw new Error(dateError);
-
-  const savedEvent = await api.saveEvent({
-    organizationId: input.organizationId,
-    eventId: input.eventId,
-    event: toEventConfiguration(
-      {
-        ...input.configuration,
-        eventVersion:
-          input.configuration.eventVersion === undefined ? 1 : input.configuration.eventVersion + 1,
-      },
-      input.organizationId,
-      input.eventId,
+    ...rule,
+    conditions: rule.conditions.map((condition) =>
+      replaceRuleField(condition, currentKey, nextKey),
     ),
-    expectedVersion: input.configuration.eventVersion ?? null,
-  });
-  const savedForm =
-    input.configuration.formVersion === undefined
-      ? await api.createForm({
-          organizationId: input.organizationId,
-          eventId: input.eventId,
-          form: toFormConfiguration(
-            { ...input.configuration, id: input.formId, formVersion: 1 },
-            input.organizationId,
-            input.eventId,
-          ),
-        })
-      : await api.saveForm({
-          organizationId: input.organizationId,
-          eventId: input.eventId,
-          form: toFormConfiguration(
-            {
-              ...input.configuration,
-              id: input.formId,
-              formVersion: input.configuration.formVersion + 1,
-            },
-            input.organizationId,
-            input.eventId,
-          ),
-          expectedVersion: input.configuration.formVersion,
-        });
-  return { event: savedEvent, form: savedForm };
+  };
 }
 
-export function configurationFromServer(
-  current: CfpConfiguration,
-  event: CfpEventConfiguration,
-  form: CfpFormConfiguration,
-): CfpConfiguration {
-  const settings = form.settings;
-  const readString = (key: string, fallback: string): string => {
-    const value = settings[key];
-    return typeof value === "string" ? value : fallback;
-  };
-  const readBoolean = (key: string, fallback: boolean): boolean => {
-    const value = settings[key];
-    return typeof value === "boolean" ? value : fallback;
-  };
-  const readNumber = (key: string, fallback: number): number => {
-    const value = settings[key];
-    return typeof value === "number" ? value : fallback;
-  };
-  const optionsFor = (key: string, fallback: string[]): string[] => {
-    const field = form.submissionFields.find((candidate) => candidate.key === key);
-    const options = field?.options
-      .filter((option): option is string => typeof option === "string")
-      .map((option) => option.trim())
-      .filter(Boolean);
-    return options?.length ? options : fallback;
-  };
-  const editorRule =
-    form.rules.find(
-      (rule) => rule.id === "editor-conditional-rule" && Array.isArray(rule.actions),
-    ) ??
-    form.rules.find(
-      (rule) =>
-        Array.isArray(rule.actions) &&
-        rule.actions.some(
-          (action) =>
-            typeof action === "object" &&
-            action !== null &&
-            action.type === "show_field" &&
-            typeof action.fieldKey === "string",
-        ),
-    );
-  const editorActions = editorRule && Array.isArray(editorRule.actions) ? editorRule.actions : [];
-  const editorAction = editorActions.find(
-    (action) =>
-      typeof action === "object" &&
-      action !== null &&
-      "fieldKey" in action &&
-      typeof action.fieldKey === "string",
+function replacePersistedRuleField(value: unknown, currentKey: string, nextKey: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => replacePersistedRuleField(entry, currentKey, nextKey));
+  }
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "fieldKey" && entry === currentKey
+        ? nextKey
+        : replacePersistedRuleField(entry, currentKey, nextKey),
+    ]),
   );
-  const persistedRuleTarget =
-    editorAction && typeof editorAction.fieldKey === "string" ? editorAction.fieldKey : undefined;
-  const persistedEditorCondition =
-    editorRule && "when" in editorRule ? editorRuleCondition(editorRule.when) : null;
-  const persistedRuleTargetLabel =
-    persistedRuleTarget === undefined
-      ? undefined
-      : form.submissionFields.find((field) => field.key === persistedRuleTarget)?.label;
-  const [welcomeTitle = current.welcomeTitle, ...welcomeBody] = form.welcomeContent.split("\n");
-  return {
-    ...current,
-    id: form.id,
-    status: form.status,
-    eventVersion: event.version,
-    formVersion: form.version,
-    eventName: event.name,
-    slug: event.slug,
-    timezone: event.timezone,
-    opensAt: dateFromInstant(event.opensAt),
-    closesAt: dateFromInstant(event.closesAt),
-    participantLimit: readNumber("speakerLimit", current.participantLimit),
-    proposalLimit: readNumber("maxSubmissionsPerAccount", current.proposalLimit),
-    tracks: optionsFor("track", current.tracks),
-    tags: optionsFor("tags", current.tags),
-    formats: optionsFor("format", current.formats),
-    levels: optionsFor("level", current.levels),
-    reminderEmails: readBoolean("remindersEnabled", current.reminderEmails),
-    adminNotifications: readBoolean("adminNotificationsEnabled", current.adminNotifications),
-    welcomeTitle,
-    welcomeBody: welcomeBody.join("\n") || current.welcomeBody,
-    confirmationTitle:
-      readString("confirmationMessage", current.confirmationTitle).split("\n")[0] ?? "",
-    confirmationBody: readString("confirmationMessage", current.confirmationBody)
-      .split("\n")
-      .slice(1)
-      .join("\n"),
-    successMessage: readString("successContent", current.successMessage),
-    redirectUrl: readString("redirectUrl", current.redirectUrl),
-    fields: withCoreProposalFields(form.submissionFields.map(toEditorField)),
-    participantFields: form.participantFields.map(toEditorField),
-    sections: form.sections.map((section) => ({ ...section })),
-    rules: [...form.rules],
-    ...(typeof editorRule?.id === "string" ? { editorRuleId: editorRule.id } : {}),
-    rule: persistedEditorCondition ?? current.rule,
-    ruleAction:
-      persistedRuleTargetLabel === undefined
-        ? current.ruleAction
-        : `show ${persistedRuleTargetLabel}`,
-    ruleTargetField: persistedRuleTarget ?? current.ruleTargetField,
-  };
 }
 
-export function summarizeRule(rule: CfpRule): string {
-  if (rule.type === "condition") {
-    return `${rule.field} ${rule.operator} ${rule.value}`;
-  }
-
-  const joiner = ` ${rule.operator} `;
-  return `(${rule.conditions.map(summarizeRule).join(joiner)})`;
-}
-
-function ruleKey(rule: CfpRule): string {
-  if (rule.type === "condition") {
-    return `condition:${rule.field}:${rule.operator}:${rule.value}`;
-  }
-
-  return `group:${rule.operator}:${rule.conditions.map(ruleKey).join("|")}`;
-}
-function firstRuleCondition(rule: CfpRule): CfpCondition {
-  if (rule.type === "condition") return rule;
-  const nested = rule.conditions[0];
-  return nested === undefined
-    ? { type: "condition", field: "format", operator: "is", value: "" }
-    : firstRuleCondition(nested);
-}
-
-function editorRuleCondition(value: unknown): CfpRule | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const candidate = value as Record<string, unknown>;
-  if (candidate.type === "predicate" && typeof candidate.fieldKey === "string") {
-    const operator = candidate.operator === "not_equals" ? "is not" : "is";
-    return {
-      type: "condition",
-      field: candidate.fieldKey,
-      operator,
-      value: typeof candidate.value === "string" ? candidate.value : String(candidate.value ?? ""),
-    };
-  }
-  if (candidate.type !== "group" || !Array.isArray(candidate.conditions)) return null;
-  const conditions = candidate.conditions.flatMap((condition): CfpRule[] => {
-    const parsed = editorRuleCondition(condition);
-    return parsed === null ? [] : [parsed];
-  });
-  if (conditions.length === 0) return null;
-  if (conditions.length === 1 && conditions[0]?.type === "condition") {
-    return conditions[0];
-  }
-  return {
-    type: "group",
-    operator: candidate.operator === "any" ? "OR" : "AND",
-    conditions,
-  };
-}
-function fieldOptionValues(field: CfpFormField | undefined): string[] {
-  return (field?.options ?? []).flatMap((option) => {
-    if (typeof option === "string") return [option];
-    if (typeof option === "object" && option !== null && "value" in option) {
-      return typeof option.value === "string" ? [option.value] : [];
-    }
-    return [];
-  });
-}
-
-function fieldKeyFromLabel(label: string): string {
-  const normalized = label
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-");
-  return normalized.replace(/^-+|-+$/gu, "") || "custom-field";
-}
-function ruleMatches(rule: CfpRule, answers: Record<string, string>): boolean {
-  if (rule.type === "condition") {
-    const fieldKey = rule.field.trim().toLocaleLowerCase();
-    const current = answers[fieldKey] ?? answers[fieldKey.replaceAll(" ", "-")];
-    return rule.operator === "is not" ? current !== rule.value : current === rule.value;
-  }
-  const results = rule.conditions.map((condition) => ruleMatches(condition, answers));
-  return rule.operator === "OR" ? results.some(Boolean) : results.every(Boolean);
-}
-
-function listFromInput(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function updateList(
-  current: CfpConfiguration,
-  key: "tracks" | "tags" | "formats" | "levels",
-  value: string,
+function updateCfpEditorField(
+  configuration: CfpConfiguration,
+  fieldId: string,
+  patch: Partial<CfpFormField>,
 ): CfpConfiguration {
-  return { ...current, [key]: listFromInput(value) };
-}
-
-function fieldTypeLabel(type: FieldType): string {
-  switch (type) {
-    case "email":
-      return "Email";
-    case "url":
-      return "URL";
-    case "textarea":
-    case "rich_text":
-      return "Long text";
-    case "select":
-      return "Select";
-    case "multi_select":
-      return "Multi-select";
-    case "boolean":
-      return "Checkbox";
-    case "number":
-      return "Number";
-    case "file_request":
-      return "File request";
-    default:
-      return "Short text";
-  }
-}
-function fieldReferenceLabel(reference: CfpFormField["fieldRef"]): string {
-  if (reference === undefined) return "";
-  if (typeof reference === "string") return reference;
-  return `${reference.id} v${reference.version}`;
+  const field = configuration.fields.find((candidate) => candidate.id === fieldId);
+  if (field === undefined) return configuration;
+  const currentKey = field.key ?? field.id;
+  const nextKey = patch.key ?? currentKey;
+  const keyChanged = nextKey !== currentKey;
+  return {
+    ...configuration,
+    fields: configuration.fields.map((candidate) =>
+      candidate.id === fieldId ? { ...candidate, ...patch } : candidate,
+    ),
+    ...(keyChanged
+      ? {
+          rule: replaceRuleField(configuration.rule, currentKey, nextKey),
+          ruleTargetField:
+            configuration.ruleTargetField === currentKey ? nextKey : configuration.ruleTargetField,
+          ...(configuration.rules === undefined
+            ? {}
+            : {
+                rules: configuration.rules.map(
+                  (rule) =>
+                    replacePersistedRuleField(
+                      rule,
+                      currentKey,
+                      nextKey,
+                    ) as (typeof configuration.rules)[number],
+                ),
+              }),
+        }
+      : {}),
+  };
 }
 
 function PreviewField({
@@ -1103,13 +224,6 @@ function RuleTree({ rule }: { rule: CfpRule }) {
   );
 }
 
-interface CfpEditorProps {
-  eventId: string;
-  organizationId: string;
-  formId?: string;
-  api?: CfpApi;
-}
-
 export function CfpEditor({
   eventId: fallbackEventId,
   organizationId,
@@ -1123,9 +237,8 @@ export function CfpEditor({
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
-  const [mobileSectionsOpen, setMobileSectionsOpen] = useState(false);
   const previewResultRef = useRef<HTMLDivElement | null>(null);
-  const sectionNavRef = useRef<HTMLElement | null>(null);
+  const saveInFlightRef = useRef(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [preparedPublishVersion, setPreparedPublishVersion] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -1229,12 +342,7 @@ export function CfpEditor({
   }
 
   function updateField(fieldId: string, patch: Partial<CfpFormField>): void {
-    setConfiguration((current) => ({
-      ...current,
-      fields: current.fields.map((field) =>
-        field.id === fieldId ? { ...field, ...patch } : field,
-      ),
-    }));
+    setConfiguration((current) => updateCfpEditorField(current, fieldId, patch));
     setSaveState("idle");
   }
   function addField(): void {
@@ -1270,15 +378,8 @@ export function CfpEditor({
     setSaveState("idle");
   }
 
-  function updatePrimaryCondition(patch: Partial<CfpCondition>): void {
-    setConfiguration((current) => {
-      const condition = firstRuleCondition(current.rule);
-      const nextCondition = { ...condition, ...patch };
-      return {
-        ...current,
-        rule: nextCondition,
-      };
-    });
+  function updatePrimaryCondition(patch: Partial<Omit<CfpCondition, "type" | "operator">>): void {
+    setConfiguration((current) => updateCfpShowWhenCondition(current, patch));
     setSaveState("idle");
   }
 
@@ -1292,11 +393,45 @@ export function CfpEditor({
     setSaveState("idle");
   }
 
-  async function saveConfiguration(): Promise<{
+  function replaceTaxonomyOptions(
+    key: "formats" | "levels" | "tags" | "tracks",
+    values: string[],
+  ): void {
+    setConfiguration((current) => ({ ...current, [key]: values }));
+    setSaveState("idle");
+  }
+
+  function focusFirstInvalidControl(): boolean {
+    if (typeof document === "undefined") return true;
+    const form = document.getElementById("cfp-editor-form");
+    if (!(form instanceof HTMLFormElement) || form.checkValidity()) return true;
+
+    const invalidControl = Array.from(
+      form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+        "input, select, textarea",
+      ),
+    ).find((control) => !control.disabled && !control.checkValidity());
+    if (!invalidControl) return false;
+
+    const sectionId = invalidControl.closest("section")?.id;
+    const section = SECTION_LINKS.find((candidate) => candidate.id === sectionId);
+    if (section) setActiveSection(section.id);
+    setSaveState("error");
+    setSaveError("Complete the highlighted field before publishing.");
+    window.requestAnimationFrame(() => {
+      invalidControl.focus();
+      invalidControl.reportValidity();
+    });
+    return false;
+  }
+
+  async function saveConfiguration(options?: { readonly validateForPublish?: boolean }): Promise<{
     event: CfpEventConfiguration;
     form: CfpFormConfiguration;
   } | null> {
+    if (saveInFlightRef.current) return null;
     setSaveError(null);
+    if (options?.validateForPublish === true && !focusFirstInvalidControl()) return null;
     if (!resolvedOrganizationId || !resolvedFormId) {
       setSaveState("error");
       setSaveError("An organizer organization and form are required before saving.");
@@ -1313,6 +448,7 @@ export function CfpEditor({
       return null;
     }
     try {
+      saveInFlightRef.current = true;
       setSaveState("saving");
       const saved = await persistCfpConfiguration(api, {
         configuration,
@@ -1329,6 +465,8 @@ export function CfpEditor({
         error instanceof Error ? error.message : "The CFP configuration could not be saved.",
       );
       return null;
+    } finally {
+      saveInFlightRef.current = false;
     }
   }
 
@@ -1338,8 +476,9 @@ export function CfpEditor({
   }
 
   async function requestPublish(): Promise<void> {
+    if (saveInFlightRef.current) return;
     setSaveError(null);
-    const saved = await saveConfiguration();
+    const saved = await saveConfiguration({ validateForPublish: true });
     if (saved === null) return;
     setPreparedPublishVersion(saved.form.version);
     setPublishDialogOpen(true);
@@ -1445,7 +584,6 @@ export function CfpEditor({
       return;
     }
     setActiveSection(SECTION_LINKS[nextIndex]?.id ?? "event-details");
-    setMobileSectionsOpen(false);
     const scrollContainer = document.getElementById(ORGANIZER_SCROLL_CONTAINER_ID);
     if (scrollContainer === null) {
       window.scrollTo({ top: 0, behavior: "auto" });
@@ -1454,8 +592,7 @@ export function CfpEditor({
     }
   }
 
-  function handlePreviewSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
+  function handlePreviewSubmit(): void {
     setPreviewSubmissionKey(previewStateKey);
     window.requestAnimationFrame(() => previewResultRef.current?.focus());
   }
@@ -1594,17 +731,24 @@ export function CfpEditor({
 
   return (
     <div className={styles.viewport}>
-      <header className={styles.pageHeader}>
-        <div>
-          <p className={styles.eyebrow}>Organizer workspace / {eventId}</p>
-          <h1>Configure your call for proposals</h1>
-          <p className={styles.pageIntro}>
-            Shape the event details, applicant experience, and rules before publishing a clear,
-            accessible public form.
-          </p>
-        </div>
-        <div className={styles.headerActionArea}>
-          <div className={styles.headerActions}>
+      <CfpEditorMasthead
+        status={
+          configuration.status === "published"
+            ? "Published"
+            : configuration.status === "closed"
+              ? "Closed"
+              : "Draft"
+        }
+        metadata={[
+          configuration.eventName,
+          `${configuration.opensAt} – ${configuration.closesAt}`,
+          configuration.timezone,
+          `${visibleFields.length} public fields`,
+          configuration.adminNotifications ? "Notifications on" : "Notifications off",
+        ]}
+        error={saveState === "error" ? saveError : null}
+        actions={
+          <>
             {publicLinkAvailable && publicRoute ? (
               <>
                 <button className={styles.secondaryButton} type="button" onClick={copyPublicLink}>
@@ -1617,76 +761,24 @@ export function CfpEditor({
                   {publicLinkCopied ? "Public CFP link copied to clipboard." : ""}
                 </span>
               </>
-            ) : (
-              <span className={styles.publicationHint}>
-                Public link available after publishing.
-              </span>
-            )}
-            <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
-              Save changes
-            </button>
-            {activeSection === "public-preview" ? (
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void requestPublish()}
-                disabled={saveState === "saving"}
-              >
-                {saveState === "saving" ? "Checking form…" : "Publish form"}
-              </button>
             ) : null}
-          </div>
-          {saveState === "error" && saveError ? (
-            <p className={styles.headerActionStatus} role="alert">
-              {saveError}
-            </p>
-          ) : null}
-        </div>
-      </header>
-
-      <nav ref={sectionNavRef} className={styles.sectionNav} aria-label="CFP workspace sections">
-        <div className={styles.desktopSectionNav}>
-          {SECTION_LINKS.map((section) => (
             <button
-              key={section.id}
-              type="button"
-              aria-controls={section.id}
-              aria-current={activeSection === section.id ? "location" : undefined}
-              className={activeSection === section.id ? styles.activeNavButton : undefined}
-              onClick={() => openSection(section.id)}
+              className={styles.primaryButton}
+              type="submit"
+              form="cfp-editor-form"
+              disabled={saveState === "saving"}
             >
-              {section.label}
+              {saveState === "saving" ? "Saving…" : "Save changes"}
             </button>
-          ))}
-        </div>
-        <Collapsible
-          className={styles.mobileSectionNav}
-          open={mobileSectionsOpen}
-          onOpenChange={setMobileSectionsOpen}
-        >
-          <CollapsibleTrigger className={styles.mobileSectionTrigger} type="button">
-            <span>
-              <span className={styles.mobileSectionLabel}>Current section</span>
-              {SECTION_LINKS.find((section) => section.id === activeSection)?.label}
-            </span>
-            <span aria-hidden="true">⌄</span>
-          </CollapsibleTrigger>
-          <CollapsibleContent className={styles.mobileSectionContent}>
-            {SECTION_LINKS.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                aria-controls={section.id}
-                aria-current={activeSection === section.id ? "location" : undefined}
-                className={activeSection === section.id ? styles.activeNavButton : undefined}
-                onClick={() => openSection(section.id)}
-              >
-                {section.label}
-              </button>
-            ))}
-          </CollapsibleContent>
-        </Collapsible>
-      </nav>
+          </>
+        }
+      />
+
+      <CfpSectionNavigation
+        activeSection={activeSection}
+        sections={SECTION_LINKS}
+        onChange={(sectionId) => openSection(sectionId as (typeof SECTION_LINKS)[number]["id"])}
+      />
 
       <div className={styles.workspaceGrid}>
         <form
@@ -1937,7 +1029,7 @@ export function CfpEditor({
             </p>
             <div className={styles.copyStack}>
               <div className={styles.fieldGroup}>
-                <label htmlFor="welcome-title">Welcome heading</label>
+                <label htmlFor="welcome-title">Form label</label>
                 <input
                   id="welcome-title"
                   name="welcomeTitle"
@@ -1947,7 +1039,7 @@ export function CfpEditor({
                 />
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="welcome-body">Welcome copy</label>
+                <label htmlFor="welcome-body">Welcome message</label>
                 <textarea
                   id="welcome-body"
                   name="welcomeBody"
@@ -1970,7 +1062,7 @@ export function CfpEditor({
                   />
                 </div>
                 <div className={styles.fieldGroup}>
-                  <label htmlFor="success-message">Success message</label>
+                  <label htmlFor="success-message">Supporting success message</label>
                   <input
                     id="success-message"
                     name="successMessage"
@@ -1981,7 +1073,7 @@ export function CfpEditor({
                 </div>
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="confirmation-body">Confirmation copy</label>
+                <label htmlFor="confirmation-body">Confirmation message</label>
                 <textarea
                   id="confirmation-body"
                   name="confirmationBody"
@@ -1991,7 +1083,7 @@ export function CfpEditor({
                 />
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="redirect-url">After-submit redirect URL</label>
+                <label htmlFor="redirect-url">Next destination URL</label>
                 <input
                   id="redirect-url"
                   name="redirectUrl"
@@ -2020,65 +1112,39 @@ export function CfpEditor({
               </div>
             </div>
             <p className={styles.sectionDescription}>
-              Consistent options make routing and review easier. Separate each option with a comma.
+              Add the choices applicants use to classify a proposal. Press Enter after each option.
             </p>
             <div className={styles.formGrid}>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="tracks">Tracks</label>
-                <input
-                  id="tracks"
-                  name="tracks"
-                  required
-                  value={configuration.tracks.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "tracks", event.target.value))
-                  }
-                  aria-describedby="tracks-help"
-                />
-                <p id="tracks-help" className={styles.fieldHint}>
-                  Route proposals into a program area.
-                </p>
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="tags">Tags</label>
-                <input
-                  id="tags"
-                  name="tags"
-                  value={configuration.tags.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "tags", event.target.value))
-                  }
-                  aria-describedby="tags-help"
-                />
-                <p id="tags-help" className={styles.fieldHint}>
-                  Add searchable labels for reviewers.
-                </p>
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="formats">Formats</label>
-                <input
-                  id="formats"
-                  name="formats"
-                  required
-                  value={configuration.formats.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) =>
-                      updateList(current, "formats", event.target.value),
-                    )
-                  }
-                />
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="levels">Levels</label>
-                <input
-                  id="levels"
-                  name="levels"
-                  value={configuration.levels.join(", ")}
-                  onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "levels", event.target.value))
-                  }
-                />
-              </div>
+              <CfpOptionListEditor
+                id="tracks"
+                label="Tracks"
+                description="Route proposals into program areas."
+                required
+                values={configuration.tracks}
+                onChange={(values) => replaceTaxonomyOptions("tracks", values)}
+              />
+              <CfpOptionListEditor
+                id="formats"
+                label="Formats"
+                description="Define the session formats applicants can propose."
+                required
+                values={configuration.formats}
+                onChange={(values) => replaceTaxonomyOptions("formats", values)}
+              />
+              <CfpOptionListEditor
+                id="levels"
+                label="Levels"
+                description="Describe the intended audience experience."
+                values={configuration.levels}
+                onChange={(values) => replaceTaxonomyOptions("levels", values)}
+              />
+              <CfpOptionListEditor
+                id="tags"
+                label="Tags"
+                description="Add searchable labels for reviewers."
+                values={configuration.tags}
+                onChange={(values) => replaceTaxonomyOptions("tags", values)}
+              />
             </div>
 
             <div className={styles.linksBlock}>
@@ -2129,9 +1195,20 @@ export function CfpEditor({
               visible only when they help an applicant complete a thoughtful proposal.
             </p>
             <fieldset className={styles.fieldList}>
-              <legend>Applicant fields</legend>
-              {configuration.fields.map((field) => (
+              <legend>Proposal questions</legend>
+              <p className={styles.fieldsetDescription}>
+                Configure the questions applicants answer. Technical keys stay stable for
+                integrations and conditional logic.
+              </p>
+              {configuration.fields.map((field, index) => (
                 <div className={styles.fieldRuleRow} key={field.id}>
+                  <div className={styles.fieldCardHeading}>
+                    <div>
+                      <span>Question {index + 1}</span>
+                      <strong>{field.label || "Untitled question"}</strong>
+                    </div>
+                    <span>{fieldTypeLabel(field.type)}</span>
+                  </div>
                   <div className={styles.formGrid}>
                     <div className={styles.fieldGroup}>
                       <label htmlFor={`field-label-${field.id}`}>Field label</label>
@@ -2180,16 +1257,14 @@ export function CfpEditor({
                       ) : null}
                     </div>
                     {field.type === "select" || field.type === "multi_select" ? (
-                      <div className={styles.fieldGroup}>
-                        <label htmlFor={`field-options-${field.id}`}>Options</label>
-                        <input
-                          id={`field-options-${field.id}`}
-                          value={fieldOptionValues(field).join(", ")}
-                          onChange={(event) =>
-                            updateField(field.id, { options: listFromInput(event.target.value) })
-                          }
-                        />
-                      </div>
+                      <CfpOptionListEditor
+                        id={`field-options-${field.id}`}
+                        label="Answer options"
+                        description="Applicants choose from these options in the public form."
+                        required
+                        values={fieldOptionValues(field)}
+                        onChange={(values) => updateField(field.id, { options: values })}
+                      />
                     ) : null}
                   </div>
                   <label>
@@ -2224,8 +1299,12 @@ export function CfpEditor({
               </button>
             </fieldset>
             {configuration.participantFields && configuration.participantFields.length > 0 ? (
-              <fieldset className={styles.fieldList}>
-                <legend>Participant identity and profile fields</legend>
+              <fieldset className={`${styles.fieldList} ${styles.identityFields}`}>
+                <legend>Applicant identity</legend>
+                <p className={styles.fieldsetDescription}>
+                  Name and email identify each applicant. Profile questions can be required for the
+                  submission without changing the person’s account identity.
+                </p>
                 {configuration.participantFields.map((field) => (
                   <div className={styles.fieldRuleRow} key={field.id}>
                     <div>
@@ -2257,7 +1336,7 @@ export function CfpEditor({
                           }))
                         }
                       />
-                      Required
+                      Require for applicants
                     </label>
                   </div>
                 ))}
@@ -2343,100 +1422,30 @@ export function CfpEditor({
             <section className={styles.rulePreview} aria-labelledby="condition-preview-heading">
               <div className={styles.subheadingRow}>
                 <div>
-                  <p className={styles.sectionKicker}>Nested condition preview</p>
-                  <h3 id="condition-preview-heading">When should this field appear?</h3>
+                  <p className={styles.sectionKicker}>Conditional visibility</p>
+                  <h3 id="condition-preview-heading">Show a field based on an answer</h3>
                 </div>
-                <span className={styles.logicBadge}>Saved on publish</span>
+                <span className={styles.logicBadge}>Optional</span>
               </div>
               <p className={styles.ruleSummary}>
-                If <strong>{ruleSummary}</strong>, then <strong>{configuration.ruleAction}</strong>.
+                Show{" "}
+                <strong>
+                  {configuration.ruleAction.replace(/^show\s+/iu, "") || "the selected field"}
+                </strong>{" "}
+                when <strong>{ruleSummary}</strong>.
               </p>
-              <ul className={styles.ruleTree} aria-label="Nested condition tree">
-                <RuleTree rule={configuration.rule} />
-              </ul>
-              <p className={styles.fieldHint}>
-                Rules support nested AND / OR groups and are evaluated before the public form is
-                published. Cycles are rejected during validation.
-              </p>
+              <details className={styles.advancedLogic}>
+                <summary>View advanced condition structure</summary>
+                <ul className={styles.ruleTree} aria-label="Advanced condition structure">
+                  <RuleTree rule={configuration.rule} />
+                </ul>
+                <p className={styles.fieldHint}>
+                  Existing nested AND/OR groups are preserved when the CFP is saved.
+                </p>
+              </details>
             </section>
-
-            <div className={styles.formActions}>
-              <button className={styles.primaryButton} type="submit">
-                Save CFP configuration
-              </button>
-              <span className={styles.saveStatus} role="status" aria-live="polite">
-                {saveState === "saving" ? "Saving event and CFP form…" : ""}
-                {saveState === "saved"
-                  ? "Event and CFP form saved. The close date below reflects the server response."
-                  : ""}
-                {saveState === "error"
-                  ? (saveError ??
-                    "Changes could not be saved. Check your organizer session and try again.")
-                  : ""}
-              </span>
-            </div>
           </section>
         </form>
-
-        <aside className={styles.summaryAside} aria-label="Configuration summary">
-          <div className={styles.summaryCard}>
-            <p className={styles.sectionKicker}>At a glance</p>
-            <h2>Ready for review</h2>
-            <dl className={styles.summaryList}>
-              <div>
-                <dt>Event</dt>
-                <dd>{configuration.eventName}</dd>
-              </div>
-              <div>
-                <dt>Public URL</dt>
-                <dd>
-                  {publicLinkAvailable && publicRoute ? (
-                    <a href={publicRoute}>
-                      /cfp/organizations/{resolvedOrganizationId}/events/{configuration.slug}
-                    </a>
-                  ) : (
-                    "Available after this CFP is published."
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Window</dt>
-                <dd>
-                  {configuration.opensAt} → {configuration.closesAt}
-                </dd>
-              </div>
-              <div>
-                <dt>Timezone</dt>
-                <dd>{configuration.timezone}</dd>
-              </div>
-              <div>
-                <dt>Visible fields</dt>
-                <dd>
-                  {visibleFields.length} of {configuration.fields.length}
-                </dd>
-              </div>
-              <div>
-                <dt>Notifications</dt>
-                <dd>
-                  {configuration.reminderEmails && configuration.adminNotifications
-                    ? "Reminders + admin alerts"
-                    : configuration.reminderEmails
-                      ? "Reminders only"
-                      : configuration.adminNotifications
-                        ? "Admin alerts only"
-                        : "Off"}
-                </dd>
-              </div>
-            </dl>
-            <a className={styles.textLink} href="#public-preview">
-              Jump to public preview <span aria-hidden="true">→</span>
-            </a>
-          </div>
-          <div className={styles.accessibilityNote}>
-            <strong>Accessibility check</strong>
-            <p>Every public field has a visible label, keyboard focus, and a required state.</p>
-          </div>
-        </aside>
       </div>
 
       <section
@@ -2462,11 +1471,10 @@ export function CfpEditor({
         </div>
 
         <div className={styles.previewGrid}>
-          <form
+          <section
             className={styles.publicForm}
             aria-label="Public CFP form preview"
             onInput={() => setPreviewSubmissionKey(null)}
-            onSubmit={handlePreviewSubmit}
           >
             <p className={styles.previewEyebrow}>{configuration.eventName} · Call for proposals</p>
             <h3>{configuration.welcomeTitle}</h3>
@@ -2555,7 +1563,7 @@ export function CfpEditor({
             <p className={styles.previewRuleNote}>
               Conditional preview: {ruleSummary} → {configuration.ruleAction}.
             </p>
-            <button className={styles.primaryButton} type="submit">
+            <button className={styles.primaryButton} onClick={handlePreviewSubmit} type="button">
               Submit preview response
             </button>
             {submittedPreviewResult ? (
@@ -2573,7 +1581,7 @@ export function CfpEditor({
                 <p className={styles.previewSuccess}>{submittedPreviewResult.successMessage}</p>
               </div>
             ) : null}
-          </form>
+          </section>
 
           <aside className={styles.previewDetails} aria-label="Public form behavior">
             <div>
@@ -2598,33 +1606,26 @@ export function CfpEditor({
           </aside>
         </div>
       </section>
-      <nav className={styles.editorStepActions} aria-label="CFP editor progress">
-        <button
-          className={styles.secondaryButton}
-          disabled={activeSectionIndex === 0}
-          onClick={() => openSection(SECTION_LINKS[activeSectionIndex - 1]?.id ?? "event-details")}
-          type="button"
-        >
-          ← Back
-        </button>
-        <span className={styles.editorStepStatus}>
-          Step {activeSectionIndex + 1} of {SECTION_LINKS.length}
-        </span>
-        {activeSectionIndex < SECTION_LINKS.length - 1 ? (
-          <button
-            className={styles.primaryButton}
-            onClick={() => {
-              const nextSection = SECTION_LINKS[activeSectionIndex + 1];
-              if (nextSection !== undefined) openSection(nextSection.id);
-            }}
-            type="button"
-          >
-            Next →
-          </button>
-        ) : (
-          <span />
-        )}
-      </nav>
+      <CfpStepActions
+        activeSection={activeSection}
+        busy={saveState === "saving"}
+        sections={SECTION_LINKS}
+        saveStatus={
+          saveState === "saved"
+            ? "All changes saved"
+            : saveState === "saving"
+              ? "Saving changes…"
+              : saveState === "error"
+                ? "Save failed"
+                : "Changes save when you choose Save changes"
+        }
+        onBack={() => openSection(SECTION_LINKS[activeSectionIndex - 1]?.id ?? "event-details")}
+        onNext={() => {
+          const nextSection = SECTION_LINKS[activeSectionIndex + 1];
+          if (nextSection !== undefined) openSection(nextSection.id);
+        }}
+        onFinish={() => void requestPublish()}
+      />
       <AlertDialog
         open={publishDialogOpen}
         onOpenChange={(open) => {

@@ -2,8 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CfpApi } from "../cfp/api";
+import { CfpEditor } from "./cfp-editor";
 import {
-  CfpEditor,
   cfpActiveSectionThreshold,
   cfpContainerScrollTop,
   cfpMinimumDate,
@@ -20,7 +20,7 @@ import {
   summarizeRule,
   toFormConfiguration,
   validateCfpDateRange,
-} from "./cfp-editor";
+} from "./cfp-editor-model";
 import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 
 describe("CFP editor", () => {

@@ -40,6 +40,10 @@ export function eventDates(startsOn: string, endsOn: string): readonly string[] 
   return dates;
 }
 
+export function resolveAgendaPlacementDate(selectedDay: string, eventStart: string): string {
+  return selectedDay === "" ? eventStart : selectedDay;
+}
+
 function parseLocalDateTime(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
   if (!match) {
@@ -156,7 +160,7 @@ export function publicationReadiness(
 export function formatRevisionTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) {
-    return value;
+    return "recently";
   }
   return new Intl.DateTimeFormat("en", {
     dateStyle: "medium",

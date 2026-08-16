@@ -4,11 +4,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AGENDA_VIEW_MODES,
   AgendaBoard,
   type AgendaBusyOperation,
   AgendaSuggestionPanel,
   type AgendaSuggestionRunView,
+} from "./agenda-workspace";
+import {
+  AGENDA_VIEW_MODES,
   type AgendaViewMode,
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
@@ -18,7 +20,7 @@ import {
   isAgendaAsyncScopeTokenCurrent,
   loadCanonicalAgendaWorkspace,
   serializeAgendaSuggestionOptions,
-} from "./agenda-workspace";
+} from "./agenda-workspace-model";
 import { createAgendaApi } from "./api";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
@@ -365,6 +367,22 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain('href="/admin/organizations/organization-1/events/evt_open"');
     expect(markup).not.toContain('href="/admin/events/evt_open"');
   });
+  it("uses Next Link for private organizer destinations while retaining the skip anchor", () => {
+    expect(workspaceSource).toContain('import Link from "next/link";');
+    expect(workspaceSource).toContain(
+      "<Link\n                href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}\n              >",
+    );
+    expect(workspaceSource).toContain('<Link href={settingsHref}>Rooms and tracks</Link>');
+    expect(workspaceSource).toContain(
+      '<Link href={settingsHref}>Create a room in Rooms and tracks settings</Link>',
+    );
+    expect(workspaceSource).toContain('<Link href={sessionsHref}>Open sessions</Link>');
+    expect(workspaceSource).not.toContain('<a href={settingsHref}>');
+    expect(workspaceSource).not.toContain('<a href={sessionsHref}>');
+    expect(workspaceSource).toContain(
+      '<a className={styles.skipLink} href="#agenda-content">',
+    );
+  });
 
   it("exposes accessible scheduling and disabled publication controls", () => {
     const markup = renderToStaticMarkup(
@@ -594,8 +612,8 @@ describe("agenda organizer workspace", () => {
 
     const firstDayMarkup = renderBoard(emptyDayData);
     expect(firstDayMarkup).toContain('aria-label="Event day navigation"');
-    expect(firstDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Previous day<\/button>/u);
-    expect(firstDayMarkup).toMatch(/<button[^>]*>Next day<\/button>/u);
+    expect(firstDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Previous day"/u);
+    expect(firstDayMarkup).toContain('aria-label="Next day, Saturday, September 19"');
     expect(firstDayMarkup).toContain("No sessions scheduled on this day.");
 
     const lastDayMarkup = renderBoard({
@@ -606,8 +624,8 @@ describe("agenda organizer workspace", () => {
         endsOn: "2026-09-20",
       },
     });
-    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Previous day<\/button>/u);
-    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Next day<\/button>/u);
+    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Previous day"/u);
+    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Next day"/u);
   });
   it("keeps advisory suggestions private and blocks applying hard-conflicting candidates", () => {
     const markup = renderToStaticMarkup(
@@ -681,12 +699,46 @@ describe("agenda organizer workspace", () => {
     const markup = renderBoard(multiDayData, "day");
 
     expect(markup).toContain('aria-label="Choose an event day"');
+    const selectorIndex = markup.indexOf('data-agenda-day-selector="true"');
+    const queueIndex = markup.indexOf('data-agenda-drop-target="placement-queue"');
+    expect(selectorIndex).toBeGreaterThan(-1);
+    expect(queueIndex).toBeGreaterThan(selectorIndex);
     expect(markup).toContain("Day 1");
     expect(markup).toContain("Fri, Sep 18");
     expect(markup).toContain("2 sessions");
     expect(markup).toContain("Day 2");
     expect(markup).toContain("Sat, Sep 19");
     expect(markup).toContain("1 session");
+  });
+
+  it("does not expose raw audit actor identifiers in organizer-facing markup", () => {
+    const rawActorId = "0610353b-d9fc-444c-ae55-a8996a896315";
+    const rawTimestampToken = "d49ad11a-a82c-4907-9915-fc6b4987abba";
+    const markup = renderBoard({
+      ...data,
+      draft: {
+        ...data.draft,
+        updatedAt: rawTimestampToken,
+        updatedBy: rawActorId,
+      },
+    });
+
+    expect(markup).not.toContain(rawActorId);
+    expect(markup).not.toContain(rawTimestampToken);
+  });
+
+  it("treats zero accepted sessions as an empty collection rather than completion", () => {
+    const markup = renderBoard({
+      ...data,
+      draft: {
+        ...data.draft,
+        entries: [],
+      },
+      unscheduledSessions: [],
+    });
+
+    expect(markup).toContain('data-agenda-empty-state="no-accepted-sessions"');
+    expect(markup).not.toContain('data-placement-complete="true"');
   });
 
   it("keeps conflict and edit controls available in every rendered mode without mutating the draft", () => {

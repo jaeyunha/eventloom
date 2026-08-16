@@ -2,11 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { EventDatePicker } from "./event-date-picker";
-import {
-  eventDatesBetween,
-  isEventDateDisabled,
-  toggleEventDate,
-} from "./event-date-picker-model";
+import { eventDatesBetween, isEventDateDisabled, toggleEventDate } from "./event-date-picker-model";
 
 describe("event date selection", () => {
   it("expands a continuous range and supports non-consecutive individual days", () => {

@@ -18,7 +18,6 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
-import { Stepper } from "../../components/ui/stepper";
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
@@ -36,7 +35,9 @@ import {
 } from "./api";
 import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
 import { CharacterCount, Field, Input } from "./cfp-field";
+import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
 import { useCfpStartupStore } from "./cfp-startup-provider";
+import { CfpSubmissionWindow } from "./cfp-submission-window";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import {
@@ -46,7 +47,6 @@ import {
   getPreviousCfpStep,
 } from "./routes";
 import {
-  CFP_STEPS,
   type CfpDraft,
   type CfpParticipant,
   type CfpSecondaryContact,
@@ -67,343 +67,33 @@ import {
   readCfpVerificationContinuation,
   writeCfpVerificationContinuation,
 } from "./verification-continuation";
+import {
+  canResumeCfpSubmission,
+  canSaveCfpDraftAtStep,
+  cfpConfirmationEmailMessage,
+  cfpHttpUrlIsValid,
+  cfpReviewSubmissionDetails,
+  cfpSubmissionErrorKey,
+  cfpSubmissionFieldValue,
+  cfpSubmissionPayload,
+  evaluatePublishedFields,
+  fieldConfig,
+  fieldOptions,
+  fieldRequired,
+  getCfpCompletionHandoffStorageKey,
+  getCfpPortalHandoffHref,
+  isFileField,
+  isRecord,
+  rotateCfpCompletionIdentity,
+  scalarValues,
+  shouldAuthenticateCfpAccount,
+  type DynamicAnswers,
+  type ParticipantAnswers,
+} from "./cfp-wizard-model";
 
 const LOCAL_MAIL_INBOX_URL =
   process.env.NODE_ENV === "development" ? "http://127.0.0.1:8025/" : null;
 
-const STEP_LABELS: Record<CfpStep, string> = {
-  welcome: "Start",
-  account: "Your account",
-  submission: "Your proposal",
-  participants: "Speakers",
-  review: "Review & submit",
-};
-
-const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
-
-export function getCfpCompletionHandoffStorageKey(
-  organizationId: string,
-  eventId: string,
-  formId: string,
-): string {
-  return `${CFP_COMPLETION_HANDOFF_PREFIX}:${encodeURIComponent(
-    organizationId,
-  )}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
-}
-export function getCfpPortalHandoffHref(
-  path: "/portal" | "/portal/submissions",
-  eventId?: string,
-): string {
-  const normalizedEventId = eventId?.trim();
-  return normalizedEventId ? `${path}?event=${encodeURIComponent(normalizedEventId)}` : path;
-}
-
-export function canResumeCfpSubmission(
-  status: CfpServerSubmission["status"],
-  step: CfpStep,
-): boolean {
-  return (
-    status === "draft" || status === "reopened" || (status === "submitted" && step === "submission")
-  );
-}
-
-export function rotateCfpCompletionIdentity(
-  identity: { organizationId: string; eventId: string; formId: string },
-  submissionId: string,
-  localStorage: Pick<Storage, "removeItem">,
-  sessionStorage: Pick<Storage, "setItem">,
-): void {
-  localStorage.removeItem(
-    getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, identity.formId),
-  );
-  sessionStorage.setItem(
-    getCfpCompletionHandoffStorageKey(identity.organizationId, identity.eventId, identity.formId),
-    submissionId.trim(),
-  );
-}
-type FormFieldOption =
-  | string
-  | {
-      value: string;
-      label?: string;
-      description?: string;
-      disabled?: boolean;
-    };
-
-type DynamicAnswers = Record<string, unknown>;
-type ParticipantAnswers = Record<string, DynamicAnswers>;
-
-interface EvaluatedFieldState {
-  visible: boolean;
-  required: boolean;
-}
-
-interface FileUploadState {
-  status: "idle" | "pending" | "ready" | "error";
-  assetId?: string;
-  name?: string;
-  message?: string;
-}
-
-type FileUploadStates = Record<string, FileUploadState>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function optionDetails(option: FormFieldOption): {
-  value: string;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-} {
-  if (typeof option === "string") return { value: option, label: option };
-  return {
-    value: option.value,
-    label: option.label ?? option.value,
-    ...(option.description === undefined ? {} : { description: option.description }),
-    ...(option.disabled === undefined ? {} : { disabled: option.disabled }),
-  };
-}
-
-function fieldOptions(field: CfpFormField): Array<ReturnType<typeof optionDetails>> {
-  return field.options.flatMap((option) => {
-    if (typeof option === "string") return [optionDetails(option)];
-    if (!isRecord(option) || typeof option.value !== "string") return [];
-    return [
-      optionDetails({
-        value: option.value,
-        ...(typeof option.label === "string" ? { label: option.label } : {}),
-        ...(typeof option.description === "string" ? { description: option.description } : {}),
-        ...(typeof option.disabled === "boolean" ? { disabled: option.disabled } : {}),
-      }),
-    ];
-  });
-}
-
-function fieldConfig(field: CfpFormField, key: string): unknown {
-  if (isRecord(field.fileRequest) && key in field.fileRequest) return field.fileRequest[key];
-  if (isRecord(field.config) && key in field.config) return field.config[key];
-  const rawField = field as unknown as Record<string, unknown>;
-  return key in rawField ? rawField[key] : undefined;
-}
-
-function isFileField(field: CfpFormField): boolean {
-  return ["file", "file_request", "upload"].includes(field.kind.toLowerCase().replaceAll("-", "_"));
-}
-function fieldRequired(field: CfpFormField): boolean {
-  return field.required || (isFileField(field) && field.fileRequest?.required === true);
-}
-
-function scalarValues(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(scalarValues);
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return [String(value)];
-  }
-  return [];
-}
-
-function valuesEqual(left: unknown, right: unknown): boolean {
-  const leftValues = scalarValues(left);
-  const rightValues = scalarValues(right);
-  if (leftValues.length === 0 || rightValues.length === 0) return Object.is(left, right);
-  return leftValues.some((value) => rightValues.includes(value));
-}
-
-function evaluateCondition(condition: unknown, answers: DynamicAnswers): boolean {
-  if (!isRecord(condition)) return false;
-  if (condition.type === "group") {
-    const children = Array.isArray(condition.conditions) ? condition.conditions : [];
-    const results = children.map((child) => evaluateCondition(child, answers));
-    return condition.operator === "any" || condition.operator === "OR"
-      ? results.some(Boolean)
-      : results.length > 0 && results.every(Boolean);
-  }
-  if (condition.type !== "predicate" && condition.type !== "condition") return false;
-  const fieldKey =
-    typeof condition.fieldKey === "string"
-      ? condition.fieldKey
-      : typeof condition.field === "string"
-        ? condition.field
-        : "";
-  if (!fieldKey) return false;
-  const current = answers[fieldKey];
-  const expected = condition.value;
-  switch (condition.operator) {
-    case "is_empty":
-    case "empty":
-      return scalarValues(current).length === 0;
-    case "is_not_empty":
-    case "not_empty":
-      return scalarValues(current).length > 0;
-    case "not_equals":
-    case "is not":
-    case "neq":
-      return !valuesEqual(current, expected);
-    case "in":
-      return Array.isArray(expected) && expected.some((item) => valuesEqual(current, item));
-    case "not_in":
-      return Array.isArray(expected) && !expected.some((item) => valuesEqual(current, item));
-    case "contains":
-      return scalarValues(current).some((value) =>
-        scalarValues(expected).some((candidate) => value.includes(candidate)),
-      );
-    default:
-      return valuesEqual(current, expected);
-  }
-}
-
-function evaluatePublishedFields(
-  form: CfpPublishedForm,
-  answers: DynamicAnswers,
-): {
-  fields: Map<string, EvaluatedFieldState>;
-  sections: Map<string, boolean>;
-} {
-  const rules = [...(form.rules ?? [])].sort((left, right) => {
-    const leftPriority = typeof left.priority === "number" ? left.priority : 0;
-    const rightPriority = typeof right.priority === "number" ? right.priority : 0;
-    return leftPriority - rightPriority;
-  });
-  const conditionalFieldKeys = new Set(
-    rules.flatMap((rule) =>
-      isRecord(rule) && Array.isArray(rule.actions)
-        ? rule.actions.flatMap((action) =>
-            isRecord(action) && action.type === "show_field" && typeof action.fieldKey === "string"
-              ? [action.fieldKey]
-              : [],
-          )
-        : [],
-    ),
-  );
-  const fields = new Map(
-    form.submissionFields
-      .concat(form.participantFields)
-      .map((field) => [
-        field.key,
-        { visible: !conditionalFieldKeys.has(field.key), required: fieldRequired(field) },
-      ]),
-  );
-  const sections = new Map(form.sections.map((section) => [section.id, true]));
-  for (const rule of rules) {
-    const when = isRecord(rule) ? (rule.when ?? rule.condition) : undefined;
-    if (!evaluateCondition(when, answers)) continue;
-    const actions = isRecord(rule) && Array.isArray(rule.actions) ? rule.actions : [];
-    for (const action of actions) {
-      if (!isRecord(action) || typeof action.type !== "string") continue;
-      const fieldKey = typeof action.fieldKey === "string" ? action.fieldKey : undefined;
-      const sectionId = typeof action.sectionId === "string" ? action.sectionId : undefined;
-      if (fieldKey && fields.has(fieldKey)) {
-        const current = fields.get(fieldKey);
-        if (!current) continue;
-        if (action.type === "show_field") current.visible = true;
-        if (action.type === "hide_field" || action.type === "skip_field") current.visible = false;
-        if (action.type === "require_field") current.required = true;
-      }
-      if (sectionId && sections.has(sectionId)) {
-        if (action.type === "show_section") sections.set(sectionId, true);
-        if (action.type === "hide_section" || action.type === "skip_section") {
-          sections.set(sectionId, false);
-        }
-      }
-    }
-  }
-  return { fields, sections };
-}
-
-function fileStateKey(fieldKey: string, participantIndex?: number): string {
-  return participantIndex === undefined ? fieldKey : `participants.${participantIndex}.${fieldKey}`;
-}
-
-function fileNameStorageKey(assetId: string): string {
-  return `eventloom:cfp-upload-name:v1:${assetId}`;
-}
-function clearCfpVerificationContinuationFromBrowser(
-  identity: { organizationId: string; eventId: string; formId: string } | null,
-): void {
-  if (identity === null || typeof window === "undefined") return;
-  clearCfpVerificationContinuation(identity, window.localStorage);
-}
-
-function readPersistedFileNames(
-  form: CfpPublishedForm | undefined,
-  answers: DynamicAnswers,
-  storage: Pick<Storage, "getItem">,
-): Record<string, string> {
-  const fileNames: Record<string, string> = {};
-  for (const field of form?.submissionFields ?? []) {
-    if (field.kind !== "file_request") continue;
-    const answer = answers[field.key];
-    const persistedAssetId =
-      typeof answer === "object" &&
-      answer !== null &&
-      "assetId" in answer &&
-      typeof answer.assetId === "string"
-        ? answer.assetId
-        : undefined;
-    if (persistedAssetId === undefined) continue;
-    const persistedFileName = storage.getItem(fileNameStorageKey(persistedAssetId));
-    if (persistedFileName !== null) fileNames[persistedAssetId] = persistedFileName;
-  }
-  return fileNames;
-}
-
-interface CfpWizardProps {
-  eventSlug: string;
-  step: CfpStep;
-  organizationId?: string;
-  formId?: string;
-  api?: CfpApi;
-}
-
-const WIZARD_STEPS = CFP_STEPS.map((step) => ({
-  id: step,
-  label: STEP_LABELS[step],
-}));
-function CfpProgress({ step, mobile = false }: { step: CfpStep; mobile?: boolean }) {
-  const currentIndex = Math.max(CFP_STEPS.indexOf(step), 0);
-  if (!mobile) {
-    return (
-      <div className={styles.desktopStepper}>
-        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
-      </div>
-    );
-  }
-
-  return (
-    <nav aria-label="Submission progress" className={styles.mobileProgress}>
-      <div className={styles.mobileProgressHeader}>
-        <span>
-          Step {currentIndex + 1} of {CFP_STEPS.length}
-        </span>
-        <strong>{STEP_LABELS[step]}</strong>
-      </div>
-      <ol className={styles.mobileStepList}>
-        {WIZARD_STEPS.map((wizardStep, index) => (
-          <li
-            aria-current={index === currentIndex ? "step" : undefined}
-            className={
-              index === currentIndex
-                ? styles.mobileStepCurrent
-                : index < currentIndex
-                  ? styles.mobileStepComplete
-                  : undefined
-            }
-            key={wizardStep.id}
-          >
-            <span aria-hidden="true" className={styles.mobileStepNumber}>
-              {index + 1}
-            </span>
-            <span className="sr-only">
-              {wizardStep.label}
-              {index < currentIndex ? " complete" : ""}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </nav>
-  );
-}
 
 function PublicCfpShell({
   children,
@@ -427,7 +117,16 @@ function PublicCfpShell({
   const resolvedOrganizationName = organization?.name ?? "Eventloom";
   const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
   const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
-  const resolvedStepName = step === undefined ? "Submission complete" : STEP_LABELS[step];
+  const resolvedStepName = step === undefined ? "Submission complete" : CFP_STEP_LABELS[step];
+  const now = Date.now();
+  const opensAt = event ? Date.parse(event.opensAt) : Number.NaN;
+  const closesAt = event ? Date.parse(event.closesAt) : Number.NaN;
+  const windowStatus =
+    Number.isFinite(closesAt) && closesAt <= now
+      ? "closed"
+      : Number.isFinite(opensAt) && opensAt > now
+        ? "upcoming"
+        : "open";
 
   return (
     <WorkspaceShell
@@ -473,27 +172,14 @@ function PublicCfpShell({
           {event ? (
             <>
               <Separator className={styles.railSeparator} />
-              <section className={styles.deadlineCard} aria-labelledby="cfp-window-heading">
-                <p id="cfp-window-heading" className={styles.deadlineLabel}>
-                  Submission window
-                </p>
-                <dl className={styles.railMeta}>
-                  <div>
-                    <dt>Opens</dt>
-                    <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
-                  </div>
-                  <div>
-                    <dt>Closes</dt>
-                    <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
-                  </div>
-                </dl>
-              </section>
-              {form ? (
-                <p className={styles.limitText}>
-                  Up to {formSubmissionLimit(form)} proposal
-                  {formSubmissionLimit(form) === 1 ? "" : "s"} per account
-                </p>
-              ) : null}
+              <CfpSubmissionWindow
+                opensAt={event.opensAt}
+                opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
+                closesAt={event.closesAt}
+                closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
+                {...(form ? { limit: formSubmissionLimit(form) } : {})}
+                status={windowStatus}
+              />
             </>
           ) : null}
         </div>
@@ -503,22 +189,16 @@ function PublicCfpShell({
         <Card className={`${styles.card} ${className ?? ""}`}>
           <div className={styles.formColumn}>
             {event ? (
-              <section className={styles.mobileContextCard} aria-label="Submission window">
-                <div>
-                  <span>Opens</span>
-                  <strong>{formatCfpWindowDate(event.opensAt, event.timezone)}</strong>
-                </div>
-                <div>
-                  <span>Closes</span>
-                  <strong>{formatCfpWindowDate(event.closesAt, event.timezone)}</strong>
-                </div>
-                {form ? (
-                  <p>
-                    Up to {formSubmissionLimit(form)} proposal
-                    {formSubmissionLimit(form) === 1 ? "" : "s"} per account
-                  </p>
-                ) : null}
-              </section>
+              <div className={styles.mobileSubmissionWindow}>
+                <CfpSubmissionWindow
+                  opensAt={event.opensAt}
+                  opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
+                  closesAt={event.closesAt}
+                  closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
+                  {...(form ? { limit: formSubmissionLimit(form) } : {})}
+                  status={windowStatus}
+                />
+              </div>
             ) : null}
             {step ? <CfpProgress mobile step={step} /> : null}
             {children}
@@ -629,18 +309,9 @@ function mergeSecondaryContact(
   };
 }
 
-export function shouldAuthenticateCfpAccount(
-  step: CfpStep,
-  session: CfpAuthenticatedSession | null,
-): boolean {
-  return step === "account" && session === null;
-}
 
 type CfpAccountMode = "sign_in" | "sign_up";
 
-export function canSaveCfpDraftAtStep(step: CfpStep | "complete"): boolean {
-  return step === "submission" || step === "participants" || step === "review";
-}
 
 function configuredCfpIdentity(
   eventSlug: string,
@@ -757,165 +428,9 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
   );
 }
 
-export function cfpSubmissionPayload(
-  draft: CfpDraft,
-  dynamicAnswers: DynamicAnswers,
-  participantAnswers: ParticipantAnswers,
-): {
-  answers: Record<string, unknown>;
-  participants: CfpServerSubmission["participants"];
-  secondaryContacts: CfpServerSubmission["secondaryContacts"];
-} {
-  const answers = { ...dynamicAnswers };
-  return {
-    answers: {
-      ...answers,
-      title: draft.submission.title,
-      abstract: dynamicAnswers.abstract ?? draft.submission.description,
-      description:
-        dynamicAnswers.description ??
-        (dynamicAnswers.abstract === undefined ? draft.submission.description : ""),
-      format: draft.submission.format,
-      tags: draft.submission.tags,
-      track: draft.submission.track,
-      level: draft.submission.level,
-      language: draft.submission.language,
-      accountEmail: draft.account.email,
-      accountFirstName: draft.account.firstName,
-      accountLastName: draft.account.lastName,
-      accountAcceptedTerms: draft.account.acceptedTerms,
-    },
-    participants: draft.participants.map((participant) => {
-      const customAnswers = participantAnswers[participant.id] ?? {};
-      return {
-        id: participant.id,
-        firstName: participant.firstName,
-        lastName: participant.lastName,
-        email: participant.email,
-        role: participant.role === "Speaker" ? "primary" : "co_speaker",
-        biography: participant.biography,
-        answers: { ...customAnswers },
-      };
-    }),
-    secondaryContacts: draft.secondaryContacts.map((contact) => ({
-      id: contact.id,
-      name: `${contact.firstName} ${contact.lastName}`.trim(),
-      email: contact.email,
-    })),
-  };
-}
 
-function reviewValueString(value: unknown): string {
-  if (Array.isArray(value)) {
-    const items = value
-      .map((item) => reviewValueString(item))
-      .filter((item) => item !== "Not specified");
-    return items.length > 0 ? items.join(", ") : "Not specified";
-  }
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "string" && value.trim().length > 0) return value;
-  return "Not specified";
-}
 
-export function cfpReviewAudienceLevel(
-  form: CfpPublishedForm | undefined,
-  answers: DynamicAnswers,
-  legacyLevel: string,
-): { label: string; value: string } {
-  const customField = form?.submissionFields.find((field) => field.id === "field-audience-level");
-  if (customField !== undefined) {
-    return {
-      label: customField.label,
-      value: reviewValueString(answers[customField.key]),
-    };
-  }
-  return { label: "Level", value: reviewValueString(legacyLevel) };
-}
 
-export function cfpReviewSubmissionDetails(
-  form: CfpPublishedForm | undefined,
-  draft: CfpDraft,
-  answers: DynamicAnswers,
-): readonly { key: string; label: string; value: string }[] {
-  if (form && form.submissionFields.length > 0) {
-    const resolvedAnswers = Object.fromEntries(
-      form.submissionFields.map((field) => [
-        field.key,
-        cfpSubmissionFieldValue(draft, answers, field.key),
-      ]),
-    );
-    const evaluated = evaluatePublishedFields(form, {
-      ...answers,
-      ...resolvedAnswers,
-      accountEmail: draft.account.email,
-      accountFirstName: draft.account.firstName,
-      accountLastName: draft.account.lastName,
-    });
-    return form.submissionFields.flatMap((field) => {
-      if (isFileField(field) || evaluated.fields.get(field.key)?.visible === false) return [];
-      const value = reviewValueString(cfpSubmissionFieldValue(draft, answers, field.key));
-      return value === "Not specified" ? [] : [{ key: field.key, label: field.label, value }];
-    });
-  }
-
-  return [
-    { key: "title", label: "Title", value: reviewValueString(draft.submission.title) },
-    {
-      key: "description",
-      label: "Description",
-      value: reviewValueString(draft.submission.description),
-    },
-    { key: "format", label: "Format", value: reviewValueString(draft.submission.format) },
-    { key: "tags", label: "Tags", value: reviewValueString(draft.submission.tags) },
-    { key: "track", label: "Track", value: reviewValueString(draft.submission.track) },
-    { key: "level", label: "Level", value: reviewValueString(draft.submission.level) },
-    { key: "language", label: "Language", value: reviewValueString(draft.submission.language) },
-  ].filter((item) => item.value !== "Not specified");
-}
-
-export function cfpConfirmationEmailMessage(recipient: string): string {
-  const delivery =
-    recipient.trim().length > 0 ? ` is queued for ${recipient.trim()}` : " is queued";
-  return `A confirmation email${delivery} and will include the event name and talk title.`;
-}
-
-export function cfpSubmissionFieldValue(
-  draft: CfpDraft,
-  answers: DynamicAnswers,
-  key: string,
-): unknown {
-  switch (key) {
-    case "title":
-      return draft.submission.title;
-    case "abstract":
-      return answers.abstract ?? draft.submission.description;
-    case "description":
-      return (
-        answers.description ?? (answers.abstract === undefined ? draft.submission.description : "")
-      );
-    case "format":
-      return draft.submission.format;
-    case "tags":
-      return draft.submission.tags;
-    case "track":
-      return draft.submission.track;
-    case "level":
-      return draft.submission.level;
-    case "language":
-      return draft.submission.language;
-    case "accountEmail":
-      return draft.account.email;
-    case "accountFirstName":
-      return draft.account.firstName;
-    case "accountLastName":
-      return draft.account.lastName;
-    case "accountAcceptedTerms":
-      return draft.account.acceptedTerms;
-    default:
-      return answers[key];
-  }
-}
 
 function participantValue(
   participant: CfpParticipant,
@@ -936,12 +451,6 @@ function participantValue(
     default:
       return answers[key];
   }
-}
-export function cfpSubmissionErrorKey(key: string): string {
-  if (key === "title") return "submission.title";
-  if (key === "abstract") return "submission.abstract";
-  if (key === "description") return "submission.description";
-  return `submission.${key}`;
 }
 
 function fieldIsEmpty(value: unknown): boolean {
@@ -1002,6 +511,11 @@ function dynamicFormErrors(
           errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
         }
       }
+      if (field.kind === "url" && typeof value === "string" && value.trim()) {
+        if (!cfpHttpUrlIsValid(value)) {
+          errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
+        }
+      }
       if (["select", "multi_select"].includes(field.kind) && field.options.length > 0) {
         const allowed = new Set(fieldOptions(field).map((option) => option.value));
         const selected = scalarValues(value);
@@ -1048,6 +562,11 @@ function dynamicFormErrors(
         if (field.kind === "email" && typeof value === "string" && value.trim()) {
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
             errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
+          }
+        }
+        if (field.kind === "url" && typeof value === "string" && value.trim()) {
+          if (!cfpHttpUrlIsValid(value)) {
+            errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
           }
         }
       }

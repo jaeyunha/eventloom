@@ -12,8 +12,8 @@ import {
   type ReminderFacts,
   type ReminderRun,
 } from "./api";
+import { CommunicationsWorkspaceView } from "./communications-workspace";
 import {
-  CommunicationsWorkspaceView,
   communicationTemplateSelectionFromKey,
   communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,
@@ -21,7 +21,7 @@ import {
   invalidateCommunicationPreviewState,
   loadCommunicationTemplates,
   previewAudienceForTemplate,
-} from "./communications-workspace";
+} from "./communications-workspace-model";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -293,13 +293,16 @@ describe("communications organizer workspace", () => {
     const markup = renderToStaticMarkup(
       createElement(CommunicationsWorkspaceView, {
         eventId: "event-1",
+        view: "templates",
         organizationId: "org-1",
         templates: [],
         creatingTemplate: true,
       }),
     );
 
-    expect(markup).toContain("The server assigns the sender identity when this draft is saved.");
+    expect(markup).toContain(
+      "The sender address is assigned when you save this draft; you cannot change it here.",
+    );
     expect(markup).not.toContain("sessionboard.namuh.co");
   });
 
@@ -308,6 +311,7 @@ describe("communications organizer workspace", () => {
       createElement(CommunicationsWorkspaceView, {
         eventId: "event-1",
         organizationId: "org-1",
+        view: "templates",
         templates: [
           template("auth-1", "verification", senders.auth, "approved"),
           template("speaker-1", "receipt", senders.speakers, "approved"),
@@ -318,16 +322,107 @@ describe("communications organizer workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Operational communications");
+    expect(markup).toContain("Event communications");
     expect(markup).toContain(senders.auth);
     expect(markup).toContain(senders.speakers);
     expect(markup).toContain(senders.calendar);
-    expect(markup).toContain("Create a new template version");
+    expect(markup).toContain("Create a new email version");
     expect(markup).toContain("Approve version 2");
-    expect(markup).toContain("No preview has been created for this event.");
-    expect(markup).toContain("does not send SMS, CRM, marketing campaigns, or analytics");
+    expect(markup).not.toContain("Send a broadcast");
+    expect(markup).not.toContain("Create email template");
   });
 
+  it("explains the event email workflow and that saving a draft does not send", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        view: "templates",
+        templates: [],
+        creatingTemplate: true,
+        onCreateTemplate: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain(
+      "Send one-off event broadcasts, manage reusable approved templates, and monitor automated task/review reminders.",
+    );
+    expect(markup).toContain("Saving creates a draft only; after review and approval");
+    expect(markup).toContain("For a one-off send from this page, use Organizer Group Email.");
+    expect(markup).toContain("No saved emails yet. Compose your first email below.");
+    expect(markup).toContain("Save email draft");
+    expect(markup).not.toContain("Send a broadcast");
+  });
+  it("defaults to broadcasts with an actionable template path and separate tab descriptions", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [],
+      }),
+    );
+
+    expect(markup).toContain("Broadcasts");
+    expect(markup).toContain("Send one-off event email");
+    expect(markup).toContain("Templates");
+    expect(markup).toContain("Manage approved reusable content");
+    expect(markup).toContain("Reminders");
+    expect(markup).toContain("Monitor task and review notices");
+    expect(markup).toContain("Send a broadcast");
+    expect(markup).toContain("Create email template");
+    expect(markup).not.toContain("Saved emails");
+    expect(markup).not.toContain("Automatic and manual reminders");
+  });
+
+  it("requires an approved email and preview before send is available", () => {
+    const draftMarkup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [template("group-1", "organizer_group_email", senders.speakers, "draft", 2)],
+        selectedTemplateId: "group-1",
+        onPreview: async () => undefined,
+      }),
+    );
+
+    expect(draftMarkup).toMatch(
+      /<button[^>]*disabled=""[^>]*>Preview recipients and email<\/button>/u,
+    );
+    expect(draftMarkup).not.toContain("Send to 2 recipients");
+    expect(draftMarkup).toContain("No approved event email exists yet");
+    expect(draftMarkup).toContain("Create email template");
+
+    const approvedMarkup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [template("group-1", "organizer_group_email", senders.speakers, "approved", 2)],
+        selectedTemplateId: "group-1",
+        onPreview: async () => undefined,
+      }),
+    );
+
+    expect(approvedMarkup).toContain("Preview recipients and email");
+    expect(approvedMarkup).not.toContain("Send to 2 recipients");
+    expect(approvedMarkup).toContain("1 approved version available");
+    expect(approvedMarkup).toContain("Exact email selected");
+
+    const readyMarkup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [template("group-1", "organizer_group_email", senders.speakers, "approved", 2)],
+        selectedTemplateId: "group-1",
+        preview,
+        onOpenSendConfirmation: () => undefined,
+      }),
+    );
+
+    expect(readyMarkup).toContain("Send to 2 recipients");
+    expect(readyMarkup).not.toMatch(/<button[^>]*disabled=""[^>]*>Send to 2 recipients<\/button>/u);
+    expect(readyMarkup).toContain("2 recipients captured by the server");
+    expect(readyMarkup).toContain("Outstanding · explicit confirmation is required");
+  });
   it("shows recipient snapshot, escaped HTML source, explicit confirmation, statuses, and history", () => {
     const markup = renderToStaticMarkup(
       createElement(CommunicationsWorkspaceView, {
@@ -348,12 +443,13 @@ describe("communications organizer workspace", () => {
     expect(markup).toContain("Escaped HTML source (not executed)");
     expect(markup).toContain("Per-recipient email previews");
     expect(markup).toContain("Hello Grace Hopper");
-    expect(markup).toContain("Step 4 · Confirm send");
+    expect(markup).toContain("Step 3 · Confirm send");
     expect(markup).toContain(
-      "Sending is blocked until you explicitly confirm this exact snapshot.",
+      "Sending is blocked until you explicitly confirm this exact recipient snapshot.",
     );
     expect(markup).toContain("Delivered");
     expect(markup).toContain("Failed");
+    expect(markup).toContain("Recorded · Partial");
     expect(markup).toContain("Provider timeout");
     expect(markup).toContain("1 delivered");
     expect(markup).toContain("1 failed");
@@ -533,6 +629,7 @@ describe("communications organizer workspace", () => {
       createElement(CommunicationsWorkspaceView, {
         eventId: "event-1",
         organizationId: "org-1",
+        view: "templates",
         templates: versions,
         selectedTemplateId: "group-1",
         selectedTemplateVersion: 2,
@@ -540,8 +637,7 @@ describe("communications organizer workspace", () => {
     );
     expect(markup).toContain('data-template-selection="group-1:2"');
     expect(markup).toContain('data-template-selection="group-1:1"');
-    expect(markup).toContain("Select organizer_group_email template version 2");
-    expect(markup).toContain("Select exact approved version");
+    expect(markup).toContain("Select saved email organizer_group_email template, version 2");
   });
 
   it("targets approved decision templates to decision-status audiences", () => {
@@ -567,6 +663,7 @@ describe("communications organizer workspace", () => {
       createElement(CommunicationsWorkspaceView, {
         eventId: "event-1",
         organizationId: "org-1",
+        view: "templates",
         templates: [template("group-1", "organizer_group_email", senders.speakers, "draft", 2)],
         selectedTemplateId: "group-1",
         selectedTemplateVersion: 2,
@@ -575,7 +672,7 @@ describe("communications organizer workspace", () => {
       }),
     );
     expect(markup).toContain('data-approval-dialog-state="open"');
-    expect(markup).toContain("Step 2 · Review and approve exact version");
+    expect(markup).toContain("Step 2 · Review and approve");
     expect(markup).toContain("Approve version 2");
   });
 
@@ -589,8 +686,8 @@ describe("communications organizer workspace", () => {
         sendConfirmationOpen: false,
       }),
     );
-    expect(markup).toContain("Step 5 · Delivery history");
-    expect(markup).toContain("Per-recipient status and audit history");
+    expect(markup).toContain("Step 4 · Track delivery");
+    expect(markup).toContain("Delivery status and send history");
     expect(markup).not.toContain("Confirm operational email send");
 
     const confirmationMarkup = renderToStaticMarkup(
@@ -635,6 +732,7 @@ describe("communications organizer workspace", () => {
       createElement(CommunicationsWorkspaceView, {
         eventId: "event-1",
         organizationId: "org-1",
+        view: "reminders",
         templates: [],
         reminderRuns: [automaticRun, manualRun],
         reminderDispatches: dispatches,
@@ -661,20 +759,21 @@ describe("communications organizer workspace", () => {
 
   it("renders reminder pending, conflict, stale, and unavailable truth states explicitly", () => {
     const states = [
-      ["pending", "Reminder truth pending", "No provider outcome is assumed"],
+      ["pending", "Reminder status is loading", "No provider outcome is assumed"],
       ["conflict", "Reminder audience conflict", "Reconcile the current audience revision"],
       [
         "stale",
-        "Reminder truth is stale",
+        "Reminder status is stale",
         "before treating a queued or provider-accepted state as terminal",
       ],
-      ["unavailable", "Reminder delivery truth unavailable", "No delivery success is shown"],
+      ["unavailable", "Reminder delivery status unavailable", "No delivery success is shown"],
     ] as const;
     for (const [state, message, truthBoundary] of states) {
       const markup = renderToStaticMarkup(
         createElement(CommunicationsWorkspaceView, {
           eventId: "event-1",
           organizationId: "org-1",
+          view: "reminders",
           templates: [],
           reminderState: state,
           reminderError: `${state} error`,
