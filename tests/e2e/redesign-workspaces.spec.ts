@@ -751,13 +751,22 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
 
     const queue = page.locator('nav[aria-label="Assigned reviews"]');
     const firstAction = queue.getByRole("button", { name: /Open scorecard/u }).first();
+    const firstRow = queue.locator("li").first();
     const firstTitle = queue.getByRole("heading", { level: 3 }).first();
-    const filterButton = queue.getByRole("button", { name: /^Filters/u });
+    const filterButton = queue.getByRole("button", { name: "Filter assigned reviews" });
 
     await expect(queue).toBeVisible();
     await expect(firstAction).toBeVisible();
     await expect(firstAction).toHaveText("Start review");
     await expect(filterButton).toBeVisible();
+    await expect(queue.getByRole("group", { name: "Review status views" })).toHaveCount(0);
+    const columnHeadings = queue.locator('[data-reviewer-column-headings="true"]');
+    await expect(columnHeadings).toHaveCount(1);
+    if (viewport.name === "desktop") {
+      await expect(columnHeadings).toBeVisible();
+    } else {
+      await expect(columnHeadings).toBeHidden();
+    }
     const titleText = await firstTitle.textContent();
     const titleMetrics = await firstTitle.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -772,6 +781,11 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
     expect(titleMetrics.overflow).toBe("hidden");
     expect(titleMetrics.textOverflow).toBe("ellipsis");
     expect(titleMetrics.whiteSpace).toBe("nowrap");
+    const firstRowBox = await firstRow.boundingBox();
+    expect(firstRowBox).not.toBeNull();
+    expect(firstRowBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      viewport.name === "desktop" ? 48 : 116,
+    );
 
     await page.screenshot({
       path: testInfo.outputPath(`reviewer-queue-${viewport.name}.png`),
@@ -779,13 +793,22 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
     });
 
     await filterButton.click();
-    await expect(page.getByLabel("Reviewer filters")).toBeVisible();
+    const filterMenu = page.getByLabel("Reviewer filters");
+    await expect(filterMenu).toBeVisible();
+    await expect(filterMenu.getByLabel("Status")).toBeVisible();
+    await filterMenu.getByLabel("Status").selectOption("needs-review");
+    await expect(filterMenu.getByLabel("Status")).toHaveValue("needs-review");
+    await expect(filterButton).toHaveAccessibleName("Filter assigned reviews, 1 active");
+    const filterMenuBox = await filterMenu.boundingBox();
+    expect(filterMenuBox).not.toBeNull();
+    expect(filterMenuBox?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(320);
     await page.screenshot({
       path: testInfo.outputPath(`reviewer-filters-${viewport.name}.png`),
       fullPage: false,
     });
+    await filterMenu.getByLabel("Status").selectOption("all");
     await page.keyboard.press("Escape");
-    await expect(page.getByLabel("Reviewer filters")).toBeHidden();
+    await expect(filterMenu).toBeHidden();
 
     await firstAction.focus();
     await expect(firstAction).toBeFocused();

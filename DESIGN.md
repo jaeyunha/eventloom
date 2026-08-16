@@ -296,19 +296,27 @@ progress patterns established by this wave.
 - The reviewer queue is a collection surface, not a permanent list-detail
   split. It uses the full available content canvas so submission titles,
   assignment context, filters, due dates, and status remain readable.
-- The page header is a compact title, not a dashboard hero. Status segmentation
-  and one filter trigger form the toolbar beneath it; secondary organization,
-  event, round, track, due, and grouping controls live in a focused popover
-  rather than consuming permanent page height.
-- Assigned submissions render as flat rows separated by hairlines. Selected,
-  hover, focus, overdue, and completion states use restrained token-based
-  emphasis rather than nested cards.
+- The page header is a compact title, not a dashboard hero. A single icon-only
+  filter trigger sits at the collection edge. Status filtering belongs inside
+  the same compact menu as organization, event, round, track, due, and grouping;
+  never render a permanent row of status tabs.
+- Assigned submissions use one Linear-like collection grammar: no bordered
+  table and no row-by-row card chrome. Desktop uses a concise labeled grid for
+  Submission, Event / round, Due, and Status, plus an unlabeled open action.
+  Labels are muted, regular-weight, and aligned to the exact row columns rather
+  than styled as small bold admin-table headings. Phones wrap the same
+  information into a compact summary with status and action paired beneath it.
+- Rows float on the collection surface without permanent separators. Hover,
+  focus, selected, overdue, and completion states use restrained token-based
+  background or inset emphasis.
 - The title is the primary row label and remains one line. Long titles use
   ellipsis while preserving the complete accessible name and native hover
-  disclosure. Event, round, track, due date, and review status are supporting
-  columns that may collapse into labeled metadata on smaller screens.
+  disclosure. Event, round, track, and due date are muted inline metadata, not
+  standalone table columns. Status and the open action stay visually paired.
 - The default queue is ungrouped. Reviewers may opt into organization, event,
-  round, or due-date grouping from the filter popover.
+  round, or due-date grouping from the filter menu. The menu is a narrow,
+  borderless stack of labeled value rows rather than a grid of boxed form
+  fields.
 - Raw UUIDs, database keys, provider identifiers, and long opaque submission
   references never appear in reviewer-facing copy. When disambiguation is
   useful, render a short human-readable submission reference only.
@@ -335,8 +343,9 @@ progress patterns established by this wave.
 
 ### 9.3 Responsive and accessibility behavior
 
-- Desktop rows preserve aligned operational columns. At intermediate widths,
-  lower-priority columns hide or fold into metadata before titles truncate.
+- Desktop rows preserve a stable identity/status/action rhythm beneath one quiet
+  Linear-like label row. The labels and values share one grid definition;
+  supporting metadata collapses before the title does.
 - Phone rows become touch-safe stacked summaries with title, event/round,
   due/status, and one clear open action. No reviewer workflow requires
   horizontal scrolling.

@@ -67,51 +67,48 @@ export function ReviewerQueueRows({
               </li>
             ) : null}
             <li className={`${styles.card} ${isSelected ? styles.cardSelected : ""}`}>
-              <div className={styles.row}>
-                <div className={styles.identity}>
-                  <span className={styles.reference}>
-                    {compactSubmissionReference(assignment.reference)}
-                  </span>
-                  <div className={styles.titleBlock}>
-                    <h3 title={assignment.title}>{assignment.title}</h3>
-                    <div className={styles.secondaryMeta}>
-                      <span>
-                        {assignment.eventName} · {assignment.round.name}
-                      </span>
-                      <span>{assignment.track ?? "No track"}</span>
-                      <span>Due {assignment.round.closesAt}</span>
-                    </div>
-                  </div>
-                </div>
-                <span className={`${styles.cell} ${styles.event}`}>{assignment.eventName}</span>
-                <span className={`${styles.cell} ${styles.round}`}>{assignment.round.name}</span>
-                <span className={`${styles.cell} ${styles.track}`}>
-                  {assignment.track ?? "No track"}
+              <div className={styles.row} data-reviewer-row-layout="summary">
+                <span className={styles.reference}>
+                  {compactSubmissionReference(assignment.reference)}
                 </span>
-                <span className={`${styles.cell} ${styles.due}`}>{assignment.round.closesAt}</span>
-                <div className={styles.footer}>
+                <h3 className={styles.title} title={assignment.title}>
+                  {assignment.title}
+                </h3>
+                <div className={styles.meta}>
+                  <span className={styles.context}>
+                    {assignment.eventName} · {assignment.round.name}
+                    {assignment.track === undefined || assignment.track === null
+                      ? null
+                      : ` · ${assignment.track}`}
+                  </span>
+                  <span className={styles.due}>
+                    <span className={styles.mobileDueLabel}>Due </span>
+                    {assignment.round.closesAt}
+                  </span>
+                </div>
+                <div className={styles.status}>
                   <EvaluatorAssignmentStatusBadge
                     status={isSubmitted ? "submitted" : assignment.assignmentStatus}
                   />
-                  <button
-                    ref={(element) => {
-                      queueActionRefs.current[assignment.id] = element;
-                    }}
-                    className={styles.action}
-                    data-reviewer-assignment-id={assignment.id}
-                    data-action-kind={isSubmitted ? "secondary" : "primary"}
-                    type="button"
-                    onClick={() => {
-                      restoreQueueFocusIdRef.current = assignment.id;
-                      selectAssignment(assignment.id);
-                    }}
-                    aria-label={`Open scorecard for ${assignment.title}`}
-                    aria-pressed={isSelected}
-                    disabled={blocked}
-                  >
-                    {isSelected ? "Review open" : actionLabel}
-                  </button>
                 </div>
+                <button
+                  ref={(element) => {
+                    queueActionRefs.current[assignment.id] = element;
+                  }}
+                  className={styles.action}
+                  data-reviewer-assignment-id={assignment.id}
+                  data-action-kind={isSubmitted ? "secondary" : "primary"}
+                  type="button"
+                  onClick={() => {
+                    restoreQueueFocusIdRef.current = assignment.id;
+                    selectAssignment(assignment.id);
+                  }}
+                  aria-label={`Open scorecard for ${assignment.title}`}
+                  aria-pressed={isSelected}
+                  disabled={blocked}
+                >
+                  {isSelected ? "Review open" : actionLabel}
+                </button>
               </div>
             </li>
           </Fragment>

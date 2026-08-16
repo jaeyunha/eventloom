@@ -11,13 +11,12 @@ export function ReviewerQueueList({
   return (
     <section className={styles.panel} aria-label="Assigned reviews">
       <ReviewerQueueFilters controller={controller} />
-      <div className={styles.columns} aria-hidden="true">
-        <span>Submission</span>
-        <span>Event</span>
-        <span>Round</span>
-        <span className={styles.track}>Track</span>
+      <div aria-hidden="true" className={styles.columns} data-reviewer-column-headings="true">
+        <span className={styles.submissionColumn}>Submission</span>
+        <span>Event / round</span>
         <span>Due</span>
         <span>Status</span>
+        <span />
       </div>
       <ReviewerQueueRows controller={controller} />
     </section>

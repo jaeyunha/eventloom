@@ -1,9 +1,8 @@
 "use client";
 
-import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
 import { ListFilter } from "lucide-react";
 import { Popover } from "radix-ui";
+import { Button } from "../../../components/ui/button";
 import type {
   ReviewerInboxFilters,
   ReviewerInboxGroupBy,
@@ -30,38 +29,31 @@ export function ReviewerQueueFilters({
     filtersActive,
     clearFilters,
   } = controller;
-  const activeFilterCount = Object.values(filters).filter((value) => value !== "all").length;
+  const activeFilterCount =
+    (statusView === "all" ? 0 : 1) +
+    Object.values(filters).filter((value) => value !== "all").length;
+  const filterLabel =
+    activeFilterCount > 0
+      ? `Filter assigned reviews, ${activeFilterCount} active`
+      : "Filter assigned reviews";
   return (
     <div className={styles.controls}>
-      <fieldset className={styles.statusViews}>
-        <legend className={styles.srOnly}>Review status views</legend>
-        {(
-          [
-            ["all", "All", statusCounts.all],
-            ["needs-review", "Needs review", statusCounts.needsReview],
-            ["in-progress", "In progress", statusCounts.inProgress],
-            ["submitted", "Submitted", statusCounts.submitted],
-          ] as const
-        ).map(([value, label, count]) => (
-          <Button
-            aria-pressed={statusView === value}
-            key={value}
-            size="sm"
-            type="button"
-            variant={statusView === value ? "default" : "outline"}
-            onClick={() => setStatusView(value as ReviewerInboxStatusView)}
-          >
-            {label}
-            <Badge variant={statusView === value ? "secondary" : "outline"}>{count}</Badge>
-          </Button>
-        ))}
-      </fieldset>
       <Popover.Root>
         <Popover.Trigger asChild>
-          <Button className={styles.filterTrigger} size="sm" type="button" variant="outline">
+          <Button
+            aria-label={filterLabel}
+            className={styles.filterTrigger}
+            size="icon-sm"
+            title={filterLabel}
+            type="button"
+            variant="outline"
+          >
             <ListFilter aria-hidden="true" />
-            Filters
-            {activeFilterCount > 0 ? <Badge variant="secondary">{activeFilterCount}</Badge> : null}
+            {activeFilterCount > 0 ? (
+              <span aria-hidden="true" className={styles.filterActiveCount}>
+                {activeFilterCount}
+              </span>
+            ) : null}
           </Button>
         </Popover.Trigger>
         <Popover.Portal>
@@ -72,21 +64,32 @@ export function ReviewerQueueFilters({
             sideOffset={8}
           >
             <div className={styles.filterPopoverHeader}>
-              <div>
-                <strong>Filters</strong>
-                <span>Refine assigned reviews</span>
-              </div>
+              <strong>Filters</strong>
               {filtersActive ? (
-                <Button size="sm" type="button" variant="ghost" onClick={clearFilters}>
+                <Button size="xs" type="button" variant="ghost" onClick={clearFilters}>
                   Clear
                 </Button>
               ) : null}
             </div>
-            <fieldset className={styles.filterBar}>
+            <fieldset className={styles.filterMenu}>
               <legend className={styles.srOnly}>Reviewer inbox filters</legend>
-              <label className={styles.filterField}>
+              <label className={styles.filterRow}>
+                <span>Status</span>
+                <select
+                  aria-label="Status"
+                  value={statusView}
+                  onChange={(event) => setStatusView(event.target.value as ReviewerInboxStatusView)}
+                >
+                  <option value="all">All · {statusCounts.all}</option>
+                  <option value="needs-review">Needs review · {statusCounts.needsReview}</option>
+                  <option value="in-progress">In progress · {statusCounts.inProgress}</option>
+                  <option value="submitted">Submitted · {statusCounts.submitted}</option>
+                </select>
+              </label>
+              <label className={styles.filterRow}>
                 <span>Organization</span>
                 <select
+                  aria-label="Organization"
                   value={filters.organizationId}
                   onChange={(event) =>
                     setFilters((current) => ({
@@ -105,9 +108,10 @@ export function ReviewerQueueFilters({
                   ))}
                 </select>
               </label>
-              <label className={styles.filterField}>
+              <label className={styles.filterRow}>
                 <span>Event</span>
                 <select
+                  aria-label="Event"
                   value={filters.eventId}
                   onChange={(event) =>
                     setFilters((current) => ({
@@ -125,9 +129,10 @@ export function ReviewerQueueFilters({
                   ))}
                 </select>
               </label>
-              <label className={styles.filterField}>
+              <label className={styles.filterRow}>
                 <span>Round</span>
                 <select
+                  aria-label="Round"
                   value={filters.roundKey}
                   onChange={(event) =>
                     setFilters((current) => ({
@@ -144,9 +149,10 @@ export function ReviewerQueueFilters({
                   ))}
                 </select>
               </label>
-              <label className={styles.filterField}>
+              <label className={styles.filterRow}>
                 <span>Due</span>
                 <select
+                  aria-label="Due"
                   value={filters.due}
                   onChange={(event) =>
                     setFilters((current) => ({
@@ -163,9 +169,10 @@ export function ReviewerQueueFilters({
                   <option value="none">No deadline</option>
                 </select>
               </label>
-              <label className={styles.filterField}>
+              <label className={styles.filterRow}>
                 <span>Track</span>
                 <select
+                  aria-label="Track"
                   value={filters.track}
                   onChange={(event) =>
                     setFilters((current) => ({
@@ -183,9 +190,10 @@ export function ReviewerQueueFilters({
                   ))}
                 </select>
               </label>
-              <label className={styles.filterField}>
+              <label className={styles.filterRow}>
                 <span>Group by</span>
                 <select
+                  aria-label="Group by"
                   value={groupBy}
                   onChange={(event) => setGroupBy(event.target.value as ReviewerInboxGroupBy)}
                 >

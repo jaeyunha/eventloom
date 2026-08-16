@@ -81,6 +81,20 @@ describe("evaluator workspace composition", () => {
     expect(markup.includes('aria-label="Reviewer queue guidance"')).toBe(false);
   });
 
+  it("keeps status filtering compact while labeling the desktop review grid", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        mode: "evaluator",
+        initialState: { queue: [{ assignment: assignment() }] },
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Filter assigned reviews"');
+    expect(markup).toContain('data-reviewer-row-layout="summary"');
+    expect(markup).not.toContain("Review status views");
+    expect(markup).toContain('data-reviewer-column-headings="true"');
+  });
+
   it("replaces opaque submission references with a short reviewer-facing reference", () => {
     const technicalReference = "SUBMISSION_753F52A9-4872-4700-9B52-D9AEF7E30D4A";
     const markup = renderToStaticMarkup(
