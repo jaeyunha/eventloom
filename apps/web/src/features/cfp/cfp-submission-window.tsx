@@ -5,11 +5,10 @@ type WindowStatus = "closed" | "open" | "upcoming";
 
 interface CfpSubmissionWindowProps {
   readonly closesAt: string;
-  readonly closesLabel: string;
   readonly limit?: number;
   readonly opensAt: string;
-  readonly opensLabel: string;
   readonly status: WindowStatus;
+  readonly timeZone: string;
 }
 
 const STATUS_COPY: Record<WindowStatus, { label: string; description: string }> = {
@@ -27,15 +26,74 @@ const STATUS_COPY: Record<WindowStatus, { label: string; description: string }> 
   },
 };
 
+function formatInstant(value: string, timeZone: string): { date: string; clock: string } {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return { date: "Date unavailable", clock: "" };
+
+  try {
+    const instant = new Date(timestamp);
+    return {
+      date: new Intl.DateTimeFormat("en-US", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone,
+      }).format(instant),
+      clock: new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+        timeZone,
+      }).format(instant),
+    };
+  } catch {
+    return { date: "Date unavailable", clock: "" };
+  }
+}
+
+function supportsTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function WindowInstant({
+  dateTime,
+  timeZone,
+}: {
+  readonly dateTime: string;
+  readonly timeZone: string;
+}) {
+  const formatted = formatInstant(dateTime, timeZone);
+  return (
+    <time data-cfp-window-value="true" dateTime={dateTime}>
+      <span className={styles.dateGroup} data-cfp-window-date-group="true">
+        {formatted.date}
+      </span>
+      {formatted.clock ? (
+        <>
+          {" "}
+          <span className={styles.clockGroup} data-cfp-window-clock-group="true">
+            {formatted.clock}
+          </span>
+        </>
+      ) : null}
+    </time>
+  );
+}
+
 export function CfpSubmissionWindow({
   closesAt,
-  closesLabel,
   limit,
   opensAt,
-  opensLabel,
   status,
+  timeZone,
 }: CfpSubmissionWindowProps) {
   const copy = STATUS_COPY[status];
+  const timeZoneAvailable = supportsTimeZone(timeZone);
 
   return (
     <section
@@ -44,7 +102,7 @@ export function CfpSubmissionWindow({
       data-cfp-submission-window="true"
       data-status={status}
     >
-      <div className={styles.summary}>
+      <div className={styles.summary} data-cfp-window-summary="true">
         <span aria-hidden="true" className={styles.icon}>
           <CalendarClock size={15} />
         </span>
@@ -54,28 +112,29 @@ export function CfpSubmissionWindow({
             <h2 id="cfp-window-heading">{copy.label}</h2>
           </div>
           <p className={styles.description}>{copy.description}</p>
-          {limit !== undefined ? (
-            <p className={styles.limit}>
-              Up to {limit} proposal{limit === 1 ? "" : "s"} per account
+          <div className={styles.metadata}>
+            <p className={styles.timeZone}>
+              {timeZoneAvailable ? `Times shown in ${timeZone}` : "Event time zone unavailable"}
             </p>
-          ) : null}
+            {limit !== undefined ? (
+              <p className={styles.limit}>
+                Up to {limit} proposal{limit === 1 ? "" : "s"} per account
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
       <dl className={styles.dates}>
         <div>
           <dt>Opens</dt>
           <dd>
-            <time data-cfp-window-value="true" dateTime={opensAt}>
-              {opensLabel}
-            </time>
+            <WindowInstant dateTime={opensAt} timeZone={timeZone} />
           </dd>
         </div>
         <div>
           <dt>Closes</dt>
           <dd>
-            <time data-cfp-window-value="true" dateTime={closesAt}>
-              {closesLabel}
-            </time>
+            <WindowInstant dateTime={closesAt} timeZone={timeZone} />
           </dd>
         </div>
       </dl>

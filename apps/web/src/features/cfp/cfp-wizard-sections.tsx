@@ -19,6 +19,7 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "../../components/ui/toggle-group";
 import { WorkspaceBrandMark } from "../../components/workspace/workspace-brand-mark";
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
@@ -506,11 +507,10 @@ export function PublicCfpShell({
               <div className={styles.submissionWindow}>
                 <CfpSubmissionWindow
                   opensAt={event.opensAt}
-                  opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
                   closesAt={event.closesAt}
-                  closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
                   {...(form ? { limit: formSubmissionLimit(form) } : {})}
                   status={windowStatus}
+                  timeZone={event.timezone}
                 />
               </div>
             ) : null}
@@ -589,6 +589,7 @@ function AccountStep({
   confirmedApplicantContext,
   onConfirmApplicantContext,
   password,
+  pending,
   requiresApplicantContextConfirmation,
   setAccountMode,
   setPassword,
@@ -601,6 +602,7 @@ function AccountStep({
   confirmedApplicantContext: boolean;
   onConfirmApplicantContext: () => void;
   password: string;
+  pending: boolean;
   requiresApplicantContextConfirmation: boolean;
   setAccountMode: (mode: CfpAccountMode) => void;
   setPassword: (value: string) => void;
@@ -653,13 +655,13 @@ function AccountStep({
   }
   const checks = getPasswordChecks(password);
   return (
-    <div>
+    <div className={styles.accountForm} data-cfp-account-form="true">
       <h1>
         {authenticatedSession
           ? `Continue as ${authenticatedSession.name}`
           : accountMode === "sign_in"
-            ? "Sign in"
-            : "Create account"}
+            ? "Sign in to continue"
+            : "Create your account"}
       </h1>
       {authenticatedSession !== null &&
       requiresApplicantContextConfirmation &&
@@ -690,42 +692,40 @@ function AccountStep({
       {!authenticatedSession ? (
         <p>
           {accountMode === "sign_in"
-            ? "Enter the email and password for your existing Eventloom account."
-            : "Create an Eventloom account to own this proposal and receive submission updates."}
+            ? "Use your existing Eventloom account to continue to your proposal."
+            : "Create an Eventloom account to save this proposal and receive updates."}
         </p>
       ) : null}
       {!authenticatedSession ? (
-        <fieldset className={styles.accountModeSwitch}>
-          <legend className="sr-only">Account mode</legend>
-          <Button
-            aria-pressed={accountMode === "sign_in"}
-            onClick={() => setAccountMode("sign_in")}
-            type="button"
-            variant={accountMode === "sign_in" ? "default" : "outline"}
-          >
-            Sign in
-          </Button>
-          <Button
-            aria-pressed={accountMode === "sign_up"}
-            onClick={() => setAccountMode("sign_up")}
-            type="button"
-            variant={accountMode === "sign_up" ? "default" : "outline"}
-          >
+        <ToggleGroup
+          aria-label="Account access"
+          className={styles.accountModeSwitch}
+          data-cfp-account-access="true"
+          disabled={pending}
+          onValueChange={(value) => {
+            if (value === "sign_in" || value === "sign_up") setAccountMode(value);
+          }}
+          orientation="horizontal"
+          spacing={0}
+          type="single"
+          value={accountMode}
+          variant="outline"
+        >
+          <ToggleGroupItem data-cfp-account-mode="sign_in" value="sign_in">
+            Existing account
+          </ToggleGroupItem>
+          <ToggleGroupItem data-cfp-account-mode="sign_up" value="sign_up">
             Create account
-          </Button>
-        </fieldset>
+          </ToggleGroupItem>
+        </ToggleGroup>
       ) : null}
       <div className={styles.sectionPanel}>
-        <Field
-          error={errors["account.email"]}
-          label="Your Email Address:"
-          name="account.email"
-          required
-        >
+        <Field error={errors["account.email"]} label="Email address" name="account.email" required>
           {(controlProps) => (
             <Input
               {...controlProps}
               autoComplete="email"
+              disabled={pending}
               readOnly={authenticatedSession !== null}
               onChange={(event) =>
                 updateDraft((current) => ({
@@ -739,21 +739,20 @@ function AccountStep({
           )}
         </Field>
         {authenticatedSession ? (
-          <p role="status">
-            You are signed in as {authenticatedSession.email}. No password is needed to continue.
-          </p>
+          <p role="status">Signed in as {authenticatedSession.email}.</p>
         ) : (
           <>
             <Field
               error={errors["account.password"]}
-              label="Password:"
+              label="Password"
               name="account.password"
               required
             >
               {(controlProps) => (
                 <Input
                   {...controlProps}
-                  autoComplete="current-password"
+                  autoComplete={accountMode === "sign_up" ? "new-password" : "current-password"}
+                  disabled={pending}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
                   value={password}
@@ -783,7 +782,7 @@ function AccountStep({
             <div className={styles.twoColumns}>
               <Field
                 error={errors["account.firstName"]}
-                label="First Name"
+                label="First name"
                 name="account.firstName"
                 required
               >
@@ -791,6 +790,8 @@ function AccountStep({
                   <>
                     <Input
                       {...controlProps}
+                      autoComplete="given-name"
+                      disabled={pending}
                       maxLength={255}
                       onChange={(event) =>
                         updateDraft((current) => ({
@@ -806,7 +807,7 @@ function AccountStep({
               </Field>
               <Field
                 error={errors["account.lastName"]}
-                label="Last Name"
+                label="Last name"
                 name="account.lastName"
                 required
               >
@@ -814,6 +815,8 @@ function AccountStep({
                   <>
                     <Input
                       {...controlProps}
+                      autoComplete="family-name"
+                      disabled={pending}
                       maxLength={255}
                       onChange={(event) =>
                         updateDraft((current) => ({
@@ -832,6 +835,7 @@ function AccountStep({
               <input
                 aria-invalid={Boolean(errors["account.acceptedTerms"])}
                 checked={draft.account.acceptedTerms}
+                disabled={pending}
                 id="account.acceptedTerms"
                 onChange={(event) =>
                   updateDraft((current) => ({
@@ -2071,6 +2075,7 @@ export function CfpWizardSections({
             errors={errors}
             onConfirmApplicantContext={onConfirmApplicantContext}
             password={password}
+            pending={mutationPending}
             requiresApplicantContextConfirmation={requiresApplicantContextConfirmation}
             setAccountMode={setAccountMode}
             setPassword={setPassword}
@@ -2117,7 +2122,10 @@ export function CfpWizardSections({
         ) : null}
 
         <div
-          className={`${styles.actions} ${step === "account" ? styles.actionsSingleSecondary : ""}`}
+          className={`${styles.actions} ${
+            step === "account" ? `${styles.accountActions} ${styles.actionsSingleSecondary}` : ""
+          }`}
+          data-cfp-actions="true"
         >
           {step !== "welcome" ? (
             <Button
@@ -2157,11 +2165,17 @@ export function CfpWizardSections({
               >
                 {step === "welcome" ? "Continue →" : null}
                 {step === "account"
-                  ? authenticatedSession
-                    ? "Continue →"
-                    : accountMode === "sign_in"
-                      ? "Sign in →"
-                      : "Create account →"
+                  ? mutationPending
+                    ? authenticatedSession
+                      ? "Continuing…"
+                      : accountMode === "sign_in"
+                        ? "Signing in…"
+                        : "Creating account…"
+                    : authenticatedSession
+                      ? "Continue to proposal"
+                      : accountMode === "sign_in"
+                        ? "Sign in and continue"
+                        : "Create account and continue"
                   : null}
                 {step === "submission" ? "Next step →" : null}
                 {step === "participants" ? "Continue to review →" : null}
@@ -2171,15 +2185,17 @@ export function CfpWizardSections({
           </div>
         </div>
       </form>
-      {step !== "welcome" ? (
-        <div className={styles.sessionFooter}>
+      {step !== "welcome" &&
+      step !== "account" &&
+      (verificationState !== null || authenticatedSession !== null) ? (
+        <div className={styles.sessionFooter} data-cfp-session-footer="true">
           {verificationState?.status === "waiting"
             ? `Verification email sent to ${verificationState.email}.`
             : verificationState?.status === "resuming"
               ? `Email verified for ${verificationState.email}. Continuing to your proposal…`
               : authenticatedSession
                 ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
-                : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
+                : null}
         </div>
       ) : null}
       <p

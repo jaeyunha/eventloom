@@ -1,3 +1,4 @@
+import type { Request } from "@playwright/test";
 import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixtures/auth";
 import { installCfpApi } from "./fixtures/cfp-api";
 
@@ -18,7 +19,48 @@ test("participant-only accounts enter CFP without organizer context controls", a
 
   await expect(page.locator("[data-cfp-applicant-context-boundary]")).toHaveCount(0);
   await expect(page.locator('a[href="/admin"]')).toHaveCount(0);
-  await expect(page.locator('button[type="submit"]')).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Continue to proposal" })).toBeEnabled();
+});
+
+test("authenticated Account continuation stays locked while the draft opens", async ({
+  page,
+  authSession,
+}) => {
+  let releaseDraftCreation!: () => void;
+  const draftCreationGate = new Promise<void>((resolve) => {
+    releaseDraftCreation = resolve;
+  });
+  let signalDraftCreation!: () => void;
+  const draftCreationStarted = new Promise<void>((resolve) => {
+    signalDraftCreation = resolve;
+  });
+  await installCfpApi(page, authSession, {
+    eventId: "authenticated-pending-context",
+    initiallyAuthenticated: true,
+    memberships: [],
+  });
+  await page.route("**/api/cfp/**", async (route) => {
+    if (route.request().method() !== "GET") {
+      signalDraftCreation();
+      await draftCreationGate;
+    }
+    await route.fallback();
+  });
+
+  const accountPath =
+    "/cfp/organizations/evaluator-org/events/authenticated-pending-context/account";
+  const submissionPath =
+    "/cfp/organizations/evaluator-org/events/authenticated-pending-context/submission";
+  await page.goto(accountPath);
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  const submit = page.getByRole("button", { name: "Continue to proposal" }).click();
+  await draftCreationStarted;
+  await expect(page.getByRole("button", { name: "Continuing…" })).toBeDisabled();
+
+  const submissionNavigation = page.waitForURL(new RegExp(`${submissionPath}$`));
+  releaseDraftCreation();
+  await submit;
+  await submissionNavigation;
 });
 
 test("current-organization organizers confirm the CFP applicant context", async ({
@@ -165,6 +207,80 @@ async function installCfpPortalHandoffApi(
   return { selectedEventIds };
 }
 
+test("switching Account modes clears rejected authentication errors", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "evt_evaluator_2026",
+    eventSlug: "evaluator-2026",
+    formId: "evaluator-2026-cfp",
+  });
+  await page.route(/\/api\/auth\/sign-(?:in|up)\/email$/u, async (route) => {
+    const action = route.request().url().includes("/sign-up/") ? "sign-up" : "sign-in";
+    await route.fulfill({
+      body: JSON.stringify({
+        code: "INVALID_CREDENTIALS",
+        message: `Rejected synthetic ${action}.`,
+      }),
+      contentType: "application/json",
+      status: 401,
+    });
+  });
+
+  await page.goto(`${EVALUATOR_CFP_PATH}/account`);
+  await page.getByLabel("Email address").fill("rejected@example.test");
+  await page.getByLabel("Password").fill("StrongPass1!");
+  await page.getByRole("button", { name: "Sign in and continue" }).click();
+  await expect(page.getByText("Rejected synthetic sign-in.", { exact: true })).toBeVisible();
+
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await expect(page.locator('p[aria-live="polite"]')).toHaveText("");
+  await page.getByLabel("First name").fill("Rejected");
+  await page.getByLabel("Last name").fill("Applicant");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Create account and continue" }).click();
+  await expect(page.getByText("Rejected synthetic sign-up.", { exact: true })).toBeVisible();
+
+  await page.locator('[data-cfp-account-mode="sign_in"]').click();
+  await expect(page.locator('p[aria-live="polite"]')).toHaveText("");
+});
+
+test("account access mode stays locked while authentication is pending", async ({
+  page,
+  authSession,
+}) => {
+  let releaseAuthentication!: () => void;
+  const authenticationGate = new Promise<void>((resolve) => {
+    releaseAuthentication = resolve;
+  });
+  await installCfpApi(page, authSession, {
+    eventId: "evt_evaluator_2026",
+    eventSlug: "evaluator-2026",
+    formId: "evaluator-2026-cfp",
+  });
+  await page.route("**/api/auth/sign-in/email", async (route) => {
+    await authenticationGate;
+    await route.fallback();
+  });
+
+  await page.goto(`${EVALUATOR_CFP_PATH}/account`);
+  await page.getByLabel("Email address").fill("pending@example.test");
+  await page.getByLabel("Password").fill("StrongPass1!");
+  const requestStarted = page.waitForRequest("**/api/auth/sign-in/email");
+  const submit = page.getByRole("button", { name: "Sign in and continue" }).click();
+  await requestStarted;
+
+  await expect(page.locator('[data-cfp-account-mode="sign_in"]')).toBeDisabled();
+  await expect(page.locator('[data-cfp-account-mode="sign_up"]')).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Signing in…" })).toBeDisabled();
+
+  const submissionNavigation = page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
+  releaseAuthentication();
+  await submit;
+  await submissionNavigation;
+});
+
 test("submitter completes the account-first CFP with two participants", async ({
   page,
   authSession,
@@ -188,17 +304,93 @@ test("submitter completes the account-first CFP with two participants", async ({
   ).toBeVisible();
   const continueButton = page.getByRole("button", { name: "Continue →" });
   await continueButton.focus();
-  await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/account$`));
+  await expect(continueButton).toBeFocused();
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/account$`)),
+    continueButton.press("Enter"),
+  ]);
 
-  await page.getByLabel("Your Email Address:").fill("ada@example.test");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await page.getByLabel("Password:").fill("CalmSystems!26");
-  await page.getByLabel("First Name").fill("Ada");
-  await page.getByLabel("Last Name").fill("Speaker");
+  const accountAccess = page.locator('[data-cfp-account-access="true"]');
+  const existingAccount = page.locator('[data-cfp-account-mode="sign_in"]');
+  const createAccount = page.locator('[data-cfp-account-mode="sign_up"]');
+  const accountEmail = page.getByLabel("Email address");
+  const accountPassword = page.getByLabel("Password");
+  const accountActions = page.locator('[data-cfp-actions="true"]');
+  const accountForm = page.locator('[data-cfp-account-form="true"]');
+
+  await expect(accountAccess).toBeVisible();
+  await expect(accountAccess).toHaveAccessibleName("Account access");
+  await expect(accountActions).toBeVisible();
+  await expect(accountForm).toBeVisible();
+  const accountMeasure = await page
+    .locator("[data-cfp-main-flow]")
+    .evaluate((mainFlow, formSelector) => {
+      const form = mainFlow.querySelector<HTMLElement>(formSelector);
+      if (!form) return null;
+      const mainRect = mainFlow.getBoundingClientRect();
+      const formRect = form.getBoundingClientRect();
+      return {
+        centerDelta: Math.abs(
+          mainRect.left + mainRect.width / 2 - (formRect.left + formRect.width / 2),
+        ),
+        width: formRect.width,
+      };
+    }, '[data-cfp-account-form="true"]');
+  expect(accountMeasure).not.toBeNull();
+  expect(accountMeasure?.centerDelta).toBeLessThanOrEqual(1);
+  expect(accountMeasure?.width).toBeLessThanOrEqual(672);
+  await expect(page.locator('[data-cfp-session-footer="true"]')).toHaveCount(0);
+  await expect
+    .poll(async () =>
+      accountActions.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          backdropFilter: style.backdropFilter,
+          boxShadow: style.boxShadow,
+          position: style.position,
+        };
+      }),
+    )
+    .toEqual({
+      backdropFilter: "none",
+      boxShadow: "none",
+      position: "static",
+    });
+  await expect(existingAccount).toHaveAttribute("data-state", "on");
+  await accountEmail.fill("ada@example.test");
+  await accountPassword.fill("CalmSystems!26");
+  await existingAccount.focus();
+  await existingAccount.press("ArrowRight");
+  await expect(createAccount).toBeFocused();
+  await createAccount.press("Space");
+  await expect(createAccount).toHaveAttribute("data-state", "on");
+  await expect(accountEmail).toHaveValue("ada@example.test");
+  await expect(accountPassword).toHaveValue("CalmSystems!26");
+  await expect(accountPassword).toHaveAttribute("autocomplete", "new-password");
+  await page.getByRole("button", { name: "Create account and continue" }).click();
+  await expect(page.getByLabel("First name")).toBeFocused();
+  await expect(page.getByLabel("First name")).toHaveAttribute("aria-invalid", "true");
+
+  await existingAccount.focus();
+  await existingAccount.press("Space");
+  await expect(existingAccount).toHaveAttribute("data-state", "on");
+  await expect(page.getByLabel("First name")).toHaveCount(0);
+  await expect(page.getByText("First name is required.", { exact: true })).toHaveCount(0);
+  await expect(accountEmail).toHaveValue("ada@example.test");
+  await expect(accountPassword).toHaveValue("CalmSystems!26");
+
+  await existingAccount.press("ArrowRight");
+  await expect(createAccount).toBeFocused();
+  await createAccount.press("Space");
+  await expect(createAccount).toHaveAttribute("data-state", "on");
+  await expect(page.getByLabel("First name")).not.toHaveAttribute("aria-invalid", "true");
+  await page.getByLabel("First name").fill("Ada");
+  await page.getByLabel("Last name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Create account →" }).click();
-  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`)),
+    page.getByRole("button", { name: "Create account and continue" }).click(),
+  ]);
 
   await page.getByLabel("Title").fill("Designing calm incident response");
   await page
@@ -215,8 +407,10 @@ test("submitter completes the account-first CFP with two participants", async ({
   await selectSearchable(page, "Track", "Track 2");
   await selectSearchable(page, "Level", "Advanced");
   await selectSearchable(page, "Language", "English");
-  await page.getByRole("button", { name: "Next step →" }).click();
-  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/participants$`));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/participants$`)),
+    page.getByRole("button", { name: "Next step →" }).click(),
+  ]);
 
   await expect(page.getByLabel("First Name").first()).toHaveValue("Ada");
   await expect(page.getByLabel("Last Name").first()).toHaveValue("Speaker");
@@ -227,8 +421,10 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByLabel("Last Name").nth(1).fill("Cooper");
   await page.getByLabel("Email").nth(1).fill("grace@example.test");
   await page.getByLabel("Biography").nth(1).fill("Engineering leader and incident facilitator.");
-  await page.getByRole("button", { name: "Continue to review →" }).click();
-  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/review$`));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/review$`)),
+    page.getByRole("button", { name: "Continue to review →" }).click(),
+  ]);
 
   await expect(
     page.getByRole("heading", { level: 1, name: "Review your submission" }),
@@ -236,9 +432,10 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(page.getByText("Designing calm incident response", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: /Ada Speaker/ })).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: /Grace Cooper/ })).toBeVisible();
-  await page.getByRole("button", { name: "Submit", exact: true }).click();
-
-  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/complete$`));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/complete$`)),
+    page.getByRole("button", { name: "Submit", exact: true }).click(),
+  ]);
   await expect(
     page.getByRole("heading", {
       level: 1,
@@ -250,8 +447,10 @@ test("submitter completes the account-first CFP with two participants", async ({
     page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
   const statusDashboard = page.getByRole("button", { name: "View submission status dashboard" });
-  await statusDashboard.click();
-  await expect(page).toHaveURL(/\/portal\/submissions\?event=evt_evaluator_2026$/);
+  await Promise.all([
+    page.waitForURL(/\/portal\/submissions\?event=evt_evaluator_2026$/),
+    statusDashboard.click(),
+  ]);
   await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Event context" })).toHaveValue(
     "portal:ai-engineer:evt_evaluator_2026",
@@ -384,15 +583,17 @@ test("new submitter returns from email verification and continues automatically"
 
   const accountPath = "/cfp/organizations/evaluator-org/events/verification-return/account";
   await page.goto(accountPath);
-  await page.getByLabel("Your Email Address:").fill(email);
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await page.getByLabel("Password:").fill("StrongPass1!");
-  await page.getByLabel("First Name").fill("Verified");
-  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByLabel("Email address").fill(email);
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await page.getByLabel("Password").fill("StrongPass1!");
+  await page.getByLabel("First name").fill("Verified");
+  await page.getByLabel("Last name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Create account →" }).click();
-
-  await expect(page.getByRole("heading", { level: 1, name: "Check your inbox" })).toBeVisible();
+  await Promise.all([
+    expect(page.getByRole("heading", { level: 1, name: "Check your inbox" })).toBeVisible(),
+    page.getByRole("button", { name: "Create account and continue" }).click(),
+  ]);
+  await expect(page.locator('[data-cfp-session-footer="true"]')).toHaveCount(0);
   await expect(page.getByText(email, { exact: true })).toBeVisible();
   await expect(
     page.getByText("After verification, you’ll return here and continue automatically.", {
@@ -442,6 +643,10 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   await expect(
     page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]'),
   ).toHaveCount(1);
+  const summaryWidth = await submissionWindow
+    .locator('[data-cfp-window-summary="true"]')
+    .evaluate((element) => element.getBoundingClientRect().width);
+  expect(summaryWidth).toBeGreaterThan(280);
   await expect(progressNavigations.getByText("Get started", { exact: true })).toBeVisible();
   await expect(progressNavigations.getByText("Review", { exact: true })).toBeVisible();
   await expect(progressNavigations.locator('[aria-current="step"]')).toHaveCount(1);
@@ -475,7 +680,9 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   const currentCompactStep = compactProgress.locator('[aria-current="step"]');
   await expect(currentCompactStep).toHaveCount(1);
   await expect(currentCompactStep).toContainText("Get started");
-  for (const value of await submissionWindow.locator("time").all()) {
+  for (const value of await submissionWindow
+    .locator("[data-cfp-window-date-group], [data-cfp-window-clock-group]")
+    .all()) {
     await expect(value).toHaveCSS("white-space", "nowrap");
   }
 
@@ -485,8 +692,103 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
       document.body.scrollWidth <= document.body.clientWidth,
   );
   expect(fitsViewport).toBe(true);
+
+  const continueButton = page.getByRole("button", { name: "Continue →" });
+  await Promise.all([
+    page.waitForURL(/\/cfp\/organizations\/evaluator-org\/events\/mobile-progress\/account$/),
+    continueButton.click(),
+  ]);
+  const existingAccount = page.locator('[data-cfp-account-mode="sign_in"]');
+  const createAccount = page.locator('[data-cfp-account-mode="sign_up"]');
+  const backButton = page.getByRole("button", { name: "← Back" });
+  const primaryButton = page.getByRole("button", { name: "Sign in and continue" });
+  const mobileOrder = await Promise.all([
+    existingAccount.boundingBox(),
+    createAccount.boundingBox(),
+    backButton.boundingBox(),
+    primaryButton.boundingBox(),
+  ]);
+  expect(mobileOrder.every((box) => box !== null)).toBe(true);
+  expect(mobileOrder[1]?.y).toBeGreaterThan(mobileOrder[0]?.y ?? 0);
+  expect(mobileOrder[3]?.y).toBeGreaterThan(mobileOrder[2]?.y ?? 0);
+
+  await page.setViewportSize({ height: 1000, width: 1280 });
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-account-desktop.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Choose color theme" }).click();
+  await page.getByRole("menuitemradio", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/u);
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-account-desktop-dark.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Choose color theme" }).click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  await expect(page.locator("html")).not.toHaveClass(/dark/u);
+
+  await page.setViewportSize({ height: 720, width: 320 });
+  const textZoomStyle = await page.addStyleTag({
+    content: "html { font-size: 200% !important; }",
+  });
+  const zoomedPageFits = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+      document.body.scrollWidth <= document.body.clientWidth,
+  );
+  expect(zoomedPageFits).toBe(true);
+  await textZoomStyle.evaluate((element) => element.remove());
+
+  await page.setViewportSize({ height: 844, width: 390 });
+  const mutatingRequests: string[] = [];
+  const recordMutatingRequest = (request: Request) => {
+    const url = new URL(request.url());
+    if (
+      request.method() !== "GET" &&
+      (url.pathname.startsWith("/api/auth/") || url.pathname.includes("/submissions"))
+    ) {
+      mutatingRequests.push(`${request.method()} ${url.pathname}`);
+    }
+  };
+  page.on("request", recordMutatingRequest);
+  await Promise.all([
+    page.waitForURL(/\/cfp\/organizations\/evaluator-org\/events\/mobile-progress$/),
+    backButton.click(),
+  ]);
+  page.off("request", recordMutatingRequest);
+  expect(mutatingRequests).toEqual([]);
+
+  await page.addStyleTag({
+    content:
+      "@media (max-width: 48rem) { html, body, #cfp-main { height: auto !important; max-height: none !important; overflow: visible !important; } }",
+  });
+  const expandWorkspaceForScreenshot = async () => {
+    await page.locator("#cfp-main").evaluate((main) => {
+      main.style.height = `${main.scrollHeight}px`;
+      let ancestor = main.parentElement;
+      while (ancestor && ancestor !== document.body) {
+        ancestor.style.height = "auto";
+        ancestor.style.maxHeight = "none";
+        ancestor.style.overflow = "visible";
+        ancestor = ancestor.parentElement;
+      }
+      document.documentElement.style.height = "auto";
+      document.body.style.height = "auto";
+    });
+  };
+  await expandWorkspaceForScreenshot();
   await page.screenshot({
     path: testInfo.outputPath("applicant-cfp-shell-mobile.png"),
+    fullPage: true,
+  });
+  await Promise.all([
+    page.waitForURL(/\/cfp\/organizations\/evaluator-org\/events\/mobile-progress\/account$/),
+    continueButton.click(),
+  ]);
+  await expandWorkspaceForScreenshot();
+  await page.screenshot({
+    path: testInfo.outputPath("applicant-cfp-account-mobile.png"),
     fullPage: true,
   });
 });
@@ -501,13 +803,13 @@ test("required CFP validation announces errors and focuses the first invalid fie
     eventName: "Validation Check Event",
   });
   await page.goto("/cfp/organizations/evaluator-org/events/validation-check/account");
-  await page.getByRole("button", { name: "Sign in →" }).click();
+  await page.getByRole("button", { name: "Sign in and continue" }).click();
 
   const errorSummary = page.getByRole("alert").filter({ hasText: "Check the highlighted fields." });
   await expect(errorSummary).toBeVisible();
   await expect(errorSummary).toContainText("Email address is required.");
-  await expect(page.getByLabel("Your Email Address:")).toBeFocused();
-  await expect(page.getByLabel("Your Email Address:")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Email address")).toBeFocused();
+  await expect(page.getByLabel("Email address")).toHaveAttribute("aria-invalid", "true");
 });
 
 test("CFP draft survives a reload without submitting", async ({ page, authSession }) => {
@@ -518,14 +820,16 @@ test("CFP draft survives a reload without submitting", async ({ page, authSessio
   });
   await page.goto("/cfp/organizations/evaluator-org/events/resume-check/account");
   await expect(page.getByRole("button", { name: "Save as draft" })).toHaveCount(0);
-  await page.getByLabel("Your Email Address:").fill("resume@example.test");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await page.getByLabel("Password:").fill("ResumeDraft!26");
-  await page.getByLabel("First Name").fill("Resilient");
-  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByLabel("Email address").fill("resume@example.test");
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await page.getByLabel("Password").fill("ResumeDraft!26");
+  await page.getByLabel("First name").fill("Resilient");
+  await page.getByLabel("Last name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Create account →" }).click();
-  await expect(page).toHaveURL(/\/resume-check\/submission$/);
+  await Promise.all([
+    page.waitForURL(/\/resume-check\/submission$/),
+    page.getByRole("button", { name: "Create account and continue" }).click(),
+  ]);
   await page.getByLabel("Title").fill("A persisted draft title");
   await page.getByRole("button", { name: "Save as draft" }).click();
   await expect(page.getByText("Draft saved", { exact: true })).toBeVisible();
@@ -1160,14 +1464,16 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await page.getByRole("button", { name: "Continue →" }).click();
   await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));
 
-  await page.getByLabel("Your Email Address:").fill("cfp-e2e@example.test");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await page.getByLabel("Password:").fill("CalmSystems!26");
-  await page.getByLabel("First Name").fill("Ada");
-  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByLabel("Email address").fill("cfp-e2e@example.test");
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await page.getByLabel("Password").fill("CalmSystems!26");
+  await page.getByLabel("First name").fill("Ada");
+  await page.getByLabel("Last name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Create account →" }).click();
-  await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/submission$`));
+  await Promise.all([
+    page.waitForURL(new RegExp(`${CFP_PATH}/submission$`)),
+    page.getByRole("button", { name: "Create account and continue" }).click(),
+  ]);
 
   await expect(page.getByRole("heading", { level: 2, name: "Session proposal" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Workshop details" })).toHaveCount(0);
@@ -1369,18 +1675,19 @@ test("CFP rejects a stale draft version without abandoning the five-step session
 }) => {
   const harness = await installDynamicCfpApi(page, authSession, { conflictOnDraftPatch: 1 });
   await page.goto(`${CFP_PATH}/account`);
-  await page.getByLabel("Your Email Address:").fill("stale-cfp@example.test");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await page.getByLabel("Password:").fill("CalmSystems!26");
-  await page.getByLabel("First Name").fill("Stale");
-  await page.getByLabel("Last Name").fill("Writer");
+  await page.getByLabel("Email address").fill("stale-cfp@example.test");
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await page.getByLabel("Password").fill("CalmSystems!26");
+  await page.getByLabel("First name").fill("Stale");
+  await page.getByLabel("Last name").fill("Writer");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Create account →" }).click();
-
-  await expect(page.getByText("The CFP submission has changed.", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Your Email Address:")).toHaveValue("stale-cfp@example.test");
-  await expect(page.getByLabel("First Name")).toHaveValue("Stale");
-  await expect(page.getByLabel("Last Name")).toHaveValue("Writer");
+  await Promise.all([
+    expect(page.getByText("The CFP submission has changed.", { exact: true })).toBeVisible(),
+    page.getByRole("button", { name: "Create account and continue" }).click(),
+  ]);
+  await expect(page.getByLabel("Email address")).toHaveValue("stale-cfp@example.test");
+  await expect(page.getByLabel("First name")).toHaveValue("Stale");
+  await expect(page.getByLabel("Last name")).toHaveValue("Writer");
   await expect(
     page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }),
   ).toBeChecked();
@@ -1414,9 +1721,9 @@ test("CFP clears a stale saved pointer and starts a fresh account step", async (
   );
   await page.goto(`${CFP_PATH}/account`);
   await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
-  await expect(page.getByLabel("Your Email Address:")).toHaveValue("");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await expect(page.getByLabel("First Name")).toHaveValue("");
+  await expect(page.getByLabel("Email address")).toHaveValue("");
+  await page.locator('[data-cfp-account-mode="sign_up"]').click();
+  await expect(page.getByLabel("First name")).toHaveValue("");
   expect(
     await page.evaluate((storageKey) => window.localStorage.getItem(storageKey), key),
   ).toBeNull();

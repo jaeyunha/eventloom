@@ -1025,15 +1025,45 @@
 
 /* -------------------------------------------------------- action footer */
 
+.accountModeFieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.accountForm {
+  width: 100%;
+  max-width: 42rem;
+  margin-inline: auto;
+}
+
 .accountModeSwitch {
   display: grid;
+  width: 100%;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   margin-top: var(--space-5);
 }
 
-.accountModeSwitch > * {
+.accountModeSwitch [data-slot="toggle-group-item"] {
   width: 100%;
+}
+
+.accountModeSwitch [data-slot="toggle-group-item"][data-state="on"] {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  color: var(--color-accent);
+}
+
+.accountForm .sectionPanel {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+}
+
+.accountForm .sectionPanel > [data-slot="field"]:first-child {
+  margin-top: 0;
 }
 
 .actions {
@@ -1050,6 +1080,20 @@
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   box-shadow: var(--workspace-sticky-shadow);
   backdrop-filter: blur(12px);
+}
+
+.accountActions {
+  position: static;
+  justify-content: flex-end;
+  margin: var(--space-7) 0 0;
+  padding: var(--space-3) 0 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.accountActions > span {
+  display: none;
 }
 
 .forwardActions {
@@ -1509,6 +1553,20 @@
   .backButton,
   .draftButton {
     grid-row: 2;
+  }
+
+  .accountActions .backButton {
+    grid-row: 1;
+  }
+
+  .accountActions .primaryButton {
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 30rem) {
+  .accountModeSwitch {
+    grid-template-columns: 1fr;
   }
 }
 

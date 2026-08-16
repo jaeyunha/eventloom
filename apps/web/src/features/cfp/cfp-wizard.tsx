@@ -1882,6 +1882,21 @@ function useCfpWizardController({
     }));
   }
 
+  function changeAccountMode(nextMode: CfpAccountMode): void {
+    setAccountMode(nextMode);
+    setSaveError(null);
+    setSaveState("idle");
+    setErrors((current) => {
+      if (nextMode === "sign_up") return current;
+
+      const next = { ...current };
+      delete next["account.firstName"];
+      delete next["account.lastName"];
+      delete next["account.acceptedTerms"];
+      return next;
+    });
+  }
+
   useEffect(() => {
     if (
       step !== "account" ||
@@ -1932,7 +1947,7 @@ function useCfpWizardController({
     password,
     requiresApplicantContextConfirmation,
     verificationState,
-    setAccountMode,
+    setAccountMode: changeAccountMode,
     setPassword,
     updateDraft,
     setConfirmedApplicantContext,
