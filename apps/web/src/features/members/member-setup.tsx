@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { type FormEvent, useMemo, useRef, useState } from "react";
 import { createLoginApi, type LoginApi } from "@/features/auth/login-form-model";
 import { createMemberApi, type MemberApi } from "./api";
@@ -90,7 +91,7 @@ export function MemberSetup({
             Your invitation was activated for <strong>{activatedEmail}</strong>, but automatic
             sign-in could not be completed.
           </p>
-          <a href="/login">Sign in to continue</a>
+          <Link href="/login">Sign in to continue</Link>
         </section>
       </main>
     );

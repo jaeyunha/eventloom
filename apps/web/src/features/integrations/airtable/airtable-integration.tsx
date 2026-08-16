@@ -304,9 +304,9 @@ export function AirtableIntegration({
 
   return (
     <div className={styles.integrationPage}>
-      <a className={styles.skipLink} href="#airtable-content">
+      <Link className={styles.skipLink} href="#airtable-content">
         Skip to Airtable settings
-      </a>
+      </Link>
       <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
         <Link href="/admin">Organizations</Link>
         <span aria-hidden="true">/</span>

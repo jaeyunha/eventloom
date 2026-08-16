@@ -2126,13 +2126,13 @@ function WelcomeStep({
         <h2 id="resources-title">Resources</h2>
         <ul>
           <li id="speaker-agreement">
-            <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
+            <Link href="#speaker-agreement">Speaker Agreement Terms and Conditions</Link>
           </li>
           <li id="application-faq">
-            <a href="#application-faq">FAQs for the Speaker Application Process</a>
+            <Link href="#application-faq">FAQs for the Speaker Application Process</Link>
           </li>
           <li id="speaker-resources">
-            <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
+            <Link href="#speaker-resources">Speaker Tips and Resources Guide</Link>
           </li>
         </ul>
       </section>
@@ -2251,7 +2251,7 @@ function AccountStep({
               <Link href="/admin">Return to organizer workspace</Link>
             </Button>
             <Button asChild type="button" variant="ghost">
-              <a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>
+              <Link href="/login?next=%2Fportal%2Fsubmissions">Use another account</Link>
             </Button>
           </div>
         </div>

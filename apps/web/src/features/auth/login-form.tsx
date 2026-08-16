@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -222,7 +223,7 @@ export function LoginForm({
         Skip to sign in
       </a>
       <header className={styles.header}>
-        <a className={styles.brand} href="/" aria-label="Eventloom home">
+        <Link className={styles.brand} href="/" aria-label="Eventloom home">
           <span className={styles.brandMark} aria-hidden="true">
             EL
           </span>
@@ -230,7 +231,7 @@ export function LoginForm({
             <strong>Eventloom</strong>
             <small>Program operations</small>
           </span>
-        </a>
+        </Link>
         <div className={styles.headerActions} data-account-entry="single">
           <p className={styles.headerContext}>One account, all your work</p>
         </div>
