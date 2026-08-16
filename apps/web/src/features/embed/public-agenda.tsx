@@ -60,95 +60,134 @@ export function PublicAgendaSessionDetail({
   backButtonRef?: RefObject<HTMLButtonElement | null>;
   speakers?: readonly PublishedSpeaker[];
 }>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    backButtonRef?.current?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [backButtonRef]);
+
+  const closeDialog = () => {
+    const dialog = dialogRef.current;
+    if (dialog?.open) dialog.close();
+    onBack();
+  };
+
   const presenters = publishedEntryPresenters(entry, speakers);
   const hasDescription = entry.summary.trim().length > 0;
   const hasLongDescription = entry.summary.length > 320;
   return (
-    <section aria-labelledby="agenda-detail-heading" aria-modal="true" role="dialog">
-      <div className={styles.viewHeading}>
-        <div>
-          <p className={styles.eyebrow}>Agenda session detail</p>
-          <h2 id="agenda-detail-heading">{entry.title}</h2>
-          <p>Published session information from the current agenda revision.</p>
-        </div>
-        <button ref={backButtonRef} className={styles.clearButton} type="button" onClick={onBack}>
-          Back to agenda
-        </button>
-      </div>
-
-      <article className={styles.publicSessionCard}>
-        <div className={styles.publicSessionTime}>
-          <span>Time</span>
-          <time dateTime={entry.startsAt}>
-            {formatPublishedDateTimeRange(entry.startsAt, entry.endsAt, displayTimeZone)}
-          </time>
-        </div>
-        <div className={styles.publicSessionCopy}>
-          <div className={styles.publicSessionMeta}>
-            {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-            {entry.trackNames
-              .filter((trackName) => trackName.trim().length > 0)
-              .map((trackName) => (
-                <span key={trackName}>Track: {trackName}</span>
-              ))}
+    <dialog
+      ref={dialogRef}
+      className={styles.detailDialog}
+      aria-labelledby="agenda-detail-heading"
+      onCancel={(event) => {
+        event.preventDefault();
+        closeDialog();
+      }}
+    >
+      <button
+        type="button"
+        className={styles.dialogDismissLayer}
+        aria-label="Close agenda session details"
+        onClick={closeDialog}
+      />
+      <div className={styles.detailDialogSurface}>
+        <div className={styles.viewHeading}>
+          <div>
+            <p className={styles.eyebrow}>Agenda session detail</p>
+            <h2 id="agenda-detail-heading">{entry.title}</h2>
+            <p>Published session information from the current agenda revision.</p>
           </div>
-          <h3>Session details</h3>
-          {hasDescription ? (
-            <p
-              id={`agenda-summary-${entry.id}`}
-              className={descriptionExpanded ? undefined : styles.biography}
-            >
-              {entry.summary}
-            </p>
-          ) : (
-            <p>No description was published.</p>
-          )}
-          {hasLongDescription ? (
-            <button
-              className={styles.clearButton}
-              type="button"
-              aria-expanded={descriptionExpanded}
-              aria-controls={`agenda-summary-${entry.id}`}
-              onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-            >
-              {descriptionExpanded ? "Show less" : "Show more"}
-            </button>
-          ) : null}
-          {presenters.length > 0 ? (
-            <div className={styles.publicSpeakers}>
-              <strong>Speakers</strong>
-              <ul>
-                {presenters.map((presenter) => (
-                  <li key={presenter.key}>
-                    {presenter.speaker ? (
-                      <>
-                        <span>{presenter.displayName}</span>{" "}
-                        <span>({speakerRole(presenter.speaker)})</span>
-                      </>
-                    ) : (
-                      presenter.displayName
-                    )}
-                  </li>
+          <button
+            ref={backButtonRef}
+            className={styles.clearButton}
+            type="button"
+            onClick={closeDialog}
+          >
+            Back to agenda
+          </button>
+        </div>
+
+        <article className={styles.publicSessionCard}>
+          <div className={styles.publicSessionTime}>
+            <span>Time</span>
+            <time dateTime={entry.startsAt}>
+              {formatPublishedDateTimeRange(entry.startsAt, entry.endsAt, displayTimeZone)}
+            </time>
+          </div>
+          <div className={styles.publicSessionCopy}>
+            <div className={styles.publicSessionMeta}>
+              {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
+              {entry.trackNames
+                .filter((trackName) => trackName.trim().length > 0)
+                .map((trackName) => (
+                  <span key={trackName}>Track: {trackName}</span>
                 ))}
-              </ul>
             </div>
-          ) : null}
-          <p>
-            <strong>Format:</strong> {entry.format || "Format not published"}
-          </p>
-          <p>
-            <strong>Track:</strong>{" "}
-            {entry.trackNames.filter((trackName) => trackName.trim().length > 0).join(", ") ||
-              "Track not published"}
-          </p>
-        </div>
-        <div className={styles.publicRoom}>
-          <span>Room</span>
-          <strong>{entry.roomName || "Room not published"}</strong>
-        </div>
-      </article>
-    </section>
+            <h3>Session details</h3>
+            {hasDescription ? (
+              <p
+                id={`agenda-summary-${entry.id}`}
+                className={descriptionExpanded ? undefined : styles.biography}
+              >
+                {entry.summary}
+              </p>
+            ) : (
+              <p>No description was published.</p>
+            )}
+            {hasLongDescription ? (
+              <button
+                className={styles.clearButton}
+                type="button"
+                aria-expanded={descriptionExpanded}
+                aria-controls={`agenda-summary-${entry.id}`}
+                onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+              >
+                {descriptionExpanded ? "Show less" : "Show more"}
+              </button>
+            ) : null}
+            {presenters.length > 0 ? (
+              <div className={styles.publicSpeakers}>
+                <strong>Speakers</strong>
+                <ul>
+                  {presenters.map((presenter) => (
+                    <li key={presenter.key}>
+                      {presenter.speaker ? (
+                        <>
+                          <span>{presenter.displayName}</span>{" "}
+                          <span>({speakerRole(presenter.speaker)})</span>
+                        </>
+                      ) : (
+                        presenter.displayName
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <p>
+              <strong>Format:</strong> {entry.format || "Format not published"}
+            </p>
+            <p>
+              <strong>Track:</strong>{" "}
+              {entry.trackNames.filter((trackName) => trackName.trim().length > 0).join(", ") ||
+                "Track not published"}
+            </p>
+          </div>
+          <div className={styles.publicRoom}>
+            <span>Room</span>
+            <strong>{entry.roomName || "Room not published"}</strong>
+          </div>
+        </article>
+      </div>
+    </dialog>
   );
 }
 type PublishedAgendaFeedFlags = {
@@ -466,6 +505,7 @@ export function PublicAgendaView({
                       return (
                         <li key={entry.id}>
                           <button
+                            id={`agenda-entry-trigger-${entry.id}`}
                             className={styles.publicSessionCard}
                             type="button"
                             aria-labelledby={`agenda-entry-${entry.id}`}
