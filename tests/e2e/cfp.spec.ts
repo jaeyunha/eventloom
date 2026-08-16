@@ -19,7 +19,48 @@ test("participant-only accounts enter CFP without organizer context controls", a
 
   await expect(page.locator("[data-cfp-applicant-context-boundary]")).toHaveCount(0);
   await expect(page.locator('a[href="/admin"]')).toHaveCount(0);
-  await expect(page.locator('button[type="submit"]')).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Continue to proposal" })).toBeEnabled();
+});
+
+test("authenticated Account continuation stays locked while the draft opens", async ({
+  page,
+  authSession,
+}) => {
+  let releaseDraftCreation!: () => void;
+  const draftCreationGate = new Promise<void>((resolve) => {
+    releaseDraftCreation = resolve;
+  });
+  let signalDraftCreation!: () => void;
+  const draftCreationStarted = new Promise<void>((resolve) => {
+    signalDraftCreation = resolve;
+  });
+  await installCfpApi(page, authSession, {
+    eventId: "authenticated-pending-context",
+    initiallyAuthenticated: true,
+    memberships: [],
+  });
+  await page.route("**/api/cfp/**", async (route) => {
+    if (route.request().method() !== "GET") {
+      signalDraftCreation();
+      await draftCreationGate;
+    }
+    await route.fallback();
+  });
+
+  const accountPath =
+    "/cfp/organizations/evaluator-org/events/authenticated-pending-context/account";
+  const submissionPath =
+    "/cfp/organizations/evaluator-org/events/authenticated-pending-context/submission";
+  await page.goto(accountPath);
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  const submit = page.getByRole("button", { name: "Continue to proposal" }).click();
+  await draftCreationStarted;
+  await expect(page.getByRole("button", { name: "Continuing…" })).toBeDisabled();
+
+  const submissionNavigation = page.waitForURL(new RegExp(`${submissionPath}$`));
+  releaseDraftCreation();
+  await submit;
+  await submissionNavigation;
 });
 
 test("current-organization organizers confirm the CFP applicant context", async ({

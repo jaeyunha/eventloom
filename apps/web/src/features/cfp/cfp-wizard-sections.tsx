@@ -660,7 +660,7 @@ function AccountStep({
         {authenticatedSession
           ? `Continue as ${authenticatedSession.name}`
           : accountMode === "sign_in"
-            ? "Continue with your account"
+            ? "Sign in to continue"
             : "Create your account"}
       </h1>
       {authenticatedSession !== null &&
@@ -692,8 +692,8 @@ function AccountStep({
       {!authenticatedSession ? (
         <p>
           {accountMode === "sign_in"
-            ? "Use the email and password for your existing Eventloom account."
-            : "Create one Eventloom account to manage this submission and future event work."}
+            ? "Use your existing Eventloom account to continue to your proposal."
+            : "Create an Eventloom account to save this proposal and receive updates."}
         </p>
       ) : null}
       {!authenticatedSession ? (
@@ -739,9 +739,7 @@ function AccountStep({
           )}
         </Field>
         {authenticatedSession ? (
-          <p role="status">
-            You are signed in as {authenticatedSession.email}. No password is needed to continue.
-          </p>
+          <p role="status">Signed in as {authenticatedSession.email}.</p>
         ) : (
           <>
             <Field
@@ -2167,12 +2165,14 @@ export function CfpWizardSections({
               >
                 {step === "welcome" ? "Continue →" : null}
                 {step === "account"
-                  ? authenticatedSession
-                    ? "Continue →"
-                    : mutationPending
-                      ? accountMode === "sign_in"
+                  ? mutationPending
+                    ? authenticatedSession
+                      ? "Continuing…"
+                      : accountMode === "sign_in"
                         ? "Signing in…"
                         : "Creating account…"
+                    : authenticatedSession
+                      ? "Continue to proposal"
                       : accountMode === "sign_in"
                         ? "Sign in and continue"
                         : "Create account and continue"
