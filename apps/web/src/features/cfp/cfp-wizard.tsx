@@ -3,13 +3,14 @@
 import { uploadMimeTypeLabels } from "@eventloom/contracts";
 import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { RedirectType, redirect, useRouter } from "next/navigation";
 import {
   type ChangeEvent,
   type FormEvent,
   type ReactNode,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -925,10 +926,6 @@ function focusFirstError(nextErrors: ValidationErrors): void {
   });
 }
 
-function reloadPinnedDraft(): void {
-  window.location.reload();
-}
-
 type CfpStartupData = {
   readonly publishedCfp: PublishedCfp;
   readonly session: CfpAuthenticatedSession | null;
@@ -1041,6 +1038,7 @@ export function CfpWizard({
   const [accountMode, setAccountMode] = useState<CfpAccountMode>("sign_in");
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [hydrated, setHydrated] = useState(false);
+  const [startupRevision, setStartupRevision] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [mutationPending, setMutationPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1140,8 +1138,9 @@ export function CfpWizard({
     setVerificationState(null);
     verificationResumeRequestedRef.current = false;
     const controller = new AbortController();
-    const scope = { active: true };
-    const ownsScope = () => scope.active && !controller.signal.aborted;
+    const scope = { active: true, revision: startupRevision };
+    const ownsScope = () =>
+      scope.active && scope.revision === startupRevision && !controller.signal.aborted;
     const handleStartupError = (error: unknown): void => {
       if (!ownsScope()) return;
       if (isCfpSchemaVersionConflict(error)) {
@@ -1325,7 +1324,7 @@ export function CfpWizard({
       controller.abort();
       mutationGateRef.current?.invalidate();
     };
-  }, [api, eventSlug, initialDraft, routeIdentity, startupStore, step]);
+  }, [api, eventSlug, initialDraft, routeIdentity, startupRevision, startupStore, step]);
 
   function updateDraft(update: (current: CfpDraft) => CfpDraft): void {
     setDraft((current) => ({ ...update(current), updatedAt: new Date().toISOString() }));
@@ -1830,6 +1829,11 @@ export function CfpWizard({
       );
     }
   }
+  function refreshPinnedDraft(): void {
+    setHydrated(false);
+    setStartupRevision((revision) => revision + 1);
+    router.refresh();
+  }
 
   function discardStaleDraftAndStartNew(): void {
     if (!identity) return;
@@ -1844,7 +1848,7 @@ export function CfpWizard({
     setStaleFormConflict(null);
     setSaveError(null);
     setSaveState("idle");
-    window.location.reload();
+    refreshPinnedDraft();
   }
 
   function useDifferentVerificationEmail(): void {
@@ -1871,16 +1875,17 @@ export function CfpWizard({
     formRef.current?.requestSubmit();
   }, [authenticatedSession, hydrated, step, verificationState]);
 
-  useEffect(() => {
-    if (
-      hydrated &&
-      cfpStepRequiresAuthentication(step) &&
-      authenticatedSession === null &&
-      routeIdentity !== null
-    ) {
-      router.replace(getCfpStepRoute(routeIdentity.organizationId, eventSlug, "account"));
-    }
-  }, [authenticatedSession, eventSlug, hydrated, routeIdentity, router, step]);
+  if (
+    hydrated &&
+    cfpStepRequiresAuthentication(step) &&
+    authenticatedSession === null &&
+    routeIdentity !== null
+  ) {
+    redirect(
+      getCfpStepRoute(routeIdentity.organizationId, eventSlug, "account"),
+      RedirectType.replace,
+    );
+  }
 
   if (cfpStepRequiresAuthentication(step) && (!hydrated || authenticatedSession === null)) {
     return <span aria-hidden="true" data-cfp-route-state="checking-session" hidden />;
@@ -1932,7 +1937,7 @@ export function CfpWizard({
               disabled={
                 staleFormConflict.pinnedDraftUnavailable || staleFormConflict.submissionId === null
               }
-              onClick={reloadPinnedDraft}
+              onClick={refreshPinnedDraft}
               type="button"
               variant="secondary"
             >
@@ -3563,55 +3568,67 @@ export function CfpComplete({
   const [publishedCfp, setPublishedCfp] = useState<PublishedCfp | null>(null);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const startupStore = useCfpStartupStore();
+  const routeIdentity = useMemo(() => {
+    try {
+      return configuredCfpIdentity(eventSlug, organizationId, formId);
+    } catch {
+      return null;
+    }
+  }, [eventSlug, formId, organizationId]);
+  const scopedOrganizationId = organizationId?.trim() ?? "";
+  const routeScopeKey =
+    routeIdentity === null
+      ? null
+      : `${routeIdentity.organizationId}\u0000${routeIdentity.eventId}\u0000${routeIdentity.formId ?? ""}`;
+  const [redirectToReviewScope, requestReviewRedirect] = useReducer(
+    (current: string | null, scopeKey: string | null) =>
+      scopeKey === null || current === scopeKey ? current : scopeKey,
+    null,
+  );
+  const reviewRedirectHref =
+    (routeIdentity === null && scopedOrganizationId.length > 0) ||
+    (routeScopeKey !== null && redirectToReviewScope === routeScopeKey)
+      ? getCfpStepRoute(routeIdentity?.organizationId ?? scopedOrganizationId, eventSlug, "review")
+      : null;
 
   useEffect(() => {
+    if (routeIdentity === null) return;
     let active = true;
-    let identity: { organizationId: string; eventId: string; formId?: string };
-    try {
-      identity = configuredCfpIdentity(eventSlug, organizationId, formId);
-    } catch {
-      const scopedOrganizationId = organizationId?.trim() ?? "";
-      if (scopedOrganizationId.length > 0) {
-        router.replace(getCfpStepRoute(scopedOrganizationId, eventSlug, "review"));
-      }
-      return () => {
-        active = false;
-      };
-    }
+    const ownsScope = (): boolean => active;
     void (async () => {
       try {
-        const published = await startupStore.load(api, identity).published;
-        if (!active) return;
+        const published = await startupStore.load(api, routeIdentity).published;
+        if (!ownsScope()) return;
         setPublishedCfp(published);
         const canonicalEventId = published.event.id;
         const activeFormId = published.form.id;
         const handoff = window.sessionStorage.getItem(
           getCfpCompletionHandoffStorageKey(
-            identity.organizationId,
+            routeIdentity.organizationId,
             canonicalEventId,
             activeFormId,
           ),
         );
         const submissionId = handoff?.trim() ?? "";
         if (!submissionId) {
-          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
+          if (ownsScope()) requestReviewRedirect(routeScopeKey);
           return;
         }
         const receipt = await api.getReceipt({
-          organizationId: identity.organizationId,
+          organizationId: routeIdentity.organizationId,
           eventId: canonicalEventId,
           submissionId,
         });
-        if (!active) return;
+        if (!ownsScope()) return;
         if (!receipt.submissionId || !receipt.submittedAt) {
-          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
+          requestReviewRedirect(routeScopeKey);
           return;
         }
         let submissionTitle = "";
         let recipient = "";
         try {
           const submission = await api.loadDraft({
-            organizationId: identity.organizationId,
+            organizationId: routeIdentity.organizationId,
             eventId: canonicalEventId,
             submissionId,
           });
@@ -3628,9 +3645,9 @@ export function CfpComplete({
         } catch {
           // The receipt remains sufficient to confirm submission when the draft view is unavailable.
         }
-        if (!active) return;
+        if (!ownsScope()) return;
         setCompletionIdentity({
-          organizationId: identity.organizationId,
+          organizationId: routeIdentity.organizationId,
           eventId: canonicalEventId,
           formId: activeFormId,
           submissionId,
@@ -3647,14 +3664,17 @@ export function CfpComplete({
         });
         setConfirmed(true);
       } catch {
-        router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
+        if (ownsScope()) requestReviewRedirect(routeScopeKey);
       }
     })();
 
     return () => {
       active = false;
     };
-  }, [api, eventSlug, formId, organizationId, router, startupStore]);
+  }, [api, routeIdentity, routeScopeKey, startupStore]);
+  if (reviewRedirectHref !== null) {
+    redirect(reviewRedirectHref, RedirectType.replace);
+  }
   function editSubmission(): void {
     if (completionIdentity === null || !completionIdentity.canEdit) return;
     window.localStorage.setItem(
