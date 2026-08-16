@@ -1,0 +1,154 @@
+.progress {
+  margin-top: 1.5rem;
+}
+
+.progressLabel {
+  margin: 0 0 0.65rem;
+  color: var(--color-muted);
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.progress ol {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress li {
+  position: relative;
+  display: grid;
+  min-height: 2.25rem;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.progress li:not(:last-child)::after {
+  position: absolute;
+  top: 1.65rem;
+  bottom: -0.6rem;
+  left: 0.72rem;
+  width: 1px;
+  background: var(--color-border);
+  content: "";
+}
+
+.indicator {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 0.67rem;
+  font-weight: 650;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress li[data-state="current"] {
+  color: var(--color-ink);
+  font-weight: 640;
+}
+
+.progress li[data-state="current"] .indicator {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 9%, var(--color-surface));
+  color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.progress li[data-state="complete"] {
+  color: color-mix(in srgb, var(--color-ink) 76%, var(--color-muted));
+}
+
+.progress li[data-state="complete"] .indicator {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: var(--color-surface);
+}
+
+.progress li[data-state="complete"]:not(:last-child)::after {
+  background: color-mix(in srgb, var(--color-success) 48%, var(--color-border));
+}
+
+.mobileProgress {
+  display: none;
+}
+
+.mobileHeader {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.mobileHeader span {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.mobileHeader strong {
+  color: var(--color-ink);
+  font-size: 0.8rem;
+  font-weight: 640;
+}
+
+.mobileSegments {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mobileSegments li {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mobileSegments li > span:first-child {
+  display: block;
+  height: 0.2rem;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.mobileSegments .mobileComplete > span:first-child {
+  background: color-mix(in srgb, var(--color-success) 70%, var(--color-border));
+}
+
+.mobileSegments .mobileCurrent > span:first-child {
+  background: var(--color-accent);
+}
+
+@media (max-width: 52rem) {
+  .progress {
+    display: none;
+  }
+
+  .mobileProgress {
+    display: block;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+}
