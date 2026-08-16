@@ -17,6 +17,7 @@ import {
   deliverableAssetKinds,
 } from "./api";
 import {
+  authorizeContentCollectionNavigationSnapshot,
   ContentRequestInspector,
   contentRequestMetrics,
   type DeliverableRow,
@@ -577,6 +578,58 @@ function deferred<T>(): {
 }
 
 describe("deliverables core request starter", () => {
+  it("revalidates cached snapshots through the privileged deliverables endpoint", async () => {
+    const listDeliverableMatrix = vi.fn().mockResolvedValue({
+      organizationId: "org-1",
+      eventId: "event-1",
+      total: 0,
+      filters: {},
+      items: [],
+    });
+    const cachedSnapshot = {
+      sessions: [session],
+      tasks: [task],
+      assets: [],
+      profiles: [],
+    };
+
+    await expect(
+      authorizeContentCollectionNavigationSnapshot({ listDeliverableMatrix }, cachedSnapshot),
+    ).resolves.toBe(cachedSnapshot);
+    expect(listDeliverableMatrix).toHaveBeenCalledOnce();
+  });
+
+  it("rejects cached snapshots when the authorization probe fails", async () => {
+    const authorizationError = new Error("Organizer access was revoked.");
+    const listDeliverableMatrix = vi.fn().mockRejectedValue(authorizationError);
+
+    await expect(
+      authorizeContentCollectionNavigationSnapshot(
+        { listDeliverableMatrix },
+        {
+          sessions: [session],
+          tasks: [task],
+          assets: [],
+          profiles: [],
+        },
+      ),
+    ).rejects.toBe(authorizationError);
+  });
+
+  it("falls back to a full load when the privileged authorization endpoint is unavailable", async () => {
+    await expect(
+      authorizeContentCollectionNavigationSnapshot(
+        {},
+        {
+          sessions: [session],
+          tasks: [task],
+          assets: [],
+          profiles: [],
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("starts the sessions and matrix requests before either deferred response settles", async () => {
     const signal = new AbortController().signal;
     const calls: string[] = [];
@@ -890,7 +943,8 @@ describe("deliverables core request starter", () => {
     );
     expect(markup).toContain("Waiting for upload");
     expect(markup).toContain("The speaker has not submitted a current file for this assignment.");
-    expect(markup).toContain("application/pdf");
+    expect(markup).toContain("PDF");
+    expect(markup).not.toContain("application/pdf");
     expect(markup).toContain("Maximum 5 MB");
   });
 
@@ -1087,6 +1141,7 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Session content");
     expect(markup).toContain("Speaker profiles");
     expect(markup).toContain("New content request");
+    expect(markup).toContain('data-slot="dialog-trigger"');
     expect(markup).not.toContain('data-slot="dialog-content"');
     expect(deliverableAssetKinds).toContain("slides");
     expect(markup).not.toContain("The replacement is staged through a");
@@ -1155,7 +1210,7 @@ describe("deliverables workspace", () => {
     expect(filesMarkup).toContain("Select approved files from a session");
     expect(filesMarkup).toContain("Download selected files ZIP");
     expect(filesMarkup).not.toContain("New file request");
-    expect(filesMarkup).toContain("Uploaded files");
+    expect(filesMarkup).toContain('data-workspace-mode="files"');
     const deliverablesMarkup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
         organizationId: "org-1",
@@ -1341,7 +1396,7 @@ describe("deliverables workspace", () => {
       }),
     );
     expect((deliverablesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
-    expect(deliverablesMarkup).toContain("Collect speaker files");
+    expect(deliverablesMarkup).toContain('data-workspace-mode="deliverables"');
     expect(deliverablesMarkup).toContain("Select outstanding assignment");
     expect(deliverablesMarkup).toContain("Canonical content and profiles stay");
     expect(deliverablesMarkup).toContain("Canonical content and profiles stay");

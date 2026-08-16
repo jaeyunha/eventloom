@@ -703,8 +703,7 @@ describe("admin navigation", () => {
       ["Agenda", "/admin/organizations/org%2Flive/events/event%2Flive/agenda"],
       ["Program settings", "/admin/organizations/org%2Flive/events/event%2Flive/settings"],
       ["Speakers", "/admin/organizations/org%2Flive/events/event%2Flive/speakers"],
-      ["Content requests", "/admin/organizations/org%2Flive/events/event%2Flive/deliverables"],
-      ["Files", "/admin/organizations/org%2Flive/events/event%2Flive/files"],
+      ["Content collection", "/admin/organizations/org%2Flive/events/event%2Flive/deliverables"],
       ["Communications", "/admin/organizations/org%2Flive/events/event%2Flive/communications"],
       ["Content remix", "/admin/organizations/org%2Flive/events/event%2Flive/remix"],
       ["Embeds", "/admin/organizations/org%2Flive/events/event%2Flive/embeds"],
@@ -727,6 +726,10 @@ describe("admin navigation", () => {
     const agenda = items.find((item) => item.label === "Agenda");
     expect(agenda?.match(`${expected[5][1]}/sessions`)).toBe(true);
     expect(agenda?.match(`${expected[5][1]}-draft`)).toBe(false);
+    const contentCollection = items.find((item) => item.label === "Content collection");
+    expect(
+      contentCollection?.match("/admin/organizations/org%2Flive/events/event%2Flive/files"),
+    ).toBe(true);
   });
 
   it("uses canonical organization destinations in the sidebar and event workspace menu", () => {

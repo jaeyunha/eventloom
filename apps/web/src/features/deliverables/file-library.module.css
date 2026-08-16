@@ -37,6 +37,10 @@
   gap: var(--space-3);
 }
 
+.libraryContent {
+  gap: var(--space-5);
+}
+
 .filters {
   display: grid;
   min-inline-size: 0;
@@ -44,7 +48,7 @@
   padding: 0;
   border: 0;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 .field {
@@ -117,7 +121,7 @@ small.muted {
 
 .emptyState {
   justify-items: start;
-  padding: var(--space-5);
+  padding: var(--space-6);
   border: 1px dashed var(--border);
   border-radius: var(--radius);
 }
