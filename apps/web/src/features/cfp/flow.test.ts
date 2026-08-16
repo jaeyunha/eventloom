@@ -55,6 +55,14 @@ describe("CFP flow", () => {
     expect(cfpWizardSource).toContain("<WorkspaceContextBar");
     expect(cfpWizardSource).toContain("<ThemeToggle />");
   });
+  it("uses client navigation when returning to the organizer workspace", () => {
+    expect(cfpWizardSource).toContain('import Link from "next/link";');
+    expect(cfpWizardSource).toContain('<Link href="/admin">Return to organizer workspace</Link>');
+    expect(cfpWizardSource).not.toContain('<a href="/admin">Return to organizer workspace</a>');
+    expect(cfpWizardSource).toContain(
+      '<a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>',
+    );
+  });
 
   it("starts draft saving only after authentication reaches the proposal", () => {
     expect(
