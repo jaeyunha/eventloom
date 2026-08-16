@@ -10,29 +10,42 @@ export const CFP_STEP_LABELS: Record<CfpStep, string> = {
   review: "Review",
 };
 
-interface CfpProgressProps {
+type CfpProgressProps = {
   readonly mobile?: boolean;
-  readonly step: CfpStep;
-}
+} & (
+  | {
+      readonly complete: true;
+      readonly step?: never;
+    }
+  | {
+      readonly complete?: false;
+      readonly step: CfpStep;
+    }
+);
 
-export function CfpProgress({ step, mobile = false }: CfpProgressProps) {
-  const currentIndex = Math.max(CFP_STEPS.indexOf(step), 0);
+export function CfpProgress(props: CfpProgressProps) {
+  const mobile = props.mobile ?? false;
+  const complete = props.complete === true;
+  const currentIndex = complete ? CFP_STEPS.length : Math.max(CFP_STEPS.indexOf(props.step), 0);
+  const currentLabel = complete ? "Submission complete" : CFP_STEP_LABELS[props.step];
 
   if (mobile) {
     return (
       <nav aria-label="Submission progress" className={styles.mobileProgress}>
         <div className={styles.mobileHeader}>
           <span>
-            Step {currentIndex + 1} of {CFP_STEPS.length}
+            {complete
+              ? `${CFP_STEPS.length} of ${CFP_STEPS.length} steps complete`
+              : `Step ${currentIndex + 1} of ${CFP_STEPS.length}`}
           </span>
-          <strong>{CFP_STEP_LABELS[step]}</strong>
+          <strong>{currentLabel}</strong>
         </div>
         <ol className={styles.mobileSegments}>
           {CFP_STEPS.map((wizardStep, index) => (
             <li
-              aria-current={index === currentIndex ? "step" : undefined}
+              aria-current={!complete && index === currentIndex ? "step" : undefined}
               className={
-                index === currentIndex
+                !complete && index === currentIndex
                   ? styles.mobileCurrent
                   : index < currentIndex
                     ? styles.mobileComplete
@@ -54,11 +67,15 @@ export function CfpProgress({ step, mobile = false }: CfpProgressProps) {
 
   return (
     <nav aria-label="Submission progress" className={styles.progress}>
-      <p className={styles.progressLabel}>Your progress</p>
+      <p className={styles.progressLabel}>{complete ? "Submission complete" : "Your progress"}</p>
       <ol>
         {CFP_STEPS.map((wizardStep, index) => {
           const state =
-            index === currentIndex ? "current" : index < currentIndex ? "complete" : "upcoming";
+            complete || index < currentIndex
+              ? "complete"
+              : index === currentIndex
+                ? "current"
+                : "upcoming";
           return (
             <li
               aria-current={state === "current" ? "step" : undefined}

@@ -13,6 +13,7 @@ import type {
   BetterAuthGateway,
   D1ApiKeyGateway,
   OrganizationMembership,
+  ReviewerGrant,
   SpeakerGrant,
   StoredApiKey,
 } from "../features/auth/types";
@@ -61,7 +62,7 @@ import type {
   IntegrationDeliveryStatus,
 } from "../routes/integrations";
 import { createD1ApplicationDependencies, D1IdempotencyStore } from "./airtable";
-import { createD1RuntimeDependencies } from "./d1";
+import { createD1RuntimeDependencies, createRuntimeEventRoleInvitationAdapters } from "./d1";
 
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
@@ -113,9 +114,10 @@ interface SessionRow {
 }
 
 interface SessionScopeRow extends SessionRow {
-  readonly scope_type: "session" | "membership" | "speaker_grant";
+  readonly scope_type: "session" | "membership" | "reviewer_grant" | "speaker_grant";
   readonly scope_order: number;
   readonly organization_id: string | null;
+  readonly event_id: string | null;
   readonly role: string | null;
   readonly speaker_profile_id: string | null;
 }
@@ -123,6 +125,11 @@ interface SessionScopeRow extends SessionRow {
 interface MembershipRow {
   readonly organization_id: string;
   readonly role: string;
+}
+
+interface ReviewerGrantRow {
+  readonly organization_id: string;
+  readonly event_id: string;
 }
 
 interface SpeakerGrantRow {
@@ -245,6 +252,14 @@ function membershipsFrom(rows: readonly MembershipRow[]): OrganizationMembership
   );
 }
 
+function reviewerGrantsFrom(rows: readonly ReviewerGrantRow[]): ReviewerGrant[] {
+  return rows.flatMap((row) =>
+    nonEmpty(row.organization_id) && nonEmpty(row.event_id)
+      ? [{ organizationId: row.organization_id, eventId: row.event_id }]
+      : [],
+  );
+}
+
 function speakerGrantsFrom(rows: readonly SpeakerGrantRow[]): SpeakerGrant[] {
   return rows.flatMap((row) =>
     nonEmpty(row.organization_id) && nonEmpty(row.speaker_profile_id)
@@ -302,6 +317,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
                 'session' AS scope_type,
                 0 AS scope_order,
                 NULL AS organization_id,
+                NULL AS event_id,
                 NULL AS role,
                 NULL AS speaker_profile_id
            FROM session_base
@@ -314,6 +330,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
                 'membership' AS scope_type,
                 1 AS scope_order,
                 memberships.organization_id,
+                NULL AS event_id,
                 memberships.role,
                 NULL AS speaker_profile_id
            FROM session_base AS base
@@ -325,20 +342,48 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
                 base.email,
                 base.email_verified,
                 base.expires_at,
-                'speaker_grant' AS scope_type,
+                'reviewer_grant' AS scope_type,
                 2 AS scope_order,
+                invitations.organization_id,
+                invitations.event_id,
+                NULL AS role,
+                NULL AS speaker_profile_id
+           FROM session_base AS base
+           JOIN event_role_invitations AS invitations
+             ON invitations.recipient_user_id = base.user_id
+            AND invitations.role = 'reviewer'
+            AND invitations.status = 'accepted'
+          WHERE base.email_verified = 1
+         UNION ALL
+         SELECT base.session_id,
+                base.user_id,
+                base.email,
+                base.email_verified,
+                base.expires_at,
+                'speaker_grant' AS scope_type,
+                3 AS scope_order,
                 grants.organization_id,
+                grants.event_id,
                 NULL AS role,
                 profiles.id AS speaker_profile_id
            FROM session_base AS base
            JOIN participant_grants AS grants
              ON grants.user_id = base.user_id
             AND grants.revoked_at IS NULL
+           JOIN event_role_invitations AS invitations
+             ON invitations.organization_id = grants.organization_id
+            AND invitations.event_id = grants.event_id
+            AND invitations.role = 'speaker'
+            AND invitations.recipient_user_id = grants.user_id
+            AND invitations.participant_id = grants.participant_id
+            AND invitations.status = 'accepted'
            JOIN speaker_profiles AS profiles
              ON profiles.organization_id = grants.organization_id
             AND profiles.event_id = grants.event_id
             AND profiles.participant_id = grants.participant_id
-          ORDER BY scope_order, organization_id, speaker_profile_id`,
+            AND profiles.status <> 'revoked'
+          WHERE base.email_verified = 1
+          ORDER BY scope_order, organization_id, event_id, speaker_profile_id`,
       )
       .bind(tokenDigest)
       .all<SessionScopeRow>();
@@ -350,6 +395,13 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
     const membershipRows: MembershipRow[] = result.results.flatMap((scope) =>
       scope.scope_type === "membership" && scope.organization_id !== null && scope.role !== null
         ? [{ organization_id: scope.organization_id, role: scope.role }]
+        : [],
+    );
+    const reviewerGrantRows: ReviewerGrantRow[] = result.results.flatMap((scope) =>
+      scope.scope_type === "reviewer_grant" &&
+      scope.organization_id !== null &&
+      scope.event_id !== null
+        ? [{ organization_id: scope.organization_id, event_id: scope.event_id }]
         : [],
     );
     const speakerGrantRows: SpeakerGrantRow[] = result.results.flatMap((scope) =>
@@ -374,6 +426,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
       emailVerified: row.email_verified === 1,
       expiresAt,
       memberships,
+      reviewerGrants: reviewerGrantsFrom(reviewerGrantRows),
       speakerGrants: speakerGrantsFrom(speakerGrantRows),
     };
   }
@@ -2521,6 +2574,9 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     },
   );
   const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
+  const eventRoleInvitationAdapters = createRuntimeEventRoleInvitationAdapters(
+    businessRepositories.eventRoleInvitations,
+  );
   const dependencies = createD1ApplicationDependencies({
     authenticator,
     database: bindings.DB,
@@ -2530,6 +2586,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     webOrigin: bindings.WEB_ORIGIN,
     aiProviders,
     businessRepositories,
+    eventRoleInvitationAdapters,
     senderAddresses,
     calendarIntegrationOptions,
   });
@@ -2542,6 +2599,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       senderAddresses.auth,
     ),
     reviewerPools: businessRepositories.reviewerPool,
+    reviewerEventInvitations: eventRoleInvitationAdapters.reviewerLifecycle,
   });
   const integrationRepository = new CloudflareIntegrationAdminRepository(
     bindings.DB,

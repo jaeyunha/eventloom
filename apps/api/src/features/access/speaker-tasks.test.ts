@@ -13,6 +13,7 @@ const user: UserPrincipal = {
   speakerGrants: [
     { organizationId: "org-a", speakerProfileId: "profile:shared-event:participant-1" },
   ],
+  reviewerGrants: [],
 };
 const apiKey: AuthPrincipal = {
   kind: "apiKey",

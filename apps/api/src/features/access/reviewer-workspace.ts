@@ -160,11 +160,14 @@ export class AccountReviewerWorkspaceService {
     principal: UserPrincipal,
     filter: AccountReviewerWorkspaceFilter = {},
   ): Promise<AccountReviewerWorkspace> {
-    const reviewerOrganizationIds = new Set(
-      principal.memberships
-        .filter((membership) => membership.role === "reviewer")
-        .map((membership) => membership.organizationId),
-    );
+    const reviewerEventIdsByOrganization = new Map<string, Set<string>>();
+    for (const grant of principal.reviewerGrants) {
+      const eventIds =
+        reviewerEventIdsByOrganization.get(grant.organizationId) ?? new Set<string>();
+      eventIds.add(grant.eventId);
+      reviewerEventIdsByOrganization.set(grant.organizationId, eventIds);
+    }
+    const reviewerOrganizationIds = new Set(reviewerEventIdsByOrganization.keys());
     if (
       filter.organizationId !== undefined &&
       !reviewerOrganizationIds.has(filter.organizationId)
@@ -172,6 +175,17 @@ export class AccountReviewerWorkspaceService {
       throw new ReviewerWorkspaceAccessError(
         "The requested reviewer organization is not available.",
       );
+    }
+    const requestedEventId = filter.eventId;
+    if (
+      requestedEventId !== undefined &&
+      ![...reviewerEventIdsByOrganization].some(
+        ([organizationId, eventIds]) =>
+          (filter.organizationId === undefined || filter.organizationId === organizationId) &&
+          eventIds.has(requestedEventId),
+      )
+    ) {
+      throw new ReviewerWorkspaceAccessError("The requested reviewer event is not available.");
     }
 
     const organizations = (await this.dependencies.listOrganizationsForUser(principal)).filter(
@@ -189,11 +203,19 @@ export class AccountReviewerWorkspaceService {
       );
     }
     const selectedOrganizations = organizations
-      .filter(
-        (organization) =>
-          filter.organizationId === undefined ||
-          organization.organizationId === filter.organizationId,
-      )
+      .filter((organization) => {
+        if (
+          filter.organizationId !== undefined &&
+          organization.organizationId !== filter.organizationId
+        ) {
+          return false;
+        }
+        return (
+          filter.eventId === undefined ||
+          reviewerEventIdsByOrganization.get(organization.organizationId)?.has(filter.eventId) ===
+            true
+        );
+      })
       .sort(compareOrganizations);
 
     if (filter.organizationId !== undefined && !organizationById.has(filter.organizationId)) {
@@ -207,24 +229,16 @@ export class AccountReviewerWorkspaceService {
         try {
           const plans = await this.dependencies.listEvaluationPlans(organization.organizationId);
           for (const plan of plans) validatePlan(plan, organization.organizationId);
-          const filteredPlans = plans.filter(
-            (plan) => filter.eventId === undefined || plan.eventId === filter.eventId,
-          );
-          const eventIds = [...new Set(filteredPlans.map((plan) => plan.eventId))].sort();
-          if (eventIds.length === 0) {
-            if (filter.eventId !== undefined)
-              return { kind: "unauthorized" as const, organization };
-            return {
-              kind: "success" as const,
-              workspace: {
-                organization: {
-                  id: organization.organizationId,
-                  name: organization.name,
-                },
-                assignments: [],
-              },
-            };
+          const grantedEventIds = reviewerEventIdsByOrganization.get(organization.organizationId);
+          if (grantedEventIds === undefined) {
+            throw new AccessContextDependencyError(
+              "The reviewer workspace organization has no current event scope.",
+            );
           }
+          const eventIds = [...grantedEventIds]
+            .filter((eventId) => filter.eventId === undefined || eventId === filter.eventId)
+            .sort();
+          const filteredPlans = plans.filter((plan) => eventIds.includes(plan.eventId));
           const actor: EvaluationActor = {
             tenantId: organization.organizationId,
             userId: principal.userId,
@@ -267,10 +281,6 @@ export class AccountReviewerWorkspaceService {
         }
       }),
     );
-
-    if (filter.eventId !== undefined && results.every((result) => result.kind === "unauthorized")) {
-      throw new ReviewerWorkspaceAccessError("The requested reviewer event is not available.");
-    }
 
     return {
       organizations: results.flatMap((result) =>

@@ -137,6 +137,7 @@ const user: AuthPrincipal = {
   email: "user@example.test",
   memberships: [{ organizationId: "org-1", role: "owner" }],
   speakerGrants: [],
+  reviewerGrants: [],
 };
 
 const apiKey: AuthPrincipal = {

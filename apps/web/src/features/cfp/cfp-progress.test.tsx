@@ -22,4 +22,12 @@ describe("CFP progress", () => {
     expect(markup).toContain("<strong>Speakers</strong>");
     expect(markup.match(/aria-current="step"/gu)).toHaveLength(1);
   });
+
+  it("keeps the shared progress rail visible after submission", () => {
+    const markup = renderToStaticMarkup(<CfpProgress complete />);
+
+    expect(markup).toContain("Submission complete");
+    expect(markup).not.toContain('aria-current="step"');
+    expect(markup.match(/Complete/gu)).toHaveLength(5);
+  });
 });

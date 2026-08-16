@@ -1,5 +1,14 @@
 "use client";
 
+import {
+  ArrowRight,
+  CalendarDays,
+  FileSpreadsheet,
+  ListChecks,
+  Mic2,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -51,6 +60,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { WorkspaceBreadcrumb, WorkspaceHeader, WorkspaceSurface } from "@/components/workspace";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
@@ -68,11 +78,15 @@ import {
 } from "./api";
 import styles from "./reports-workspace.module.css";
 import {
+  draftFromReportTemplate,
   type FieldOption,
   fieldsForRelationships,
   normalizeDraft,
   REPORT_DIALOG_COPY,
   REPORT_FIELD_ALLOWLIST,
+  REPORT_TEMPLATES,
+  type ReportTemplate,
+  type ReportTemplateId,
   SOURCE_ORDER,
 } from "./reports-workspace-model";
 
@@ -354,6 +368,104 @@ function equalDraft(left: ReportDefinitionInput, right: ReportDefinitionInput): 
   return JSON.stringify(normalizeDraft(left)) === JSON.stringify(normalizeDraft(right));
 }
 
+function ReportTemplateIcon({ id }: Readonly<{ id: ReportTemplateId }>) {
+  const iconProps = { "aria-hidden": true, size: 20, strokeWidth: 1.8 } as const;
+  switch (id) {
+    case "program-schedule":
+      return <CalendarDays {...iconProps} />;
+    case "speaker-directory":
+      return <Mic2 {...iconProps} />;
+    case "participant-directory":
+      return <Users {...iconProps} />;
+    case "evaluation-progress":
+      return <ListChecks {...iconProps} />;
+  }
+}
+
+type CommonExportsProps = Readonly<{
+  organizationId: string;
+  eventId: string;
+  onUseTemplate: (template: ReportTemplate, trigger: HTMLElement) => void;
+}>;
+
+function CommonExports({ organizationId, eventId, onUseTemplate }: CommonExportsProps) {
+  const reviewsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/reviews`;
+  return (
+    <WorkspaceSurface
+      id="report-templates"
+      className={styles.commonExports}
+      data-report-surface="common-exports"
+      title="Common exports"
+      description="Start with an organizer-ready setup, then adjust fields or filters before saving."
+      actions={
+        <Badge variant="outline" className={styles.safeBadge}>
+          <ShieldCheck aria-hidden="true" size={14} />
+          This event only
+        </Badge>
+      }
+    >
+      <div className={styles.quickExportGrid}>
+        <Card className={`${styles.exportTemplateCard} ${styles.featuredExportCard}`}>
+          <CardHeader className={styles.exportTemplateHeader}>
+            <div className={styles.templateIcon}>
+              <FileSpreadsheet aria-hidden="true" size={20} strokeWidth={1.8} />
+            </div>
+            <Badge className={styles.recommendedBadge}>Recommended</Badge>
+            <CardTitle>Review scores & decisions</CardTitle>
+            <CardDescription>
+              Open review results and export submission scores, review counts, and organizer
+              decisions.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className={styles.exportTemplateFooter}>
+            <Button asChild>
+              <Link href={reviewsHref}>
+                Open review results
+                <ArrowRight aria-hidden="true" size={16} />
+              </Link>
+            </Button>
+            <span className={styles.templateMeta}>Use the Export CSV action in Reviews.</span>
+          </CardFooter>
+        </Card>
+
+        {REPORT_TEMPLATES.map((template) => (
+          <Card
+            key={template.id}
+            className={styles.exportTemplateCard}
+            data-report-template-id={template.id}
+          >
+            <CardHeader className={styles.exportTemplateHeader}>
+              <div className={styles.templateIcon}>
+                <ReportTemplateIcon id={template.id} />
+              </div>
+              <CardTitle>{template.name}</CardTitle>
+              <CardDescription>{template.description}</CardDescription>
+            </CardHeader>
+            <CardFooter className={styles.exportTemplateFooter}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={(event) => onUseTemplate(template, event.currentTarget)}
+              >
+                Use template
+                <ArrowRight aria-hidden="true" size={16} />
+              </Button>
+              <span className={styles.templateMeta}>{template.fields.length} columns included</span>
+            </CardFooter>
+          </Card>
+        ))}
+      </div>
+      <div className={styles.trustNote}>
+        <ShieldCheck aria-hidden="true" size={18} />
+        <p>
+          Only fields intended for organizers are available here. Access is checked again whenever
+          an export is generated.
+        </p>
+      </div>
+    </WorkspaceSurface>
+  );
+}
+
 function FormMessage({ message, error = false }: Readonly<{ message: string; error?: boolean }>) {
   return (
     <Alert variant={error ? "destructive" : "default"} className={styles.message}>
@@ -427,7 +539,6 @@ type SavedReportListProps = Readonly<{
   readonly selectedId: string | null;
   readonly onSelect: (definition: ReportDefinition, trigger: HTMLElement) => void;
   readonly onDelete: (definition: ReportDefinition, trigger: HTMLElement) => void;
-  readonly onNew: (trigger: HTMLElement) => void;
   readonly busy: boolean;
 }>;
 
@@ -438,32 +549,27 @@ export function SavedReportList({
   selectedId,
   onSelect,
   onDelete,
-  onNew,
   busy,
 }: SavedReportListProps) {
   return (
     <Card className={styles.savedList} id="saved-reports">
       <CardHeader className={styles.sectionHeader}>
         <div>
-          <p className={styles.sectionEyebrow}>Saved recipes</p>
+          <p className={styles.sectionEyebrow}>Reusable exports</p>
           <CardTitle>Saved reports</CardTitle>
           <CardDescription>
-            Reusable recipes define sources and columns. Each run is an immutable, dated result with
-            server audit metadata.
+            Reuse the same data, columns, filters, and sorting whenever you need another file.
           </CardDescription>
           {eventId ? (
             <span className={styles.srOnly}>Saved report definitions for {eventId}</span>
           ) : null}
         </div>
-        <Button type="button" onClick={(event) => onNew(event.currentTarget)} disabled={busy}>
-          New report
-        </Button>
       </CardHeader>
       <CardContent>
         {definitions.length === 0 ? (
           <div className={styles.emptyState} role="status">
             <Badge variant="outline">Empty</Badge>
-            <p>No saved reports yet. Create a recipe from the approved event-scoped fields.</p>
+            <p>Use a common export above or save a custom report for repeat use.</p>
           </div>
         ) : (
           <div className={styles.savedItems}>
@@ -499,10 +605,10 @@ export function SavedReportList({
                       <Badge variant="outline">Version {definition.version}</Badge>
                     </span>
                     <span className={styles.savedItemLatest}>
-                      Latest run:{" "}
+                      Last export:{" "}
                       {latestRun
                         ? `${dateLabel(latestRun.requestedAt)} · ${latestRun.audit.rowCount} rows`
-                        : "Not run yet"}
+                        : "Never exported"}
                     </span>
                   </Button>
                   <Button
@@ -578,15 +684,15 @@ export function ReportDefinitionEditor({
     >
       <div className={styles.sectionHeader}>
         <div>
-          <p className={styles.sectionEyebrow}>Recipe editor</p>
+          <p className={styles.sectionEyebrow}>Report builder</p>
           <h2 id="definition-editor-heading">
             {selectedDefinition === null
-              ? "Create a saved report"
+              ? "Create custom report"
               : `Edit ${selectedDefinition.name}`}
           </h2>
           <p className={styles.muted}>
-            Saved recipe version {selectedDefinition?.version ?? "new"}. Optimistic version checks
-            keep concurrent edits honest.
+            Choose the event data and spreadsheet columns you need, then save the report before
+            previewing or exporting it.
           </p>
         </div>
         <Badge variant={selectedDefinition === null ? "secondary" : "outline"}>
@@ -594,11 +700,11 @@ export function ReportDefinitionEditor({
         </Badge>
       </div>
 
-      <Card className={styles.innerCard}>
+      <Card className={styles.innerCard} data-report-builder-step="identity">
         <CardHeader>
-          <CardTitle>Identity and purpose</CardTitle>
+          <CardTitle>1. Name this report</CardTitle>
           <CardDescription>
-            Give this reusable recipe a clear name and explain what it is for.
+            Name the export so other organizers know when to use it.
           </CardDescription>
         </CardHeader>
         <CardContent className={styles.formGrid}>
@@ -613,7 +719,7 @@ export function ReportDefinitionEditor({
             />
           </div>
           <div className={styles.field}>
-            <Label htmlFor="report-description">Purpose</Label>
+            <Label htmlFor="report-description">Description</Label>
             <Textarea
               id="report-description"
               value={draft.description ?? ""}
@@ -626,12 +732,12 @@ export function ReportDefinitionEditor({
       </Card>
 
       <div className={styles.editorGrid}>
-        <Card className={styles.innerCard}>
+        <Card className={styles.innerCard} data-report-builder-step="sources">
           <CardHeader>
-            <CardTitle>Data sources</CardTitle>
+            <CardTitle>Choose data</CardTitle>
             <CardDescription>
-              Choose event-scoped sources. The server rechecks access for every save and run; this
-              UI list is not an authorization boundary.
+              Select the event areas this spreadsheet should include. Only organizer-safe fields are
+              available.
             </CardDescription>
           </CardHeader>
           <CardContent className={styles.checkGrid}>
@@ -649,12 +755,11 @@ export function ReportDefinitionEditor({
           </CardContent>
         </Card>
 
-        <Card className={styles.innerCard}>
+        <Card className={styles.innerCard} data-report-builder-step="columns">
           <CardHeader>
-            <CardTitle>Columns</CardTitle>
+            <CardTitle>2. Choose columns</CardTitle>
             <CardDescription>
-              Select from the organizer-safe field registry, then set the output order before
-              running.
+              Select the information to include in each exported row.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -670,8 +775,8 @@ export function ReportDefinitionEditor({
               ))}
             </div>
             <div className={styles.orderBlock}>
-              <h3>Field order</h3>
-              <p className={styles.muted}>Output columns follow this order.</p>
+              <h3>Export column order</h3>
+              <p className={styles.muted}>The first item becomes the first column in the file.</p>
               {draft.order.length === 0 ? (
                 <p className={styles.emptyState} role="status">
                   Select at least one field to set the output order.
@@ -714,14 +819,13 @@ export function ReportDefinitionEditor({
 
       <Collapsible
         className={styles.refine}
+        data-report-builder-step="refinements"
         defaultOpen={draft.filters.length > 0 || draft.sort.length > 0}
       >
         <div className={styles.refineHeader}>
           <div>
-            <h3>Refine report</h3>
-            <p className={styles.muted}>
-              Filters, sorting, and evaluation-plan context are applied server-side.
-            </p>
+            <h3>3. Filters and sorting</h3>
+            <p className={styles.muted}>Optional rules help narrow and order the exported rows.</p>
           </div>
           <CollapsibleTrigger asChild>
             <Button type="button" variant="outline" size="sm">
@@ -894,39 +998,44 @@ export function ReportDefinitionEditor({
             ))}
           </div>
 
-          <div className={styles.refineGroup}>
-            <div className={styles.subsectionHeader}>
-              <div>
-                <h4>Evaluation-plan context</h4>
-                <p className={styles.muted}>
-                  Optional plan identifiers are sent to the server and recorded in run audit
-                  metadata.
-                </p>
+          <Collapsible
+            className={styles.advancedDisclosure}
+            defaultOpen={evaluationPlanId.length > 0 || evaluationPlanVersion.length > 0}
+          >
+            <CollapsibleTrigger asChild>
+              <Button type="button" variant="ghost" size="sm">
+                Advanced audit settings
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className={styles.advancedDisclosureContent}>
+              <p className={styles.muted}>
+                Pin an export to a saved review-plan version only when an audit workflow requires
+                it.
+              </p>
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <Label htmlFor="evaluation-plan-id">Review plan ID (optional)</Label>
+                  <Input
+                    id="evaluation-plan-id"
+                    value={evaluationPlanId}
+                    onChange={(event) => onEvaluationPlanId(event.currentTarget.value)}
+                    placeholder="plan-2026"
+                  />
+                </div>
+                <div className={styles.field}>
+                  <Label htmlFor="evaluation-plan-version">Review plan version (optional)</Label>
+                  <Input
+                    id="evaluation-plan-version"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={evaluationPlanVersion}
+                    onChange={(event) => onEvaluationPlanVersion(event.currentTarget.value)}
+                  />
+                </div>
               </div>
-            </div>
-            <div className={styles.formGrid}>
-              <div className={styles.field}>
-                <Label htmlFor="evaluation-plan-id">Evaluation plan ID (optional)</Label>
-                <Input
-                  id="evaluation-plan-id"
-                  value={evaluationPlanId}
-                  onChange={(event) => onEvaluationPlanId(event.currentTarget.value)}
-                  placeholder="plan-2026"
-                />
-              </div>
-              <div className={styles.field}>
-                <Label htmlFor="evaluation-plan-version">Evaluation plan version (optional)</Label>
-                <Input
-                  id="evaluation-plan-version"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={evaluationPlanVersion}
-                  onChange={(event) => onEvaluationPlanVersion(event.currentTarget.value)}
-                />
-              </div>
-            </div>
-          </div>
+            </CollapsibleContent>
+          </Collapsible>
         </CollapsibleContent>
       </Collapsible>
 
@@ -937,7 +1046,8 @@ export function ReportDefinitionEditor({
         {selectedDefinition !== null ? (
           <Button
             type="button"
-            variant="destructive"
+            variant="ghost"
+            className={styles.deleteButton}
             onClick={(event) => onDelete(event.currentTarget)}
             disabled={busy}
           >
@@ -970,15 +1080,17 @@ export function ReportRunControls({
     <section className={styles.section} id="report-run-controls" aria-labelledby="run-heading">
       <div className={styles.sectionHeader}>
         <div>
-          <p className={styles.sectionEyebrow}>Execution</p>
-          <h2 id="run-heading">Preview and run</h2>
+          <p className={styles.sectionEyebrow}>Export</p>
+          <h2 id="run-heading">Preview and export</h2>
           <p className={styles.muted}>
-            Run a saved recipe at its current version. The server creates the immutable dated run
-            and audit record; no client-side export is treated as authoritative.
+            Preview the first rows, then generate a CSV or Excel file and record it in export
+            history.
           </p>
         </div>
         <Badge variant={selectedDefinition === null ? "secondary" : "outline"}>
-          {selectedDefinition === null ? "Save first" : `Recipe v${selectedDefinition.version}`}
+          {selectedDefinition === null
+            ? "Save first"
+            : `Saved report · v${selectedDefinition.version}`}
         </Badge>
       </div>
       <CardContent className={styles.runControls}>
@@ -998,13 +1110,19 @@ export function ReportRunControls({
           <Button
             type="button"
             variant="outline"
+            data-report-action="preview"
             onClick={onPreview}
             disabled={busy || selectedDefinition === null}
           >
-            Preview report
+            Preview rows
           </Button>
-          <Button type="button" onClick={onRun} disabled={busy || selectedDefinition === null}>
-            {busy ? "Running…" : "Run and export report"}
+          <Button
+            type="button"
+            data-report-action="export"
+            onClick={onRun}
+            disabled={busy || selectedDefinition === null}
+          >
+            {busy ? "Generating…" : `Generate and download ${format === "csv" ? "CSV" : "Excel"}`}
           </Button>
         </div>
       </CardContent>
@@ -1023,10 +1141,11 @@ export function ReportPreview({ run, onDownload, busy }: ReportPreviewProps) {
     <Card className={styles.section} id="report-preview" aria-labelledby="preview-heading">
       <CardHeader className={styles.sectionHeader}>
         <div>
-          <p className={styles.sectionEyebrow}>Immutable result</p>
-          <CardTitle id="preview-heading">Report preview</CardTitle>
+          <p className={styles.sectionEyebrow}>Generated preview</p>
+          <CardTitle id="preview-heading">Preview</CardTitle>
           <CardDescription>
-            Run {run.id} · version {run.definitionVersion} · requested {dateLabel(run.requestedAt)}
+            {run.audit.rowCount} rows · report version {run.definitionVersion} · generated{" "}
+            {dateLabel(run.requestedAt)}
           </CardDescription>
         </div>
         <Button type="button" onClick={onDownload} disabled={busy}>
@@ -1046,7 +1165,7 @@ export function ReportPreview({ run, onDownload, busy }: ReportPreviewProps) {
                 <TableRow>
                   {header.map((column) => (
                     <TableHead scope="col" key={column}>
-                      {column}
+                      {optionForField(column)?.label ?? column}
                     </TableHead>
                   ))}
                 </TableRow>
@@ -1071,7 +1190,12 @@ export function ReportPreview({ run, onDownload, busy }: ReportPreviewProps) {
             </p>
           </div>
         )}
-        <p className={styles.auditNote}>Output digest: {run.audit.outputDigest}</p>
+        <details className={styles.auditDisclosure}>
+          <summary>View audit details</summary>
+          <p className={styles.auditNote} data-report-audit="output-digest">
+            Output digest: {run.audit.outputDigest}
+          </p>
+        </details>
       </CardContent>
     </Card>
   );
@@ -1090,28 +1214,28 @@ export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
       <div className={styles.sectionHeader}>
         <div>
           <p className={styles.sectionEyebrow}>Audit trail</p>
-          <h2 id="run-history-heading">Run history</h2>
+          <h2 id="run-history-heading">Export history</h2>
           <p className={styles.muted}>
-            Every completed run is dated, immutable, and linked to its audited server output.
+            Re-download previous server-generated files or inspect how an export was produced.
           </p>
         </div>
         <Badge variant="outline">
-          {runs.length} run{runs.length === 1 ? "" : "s"}
+          {runs.length} export{runs.length === 1 ? "" : "s"}
         </Badge>
       </div>
       {runs.length === 0 ? (
         <div className={styles.emptyState} role="status">
-          <Badge variant="outline">No runs</Badge>
-          <p>No runs for this saved report yet.</p>
+          <Badge variant="outline">No exports</Badge>
+          <p>No exports for this saved report yet.</p>
         </div>
       ) : (
         <Table>
-          <TableCaption>Completed report runs and audit metadata</TableCaption>
+          <TableCaption>Completed exports and audit metadata</TableCaption>
           <TableHeader>
             <TableRow>
-              <TableHead scope="col">Run</TableHead>
-              <TableHead scope="col">Recipe version</TableHead>
-              <TableHead scope="col">Requested</TableHead>
+              <TableHead scope="col">Export</TableHead>
+              <TableHead scope="col">Report version</TableHead>
+              <TableHead scope="col">Exported</TableHead>
               <TableHead scope="col">Rows</TableHead>
               <TableHead scope="col">Audit</TableHead>
               <TableHead scope="col">Export</TableHead>
@@ -1125,7 +1249,7 @@ export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
                 <TableCell>{dateLabel(run.audit.requestedAt)}</TableCell>
                 <TableCell>{run.audit.rowCount}</TableCell>
                 <TableCell>
-                  <span className={styles.auditDigest}>
+                  <span className={styles.auditDigest} data-report-audit="output-digest">
                     Output digest: {run.audit.outputDigest}
                   </span>
                   <Button
@@ -1134,7 +1258,7 @@ export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
                     variant="outline"
                     onClick={() => setAuditRun(run)}
                   >
-                    View audit metadata
+                    Audit details
                   </Button>
                 </TableCell>
                 <TableCell>
@@ -1156,9 +1280,9 @@ export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
       <Dialog open={auditRun !== null} onOpenChange={(open) => !open && setAuditRun(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Run audit metadata</DialogTitle>
+            <DialogTitle>Export audit details</DialogTitle>
             <DialogDescription>
-              The audit record is returned by the server for this immutable run.
+              The server records when this file was generated and which saved report produced it.
             </DialogDescription>
           </DialogHeader>
           {auditRun ? (
@@ -1266,7 +1390,10 @@ export function DeleteReportDialog({
 
 type SelectionRequest =
   | { readonly kind: "select"; readonly definition: ReportDefinition }
-  | { readonly kind: "new" };
+  | {
+      readonly kind: "new";
+      readonly draft?: ReportDefinitionInput;
+    };
 
 export function DirtySelectionDialog({
   open,
@@ -1356,8 +1483,8 @@ export function ReportsWorkspace({
   const [requestError, setRequestError] = useState<string | null>(null);
   const [previewRun, setPreviewRun] = useState<ReportRun | null>(null);
   const [format, setFormat] = useState<ReportFormat>("csv");
-  const [evaluationPlanId, setEvaluationPlanId] = useState("plan-2026");
-  const [evaluationPlanVersion, setEvaluationPlanVersion] = useState("3");
+  const [evaluationPlanId, setEvaluationPlanId] = useState("");
+  const [evaluationPlanVersion, setEvaluationPlanVersion] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<ReportDefinition | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deleteRestoreRef = useRef<HTMLElement | null>(null);
@@ -1504,7 +1631,7 @@ export function ReportsWorkspace({
   function applySelection(request: SelectionRequest): void {
     if (request.kind === "new") {
       setSelectedId(null);
-      setDraft(newDraft());
+      setDraft(request.draft ?? newDraft());
     } else {
       setSelectedId(request.definition.id);
       setDraft(draftFromDefinition(request.definition));
@@ -1527,9 +1654,13 @@ export function ReportsWorkspace({
     applySelection(request);
   }
 
-  function requestNewDefinition(trigger: HTMLElement): void {
-    if (selectedId === null && !isDirty) return;
-    const request: SelectionRequest = { kind: "new" };
+  function requestNewDefinition(trigger: HTMLElement, template?: ReportTemplate): void {
+    const nextDraft = template === undefined ? newDraft() : draftFromReportTemplate(template);
+    if (selectedId === null && !isDirty && equalDraft(draft, nextDraft)) return;
+    const request: SelectionRequest = {
+      kind: "new",
+      draft: nextDraft,
+    };
     if (isDirty) {
       selectionRestoreRef.current = trigger;
       setSelectionRequest(request);
@@ -1857,145 +1988,105 @@ export function ReportsWorkspace({
   }
 
   return (
-    <main className={styles.page}>
+    <main className={styles.page} data-report-workspace-mode="outcome-first">
       <a className={styles.skipLink} href="#reports-content">
         Skip to reports workspace content
       </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <p className={styles.eyebrow}>
-            {organizationId} · {eventId}
-          </p>
-          <h1>Reports workspace</h1>
-          <p className={styles.headerDescription}>
-            Start with a saved report recipe, then preview or run an immutable audited result from
-            approved event-scoped data.
-          </p>
-        </div>
-        <Button asChild variant="outline">
-          <Link
-            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`}
-          >
-            Event overview
-          </Link>
-        </Button>
-      </header>
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
+            <Link
+              href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`}
+            >
+              Event workspace
+            </Link>
+            <span aria-hidden="true">/</span>
+            <span aria-current="page">Reports & exports</span>
+          </WorkspaceBreadcrumb>
+        }
+        title="Reports & exports"
+        description="Download common event data now, or save a custom report when you need the same export again."
+        actions={
+          <>
+            <Button asChild variant="outline">
+              <Link
+                href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`}
+              >
+                Event overview
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              data-report-action="new"
+              onClick={(event) => requestNewDefinition(event.currentTarget)}
+            >
+              Create custom report
+            </Button>
+          </>
+        }
+      />
 
-      <div id="reports-content" tabIndex={-1}>
+      <div id="reports-content" className={styles.reportsContent} tabIndex={-1}>
         {requestError !== null ? <FormMessage message={requestError} error /> : null}
         {message !== null ? <FormMessage message={message} /> : null}
-        <Alert className={styles.authorityNotice}>
-          <AlertTitle>Server-authorized fields</AlertTitle>
-          <AlertDescription>
-            The organizer-safe field list is only a request affordance. Server authorization, event
-            scoping, export generation, and audit records remain authoritative for every operation.
-          </AlertDescription>
-        </Alert>
+        <CommonExports
+          organizationId={organizationId}
+          eventId={eventId}
+          onUseTemplate={(template, trigger) => requestNewDefinition(trigger, template)}
+        />
 
-        <div className={styles.mobileSwitcher}>
-          <Collapsible defaultOpen>
-            <div className={styles.mobileSwitcherHeader}>
-              <span className={styles.sectionEyebrow}>Workspace sections</span>
-              <CollapsibleTrigger asChild>
-                <Button type="button" variant="outline" size="sm">
-                  Switch section
-                </Button>
-              </CollapsibleTrigger>
-            </div>
-            <CollapsibleContent className={styles.mobileSwitcherContent}>
-              <a href="#saved-reports">Saved reports</a>
-              <a href="#reports-editor">Recipe editor</a>
-              <a href="#report-run-controls">Preview and run</a>
-              <a href="#report-history">Run history</a>
-            </CollapsibleContent>
-          </Collapsible>
-        </div>
-
-        <div className={styles.workspaceLayout}>
-          <aside className={styles.desktopNavigator} aria-label="Reports workspace navigator">
-            <div className={styles.navigatorInner}>
-              <p className={styles.sectionEyebrow}>Navigate</p>
-              <nav className={styles.sectionNav}>
-                <a href="#saved-reports">Saved reports</a>
-                <a href="#reports-editor">Recipe editor</a>
-                <a href="#report-run-controls">Preview and run</a>
-                <a href="#report-history">Run history</a>
-              </nav>
-              <p className={styles.sectionEyebrow}>Saved recipes</p>
-              <div className={styles.navigatorRecipes}>
-                {definitions.map((definition) => (
-                  <Button
-                    key={definition.id}
-                    type="button"
-                    variant={selectedId === definition.id ? "secondary" : "ghost"}
-                    size="sm"
-                    onClick={(event) => requestSelectDefinition(definition, event.currentTarget)}
-                  >
-                    {definition.name}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </aside>
-
-          <div className={styles.workspaceMain}>
-            <SavedReportList
-              eventId={eventId}
-              definitions={definitions}
-              runs={runs}
-              selectedId={selectedId}
-              onSelect={requestSelectDefinition}
-              onDelete={requestDeleteCandidate}
-              onNew={requestNewDefinition}
+        <div className={styles.workspaceMain}>
+          <SavedReportList
+            eventId={eventId}
+            definitions={definitions}
+            runs={runs}
+            selectedId={selectedId}
+            onSelect={requestSelectDefinition}
+            onDelete={requestDeleteCandidate}
+            busy={busy}
+          />
+          <ReportDefinitionEditor
+            selectedDefinition={selectedDefinition}
+            draft={draft}
+            availableFields={availableFields}
+            evaluationPlanId={evaluationPlanId}
+            evaluationPlanVersion={evaluationPlanVersion}
+            busy={busy}
+            onDraftText={(field, value) =>
+              updateDraft((current) => ({ ...current, [field]: value }))
+            }
+            onToggleRelationship={toggleRelationship}
+            onToggleField={toggleField}
+            onMoveField={moveField}
+            onAddFilter={addFilter}
+            onUpdateFilter={updateFilter}
+            onRemoveFilter={removeFilter}
+            onAddSort={addSort}
+            onUpdateSort={updateSort}
+            onRemoveSort={removeSort}
+            onEvaluationPlanId={setEvaluationPlanId}
+            onEvaluationPlanVersion={setEvaluationPlanVersion}
+            onSave={() => void saveDefinition()}
+            onDelete={(trigger) =>
+              selectedDefinition && requestDeleteCandidate(selectedDefinition, trigger)
+            }
+          />
+          <ReportRunControls
+            selectedDefinition={selectedDefinition}
+            format={format}
+            busy={busy}
+            onFormat={setFormat}
+            onPreview={() => void runReport(true)}
+            onRun={() => void runReport(false)}
+          />
+          {previewRun !== null ? (
+            <ReportPreview
+              run={previewRun}
+              onDownload={() => void downloadRun(previewRun)}
               busy={busy}
             />
-            <ReportDefinitionEditor
-              selectedDefinition={selectedDefinition}
-              draft={draft}
-              availableFields={availableFields}
-              evaluationPlanId={evaluationPlanId}
-              evaluationPlanVersion={evaluationPlanVersion}
-              busy={busy}
-              onDraftText={(field, value) =>
-                updateDraft((current) => ({ ...current, [field]: value }))
-              }
-              onToggleRelationship={toggleRelationship}
-              onToggleField={toggleField}
-              onMoveField={moveField}
-              onAddFilter={addFilter}
-              onUpdateFilter={updateFilter}
-              onRemoveFilter={removeFilter}
-              onAddSort={addSort}
-              onUpdateSort={updateSort}
-              onRemoveSort={removeSort}
-              onEvaluationPlanId={setEvaluationPlanId}
-              onEvaluationPlanVersion={setEvaluationPlanVersion}
-              onSave={() => void saveDefinition()}
-              onDelete={(trigger) =>
-                selectedDefinition && requestDeleteCandidate(selectedDefinition, trigger)
-              }
-            />
-            <ReportRunControls
-              selectedDefinition={selectedDefinition}
-              format={format}
-              busy={busy}
-              onFormat={setFormat}
-              onPreview={() => void runReport(true)}
-              onRun={() => void runReport(false)}
-            />
-            {previewRun !== null ? (
-              <ReportPreview
-                run={previewRun}
-                onDownload={() => void downloadRun(previewRun)}
-                busy={busy}
-              />
-            ) : null}
-            <RunHistory
-              runs={visibleRuns}
-              busy={busy}
-              onDownload={(run) => void downloadRun(run)}
-            />
-          </div>
+          ) : null}
+          <RunHistory runs={visibleRuns} busy={busy} onDownload={(run) => void downloadRun(run)} />
         </div>
       </div>
 

@@ -19,6 +19,7 @@ function principal(role: OrganizationRole, tenant = organizationId): AuthPrincip
     email: `${role}@example.test`,
     memberships: [{ organizationId: tenant, role }],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 

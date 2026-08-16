@@ -134,7 +134,10 @@ function ParticipantCard({ model }: Readonly<{ model: NonNullable<WorkHubModel["
   );
 }
 
-export function WorkHubCards({ model }: Readonly<{ model: WorkHubModel }>) {
+export function WorkHubCards({
+  model,
+  hasEventInvitations = false,
+}: Readonly<{ model: WorkHubModel; hasEventInvitations?: boolean }>) {
   const availableCount = [model.organizer, model.reviewer, model.participant].filter(
     Boolean,
   ).length;
@@ -143,7 +146,7 @@ export function WorkHubCards({ model }: Readonly<{ model: WorkHubModel }>) {
       {model.organizer ? <OrganizerCard model={model.organizer} /> : null}
       {model.reviewer ? <ReviewerCard model={model.reviewer} /> : null}
       {model.participant ? <ParticipantCard model={model.participant} /> : null}
-      {availableCount === 0 ? (
+      {availableCount === 0 && !hasEventInvitations ? (
         <Alert className={styles.emptyState}>
           <AlertTitle>No assigned work yet</AlertTitle>
           <AlertDescription>

@@ -4,6 +4,7 @@ import styles from "../review-workspace.module.css";
 import type { EvaluatorController } from "./evaluator-controller";
 export function EvaluatorActionBar({ controller }: Readonly<{ controller: EvaluatorController }>) {
   const {
+    assignment,
     primaryAction,
     onNext,
     autosaveState,
@@ -12,6 +13,12 @@ export function EvaluatorActionBar({ controller }: Readonly<{ controller: Evalua
     reviewLocked,
     submitReview,
   } = controller;
+  const summary =
+    assignment.round.status === "scheduled"
+      ? "Scoring and comments stay locked until the scheduled round opens."
+      : assignment.round.status === "closed"
+        ? "This review round is closed; scores and comments are read-only."
+        : `Submission waits for autosave, then locks scores and comments for organizer aggregation. ${autosaveState}.`;
   return (
     <StickyActionBar
       className={styles.evaluatorActionBar}
@@ -19,10 +26,7 @@ export function EvaluatorActionBar({ controller }: Readonly<{ controller: Evalua
       summary={
         <div className={styles.evaluatorActionSummary}>
           <strong>Submit review</strong>
-          <span>
-            Submission waits for autosave, then locks scores and comments for organizer aggregation.{" "}
-            {autosaveState}.
-          </span>
+          <span>{summary}</span>
           {submitError ? (
             <span className={styles.formError} role="alert">
               {submitError}

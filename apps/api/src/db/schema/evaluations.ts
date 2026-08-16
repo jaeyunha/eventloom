@@ -340,6 +340,7 @@ export const reviewerPoolMembers = sqliteTable(
     eventId: text("event_id").notNull(),
     poolId: text("pool_id").notNull(),
     reviewerId: text("reviewer_id").notNull(),
+    grantedAt: text("granted_at"),
   },
   (table) => [
     primaryKey({ columns: [table.organizationId, table.eventId, table.poolId, table.reviewerId] }),
@@ -352,6 +353,12 @@ export const reviewerPoolMembers = sqliteTable(
       table.eventId,
       table.reviewerId,
       table.poolId,
+    ),
+    index("reviewer_pool_members_granted_at_idx").on(
+      table.organizationId,
+      table.eventId,
+      table.reviewerId,
+      table.grantedAt,
     ),
   ],
 );
