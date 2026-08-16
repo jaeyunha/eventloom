@@ -10,10 +10,30 @@ vi.mock("@/features/auth/authenticated-route-guard", () => ({
 }));
 
 describe("ReviewerPage", () => {
-  it("composes the evaluator-only page inside the route shell with one main landmark", () => {
-    const markup = renderToStaticMarkup(
-      createElement(ReviewerLayout, null, createElement(ReviewerPage)),
-    );
+  it("routes an invitation to the exact event and organization", async () => {
+    const element = await ReviewerPage({
+      searchParams: Promise.resolve({ eventId: " event-1 ", organizationId: "org-1" }),
+    });
+
+    expect(element.props).toMatchObject({
+      mode: "evaluator",
+      eventId: "event-1",
+      organizationId: "org-1",
+    });
+  });
+
+  it("preserves the unfiltered route and ignores unusable raw values", async () => {
+    const element = await ReviewerPage({
+      searchParams: Promise.resolve({ eventId: ["event-1", "event-2"], organizationId: "   " }),
+    });
+    const unfiltered = await ReviewerPage();
+
+    expect(element.props).toEqual({ mode: "evaluator" });
+    expect(unfiltered.props).toEqual({ mode: "evaluator" });
+  });
+
+  it("composes the evaluator-only page inside the route shell with one main landmark", async () => {
+    const markup = renderToStaticMarkup(createElement(ReviewerLayout, null, await ReviewerPage()));
 
     expect(markup).toContain('data-reviewer-shell="true"');
     expect(markup).toContain("Reviewer queue");

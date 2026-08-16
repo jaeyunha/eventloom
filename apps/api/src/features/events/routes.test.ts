@@ -83,6 +83,7 @@ function principal(
     email: "organizer@example.com",
     memberships: [{ organizationId, role }],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 

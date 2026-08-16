@@ -431,11 +431,7 @@ function PublicCfpShell({
             <p className={styles.railEventName}>{resolvedEventName}</p>
             <p className={styles.railFormName}>{resolvedFormName}</p>
           </div>
-          {step ? (
-            <CfpProgress step={step} />
-          ) : (
-            <p className={styles.railComplete}>Submission complete</p>
-          )}
+          {step ? <CfpProgress step={step} /> : <CfpProgress complete />}
           {event ? (
             <>
               <Separator className={styles.railSeparator} />
@@ -455,7 +451,7 @@ function PublicCfpShell({
       <div className={styles.viewport}>
         <Card className={`${styles.card} ${className ?? ""}`}>
           <div className={styles.formColumn}>
-            {event ? (
+            {event && step ? (
               <div className={styles.mobileSubmissionWindow}>
                 <CfpSubmissionWindow
                   opensAt={event.opensAt}
@@ -467,7 +463,7 @@ function PublicCfpShell({
                 />
               </div>
             ) : null}
-            {step ? <CfpProgress mobile step={step} /> : null}
+            {step ? <CfpProgress mobile step={step} /> : <CfpProgress complete mobile />}
             {children}
           </div>
         </Card>
@@ -3499,7 +3495,9 @@ export function CfpComplete({
     submissionId: string;
     canEdit: boolean;
   } | null>(null);
+  const [publishedCfp, setPublishedCfp] = useState<PublishedCfp | null>(null);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
+  const startupStore = useCfpStartupStore();
 
   useEffect(() => {
     let active = true;
@@ -3517,11 +3515,9 @@ export function CfpComplete({
     }
     void (async () => {
       try {
-        const published = await api.getPublished({
-          organizationId: identity.organizationId,
-          eventId: identity.eventId,
-          ...(identity.formId === undefined ? {} : { formId: identity.formId }),
-        });
+        const published = await startupStore.load(api, identity).published;
+        if (!active) return;
+        setPublishedCfp(published);
         const canonicalEventId = published.event.id;
         const activeFormId = published.form.id;
         const handoff = window.sessionStorage.getItem(
@@ -3593,7 +3589,7 @@ export function CfpComplete({
     return () => {
       active = false;
     };
-  }, [api, eventSlug, formId, organizationId, router]);
+  }, [api, eventSlug, formId, organizationId, router, startupStore]);
   function editSubmission(): void {
     if (completionIdentity === null || !completionIdentity.canEdit) return;
     window.localStorage.setItem(
@@ -3621,7 +3617,11 @@ export function CfpComplete({
 
   if (!confirmed) {
     return (
-      <PublicCfpShell>
+      <PublicCfpShell
+        event={publishedCfp?.event}
+        form={publishedCfp?.form}
+        organization={publishedCfp?.organization}
+      >
         <div aria-busy="true" aria-live="polite" className={styles.loading}>
           Confirming your submission…
         </div>
@@ -3632,8 +3632,9 @@ export function CfpComplete({
   return (
     <PublicCfpShell
       className={styles.completeCard}
-      eventName={confirmationDetails?.eventName}
-      formName="Call for Speakers"
+      event={publishedCfp?.event}
+      form={publishedCfp?.form}
+      organization={publishedCfp?.organization}
     >
       <div className={styles.completeContent}>
         <div aria-hidden="true" className={styles.successMarker}>

@@ -178,6 +178,44 @@ Do not use `wrangler d1 export` as an incidental live-release backup:
 Cloudflare warns that it can make the database temporarily unavailable. Time
 Travel is the no-downtime recovery mechanism for this cutover.
 
+### Event-role invitation migration preflight
+
+Before applying `0027_event_role_invitations.sql` to staging or production:
+
+1. Create a D1 backup or confirm the account's Time Travel recovery point and
+   record the operator responsible for rollback.
+2. Count active speaker grants that are eligible for invitation backfill:
+   - the account is verified;
+   - the participant identity is resolved;
+   - participant, active speaker profile, and current account emails agree;
+   - the participant belongs to the same organization and event as the grant.
+3. Count and review active speaker grants excluded by those predicates. The
+   migration skips incompatible invitation backfill rather than aborting, then
+   fail-closes those unmatched grants and clears speaker claims without an
+   exact accepted invitation. The organizer owns remediation and re-invitation
+   for every excluded row.
+4. Count reviewer invitation candidates from existing reviewer memberships,
+   reviewer-pool grants, and review assignments, grouped by organization/event:
+   - count verified eligible accounts separately from unverified or unresolved
+     accounts excluded from backfill;
+   - confirm every existing reviewer-pool member resolves to a pool with a
+     non-null `updated_at`; migration `0027` uses that value to initialize the
+     durable reviewer grant generation;
+   - assign organizer ownership for account verification and re-invitation of
+     every excluded reviewer before relying on event access.
+5. Apply the remote migration and retain its complete output. Then run
+   `PRAGMA foreign_key_check`, confirm no reviewer-pool member has a null
+   `granted_at`, confirm no active participant grant lacks an exact accepted
+   speaker invitation and active profile, and compare inserted
+   reviewer/speaker invitation counts with the preflight counts.
+6. Verify in staging with real accounts:
+   - late account verification produces a pending `/work` invitation;
+   - accept, decline, and revocation each enforce exact event scope;
+   - accepted reviewer and speaker access survives a later verified email
+     change for the same account ID;
+   - assignments, participant records, profiles, sessions, and tasks remain
+     unchanged through acceptance and revocation.
+
 ## 4. Staging deployment and acceptance
 
 After preflight and migration approval, deploy the API Worker with the guarded script:

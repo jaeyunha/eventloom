@@ -13,9 +13,11 @@ import {
   UnavailableState,
 } from "./reports-workspace";
 import {
+  draftFromReportTemplate,
   normalizeDraft,
   REPORT_DIALOG_COPY,
   REPORT_FIELD_ALLOWLIST,
+  REPORT_TEMPLATES,
 } from "./reports-workspace-model";
 
 const definition: ReportDefinition = {
@@ -380,36 +382,65 @@ describe("reports API adapter", () => {
 });
 
 describe("reports workspace", () => {
-  it("renders saved report recipes, safe sources, field order, filters, sorting, preview, export, and audit controls", () => {
+  it("renders an outcome-first export launchpad with safe builder and audit controls", () => {
     const markup = renderToStaticMarkup(
       createElement(ReportsWorkspace, { organizationId: "org-1", eventId: "event-1" }),
     );
 
-    expect(markup).toContain("Reports workspace");
-    expect(markup).toContain("Saved reports");
-    expect(markup).toContain("Reusable recipes define sources and columns");
-    expect(markup).toContain("immutable, dated result");
+    expect(markup).toContain('data-report-workspace-mode="outcome-first"');
+    expect(markup).toContain('data-report-surface="common-exports"');
+    expect(markup).toContain('data-report-template-id="program-schedule"');
+    expect(markup).toContain('data-report-template-id="speaker-directory"');
+    expect(markup).toContain('data-report-template-id="participant-directory"');
+    expect(markup).toContain('data-report-template-id="evaluation-progress"');
+    expect(markup).toContain('href="/admin/organizations/org-1/events/event-1/reviews"');
+    expect(markup).toContain('data-report-builder-step="identity"');
+    expect(markup).toContain('data-report-builder-step="sources"');
+    expect(markup).toContain('data-report-builder-step="columns"');
+    expect(markup).toContain('data-report-builder-step="refinements"');
+    expect(markup).toContain('data-report-action="preview"');
+    expect(markup).toContain('data-report-action="export"');
+    expect(markup).toContain('data-report-audit="output-digest"');
+    expect(markup.match(/data-report-action="new"/g)).toHaveLength(1);
     expect(markup).toContain("<caption ");
     expect(markup).toContain('scope="col"');
     expect(markup).toContain('scope="row"');
-    expect(markup).toContain("Data sources");
-    expect(markup).toContain("Columns");
-    expect(markup).toContain("Field order");
-    expect(markup).toContain("Move up");
-    expect(markup).toContain("Add filter");
-    expect(markup).toContain("Add sort");
-    expect(markup).toContain("Evaluation plan version");
-    expect(markup).toContain("Preview report");
-    expect(markup).toContain("Download CSV");
-    expect(markup).toContain("View audit metadata");
-    expect(markup).toContain("Output digest");
-    expect(markup).toContain("Reports workspace navigator");
-    expect(markup).toContain("Switch section");
-    expect(markup).toContain("Server authorization");
+    expect(markup).not.toContain('aria-label="Reports workspace navigator"');
+    expect(markup).not.toContain('aria-label="Switch section"');
     expect(markup).not.toContain("privateNotes");
     expect(markup).not.toContain("individualGrade");
     expect(markup).not.toContain("fileIds");
     expect(markup).not.toContain("email");
+  });
+
+  it("builds normalized organizer-safe drafts from every report template", () => {
+    expect(REPORT_TEMPLATES.map((template) => template.id)).toEqual([
+      "program-schedule",
+      "speaker-directory",
+      "participant-directory",
+      "evaluation-progress",
+    ]);
+
+    for (const template of REPORT_TEMPLATES) {
+      const draft = draftFromReportTemplate(template);
+      const allowedFields = new Set(
+        draft.relationships.flatMap((relationship) =>
+          REPORT_FIELD_ALLOWLIST[relationship].map((field) => field.key),
+        ),
+      );
+
+      expect(draft.fields.every((field) => allowedFields.has(field))).toBe(true);
+      expect(draft.order.every((field) => allowedFields.has(field))).toBe(true);
+      expect(Object.keys(draft).sort()).toEqual([
+        "description",
+        "fields",
+        "filters",
+        "name",
+        "order",
+        "relationships",
+        "sort",
+      ]);
+    }
   });
   it("normalizes reports cache scope keys and isolates event resources", () => {
     expect(reportsNavigationCacheKey(" org-1 ", " event-1 ")).toBe(
@@ -468,24 +499,26 @@ describe("reports workspace", () => {
     expect(error).toContain("Reports API unavailable.");
   });
 
-  it("labels recipes and immutable dated runs separately", () => {
-    const recipeMarkup = renderToStaticMarkup(
+  it("keeps saved report definitions and generated export artifacts structurally distinct", () => {
+    const workspaceMarkup = renderToStaticMarkup(
       createElement(ReportsWorkspace, { organizationId: "org-1", eventId: "event-1" }),
     );
-    const runMarkup = renderToStaticMarkup(
+    const previewMarkup = renderToStaticMarkup(
       createElement(ReportPreview, {
         run,
         busy: false,
         onDownload: () => undefined,
       }),
     );
-    expect(recipeMarkup).toContain("Saved recipes");
-    expect(recipeMarkup).toContain("Run history");
-    expect(recipeMarkup).toContain("immutable, dated result");
-    expect(runMarkup).toContain("Immutable result");
-    expect(runMarkup).toContain("Run run-1");
-    expect(runMarkup).toContain("Output digest");
-    expect(runMarkup).toContain("Download CSV");
+    expect(workspaceMarkup).toContain('id="saved-reports"');
+    expect(workspaceMarkup).toContain('id="report-run-controls"');
+    expect(workspaceMarkup).toContain('id="report-history"');
+    expect(previewMarkup).toContain('id="report-preview"');
+    expect(previewMarkup).toContain('data-report-audit="output-digest"');
+    expect(previewMarkup).toContain("<table");
+    expect(previewMarkup).toContain("Session ID");
+    expect(previewMarkup).toContain("Session title");
+    expect(previewMarkup).not.toContain(">sessions.id<");
   });
   it("keeps XLSX runs download-only instead of parsing SpreadsheetML as CSV", () => {
     const markup = renderToStaticMarkup(

@@ -2,6 +2,7 @@ export * from "./calendar-invitations";
 export * from "./cfp-speakers";
 export * from "./communications-crm";
 export * from "./evaluations";
+export * from "./event-role-invitations";
 export * from "./identity-access";
 export * from "./integrations";
 export * from "./program-core";

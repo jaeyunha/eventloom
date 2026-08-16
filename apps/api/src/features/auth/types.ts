@@ -25,6 +25,11 @@ export interface SpeakerGrant {
   speakerProfileId: string;
 }
 
+export interface ReviewerGrant {
+  organizationId: string;
+  eventId: string;
+}
+
 export interface AuthSession {
   sessionId: string;
   userId: string;
@@ -32,6 +37,7 @@ export interface AuthSession {
   emailVerified: boolean;
   expiresAt: Date;
   memberships: readonly OrganizationMembership[];
+  reviewerGrants: readonly ReviewerGrant[];
   speakerGrants: readonly SpeakerGrant[];
 }
 
@@ -50,6 +56,7 @@ export interface UserPrincipal {
   userId: string;
   email: string;
   memberships: readonly OrganizationMembership[];
+  reviewerGrants: readonly ReviewerGrant[];
   speakerGrants: readonly SpeakerGrant[];
 }
 

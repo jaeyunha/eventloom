@@ -18,6 +18,7 @@ import {
   type MemberUser,
   memberRoles,
   type ReserveReviewerAssignmentInput,
+  type ReviewerEventInvitationLifecycle,
   type ReviewerPool,
   type ReviewerPoolGrant,
   type ReviewerPoolGrantInput,
@@ -96,6 +97,7 @@ export interface MemberServiceDependencies {
   readonly auth: MemberAuthBoundary;
   readonly invitationDelivery: MemberInvitationDelivery;
   readonly reviewerPools: ReviewerPoolRepository;
+  readonly reviewerEventInvitations: ReviewerEventInvitationLifecycle;
 }
 
 export interface MemberServiceOptions {
@@ -418,6 +420,7 @@ export class MemberService {
   readonly #auth: MemberAuthBoundary;
   readonly #invitationDelivery: MemberInvitationDelivery;
   readonly #reviewerPools: ReviewerPoolRepository;
+  readonly #reviewerEventInvitations: ReviewerEventInvitationLifecycle;
   readonly #clock: () => Date;
   readonly #generateId: () => string;
   readonly #invitationTtlMs: number;
@@ -434,6 +437,7 @@ export class MemberService {
     this.#auth = dependencies.auth;
     this.#invitationDelivery = dependencies.invitationDelivery;
     this.#reviewerPools = dependencies.reviewerPools;
+    this.#reviewerEventInvitations = dependencies.reviewerEventInvitations;
     this.#clock = options.clock ?? (() => new Date());
     this.#generateId = options.generateId ?? (() => crypto.randomUUID());
     this.#invitationTtlMs = options.invitationTtlMs ?? DEFAULT_INVITATION_TTL_MS;
@@ -1028,11 +1032,14 @@ export class MemberService {
       }
       if (actor.role !== "owner") throw forbidden("Only an owner can revoke an owner membership.");
     }
-    await this.#identity.revokePendingInvitations(
+    const revokedAt = isoDate(this.#clock(), "clock");
+    await this.#identity.revokePendingInvitations(organizationId, member.email, revokedAt);
+    await this.#reviewerEventInvitations.revokeReviewerInvitationsForMember({
       organizationId,
-      member.email,
-      isoDate(this.#clock(), "clock"),
-    );
+      recipientUserId: userId,
+      revokedByUserId: actorUser(actor),
+      revokedAt,
+    });
     if (activeMember !== null) {
       await this.#identity.removeMembership(organizationId, userId);
     }
@@ -1104,16 +1111,25 @@ export class MemberService {
           }));
     const ids = reviewerInputs.map((candidate) => candidate.reviewerId);
     if (new Set(ids).size !== ids.length) throw validation("Reviewer ids must be unique.");
+    const pendingReviewers = new Map(
+      (await this.#identity.listPendingInvitations(organizationId))
+        .filter((invitation) => invitation.role === "reviewer")
+        .map((invitation) => [invitation.userId, invitation]),
+    );
     const previous = new Map((current?.grants ?? []).map((grant) => [grant.reviewerId, grant]));
+    const verifiedReviewers = new Map<string, Member>();
     const grants: ReviewerPoolGrant[] = [];
     for (const candidate of reviewerInputs) {
       const member = await this.#identity.getMember(organizationId, candidate.reviewerId);
-      if (member === null) {
-        const pendingReviewer = (await this.#identity.listPendingInvitations(organizationId)).some(
-          (invitation) =>
-            invitation.userId === candidate.reviewerId && invitation.role === "reviewer",
-        );
-        if (pendingReviewer) {
+      const pendingInvitation = pendingReviewers.get(candidate.reviewerId);
+      const reviewer =
+        member?.emailVerified === true
+          ? member
+          : pendingInvitation === undefined
+            ? null
+            : await this.#pendingMember(pendingInvitation);
+      if (reviewer === null) {
+        if (member !== null) {
           throw conflict(
             "The reviewer must verify the setup invitation before receiving assignments.",
             "REVIEWER_NOT_ACTIVE",
@@ -1121,12 +1137,7 @@ export class MemberService {
         }
         throw forbidden("Only reviewer memberships can enter a reviewer pool.");
       }
-      if (!member.emailVerified) {
-        throw conflict(
-          "The reviewer must verify the setup invitation before receiving assignments.",
-          "REVIEWER_NOT_ACTIVE",
-        );
-      }
+      if (reviewer.emailVerified) verifiedReviewers.set(reviewer.userId, reviewer);
       const previousGrant = previous.get(candidate.reviewerId);
       const maxAssignments = candidate.maxAssignments ?? globalCap ?? previousGrant?.maxAssignments;
       if (maxAssignments === undefined) {
@@ -1152,12 +1163,67 @@ export class MemberService {
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };
+    const removedReviewerIds = [...previous.keys()].filter(
+      (reviewerId) => !ids.includes(reviewerId),
+    );
+    const addedReviewerIds = new Set(ids.filter((reviewerId) => !previous.has(reviewerId)));
+    const actingUserId = actorUser(actor);
+    const addedReviewerInvitations = [...verifiedReviewers.values()]
+      .filter((reviewer) => addedReviewerIds.has(reviewer.userId))
+      .map((reviewer) => ({
+        id: `event-role-invitation:${this.#generateId()}`,
+        recipientUserId: reviewer.userId,
+        normalizedEmail: reviewer.email,
+        creationIdempotencyKey: `reviewer-event:${organizationId}\u0000${eventId}\u0000${roundId}\u0000${reviewer.userId}\u0000${next.version}`,
+        invitedByUserId: actingUserId,
+        invitedAt: now,
+      }));
+    const atomicPoolSave = this.#reviewerPools.saveReviewerPoolAndRevokeInvitations;
+    const savesInvitationsAtomically = atomicPoolSave !== undefined;
     try {
-      await this.#reviewerPools.saveReviewerPool(next, current?.version ?? null);
+      if (atomicPoolSave !== undefined) {
+        await atomicPoolSave.call(this.#reviewerPools, {
+          pool: next,
+          expectedVersion: current?.version ?? null,
+          removedReviewerIds,
+          addedReviewerInvitations,
+          revokedByUserId: actingUserId,
+          revokedAt: now,
+        });
+      } else {
+        await Promise.all(
+          removedReviewerIds.map((recipientUserId) =>
+            this.#reviewerEventInvitations.revokeReviewerInvitationIfUnpooled({
+              organizationId,
+              eventId,
+              excludedRoundId: roundId,
+              recipientUserId,
+              revokedByUserId: actingUserId,
+              revokedAt: now,
+            }),
+          ),
+        );
+        await this.#reviewerPools.saveReviewerPool(next, current?.version ?? null);
+      }
     } catch (error) {
       if (repositoryConflict(error))
         throw conflict("The reviewer pool changed. Reload it before saving.");
       throw error;
+    }
+    if (!savesInvitationsAtomically) {
+      await Promise.all(
+        addedReviewerInvitations.map((invitation) =>
+          this.#reviewerEventInvitations.createReviewerInvitation({
+            organizationId,
+            eventId,
+            recipientUserId: invitation.recipientUserId,
+            normalizedEmail: invitation.normalizedEmail,
+            invitedByUserId: invitation.invitedByUserId,
+            idempotencyKey: invitation.creationIdempotencyKey,
+            invitedAt: invitation.invitedAt,
+          }),
+        ),
+      );
     }
     return clone(next);
   }

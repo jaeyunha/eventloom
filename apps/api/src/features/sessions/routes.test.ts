@@ -20,6 +20,7 @@ function principal(organizationId = "tenant-a"): AuthPrincipal {
     email: "organizer@example.com",
     memberships: [{ organizationId, role: "admin" }],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 

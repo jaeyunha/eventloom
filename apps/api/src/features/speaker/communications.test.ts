@@ -282,8 +282,8 @@ describe("durable speaker communications", () => {
     });
     expect(preview.recipientIds).toEqual(["participant-priya"]);
     expect(preview.recipients[0]).toMatchObject({
-      html: expect.stringContaining("https://event.example.test/login?next=/portal"),
-      text: expect.stringContaining("https://event.example.test/login?next=/portal"),
+      html: expect.stringContaining("https://event.example.test/login?next=/work"),
+      text: expect.stringContaining("https://event.example.test/login?next=/work"),
     });
     expect(preview.recipients[0]?.html).not.toContain("attacker.example.test");
     expect(preview.recipients[0]?.text).not.toContain("attacker.example.test");
@@ -377,7 +377,8 @@ describe("durable speaker communications", () => {
     expect(first.recipients).toHaveLength(1);
     expect(replay).toMatchObject({ status: "duplicate", duplicate: true });
     expect(delivered).toHaveLength(1);
-    expect(delivered[0]?.text).toContain("https://event.example.test/login?next=/portal");
+    expect(delivered[0]?.text).toContain("review and accept your speaker invitation");
+    expect(delivered[0]?.text).toContain("https://event.example.test/login?next=/work");
     expect(JSON.stringify(delivered)).not.toMatch(/grant|token|secret/iu);
 
     await expect(

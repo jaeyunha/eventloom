@@ -428,6 +428,10 @@ describe("D1SpeakerRepository", () => {
         capabilityAllows(organizationScope, "task-response", participantId),
       ),
     ).toEqual(["participant-a"]);
+    expect(database.queries.join("\n")).toContain("invitation.recipient_user_id = pg.user_id");
+    expect(database.queries.join("\n")).toContain("invitation.participant_id = pg.participant_id");
+    expect(database.queries.join("\n")).toContain("invitation.status = 'accepted'");
+    expect(database.queries.join("\n")).toContain("profile.status <> 'revoked'");
     expect(database.reads).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -446,6 +450,7 @@ describe("D1SpeakerRepository", () => {
       speakerGrants: [
         { organizationId: "org-a", speakerProfileId: "profile:event-1:participant-a" },
       ],
+      reviewerGrants: [],
     };
     const access = new AccessContextService({
       listOrganizationsForUser: async () => [{ organizationId: "org-a", name: "Org A" }],

@@ -7,6 +7,7 @@ export interface EventSettingsAuditFieldChange {
 }
 
 export interface EventSettingsAuditPresentation {
+  readonly changeKind: "created" | "updated" | "deleted";
   readonly domain: string;
   readonly entityLabel: string;
   readonly summary: string;
@@ -93,9 +94,19 @@ function auditEntityLabel(entry: EventSettingsAuditEntry): string {
   return entry.entityId;
 }
 
-function auditSummary(entry: EventSettingsAuditEntry): string {
-  if (entry.action === "created") return "Created";
-  if (entry.action === "deleted") return "Deleted";
+function auditChangeKind(
+  action: EventSettingsAuditEntry["action"],
+): EventSettingsAuditPresentation["changeKind"] {
+  if (action === "created" || action === "deleted") return action;
+  return "updated";
+}
+
+function auditSummary(
+  entry: EventSettingsAuditEntry,
+  changeKind: EventSettingsAuditPresentation["changeKind"],
+): string {
+  if (changeKind === "created") return "Created";
+  if (changeKind === "deleted") return "Deleted";
   const changes = eventSettingsAuditDiff(entry);
   if (changes.length === 0) return "Updated";
   const fields = changes.map(({ field }) => field.toLowerCase());
@@ -107,13 +118,15 @@ function auditSummary(entry: EventSettingsAuditEntry): string {
 export function eventSettingsAuditPresentation(
   entry: EventSettingsAuditEntry,
 ): EventSettingsAuditPresentation {
+  const changeKind = auditChangeKind(entry.action);
   const previousVersion = Math.max(0, entry.version - 1);
   return {
+    changeKind,
     domain: auditDomain(entry),
     entityLabel: auditEntityLabel(entry),
-    summary: auditSummary(entry),
+    summary: auditSummary(entry, changeKind),
     versionLabel:
-      entry.action === "created" ? `v${entry.version}` : `v${previousVersion} → v${entry.version}`,
+      changeKind === "created" ? `v${entry.version}` : `v${previousVersion} → v${entry.version}`,
   };
 }
 

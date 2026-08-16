@@ -139,7 +139,7 @@ describe("local public applicant authentication", () => {
     });
   });
 
-  it("authorizes the local organizer account for the aggregate reviewer workspace", async () => {
+  it("does not infer reviewer workspace access from the local organizer membership", async () => {
     const app = createApp(createLocalDependencies());
 
     const response = await app.request(
@@ -152,10 +152,10 @@ describe("local public applicant authentication", () => {
       environment,
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      data: {
-        assignments: expect.any(Array),
+      error: {
+        code: "ACCESS_DENIED",
       },
     });
   });

@@ -106,6 +106,18 @@ export class D1SpeakerRepository
         `SELECT pg.organization_id, pg.participant_id, pg.permissions_json,
                 group_concat(DISTINCT sp.submission_id) AS submission_ids
            FROM participant_grants pg
+           JOIN event_role_invitations invitation
+             ON invitation.organization_id = pg.organization_id
+            AND invitation.event_id = pg.event_id
+            AND invitation.role = 'speaker'
+            AND invitation.recipient_user_id = pg.user_id
+            AND invitation.participant_id = pg.participant_id
+            AND invitation.status = 'accepted'
+           JOIN speaker_profiles profile
+             ON profile.organization_id = pg.organization_id
+            AND profile.event_id = pg.event_id
+            AND profile.participant_id = pg.participant_id
+            AND profile.status <> 'revoked'
       LEFT JOIN submission_participants sp
              ON sp.organization_id = pg.organization_id
             AND sp.event_id = pg.event_id
@@ -172,6 +184,18 @@ export class D1SpeakerRepository
                 group_concat(DISTINCT pg.participant_id) AS participant_ids,
                 group_concat(DISTINCT sp.submission_id) AS submission_ids
            FROM participant_grants pg
+           JOIN event_role_invitations invitation
+             ON invitation.organization_id = pg.organization_id
+            AND invitation.event_id = pg.event_id
+            AND invitation.role = 'speaker'
+            AND invitation.recipient_user_id = pg.user_id
+            AND invitation.participant_id = pg.participant_id
+            AND invitation.status = 'accepted'
+           JOIN speaker_profiles profile
+             ON profile.organization_id = pg.organization_id
+            AND profile.event_id = pg.event_id
+            AND profile.participant_id = pg.participant_id
+            AND profile.status <> 'revoked'
            JOIN events e ON e.organization_id = pg.organization_id AND e.id = pg.event_id
       LEFT JOIN submission_participants sp
              ON sp.organization_id = pg.organization_id
@@ -221,6 +245,14 @@ export class D1SpeakerRepository
              ON sp.organization_id = pg.organization_id
             AND sp.event_id = pg.event_id
             AND sp.participant_id = pg.participant_id
+            AND sp.status <> 'revoked'
+           JOIN event_role_invitations invitation
+             ON invitation.organization_id = pg.organization_id
+            AND invitation.event_id = pg.event_id
+            AND invitation.role = 'speaker'
+            AND invitation.recipient_user_id = pg.user_id
+            AND invitation.participant_id = pg.participant_id
+            AND invitation.status = 'accepted'
           WHERE pg.organization_id = ? AND pg.event_id = ?
             AND pg.user_id = ? AND pg.revoked_at IS NULL
        ORDER BY sp.id`,
@@ -621,6 +653,27 @@ export class D1SpeakerRepository
     });
   }
 
+  async resolveVerifiedInvitationRecipient(email: string): Promise<{
+    userId: string;
+    normalizedEmail: string;
+  } | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.length === 0) return null;
+    const users = await this.#db
+      .prepare(
+        `SELECT id
+           FROM auth_users
+          WHERE email = ? COLLATE NOCASE AND email_verified = 1
+          ORDER BY id
+          LIMIT 2`,
+      )
+      .bind(normalizedEmail)
+      .all<{ id: string }>();
+    const matches = users.results ?? [];
+    if (matches.length !== 1 || matches[0] === undefined) return null;
+    return { userId: matches[0].id, normalizedEmail };
+  }
+
   async ensureVerifiedParticipantGrant(input: {
     readonly organizationId: string;
     readonly eventId: string;
@@ -641,13 +694,23 @@ export class D1SpeakerRepository
     if ((profile.results ?? []).length !== 1) return false;
     const users = await this.#db
       .prepare(
-        `SELECT id
-           FROM auth_users
-          WHERE email = ? COLLATE NOCASE AND email_verified = 1
-          ORDER BY id
+        `SELECT users.id
+           FROM auth_users AS users
+           JOIN event_role_invitations AS invitations
+             ON invitations.organization_id = ?
+            AND invitations.event_id = ?
+            AND invitations.role = 'speaker'
+            AND invitations.participant_id = ?
+            AND invitations.recipient_user_id = users.id
+            AND invitations.accepted_by_user_id = users.id
+            AND invitations.status = 'accepted'
+            AND invitations.normalized_email = lower(trim(users.email))
+          WHERE users.email = ? COLLATE NOCASE
+            AND users.email_verified = 1
+          ORDER BY users.id
           LIMIT 2`,
       )
-      .bind(input.email.trim())
+      .bind(input.organizationId, input.eventId, input.participantId, input.email.trim())
       .all<{ id: string }>();
     if ((users.results ?? []).length !== 1) return false;
     const user = users.results[0];

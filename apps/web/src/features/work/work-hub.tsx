@@ -8,19 +8,22 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ORGANIZER_ORGANIZATION_STORAGE_KEY } from "@/lib/organizer-workspace-preference";
 import { signOutAccount } from "../account/account-actions";
+import { WorkEventInvitations } from "./work-event-invitations";
 import styles from "./work-hub.module.css";
 import { WorkHubCards } from "./work-hub-cards";
 import { loadWorkHubModel } from "./work-hub-loader";
 import type { WorkHubModel } from "./work-hub-model";
 
 export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
-  const availableCount = [model.organizer, model.reviewer, model.participant].filter(
-    Boolean,
-  ).length;
+  const [invitations, setInvitations] = useState(model.invitations ?? []);
+  const acceptedEventCount = invitations.filter(({ status }) => status === "accepted").length;
+  const availableCount =
+    [model.organizer, model.reviewer, model.participant].filter(Boolean).length +
+    acceptedEventCount;
   return (
     <div className={styles.shell} data-role-workspace-shell="true">
-      <a className={styles.skipLink} href="#workspaces">
-        Skip to workspaces
+      <a className={styles.skipLink} href="#work-content">
+        Skip to work
       </a>
       <div className={styles.frame}>
         <header className={styles.topbar}>
@@ -46,7 +49,7 @@ export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
             </div>
           </div>
         </header>
-        <main className={styles.main}>
+        <main className={styles.main} id="work-content" tabIndex={-1}>
           <section className={styles.heading} aria-labelledby="work-heading">
             <p className={styles.eyebrow}>
               One account · {availableCount} workspace{availableCount === 1 ? "" : "s"}
@@ -57,7 +60,8 @@ export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
               signing in again.
             </p>
           </section>
-          <WorkHubCards model={model} />
+          <WorkEventInvitations invitations={invitations} onInvitationsChange={setInvitations} />
+          <WorkHubCards model={model} hasEventInvitations={invitations.length > 0} />
         </main>
       </div>
     </div>

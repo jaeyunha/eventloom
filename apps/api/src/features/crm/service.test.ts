@@ -33,6 +33,7 @@ function crmRouteApp(crm: CrmService): Hono<CrmRouteEnvironment> {
       email: "owner@example.test",
       memberships: [{ organizationId: actor.organizationId, role: "owner" }],
       speakerGrants: [],
+      reviewerGrants: [],
     });
     await next();
   });

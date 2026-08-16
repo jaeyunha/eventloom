@@ -58,6 +58,7 @@ function session(overrides: Partial<AuthSession> = {}): AuthSession {
     expiresAt: new Date("2026-08-08T13:00:00.000Z"),
     memberships: [{ organizationId: "organization-1", role: "admin" }],
     speakerGrants: [{ organizationId: "organization-1", speakerProfileId: "speaker-profile-1" }],
+    reviewerGrants: [],
     ...overrides,
   };
 }
@@ -70,6 +71,7 @@ function userPrincipal(overrides: Partial<UserPrincipal> = {}): UserPrincipal {
     email: "speaker@example.com",
     memberships: [{ organizationId: "organization-1", role: "reviewer" }],
     speakerGrants: [{ organizationId: "organization-1", speakerProfileId: "speaker-profile-1" }],
+    reviewerGrants: [],
     ...overrides,
   };
 }

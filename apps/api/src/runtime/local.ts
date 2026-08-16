@@ -25,12 +25,13 @@ import {
   InMemoryCommunicationRepository,
 } from "../features/communications/service";
 import type {
+  CommunicationDeliveryAdapter,
   CommunicationRecipient,
   CommunicationSenderIdentities,
   CommunicationTemplate,
 } from "../features/communications/types";
 import { CrmService, InMemoryCrmRepository } from "../features/crm/service";
-import { evaluationRolesForOrganizationMembership } from "../features/evaluations/access";
+import { evaluationRolesForPrincipal } from "../features/evaluations/access";
 import {
   InMemoryEvaluationRepository,
   InMemorySubmissionReviewSource,
@@ -45,6 +46,11 @@ import type {
   EvaluationPlan,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
+import { InMemoryEventRoleInvitationRepository } from "../features/event-invitations/memory";
+import type {
+  EventRoleInvitation,
+  EventRoleInvitationTransitionInput,
+} from "../features/event-invitations/types";
 import {
   EventService,
   EventServiceError,
@@ -134,6 +140,7 @@ import type {
 } from "../routes/organizer-overview";
 import type { PublishedSpeakerProjection } from "../routes/public-speakers";
 import { createLocalCfpService, seedLocalCfpForm } from "./cfp";
+import { createRuntimeEventRoleInvitationAdapters } from "./d1";
 import { seedLocalCfpScenario } from "./local-cfp-scenario";
 import { seedLocalEvaluationWorkflow } from "./local-evaluation-workflow";
 import { LOCAL_REVIEW_SCENARIO_REVIEWERS, localSubmissionScenario } from "./local-review-scenario";
@@ -315,11 +322,18 @@ async function sourceHash(value: unknown): Promise<string> {
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function localAuthenticator(personas: readonly LocalPersona[]): RequestAuthenticator {
+function localAuthenticator(
+  personas: readonly LocalPersona[],
+  invitations: InMemoryEventRoleInvitationRepository,
+): RequestAuthenticator {
   const sessions: BetterAuthGateway = {
     async resolveSession(token) {
       const persona = localPersonaForToken(personas, token);
       if (persona === null) return null;
+      const acceptedInvitations = await invitations.listForVerifiedAccount(
+        persona.userId,
+        persona.email,
+      );
       return {
         sessionId: persona.sessionId,
         userId: persona.userId,
@@ -327,7 +341,26 @@ function localAuthenticator(personas: readonly LocalPersona[]): RequestAuthentic
         emailVerified: true,
         expiresAt: FAR_FUTURE,
         memberships: persona.memberships,
-        speakerGrants: persona.speakerGrants,
+        reviewerGrants: acceptedInvitations.flatMap((invitation) =>
+          invitation.status === "accepted" && invitation.role === "reviewer"
+            ? [{ organizationId: invitation.organizationId, eventId: invitation.eventId }]
+            : [],
+        ),
+        speakerGrants: [
+          ...persona.speakerGrants,
+          ...acceptedInvitations.flatMap((invitation) =>
+            invitation.status === "accepted" &&
+            invitation.role === "speaker" &&
+            invitation.participantId !== null
+              ? [
+                  {
+                    organizationId: invitation.organizationId,
+                    speakerProfileId: `cfp-profile:${invitation.participantId}`,
+                  },
+                ]
+              : [],
+          ),
+        ],
       };
     },
     async requestMagicLink() {},
@@ -370,6 +403,7 @@ function localSessionPayload(persona: LocalPersona): Record<string, unknown> {
       emailVerified: true,
     },
     memberships: persona.memberships,
+    reviewerGrants: [],
     speakerGrants: persona.speakerGrants,
   };
 }
@@ -496,6 +530,16 @@ class LocalSpeakerRepository
     Awaited<ReturnType<SpeakerOrganizerLifecycleRepository["saveOrganizerSpeakerImportPreview"]>>
   >();
   readonly #aggregateOperations = new Map<string, { digest: string; participantIds: string[] }>();
+
+  constructor(
+    private readonly invitationRecipientForEmail: (
+      email: string,
+    ) => { userId: string; normalizedEmail: string } | null,
+  ) {}
+
+  async resolveVerifiedInvitationRecipient(email: string) {
+    return this.invitationRecipientForEmail(email.trim().toLowerCase());
+  }
 
   #aggregateOperationKey(
     organizationId: string,
@@ -989,14 +1033,33 @@ class LocalSpeakerRepository
         profiles[profileIndex] = { ...profile, status: "accepted", updatedAt };
       }
     }
-    for (const [accountId, context] of this.#cfpPortalContexts) {
-      if (context.eventId === eventId && context.submissionIds.includes(submissionId)) {
-        this.#cfpPortalContexts.set(accountId, {
-          ...context,
-          capabilities: [...LOCAL_SPEAKER_CAPABILITIES],
-        });
-      }
+  }
+
+  acceptSpeakerInvitation(accountId: string, eventId: string, participantId: string): void {
+    this.#ensureEvent(eventId);
+    const current = this.#cfpPortalContexts.get(accountId);
+    if (current?.eventId === eventId && current.participantIds.includes(participantId)) {
+      this.#cfpPortalContexts.set(accountId, {
+        ...current,
+        capabilities: [...LOCAL_SPEAKER_CAPABILITIES],
+      });
+      return;
     }
+    const submission = (this.#submissions.get(eventId) ?? []).find(({ participantIds }) =>
+      participantIds.includes(participantId),
+    );
+    if (submission === undefined) return;
+    this.#cfpPortalContexts.set(accountId, {
+      id: `portal:${eventId}:${participantId}`,
+      eventId,
+      name: eventId,
+      slug: eventId,
+      status: "active",
+      capabilities: [...LOCAL_SPEAKER_CAPABILITIES],
+      submissionIds: [submission.id],
+      participantIds: [participantId],
+      primaryParticipantId: participantId,
+    });
   }
 
   async createTask(command: {
@@ -2328,6 +2391,23 @@ function localCfpServiceWithSeed(
   };
 }
 
+class LocalEventRoleInvitationRepository extends InMemoryEventRoleInvitationRepository {
+  constructor(
+    seed: readonly EventRoleInvitation[],
+    private readonly onAccepted: (invitation: EventRoleInvitation) => void,
+  ) {
+    super(seed);
+  }
+
+  override async accept(
+    input: EventRoleInvitationTransitionInput,
+  ): Promise<EventRoleInvitation | null> {
+    const invitation = await super.accept(input);
+    if (invitation?.status === "accepted") this.onAccepted(invitation);
+    return invitation;
+  }
+}
+
 function eventIdFrom(request: Request): string | null {
   const url = new URL(request.url);
   const pathMatch = /\/(?:events|event)\/([^/]+)/u.exec(url.pathname)?.[1];
@@ -2355,8 +2435,111 @@ function localCfpEvent(event: Event): EventCfp {
 
 export function createLocalDependencies(aiProviders?: CloudflareAiProviders): ApiDependencies {
   const personas = [...LOCAL_PERSONAS];
-  const authenticator = localAuthenticator(personas);
-  const speakerRepository = new LocalSpeakerRepository();
+  const speakerRepository = new LocalSpeakerRepository((email) => {
+    const recipients = personas.filter(
+      (persona) => persona.email.trim().toLowerCase() === email.trim().toLowerCase(),
+    );
+    const recipient = recipients.length === 1 ? recipients[0] : undefined;
+    return recipient === undefined
+      ? null
+      : { userId: recipient.userId, normalizedEmail: recipient.email.trim().toLowerCase() };
+  });
+  const localEventInvitationSeed: EventRoleInvitation[] = [
+    ...LOCAL_REVIEW_SCENARIO_REVIEWERS.map(
+      (reviewer): EventRoleInvitation => ({
+        id: `local-reviewer-invitation:${reviewer.id}:demo-event`,
+        organizationId: LOCAL_ORGANIZATION_ID,
+        organizationName: "Eventloom",
+        eventId: "demo-event",
+        eventName: "Open Sessionboard Conference",
+        role: "reviewer",
+        recipientUserId: reviewer.id,
+        recipientEmail: reviewer.email.trim().toLowerCase(),
+        normalizedEmail: reviewer.email.trim().toLowerCase(),
+        participantId: null,
+        status: "accepted",
+        creationIdempotencyKey: `local-reviewer:${reviewer.id}:demo-event`,
+        invitedByActorType: "user",
+        invitedByActorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        invitedAt: SEEDED_AT,
+        createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+        createdAt: SEEDED_AT,
+        acceptedByUserId: reviewer.id,
+        acceptedAt: SEEDED_AT,
+        declinedByUserId: null,
+        declinedAt: null,
+        revokedByActorType: null,
+        revokedByActorId: null,
+        revokedAt: null,
+        version: 2,
+        updatedAt: SEEDED_AT,
+      }),
+    ),
+    {
+      id: "local-speaker-invitation:demo-event:local-participant",
+      organizationId: LOCAL_ORGANIZATION_ID,
+      organizationName: "Eventloom",
+      eventId: "demo-event",
+      eventName: "Open Sessionboard Conference",
+      role: "speaker",
+      recipientUserId: LOCAL_SPEAKER_ACCOUNT_ID,
+      recipientEmail: LOCAL_SPEAKER_EMAIL,
+      normalizedEmail: LOCAL_SPEAKER_EMAIL,
+      participantId: "local-participant",
+      status: "accepted",
+      creationIdempotencyKey: "evaluation-acceptance:local-submission:local-participant",
+      invitedByActorType: "user",
+      invitedByActorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      invitedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      createdAt: SEEDED_AT,
+      acceptedByUserId: LOCAL_SPEAKER_ACCOUNT_ID,
+      acceptedAt: SEEDED_AT,
+      declinedByUserId: null,
+      declinedAt: null,
+      revokedByActorType: null,
+      revokedByActorId: null,
+      revokedAt: null,
+      version: 2,
+      updatedAt: SEEDED_AT,
+    },
+  ];
+  const eventInvitationRepository = new LocalEventRoleInvitationRepository(
+    localEventInvitationSeed,
+    (invitation) => {
+      const personaIndex = personas.findIndex(
+        ({ userId }) => userId === invitation.recipientUserId,
+      );
+      const persona = personas[personaIndex];
+      if (persona !== undefined && invitation.role === "reviewer") {
+        const hasMembership = persona.memberships.some(
+          ({ organizationId, role }) =>
+            organizationId === invitation.organizationId && role === "reviewer",
+        );
+        if (!hasMembership) {
+          personas[personaIndex] = {
+            ...persona,
+            memberships: [
+              ...persona.memberships,
+              { organizationId: invitation.organizationId, role: "reviewer" },
+            ],
+          };
+        }
+      }
+      if (invitation.role === "speaker" && invitation.participantId !== null) {
+        speakerRepository.acceptSpeakerInvitation(
+          invitation.recipientUserId,
+          invitation.eventId,
+          invitation.participantId,
+        );
+      }
+    },
+  );
+  const eventRoleInvitationAdapters = createRuntimeEventRoleInvitationAdapters(
+    eventInvitationRepository,
+    { clock: () => new Date(SEEDED_AT) },
+  );
+  const authenticator = localAuthenticator(personas, eventInvitationRepository);
   const privateAssetGateway = new LocalPrivateAssetGateway();
   let speakerService!: SpeakerService;
   const publicRepository = new LocalPublicApiRepository();
@@ -2594,6 +2777,48 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         throw new Error("The accepted local submission was not found in the event review graph.");
       }
       speakerRepository.acceptSubmission(input.eventId, input.submissionId, input.decidedAt);
+      await Promise.all(
+        material.participants.map(async (participant) => {
+          const email = participant.email.trim().toLowerCase();
+          const recipients = personas.filter(
+            (persona) => persona.email.trim().toLowerCase() === email,
+          );
+          if (email.length === 0 || recipients.length !== 1) return;
+          const recipient = recipients[0];
+          if (recipient === undefined) return;
+          const existing = (
+            await eventInvitationRepository.listForVerifiedAccount(recipient.userId, email)
+          ).find(
+            (invitation) =>
+              invitation.eventId === input.eventId &&
+              invitation.role === "speaker" &&
+              invitation.participantId === participant.id,
+          );
+          if (existing !== undefined) {
+            if (existing.status === "accepted") {
+              speakerRepository.acceptSpeakerInvitation(
+                recipient.userId,
+                input.eventId,
+                participant.id,
+              );
+            }
+            return;
+          }
+          await eventRoleInvitationAdapters.speakerCreator.create({
+            id: `local-speaker-invitation:${input.eventId}:${participant.id}`,
+            organizationId: input.tenantId,
+            eventId: input.eventId,
+            role: "speaker",
+            recipientUserId: recipient.userId,
+            normalizedEmail: email,
+            participantId: participant.id,
+            creationIdempotencyKey: `evaluation-acceptance:${input.submissionId}:${participant.id}`,
+            invitedByActorType: "user",
+            invitedByActorId: input.decidedBy,
+            invitedAt: input.decidedAt,
+          });
+        }),
+      );
       const firstParticipant = material.participants[0];
       if (firstParticipant === undefined) {
         throw new Error("An accepted local submission must include a speaker.");
@@ -2749,6 +2974,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       }),
       invitationDelivery: new InMemoryMemberInvitationDelivery(),
       reviewerPools: new InMemoryReviewerPoolRepository({ pools: [reviewerPool] }),
+      reviewerEventInvitations: eventRoleInvitationAdapters.reviewerLifecycle,
     },
     {
       clock: () => new Date(SEEDED_AT),
@@ -2830,15 +3056,42 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           sessionTitle: "Designing reliable community systems",
         },
       } satisfies CommunicationRecipient,
+      {
+        id: "local-invitation-participant",
+        participantId: "local-invitation-participant",
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        email: LOCAL_REVIEWER_EMAIL,
+        displayName: "Review Speaker",
+        audiences: ["accepted_participants", "all_participants"],
+        data: {
+          first_name: "Review",
+          display_name: "Review Speaker",
+          email: LOCAL_REVIEWER_EMAIL,
+          sessionTitle: "Invitation composition",
+        },
+      } satisfies CommunicationRecipient,
     ],
     authorizedAudiences: {
       [`${LOCAL_ORGANIZATION_ID}:demo-event`]: ["accepted_participants", "all_participants"],
     },
   });
-  const communicationService = new CommunicationService(communicationRepository, undefined, {
-    clock: () => new Date(SEEDED_AT),
-    senderIdentities: LOCAL_COMMUNICATION_SENDERS,
-  });
+  const localCommunicationDelivery: CommunicationDeliveryAdapter = {
+    async send(request) {
+      return {
+        status: "delivered",
+        providerMessageId: `local-communication:${request.sendId}:${request.recipientId}`,
+      };
+    },
+  };
+  const communicationService = new CommunicationService(
+    communicationRepository,
+    localCommunicationDelivery,
+    {
+      clock: () => new Date(SEEDED_AT),
+      senderIdentities: LOCAL_COMMUNICATION_SENDERS,
+    },
+  );
   speakerService = new SpeakerService(speakerRepository, privateAssetGateway, {
     speakerSender: LOCAL_COMMUNICATION_SENDERS.speakers,
     now: () => new Date(SEEDED_AT),
@@ -2850,6 +3103,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       communicationService,
       "http://127.0.0.1:3015",
     ),
+    invitationCreator: eventRoleInvitationAdapters.speakerCreator,
   });
   let programGraphSeeded!: Promise<void>;
   const reportRepository = new InMemoryReportRepository();
@@ -3230,7 +3484,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         const known = new Map(
           organizations.map((organization) => [organization.organizationId, organization.name]),
         );
-        for (const grant of principal.speakerGrants) {
+        for (const grant of [...principal.reviewerGrants, ...principal.speakerGrants]) {
           if (!known.has(grant.organizationId) && grant.organizationId === LOCAL_ORGANIZATION_ID) {
             known.set(grant.organizationId, "Eventloom");
           }
@@ -3399,6 +3653,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
     authenticator,
     auth: localAuthRoutes(personas),
+    eventInvitations: { service: eventRoleInvitationAdapters.service },
     organizerOverview: serviceAfterSeed(organizerOverview, programGraphSeeded),
     crm: { service: crmService },
     speaker: {
@@ -3443,10 +3698,6 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       service: seededEvaluationService,
       async actorFor(principal: AuthPrincipal, request: Request): Promise<EvaluationActor | null> {
         if (principal.kind !== "user") return null;
-        const membership = principal.memberships.find(
-          ({ organizationId }) => organizationId === LOCAL_ORGANIZATION_ID,
-        );
-        if (membership === undefined) return null;
         const body = await request
           .clone()
           .json<Record<string, unknown>>()
@@ -3455,16 +3706,25 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           typeof body?.eventId === "string" && body.eventId.trim().length > 0
             ? body.eventId
             : eventIdFrom(request);
-        const roles = evaluationRolesForOrganizationMembership(membership.role);
         if (eventId === null) {
           await localScenarioSeeded;
           const plans = await evaluationRepository.listPlans(LOCAL_ORGANIZATION_ID);
-          const grants = plans.flatMap((plan) =>
-            roles.map((role) => ({
-              tenantId: LOCAL_ORGANIZATION_ID,
-              eventId: plan.eventId,
-              role,
-            })),
+          const organizer = principal.memberships.some(
+            ({ organizationId, role }) =>
+              organizationId === LOCAL_ORGANIZATION_ID && (role === "owner" || role === "admin"),
+          );
+          const grants = [
+            ...(organizer
+              ? plans.map((plan) => ({ eventId: plan.eventId, role: "organizer" as const }))
+              : []),
+            ...principal.reviewerGrants
+              .filter(({ organizationId }) => organizationId === LOCAL_ORGANIZATION_ID)
+              .map((grant) => ({ eventId: grant.eventId, role: "reviewer" as const })),
+          ].filter(
+            (grant, index, all) =>
+              all.findIndex(
+                (candidate) => candidate.eventId === grant.eventId && candidate.role === grant.role,
+              ) === index,
           );
           if (grants.length === 0) return null;
           return {
@@ -3474,22 +3734,13 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             grants,
           };
         }
-        if (
-          roles.includes("reviewer") &&
-          !roles.includes("organizer") &&
-          eventId !== "demo-event"
-        ) {
-          return null;
-        }
+        const roles = evaluationRolesForPrincipal(principal, LOCAL_ORGANIZATION_ID, eventId);
+        if (roles.length === 0) return null;
         return {
           tenantId: LOCAL_ORGANIZATION_ID,
           userId: principal.userId,
           kind: "human",
-          grants: roles.map((role) => ({
-            tenantId: LOCAL_ORGANIZATION_ID,
-            eventId,
-            role,
-          })),
+          grants: roles.map((role) => ({ eventId, role })),
         };
       },
     },

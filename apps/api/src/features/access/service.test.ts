@@ -17,6 +17,7 @@ function principal(overrides: Partial<UserPrincipal> = {}): UserPrincipal {
     email: "user@example.test",
     memberships: [{ organizationId: "org-a", role: "reviewer" }],
     speakerGrants: [{ organizationId: "org-a", speakerProfileId: "speaker-a" }],
+    reviewerGrants: [],
     ...overrides,
   };
 }
@@ -72,6 +73,7 @@ describe("access context service", () => {
             { organizationId: "org-a", role: "reviewer" },
             { organizationId: "org-b", role: "owner" },
           ],
+          reviewerGrants: [{ organizationId: "org-a", eventId: "event-a" }],
         }),
       ),
     ).resolves.toEqual([
@@ -330,7 +332,7 @@ describe("access context service", () => {
     );
     active = false;
     expect((await service.list(principal())).some((context) => context.scope === "event")).toBe(
-      true,
+      false,
     );
     expect(
       (await service.list(principal({ speakerGrants: [] }))).some(

@@ -56,6 +56,116 @@ export const SOURCE_ORDER: readonly ReportRelationship[] = [
   "evaluationProgress",
 ];
 
+export type ReportTemplateId =
+  | "program-schedule"
+  | "speaker-directory"
+  | "participant-directory"
+  | "evaluation-progress";
+
+export interface ReportTemplate {
+  readonly id: ReportTemplateId;
+  readonly name: string;
+  readonly description: string;
+  readonly relationships: readonly ReportRelationship[];
+  readonly fields: readonly string[];
+  readonly order: readonly string[];
+  readonly filters: ReportDefinitionInput["filters"];
+  readonly sort: ReportDefinitionInput["sort"];
+}
+
+export const REPORT_TEMPLATES: readonly ReportTemplate[] = [
+  {
+    id: "program-schedule",
+    name: "Program schedule",
+    description: "Working session schedule for production and organizer coordination.",
+    relationships: ["sessions"],
+    fields: [
+      "sessions.title",
+      "sessions.status",
+      "sessions.startsAt",
+      "sessions.endsAt",
+      "sessions.room",
+      "sessions.track",
+    ],
+    order: [
+      "sessions.title",
+      "sessions.status",
+      "sessions.startsAt",
+      "sessions.endsAt",
+      "sessions.room",
+      "sessions.track",
+    ],
+    filters: [],
+    sort: [{ field: "sessions.startsAt", direction: "asc" }],
+  },
+  {
+    id: "speaker-directory",
+    name: "Speaker directory",
+    description: "Organizer-safe speaker names and biographies for event handoffs.",
+    relationships: ["speakers"],
+    fields: ["speakers.displayName", "speakers.biography"],
+    order: ["speakers.displayName", "speakers.biography"],
+    filters: [],
+    sort: [{ field: "speakers.displayName", direction: "asc" }],
+  },
+  {
+    id: "participant-directory",
+    name: "Participant directory",
+    description: "Participant names and biographies for event operations.",
+    relationships: ["participants"],
+    fields: ["participants.displayName", "participants.biography"],
+    order: ["participants.displayName", "participants.biography"],
+    filters: [],
+    sort: [{ field: "participants.displayName", direction: "asc" }],
+  },
+  {
+    id: "evaluation-progress",
+    name: "Evaluation progress",
+    description: "Plan-level review completion and aggregate scoring summary.",
+    relationships: ["evaluationProgress"],
+    fields: [
+      "evaluationProgress.planName",
+      "evaluationProgress.planVersion",
+      "evaluationProgress.total",
+      "evaluationProgress.assigned",
+      "evaluationProgress.inProgress",
+      "evaluationProgress.submitted",
+      "evaluationProgress.abstained",
+      "evaluationProgress.completionPercent",
+      "evaluationProgress.averageScore",
+      "evaluationProgress.possibleScore",
+      "evaluationProgress.scoreCount",
+    ],
+    order: [
+      "evaluationProgress.planName",
+      "evaluationProgress.planVersion",
+      "evaluationProgress.total",
+      "evaluationProgress.assigned",
+      "evaluationProgress.inProgress",
+      "evaluationProgress.submitted",
+      "evaluationProgress.abstained",
+      "evaluationProgress.completionPercent",
+      "evaluationProgress.averageScore",
+      "evaluationProgress.possibleScore",
+      "evaluationProgress.scoreCount",
+    ],
+    filters: [],
+    sort: [],
+  },
+];
+
+export function draftFromReportTemplate(template: ReportTemplate): ReportDefinitionInput {
+  return normalizeDraft({
+    name: template.name,
+    description: template.description,
+    relationships: [...template.relationships],
+    fields: [...template.fields],
+    order: [...template.order],
+    filters: [...template.filters],
+    sort: [...template.sort],
+  });
+}
+
 export function fieldsForRelationships(
   relationships: readonly ReportRelationship[],
 ): readonly FieldOption[] {
