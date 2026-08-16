@@ -311,4 +311,3 @@ export function createReportsApi(
     },
   };
 }
-export const createReportApi = createReportsApi;

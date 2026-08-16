@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
 import styles from ".././review-workspace.module.css";
@@ -32,7 +32,7 @@ export function DecisionEditor({
   const [saved, setSaved] = useState(decision !== undefined);
   const [busy, setBusy] = useState(false);
 
-  const [decisionVersion, setDecisionVersion] = useState<number | undefined>(decision?.version);
+  const decisionVersionRef = useRef<number | undefined>(decision?.version);
   async function saveDecision(): Promise<void> {
     if (!status) {
       setError("Choose accept, waitlist, or reject before confirming.");
@@ -60,11 +60,13 @@ export function DecisionEditor({
             status,
             reason: reason.trim(),
             idempotencyKey: decisionKey,
-            ...(decisionVersion === undefined ? {} : { expectedVersion: decisionVersion }),
+            ...(decisionVersionRef.current === undefined
+              ? {}
+              : { expectedVersion: decisionVersionRef.current }),
           }),
         },
       );
-      setDecisionVersion(savedDecision.version);
+      decisionVersionRef.current = savedDecision.version;
       setSaved(true);
     } catch (requestError) {
       setError(

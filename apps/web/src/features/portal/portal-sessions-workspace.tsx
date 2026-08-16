@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSyncExternalStore } from "react";
 import {
   MetadataList,
   MetadataRow,
@@ -19,6 +20,22 @@ import type {
   PortalSubmission,
   PortalTask,
 } from "./types";
+
+function subscribeToPortalSessionDate(): () => void {
+  return () => undefined;
+}
+
+function browserPortalSessionDate(value: string): string {
+  return new Date(value).toLocaleDateString("en");
+}
+
+function PortalSessionDate({ value }: Readonly<{ value: string }>) {
+  return useSyncExternalStore(
+    subscribeToPortalSessionDate,
+    () => browserPortalSessionDate(value),
+    () => value,
+  );
+}
 
 export interface SessionsWorkspaceViewProps {
   readonly eventName: string;
@@ -123,7 +140,7 @@ export function SessionsWorkspaceView({
                       />
                       <MetadataRow
                         label="Last updated"
-                        value={new Date(selected.updatedAt).toLocaleDateString("en")}
+                        value={<PortalSessionDate value={selected.updatedAt} />}
                       />
                     </MetadataList>
                   </div>

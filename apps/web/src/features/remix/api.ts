@@ -217,7 +217,13 @@ function segment(value: string, label: string): string {
 
 function queryValues(values: readonly string[] | undefined): string | null {
   if (values === undefined || values.length === 0) return null;
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const normalized = values.reduce<string[]>((trimmedValues, value) => {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      trimmedValues.push(trimmed);
+    }
+    return trimmedValues;
+  }, []);
   return normalized.length === 0 ? null : normalized.join(",");
 }
 

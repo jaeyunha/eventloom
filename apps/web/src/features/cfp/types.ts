@@ -1,6 +1,13 @@
 export const CFP_STEPS = ["welcome", "account", "submission", "participants", "review"] as const;
 
 export type CfpStep = (typeof CFP_STEPS)[number];
+export const CFP_STEP_LABELS: Record<CfpStep, string> = {
+  welcome: "Get started",
+  account: "Account",
+  submission: "Proposal",
+  participants: "Speakers",
+  review: "Review",
+};
 
 export interface CfpAccount {
   email: string;

@@ -14,12 +14,7 @@ import {
   qualifiedEventContext,
   sessionHasOrganizerMembership,
 } from "./admin-shell";
-import {
-  OrganizerEventsView,
-  OrganizerOverviewView,
-  organizerOverviewCacheKey,
-  organizerOverviewCacheTags,
-} from "./organizer-overview";
+import { OrganizerEventsView, OrganizerOverviewView } from "./organizer-overview";
 import {
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
@@ -33,6 +28,8 @@ import {
   type OrganizerOverviewCoreData,
   organizerEventIntersectsCalendarDate,
   organizerEventMinimumDateTimeLocal,
+  organizerOverviewCacheKey,
+  organizerOverviewCacheTags,
   parseOrganizerEventsResponse,
   parseOrganizerOverviewActivityResponse,
   parseOrganizerOverviewCoreResponse,

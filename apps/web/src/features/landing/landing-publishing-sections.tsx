@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { LandingIcon } from "./landing-icon";
 
 const openSourceBenefits = [
@@ -89,9 +90,9 @@ export function LandingPublishingSections() {
               Eventloom fits your event operations.
             </p>
           </div>
-          <a className="button button-primary" href="/events">
+          <Link className="button button-primary" href="/events">
             Explore public events <LandingIcon name="arrow-right" />
-          </a>
+          </Link>
         </div>
       </section>
     </>

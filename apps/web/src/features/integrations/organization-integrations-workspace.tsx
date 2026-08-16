@@ -9,7 +9,7 @@ import {
   WorkspaceMetaItem,
 } from "@/components/workspace/workspace-ui";
 import { workspaceClassNames } from "@/components/workspace/workspace-ui-model";
-import { AirtableIntegration } from "./airtable";
+import { AirtableIntegration } from "./airtable/airtable-integration";
 import { OrganizationApiKeys } from "./organization-api-keys";
 import styles from "./organization-integrations-workspace.module.css";
 

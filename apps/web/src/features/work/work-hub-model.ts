@@ -101,11 +101,12 @@ export function buildWorkHubModel({
   portalContexts: readonly PortalContext[];
   preferredOrganizationId: string | null;
 }>): WorkHubModel {
-  const organizerIds = new Set(
-    session.memberships
-      .filter(({ role }) => role === "owner" || role === "admin")
-      .map(({ organizationId }) => organizationId),
-  );
+  const organizerIds = new Set<string>();
+  for (const { role, organizationId } of session.memberships) {
+    if (role === "owner" || role === "admin") {
+      organizerIds.add(organizationId);
+    }
+  }
   const organizerOrganizations = organizations.filter(({ organizationId }) =>
     organizerIds.has(organizationId),
   );
