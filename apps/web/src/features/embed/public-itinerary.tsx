@@ -73,11 +73,15 @@ function publicEventDays(
   if (startsAt === null || endsAt === null || endsAt < startsAt) {
     return agendaDays;
   }
+  const agendaDayByDate = new Map<string, (typeof agendaDays)[number]>();
+  for (const day of agendaDays) {
+    if (!agendaDayByDate.has(day.date)) agendaDayByDate.set(day.date, day);
+  }
 
   const days = [];
   for (let timestamp = startsAt; timestamp <= endsAt; timestamp += 86_400_000) {
     const date = new Date(timestamp).toISOString().slice(0, 10);
-    const existingDay = agendaDays.find((day) => day.date === date);
+    const existingDay = agendaDayByDate.get(date);
     days.push(
       existingDay ?? {
         date,
