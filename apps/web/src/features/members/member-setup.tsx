@@ -64,6 +64,7 @@ export function MemberSetup({
   const [activatedEmail, setActivatedEmail] = useState<string | null>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const setupTokenRef = useRef(token?.trim() ?? "");
+  const submissionIdRef = useRef(0);
   const configured = useMemo(() => {
     if (providedMemberApi && providedLoginApi) {
       return { memberApi: providedMemberApi, loginApi: providedLoginApi };
@@ -122,6 +123,8 @@ export function MemberSetup({
       queueMicrotask(() => errorRef.current?.focus());
       return;
     }
+    const submissionId = submissionIdRef.current + 1;
+    submissionIdRef.current = submissionId;
     clearMemberSetupTokenFromUrl();
     setBusy(true);
     setError(null);
@@ -133,12 +136,16 @@ export function MemberSetup({
         name,
         password,
       });
+      if (submissionId !== submissionIdRef.current) return;
       (navigate ?? ((path) => window.location.assign(path)))(destination);
     } catch (reason) {
+      if (submissionId !== submissionIdRef.current) return;
       if (reason instanceof MemberSetupActivatedSignInRequiredError) {
         setActivatedEmail(reason.email);
         setSetupState("activated-sign-in-required");
-        setError(null);
+        setError((currentError) =>
+          submissionId === submissionIdRef.current ? null : currentError,
+        );
       } else {
         setError(setupError(reason));
         queueMicrotask(() => errorRef.current?.focus());
