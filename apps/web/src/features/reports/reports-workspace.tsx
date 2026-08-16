@@ -368,9 +368,14 @@ function carryRowKey<T extends object>(state: RowKeyState<T>, previous: T, next:
 function equalDraft(left: ReportDefinitionInput, right: ReportDefinitionInput): boolean {
   return JSON.stringify(normalizeDraft(left)) === JSON.stringify(normalizeDraft(right));
 }
+const REPORT_TEMPLATE_ICON_PROPS = {
+  "aria-hidden": true,
+  size: 20,
+  strokeWidth: 1.8,
+} as const;
 
 function ReportTemplateIcon({ id }: Readonly<{ id: ReportTemplateId }>) {
-  const iconProps = { "aria-hidden": true, size: 20, strokeWidth: 1.8 } as const;
+  const iconProps = REPORT_TEMPLATE_ICON_PROPS;
   switch (id) {
     case "program-schedule":
       return <CalendarDays {...iconProps} />;

@@ -1961,7 +1961,9 @@ function CommunicationsWorkspaceForScope({
   const reminderTruthGenerationRef = useRef(0);
   const communicationScopeKey = `${normalizeCommunicationScopeId(organizationId)}:${normalizeCommunicationScopeId(eventId)}`;
   const reminderFactsRef = useRef<ReminderFacts | null>(reminderFacts);
-  reminderFactsRef.current = reminderFacts;
+  useLayoutEffect(() => {
+    reminderFactsRef.current = reminderFacts;
+  }, [reminderFacts]);
   const selectedTemplateSelectionRef = useRef<CommunicationTemplateSelection | undefined>(
     selectedTemplateId.length === 0 || selectedTemplateVersion === undefined
       ? undefined

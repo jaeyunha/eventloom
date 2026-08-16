@@ -263,9 +263,13 @@ export function cfpHttpUrlIsValid(value: string): boolean {
 
 function reviewValueString(value: unknown): string {
   if (Array.isArray(value)) {
-    const items = value
-      .map((item) => reviewValueString(item))
-      .filter((item) => item !== "Not specified");
+    const items: string[] = [];
+    const length = value.length;
+    for (let index = 0; index < length; index += 1) {
+      if (!(index in value)) continue;
+      const item = reviewValueString(value[index]);
+      if (item !== "Not specified") items.push(item);
+    }
     return items.length > 0 ? items.join(", ") : "Not specified";
   }
   if (typeof value === "boolean") return value ? "Yes" : "No";

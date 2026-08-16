@@ -3093,10 +3093,15 @@ export function DeliverablesWorkspace({
     readonly key: string;
     readonly data: DeliverablesSnapshot | undefined;
   }>({ key: coreCacheKey, data: cachedCoreDataAtRender });
-  if (cachedCoreDataRef.current.key !== coreCacheKey) {
-    cachedCoreDataRef.current = { key: coreCacheKey, data: cachedCoreDataAtRender };
-  }
-  const cachedCoreData = cachedCoreDataRef.current.data;
+  const cachedCoreData =
+    cachedCoreDataRef.current.key === coreCacheKey
+      ? cachedCoreDataRef.current.data
+      : cachedCoreDataAtRender;
+  useLayoutEffect(() => {
+    if (cachedCoreDataRef.current.key !== coreCacheKey) {
+      cachedCoreDataRef.current = { key: coreCacheKey, data: cachedCoreDataAtRender };
+    }
+  }, [cachedCoreDataAtRender, coreCacheKey]);
   const seededCoreData = initialData;
   const scopeRef = useRef<DeliverablesWorkspaceScope>({
     api,

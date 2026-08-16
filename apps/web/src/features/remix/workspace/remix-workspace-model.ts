@@ -11,6 +11,12 @@ import {
   remixSpeakerFields,
 } from "../api";
 
+const REMIX_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
+
 export const fieldLabels: Readonly<Record<RemixField, string>> = {
   title: "Title",
   description: "Description",
@@ -162,9 +168,5 @@ export function auditActionLabel(action: RemixAuditAction): string {
 export function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  }).format(date);
+  return REMIX_TIMESTAMP_FORMATTER.format(date);
 }

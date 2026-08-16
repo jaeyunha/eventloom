@@ -357,12 +357,17 @@ function localCfpDateToIso(value: string, timeZone: string): string | null {
     hourCycle: "h23",
   });
   for (let iteration = 0; iteration < 3; iteration += 1) {
-    const parts = Object.fromEntries(
-      formatter
-        .formatToParts(new Date(candidate))
-        .filter((part) => part.type !== "literal")
-        .map((part) => [part.type, part.value]),
-    );
+    const parts: Record<string, string> = {};
+    const formatParts = formatter.formatToParts(new Date(candidate));
+    const length = formatParts.length;
+    for (let index = 0; index < length; index += 1) {
+      if (!(index in formatParts)) continue;
+      const part = formatParts[index];
+      if (part === undefined) continue;
+      if (part.type !== "literal") {
+        parts[part.type] = part.value;
+      }
+    }
     const wallMilliseconds = Date.UTC(
       Number(parts.year),
       Number(parts.month) - 1,
@@ -872,11 +877,19 @@ export function configurationFromServer(
   };
   const optionsFor = (key: string, fallback: string[]): string[] => {
     const field = form.submissionFields.find((candidate) => candidate.key === key);
-    const options = field?.options
-      .filter((option): option is string => typeof option === "string")
-      .map((option) => option.trim())
-      .filter(Boolean);
-    return options?.length ? options : fallback;
+    const fieldOptions = field?.options;
+    const options: string[] = [];
+    if (fieldOptions !== undefined) {
+      const length = fieldOptions.length;
+      for (let index = 0; index < length; index += 1) {
+        if (!(index in fieldOptions)) continue;
+        const option = fieldOptions[index];
+        if (typeof option !== "string") continue;
+        const trimmed = option.trim();
+        if (trimmed) options.push(trimmed);
+      }
+    }
+    return options.length > 0 ? options : fallback;
   };
   const editorRule =
     form.rules.find(
