@@ -1,6 +1,7 @@
 "use client";
 
 import { CalendarDays, CheckCircle2, Clock3, Save } from "lucide-react";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -906,11 +907,11 @@ export function AgendaBoard({
         <WorkspaceHeader
           breadcrumb={
             <WorkspaceBreadcrumb>
-              <a
+              <Link
                 href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}
               >
                 {data.event.name}
-              </a>
+              </Link>
               <span>/</span>
               <strong>Agenda</strong>
             </WorkspaceBreadcrumb>
@@ -940,7 +941,7 @@ export function AgendaBoard({
           }
           actions={
             <Button asChild size="sm" variant="outline">
-              <a href={settingsHref}>Rooms and tracks</a>
+              <Link href={settingsHref}>Rooms and tracks</Link>
             </Button>
           }
         />
@@ -1277,7 +1278,7 @@ export function AgendaBoard({
             {hasScheduleInventory && !hasRooms ? (
               <p className={styles.formError} role="status">
                 Scheduling is unavailable until you create a room.{" "}
-                <a href={settingsHref}>Create a room in Rooms and tracks settings</a> before
+                <Link href={settingsHref}>Create a room in Rooms and tracks settings</Link> before
                 scheduling accepted sessions.
               </p>
             ) : null}
@@ -1296,7 +1297,7 @@ export function AgendaBoard({
                 </EmptyHeader>
                 <EmptyContent>
                   <Button asChild>
-                    <a href={sessionsHref}>Open sessions</a>
+                    <Link href={sessionsHref}>Open sessions</Link>
                   </Button>
                 </EmptyContent>
               </Empty>

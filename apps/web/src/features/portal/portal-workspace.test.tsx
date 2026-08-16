@@ -229,4 +229,31 @@ describe("focused participant workspaces", () => {
     expect(routeSource).toContain("redirect(event ? `/portal/tasks?event=");
     expect(routeSource).not.toMatch(/<PortalWorkspace section=["'{]tasks/);
   });
+  it("uses Next Link for same-origin workspace destinations", () => {
+    const workspaceSource = readFileSync(
+      fileURLToPath(new URL("portal-workspace.tsx", import.meta.url)),
+      "utf8",
+    );
+    const sessionsSource = readFileSync(
+      fileURLToPath(new URL("portal-sessions-workspace.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(workspaceSource).toContain('import Link from "next/link";');
+    expect(workspaceSource).toContain("<Link");
+    expect(workspaceSource).toContain("href={item.href}");
+    expect(workspaceSource).toContain(
+      '<Link href="/portal/submissions">View my submissions</Link>',
+    );
+    expect(workspaceSource).not.toContain('<a href="/portal/submissions">');
+    expect(sessionsSource).toContain('import Link from "next/link";');
+    expect(sessionsSource).toContain(
+      '<Link href="/portal/tasks">Open Requests & tasks</Link>',
+    );
+    expect(sessionsSource).toContain(
+      '<Link href="/portal?workspace=files">Manage session files</Link>',
+    );
+    expect(sessionsSource).not.toContain('<a href="/portal/tasks">');
+    expect(sessionsSource).not.toContain('<a href="/portal?workspace=files">');
+  });
 });

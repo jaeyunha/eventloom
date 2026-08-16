@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -33,6 +35,14 @@ import {
 } from "./deliverables-workspace";
 import { projectFileFamilies } from "./file-family-model";
 import { FileReviewDrawerBody } from "./file-review-drawer";
+const deliverablesWorkspaceSource = readFileSync(
+  fileURLToPath(new URL("./deliverables-workspace.tsx", import.meta.url)),
+  "utf8",
+);
+const fileLibrarySource = readFileSync(
+  fileURLToPath(new URL("./file-library.tsx", import.meta.url)),
+  "utf8",
+);
 
 function storedManifestZip(manifest: unknown): Uint8Array {
   const payload = new TextEncoder().encode(`${JSON.stringify(manifest)}\n`);

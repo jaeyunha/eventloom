@@ -366,6 +366,22 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain('href="/admin/organizations/organization-1/events/evt_open"');
     expect(markup).not.toContain('href="/admin/events/evt_open"');
   });
+  it("uses Next Link for private organizer destinations while retaining the skip anchor", () => {
+    expect(workspaceSource).toContain('import Link from "next/link";');
+    expect(workspaceSource).toContain(
+      "<Link\n                href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}\n              >",
+    );
+    expect(workspaceSource).toContain('<Link href={settingsHref}>Rooms and tracks</Link>');
+    expect(workspaceSource).toContain(
+      '<Link href={settingsHref}>Create a room in Rooms and tracks settings</Link>',
+    );
+    expect(workspaceSource).toContain('<Link href={sessionsHref}>Open sessions</Link>');
+    expect(workspaceSource).not.toContain('<a href={settingsHref}>');
+    expect(workspaceSource).not.toContain('<a href={sessionsHref}>');
+    expect(workspaceSource).toContain(
+      '<a className={styles.skipLink} href="#agenda-content">',
+    );
+  });
 
   it("exposes accessible scheduling and disabled publication controls", () => {
     const markup = renderToStaticMarkup(

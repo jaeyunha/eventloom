@@ -1,6 +1,7 @@
 "use client";
 
 import { standardFileRequestMimeTypes } from "@eventloom/contracts";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -1953,7 +1954,7 @@ function SessionEditor(
       </CardHeader>
       <CardContent>
         <Button asChild>
-          <a href={href}>Open Sessions</a>
+          <Link href={href}>Open Sessions</Link>
         </Button>
       </CardContent>
     </Card>
@@ -2004,7 +2005,7 @@ function SpeakerEditor(
       </CardHeader>
       <CardContent>
         <Button asChild>
-          <a href={href}>Open Speakers</a>
+          <Link href={href}>Open Speakers</Link>
         </Button>
       </CardContent>
     </Card>
@@ -2216,18 +2217,18 @@ export function DeliverablesWorkspaceView({
               aria-label="Content requests and uploaded files"
               data-mode-switcher
             >
-              <a href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
+              <Link href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
                 Requests <span>Assign &amp; track</span>
-              </a>
-              <a href={filesHref} aria-current={filesMode ? "page" : undefined}>
+              </Link>
+              <Link href={filesHref} aria-current={filesMode ? "page" : undefined}>
                 Uploaded files <span>Review &amp; download</span>
-              </a>
+              </Link>
             </nav>
             <details className={styles.mobileSwitcher}>
               <summary>Switch section: {filesMode ? "Uploaded files" : "Requests"}</summary>
               <nav aria-label="Mobile section switcher">
-                <a href={deliverablesHref}>Requests — Assign &amp; track</a>
-                <a href={filesHref}>Uploaded files — Review &amp; download</a>
+                <Link href={deliverablesHref}>Requests — Assign &amp; track</Link>
+                <Link href={filesHref}>Uploaded files — Review &amp; download</Link>
               </nav>
             </details>
           </CardContent>

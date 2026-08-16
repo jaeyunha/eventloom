@@ -628,6 +628,7 @@ export function PortalProvider({
       if (!source) {
         return false;
       }
+      loadGeneration.current += 1;
       const scopedContext = scopePortalContextToAuthorizedParticipants(target, selected);
       const scopedView = scopePortalViewToAuthorizedParticipants(source, target, selected);
       setContext(scopedContext);
@@ -643,10 +644,9 @@ export function PortalProvider({
       setSavingProfile(false);
       setMutationError(null);
       setWorkspace({ ...emptyWorkspace, assets: [...(scopedView.assets ?? [])] });
-      void loadWorkspaceFor(scopedContext, scopedView);
       return true;
     },
-    [authoritativeView, context, contexts, loadWorkspaceFor],
+    [authoritativeView, context, contexts],
   );
   const loadWorkspace = useCallback(async () => {
     if (context && view) {
