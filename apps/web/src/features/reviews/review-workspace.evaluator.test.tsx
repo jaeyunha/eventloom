@@ -105,7 +105,7 @@ describe("evaluator workspace composition", () => {
     expect(markup).toContain('data-round-availability="scheduled"');
     expect(markup).toContain('role="status"');
     expect(markup).toContain('id="round-availability-notice"');
-    expect(markup).toContain('datetime="2026-08-17T08:24:00.000Z"');
+    expect(markup).toContain('dateTime="2026-08-17T08:24:00.000Z"');
     expect(markup).toContain('aria-describedby="round-availability-notice"');
   });
 
