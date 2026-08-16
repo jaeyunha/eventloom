@@ -20,6 +20,11 @@ export interface OrganizerAuthoringProps {
   assignmentTarget?: { readonly roundId: string; readonly submissionId: string } | undefined;
 }
 
+interface AssignmentFieldOverride {
+  readonly ownerKey: string;
+  readonly value: string;
+}
+
 export function useOrganizerAuthoringState({
   assignmentOnly = false,
   ...props
@@ -69,18 +74,40 @@ export function useOrganizerAuthoringState({
   );
   const [fileIds, setFileIds] = useState(() => seed.reviewerProjection?.fileIds?.join(", ") ?? "");
   const [rounds, setRounds] = useState<readonly ApiPlan["rounds"][number][]>(initialRounds);
-  const [assignmentRoundId, setAssignmentRoundId] = useState(
-    seed.rounds[0]?.id ?? initialRounds[0]?.id ?? "",
-  );
+  const [assignmentRoundOverride, setAssignmentRoundOverride] =
+    useState<AssignmentFieldOverride | null>(null);
   const [assignmentPreview, setAssignmentPreview] = useState<DistributionPreview | null>(null);
   const [assignmentPreviewKey, setAssignmentPreviewKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [assignmentSubmissionId, setAssignmentSubmissionId] = useState("");
+  const [assignmentSubmissionOverride, setAssignmentSubmissionOverride] =
+    useState<AssignmentFieldOverride | null>(null);
   const [assignmentReviewerIds, setAssignmentReviewerIds] = useState<readonly string[]>([]);
   const [assignmentReviewerQuery, setAssignmentReviewerQuery] = useState("");
   const [version, setVersion] = useState(seed.version);
   const [status, setStatus] = useState(seed.status);
   const [busy, setBusy] = useState(false);
+  const assignmentOwnerKey = JSON.stringify([
+    seed.planId,
+    assignmentTarget?.roundId ?? null,
+    assignmentTarget?.submissionId ?? null,
+  ]);
+  const assignmentRoundCandidate =
+    assignmentRoundOverride?.ownerKey === assignmentOwnerKey
+      ? assignmentRoundOverride.value
+      : (assignmentTarget?.roundId ?? seed.rounds[0]?.id ?? initialRounds[0]?.id ?? "");
+  const assignmentRoundId = rounds.some((round) => round.id === assignmentRoundCandidate)
+    ? assignmentRoundCandidate
+    : (rounds[0]?.id ?? "");
+  const setAssignmentRoundId = (value: string): void => {
+    setAssignmentRoundOverride({ ownerKey: assignmentOwnerKey, value });
+  };
+  const assignmentSubmissionId =
+    assignmentSubmissionOverride?.ownerKey === assignmentOwnerKey
+      ? assignmentSubmissionOverride.value
+      : (assignmentTarget?.submissionId ?? "");
+  const setAssignmentSubmissionId = (value: string): void => {
+    setAssignmentSubmissionOverride({ ownerKey: assignmentOwnerKey, value });
+  };
   const reviewerIdSet = new Set(reviewerMembers.map((member) => member.userId));
   const reviewerDirectoryReady = !reviewerMembersLoading && reviewerMembersError === null;
   const isDraft = status === "draft";
@@ -96,17 +123,6 @@ export function useOrganizerAuthoringState({
   const visibleAssignmentReviewerMembers = matchingAssignmentReviewerMembers.slice(0, 8);
   const assignmentReviewerSelectionDisabled =
     busy || status !== "open" || reviewerMembersLoading || reviewerMembersError !== null;
-
-  useEffect(() => {
-    if (assignmentTarget === undefined) return;
-    setAssignmentRoundId(assignmentTarget.roundId);
-    setAssignmentSubmissionId(assignmentTarget.submissionId);
-  }, [assignmentTarget]);
-  useEffect(() => {
-    setAssignmentRoundId((currentRoundId) =>
-      rounds.some((round) => round.id === currentRoundId) ? currentRoundId : (rounds[0]?.id ?? ""),
-    );
-  }, [rounds]);
 
   useEffect(() => {
     const authoritativeReviewerIds = reviewerIdsForAssignmentTarget(

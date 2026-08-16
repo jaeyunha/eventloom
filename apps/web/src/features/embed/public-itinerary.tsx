@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./embed.module.css";
 import {
   formatPublishedDateTimeRange,
@@ -194,15 +194,20 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
   );
   const [expandedDetails, setExpandedDetails] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
-  const [storageReady, setStorageReady] = useState(false);
-  const [loadedStorageKey, setLoadedStorageKey] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  const storageKeyRef = useRef(storageKey);
+  const storageLoadedRef = useRef(false);
+  const hydratedSelectedIdsRef = useRef<readonly string[] | null>(null);
+  const hydrationPendingRef = useRef(false);
 
   useEffect(() => {
     if (!days.some((day) => day.date === activeDay)) setActiveDay(days[0]?.date ?? "");
   }, [activeDay, days]);
 
   useEffect(() => {
+    storageKeyRef.current = storageKey;
+    hydrationPendingRef.current = true;
+    storageLoadedRef.current = false;
     try {
       const current = window.localStorage.getItem(storageKey);
       const stored = current ?? window.localStorage.getItem(legacyStorageKey);
@@ -213,27 +218,35 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
             (value): value is string => typeof value === "string" && availableIds.has(value),
           )
         : [];
+      hydratedSelectedIdsRef.current = selected;
       setSelectedIds(selected);
       if (current === null && stored !== null) {
         window.localStorage.setItem(storageKey, JSON.stringify(selected));
         window.localStorage.removeItem(legacyStorageKey);
       }
     } catch {
-      setSelectedIds([]);
+      const selected: readonly string[] = [];
+      hydratedSelectedIdsRef.current = selected;
+      setSelectedIds(selected);
     } finally {
-      setLoadedStorageKey(storageKey);
-      setStorageReady(true);
+      storageLoadedRef.current = true;
     }
   }, [agenda.entries, legacyStorageKey, storageKey]);
 
   useEffect(() => {
-    if (!storageReady || loadedStorageKey !== storageKey) return;
+    if (!storageLoadedRef.current) return;
+    if (hydrationPendingRef.current) {
+      hydrationPendingRef.current = false;
+      return;
+    }
+    if (selectedIds === hydratedSelectedIdsRef.current) return;
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(selectedIds));
+      window.localStorage.setItem(storageKeyRef.current, JSON.stringify(selectedIds));
+      hydratedSelectedIdsRef.current = selectedIds;
     } catch {
       // Private browsing and embedded contexts may deny storage; the controls still work in memory.
     }
-  }, [loadedStorageKey, selectedIds, storageKey, storageReady]);
+  }, [selectedIds]);
 
   const tracks = useMemo(
     () => uniqueValues(agenda.entries.flatMap((entry) => entry.trackNames)),

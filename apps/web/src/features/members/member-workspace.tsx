@@ -286,10 +286,19 @@ export function MemberWorkspace({
 }: MemberWorkspaceProps) {
   const settingsOnly = view === "settings";
   const baseUrl = apiBaseUrl(explicitBaseUrl);
-  const [api, setApi] = useState<MemberApi | null>(providedApi ?? null);
+  const apiResolution = useMemo(() => {
+    if (providedApi !== undefined) return { api: providedApi, error: null };
+    try {
+      return { api: createMemberApi(baseUrl, organizationId), error: null };
+    } catch (reason: unknown) {
+      return { api: null, error: errorMessage(reason) };
+    }
+  }, [baseUrl, organizationId, providedApi]);
+  const api = apiResolution.api;
   const [members, setMembers] = useState<readonly OrganizationMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const workspaceError = apiResolution.error ?? error;
   const [notice, setNotice] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(settingsOnly ? "settings" : initialTab);
   const [query, setQuery] = useState("");
@@ -326,19 +335,6 @@ export function MemberWorkspace({
       return allowedRoles.includes(current.role) ? current : { ...current, role: "reviewer" };
     });
   }, [currentOrganization?.role]);
-
-  useEffect(() => {
-    if (providedApi !== undefined) {
-      setApi(providedApi);
-      return;
-    }
-    try {
-      setApi(createMemberApi(baseUrl, organizationId));
-    } catch (reason: unknown) {
-      setApi(null);
-      setError(errorMessage(reason));
-    }
-  }, [baseUrl, organizationId, providedApi]);
 
   const loadOrganizations = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -653,7 +649,7 @@ export function MemberWorkspace({
         </div>
       </header>
 
-      {error ? <StatusMessage message={error} error /> : null}
+      {workspaceError ? <StatusMessage message={workspaceError} error /> : null}
       {notice ? <StatusMessage message={notice} /> : null}
       {settingsOnly && organizationsError ? (
         <StatusMessage message={organizationsError} error />
@@ -736,7 +732,7 @@ export function MemberWorkspace({
               </div>
 
               {loading ? <p className={styles.statusMessage}>Loading people…</p> : null}
-              {!loading && error === null && members.length === 0 ? (
+              {!loading && workspaceError === null && members.length === 0 ? (
                 <Empty className={styles.empty}>
                   <EmptyHeader>
                     <EmptyTitle>No one has been added yet</EmptyTitle>
