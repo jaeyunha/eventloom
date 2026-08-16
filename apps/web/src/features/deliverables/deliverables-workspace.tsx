@@ -2193,8 +2193,32 @@ export function DeliverablesWorkspaceView({
   const [reminderPreviewMode, setReminderPreviewMode] = useState<"selected" | "all" | null>(null);
 
   useEffect(() => {
+    const nextFilters = {
+      ...filters,
+      speakerId:
+        filters.speakerId !== "all" &&
+        !rows.some((row) => row.task.participantId === filters.speakerId)
+          ? "all"
+          : filters.speakerId,
+      sessionId:
+        filters.sessionId !== "all" &&
+        !rows.some((row) => (row.task.submissionId ?? "participant") === filters.sessionId)
+          ? "all"
+          : filters.sessionId,
+      taskId:
+        filters.taskId !== "all" && !rows.some((row) => row.task.id === filters.taskId)
+          ? "all"
+          : filters.taskId,
+    };
+    if (
+      nextFilters.speakerId !== filters.speakerId ||
+      nextFilters.sessionId !== filters.sessionId ||
+      nextFilters.taskId !== filters.taskId
+    ) {
+      setFilters(nextFilters);
+    }
     const visibleOutstandingIds = new Set(
-      filterContentRequestRows(rows, filters)
+      filterContentRequestRows(rows, nextFilters)
         .filter((row) => isOutstanding(row.status))
         .map((row) => row.task.id),
     );
@@ -2203,26 +2227,6 @@ export function DeliverablesWorkspaceView({
       current !== null && rows.some((row) => row.task.id === current) ? current : null,
     );
   }, [filters, rows]);
-
-  useEffect(() => {
-    setFilters((current) => ({
-      ...current,
-      speakerId:
-        current.speakerId !== "all" &&
-        !rows.some((row) => row.task.participantId === current.speakerId)
-          ? "all"
-          : current.speakerId,
-      sessionId:
-        current.sessionId !== "all" &&
-        !rows.some((row) => (row.task.submissionId ?? "participant") === current.sessionId)
-          ? "all"
-          : current.sessionId,
-      taskId:
-        current.taskId !== "all" && !rows.some((row) => row.task.id === current.taskId)
-          ? "all"
-          : current.taskId,
-    }));
-  }, [rows]);
 
   const selectedAssignment =
     selectedAssignmentId === null
