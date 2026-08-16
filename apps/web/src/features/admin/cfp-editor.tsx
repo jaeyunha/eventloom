@@ -11,6 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { type CfpEventConfiguration, type CfpFormConfiguration, createCfpApi } from "../cfp/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
@@ -255,7 +256,7 @@ export function CfpEditor({
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
-  const previewResultRef = useRef<HTMLDivElement | null>(null);
+  const previewResultRef = useRef<HTMLElement | null>(null);
   const saveInFlightRef = useRef(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [preparedPublishVersion, setPreparedPublishVersion] = useState<number | null>(null);
@@ -270,6 +271,7 @@ export function CfpEditor({
     level: "Introductory",
   });
   const [previewSubmissionKey, setPreviewSubmissionKey] = useState<string | null>(null);
+  const [previewView, setPreviewView] = useState<"application" | "confirmation">("application");
   const [publicLinkCopied, setPublicLinkCopied] = useState(false);
   const [configurationLoadState, setConfigurationLoadState] = useState<
     "loading" | "ready" | "error"
@@ -646,6 +648,7 @@ export function CfpEditor({
 
   function handlePreviewSubmit(): void {
     setPreviewSubmissionKey(previewStateKey);
+    setPreviewView("confirmation");
     window.requestAnimationFrame(() => previewResultRef.current?.focus());
   }
 
@@ -1472,10 +1475,29 @@ export function CfpEditor({
           ) : null}
         </div>
 
+        <div className={styles.previewViewBar}>
+          <ToggleGroup
+            type="single"
+            value={previewView}
+            variant="outline"
+            spacing={0}
+            role="group"
+            aria-label="Public preview view"
+            className={styles.previewViewToggle}
+            onValueChange={(value) => {
+              if (value === "application" || value === "confirmation") setPreviewView(value);
+            }}
+          >
+            <ToggleGroupItem value="application">Application form</ToggleGroupItem>
+            <ToggleGroupItem value="confirmation">After submission</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+
         <div className={styles.previewGrid}>
           <section
             className={styles.publicForm}
             aria-label="Public CFP form preview"
+            hidden={previewView !== "application"}
             onInput={() => setPreviewSubmissionKey(null)}
           >
             <p className={styles.previewEyebrow}>{configuration.eventName} · Call for proposals</p>
@@ -1568,29 +1590,25 @@ export function CfpEditor({
             <button className={styles.primaryButton} onClick={handlePreviewSubmit} type="button">
               Submit preview response
             </button>
-            {submittedPreviewResult ? (
-              <div
-                ref={previewResultRef}
-                className={styles.previewSubmissionResult}
-                role="status"
-                aria-live="polite"
-                tabIndex={-1}
-              >
-                <p className={styles.previewConfirmation}>
-                  <strong>{submittedPreviewResult.confirmationTitle}</strong> —{" "}
-                  {submittedPreviewResult.confirmationBody}
-                </p>
-                <p className={styles.previewSuccess}>{submittedPreviewResult.successMessage}</p>
-              </div>
-            ) : null}
           </section>
 
-          <aside className={styles.previewDetails} aria-label="Public form behavior">
+          <section
+            ref={previewResultRef}
+            className={styles.previewDetails}
+            aria-label="After submission preview"
+            aria-live={submittedPreviewResult ? "polite" : "off"}
+            hidden={previewView !== "confirmation"}
+            tabIndex={-1}
+          >
             <div>
               <p className={styles.sectionKicker}>After submission</p>
-              <h3>{configuration.confirmationTitle}</h3>
-              <p>{configuration.confirmationBody}</p>
-              <p className={styles.previewSuccessText}>{configuration.successMessage}</p>
+              <h3>
+                {submittedPreviewResult?.confirmationTitle ?? configuration.confirmationTitle}
+              </h3>
+              <p>{submittedPreviewResult?.confirmationBody ?? configuration.confirmationBody}</p>
+              <p className={styles.previewSuccessText}>
+                {submittedPreviewResult?.successMessage ?? configuration.successMessage}
+              </p>
             </div>
             <div>
               <p className={styles.sectionKicker}>Helpful links</p>
@@ -1605,7 +1623,7 @@ export function CfpEditor({
             <p className={styles.fieldHint}>
               Redirect after submit: <code>{configuration.redirectUrl}</code>
             </p>
-          </aside>
+          </section>
         </div>
       </section>
       <CfpStepActions
