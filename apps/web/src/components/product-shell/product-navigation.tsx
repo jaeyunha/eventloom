@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ThemeToggle } from "./theme-toggle";
 
 const productNavigationLinks = [
@@ -11,7 +12,7 @@ export function ProductNavigation() {
   return (
     <header className="product-nav-shell">
       <div className="product-nav-inner">
-        <a className="product-brand" href="/" aria-label="Eventloom home">
+        <Link className="product-brand" href="/" aria-label="Eventloom home">
           <span className="product-brand-mark" aria-hidden="true">
             EL
           </span>
@@ -19,18 +20,18 @@ export function ProductNavigation() {
             <strong>Eventloom</strong>
             <small>Conference program operations</small>
           </span>
-        </a>
+        </Link>
 
         <nav className="product-nav" aria-label="Product navigation">
           <ul>
             {productNavigationLinks.map((link) => (
               <li key={link.href}>
-                <a
+                <Link
                   className={`product-nav-link${link.primary ? " product-nav-link-primary" : ""}`}
                   href={link.href}
                 >
                   {link.label}
-                </a>
+                </Link>
               </li>
             ))}
             <li>

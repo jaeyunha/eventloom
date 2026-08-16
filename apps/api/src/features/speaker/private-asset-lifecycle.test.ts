@@ -603,6 +603,19 @@ function opaqueToken(url: string): string {
   return token;
 }
 
+function downloadCapabilityParts(url: string): {
+  readonly capabilityId: string;
+  readonly token: string;
+} {
+  const parts = new URL(`https://api.invalid${url}`).pathname.split("/");
+  const capabilityId = parts.at(-2);
+  const token = parts.at(-1);
+  if (capabilityId === undefined || token === undefined) {
+    throw new Error("Expected a download capability identifier and token.");
+  }
+  return { capabilityId: decodeURIComponent(capabilityId), token };
+}
+
 class MemoryBucket {
   readonly objects = new Map<string, { body: Uint8Array; contentType: string }>();
   beforePut?: () => Promise<void>;
@@ -1046,11 +1059,52 @@ describe("private speaker asset lifecycle", () => {
     ).rejects.toThrow();
     expect(await bucket.head(binding().objectKey)).toMatchObject({ size: 3 });
 
-    const download = await gateway.registerDownloadCapability(binding());
-    const downloadToken = opaqueToken(download.url);
-    const object = await gateway.consumeDownloadCapability("asset-1", downloadToken);
-    expect(await new Response(object.body).text()).toBe("abc");
-    await expect(gateway.consumeDownloadCapability("asset-1", downloadToken)).rejects.toThrow();
+    const firstDownload = await gateway.registerDownloadCapability(binding());
+    const secondDownload = await gateway.registerDownloadCapability(binding());
+    expect(firstDownload.url).not.toBe(secondDownload.url);
+
+    const firstDownloadCapability = downloadCapabilityParts(firstDownload.url);
+    const secondDownloadCapability = downloadCapabilityParts(secondDownload.url);
+    expect(firstDownloadCapability.capabilityId).not.toBe(secondDownloadCapability.capabilityId);
+    const firstObject = await gateway.consumeDownloadCapability(
+      firstDownloadCapability.capabilityId,
+      firstDownloadCapability.token,
+    );
+    expect(await new Response(firstObject.body).text()).toBe("abc");
+    const secondObject = await gateway.consumeDownloadCapability(
+      secondDownloadCapability.capabilityId,
+      secondDownloadCapability.token,
+    );
+    expect(await new Response(secondObject.body).text()).toBe("abc");
+    await expect(
+      gateway.consumeDownloadCapability(
+        firstDownloadCapability.capabilityId,
+        firstDownloadCapability.token,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      gateway.consumeDownloadCapability(
+        secondDownloadCapability.capabilityId,
+        secondDownloadCapability.token,
+      ),
+    ).rejects.toThrow();
+
+    const recentlyExpiredDownload = await gateway.registerDownloadCapability(
+      binding({
+        capabilityId: "recently-expired-download",
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      }),
+    );
+    const recentlyExpiredCapability = downloadCapabilityParts(recentlyExpiredDownload.url);
+    await gateway.registerDownloadCapability(
+      binding({ capabilityId: "download-after-recent-expiry" }),
+    );
+    await expect(
+      gateway.consumeDownloadCapability(
+        recentlyExpiredCapability.capabilityId,
+        recentlyExpiredCapability.token,
+      ),
+    ).rejects.toThrow("expired");
 
     const expired = await gateway.registerUploadCapability(
       binding({ capabilityId: "expired", expiresAt: new Date(Date.now() - 1_000).toISOString() }),

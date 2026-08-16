@@ -1,21 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { respondToEventInvitation } from "./work-event-invitation-model";
 
-type InvitationResponse = "accept" | "decline";
-type InvitationMutation = (
-  fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-  input: Readonly<{
-    invitationId: string;
-    expectedVersion: number;
-    response: InvitationResponse;
-  }>,
-) => Promise<string | null>;
-
-async function invitationMutation(): Promise<InvitationMutation> {
-  const invitationModule = (await import("./work-event-invitations")) as {
-    respondToEventInvitation?: InvitationMutation;
-  };
-  expect(invitationModule.respondToEventInvitation).toBeTypeOf("function");
-  return invitationModule.respondToEventInvitation as InvitationMutation;
+async function invitationMutation() {
+  expect(respondToEventInvitation).toBeTypeOf("function");
+  return respondToEventInvitation;
 }
 
 describe("respondToEventInvitation", () => {

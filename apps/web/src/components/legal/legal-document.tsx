@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { ProductNavigation } from "@/components/product-shell/product-navigation";
 import styles from "./legal-document.module.css";
@@ -79,9 +80,9 @@ export function LegalDocument({
             Open program operations, operated by Namuh.
           </p>
           <nav aria-label="Legal footer navigation">
-            <a href="/">Home</a>
-            <a href="/privacy">Privacy</a>
-            <a href="/terms">Terms</a>
+            <Link href="/">Home</Link>
+            <Link href="/privacy">Privacy</Link>
+            <Link href="/terms">Terms</Link>
             <a href="mailto:support@namuh.co">Support</a>
           </nav>
         </footer>

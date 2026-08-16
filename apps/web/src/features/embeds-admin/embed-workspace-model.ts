@@ -1,3 +1,5 @@
+import type { NavigationDataCache } from "@/lib/navigation-data-cache";
+
 /**
  * Canonical non-React models, transport helpers, and public embed output builders.
  *
@@ -716,9 +718,13 @@ function isEmbedFieldId(value: unknown): value is EmbedFieldId {
 function normalizeStringList(value: unknown): readonly string[] | null {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return null;
   const unique: string[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
     const normalized = item.trim();
-    if (normalized && !unique.includes(normalized)) unique.push(normalized);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      unique.push(normalized);
+    }
   }
   return unique;
 }
@@ -727,7 +733,8 @@ function normalizeDisplayFields(value: unknown): readonly EmbedFieldId[] | null 
   if (!Array.isArray(value) || !value.every(isEmbedFieldId)) return null;
   const unique = [...new Set(value)];
   const required = EMBED_DISPLAY_FIELDS.filter((field) => field.required).map((field) => field.id);
-  return [...required, ...unique.filter((field) => !required.includes(field))];
+  const requiredIds = new Set(required);
+  return [...required, ...unique.filter((field) => !requiredIds.has(field))];
 }
 
 function normalizeHexColor(value: unknown): string | null {
@@ -1247,22 +1254,6 @@ export function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "The organizer event could not be loaded.";
 }
 
-export function revisionFromProjection(value: unknown): EmbedPublicRevision | null {
-  if (!isRecord(value)) return null;
-  const id = nonEmptyString(value.id);
-  const publishedAt = nonEmptyString(value.publishedAt);
-  const revisionNumber = value.number;
-  if (
-    !id ||
-    !publishedAt ||
-    typeof revisionNumber !== "number" ||
-    !Number.isFinite(revisionNumber)
-  ) {
-    return null;
-  }
-  return { id, number: revisionNumber, publishedAt };
-}
-
 export function publicationMetadataFromState(
   state: EmbedPublicationState | null,
   status: "loading" | "none" | "unavailable" | "pending" | "failed" | "served",
@@ -1329,5 +1320,243 @@ export async function loadEmbedPublication(
       "unavailable",
       error instanceof Error ? error.message : "The publication API is unavailable.",
     );
+  }
+}
+export type EmbedWorkspaceEventSnapshot = Pick<
+  EmbedEventRecord,
+  "id" | "organizationId" | "slug" | "name" | "version" | "embedConfigurations"
+>;
+
+export interface EmbedWorkspaceCacheSnapshot {
+  readonly event: EmbedWorkspaceEventSnapshot;
+  readonly publication?: EmbedPublicationMetadata;
+}
+
+export type EmbedWorkspaceLoadState =
+  | { readonly status: "loading"; readonly scopeKey: string }
+  | {
+      readonly status: "loaded";
+      readonly scopeKey: string;
+      readonly event: EmbedWorkspaceEventSnapshot;
+      readonly eventSlug: string;
+      readonly eventName: string;
+    }
+  | { readonly status: "error"; readonly scopeKey: string; readonly message: string };
+export type EmbedWorkspaceLoadedState = Extract<
+  EmbedWorkspaceLoadState,
+  { readonly status: "loaded" }
+>;
+
+export interface EmbedWorkspaceCacheScope {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly key: string;
+  readonly tags: readonly string[];
+  readonly invalidationTags: readonly string[];
+}
+
+export function embedWorkspaceCacheKey(organizationId: string, eventId: string): string {
+  return `embeds:workspace:${organizationId.trim()}:${eventId.trim()}`;
+}
+
+export function embedWorkspaceCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `embeds:${normalizedEventId}`,
+  ];
+}
+
+export function embedWorkspaceCacheScope(
+  organizationId: string,
+  eventId: string,
+): EmbedWorkspaceCacheScope | null {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  if (!normalizedOrganizationId || !normalizedEventId) return null;
+  const tags = embedWorkspaceCacheTags(normalizedOrganizationId, normalizedEventId);
+  return {
+    organizationId: normalizedOrganizationId,
+    eventId: normalizedEventId,
+    key: embedWorkspaceCacheKey(normalizedOrganizationId, normalizedEventId),
+    tags,
+    invalidationTags: tags.slice(1),
+  };
+}
+
+export function embedWorkspaceEventSnapshot(event: EmbedEventRecord): EmbedWorkspaceEventSnapshot {
+  return {
+    id: event.id,
+    organizationId: event.organizationId,
+    slug: event.slug,
+    name: event.name,
+    version: event.version,
+    embedConfigurations: eventEmbedConfigurations(event.embedConfigurations),
+  };
+}
+
+export function embedWorkspaceLoadedState(
+  scopeKey: string,
+  snapshot: EmbedWorkspaceCacheSnapshot,
+): EmbedWorkspaceLoadedState | null {
+  const eventSlug = normalizeEmbedSlug(snapshot.event.slug);
+  if (
+    snapshot.event.id.trim().length === 0 ||
+    snapshot.event.organizationId.trim().length === 0 ||
+    eventSlug === null
+  ) {
+    return null;
+  }
+  return {
+    status: "loaded",
+    scopeKey,
+    event: snapshot.event,
+    eventSlug,
+    eventName: snapshot.event.name,
+  };
+}
+
+export function cachedEmbedWorkspaceSnapshot(
+  cache: NavigationDataCache | null,
+  scope: EmbedWorkspaceCacheScope | null,
+): EmbedWorkspaceCacheSnapshot | undefined {
+  if (cache === null || scope === null) return undefined;
+  const snapshot = cache.peek<EmbedWorkspaceCacheSnapshot>(scope.key);
+  if (
+    snapshot === undefined ||
+    snapshot.event.id.trim() !== scope.eventId ||
+    snapshot.event.organizationId.trim() !== scope.organizationId ||
+    embedWorkspaceLoadedState(scope.key, snapshot) === null
+  ) {
+    return undefined;
+  }
+  return snapshot;
+}
+
+export type EmbedWorkspaceLoaderApi = Pick<
+  EmbedWorkspaceApi,
+  "getEvent" | "updateEvent" | "getPublication"
+>;
+
+export interface EmbedWorkspaceLoadCallbacks {
+  readonly setState: (value: EmbedWorkspaceLoadState) => void;
+  readonly setLoadedApi: (value: EmbedWorkspaceLoaderApi) => void;
+  readonly setPublication: (value: EmbedPublicationMetadata | undefined) => void;
+  readonly setPublicationFresh: (value: boolean) => void;
+}
+
+export interface EmbedWorkspaceLoadOptions {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly scopeKey: string;
+  readonly providedApi: EmbedWorkspaceLoaderApi | undefined;
+  readonly navigationCache: NavigationDataCache | null;
+  readonly cacheScope: EmbedWorkspaceCacheScope | null;
+  readonly fresh: boolean;
+  readonly signal: AbortSignal;
+  readonly isCurrentScope: () => boolean;
+  readonly callbacks: EmbedWorkspaceLoadCallbacks;
+}
+
+export async function loadEmbedWorkspace(options: EmbedWorkspaceLoadOptions): Promise<void> {
+  const {
+    organizationId,
+    eventId,
+    scopeKey,
+    providedApi,
+    navigationCache,
+    cacheScope,
+    fresh,
+    signal,
+    isCurrentScope,
+    callbacks,
+  } = options;
+  const { setState, setLoadedApi, setPublication, setPublicationFresh } = callbacks;
+  const requestScopeKey = scopeKey;
+  if (!organizationId || !eventId) {
+    setState({
+      status: "error",
+      scopeKey: requestScopeKey,
+      message: "An organization and event context are required.",
+    });
+    return;
+  }
+
+  let api = providedApi;
+  if (!api) {
+    try {
+      api = createEmbedWorkspaceApi(organizationId);
+    } catch (error) {
+      if (!signal.aborted && isCurrentScope()) {
+        setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
+      }
+      return;
+    }
+  }
+  setLoadedApi(api);
+
+  const cachedAtStart = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
+  if (fresh && navigationCache !== null && cacheScope !== null) {
+    navigationCache.invalidate(cacheScope.invalidationTags);
+  }
+  if (fresh) {
+    setPublicationFresh(false);
+    setPublication(
+      publicationMetadataFromState(
+        null,
+        "loading",
+        "Loading the current organizer publication state.",
+      ),
+    );
+  }
+  if (fresh || cachedAtStart === undefined) {
+    setState({ status: "loading", scopeKey: requestScopeKey });
+  }
+
+  const loadEvent = async (requestSignal?: AbortSignal): Promise<EmbedWorkspaceCacheSnapshot> => {
+    const event = await api.getEvent(eventId, requestSignal);
+    if (requestSignal?.aborted) {
+      throw new DOMException("The request was aborted.", "AbortError");
+    }
+    if (event.organizationId !== organizationId || event.id !== eventId) {
+      throw new Error(
+        "The organizer event response does not match this organization and event context.",
+      );
+    }
+    const eventSnapshot = embedWorkspaceEventSnapshot(event);
+    const cachedPublication = fresh ? undefined : cachedAtStart?.publication;
+    return cachedPublication === undefined
+      ? { event: eventSnapshot }
+      : { event: eventSnapshot, publication: cachedPublication };
+  };
+
+  try {
+    const snapshot =
+      navigationCache !== null && cacheScope !== null
+        ? await navigationCache.read<EmbedWorkspaceCacheSnapshot>({
+            key: cacheScope.key,
+            tags: cacheScope.tags,
+            load: () => loadEvent(),
+            ...(fresh ? { fresh: true } : {}),
+          })
+        : await loadEvent(signal);
+    if (signal.aborted || !isCurrentScope()) return;
+    if (snapshot.event.organizationId !== organizationId || snapshot.event.id !== eventId) {
+      throw new Error("The cached organizer event response does not match this context.");
+    }
+    const loadedState = embedWorkspaceLoadedState(requestScopeKey, snapshot);
+    if (loadedState === null) {
+      throw new Error("The organizer event has no public slug.");
+    }
+    setState(loadedState);
+    if (snapshot.publication !== undefined) setPublication(snapshot.publication);
+  } catch (error) {
+    if (signal.aborted || !isCurrentScope()) return;
+    setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
   }
 }

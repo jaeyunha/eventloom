@@ -214,7 +214,7 @@ function normalizeLoginSession(value: unknown): LoginSession | null {
   return parseLoginSession(value);
 }
 
-export function resolveLoginLandingRoute(value: unknown, returnTo?: unknown): string {
+export function safeLoginLandingRoute(value: unknown, returnTo?: unknown): string {
   const session = normalizeLoginSession(value);
   if (session === null) {
     throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE);
@@ -471,7 +471,7 @@ export async function signInAndRedirect(input: {
 }): Promise<void> {
   await input.api.signInWithEmail({ email: input.email, password: input.password });
   const session = await input.api.getSession();
-  input.navigate(resolveLoginLandingRoute(session, input.returnTo));
+  input.navigate(safeLoginLandingRoute(session, input.returnTo));
 }
 
 export function failureFromUnknown(

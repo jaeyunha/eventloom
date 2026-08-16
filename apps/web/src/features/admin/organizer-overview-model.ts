@@ -63,6 +63,22 @@ export interface OrganizerOverviewConfig {
 }
 
 export type OrganizerOverviewConfigResult = OrganizerOverviewConfig | { readonly error: string };
+export type OrganizerOverviewCacheResource = "activity" | "core" | "events";
+
+export function organizerOverviewCacheKey(
+  organizationId: string,
+  resource: OrganizerOverviewCacheResource,
+): string {
+  return `organizer-overview:${organizationId.trim()}:${resource}`;
+}
+
+export function organizerOverviewCacheTags(organizationId: string): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `organizer-overview:${normalizedOrganizationId}`,
+  ];
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -543,11 +559,19 @@ function parseOrganizerEventEmbedConfiguration(
     if (!Array.isArray(listValue) || !listValue.every((item) => typeof item === "string")) {
       throw eventRecordError(`${listField} must be an array of strings.`);
     }
-    return listValue
-      .map((item) => item.trim())
-      .filter((item, index, list) => {
-        return item.length > 0 && list.indexOf(item) === index;
-      });
+    const values: string[] = [];
+    const seen = new Set<string>();
+    const itemCount = listValue.length;
+    for (let index = 0; index < itemCount; index += 1) {
+      if (!(index in listValue)) continue;
+      const itemValue = listValue[index];
+      if (typeof itemValue !== "string") continue;
+      const item = itemValue.trim();
+      if (item.length === 0 || seen.has(item)) continue;
+      seen.add(item);
+      values.push(item);
+    }
+    return values;
   };
 
   return {
@@ -897,7 +921,6 @@ function localDateTimeToIso(
     return null;
   }
 }
-
 function localDateTimeIssue(
   value: string,
   timeZone: string,
@@ -915,20 +938,20 @@ function localDateTimeIssue(
 function isoToLocalDateTime(value: string, timeZone: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf()) || !validEventTimeZone(timeZone)) return "";
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
+  const parts: Record<string, string> = {};
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)) {
+    if (part.type !== "literal") {
+      parts[part.type] = part.value;
+    }
+  }
   if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) return "";
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }

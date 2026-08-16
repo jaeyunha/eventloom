@@ -20,6 +20,7 @@ type SpeakerGalleryDetailView = PublishedSpeakerGallery & {
     readonly entries: readonly PublishedAgendaEntry[];
   };
 };
+const EMPTY_TRACK_LIST: readonly string[] = [];
 
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
@@ -46,107 +47,145 @@ export function SpeakerProfileDetail({
   onBack: () => void;
   backButtonRef?: RefObject<HTMLButtonElement | null>;
 }>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const photoUrl = publicPhotoUrl(speaker.photoUrl);
   const [biographyExpanded, setBiographyExpanded] = useState(false);
   const sessions = speakerSessionsFromProjection(speaker, gallery);
   const biography = speaker.biography.trim();
   const hasLongBiography = biography.length > 320;
 
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    backButtonRef?.current?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [backButtonRef]);
+
+  const closeDialog = () => {
+    const dialog = dialogRef.current;
+    if (dialog?.open) dialog.close();
+    onBack();
+  };
+
   return (
-    <section aria-labelledby="speaker-detail-heading" aria-modal="true" role="dialog">
-      <div className={styles.viewHeading}>
-        <div>
-          <p className={styles.eyebrow}>Speaker profile</p>
-          <h2 id="speaker-detail-heading">{speaker.displayName}</h2>
-          <p>Published details and sessions for this speaker.</p>
+    <dialog
+      ref={dialogRef}
+      className={styles.detailDialog}
+      aria-labelledby="speaker-detail-heading"
+      onCancel={(event) => {
+        event.preventDefault();
+        closeDialog();
+      }}
+    >
+      <button
+        type="button"
+        className={styles.dialogDismissLayer}
+        aria-label="Close speaker profile"
+        onClick={closeDialog}
+      />
+      <div className={styles.detailDialogSurface}>
+        <div className={styles.viewHeading}>
+          <div>
+            <p className={styles.eyebrow}>Speaker profile</p>
+            <h2 id="speaker-detail-heading">{speaker.displayName}</h2>
+            <p>Published details and sessions for this speaker.</p>
+          </div>
+          <button
+            ref={backButtonRef}
+            className={styles.clearButton}
+            type="button"
+            onClick={closeDialog}
+          >
+            Back to speakers
+          </button>
         </div>
-        <button ref={backButtonRef} className={styles.clearButton} type="button" onClick={onBack}>
-          Back to speakers
-        </button>
-      </div>
-      <article className={styles.speakerDetail}>
-        <div className={styles.speakerPhoto}>
-          {photoUrl ? (
-            <span
-              className={styles.photoImage}
-              aria-hidden="true"
-              style={{ backgroundImage: `url(${JSON.stringify(photoUrl)})` }}
-            />
-          ) : (
-            <span aria-hidden="true">{speakerInitials(speaker.displayName) || "?"}</span>
-          )}
-        </div>
-        <div className={styles.speakerCopy}>
-          <h3>{speaker.displayName}</h3>
-          {speaker.pronouns ? <p className={styles.pronouns}>{speaker.pronouns}</p> : null}
-          <p className={styles.speakerRole}>{speakerRole(speaker)}</p>
-          <p>
-            <strong>Company:</strong> {speaker.organization || "Company not published"}
-          </p>
-          {biography ? (
-            <p
-              id={`speaker-biography-${speaker.id}`}
-              className={biographyExpanded ? undefined : styles.biography}
-            >
-              {biography}
-            </p>
-          ) : (
-            <p>Biography not published.</p>
-          )}
-          {hasLongBiography ? (
-            <button
-              className={styles.clearButton}
-              type="button"
-              aria-expanded={biographyExpanded}
-              aria-controls={`speaker-biography-${speaker.id}`}
-              onClick={() => setBiographyExpanded((expanded) => !expanded)}
-            >
-              {biographyExpanded ? "Show less" : "Show more"}
-            </button>
-          ) : null}
-          <div className={styles.speakerSessions}>
-            <h4>Sessions ({sessions.length})</h4>
-            {sessions.length > 0 ? (
-              <ul>
-                {sessions.map((session) => (
-                  <li key={session.id}>
-                    <strong>{session.title}</strong>
-                    <br />
-                    <time dateTime={session.startsAt}>
-                      {[
-                        formatPublishedSessionSchedule(
-                          session.startsAt,
-                          session.endsAt,
-                          gallery.event.timeZone,
-                        ).dateLabel,
-                        formatPublishedSessionSchedule(
-                          session.startsAt,
-                          session.endsAt,
-                          gallery.event.timeZone,
-                        ).timeLabel,
-                      ].join(" · ")}
-                    </time>
-                    <br />
-                    <span>Room: {session.roomName || "Room not published"}</span>
-                    <br />
-                    <span>Track: {session.trackNames.join(", ") || "Track not published"}</span>
-                  </li>
-                ))}
-              </ul>
+        <article className={styles.speakerDetail}>
+          <div className={styles.speakerPhoto}>
+            {photoUrl ? (
+              <span
+                className={styles.photoImage}
+                aria-hidden="true"
+                style={{ backgroundImage: `url(${JSON.stringify(photoUrl)})` }}
+              />
             ) : (
-              <p>No sessions are currently published for this speaker.</p>
+              <span aria-hidden="true">{speakerInitials(speaker.displayName) || "?"}</span>
             )}
           </div>
-        </div>
-      </article>
-    </section>
+          <div className={styles.speakerCopy}>
+            <h3>{speaker.displayName}</h3>
+            {speaker.pronouns ? <p className={styles.pronouns}>{speaker.pronouns}</p> : null}
+            <p className={styles.speakerRole}>{speakerRole(speaker)}</p>
+            <p>
+              <strong>Company:</strong> {speaker.organization || "Company not published"}
+            </p>
+            {biography ? (
+              <p
+                id={`speaker-biography-${speaker.id}`}
+                className={biographyExpanded ? undefined : styles.biography}
+              >
+                {biography}
+              </p>
+            ) : (
+              <p>Biography not published.</p>
+            )}
+            {hasLongBiography ? (
+              <button
+                className={styles.clearButton}
+                type="button"
+                aria-expanded={biographyExpanded}
+                aria-controls={`speaker-biography-${speaker.id}`}
+                onClick={() => setBiographyExpanded((expanded) => !expanded)}
+              >
+                {biographyExpanded ? "Show less" : "Show more"}
+              </button>
+            ) : null}
+            <div className={styles.speakerSessions}>
+              <h4>Sessions ({sessions.length})</h4>
+              {sessions.length > 0 ? (
+                <ul>
+                  {sessions.map((session) => (
+                    <li key={session.id}>
+                      <strong>{session.title}</strong>
+                      <br />
+                      <time dateTime={session.startsAt}>
+                        {[
+                          formatPublishedSessionSchedule(
+                            session.startsAt,
+                            session.endsAt,
+                            gallery.event.timeZone,
+                          ).dateLabel,
+                          formatPublishedSessionSchedule(
+                            session.startsAt,
+                            session.endsAt,
+                            gallery.event.timeZone,
+                          ).timeLabel,
+                        ].join(" · ")}
+                      </time>
+                      <br />
+                      <span>Room: {session.roomName || "Room not published"}</span>
+                      <br />
+                      <span>Track: {session.trackNames.join(", ") || "Track not published"}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No sessions are currently published for this speaker.</p>
+              )}
+            </div>
+          </div>
+        </article>
+      </div>
+    </dialog>
   );
 }
 
 export function SpeakerGallery({
   gallery,
   agenda,
-  tracks: configuredTracks = [],
+  tracks: configuredTracks = EMPTY_TRACK_LIST,
   layout = null,
   displayFields = null,
 }: Readonly<{

@@ -17,67 +17,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  parseInvitationMutationHref,
-  type WorkEventInvitation,
-} from "./work-event-invitation-model";
+import { respondToEventInvitation, type WorkEventInvitation } from "./work-event-invitation-model";
 import styles from "./work-hub.module.css";
 
-type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type InvitationDecision = "accept" | "decline";
-
-interface InvitationMutationError extends Error {
-  readonly status: number;
-  readonly code: string;
-}
-
-function mutationError(response: Response, payload: unknown): InvitationMutationError {
-  const payloadRecord =
-    typeof payload === "object" && payload !== null && !Array.isArray(payload)
-      ? (payload as Record<string, unknown>)
-      : null;
-  const errorRecord =
-    typeof payloadRecord?.error === "object" &&
-    payloadRecord.error !== null &&
-    !Array.isArray(payloadRecord.error)
-      ? (payloadRecord.error as Record<string, unknown>)
-      : null;
-  const error = new Error(
-    typeof errorRecord?.message === "string" ? errorRecord.message : "Invitation update failed",
-  ) as InvitationMutationError;
-  Object.assign(error, {
-    status: response.status,
-    code: typeof errorRecord?.code === "string" ? errorRecord.code : "INVITATION_UPDATE_FAILED",
-  });
-  return error;
-}
-
-export async function respondToEventInvitation(
-  fetcher: Fetcher,
-  input: Readonly<{
-    invitationId: string;
-    expectedVersion: number;
-    response: InvitationDecision;
-  }>,
-): Promise<string | null> {
-  const response = await fetcher(
-    `/api/account/event-invitations/${encodeURIComponent(input.invitationId)}/${input.response}`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ expectedVersion: input.expectedVersion }),
-    },
-  );
-  const payload = response.headers.get("content-type")?.includes("application/json")
-    ? await response.json()
-    : null;
-  if (!response.ok) throw mutationError(response, payload);
-  return input.response === "accept" ? parseInvitationMutationHref(payload) : null;
-}
 
 function roleLabel(invitation: WorkEventInvitation): string {
   return invitation.role === "reviewer" ? "Reviewer" : "Speaker";

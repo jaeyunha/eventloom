@@ -1,14 +1,6 @@
 import { Check } from "lucide-react";
 import styles from "./cfp-progress.module.css";
-import { CFP_STEPS, type CfpStep } from "./types";
-
-export const CFP_STEP_LABELS: Record<CfpStep, string> = {
-  welcome: "Get started",
-  account: "Account",
-  submission: "Proposal",
-  participants: "Speakers",
-  review: "Review",
-};
+import { CFP_STEP_LABELS, CFP_STEPS, type CfpStep } from "./types";
 
 type CfpProgressProps = {
   readonly mobile?: boolean;

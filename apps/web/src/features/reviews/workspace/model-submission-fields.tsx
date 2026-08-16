@@ -8,15 +8,14 @@ export function submissionFields(
   redactIdentity = false,
 ): readonly { id: string; label: string; value: string }[] {
   if (answers === undefined) return [];
-  return Object.entries(answers)
-    .filter(([id]) => !redactIdentity || !isAccountIdentityField(id))
-    .flatMap(([id, value]) => {
-      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-        return [{ id, label: readableSubmissionFieldLabel(id), value: String(value) }];
-      }
-      if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
-        return [{ id, label: readableSubmissionFieldLabel(id), value: value.join(", ") }];
-      }
-      return [];
-    });
+  return Object.entries(answers).flatMap(([id, value]) => {
+    if (redactIdentity && isAccountIdentityField(id)) return [];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return [{ id, label: readableSubmissionFieldLabel(id), value: String(value) }];
+    }
+    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+      return [{ id, label: readableSubmissionFieldLabel(id), value: value.join(", ") }];
+    }
+    return [];
+  });
 }

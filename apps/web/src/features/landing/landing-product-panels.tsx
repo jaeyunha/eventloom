@@ -2,6 +2,19 @@ import { LandingIcon, type LandingIconName } from "./landing-icon";
 
 export type ProductPanel = "collect" | "review" | "schedule" | "publish";
 
+const LANDING_PANEL_DELIVERIES: readonly [LandingIconName, string, string, string][] = [
+  ["public-agenda", "Public agenda", "Privacy-safe projection", "Current"],
+  ["agenda", "Calendar feeds", "Per-event time zone", "Current"],
+  ["embeds", "Embeds and webhooks", "Versioned delivery", "Delivered"],
+];
+
+const LANDING_PANEL_CAPTIONS = {
+  collect: ["Resumable proposal intake", "Applicant view · Step 3 of 4"],
+  review: ["Human-led review", "Assigned reviewer · Blind context"],
+  schedule: ["Draft agenda · Friday, September 18", "3 rooms · Event time zone"],
+  publish: ["Immutable public revision", "Revision 7 · Published 2 minutes ago"],
+} satisfies Record<ProductPanel, readonly [string, string]>;
+
 function CollectPanel() {
   return (
     <div className="collect-grid">
@@ -163,18 +176,12 @@ function SchedulePanel() {
 }
 
 function PublishPanel() {
-  const deliveries: readonly [LandingIconName, string, string, string][] = [
-    ["public-agenda", "Public agenda", "Privacy-safe projection", "Current"],
-    ["agenda", "Calendar feeds", "Per-event time zone", "Current"],
-    ["embeds", "Embeds and webhooks", "Versioned delivery", "Delivered"],
-  ];
-
   return (
     <div className="publish-grid">
       <div className="demo-card">
         <span className="demo-card-label">Delivery surfaces</span>
         <div className="publish-stack">
-          {deliveries.map(([icon, title, detail, status]) => (
+          {LANDING_PANEL_DELIVERIES.map(([icon, title, detail, status]) => (
             <div className="delivery-row" key={title}>
               <LandingIcon name={icon} />
               <span>
@@ -197,20 +204,14 @@ function PublishPanel() {
   );
 }
 
-export function LandingProductPanels({ activePanel }: Readonly<{ activePanel: ProductPanel }>) {
-  const content = {
-    collect: <CollectPanel />,
-    review: <ReviewPanel />,
-    schedule: <SchedulePanel />,
-    publish: <PublishPanel />,
-  } satisfies Record<ProductPanel, React.ReactNode>;
-  const caption = {
-    collect: ["Resumable proposal intake", "Applicant view · Step 3 of 4"],
-    review: ["Human-led review", "Assigned reviewer · Blind context"],
-    schedule: ["Draft agenda · Friday, September 18", "3 rooms · Event time zone"],
-    publish: ["Immutable public revision", "Revision 7 · Published 2 minutes ago"],
-  } satisfies Record<ProductPanel, readonly [string, string]>;
+const LANDING_PANEL_CONTENT = {
+  collect: <CollectPanel />,
+  review: <ReviewPanel />,
+  schedule: <SchedulePanel />,
+  publish: <PublishPanel />,
+} satisfies Record<ProductPanel, React.ReactNode>;
 
+export function LandingProductPanels({ activePanel }: Readonly<{ activePanel: ProductPanel }>) {
   return (
     <div
       className="demo-panel active"
@@ -219,10 +220,10 @@ export function LandingProductPanels({ activePanel }: Readonly<{ activePanel: Pr
       aria-labelledby={`tab-${activePanel}`}
     >
       <div className="demo-caption">
-        <strong>{caption[activePanel][0]}</strong>
-        <span>{caption[activePanel][1]}</span>
+        <strong>{LANDING_PANEL_CAPTIONS[activePanel][0]}</strong>
+        <span>{LANDING_PANEL_CAPTIONS[activePanel][1]}</span>
       </div>
-      {content[activePanel]}
+      {LANDING_PANEL_CONTENT[activePanel]}
     </div>
   );
 }

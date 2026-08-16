@@ -6,7 +6,6 @@ import {
   Field as FieldRoot,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 export interface FieldControlProps {
@@ -59,9 +58,7 @@ export function Field({
     </FieldRoot>
   );
 }
-
-export { Input, Textarea };
-
+export { Input };
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   function Select({ className, ...props }, ref) {
     return (

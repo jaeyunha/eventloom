@@ -1,4 +1,4 @@
-export const portalSubmissionStatuses = [
+const portalSubmissionStatuses = [
   "draft",
   "submitted",
   "under_review",
@@ -9,7 +9,7 @@ export const portalSubmissionStatuses = [
 
 export type PortalSubmissionStatus = (typeof portalSubmissionStatuses)[number];
 
-export const portalTaskStatuses = [
+const portalTaskStatuses = [
   "not_started",
   "in_progress",
   "submitted",
@@ -26,7 +26,7 @@ export type PortalAssetKind = "headshot" | "slides" | "supporting_file";
 export type PortalAssetState = "pending_upload" | "ready" | "rejected";
 
 /** Capabilities are an allow-list from the server; unknown values are ignored by the UI. */
-export const portalCapabilities = [
+const portalCapabilities = [
   "profile-self",
   "submission-edit",
   "roster-manage",

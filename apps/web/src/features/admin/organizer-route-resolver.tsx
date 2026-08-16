@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { RedirectType, redirect } from "next/navigation";
 import { useOrganizerOrganizationId } from "./admin-shell";
 import {
   type OrganizerRouteResolverDestination,
@@ -16,12 +15,13 @@ export function OrganizerRouteResolver({
   readonly destination: OrganizerRouteResolverDestination;
 }>) {
   const organizationId = useOrganizerOrganizationId();
-  const router = useRouter();
 
-  useEffect(() => {
-    if (organizationId === null) return;
-    router.replace(organizerRouteResolverHref(organizationId, destination, createEvent));
-  }, [createEvent, destination, organizationId, router]);
+  if (organizationId !== null) {
+    redirect(
+      organizerRouteResolverHref(organizationId, destination, createEvent),
+      RedirectType.replace,
+    );
+  }
 
   return (
     <p role="status" aria-live="polite">

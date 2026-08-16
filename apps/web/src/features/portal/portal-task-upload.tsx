@@ -2,8 +2,12 @@
 
 import { formatUploadMimeTypes } from "@eventloom/contracts";
 import { type ChangeEvent, useState } from "react";
-import { Button, Input } from "../../components/ui";
-import { WorkspaceActionBar, WorkspaceFormSection } from "../../components/workspace";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import {
+  WorkspaceActionBar,
+  WorkspaceFormSection,
+} from "../../components/workspace/workspace-state";
 import { usePortal } from "./portal-provider";
 import styles from "./portal-task-detail.module.css";
 import { getTaskUploadPolicy, validateTaskUpload } from "./portal-task-model";

@@ -636,7 +636,3 @@ export function createMemberApi(
     setPool: setReviewerPool,
   };
 }
-
-export const createOrganizationMemberApi = createMemberApi;
-export const createOrganizationMembersApi = createMemberApi;
-export const createMembersApi = createMemberApi;

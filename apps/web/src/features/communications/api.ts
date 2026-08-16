@@ -287,8 +287,6 @@ export class CommunicationApiError extends Error {
   }
 }
 
-export { CommunicationApiError as CommunicationsApiError };
-
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type JsonRecord = Record<string, unknown>;
@@ -925,5 +923,3 @@ export function createCommunicationApi(
     },
   };
 }
-
-export const createCommunicationsApi = createCommunicationApi;
