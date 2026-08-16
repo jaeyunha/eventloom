@@ -69,10 +69,6 @@ import type {
   CrmRepositoryFilter,
   CrmSegment,
 } from "../features/crm/types";
-import {
-  evaluationRolesForOrganizationMembership,
-  evaluationRolesForPrincipal,
-} from "../features/evaluations/access";
 import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationRepository,
@@ -240,6 +236,7 @@ import {
   type D1RuntimeDependencies,
   type RuntimeEventRoleInvitationAdapters,
 } from "./d1";
+import { createEvaluationActorResolver } from "./evaluation-actor";
 import { resolvedOrganizationId, resolveOrganizationScope } from "./organization-scope";
 
 const APPLICATION_ID = "Application ID";
@@ -7481,14 +7478,6 @@ export async function reconcilePublishedAgendaCalendarInvitations(input: {
   }
 }
 
-function eventIdFromRequest(request: Request): string | undefined {
-  const url = new URL(request.url);
-  const pathId = /\/events\/([^/]+)/u.exec(url.pathname)?.[1];
-  if (pathId !== undefined) return decodeURIComponent(pathId);
-  const queryId = url.searchParams.get("eventId")?.trim();
-  return queryId === undefined || queryId.length === 0 ? undefined : queryId;
-}
-
 export class AirtableEvaluationDecisionProjection {
   constructor(
     private readonly cfp: Pick<CfpRepository, "getSubmission">,
@@ -8157,115 +8146,10 @@ export function createD1ApplicationDependencies(
       options.senderAddresses,
     ),
     reviewerIdentity: new D1EvaluationReviewerIdentityBoundary(options.database),
-    async actorFor(principal: AuthPrincipal, request: Request): Promise<EvaluationActor | null> {
-      if (principal.kind !== "user") return null;
-      const organizationIds = [
-        ...new Set([
-          ...principal.memberships.map(({ organizationId }) => organizationId),
-          ...principal.reviewerGrants.map(({ organizationId }) => organizationId),
-        ]),
-      ];
-      const body = await request
-        .clone()
-        .json<unknown>()
-        .catch(() => undefined);
-      let eventId = isRecord(body) && typeof body.eventId === "string" ? body.eventId : undefined;
-      eventId ??= eventIdFromRequest(request);
-      if (eventId === undefined) {
-        const planId = /\/plans\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
-        if (planId !== undefined) {
-          for (const organizationId of organizationIds) {
-            const plan = await evaluationRepository.getPlan(
-              organizationId,
-              decodeURIComponent(planId),
-            );
-            if (plan !== null) {
-              eventId = plan.eventId;
-              break;
-            }
-          }
-        }
-      }
-      if (eventId === undefined) {
-        const assignmentId = /\/assignments\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
-        if (assignmentId !== undefined) {
-          for (const organizationId of organizationIds) {
-            const assignment = await evaluationRepository.getAssignment(
-              organizationId,
-              decodeURIComponent(assignmentId),
-            );
-            if (assignment !== null) {
-              eventId = assignment.eventId;
-              break;
-            }
-          }
-        }
-      }
-
-      if (eventId === undefined || eventId.trim().length === 0) {
-        const organizerGrants = (
-          await Promise.all(
-            principal.memberships.map(async (membership) => {
-              const roles = evaluationRolesForOrganizationMembership(membership.role);
-              if (!roles.includes("organizer")) return [];
-              const plans = await evaluationRepository.listPlans(membership.organizationId);
-              return plans.map((plan) => ({
-                tenantId: membership.organizationId,
-                eventId: plan.eventId,
-                role: "organizer" as const,
-              }));
-            }),
-          )
-        ).flat();
-        const reviewerGrants = principal.reviewerGrants.map((grant) => ({
-          tenantId: grant.organizationId,
-          eventId: grant.eventId,
-          role: "reviewer" as const,
-        }));
-        const grants = [...organizerGrants, ...reviewerGrants].filter(
-          (grant, index, all) =>
-            all.findIndex(
-              (candidate) =>
-                candidate.tenantId === grant.tenantId &&
-                candidate.eventId === grant.eventId &&
-                candidate.role === grant.role,
-            ) === index,
-        );
-        const tenantIds = [...new Set(grants.map(({ tenantId }) => tenantId))];
-        if (tenantIds.length !== 1) return null;
-        const tenantId = tenantIds[0];
-        if (tenantId === undefined) return null;
-        return {
-          tenantId,
-          userId: principal.userId,
-          kind: "human",
-          grants: grants.map(({ eventId: grantedEventId, role }) => ({
-            eventId: grantedEventId,
-            role,
-          })),
-        };
-      }
-
-      const matchingOrganizations = (
-        await Promise.all(
-          organizationIds.map(async (organizationId) => ({
-            organizationId,
-            event: await cfpRepository.getEvent(organizationId, eventId),
-          })),
-        )
-      ).filter(({ event }) => event !== null);
-      if (matchingOrganizations.length !== 1) return null;
-      const organizationId = matchingOrganizations[0]?.organizationId;
-      if (organizationId === undefined) return null;
-      const roles = evaluationRolesForPrincipal(principal, organizationId, eventId);
-      if (roles.length === 0) return null;
-      return {
-        tenantId: organizationId,
-        userId: principal.userId,
-        kind: "human",
-        grants: roles.map((role) => ({ eventId, role })),
-      };
-    },
+    actorFor: createEvaluationActorResolver({
+      cfpRepository,
+      evaluationRepository,
+    }),
   };
   const authenticator = options.authenticator;
 

@@ -4,6 +4,7 @@ import type { ApiSuggestion } from "./api-api-suggestion";
 import { EvaluationRequestError } from "./api-evaluation-request-error";
 import type { EvaluatorAutosaveController } from "./evaluator-autosave-actions";
 import { evaluationRequest } from "./model-evaluation-request";
+import { reviewerAssignmentRequestPath } from "./model-reviewer-assignment-request-path";
 import { validateSuggestionEditValue } from "./model-validate-suggestion-edit-value";
 export function useEvaluatorSuggestionActions(scope: EvaluatorAutosaveController) {
   const {
@@ -25,7 +26,7 @@ export function useEvaluatorSuggestionActions(scope: EvaluatorAutosaveController
     try {
       const suggestion = await evaluationRequest<ApiSuggestion>(
         baseUrl,
-        `/assignments/${encodeURIComponent(assignment.id)}/suggestions/generate`,
+        reviewerAssignmentRequestPath(assignment, { kind: "generateSuggestions" }),
         { method: "POST", body: JSON.stringify({}) },
       );
       setSuggestions((current) => [...current, suggestion]);
@@ -72,7 +73,10 @@ export function useEvaluatorSuggestionActions(scope: EvaluatorAutosaveController
         review: NonNullable<ApiReviewContext["review"]> | null;
       }>(
         baseUrl,
-        `/assignments/${encodeURIComponent(assignment.id)}/suggestions/${encodeURIComponent(suggestion.id)}/resolve`,
+        reviewerAssignmentRequestPath(assignment, {
+          kind: "resolveSuggestion",
+          suggestionId: suggestion.id,
+        }),
         {
           method: "POST",
           body: JSON.stringify({

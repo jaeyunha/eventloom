@@ -17,6 +17,7 @@ export interface EvaluatorWorkspaceProps {
   onNext?: (() => void) | undefined;
   onDraftChange?: ((snapshot: EvaluatorDraftSnapshot) => void) | undefined;
   onAutosavePendingChange?: ((pending: boolean) => void) | undefined;
+  returnHref?: string | undefined;
 }
 
 export function useEvaluatorState({
@@ -33,6 +34,7 @@ export function useEvaluatorState({
     onNext,
     onDraftChange,
     onAutosavePendingChange,
+    returnHref,
   } = props;
   const initiallySubmitted =
     assignment.submittedAt !== null ||
@@ -95,6 +97,7 @@ export function useEvaluatorState({
     onNext,
     onDraftChange,
     onAutosavePendingChange,
+    returnHref,
     initiallySubmitted,
     scoreValues,
     setScoreValues,

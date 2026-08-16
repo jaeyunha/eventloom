@@ -156,6 +156,35 @@ function textContrastRatio(element: HTMLElement): number {
   );
 }
 
+function waitForReviewerDrawerTransition(page: Page): Promise<void> {
+  return page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          observer.disconnect();
+          reject(new Error("Reviewer drawer transition did not finish."));
+        }, 1_000);
+        const finish = () => {
+          window.clearTimeout(timeout);
+          observer.disconnect();
+          requestAnimationFrame(() => resolve());
+        };
+        const observer = new MutationObserver(() => {
+          const drawer = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
+          if (drawer === null) return;
+          const style = getComputedStyle(drawer);
+          if (style.transitionDuration === "0s" && style.animationDuration === "0s") {
+            finish();
+            return;
+          }
+          drawer.addEventListener("transitionend", finish, { once: true });
+          drawer.addEventListener("animationend", finish, { once: true });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }),
+  );
+}
+
 test.beforeEach(async ({ context }) => {
   await context.addCookies([
     {
@@ -844,6 +873,8 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
 
     await firstAction.focus();
     await expect(firstAction).toBeFocused();
+    const assignmentId = await firstAction.getAttribute("data-reviewer-assignment-id");
+    expect(assignmentId).not.toBeNull();
     const queueBeforeOpen = await queue.boundingBox();
 
     const actionMetrics = await firstAction.evaluate((element) => {
@@ -859,37 +890,15 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
     expect(actionMetrics.lineCount).toBe(1);
     expect(actionMetrics.whiteSpace).toBe("nowrap");
 
-    const drawerSettled = page.evaluate(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => {
-            observer.disconnect();
-            reject(new Error("Reviewer drawer transition did not finish."));
-          }, 1_000);
-          const finish = () => {
-            window.clearTimeout(timeout);
-            observer.disconnect();
-            requestAnimationFrame(() => resolve());
-          };
-          const observer = new MutationObserver(() => {
-            const drawer = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
-            if (drawer === null) return;
-            const style = getComputedStyle(drawer);
-            if (style.transitionDuration === "0s" && style.animationDuration === "0s") {
-              finish();
-              return;
-            }
-            drawer.addEventListener("transitionend", finish, { once: true });
-            drawer.addEventListener("animationend", finish, { once: true });
-          });
-          observer.observe(document.body, { childList: true, subtree: true });
-        }),
-    );
+    const drawerSettled = waitForReviewerDrawerTransition(page);
     await firstAction.click();
 
     const scorecard = page.getByRole("dialog");
     const closeReview = scorecard.getByRole("button", { name: "Close review" });
     await expect(scorecard).toBeVisible();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("assignmentId"))
+      .toBe(assignmentId);
     await drawerSettled;
     await expect(closeReview).toBeFocused();
     await expect(page.locator("#review-workspace")).toHaveCount(1);
@@ -938,15 +947,84 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
       fullPage: false,
     });
 
+    const openFullPage = scorecard.getByRole("link", { name: "Open review as full page" });
+    const encodedAssignmentId = encodeURIComponent(assignmentId ?? "");
+    await expect(openFullPage).toHaveAttribute(
+      "href",
+      `/review/${encodedAssignmentId}?organizationId=${ORGANIZATION_ID}&eventId=${EVENT_ID}`,
+    );
+    await openFullPage.click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/review/${encodedAssignmentId}\\?organizationId=${ORGANIZATION_ID}&eventId=${EVENT_ID}$`,
+        "u",
+      ),
+    );
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Back to queue" })).toBeVisible();
+    const fullPageTitle = await page.locator("#assigned-submission-heading").innerText();
+    await expect(page.getByRole("heading", { name: fullPageTitle })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: fullPageTitle, level: 1 })).toBeVisible();
+    await expect(page.locator('[data-reviewer-scorecard-footer="true"]')).toHaveCSS(
+      "position",
+      "static",
+    );
+    await page.screenshot({
+      path: testInfo.outputPath(`reviewer-full-page-${viewport.name}.png`),
+      fullPage: false,
+    });
+
+    await page.goBack();
+    await expect(scorecard).toBeVisible();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("assignmentId"))
+      .toBe(assignmentId);
+
     await closeReview.click();
     await expect(scorecard).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assignmentId")).toBeNull();
     await expect(firstAction).toBeFocused();
 
     await firstAction.click();
     await expect(scorecard).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(scorecard).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assignmentId")).toBeNull();
     await expect(firstAction).toBeFocused();
+
+    await firstAction.click();
+    await expect(scorecard).toBeVisible();
+    await page.goBack();
+    await expect(scorecard).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assignmentId")).toBeNull();
+    await expect(firstAction).toBeFocused();
+
+    await page.goForward();
+    await expect(scorecard).toBeVisible();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("assignmentId"))
+      .toBe(assignmentId);
+    if (viewport.name === "mobile") {
+      const autosaveCompleted = page.waitForResponse((response) => {
+        const request = response.request();
+        const url = new URL(request.url());
+        return (
+          request.method() === "PUT" &&
+          /\/api\/admin\/evaluations\/assignments\/[^/]+\/review$/u.test(url.pathname)
+        );
+      });
+      await scorecard.getByRole("radio").last().check();
+      const autosaveResponse = await autosaveCompleted;
+      const autosaveUrl = new URL(autosaveResponse.url());
+      expect(autosaveResponse.ok()).toBe(true);
+      expect(autosaveUrl.searchParams.get("organizationId")).toBe(ORGANIZATION_ID);
+      expect(autosaveUrl.searchParams.get("eventId")).toBe(EVENT_ID);
+      await expect(scorecard.getByText("Saved on server", { exact: true })).toBeVisible();
+    } else {
+      await closeReview.click();
+      await expect(scorecard).toBeHidden();
+      await expect(firstAction).toBeFocused();
+    }
   }
 });
 
