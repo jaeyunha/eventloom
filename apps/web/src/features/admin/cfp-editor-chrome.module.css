@@ -1,0 +1,304 @@
+.masthead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.5rem;
+  align-items: start;
+  padding: 0.25rem 0 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.titleBlock {
+  display: grid;
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.titleBlock h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: clamp(1.75rem, 3vw, 2.45rem);
+  font-weight: 680;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+}
+
+.description {
+  max-width: 46rem;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.925rem;
+  line-height: 1.55;
+}
+
+.metadata {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.metadata > span:not(:first-child)::before {
+  margin-right: 0.75rem;
+  color: var(--border);
+  content: "•";
+}
+
+.statusBadge {
+  display: inline-flex;
+  min-height: 1.5rem;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 650;
+}
+
+.statusBadge[data-status="published"] {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, var(--background));
+  color: var(--success);
+}
+
+.statusBadge[data-status="closed"] {
+  border-color: color-mix(in srgb, var(--destructive) 30%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 8%, var(--background));
+  color: var(--destructive);
+}
+
+.actionColumn {
+  display: grid;
+  max-width: 35rem;
+  gap: 0.5rem;
+  justify-items: end;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.actions > * {
+  min-height: 2.5rem;
+}
+
+.actions > :global(.sr-only) {
+  position: absolute;
+  width: 1px;
+  min-width: 1px;
+  height: 1px;
+  min-height: 1px;
+  flex: none;
+}
+
+.error {
+  max-width: 34rem;
+  margin: 0;
+  color: var(--destructive);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.sectionNavigation {
+  padding: 0.75rem 0;
+}
+
+.sectionList {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--muted) 55%, var(--background));
+  list-style: none;
+}
+
+.sectionList button {
+  display: flex;
+  width: 100%;
+  min-height: 2.75rem;
+  gap: 0.55rem;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 0.2rem);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sectionList button:hover {
+  background: color-mix(in srgb, var(--background) 76%, transparent);
+  color: var(--foreground);
+}
+
+.sectionList button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.sectionList .activeSection {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+}
+
+.sectionNumber {
+  color: color-mix(in srgb, var(--muted-foreground) 78%, transparent);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+}
+
+.mobileSectionSelect {
+  display: none;
+}
+
+.stepActions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+}
+
+.stepSummary {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+}
+
+.stepSummary strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.85rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saveStatus {
+  min-height: 1em;
+}
+
+.stepButtons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(7.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.stepButtons button {
+  min-height: 2.5rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.stepButtons button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.stepButtons .continueButton {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+@media (max-width: 64rem) {
+  .masthead {
+    grid-template-columns: 1fr;
+  }
+
+  .actionColumn {
+    width: 100%;
+    max-width: none;
+    justify-items: stretch;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
+  .error {
+    text-align: left;
+  }
+}
+
+@media (max-width: 48rem) {
+  .sectionList {
+    display: none;
+  }
+
+  .mobileSectionSelect {
+    display: grid;
+    gap: 0.35rem;
+    color: var(--muted-foreground);
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+
+  .mobileSectionSelect select {
+    width: 100%;
+    min-height: 2.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 0.875rem;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .actions > * {
+    width: 100%;
+  }
+
+  .stepActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .stepButtons {
+    grid-template-columns: 1fr 1fr;
+  }
+}
