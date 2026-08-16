@@ -54,6 +54,39 @@ describe("same-origin API proxy", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
+  it("retries one transient upstream transport failure for an idempotent read", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("Network connection lost."))
+      .mockResolvedValueOnce(Response.json({ data: "ready" }));
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await GET(
+      new NextRequest("https://web.example.test/api/admin/events"),
+      context,
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await expect(response.json()).resolves.toEqual({ data: "ready" });
+  });
+
+  it("does not retry a failed mutation", async () => {
+    const failure = new TypeError("Network connection lost.");
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(failure);
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(
+      PUT(
+        new NextRequest("https://web.example.test/api/admin/events", {
+          method: "PUT",
+          body: "{}",
+        }),
+        context,
+      ),
+    ).rejects.toBe(failure);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates client cancellation to the upstream request", async () => {
     const client = new AbortController();
     let upstreamSignal: AbortSignal | undefined;

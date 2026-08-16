@@ -3,7 +3,10 @@
 ## Source precedence and status
 
 - `spec/eventloom.md` is the product truth source for supported scope and status.
-- The authoritative competition reference is `/Users/jaeyunha/dev/open-sessionboard/Kill-My-SaaS-Competition-Brief`. It is intentionally ignored by Git and may not exist inside worktrees; read it from that absolute path and treat it as read-only.
+- The competition brief is an untracked, read-only external reference. An
+  operator may provide it outside the repository when competition-specific
+  interpretation is required; never copy it or extracted artifacts into the
+  source tree.
 - Executable code/configuration and observed deployment behavior define what is currently running.
 - `ARCHITECTURE.md` defines system boundaries. `docs/setup.md`, `docs/api.md`, `docs/calendar-semantics.md`, `docs/qa-runbook.md`, `docs/deployment-readiness.md`, and `docs/release-runbook.md` define operational procedures.
 - `docs/llm-judge-runs.md` records evaluator evidence and its limitations. Incomplete, mocked, or diagnostic runs are not release evidence.

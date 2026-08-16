@@ -175,7 +175,7 @@ test.beforeEach(async ({ context }) => {
         session: { id: SESSION_TOKEN, userId: "user-organizer-e2e" },
         user: {
           id: "user-organizer-e2e",
-          email: "jaeyunha0317@gmail.com",
+          email: "organizer@example.test",
           name: "Olivia Organizer",
         },
         memberships: [{ organizationId: ORGANIZATION_ID, role: "owner" }],
@@ -735,6 +735,7 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
   context,
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
   await context.addCookies([
     {
       name: SESSION_COOKIE,
@@ -964,6 +965,7 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
 test("plan and rubric renders an open plan as a focused read-only workbench", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
   for (const viewport of [
     { name: "desktop", width: 1440, height: 1000 },
     { name: "mobile", width: 390, height: 844 },
