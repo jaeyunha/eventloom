@@ -20,7 +20,7 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.dispose();
 });
 
-it("runs automatic speaker task reminders at Santiago's first real instant after a deadline date", async () => {
+it("queues one reminder per eligible 48-hour or overdue task across cron retries", async () => {
   const lifecycle = createSpeakerLifecycleFixture();
   fixtures.push(lifecycle);
   const phase = lifecycle.createPhase({
@@ -65,18 +65,31 @@ it("runs automatic speaker task reminders at Santiago's first real instant after
     socialLinks: {},
     status: "confirmed",
   });
-  await phase.service.createOrganizerTask({
-    eventId: ids.eventId,
-    accountId: ids.organizerAccountId,
-    type: "upload",
-    title: "Upload slides",
-    description: "Upload the final deck.",
-    allowedMimeTypes: ["application/pdf"],
-    maxBytes: 5_000_000,
-    dueAt: "2099-09-05",
-    reminderOffsetsMinutes: [0],
-    assignments: [{ participantId: "participant-priya", submissionId: null }],
-  });
+  for (const input of [
+    {
+      title: "Upload slides in 48 hours",
+      dueAt: "2099-09-07",
+      reminderOffsetsMinutes: [2_880],
+    },
+    {
+      title: "Sign overdue release",
+      dueAt: "2099-09-04",
+      reminderOffsetsMinutes: [0],
+    },
+  ]) {
+    await phase.service.createOrganizerTask({
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      type: "upload",
+      title: input.title,
+      description: "Complete this speaker requirement.",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
+      dueAt: input.dueAt,
+      reminderOffsetsMinutes: input.reminderOffsetsMinutes,
+      assignments: [{ participantId: "participant-priya", submissionId: null }],
+    });
+  }
 
   const database = lifecycle.database as unknown as D1Database;
   const queued: CloudflareOutboxMessage[] = [];
@@ -107,36 +120,24 @@ it("runs automatic speaker task reminders at Santiago's first real instant after
     outbox: new CloudflareReminderOutbox(database, queue),
   });
 
+  const scheduledAt = new Date("2099-09-06T04:00:00.000Z");
+  await runScheduledReminders(dependencies, { DB: database } as RuntimeBindings, scheduledAt);
   await runScheduledReminders(
     dependencies,
     { DB: database } as RuntimeBindings,
-    new Date("2099-09-06T03:59:59.999Z"),
-  );
-  expect(
-    await new D1ReminderRepository(database).listDispatches(ids.organizationId, ids.eventId),
-  ).toMatchObject([
-    {
-      cadenceWindow: "before:2099-09-06T04:00:00.000Z",
-      eligibilityReason: "outside_window",
-      status: "skipped",
-    },
-  ]);
-
-  await runScheduledReminders(
-    dependencies,
-    { DB: database } as RuntimeBindings,
-    new Date("2099-09-06T04:00:00.000Z"),
+    new Date("2099-09-06T05:00:00.000Z"),
   );
 
   const runs = await new D1ReminderRepository(database).listRuns(ids.organizationId, ids.eventId);
+  expect(runs).toHaveLength(2);
   expect(runs).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         triggerType: "automatic",
         audienceType: "task",
-        candidateCount: 1,
-        eligibleCount: 0,
-        queuedCount: 0,
+        candidateCount: 2,
+        eligibleCount: 2,
+        queuedCount: 2,
         failedCount: 0,
         state: "completed",
         configurationFailure: null,
@@ -144,9 +145,9 @@ it("runs automatic speaker task reminders at Santiago's first real instant after
       expect.objectContaining({
         triggerType: "automatic",
         audienceType: "task",
-        candidateCount: 1,
-        eligibleCount: 1,
-        queuedCount: 1,
+        candidateCount: 2,
+        eligibleCount: 2,
+        queuedCount: 2,
         failedCount: 0,
         state: "completed",
         configurationFailure: null,
@@ -157,26 +158,34 @@ it("runs automatic speaker task reminders at Santiago's first real instant after
     ids.organizationId,
     ids.eventId,
   );
-  expect(dispatches).toEqual(
+  const queuedDispatches = dispatches.filter((dispatch) => dispatch.status === "queued");
+  expect(queuedDispatches).toHaveLength(2);
+  expect(queuedDispatches).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         recipient: "participant-priya",
         subject: expect.objectContaining({ type: "task" }),
-        cadenceWindow: "2099-09-06T04:00:00.000Z",
         status: "queued",
         outboxJobId: expect.any(String),
       }),
     ]),
   );
-  expect(queued).toHaveLength(1);
-  expect(queued[0]).toMatchObject({
-    tenantId: ids.organizationId,
-    topic: "communications",
-  });
+  expect(new Set(queuedDispatches.map((dispatch) => dispatch.cadenceWindow))).toEqual(
+    new Set(["2099-09-05T04:00:00.000Z", "2099-09-06T03:00:00.000Z"]),
+  );
+  expect(queued).toHaveLength(2);
+  expect(queued).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        tenantId: ids.organizationId,
+        topic: "communications",
+      }),
+    ]),
+  );
   const outbox = lifecycle.database.query<{ state: string; payload_json: string }>(
     "SELECT state,payload_json FROM outbox_jobs WHERE topic='communications'",
   );
-  expect(outbox).toHaveLength(1);
-  expect(outbox[0]?.state).toBe("queued");
-  expect(outbox[0]?.payload_json).toContain('"effect":"send_reminder"');
-});
+  expect(outbox).toHaveLength(2);
+  expect(outbox.every((job) => job.state === "queued")).toBe(true);
+  expect(outbox.every((job) => job.payload_json.includes('"effect":"send_reminder"'))).toBe(true);
+}, 30_000);
