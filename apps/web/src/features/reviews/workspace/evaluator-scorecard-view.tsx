@@ -3,20 +3,33 @@ import styles from "../review-workspace.module.css";
 import { EvaluatorCommentField } from "./evaluator-comment-field";
 import type { EvaluatorController } from "./evaluator-controller";
 import { EvaluatorCriterionCard } from "./evaluator-criterion-card";
+import { ROUND_AVAILABILITY_NOTICE_ID } from "./evaluator-round-availability-notice";
 import { EvaluatorSuggestionToolbar } from "./evaluator-suggestion-toolbar";
 export function EvaluatorScorecardView({
   controller,
 }: Readonly<{ controller: EvaluatorController }>) {
   const { assignment, autosaveState, countedScore, possibleScore } = controller;
+  const status =
+    assignment.round.status === "scheduled"
+      ? "Scoring not open"
+      : assignment.round.status === "closed"
+        ? "Scoring closed"
+        : autosaveState;
   return (
-    <section className={styles.section} aria-labelledby="score-heading">
+    <section
+      className={styles.section}
+      aria-labelledby="score-heading"
+      aria-describedby={
+        assignment.round.status === "open" ? undefined : ROUND_AVAILABILITY_NOTICE_ID
+      }
+    >
       <div className={styles.sectionHeading}>
         <div>
           <p className={styles.sectionEyebrow}>Human rubric</p>
           <h2 id="score-heading">Score this submission</h2>
         </div>
         <p className={styles.autosaveStatus} aria-live="polite">
-          {autosaveState}
+          {status}
         </p>
       </div>
       <p className={styles.sectionIntro}>

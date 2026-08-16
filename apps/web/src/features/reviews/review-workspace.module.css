@@ -1676,6 +1676,16 @@
   background: transparent;
 }
 
+.roundAvailabilityNotice {
+  margin: var(--space-4) 0 var(--space-5);
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--color-border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--background));
+}
+
+.roundAvailabilityNotice > svg {
+  color: color-mix(in srgb, var(--warning) 78%, var(--foreground));
+}
+
 .authorityNotice h2 {
   display: inline;
   margin-right: 0.3rem;
