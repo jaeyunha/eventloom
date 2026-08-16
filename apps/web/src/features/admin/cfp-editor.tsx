@@ -871,9 +871,12 @@ export function CfpEditor({
                   max={15}
                   step={1}
                   value={configuration.participantLimit}
-                  onChange={(event) =>
-                    updateConfiguration("participantLimit", Number(event.target.value))
-                  }
+                  onChange={(event) => {
+                    const participantLimit = event.currentTarget.valueAsNumber;
+                    if (Number.isFinite(participantLimit)) {
+                      updateConfiguration("participantLimit", participantLimit);
+                    }
+                  }}
                   aria-describedby="participant-limit-help"
                 />
                 <p id="participant-limit-help" className={styles.fieldHint}>
@@ -891,9 +894,12 @@ export function CfpEditor({
                   max={100}
                   step={1}
                   value={configuration.proposalLimit}
-                  onChange={(event) =>
-                    updateConfiguration("proposalLimit", Number(event.target.value))
-                  }
+                  onChange={(event) => {
+                    const proposalLimit = event.currentTarget.valueAsNumber;
+                    if (Number.isFinite(proposalLimit)) {
+                      updateConfiguration("proposalLimit", proposalLimit);
+                    }
+                  }}
                   aria-describedby="proposal-limit-help"
                 />
                 <p id="proposal-limit-help" className={styles.fieldHint}>
