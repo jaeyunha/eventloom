@@ -1620,11 +1620,14 @@
   font-size: 0.78rem;
 }
 .eventForm {
+  container: event-editor / inline-size;
   display: grid;
   gap: 1.5rem;
 }
+.eventEditorHeader,
 .eventEditorCard {
-  width: min(100%, 52rem);
+  width: min(100%, var(--admin-settings-content-width));
+  margin-inline: auto;
 }
 .eventEditorIntro {
   display: grid;
@@ -1655,6 +1658,9 @@
   color: var(--muted-foreground);
   font-size: 0.74rem;
   line-height: 1.45;
+}
+.eventIdentityFields .eventFieldDescription {
+  min-height: 2.9em;
 }
 .eventFieldDescription code {
   color: var(--foreground);
@@ -1736,8 +1742,19 @@
 .eventInlineActions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.55rem;
   align-items: center;
+}
+
+@container event-editor (max-width: 44rem) {
+  .eventTwoColumn {
+    grid-template-columns: 1fr;
+  }
+
+  .eventIdentityFields .eventFieldDescription {
+    min-height: 0;
+  }
 }
 .overviewLoading {
   min-width: 0;
@@ -1931,6 +1948,9 @@
     grid-template-columns: 1fr;
   }
   .eventInlineActions button {
+    width: 100%;
+  }
+  .eventEditorHeader .headerActions button {
     width: 100%;
   }
 

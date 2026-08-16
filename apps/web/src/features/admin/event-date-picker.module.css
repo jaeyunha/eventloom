@@ -360,6 +360,34 @@
   }
 }
 
+@container event-editor (max-width: 48rem) {
+  .heading {
+    display: grid;
+  }
+
+  .headingActions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .modeToggle {
+    width: 100%;
+  }
+
+  .modeToggle button {
+    flex: 1 1 0;
+  }
+
+  .pickerLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .details {
+    border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    border-left: 0;
+  }
+}
+
 @media (max-width: 34rem) {
   .heading,
   .summary,
