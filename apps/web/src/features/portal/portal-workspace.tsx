@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui";
 import { WorkspaceState } from "@/components/workspace";
+import { participantDashboardHref } from "./participant-dashboard-model";
 import { AssetDetails } from "./portal-asset-details";
 import { EventGuideWorkspaceView } from "./portal-event-guide";
 import { type FilesWorkspaceUpload, FilesWorkspaceView } from "./portal-files-workspace";
-import { portalContextLabel } from "./portal-provider-model";
 import { usePortal } from "./portal-provider";
+import { portalContextLabel } from "./portal-provider-model";
 import { safePublishedUrl } from "./portal-published-content-model";
-import { participantDashboardHref } from "./participant-dashboard-model";
 import { SessionsWorkspaceView } from "./portal-sessions-workspace";
 import styles from "./portal-workspace.module.css";
 
@@ -99,7 +100,7 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
         description="Track your proposal in My submissions. Sessions, tasks, and files unlock after an organizer accepts it."
         action={
           <Button asChild>
-            <a href="/portal/submissions">View my submissions</a>
+            <Link href="/portal/submissions">View my submissions</Link>
           </Button>
         }
       />
@@ -133,13 +134,13 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
     <div className={styles.page}>
       <nav className={styles.navigation} aria-label="Accepted session tools">
         {workspaceNavigation.map((item) => (
-          <a
+          <Link
             key={item.surface}
             href={item.href}
             aria-current={item.surface === surface ? "page" : undefined}
           >
             {item.label}
-          </a>
+          </Link>
         ))}
       </nav>
 

@@ -78,11 +78,12 @@ describe("admin command palette model", () => {
     ]);
     expect(results[0]).toMatchObject({
       group: "Events",
-      href: "/admin/organizations/ai-engineer/events/annual%2Fsummit",
+      href: "/admin/organizations/ai-engineer/events/event-annual-summit",
       kind: "event",
       status: "active",
     });
     expect(results.some((result) => result.href === "/admin/events")).toBe(false);
+    expect(results[0]?.href).not.toContain("annual%2Fsummit");
   });
 
   it("filters across event names, statuses, and page keywords", () => {

@@ -1,7 +1,8 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import {
   AlertDialog,
@@ -71,6 +72,35 @@ export interface RemixWorkspaceProps {
   eventId: string;
   /** Inject the authoritative API in tests or a host application. `null` means unavailable. */
   api?: RemixApi | null;
+}
+
+export interface RemixNavigationCacheSnapshot {
+  readonly records: readonly RemixSourceRecord[];
+  readonly candidates: readonly RemixCandidate[];
+  readonly audit: readonly RemixAuditEntry[];
+}
+
+function normalizeRemixScopeId(value: string): string {
+  return value.trim();
+}
+
+export function remixNavigationCacheKey(
+  organizationId: string,
+  eventId: string,
+  sourceType: RemixSourceType,
+): string {
+  const organization = normalizeRemixScopeId(organizationId);
+  const event = normalizeRemixScopeId(eventId);
+  return `organization:${organization}:event:${event}:remix:workspace:${sourceType}`;
+}
+
+export function remixNavigationCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeRemixScopeId(organizationId);
+  const event = normalizeRemixScopeId(eventId);
+  return [`organization:${organization}`, `event:${event}`, `remix:${event}`];
 }
 
 const fieldLabels: Readonly<Record<RemixField, string>> = {
@@ -305,27 +335,47 @@ export function RemixWorkspace({
   eventId: fallbackEventId,
   api: apiOverride,
 }: RemixWorkspaceProps) {
-  const eventId = useOrganizerEventId(fallbackEventId);
-  const scopeValid = organizationId.trim().length > 0 && eventId.trim().length > 0;
+  const eventId = normalizeRemixScopeId(useOrganizerEventId(fallbackEventId));
+  const normalizedOrganizationId = normalizeRemixScopeId(organizationId);
+  const scopeValid = normalizedOrganizationId.length > 0 && eventId.length > 0;
   const api = useMemo<RemixApi | null>(() => {
     if (apiOverride !== undefined) return apiOverride;
     // Tests must inject an API; never manufacture candidates for the test environment.
     if (process.env.NODE_ENV === "test" || !scopeValid) return null;
     try {
-      return createRemixApi("", organizationId);
+      return createRemixApi("", normalizedOrganizationId);
     } catch {
       return null;
     }
-  }, [apiOverride, organizationId, scopeValid]);
+  }, [apiOverride, normalizedOrganizationId, scopeValid]);
+  const navigationCache = useNavigationDataCache();
+  const [sourceType, setSourceType] = useState<RemixSourceType>("session");
+  const remixCacheKey = useMemo(
+    () => remixNavigationCacheKey(normalizedOrganizationId, eventId, sourceType),
+    [eventId, normalizedOrganizationId, sourceType],
+  );
+  const remixCacheTags = useMemo(
+    () => remixNavigationCacheTags(normalizedOrganizationId, eventId),
+    [eventId, normalizedOrganizationId],
+  );
+  const cachedSnapshot = navigationCache?.peek<RemixNavigationCacheSnapshot>(remixCacheKey);
+  const initialRecords =
+    cachedSnapshot?.records.filter(
+      (record) => record.eventId === eventId && record.kind === sourceType,
+    ) ?? [];
+  const initialCandidates =
+    cachedSnapshot?.candidates.filter((candidate) => candidate.eventId === eventId) ?? [];
+  const initialAudit = cachedSnapshot?.audit.filter((entry) => entry.eventId === eventId) ?? [];
   const [capabilityUnavailable, setCapabilityUnavailable] = useState(api === null);
   const [capabilityMessage, setCapabilityMessage] = useState<string | null>(null);
-  const [sourceType, setSourceType] = useState<RemixSourceType>("session");
   const sourceTypeInitialized = useRef(false);
-  const [records, setRecords] = useState<readonly RemixSourceRecord[]>([]);
-  const [candidates, setCandidates] = useState<readonly RemixCandidate[]>([]);
-  const [audit, setAudit] = useState<readonly RemixAuditEntry[]>([]);
+  const [records, setRecords] = useState<readonly RemixSourceRecord[]>(() => initialRecords);
+  const [candidates, setCandidates] = useState<readonly RemixCandidate[]>(() => initialCandidates);
+  const [audit, setAudit] = useState<readonly RemixAuditEntry[]>(() => initialAudit);
   const [selectedSourceIds, setSelectedSourceIds] = useState<readonly string[]>([]);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    () => initialCandidates[0]?.id ?? null,
+  );
   const [candidateFilter, setCandidateFilter] = useState<RemixCandidate["status"] | "all">("all");
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("");
@@ -337,16 +387,47 @@ export function RemixWorkspace({
   );
   const [humanConfirmed, setHumanConfirmed] = useState(false);
   const [draftContent, setDraftContent] = useState<Readonly<Record<string, string>>>({});
-  const [loading, setLoading] = useState(api !== null && scopeValid);
+  const [loading, setLoading] = useState(
+    api !== null && scopeValid && cachedSnapshot === undefined,
+  );
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(() =>
     scopeValid ? null : "Organization and event scope are required.",
   );
+  const [retryToken, setRetryToken] = useState(0);
+  const retrySeenRef = useRef(0);
+  const loadGenerationRef = useRef(0);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applyDialogOpen, setApplyDialogOpen] = useState(false);
   const applyButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const applySnapshot = useCallback(
+    (snapshot: RemixNavigationCacheSnapshot): void => {
+      const nextRecords = snapshot.records.filter(
+        (record) => record.eventId === eventId && record.kind === sourceType,
+      );
+      const nextCandidates = snapshot.candidates.filter(
+        (candidate) => candidate.eventId === eventId,
+      );
+      const nextAudit = snapshot.audit.filter((entry) => entry.eventId === eventId);
+      setRecords(nextRecords);
+      setCandidates(nextCandidates);
+      setAudit(nextAudit);
+      setSelectedCandidateId((current) =>
+        current !== null && nextCandidates.some((candidate) => candidate.id === current)
+          ? current
+          : (nextCandidates[0]?.id ?? null),
+      );
+    },
+    [eventId, sourceType],
+  );
+
+  function invalidateRemixCache(): void {
+    loadGenerationRef.current += 1;
+    navigationCache?.invalidate(remixCacheTags);
+  }
 
   useEffect(() => {
     setCapabilityUnavailable(api === null);
@@ -377,36 +458,48 @@ export function RemixWorkspace({
       return;
     }
     let active = true;
-    setLoading(true);
+    const generation = ++loadGenerationRef.current;
+    const immediateSnapshot = navigationCache?.peek<RemixNavigationCacheSnapshot>(remixCacheKey);
+    const hasImmediateSnapshot = immediateSnapshot !== undefined;
+    if (immediateSnapshot !== undefined) applySnapshot(immediateSnapshot);
+    setLoading(!hasImmediateSnapshot);
     setError(null);
     const controller = new AbortController();
-    void Promise.all([
-      api.listRecords({
-        eventId,
-        sourceType,
-        filter: {
-          query: search,
-          tags: normalizeFilterInput(tagFilter),
-          tracks: normalizeFilterInput(trackFilter),
-        },
-        signal: controller.signal,
-      }),
-      api.listCandidates({ eventId, signal: controller.signal }),
-      api.listAudit(eventId, controller.signal),
-    ])
-      .then(([nextRecords, nextCandidates, nextAudit]) => {
-        if (!active) return;
-        setRecords(nextRecords.filter((record) => record.eventId === eventId));
-        setCandidates(nextCandidates.filter((candidate) => candidate.eventId === eventId));
-        setAudit(nextAudit.filter((entry) => entry.eventId === eventId));
-        setSelectedCandidateId((current) =>
-          current !== null && nextCandidates.some((candidate) => candidate.id === current)
-            ? current
-            : (nextCandidates[0]?.id ?? null),
-        );
+    const retryFresh = retryToken !== retrySeenRef.current;
+    retrySeenRef.current = retryToken;
+    const load = async (): Promise<RemixNavigationCacheSnapshot> => {
+      const signal = navigationCache === null ? controller.signal : undefined;
+      const [nextRecords, nextCandidates, nextAudit] = await Promise.all([
+        api.listRecords({ eventId, sourceType, ...(signal === undefined ? {} : { signal }) }),
+        api.listCandidates({ eventId, ...(signal === undefined ? {} : { signal }) }),
+        api.listAudit(eventId, signal),
+      ]);
+      return {
+        records: nextRecords.filter(
+          (record) => record.eventId === eventId && record.kind === sourceType,
+        ),
+        candidates: nextCandidates.filter((candidate) => candidate.eventId === eventId),
+        audit: nextAudit.filter((entry) => entry.eventId === eventId),
+      };
+    };
+    const isCurrent = (): boolean =>
+      active && generation === loadGenerationRef.current && !controller.signal.aborted;
+    const read = navigationCache
+      ? navigationCache.read<RemixNavigationCacheSnapshot>({
+          key: remixCacheKey,
+          tags: remixCacheTags,
+          fresh: retryFresh,
+          load,
+        })
+      : load();
+    void read
+      .then((snapshot) => {
+        if (!isCurrent()) return;
+        applySnapshot(snapshot);
       })
       .catch((reason: unknown) => {
-        if (!active || (reason instanceof DOMException && reason.name === "AbortError")) return;
+        if (!isCurrent() || (reason instanceof DOMException && reason.name === "AbortError"))
+          return;
         if (isCapabilityUnavailable(reason)) {
           setCapabilityUnavailable(true);
           setCapabilityMessage(reason instanceof Error ? reason.message : "Capability not found.");
@@ -418,13 +511,24 @@ export function RemixWorkspace({
         setError(messageFrom(reason));
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (isCurrent()) setLoading(false);
       });
     return () => {
       active = false;
       controller.abort();
     };
-  }, [api, capabilityUnavailable, eventId, scopeValid, search, sourceType, tagFilter, trackFilter]);
+  }, [
+    api,
+    capabilityUnavailable,
+    eventId,
+    navigationCache,
+    remixCacheKey,
+    remixCacheTags,
+    retryToken,
+    scopeValid,
+    sourceType,
+    applySnapshot,
+  ]);
 
   const availableFields = fieldsForSourceType(sourceType);
   const visibleRecords = useMemo(() => {
@@ -527,6 +631,7 @@ export function RemixWorkspace({
         tone: tone.trim(),
         ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
       });
+      invalidateRemixCache();
       setCandidates((current) => [...generated, ...current]);
       const first = generated[0];
       if (first !== undefined) setSelectedCandidateId(first.id);
@@ -556,6 +661,7 @@ export function RemixWorkspace({
         ...(tone.trim().length === 0 ? {} : { tone: tone.trim() }),
         ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
       });
+      invalidateRemixCache();
       setCandidates((current) => [
         regenerated,
         ...current.map((candidate) =>
@@ -595,6 +701,7 @@ export function RemixWorkspace({
         candidateId: selectedCandidate.id,
         reason: "Rejected by the human organizer.",
       });
+      invalidateRemixCache();
       setCandidates((current) =>
         current.map((candidate) => (candidate.id === rejected.id ? rejected : candidate)),
       );
@@ -625,6 +732,7 @@ export function RemixWorkspace({
         expectedVersion: selectedCandidate.version,
         content,
       });
+      invalidateRemixCache();
       setCandidates((current) =>
         current.map((candidate) =>
           candidate.id === selectedCandidate.id
@@ -809,6 +917,14 @@ export function RemixWorkspace({
               <Alert variant="destructive">
                 <AlertTitle>Workspace data unavailable</AlertTitle>
                 <AlertDescription>{error}</AlertDescription>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRetryToken((value) => value + 1)}
+                  disabled={loading}
+                >
+                  Retry loading remix data
+                </Button>
               </Alert>
             ) : null}
             <fieldset className={styles.sourceList}>

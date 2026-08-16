@@ -20,35 +20,26 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
 } from "@/lib/scoped-read-flight";
 import { useOrganizerOrganizationId } from "./admin-shell";
 import styles from "./admin-shell.module.css";
-import {
-  EventDatePicker,
-  type EventDateSelectionValue,
-} from "./event-date-picker";
+import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import {
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
-  eventStatusClass as organizerEventStatusClass,
   getCalendarMonthCells,
   initialCalendarMonth,
   normalizeOrganizerEventSlug,
-  organizerEventEditorFormValues,
-  organizerEventIntersectsCalendarDate,
-  organizerEventMinimumDateTimeLocal,
-  parseCalendarInstant,
-  OrganizerEventsApiError,
-  resolveOrganizerOverviewConfig,
-  validateOrganizerEventForm,
   type OrganizerEventCreateInput,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
   type OrganizerEventStatus,
   type OrganizerEventsApi,
+  OrganizerEventsApiError,
   type OrganizerOverviewActionType,
   type OrganizerOverviewActivityData,
   type OrganizerOverviewActivityMetrics,
@@ -56,8 +47,14 @@ import {
   type OrganizerOverviewConfigResult,
   type OrganizerOverviewCoreData,
   type OrganizerOverviewEvent,
+  organizerEventEditorFormValues,
+  organizerEventIntersectsCalendarDate,
+  organizerEventMinimumDateTimeLocal,
+  eventStatusClass as organizerEventStatusClass,
+  parseCalendarInstant,
+  resolveOrganizerOverviewConfig,
+  validateOrganizerEventForm,
 } from "./organizer-overview-model";
-
 
 export type OrganizerOverviewRequestState<T> =
   | { readonly status: "loading"; readonly data: T | null }
@@ -89,7 +86,6 @@ export type OrganizerOverviewViewState =
       readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
       readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
     };
-
 
 const actionTypeLabels: Record<OrganizerOverviewActionType, string> = {
   reviews: "Reviews",
@@ -795,6 +791,23 @@ function errorMessage(error: unknown): string {
   return "The organizer overview could not be loaded. Check your connection and try again.";
 }
 
+type OrganizerOverviewCacheResource = "activity" | "core" | "events";
+
+export function organizerOverviewCacheKey(
+  organizationId: string,
+  resource: OrganizerOverviewCacheResource,
+): string {
+  return `organizer-overview:${organizationId.trim()}:${resource}`;
+}
+
+export function organizerOverviewCacheTags(organizationId: string): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `organizer-overview:${normalizedOrganizationId}`,
+  ];
+}
+
 export function OrganizerOverview({
   api: providedApi,
   config: providedConfig,
@@ -817,100 +830,164 @@ export function OrganizerOverview({
     }
     return createOrganizerOverviewApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
+  const navigationCache = useNavigationDataCache();
+  const cacheOrganizationId = "error" in config ? null : config.organizationId.trim();
+  const coreCacheKey =
+    cacheOrganizationId === null ? null : organizerOverviewCacheKey(cacheOrganizationId, "core");
+  const activityCacheKey =
+    cacheOrganizationId === null
+      ? null
+      : organizerOverviewCacheKey(cacheOrganizationId, "activity");
+  const cacheTags = useMemo(
+    () => (cacheOrganizationId === null ? [] : organizerOverviewCacheTags(cacheOrganizationId)),
+    [cacheOrganizationId],
+  );
+  const cachedCore =
+    coreCacheKey === null
+      ? undefined
+      : navigationCache?.peek<OrganizerOverviewCoreData>(coreCacheKey);
+  const cachedActivity =
+    activityCacheKey === null
+      ? undefined
+      : navigationCache?.peek<OrganizerOverviewActivityData>(activityCacheKey);
   const [state, setState] = useState<OrganizerOverviewViewState>(() =>
     "error" in config
       ? { status: "config-error", message: config.error }
       : {
-          status: "loading",
-          core: { status: "loading", data: null },
-          activity: { status: "loading", data: null },
+          status: cachedCore === undefined ? "loading" : "loaded",
+          core:
+            cachedCore === undefined
+              ? { status: "loading", data: null }
+              : { status: "loaded", data: cachedCore },
+          activity:
+            cachedActivity === undefined
+              ? { status: "loading", data: null }
+              : { status: "loaded", data: cachedActivity },
         },
   );
   const generationRef = useRef(0);
 
-  const loadCore = useCallback(async () => {
-    if (!api || "error" in config) {
-      return;
-    }
-    const generation = generationRef.current;
-    setState((previous) => {
-      if (previous.status === "config-error") {
-        return previous;
+  const loadCore = useCallback(
+    async (fresh = false) => {
+      if (!api || "error" in config) {
+        return;
       }
-      return stateWithCore(previous, {
-        status: "loading",
-        data: previous.core.data,
+      const generation = generationRef.current;
+      setState((previous) => {
+        if (previous.status === "config-error") {
+          return previous;
+        }
+        return stateWithCore(previous, {
+          status: "loading",
+          data: previous.core.data,
+        });
       });
-    });
-    try {
-      const data = await api.getCore();
-      if (generationRef.current !== generation) {
-        return;
+      try {
+        const data =
+          navigationCache === null || coreCacheKey === null
+            ? await api.getCore()
+            : await navigationCache.read({
+                key: coreCacheKey,
+                tags: cacheTags,
+                fresh,
+                load: async () => {
+                  const data = await api.getCore();
+                  if (data.organizationId !== config.organizationId) {
+                    throw new Error(
+                      "The organizer overview returned data for another organization.",
+                    );
+                  }
+                  return data;
+                },
+              });
+        if (generationRef.current !== generation) {
+          return;
+        }
+        if (data.organizationId !== config.organizationId) {
+          throw new Error("The organizer overview returned data for another organization.");
+        }
+        setState((previous) =>
+          stateWithCore(previous, {
+            status: "loaded",
+            data,
+          }),
+        );
+      } catch (error) {
+        if (generationRef.current !== generation) {
+          return;
+        }
+        setState((previous) =>
+          stateWithCore(previous, {
+            status: "error",
+            data: previous.status === "config-error" ? null : previous.core.data,
+            message: errorMessage(error),
+          }),
+        );
       }
-      if (data.organizationId !== config.organizationId) {
-        throw new Error("The organizer overview returned data for another organization.");
-      }
-      setState((previous) =>
-        stateWithCore(previous, {
-          status: "loaded",
-          data,
-        }),
-      );
-    } catch (error) {
-      if (generationRef.current !== generation) {
-        return;
-      }
-      setState((previous) =>
-        stateWithCore(previous, {
-          status: "error",
-          data: previous.status === "config-error" ? null : previous.core.data,
-          message: errorMessage(error),
-        }),
-      );
-    }
-  }, [api, config]);
+    },
+    [api, cacheTags, config, coreCacheKey, navigationCache],
+  );
 
-  const loadActivity = useCallback(async () => {
-    if (!api || "error" in config) {
-      return;
-    }
-    const generation = generationRef.current;
-    setState((previous) => {
-      if (previous.status === "config-error") {
-        return previous;
+  const loadActivity = useCallback(
+    async (fresh = false) => {
+      if (!api || "error" in config) {
+        return;
       }
-      return stateWithActivity(previous, {
-        status: "loading",
-        data: previous.activity.data,
+      const generation = generationRef.current;
+      setState((previous) => {
+        if (previous.status === "config-error") {
+          return previous;
+        }
+        return stateWithActivity(previous, {
+          status: "loading",
+          data: previous.activity.data,
+        });
       });
-    });
-    try {
-      const data = await api.getActivity();
-      if (generationRef.current !== generation) {
-        return;
+      try {
+        const data =
+          navigationCache === null || activityCacheKey === null
+            ? await api.getActivity()
+            : await navigationCache.read({
+                key: activityCacheKey,
+                tags: cacheTags,
+                fresh,
+                load: async () => {
+                  const data = await api.getActivity();
+                  if (data.organizationId !== config.organizationId) {
+                    throw new Error(
+                      "The organizer overview returned data for another organization.",
+                    );
+                  }
+                  return data;
+                },
+              });
+        if (generationRef.current !== generation) {
+          return;
+        }
+        if (data.organizationId !== config.organizationId) {
+          throw new Error("The organizer overview returned data for another organization.");
+        }
+        setState((previous) =>
+          stateWithActivity(previous, {
+            status: "loaded",
+            data,
+          }),
+        );
+      } catch (error) {
+        if (generationRef.current !== generation) {
+          return;
+        }
+        setState((previous) =>
+          stateWithActivity(previous, {
+            status: "error",
+            data: previous.status === "config-error" ? null : previous.activity.data,
+            message: errorMessage(error),
+          }),
+        );
       }
-      if (data.organizationId !== config.organizationId) {
-        throw new Error("The organizer overview returned data for another organization.");
-      }
-      setState((previous) =>
-        stateWithActivity(previous, {
-          status: "loaded",
-          data,
-        }),
-      );
-    } catch (error) {
-      if (generationRef.current !== generation) {
-        return;
-      }
-      setState((previous) =>
-        stateWithActivity(previous, {
-          status: "error",
-          data: previous.status === "config-error" ? null : previous.activity.data,
-          message: errorMessage(error),
-        }),
-      );
-    }
-  }, [api, config]);
+    },
+    [activityCacheKey, api, cacheTags, config, navigationCache],
+  );
 
   useEffect(() => {
     generationRef.current += 1;
@@ -925,20 +1002,34 @@ export function OrganizerOverview({
       );
       return;
     }
+    const nextCore =
+      coreCacheKey === null
+        ? undefined
+        : navigationCache?.peek<OrganizerOverviewCoreData>(coreCacheKey);
+    const nextActivity =
+      activityCacheKey === null
+        ? undefined
+        : navigationCache?.peek<OrganizerOverviewActivityData>(activityCacheKey);
     setState({
-      status: "loading",
-      core: { status: "loading", data: null },
-      activity: { status: "loading", data: null },
+      status: nextCore === undefined ? "loading" : "loaded",
+      core:
+        nextCore === undefined
+          ? { status: "loading", data: null }
+          : { status: "loaded", data: nextCore },
+      activity:
+        nextActivity === undefined
+          ? { status: "loading", data: null }
+          : { status: "loaded", data: nextActivity },
     });
-    void loadCore();
-    void loadActivity();
-  }, [api, config, loadActivity, loadCore]);
+    if (nextCore === undefined) void loadCore();
+    if (nextActivity === undefined) void loadActivity();
+  }, [activityCacheKey, api, config, coreCacheKey, loadActivity, loadCore, navigationCache]);
 
   return (
     <OrganizerOverviewView
       state={state}
-      onRetryCore={api ? loadCore : undefined}
-      onRetryActivity={api ? loadActivity : undefined}
+      onRetryCore={api ? () => void loadCore(true) : undefined}
+      onRetryActivity={api ? () => void loadActivity(true) : undefined}
     />
   );
 }
@@ -1796,12 +1887,31 @@ export function OrganizerEvents({
     if ("error" in config) return null;
     return createOrganizerEventsApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
+  const navigationCache = useNavigationDataCache();
+  const cacheOrganizationId = "error" in config ? null : config.organizationId.trim();
+  const eventsCacheKey =
+    cacheOrganizationId === null ? null : organizerOverviewCacheKey(cacheOrganizationId, "events");
+  const eventsCacheTags = useMemo(
+    () => (cacheOrganizationId === null ? [] : organizerOverviewCacheTags(cacheOrganizationId)),
+    [cacheOrganizationId],
+  );
+  const cachedEvents =
+    eventsCacheKey === null
+      ? undefined
+      : navigationCache?.peek<readonly OrganizerEventRecord[]>(eventsCacheKey);
   const initialReadKey = useMemo(
     () => (api && !("error" in config) ? { api, organizationId: config.organizationId } : null),
     [api, config],
   );
   const [state, setState] = useState<OrganizerEventsViewState>(() =>
-    "error" in config ? { status: "config-error", message: config.error } : { status: "loading" },
+    "error" in config
+      ? { status: "config-error", message: config.error }
+      : cachedEvents === undefined
+        ? { status: "loading" }
+        : {
+            status: "loaded",
+            data: { organizationId: config.organizationId, events: cachedEvents },
+          },
   );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -1816,7 +1926,11 @@ export function OrganizerEvents({
   const initialReadCoordinator = initialReadCoordinatorRef.current;
 
   const load = useCallback(
-    async (signal?: AbortSignal, initialRead?: Promise<readonly OrganizerEventRecord[]>) => {
+    async (
+      signal?: AbortSignal,
+      initialRead?: Promise<readonly OrganizerEventRecord[]>,
+      fresh = false,
+    ) => {
       if (!api || "error" in config) return;
       const generation = generationRef.current;
       setState((current) => {
@@ -1827,7 +1941,23 @@ export function OrganizerEvents({
       });
       setNotice(null);
       try {
-        const events = await (initialRead ?? api.listEvents(signal));
+        const events = await (initialRead ??
+          (navigationCache === null || eventsCacheKey === null
+            ? api.listEvents(signal)
+            : navigationCache.read({
+                key: eventsCacheKey,
+                tags: eventsCacheTags,
+                fresh,
+                load: async () => {
+                  const events = await api.listEvents();
+                  if (events.some((event) => event.organizationId !== config.organizationId)) {
+                    throw new Error(
+                      "The organizer event response belongs to another organization.",
+                    );
+                  }
+                  return events;
+                },
+              })));
         if (signal?.aborted || generationRef.current !== generation) return;
         if (events.some((event) => event.organizationId !== config.organizationId)) {
           throw new Error("The organizer event response belongs to another organization.");
@@ -1846,7 +1976,7 @@ export function OrganizerEvents({
         });
       }
     },
-    [api, config],
+    [api, config, eventsCacheKey, eventsCacheTags, navigationCache],
   );
 
   useEffect(() => {
@@ -1862,19 +1992,53 @@ export function OrganizerEvents({
       );
       return;
     }
+    const cached =
+      eventsCacheKey === null
+        ? undefined
+        : navigationCache?.peek<readonly OrganizerEventRecord[]>(eventsCacheKey);
+    if (cached?.every((event) => event.organizationId === config.organizationId) === true) {
+      setState({
+        status: "loaded",
+        data: { organizationId: config.organizationId, events: cached },
+      });
+      return;
+    }
     setState({ status: "loading" });
     const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
-      api.listEvents(signal),
+      navigationCache === null || eventsCacheKey === null
+        ? api.listEvents(signal)
+        : navigationCache.read({
+            key: eventsCacheKey,
+            tags: eventsCacheTags,
+            load: async () => {
+              const events = await api.listEvents();
+              if (events.some((event) => event.organizationId !== config.organizationId)) {
+                throw new Error("The organizer event response belongs to another organization.");
+              }
+              return events;
+            },
+          }),
     );
     void load(lease.signal, lease.promise);
     return () => {
       generationRef.current += 1;
       lease.release();
     };
-  }, [api, config, initialReadCoordinator, initialReadKey, load]);
+  }, [
+    api,
+    config,
+    eventsCacheKey,
+    eventsCacheTags,
+    initialReadCoordinator,
+    initialReadKey,
+    load,
+    navigationCache,
+  ]);
 
   async function create(input: OrganizerEventCreateInput) {
     if (!api || "error" in config) return;
+    generationRef.current += 1;
+    navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
     setNotice(null);
     try {
@@ -1907,6 +2071,8 @@ export function OrganizerEvents({
     expectedVersion: number,
   ) {
     if (!api || "error" in config) return;
+    generationRef.current += 1;
+    navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
     setNotice(null);
     try {
@@ -1948,6 +2114,8 @@ export function OrganizerEvents({
 
   async function archive(eventId: string, expectedVersion: number) {
     if (!api || "error" in config) return;
+    generationRef.current += 1;
+    navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
     setNotice(null);
     try {
@@ -1982,7 +2150,7 @@ export function OrganizerEvents({
       busy={busy}
       notice={notice}
       {...(initialEditor === undefined ? {} : { initialEditor })}
-      onRetry={() => void load()}
+      onRetry={() => void load(undefined, undefined, true)}
       onCreate={api ? create : undefined}
       onUpdate={api ? update : undefined}
       onArchive={api ? archive : undefined}

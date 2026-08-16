@@ -28,6 +28,8 @@ import {
   useOrganizerEventId,
   useOrganizerEventWorkspace,
 } from "@/features/admin/organizer-event-workspace";
+import type { NavigationDataCache } from "@/lib/navigation-data-cache";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createSessionsApi,
   type SessionContentStatus,
@@ -83,6 +85,63 @@ export interface SessionsWorkspaceViewProps {
   }) => Promise<void>;
   readonly onRetry?: () => void;
   readonly onRetrySpeakers?: () => void;
+}
+export interface SessionsWorkspaceCacheBundle {
+  readonly sessions: readonly SessionRecord[];
+  readonly speakers: readonly SessionSpeakerCandidate[];
+}
+
+export function sessionsWorkspaceCacheKey(organizationId: string, eventId: string): string {
+  return `sessions:workspace:${organizationId.trim()}:${eventId.trim()}`;
+}
+
+export function sessionsWorkspaceCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `sessions:${normalizedEventId}`,
+  ];
+}
+
+function sessionsHistoryCacheKey(
+  organizationId: string,
+  eventId: string,
+  sessionId: string,
+  version: number,
+): string {
+  return `sessions:history:${organizationId.trim()}:${eventId.trim()}:${sessionId.trim()}:v${version}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function abortedError(): DOMException {
+  return new DOMException("The session request was aborted.", "AbortError");
+}
+
+export async function loadSessionsWorkspaceBundle(
+  api: SessionsApi,
+  cache: NavigationDataCache | null,
+  key: string,
+  tags: readonly string[],
+  signal?: AbortSignal,
+  fresh = false,
+): Promise<SessionsWorkspaceCacheBundle> {
+  const load = async (): Promise<SessionsWorkspaceCacheBundle> => {
+    const sessionsRequest = cache === null ? api.list(signal) : api.list();
+    const speakersRequest = cache === null ? api.listSpeakers(signal) : api.listSpeakers();
+    const [sessions, speakers] = await Promise.all([sessionsRequest, speakersRequest]);
+    if (cache === null && signal?.aborted) throw abortedError();
+    return { sessions, speakers };
+  };
+  if (cache === null) return load();
+  return cache.read({ key, tags, load, fresh });
 }
 
 function messageFrom(error: unknown): string {
@@ -614,102 +673,177 @@ function ScopedSessionsWorkspace({
   organizationId,
   api: providedApi,
 }: Readonly<SessionsWorkspaceProps>) {
+  const cache = useNavigationDataCache();
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
   const api = useMemo(
-    () => providedApi ?? createSessionsApi("", organizationId, eventId),
-    [eventId, organizationId, providedApi],
+    () => providedApi ?? createSessionsApi("", normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId, providedApi],
   );
-  const [sessions, setSessions] = useState<readonly SessionRecord[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [history, setHistory] = useState<readonly SessionHistoryEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const workspaceCacheKey = useMemo(
+    () => sessionsWorkspaceCacheKey(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const workspaceCacheTags = useMemo(
+    () => sessionsWorkspaceCacheTags(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const workspaceInvalidationTags = useMemo(
+    () => [`event:${normalizedEventId}`, `sessions:${normalizedEventId}`],
+    [normalizedEventId],
+  );
+  const cachedBundle = cache?.peek<SessionsWorkspaceCacheBundle>(workspaceCacheKey);
+  const initialSession = cachedBundle?.sessions[0];
+  const initialHistoryKey =
+    initialSession !== undefined &&
+    initialSession.eventId.trim() === normalizedEventId &&
+    initialSession.id.trim().length > 0 &&
+    Number.isSafeInteger(initialSession.version) &&
+    initialSession.version >= 1
+      ? sessionsHistoryCacheKey(
+          normalizedOrganizationId,
+          normalizedEventId,
+          initialSession.id,
+          initialSession.version,
+        )
+      : null;
+  const initialHistory =
+    cache === null || initialHistoryKey === null
+      ? undefined
+      : cache.peek<readonly SessionHistoryEntry[]>(initialHistoryKey);
+  const [sessions, setSessions] = useState<readonly SessionRecord[]>(
+    () => cachedBundle?.sessions ?? [],
+  );
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    () => initialSession?.id ?? null,
+  );
+  const [history, setHistory] = useState<readonly SessionHistoryEntry[]>(
+    () => initialHistory ?? [],
+  );
+  const [loading, setLoading] = useState(cachedBundle === undefined);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [speakers, setSpeakers] = useState<readonly SessionSpeakerCandidate[] | null>(null);
-  const [loadingSpeakers, setLoadingSpeakers] = useState(true);
+  const [speakers, setSpeakers] = useState<readonly SessionSpeakerCandidate[] | null>(
+    () => cachedBundle?.speakers ?? null,
+  );
+  const [loadingSpeakers, setLoadingSpeakers] = useState(cachedBundle === undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [speakerError, setSpeakerError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
   const historyGeneration = useRef(0);
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal, fresh = false) => {
+      const generation = loadGeneration.current + 1;
+      loadGeneration.current = generation;
+      const isCurrent = () => generation === loadGeneration.current && !signal?.aborted;
       setLoading(true);
-      setError(null);
-      try {
-        const next = await api.list(signal);
-        if (signal?.aborted) return;
-        setSessions(next);
-        setSelectedSessionId((current) =>
-          current !== null && next.some((session) => session.id === current)
-            ? current
-            : (next[0]?.id ?? null),
-        );
-      } catch (loadError) {
-        if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
-          setError(messageFrom(loadError));
-        }
-      } finally {
-        if (!signal?.aborted) setLoading(false);
-      }
-    },
-    [api],
-  );
-
-  const loadSpeakers = useCallback(
-    async (signal?: AbortSignal) => {
       setLoadingSpeakers(true);
+      setError(null);
       setSpeakerError(null);
       try {
-        const next = await api.listSpeakers(signal);
-        if (signal?.aborted) return;
-        setSpeakers(next);
+        const next = await loadSessionsWorkspaceBundle(
+          api,
+          cache,
+          workspaceCacheKey,
+          workspaceCacheTags,
+          signal,
+          fresh,
+        );
+        if (!isCurrent()) return;
+        setSessions(next.sessions);
+        setSelectedSessionId((current) =>
+          current !== null && next.sessions.some((session) => session.id === current)
+            ? current
+            : (next.sessions[0]?.id ?? null),
+        );
+        setSpeakers(next.speakers);
       } catch (loadError) {
-        if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
-          setSpeakerError(messageFrom(loadError));
+        if (isCurrent() && !isAbortError(loadError)) {
+          const message = messageFrom(loadError);
+          setError(message);
+          setSpeakerError(message);
         }
       } finally {
-        if (!signal?.aborted) setLoadingSpeakers(false);
+        if (isCurrent()) {
+          setLoading(false);
+          setLoadingSpeakers(false);
+        }
       }
     },
-    [api],
+    [api, cache, workspaceCacheKey, workspaceCacheTags],
   );
 
   const loadHistory = useCallback(
-    async (sessionId: string, signal?: AbortSignal) => {
+    async (session: SessionRecord, signal?: AbortSignal, fresh = false) => {
       const generation = historyGeneration.current + 1;
       historyGeneration.current = generation;
+      const isCurrent = () => generation === historyGeneration.current && !signal?.aborted;
+      const safeHistoryKey =
+        session.eventId.trim() === normalizedEventId &&
+        session.id.trim().length > 0 &&
+        Number.isSafeInteger(session.version) &&
+        session.version >= 1
+          ? sessionsHistoryCacheKey(
+              normalizedOrganizationId,
+              normalizedEventId,
+              session.id,
+              session.version,
+            )
+          : null;
+      const load = async (): Promise<readonly SessionHistoryEntry[]> => {
+        const next = await api.listHistory(session.id, signal);
+        if (signal?.aborted) throw abortedError();
+        return next;
+      };
       setLoadingHistory(true);
       setHistoryError(null);
       try {
-        const next = await api.listHistory(sessionId, signal);
-        if (!signal?.aborted && generation === historyGeneration.current) setHistory(next);
+        if (cache !== null && safeHistoryKey !== null && !fresh) {
+          const cached = cache.peek<readonly SessionHistoryEntry[]>(safeHistoryKey);
+          if (cached !== undefined) {
+            if (isCurrent()) {
+              setHistory(cached);
+              setLoadingHistory(false);
+            }
+            return;
+          }
+        }
+        const next =
+          cache !== null && safeHistoryKey !== null
+            ? await cache.read({
+                key: safeHistoryKey,
+                tags: workspaceCacheTags,
+                load,
+                fresh,
+              })
+            : await load();
+        if (isCurrent()) setHistory(next);
       } catch (loadError) {
-        if (
-          !(loadError instanceof DOMException && loadError.name === "AbortError") &&
-          generation === historyGeneration.current
-        ) {
+        if (isCurrent() && !isAbortError(loadError)) {
           setHistory([]);
           setHistoryError(messageFrom(loadError));
         }
       } finally {
-        if (!signal?.aborted && generation === historyGeneration.current) {
-          setLoadingHistory(false);
-        }
+        if (isCurrent()) setLoadingHistory(false);
       }
     },
-    [api],
+    [api, cache, normalizedEventId, normalizedOrganizationId, workspaceCacheTags],
   );
 
   useEffect(() => {
+    if (cache?.peek<SessionsWorkspaceCacheBundle>(workspaceCacheKey) !== undefined) return;
     const controller = new AbortController();
     void load(controller.signal);
-    void loadSpeakers(controller.signal);
     return () => controller.abort();
-  }, [load, loadSpeakers]);
+  }, [cache, load, workspaceCacheKey]);
+
+  const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
 
   useEffect(() => {
-    if (selectedSessionId === null) {
+    if (selectedSession === null) {
       historyGeneration.current += 1;
       setHistory([]);
       setHistoryError(null);
@@ -717,9 +851,9 @@ function ScopedSessionsWorkspace({
       return;
     }
     const controller = new AbortController();
-    void loadHistory(selectedSessionId, controller.signal);
+    void loadHistory(selectedSession, controller.signal);
     return () => controller.abort();
-  }, [loadHistory, selectedSessionId]);
+  }, [loadHistory, selectedSession]);
 
   async function mutate(
     sessionId: string,
@@ -727,17 +861,22 @@ function ScopedSessionsWorkspace({
     successMessage: string,
   ): Promise<void> {
     if (busy) return;
+    loadGeneration.current += 1;
+    historyGeneration.current += 1;
+    cache?.invalidate(workspaceInvalidationTags);
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const next = await request();
-      setSessions((current) =>
-        current.map((session) => (session.id === sessionId ? next : session)),
-      );
+      const nextSessions = sessions.map((session) => (session.id === sessionId ? next : session));
+      setSessions(nextSessions);
       setSelectedSessionId(next.id);
+      if (cache !== null && speakers !== null) {
+        cache.write(workspaceCacheKey, { sessions: nextSessions, speakers }, workspaceCacheTags);
+      }
       setStatusMessage(successMessage);
-      void loadHistory(next.id);
+      void loadHistory(next, undefined, true);
     } catch (mutationError) {
       setError(messageFrom(mutationError));
     } finally {
@@ -768,8 +907,14 @@ function ScopedSessionsWorkspace({
           `Session content restored from version ${input.version}.`,
         )
       }
-      onRetry={() => void load()}
-      onRetrySpeakers={() => void loadSpeakers()}
+      onRetry={() => {
+        cache?.invalidate(workspaceInvalidationTags);
+        void load(undefined, true);
+      }}
+      onRetrySpeakers={() => {
+        cache?.invalidate(workspaceInvalidationTags);
+        void load(undefined, true);
+      }}
       onSave={(input) =>
         mutate(input.sessionId, () => api.updateContent(input), "Session content saved.")
       }
@@ -800,7 +945,7 @@ export function SessionsWorkspace(props: Readonly<SessionsWorkspaceProps>) {
   const eventId = useOrganizerEventId(props.eventId);
   return (
     <ScopedSessionsWorkspace
-      key={`${props.organizationId}\u0000${eventId}`}
+      key={`${props.organizationId.trim()}\u0000${eventId.trim()}`}
       {...props}
       eventId={eventId}
     />

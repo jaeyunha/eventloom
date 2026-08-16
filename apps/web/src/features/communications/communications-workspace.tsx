@@ -45,6 +45,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import { createScopedReadFlightCoordinator } from "@/lib/scoped-read-flight";
 import {
   COMMUNICATION_AUDIENCES,
@@ -97,6 +98,42 @@ export interface CommunicationsWorkspaceProps {
   readonly initialReminderRuns?: readonly ReminderRun[];
   readonly initialReminderDispatches?: readonly ReminderDispatch[];
   readonly initialReminderFacts?: ReminderFacts | null;
+}
+export type CommunicationNavigationCacheResource = "templates" | "reminder-truth";
+
+export interface CommunicationReminderTruthSnapshot {
+  readonly runs: readonly ReminderRun[];
+  readonly dispatches: readonly ReminderDispatch[];
+  readonly facts: ReminderFacts | null;
+}
+
+function normalizeCommunicationScopeId(value: string): string {
+  return value.trim();
+}
+
+export function communicationNavigationCacheKey(
+  resource: CommunicationNavigationCacheResource,
+  organizationId: string,
+  eventId: string,
+): string {
+  const organization = normalizeCommunicationScopeId(organizationId);
+  const event = normalizeCommunicationScopeId(eventId);
+  return `organization:${organization}:event:${event}:communications:${resource}`;
+}
+
+export function communicationNavigationCacheTags(
+  resource: CommunicationNavigationCacheResource,
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeCommunicationScopeId(organizationId);
+  const event = normalizeCommunicationScopeId(eventId);
+  return [
+    `organization:${organization}`,
+    `event:${event}`,
+    `communications:${event}`,
+    `communications:${resource}:${event}`,
+  ];
 }
 
 export interface CommunicationTemplateSelection {
@@ -1943,8 +1980,8 @@ export function CommunicationsWorkspaceView({
   );
 }
 
-export function CommunicationsWorkspace({
-  eventId: fallbackEventId,
+function CommunicationsWorkspaceForScope({
+  eventId,
   organizationId,
   api: providedApi,
   initialTemplates,
@@ -1952,41 +1989,92 @@ export function CommunicationsWorkspace({
   initialSend = null,
   initialReminderRuns,
   initialReminderDispatches,
-  initialReminderFacts = null,
+  initialReminderFacts,
   providerState: initialProviderState = "unknown",
 }: CommunicationsWorkspaceProps) {
-  const eventId = useOrganizerEventId(fallbackEventId);
   const api = useMemo(
     () => providedApi ?? createCommunicationApi("", organizationId),
     [organizationId, providedApi],
   );
-  const [templates, setTemplates] = useState<readonly CommunicationTemplate[]>(
-    initialTemplates ?? [],
+  const navigationCache = useNavigationDataCache();
+  const templateCacheKey = useMemo(
+    () => communicationNavigationCacheKey("templates", organizationId, eventId),
+    [eventId, organizationId],
   );
+  const templateCacheTags = useMemo(
+    () => communicationNavigationCacheTags("templates", organizationId, eventId),
+    [eventId, organizationId],
+  );
+  const reminderTruthCacheKey = useMemo(
+    () => communicationNavigationCacheKey("reminder-truth", organizationId, eventId),
+    [eventId, organizationId],
+  );
+  const reminderTruthCacheTags = useMemo(
+    () => communicationNavigationCacheTags("reminder-truth", organizationId, eventId),
+    [eventId, organizationId],
+  );
+  const cachedTemplates = navigationCache?.peek<readonly CommunicationTemplate[]>(templateCacheKey);
+  const hasExplicitReminderTruth =
+    initialReminderRuns !== undefined ||
+    initialReminderDispatches !== undefined ||
+    initialReminderFacts !== undefined;
+  const cachedReminderTruth = hasExplicitReminderTruth
+    ? undefined
+    : navigationCache?.peek<CommunicationReminderTruthSnapshot>(reminderTruthCacheKey);
+  const initialTemplateValue = initialTemplates ?? cachedTemplates ?? [];
+  const initialReminderTruthValue = useMemo<CommunicationReminderTruthSnapshot>(
+    () =>
+      hasExplicitReminderTruth
+        ? {
+            runs: initialReminderRuns ?? [],
+            dispatches: initialReminderDispatches ?? [],
+            facts: initialReminderFacts ?? null,
+          }
+        : (cachedReminderTruth ?? { runs: [], dispatches: [], facts: null }),
+    [
+      cachedReminderTruth,
+      hasExplicitReminderTruth,
+      initialReminderDispatches,
+      initialReminderFacts,
+      initialReminderRuns,
+    ],
+  );
+  const initialReminderTruthRef = useRef(initialReminderTruthValue);
+  const initialReminderTruth = initialReminderTruthRef.current;
+  const hasImmediateTemplateData = useRef(
+    initialTemplates !== undefined || cachedTemplates !== undefined,
+  ).current;
+  const hasImmediateReminderTruth = useRef(
+    hasExplicitReminderTruth || cachedReminderTruth !== undefined,
+  ).current;
+  const [templates, setTemplates] =
+    useState<readonly CommunicationTemplate[]>(initialTemplateValue);
   const [preview, setPreview] = useState<CommunicationPreview | null>(initialPreview);
   const [send, setSend] = useState<CommunicationSend | null>(initialSend);
   const [reminderRuns, setReminderRuns] = useState<readonly ReminderRun[]>(
-    initialReminderRuns ?? [],
+    initialReminderTruth.runs,
   );
   const [reminderDispatches, setReminderDispatches] = useState<readonly ReminderDispatch[]>(
-    initialReminderDispatches ?? [],
+    initialReminderTruth.dispatches,
   );
-  const [reminderFacts] = useState<ReminderFacts | null>(initialReminderFacts);
+  const [reminderFacts, setReminderFacts] = useState<ReminderFacts | null>(
+    initialReminderTruth.facts,
+  );
   const [reminderState, setReminderState] = useState<ReminderTruthState>(
-    initialReminderRuns !== undefined || initialReminderDispatches !== undefined ? "ready" : "idle",
+    hasImmediateReminderTruth ? "ready" : "idle",
   );
   const [reminderError, setReminderError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState(
-    initialTemplates?.[0]?.id ?? initialPreview?.templateId ?? "",
+    initialTemplateValue[0]?.id ?? initialPreview?.templateId ?? "",
   );
   const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | undefined>(
-    initialTemplates?.[0]?.version ?? initialPreview?.templateVersion,
+    initialTemplateValue[0]?.version ?? initialPreview?.templateVersion,
   );
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [selectedAudience, setSelectedAudience] = useState<CommunicationAudience>(
     initialPreview?.audience ?? "all_participants",
   );
-  const [loading, setLoading] = useState(initialTemplates === undefined);
+  const [loading, setLoading] = useState(!hasImmediateTemplateData);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -1996,6 +2084,10 @@ export function CommunicationsWorkspace({
   const idempotencyKeyRef = useRef<string | null>(null);
   const reminderIdempotencyKeyRef = useRef<string | null>(null);
   const templateLoadGenerationRef = useRef(0);
+  const reminderTruthGenerationRef = useRef(0);
+  const communicationScopeKey = `${normalizeCommunicationScopeId(organizationId)}:${normalizeCommunicationScopeId(eventId)}`;
+  const reminderFactsRef = useRef<ReminderFacts | null>(reminderFacts);
+  reminderFactsRef.current = reminderFacts;
   const selectedTemplateSelectionRef = useRef<CommunicationTemplateSelection | undefined>(
     selectedTemplateId.length === 0 || selectedTemplateVersion === undefined
       ? undefined
@@ -2031,17 +2123,21 @@ export function CommunicationsWorkspace({
     async (
       signal: AbortSignal | undefined,
       initialRead?: Promise<readonly CommunicationTemplate[]>,
+      showLoading = true,
     ) => {
       const generation = templateLoadGenerationRef.current + 1;
       templateLoadGenerationRef.current = generation;
-      setLoading(true);
+      if (showLoading) setLoading(true);
       setError(null);
       await loadCommunicationTemplates({
         read: () =>
           initialRead ??
           initialReadKey.api.listTemplates(initialReadKey.eventId, undefined, signal),
         signal,
-        isCurrent: () => templateLoadGenerationRef.current === generation,
+        isCurrent: () =>
+          templateLoadGenerationRef.current === generation &&
+          communicationScopeKey ===
+            `${normalizeCommunicationScopeId(organizationId)}:${normalizeCommunicationScopeId(eventId)}`,
         onLoaded: (loaded) => {
           setTemplates(loaded);
           const currentSelection = selectedTemplateSelectionRef.current;
@@ -2062,68 +2158,140 @@ export function CommunicationsWorkspace({
         onSettled: () => setLoading(false),
       });
     },
-    [initialReadKey],
+    [communicationScopeKey, eventId, initialReadKey, organizationId],
   );
-  const refreshDeliveryTruth = useCallback(async () => {
-    if (
-      typeof api.listReminderRuns !== "function" ||
-      typeof api.listReminderDispatches !== "function"
-    ) {
-      setReminderState("unavailable");
-      setReminderError("Reminder delivery status is not exposed by this API surface.");
-      return;
-    }
-    setReminderState("pending");
-    setReminderError(null);
-    try {
-      const [runs, dispatches] = await Promise.all([
-        api.listReminderRuns(eventId),
-        api.listReminderDispatches(eventId),
-      ]);
-      setReminderRuns(runs);
-      setReminderDispatches(dispatches);
-      setReminderState("ready");
-    } catch (reason) {
-      setReminderState(reminderTruthStateFromError(reason));
-      setReminderError(messageFromError(reason));
-    }
-  }, [api, eventId]);
+  const refreshDeliveryTruth = useCallback(
+    async (fresh = false, signal?: AbortSignal, showPending = true): Promise<void> => {
+      const generation = reminderTruthGenerationRef.current + 1;
+      reminderTruthGenerationRef.current = generation;
+      const isCurrent = (): boolean =>
+        reminderTruthGenerationRef.current === generation &&
+        communicationScopeKey ===
+          `${normalizeCommunicationScopeId(organizationId)}:${normalizeCommunicationScopeId(eventId)}` &&
+        !signal?.aborted;
+      if (showPending) setReminderState("pending");
+      setReminderError(null);
+      const load = async (
+        requestSignal?: AbortSignal,
+      ): Promise<CommunicationReminderTruthSnapshot> => {
+        if (
+          typeof api.listReminderRuns !== "function" ||
+          typeof api.listReminderDispatches !== "function"
+        ) {
+          throw new Error("Reminder delivery status is not exposed by this API surface.");
+        }
+        const [runs, dispatches] = await Promise.all([
+          api.listReminderRuns(eventId, requestSignal),
+          api.listReminderDispatches(eventId, requestSignal),
+        ]);
+        return { runs, dispatches, facts: reminderFactsRef.current };
+      };
+      try {
+        const loaded =
+          navigationCache === null
+            ? await load(signal)
+            : await navigationCache.read<CommunicationReminderTruthSnapshot>({
+                key: reminderTruthCacheKey,
+                tags: reminderTruthCacheTags,
+                fresh,
+                load: () => load(),
+              });
+        if (!isCurrent()) return;
+        setReminderRuns(loaded.runs);
+        setReminderDispatches(loaded.dispatches);
+        setReminderFacts(loaded.facts);
+        setReminderState("ready");
+      } catch (reason) {
+        if (!isCurrent()) return;
+        setReminderState(reminderTruthStateFromError(reason));
+        setReminderError(messageFromError(reason));
+      }
+    },
+    [
+      api,
+      communicationScopeKey,
+      eventId,
+      navigationCache,
+      organizationId,
+      reminderTruthCacheKey,
+      reminderTruthCacheTags,
+    ],
+  );
 
   useEffect(() => {
-    if (initialTemplates !== undefined) return;
-    setTemplates([]);
+    if (initialTemplates !== undefined) {
+      navigationCache?.write(templateCacheKey, initialTemplates, templateCacheTags);
+      return;
+    }
+    setTemplates((current) => (hasImmediateTemplateData ? current : []));
     setPreview(null);
     setSend(null);
-    setSelectedTemplateId("");
-    setSelectedTemplateVersion(undefined);
+    setSelectedTemplateId((current) => (hasImmediateTemplateData ? current : ""));
+    setSelectedTemplateVersion((current) => (hasImmediateTemplateData ? current : undefined));
     setCreatingTemplate(false);
     setSelectedAudience("all_participants");
     setStatusMessage(null);
     setSendConfirmationOpen(false);
     idempotencyKeyRef.current = null;
+    if (navigationCache !== null) {
+      const read = navigationCache.read<readonly CommunicationTemplate[]>({
+        key: templateCacheKey,
+        tags: templateCacheTags,
+        load: () => initialReadKey.api.listTemplates(initialReadKey.eventId),
+      });
+      void loadTemplates(undefined, read, !hasImmediateTemplateData);
+      return () => {
+        templateLoadGenerationRef.current += 1;
+      };
+    }
     const lease = initialReadCoordinator.acquire(initialReadKey);
-    void loadTemplates(lease.signal, lease.promise);
+    void loadTemplates(lease.signal, lease.promise, !hasImmediateTemplateData);
     return () => {
       templateLoadGenerationRef.current += 1;
       lease.release();
     };
-  }, [initialReadCoordinator, initialReadKey, initialTemplates, loadTemplates]);
+  }, [
+    hasImmediateTemplateData,
+    initialReadCoordinator,
+    initialReadKey,
+    initialTemplates,
+    loadTemplates,
+    navigationCache,
+    templateCacheKey,
+    templateCacheTags,
+  ]);
   useEffect(() => {
-    if (initialReminderRuns !== undefined || initialReminderDispatches !== undefined) return;
-    setReminderRuns([]);
-    setReminderDispatches([]);
-    void refreshDeliveryTruth();
-  }, [initialReminderDispatches, initialReminderRuns, refreshDeliveryTruth]);
+    if (hasExplicitReminderTruth) {
+      navigationCache?.write(reminderTruthCacheKey, initialReminderTruth, reminderTruthCacheTags);
+      return;
+    }
+    const controller = new AbortController();
+    void refreshDeliveryTruth(false, controller.signal, !hasImmediateReminderTruth);
+    return () => {
+      reminderTruthGenerationRef.current += 1;
+      if (navigationCache === null) controller.abort();
+    };
+  }, [
+    hasExplicitReminderTruth,
+    hasImmediateReminderTruth,
+    initialReminderTruth,
+    navigationCache,
+    refreshDeliveryTruth,
+    reminderTruthCacheKey,
+    reminderTruthCacheTags,
+  ]);
 
   function replaceTemplate(next: CommunicationTemplate): void {
-    setTemplates((current) =>
-      [
-        ...current.filter(
-          (template) => !(template.id === next.id && template.version === next.version),
-        ),
-        next,
-      ].sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version),
-    );
+    const nextTemplates = [
+      ...templates.filter(
+        (template) => !(template.id === next.id && template.version === next.version),
+      ),
+      next,
+    ].sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+    templateLoadGenerationRef.current += 1;
+    navigationCache?.invalidate(templateCacheTags.slice(-1));
+    navigationCache?.write(templateCacheKey, nextTemplates, templateCacheTags);
+    setTemplates(nextTemplates);
     setSelectedTemplateId(next.id);
     setSelectedTemplateVersion(next.version);
     setCreatingTemplate(false);
@@ -2327,6 +2495,12 @@ export function CommunicationsWorkspace({
       setReminderError("A reminder idempotency key could not be created.");
       return;
     }
+    const actionGeneration = reminderTruthGenerationRef.current + 1;
+    reminderTruthGenerationRef.current = actionGeneration;
+    const actionScopeKey = communicationScopeKey;
+    const isCurrent = (): boolean =>
+      reminderTruthGenerationRef.current === actionGeneration &&
+      communicationScopeKey === actionScopeKey;
     setBusy(true);
     setReminderState("pending");
     setReminderError(null);
@@ -2337,12 +2511,25 @@ export function CommunicationsWorkspace({
         idempotencyKey,
         expectedAudienceRevision,
       });
-      setReminderRuns((current) => [...current.filter((run) => run.id !== next.id), next]);
+      if (!isCurrent()) return;
+      const nextRuns = [...reminderRuns.filter((run) => run.id !== next.id), next];
+      navigationCache?.invalidate(reminderTruthCacheTags.slice(-1));
+      navigationCache?.write(
+        reminderTruthCacheKey,
+        {
+          runs: nextRuns,
+          dispatches: reminderDispatches,
+          facts: reminderFactsRef.current,
+        },
+        reminderTruthCacheTags,
+      );
+      setReminderRuns(nextRuns);
       reminderIdempotencyKeyRef.current = null;
       setReminderState("ready");
       setStatusMessage(`Manual reminder run ${next.id} is ${statusLabel(next.state)}.`);
-      await refreshDeliveryTruth();
+      await refreshDeliveryTruth(true);
     } catch (reason) {
+      if (!isCurrent()) return;
       setReminderState(reminderTruthStateFromError(reason));
       setReminderError(messageFromError(reason));
     } finally {
@@ -2364,7 +2551,7 @@ export function CommunicationsWorkspace({
       reminderError={reminderError}
       reminderLoading={reminderState === "pending"}
       onRunManualReminders={runManualReminders}
-      onRefreshDeliveryTruth={refreshDeliveryTruth}
+      onRefreshDeliveryTruth={() => refreshDeliveryTruth(true)}
       loading={loading}
       busy={busy}
       error={error}
@@ -2405,6 +2592,12 @@ export function CommunicationsWorkspace({
       onRetryFailed={retryFailed}
     />
   );
+}
+
+export function CommunicationsWorkspace(props: CommunicationsWorkspaceProps) {
+  const eventId = useOrganizerEventId(props.eventId);
+  const scopeKey = `${normalizeCommunicationScopeId(props.organizationId)}:${normalizeCommunicationScopeId(eventId)}`;
+  return <CommunicationsWorkspaceForScope key={scopeKey} {...props} eventId={eventId} />;
 }
 
 export const CommunicationWorkspace = CommunicationsWorkspace;
