@@ -715,7 +715,7 @@ describe("agenda organizer workspace", () => {
   });
 
   it("does not expose raw audit actor identifiers in organizer-facing markup", () => {
-    const rawActorId = "00000000-0000-4000-8000-000000000001";
+    const rawActorId = "internal-actor-id-should-not-render";
     const rawTimestampToken = "2099-12-31T23:59:59.000Z";
     const markup = renderBoard({
       ...data,
