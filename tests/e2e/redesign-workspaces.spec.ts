@@ -834,6 +834,18 @@ test("plan and rubric renders an open plan as a focused read-only workbench", as
     ).toBeVisible();
     await expect(page.getByLabel("Overall review deadline")).toBeEnabled();
 
+    const authoringSection = page.locator('section[aria-labelledby="authoring-heading"]');
+    const authoringGutter = await authoringSection.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        left: Number.parseFloat(style.paddingLeft),
+        right: Number.parseFloat(style.paddingRight),
+      };
+    });
+    const expectedAuthoringGutter = viewport.name === "desktop" ? 24 : 16;
+    expect(authoringGutter.left).toBeCloseTo(expectedAuthoringGutter, 1);
+    expect(authoringGutter.right).toBeCloseTo(expectedAuthoringGutter, 1);
+
     if (viewport.name === "desktop") {
       const layers = await page.evaluate(() => {
         const shell = document.querySelector<HTMLElement>('[data-role-workspace-shell="true"]');
