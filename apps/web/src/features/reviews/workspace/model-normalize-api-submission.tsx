@@ -8,7 +8,7 @@ export function normalizeApiSubmission(submission: ApiSubmission): ApiSubmission
     title:
       typeof submission.title === "string" && submission.title.trim().length > 0
         ? submission.title.trim()
-        : submission.id.trim(),
+        : "No title",
     abstract: typeof submission.abstract === "string" ? submission.abstract : "",
     participants: Array.isArray(submission.participants) ? submission.participants : [],
   };

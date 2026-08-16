@@ -1,13 +1,12 @@
 "use client";
-import Link from "next/link";
 import { Button } from "../../../components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "../../../components/ui/empty";
 import styles from "../review-workspace.module.css";
 import { ReviewerAssignmentList } from "./assignment-reviewer-assignment-list";
 import { OrganizerAuthoring } from "./organizer-authoring-organizer-authoring";
@@ -27,9 +26,6 @@ export function OrganizerAssignmentsPanel({
     assignmentTarget,
     setView,
   } = controller;
-  const invitationHref = controller.organizationId
-    ? `/admin/organizations/${encodeURIComponent(controller.organizationId)}/members?tab=invite`
-    : "/admin/events";
   if (seed.status === "draft") {
     return (
       <section className={styles.section} aria-labelledby="assignments-unavailable-heading">
@@ -49,16 +45,15 @@ export function OrganizerAssignmentsPanel({
   }
   return (
     <>
-      <div className={styles.viewIntro}>
-        <p className={styles.sectionEyebrow}>Review team</p>
-        <h2>Choose the round team, then distribute work</h2>
-        <p>
-          Add organization reviewers to this event round, set their capacity, create submission
-          assignments, and monitor completion from one place.
-        </p>
-        <Button asChild variant="outline">
-          <Link href={invitationHref}>Invite reviewers</Link>
-        </Button>
+      <div className={styles.assignmentSectionIntro}>
+        <div className={styles.assignmentSectionIntroCopy}>
+          <p className={styles.sectionEyebrow}>Review team</p>
+          <h2>Choose the round team, then distribute work</h2>
+          <p>
+            Add organization reviewers to this event round, set their capacity, create proposal
+            assignments, and monitor completion from one place.
+          </p>
+        </div>
       </div>
       <OrganizerAuthoring
         seed={seed}
@@ -72,26 +67,28 @@ export function OrganizerAssignmentsPanel({
         assignmentOnly
         assignmentTarget={assignmentTarget ?? undefined}
       />
-      <div className={styles.viewIntro}>
-        <p className={styles.sectionEyebrow}>Assignments</p>
-        <h2>Progress and active assignments</h2>
-        <p>Monitor completed reviews, send reminders, and replace assignments as needed.</p>
+      <div className={styles.assignmentSectionIntro}>
+        <div className={styles.assignmentSectionIntroCopy}>
+          <p className={styles.sectionEyebrow}>Assignments</p>
+          <h2>Progress and active assignments</h2>
+          <p>Monitor completed reviews, send reminders, and replace assignments as needed.</p>
+        </div>
       </div>
       {seed.assignments.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No assignments yet</CardTitle>
-            <CardDescription>
-              Save the round review team above, then choose a submission and reviewers to create the
+        <Empty className={styles.assignmentEmpty}>
+          <EmptyHeader>
+            <EmptyTitle>No assignments yet</EmptyTitle>
+            <EmptyDescription>
+              Save the round review team above, then choose a proposal and reviewers to create the
               first assignments.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
             <Button asChild>
               <a href="#assignment-task-heading">Fill reviewer slots</a>
             </Button>
-          </CardContent>
-        </Card>
+          </EmptyContent>
+        </Empty>
       ) : (
         <>
           <ReviewerProgressDashboard

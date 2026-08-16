@@ -4427,3 +4427,279 @@
     scroll-behavior: auto;
   }
 }
+
+/* Organizer assignments: one bounded task flow instead of full-canvas form rows. */
+#review-panel-assignments {
+  max-inline-size: 64rem;
+  margin-inline: auto;
+  gap: var(--space-7);
+}
+
+.assignmentSectionIntro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding-block-end: var(--space-4);
+  border-block-end: 1px solid var(--color-border);
+}
+
+.assignmentSectionIntroCopy {
+  display: grid;
+  gap: var(--space-2);
+  max-inline-size: 44rem;
+}
+
+.assignmentSectionIntroCopy h2 {
+  font-size: clamp(1.45rem, 2vw, 1.8rem);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.assignmentSectionIntroCopy > p:last-child {
+  color: var(--color-muted);
+  line-height: 1.55;
+}
+
+.assignmentCoverageTask {
+  max-inline-size: 64rem;
+  margin-inline: auto;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.assignmentTaskHeader {
+  padding: var(--space-5) var(--space-6);
+  border-block-end: 1px solid var(--color-border);
+  background: var(--color-brand-soft);
+}
+
+.assignmentContextGrid {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  align-items: stretch;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+}
+
+.assignmentContextField {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+}
+
+.assignmentContextField label {
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.assignmentRoundSelect {
+  inline-size: 100%;
+  min-block-size: 2.75rem;
+  padding-inline: 0.75rem 2rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--organizer-control-radius);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+}
+
+.assignmentPolicy {
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--organizer-control-radius);
+  background: var(--color-brand-soft);
+}
+
+.assignmentPolicy p:last-child {
+  color: var(--color-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.assignmentPolicy .mutedLabel,
+.assignmentPreview .mutedLabel {
+  color: var(--color-muted);
+}
+
+.assignmentCoverageTask .reviewTeamCard {
+  margin-inline: var(--space-6);
+  box-shadow: none;
+}
+
+.assignmentCoverageTask .reviewTeamRow {
+  grid-template-columns: minmax(0, 1fr) 9rem 7rem;
+  align-items: center;
+}
+
+.assignmentCoverageTask .reviewTeamCap {
+  grid-template-columns: 1fr;
+  gap: var(--space-1);
+}
+
+.assignmentCoverageTask .reviewTeamCap input {
+  inline-size: 100%;
+}
+
+.assignmentCoverageTask .reviewTeamLoad {
+  justify-self: end;
+  text-align: end;
+}
+
+.assignmentCoverageGrid {
+  grid-template-columns: minmax(20rem, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border-block-start: 1px solid var(--color-border);
+}
+
+.assignmentSubmissionSelect {
+  inline-size: 100%;
+  min-block-size: 2.75rem;
+  padding-inline: 0.75rem 2rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--organizer-control-radius);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+}
+
+.assignmentPreview {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0 var(--space-6) var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--organizer-control-radius);
+  background: var(--color-brand-soft);
+}
+
+.assignmentPreviewMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.assignmentPreviewMetrics > div {
+  display: grid;
+  gap: 0.2rem;
+  padding-inline: var(--space-4);
+  border-inline-start: 1px solid var(--color-border);
+}
+
+.assignmentPreviewMetrics > div:first-child {
+  padding-inline-start: 0;
+  border-inline-start: 0;
+}
+
+.assignmentPreviewMetrics strong {
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.assignmentPreviewMetrics span {
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.assignmentActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  border-block-start: 1px solid var(--color-border);
+  background: var(--color-brand-soft);
+}
+
+.assignmentEmpty {
+  min-block-size: 13rem;
+  border: 1px dashed var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+@media (max-width: 48rem) {
+  .workspace {
+    padding-block-end: calc(6.5rem + env(safe-area-inset-bottom));
+  }
+
+  #review-panel-assignments {
+    gap: var(--space-5);
+  }
+
+  .assignmentSectionIntro {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assignmentSectionIntro > a,
+  .assignmentSectionIntro > button {
+    align-self: flex-start;
+  }
+
+  .assignmentTaskHeader,
+  .assignmentContextGrid,
+  .assignmentCoverageGrid,
+  .assignmentActions {
+    padding-inline: var(--space-4);
+  }
+
+  .assignmentContextGrid,
+  .assignmentCoverageGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .assignmentCoverageTask .reviewTeamCard {
+    margin-inline: var(--space-4);
+  }
+
+  .assignmentCoverageTask .reviewTeamRow {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .assignmentCoverageTask .reviewTeamLoad {
+    justify-self: start;
+    text-align: start;
+  }
+
+  .assignmentPreview {
+    margin-inline: var(--space-4);
+  }
+
+  .assignmentActions {
+    justify-content: stretch;
+  }
+
+  .assignmentActions > button {
+    flex: 1 1 0;
+  }
+}
+
+@media (max-width: 34rem) {
+  .assignmentPreviewMetrics {
+    grid-template-columns: 1fr;
+  }
+
+  .assignmentPreviewMetrics > div,
+  .assignmentPreviewMetrics > div:first-child {
+    padding: var(--space-3) 0;
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--color-border);
+  }
+
+  .assignmentPreviewMetrics > div:first-child {
+    padding-block-start: 0;
+    border-block-start: 0;
+  }
+
+  .assignmentActions {
+    flex-direction: column;
+  }
+}

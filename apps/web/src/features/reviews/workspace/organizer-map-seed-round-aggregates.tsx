@@ -14,12 +14,5 @@ export function mapSeedRoundAggregates(
     abstract: "",
     ...(aggregate.participants === undefined ? {} : { participants: aggregate.participants }),
   }));
-  const mapped = mapRoundAggregates(submissionRows, seed.assignments, aggregates, roundId);
-  const referenceById = new Map(
-    seed.aggregates.map((aggregate) => [aggregate.id, aggregate.reference]),
-  );
-  return mapped.map((aggregate) => ({
-    ...aggregate,
-    reference: referenceById.get(aggregate.id) ?? aggregate.reference,
-  }));
+  return mapRoundAggregates(submissionRows, seed.assignments, aggregates, roundId);
 }
