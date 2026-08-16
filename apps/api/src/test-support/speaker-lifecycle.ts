@@ -46,6 +46,7 @@ const migrationNames = [
   "0024_cfp_file_assets.sql",
   "0025_canonical_d1_speakers.sql",
   "0026_cfp_url_field_kind.sql",
+  "0027_event_role_invitations.sql",
 ] as const;
 
 class FakeR2Bucket {

@@ -15,10 +15,10 @@ export type { SpeakerCommunications } from "./communications-types";
 export const SPEAKER_WELCOME_TEMPLATE_ID = "speaker-approved-welcome";
 const encoder = new TextEncoder();
 const welcome = {
-  name: "Approved speaker welcome",
-  subject: "Welcome to the speaker portal",
-  html: '<p>Hello {{first_name}},</p><p>Welcome. <a href="{{portal_url}}">Sign in to the speaker portal</a> to continue.</p>',
-  text: "Hello {{first_name}},\n\nWelcome. Sign in to the speaker portal to continue: {{portal_url}}",
+  name: "Speaker invitation",
+  subject: "Review your speaker invitation",
+  html: '<p>Hello {{first_name}},</p><p><a href="{{portal_url}}">Sign in to the work hub</a> to review and accept your speaker invitation.</p>',
+  text: "Hello {{first_name}},\n\nSign in to the work hub to review and accept your speaker invitation: {{portal_url}}",
 } as const;
 
 async function scopedWelcomeTemplateId(organizationId: string, eventId: string): Promise<string> {
@@ -113,7 +113,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
             ? {}
             : { templateVersion: input.templateVersion }),
           recipientIds: input.participantIds,
-          data: { ...(input.data ?? {}), portal_url: this.portalUrl() },
+          data: { ...(input.data ?? {}), portal_url: this.workHubUrl() },
         },
       ),
     );
@@ -149,7 +149,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       ...input,
       templateId: template.id,
       templateVersion: template.version,
-      data: { portal_url: this.portalUrl() },
+      data: { portal_url: this.workHubUrl() },
     });
     return preview.recipients.map((recipient) => ({
       participantId: recipient.participantId,
@@ -167,7 +167,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       ...input,
       templateId: template.id,
       templateVersion: template.version,
-      data: { portal_url: this.portalUrl() },
+      data: { portal_url: this.workHubUrl() },
     });
     const send = await this.send({ ...input, previewId: preview.id });
     const replayed = prior !== undefined;
@@ -198,8 +198,8 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     };
   }
 
-  private portalUrl(): string {
-    return `${new URL("/login", this.webOrigin).toString()}?next=/portal`;
+  private workHubUrl(): string {
+    return `${new URL("/login", this.webOrigin).toString()}?next=/work`;
   }
 
   private async ensureWelcomeTemplate(input: {

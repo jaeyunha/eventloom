@@ -1,5 +1,6 @@
 import type { AccountIdentity, AccountSession } from "../account/account-access";
 import type { PortalContext } from "../portal/types";
+import type { WorkEventInvitation } from "./work-event-invitation-model";
 
 export interface WorkOrganizerModel {
   readonly organizationCount: number;
@@ -28,6 +29,7 @@ export interface WorkHubModel {
   readonly organizer: WorkOrganizerModel | null;
   readonly reviewer: WorkReviewerModel | null;
   readonly participant: WorkParticipantModel | null;
+  readonly invitations?: readonly WorkEventInvitation[];
 }
 
 export interface WorkOrganizationSummary {
@@ -131,20 +133,19 @@ export function buildWorkHubModel({
         };
 
   const assignmentSummaries = reviewerAssignments.map(reviewerAssignment);
-  const reviewerAuthorized =
-    assignmentSummaries.length > 0 || session.memberships.some(({ role }) => role === "reviewer");
-  const reviewer = reviewerAuthorized
-    ? {
-        assignmentCount: assignmentSummaries.length,
-        inProgressCount: assignmentSummaries.filter(({ status }) => status === "in_progress")
-          .length,
-        submittedCount: assignmentSummaries.filter(({ status }) => status === "submitted").length,
-        eventNames: unique(assignmentSummaries.map(({ eventName }) => eventName)),
-        organizationNames: unique(
-          assignmentSummaries.map(({ organizationName }) => organizationName),
-        ),
-      }
-    : null;
+  const reviewer =
+    assignmentSummaries.length > 0
+      ? {
+          assignmentCount: assignmentSummaries.length,
+          inProgressCount: assignmentSummaries.filter(({ status }) => status === "in_progress")
+            .length,
+          submittedCount: assignmentSummaries.filter(({ status }) => status === "submitted").length,
+          eventNames: unique(assignmentSummaries.map(({ eventName }) => eventName)),
+          organizationNames: unique(
+            assignmentSummaries.map(({ organizationName }) => organizationName),
+          ),
+        }
+      : null;
 
   const proposalContexts = portalContexts.filter(({ submissionIds }) => submissionIds.length > 0);
   const taskContexts = portalContexts.filter(

@@ -604,6 +604,7 @@ function sessionFromPayload(payload: unknown): AuthSession | null {
     expiresAt,
     memberships: [],
     speakerGrants: [],
+    reviewerGrants: [],
   };
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PortalContext } from "../portal/types";
+import { parseWorkEventInvitations } from "./work-event-invitation-model";
 import { buildWorkHubModel } from "./work-hub-model";
 
 const participantContext = (overrides: Partial<PortalContext> = {}): PortalContext => ({
@@ -91,6 +92,90 @@ describe("buildWorkHubModel", () => {
     expect(model.reviewer?.organizationNames).toEqual([]);
     expect(model.reviewer?.eventNames).toEqual([]);
     expect(model.participant).toBeNull();
+  });
+
+  it("preserves pending reviewer and accepted speaker invitations with event-scoped destinations", () => {
+    const invitations = parseWorkEventInvitations({
+      data: [
+        {
+          invitationId: "invite-review",
+          role: "reviewer",
+          status: "pending",
+          version: 3,
+          organizationId: "org-review",
+          organizationName: "Open Research Network",
+          eventId: "event/review",
+          eventName: "Research Exchange 2027",
+          workspaceHref: null,
+        },
+        {
+          invitationId: "invite-speaker",
+          role: "speaker",
+          status: "accepted",
+          version: 5,
+          organizationId: "org-speaker",
+          organizationName: "Civic Design Guild",
+          eventId: "event/speaker",
+          eventName: "Human-Centered Summit",
+          workspaceHref: "/portal?event=event%2Fspeaker",
+        },
+      ],
+    });
+
+    expect(invitations).toEqual([
+      {
+        id: "invite-review",
+        role: "reviewer",
+        status: "pending",
+        version: 3,
+        organizationName: "Open Research Network",
+        eventName: "Research Exchange 2027",
+        workspaceHref: null,
+      },
+      {
+        id: "invite-speaker",
+        role: "speaker",
+        status: "accepted",
+        version: 5,
+        organizationName: "Civic Design Guild",
+        eventName: "Human-Centered Summit",
+        workspaceHref: "/portal?event=event%2Fspeaker",
+      },
+    ]);
+  });
+
+  it("keeps pending reviewer invitations separate from membership-gated workspace access", () => {
+    const base = buildWorkHubModel({
+      session: {
+        ...session,
+        memberships: [{ organizationId: "org-review", role: "reviewer" as const }],
+      },
+      organizations: [],
+      reviewerAssignments: [],
+      portalContexts: [],
+      preferredOrganizationId: null,
+    });
+    const model = {
+      ...base,
+      invitations: parseWorkEventInvitations({
+        data: [
+          {
+            invitationId: "invite-only",
+            role: "reviewer",
+            status: "pending",
+            version: 1,
+            organizationName: "Civic Design Guild",
+            eventName: "Design Systems Summit",
+            workspaceHref: null,
+          },
+        ],
+      }),
+    };
+
+    expect(model.organizer).toBeNull();
+    expect(model.reviewer).toBeNull();
+    expect(model.participant).toBeNull();
+    expect(model.invitations).toHaveLength(1);
   });
 
   it("does not add a continue destination without supported saved state", () => {

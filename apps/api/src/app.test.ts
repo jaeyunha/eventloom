@@ -76,6 +76,7 @@ describe("API foundation", () => {
       email: "organizer@example.test",
       memberships: [{ organizationId: "org-a", role: "admin" }],
       speakerGrants: [],
+      reviewerGrants: [],
     };
     const app = createApp({
       authenticator: { authenticate: async () => principal },
@@ -177,6 +178,7 @@ describe("Airtable integration origin protection", () => {
       email: "organizer@example.test",
       memberships: [{ organizationId: "org-a", role: "admin" }],
       speakerGrants: [],
+      reviewerGrants: [],
     };
     const integration: AirtableIntegrationRouteDependencies = {
       webOrigin: environment.WEB_ORIGIN,
@@ -236,6 +238,7 @@ describe("authentication session access", () => {
           speakerProfileId: "speaker-1",
         },
       ],
+      reviewerGrants: [],
     };
     const app = createApp({
       auth: {
@@ -283,6 +286,7 @@ describe("canonical organizer workspaces", () => {
       email: "organizer@example.test",
       memberships: [{ organizationId, role: "admin" as const }],
       speakerGrants: [],
+      reviewerGrants: [],
     };
     const organizerHeaders = { authorization: "Bearer organizer" };
     const authenticator = {
@@ -451,6 +455,7 @@ describe("feature-router error normalization", () => {
       email: "organizer@example.test",
       memberships: [{ organizationId, role: "admin" as const }],
       speakerGrants: [],
+      reviewerGrants: [],
     };
     const actorFor = async (_principal: AuthPrincipal, tenant: string, scopedEvent: string) => ({
       tenantId: tenant,

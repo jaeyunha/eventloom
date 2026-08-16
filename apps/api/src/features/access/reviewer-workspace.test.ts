@@ -22,6 +22,10 @@ const user: UserPrincipal = {
     { organizationId: "org-a", role: "reviewer" },
     { organizationId: "org-b", role: "reviewer" },
   ],
+  reviewerGrants: [
+    { organizationId: "org-a", eventId: "shared-event" },
+    { organizationId: "org-b", eventId: "shared-event" },
+  ],
   speakerGrants: [],
 };
 
@@ -132,6 +136,117 @@ function appFor(principal: AuthPrincipal | null, access = dependencies()) {
 }
 
 describe("GET /api/account/reviewer-workspace", () => {
+  it("does not expose assignments for a pending reviewer event invitation", async () => {
+    const listReviewerWorkspace = vi.fn();
+    const pendingReviewerInvitee: UserPrincipal = {
+      ...user,
+      reviewerGrants: [],
+    };
+
+    const response = await appFor(
+      pendingReviewerInvitee,
+      dependencies({ reviewerWorkspace: { listReviewerWorkspace } }),
+    ).request("/api/account/reviewer-workspace", {}, environment);
+
+    expect(response.status).toBe(200);
+    expect(listReviewerWorkspace).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      data: { organizations: [], warnings: [] },
+    });
+  });
+
+  it("exposes preserved assignments only for the accepted reviewer event invitation", async () => {
+    const eventA = "event-a";
+    const eventB = "event-b";
+    const acceptedEventAReviewer: UserPrincipal = {
+      ...user,
+      memberships: [{ organizationId: "org-a", role: "reviewer" }],
+      reviewerGrants: [{ organizationId: "org-a", eventId: eventA }],
+    };
+    const listReviewerWorkspace = vi.fn(async (actor: EvaluationActor) => ({
+      assignments: [assignment("org-a", eventA), assignment("org-a", eventB)].filter((entry) =>
+        actor.grants.some(
+          (grant) => grant.role === "reviewer" && grant.eventId === entry.assignment.eventId,
+        ),
+      ),
+    }));
+
+    const response = await appFor(
+      acceptedEventAReviewer,
+      dependencies({
+        listEvents: async (organizationId) =>
+          organizationId === "org-a"
+            ? [
+                { organizationId, eventId: eventA, name: "Event A" },
+                { organizationId, eventId: eventB, name: "Event B" },
+              ]
+            : [],
+        listEvaluationPlans: async (organizationId) => [
+          {
+            organizationId,
+            eventId: eventA,
+            planId: "shared-plan",
+            closesAt: null,
+          },
+          {
+            organizationId,
+            eventId: eventB,
+            planId: "shared-plan",
+            closesAt: null,
+          },
+        ],
+        reviewerWorkspace: { listReviewerWorkspace },
+      }),
+    ).request("/api/account/reviewer-workspace", {}, environment);
+    const body = (await response.json()) as {
+      data: {
+        organizations: Array<{
+          organization: { id: string };
+          assignments: Array<{ assignment: { eventId: string } }>;
+        }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(listReviewerWorkspace).toHaveBeenCalledWith(
+      {
+        tenantId: "org-a",
+        userId: user.userId,
+        kind: "human",
+        grants: [{ eventId: eventA, role: "reviewer" }],
+      },
+      undefined,
+    );
+    expect(
+      body.data.organizations.map(({ organization, assignments }) => ({
+        organizationId: organization.id,
+        eventIds: assignments.map((entry) => entry.assignment.eventId),
+      })),
+    ).toEqual([{ organizationId: "org-a", eventIds: [eventA] }]);
+  });
+
+  it("denies the same organization's unaccepted reviewer event", async () => {
+    const listReviewerWorkspace = vi.fn();
+    const acceptedEventAReviewer: UserPrincipal = {
+      ...user,
+      memberships: [{ organizationId: "org-a", role: "reviewer" }],
+      reviewerGrants: [{ organizationId: "org-a", eventId: "event-a" }],
+    };
+
+    const response = await appFor(
+      acceptedEventAReviewer,
+      dependencies({ reviewerWorkspace: { listReviewerWorkspace } }),
+    ).request(
+      "/api/account/reviewer-workspace?organizationId=org-a&eventId=event-b",
+      {},
+      environment,
+    );
+
+    expect(response.status).toBe(403);
+    expect(listReviewerWorkspace).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "ACCESS_DENIED" } });
+  });
+
   it("aggregates one actor per organization while preserving duplicate identifiers and deadlines", async () => {
     const calls: Array<{ actor: EvaluationActor; eventId?: string }> = [];
     const access = dependencies({

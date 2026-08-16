@@ -15,12 +15,22 @@ export interface OrganizationMember {
   readonly updatedAt: string;
 }
 
-export function activeVerifiedReviewers(
+/** Reviewer members that organizers can prepare in a round pool. */
+export function reviewerPoolCandidates(
   members: readonly OrganizationMember[],
 ): readonly OrganizationMember[] {
   return members.filter(
-    (member) => member.role === "reviewer" && member.status === "active" && member.emailVerified,
+    (member) =>
+      member.role === "reviewer" &&
+      ((member.status === "active" && member.emailVerified) || member.status === "pending"),
   );
+}
+
+/** @deprecated Use reviewerPoolCandidates for organizer reviewer selection. */
+export function activeVerifiedReviewers(
+  members: readonly OrganizationMember[],
+): readonly OrganizationMember[] {
+  return reviewerPoolCandidates(members);
 }
 export type MemberRecord = OrganizationMember;
 export type Member = OrganizationMember;
