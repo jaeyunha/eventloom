@@ -47,6 +47,7 @@ export function RemixSourcePicker({
   loading,
   error,
 }: RemixSourcePickerProps) {
+  const selectedSourceIdSet = new Set(selectedSourceIds);
   return (
     <section className={styles.composerSection} aria-labelledby="remix-content-heading">
       <header className={styles.sectionHeading}>
@@ -142,7 +143,7 @@ export function RemixSourcePicker({
                   <FieldLabel className={styles.sourceItem} htmlFor={`remix-source-${record.id}`}>
                     <Checkbox
                       id={`remix-source-${record.id}`}
-                      checked={selectedSourceIds.includes(record.id)}
+                      checked={selectedSourceIdSet.has(record.id)}
                       onCheckedChange={(checked) => {
                         if (checked === true || checked === false) onToggleSource(record.id);
                       }}

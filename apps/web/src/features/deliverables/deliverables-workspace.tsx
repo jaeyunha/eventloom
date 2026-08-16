@@ -815,6 +815,7 @@ function TaskComposer({
   const assignmentCount = assigneeIds.length;
   const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
   const assigneeIdSet = useMemo(() => new Set(assigneeIds), [assigneeIds]);
+  const allowedMimeTypeSet = useMemo(() => new Set(allowedMimeTypes), [allowedMimeTypes]);
 
   function toggleAssignee(id: string): void {
     setAssigneeIds((current) =>
@@ -835,7 +836,7 @@ function TaskComposer({
   }
 
   function fileFormatIsSelected(format: RequestFileFormat): boolean {
-    return format.mimeTypes.every((mimeType) => allowedMimeTypes.includes(mimeType));
+    return format.mimeTypes.every((mimeType) => allowedMimeTypeSet.has(mimeType));
   }
 
   function toggleFileFormat(format: RequestFileFormat, checked: boolean): void {
@@ -3323,86 +3324,82 @@ export function DeliverablesWorkspace({
         !signal?.aborted &&
         loadGenerationRef.current === generation &&
         isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
-      if (initialData !== undefined && !fresh) {
-        if (isCurrent()) setLoading(false);
-        return;
-      }
-      if (!isCurrent()) return;
-      setLoading(true);
-      setError(null);
-      setLoadingSessionHistories(false);
-      if (!fresh && cachedCoreData !== undefined) {
-        try {
-          const authorizedSnapshot = await authorizeContentCollectionNavigationSnapshot(
-            api,
-            cachedCoreData,
-            signal,
-          );
-          if (!isCurrent()) return;
-          if (authorizedSnapshot === undefined) {
-            invalidateDeliverablesCoreCache(scope);
-          } else {
-            setSessions(authorizedSnapshot.sessions);
-            setTasks(authorizedSnapshot.tasks);
-            setAssets(authorizedSnapshot.assets);
-            setProfiles(authorizedSnapshot.profiles);
-            setSpeakerContentHistory(
-              speakerContentHistoryStatesForProfiles(
-                authorizedSnapshot.profiles,
-                authorizedSnapshot.speakerContentHistory,
-              ),
+      try {
+        if (initialData !== undefined && !fresh) {
+          return;
+        }
+        if (!isCurrent()) return;
+        setLoading(true);
+        setError(null);
+        setLoadingSessionHistories(false);
+        if (!fresh && cachedCoreData !== undefined) {
+          try {
+            const authorizedSnapshot = await authorizeContentCollectionNavigationSnapshot(
+              api,
+              cachedCoreData,
+              signal,
             );
-            setMatrix(authorizedSnapshot.matrix);
-            setCapabilityMessages([]);
-            setLoading(false);
+            if (!isCurrent()) return;
+            if (authorizedSnapshot === undefined) {
+              invalidateDeliverablesCoreCache(scope);
+            } else {
+              setSessions(authorizedSnapshot.sessions);
+              setTasks(authorizedSnapshot.tasks);
+              setAssets(authorizedSnapshot.assets);
+              setProfiles(authorizedSnapshot.profiles);
+              setSpeakerContentHistory(
+                speakerContentHistoryStatesForProfiles(
+                  authorizedSnapshot.profiles,
+                  authorizedSnapshot.speakerContentHistory,
+                ),
+              );
+              setMatrix(authorizedSnapshot.matrix);
+              setCapabilityMessages([]);
+              return;
+            }
+          } catch (reason) {
+            invalidateDeliverablesCoreCache(scope);
+            if (isCurrent()) {
+              setError(messageFromError(reason));
+            }
             return;
           }
-        } catch (reason) {
-          invalidateDeliverablesCoreCache(scope);
-          if (isCurrent()) {
-            setError(messageFromError(reason));
-            setLoading(false);
-          }
-          return;
         }
-      }
-      if (navigationDataCache !== null && canLoadDeliverablesCoreSnapshot(api, mode)) {
-        try {
-          const snapshot = await navigationDataCache.read<DeliverablesSnapshot>({
-            key: coreCacheKey,
-            tags: coreCacheTags,
-            fresh: true,
-            load: () => loadDeliverablesCoreSnapshot(api, mode),
-          });
-          if (!isCurrent()) return;
-          setSessions(snapshot.sessions);
-          setTasks(snapshot.tasks);
-          setAssets(snapshot.assets);
-          setProfiles(snapshot.profiles);
-          setMatrix(snapshot.matrix);
-          if (mode === "deliverables") {
-            setSpeakerContentHistory(
-              speakerContentHistoryStatesForProfiles(
-                snapshot.profiles,
-                Object.fromEntries(
-                  snapshot.profiles.map((profile) => [
-                    profile.participantId,
-                    speakerContentHistoryLoading(),
-                  ]),
+        if (navigationDataCache !== null && canLoadDeliverablesCoreSnapshot(api, mode)) {
+          try {
+            const snapshot = await navigationDataCache.read<DeliverablesSnapshot>({
+              key: coreCacheKey,
+              tags: coreCacheTags,
+              fresh: true,
+              load: () => loadDeliverablesCoreSnapshot(api, mode),
+            });
+            if (!isCurrent()) return;
+            setSessions(snapshot.sessions);
+            setTasks(snapshot.tasks);
+            setAssets(snapshot.assets);
+            setProfiles(snapshot.profiles);
+            setMatrix(snapshot.matrix);
+            if (mode === "deliverables") {
+              setSpeakerContentHistory(
+                speakerContentHistoryStatesForProfiles(
+                  snapshot.profiles,
+                  Object.fromEntries(
+                    snapshot.profiles.map((profile) => [
+                      profile.participantId,
+                      speakerContentHistoryLoading(),
+                    ]),
+                  ),
                 ),
-              ),
-            );
-          } else {
-            setSpeakerContentHistory({});
+              );
+            } else {
+              setSpeakerContentHistory({});
+            }
+            setCapabilityMessages([...deliverablesCapabilityMessages(api, mode)]);
+            return;
+          } catch {
+            // The uncached path preserves partial projections and capability errors.
           }
-          setCapabilityMessages([...deliverablesCapabilityMessages(api, mode)]);
-          setLoading(false);
-          return;
-        } catch {
-          // The uncached path preserves partial projections and capability errors.
         }
-      }
-      try {
         if (initialData !== undefined) return;
         if (!isCurrent()) return;
         setLoading(true);

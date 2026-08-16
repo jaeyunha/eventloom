@@ -116,9 +116,11 @@ export function recordMatches(
   if (record.kind === "speaker") return tags.length === 0 && tracks.length === 0;
   const normalizedTags = sessionTags.map((tag) => tag.toLocaleLowerCase());
   const normalizedTracks = sessionTracks.map((track) => track.toLocaleLowerCase());
+  const normalizedTagSet = new Set(normalizedTags);
+  const normalizedTrackSet = new Set(normalizedTracks);
   return (
-    tags.every((tag) => normalizedTags.includes(tag)) &&
-    tracks.every((track) => normalizedTracks.includes(track))
+    tags.every((tag) => normalizedTagSet.has(tag)) &&
+    tracks.every((track) => normalizedTrackSet.has(track))
   );
 }
 
