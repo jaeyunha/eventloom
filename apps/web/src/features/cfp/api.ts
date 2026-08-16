@@ -335,11 +335,16 @@ const formSchema = z
 export type CfpEventConfiguration = z.infer<typeof eventSchema>;
 export type CfpFormConfiguration = z.infer<typeof formSchema>;
 
+export interface CfpOrganizationMembership {
+  organizationId: string;
+  role: "owner" | "admin" | "reviewer";
+}
 export interface CfpAuthenticatedSession {
   email: string;
   name: string;
   firstName: string;
   lastName: string;
+  memberships: readonly CfpOrganizationMembership[];
 }
 export type CfpAccountAuthentication =
   | {
@@ -687,7 +692,29 @@ function authenticatedSessionFrom(body: unknown): CfpAuthenticatedSession | null
     name: name || [firstName, lastName].filter(Boolean).join(" ") || email,
     firstName,
     lastName,
+    memberships: authenticatedMembershipsFrom(payload, user),
   };
+}
+
+function authenticatedMembershipsFrom(
+  payload: Record<string, unknown>,
+  user: Record<string, unknown>,
+): readonly CfpOrganizationMembership[] {
+  const source = Array.isArray(payload.memberships)
+    ? payload.memberships
+    : Array.isArray(user.memberships)
+      ? user.memberships
+      : [];
+  return source.flatMap((value) => {
+    if (!isRecord(value)) return [];
+    const rawOrganizationId = value.organizationId ?? value.organization_id;
+    const organizationId = typeof rawOrganizationId === "string" ? rawOrganizationId.trim() : "";
+    const role = typeof value.role === "string" ? value.role.trim().toLowerCase() : "";
+    if (organizationId === "" || (role !== "owner" && role !== "admin" && role !== "reviewer")) {
+      return [];
+    }
+    return [{ organizationId, role }];
+  });
 }
 
 async function authSessionRequest(
@@ -884,7 +911,27 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
         });
         if (signIn.response.ok) {
           const session = authenticatedSessionFrom(signIn.body);
-          if (session !== null) return { status: "authenticated", session };
+          if (session !== null) {
+            const refreshed = await authSessionRequest(fetcher, authBase);
+            if (!refreshed.response.ok) {
+              throw authError(
+                refreshed.response,
+                refreshed.body,
+                "AUTH_SESSION_LOOKUP_FAILED",
+                "We could not check your sign-in session.",
+              );
+            }
+            const authoritativeSession = authenticatedSessionFrom(refreshed.body);
+            if (authoritativeSession !== null) {
+              return { status: "authenticated", session: authoritativeSession };
+            }
+            throw authError(
+              refreshed.response,
+              refreshed.body,
+              "AUTH_SESSION_NOT_CREATED",
+              "Your sign-in session could not be established.",
+            );
+          }
           if (hasUnverifiedAuthUser(signIn.body)) return { status: "verification_required" };
           throw authError(
             signIn.response,

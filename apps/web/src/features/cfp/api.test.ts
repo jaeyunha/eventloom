@@ -20,6 +20,10 @@ describe("CFP authenticated session", () => {
           name: "Priya Raman",
           emailVerified: true,
         },
+        memberships: [
+          { organizationId: "org-1", role: "admin" },
+          { organizationId: "org-2", role: "reviewer" },
+        ],
       });
     }) as typeof fetch);
 
@@ -28,6 +32,10 @@ describe("CFP authenticated session", () => {
       name: "Priya Raman",
       firstName: "Priya",
       lastName: "Raman",
+      memberships: [
+        { organizationId: "org-1", role: "admin" },
+        { organizationId: "org-2", role: "reviewer" },
+      ],
     });
     expect(requestUrl).toBe("https://web.example.com/api/auth/get-session");
     expect(requestInit?.method).toBe("GET");
@@ -98,6 +106,7 @@ describe("CFP authenticated session", () => {
         name: "Ada Speaker",
         firstName: "Ada",
         lastName: "Speaker",
+        memberships: [],
       },
     });
     expect(requests.map((request) => request.url)).toEqual([
@@ -111,6 +120,55 @@ describe("CFP authenticated session", () => {
       name: "Ada Speaker",
       callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
     });
+  });
+
+  it("refreshes authoritative memberships after credential sign-in", async () => {
+    const requests: string[] = [];
+    const api = createCfpApi("https://web.example.com", (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/sign-in/email")) {
+        return Response.json({
+          token: "signin-token",
+          user: {
+            email: "Organizer@Example.com",
+            name: "Olivia Organizer",
+            emailVerified: true,
+          },
+        });
+      }
+      return Response.json({
+        session: { id: "session-1" },
+        user: {
+          email: "Organizer@Example.com",
+          name: "Olivia Organizer",
+          emailVerified: true,
+        },
+        memberships: [{ organizationId: "org-1", role: "owner" }],
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "Organizer@Example.com",
+        mode: "sign_in",
+        password: "StrongPass1!",
+        name: "Olivia Organizer",
+      }),
+    ).resolves.toEqual({
+      status: "authenticated",
+      session: {
+        email: "organizer@example.com",
+        name: "Olivia Organizer",
+        firstName: "Olivia",
+        lastName: "Organizer",
+        memberships: [{ organizationId: "org-1", role: "owner" }],
+      },
+    });
+    expect(requests).toEqual([
+      "https://web.example.com/api/auth/sign-in/email",
+      "https://web.example.com/api/auth/get-session",
+    ]);
   });
 
   it("does not fall back to account creation when sign-in fails", async () => {

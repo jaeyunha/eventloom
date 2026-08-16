@@ -4,6 +4,43 @@ import { installCfpApi } from "./fixtures/cfp-api";
 test.use({ authRole: "submitter" });
 const EVALUATOR_CFP_PATH = "/cfp/organizations/evaluator-org/events/evaluator-2026";
 
+test("participant-only accounts enter CFP without organizer context controls", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "participant-context",
+    initiallyAuthenticated: true,
+    memberships: [],
+  });
+
+  await page.goto("/cfp/organizations/evaluator-org/events/participant-context/account");
+
+  await expect(page.locator("[data-cfp-applicant-context-boundary]")).toHaveCount(0);
+  await expect(page.locator('a[href="/admin"]')).toHaveCount(0);
+  await expect(page.locator('button[type="submit"]')).toBeEnabled();
+});
+
+test("current-organization organizers confirm the CFP applicant context", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "organizer-context",
+    initiallyAuthenticated: true,
+    memberships: [{ organizationId: "evaluator-org", role: "owner" }],
+  });
+
+  await page.goto("/cfp/organizations/evaluator-org/events/organizer-context/account");
+
+  const boundary = page.locator("[data-cfp-applicant-context-boundary]");
+  await expect(boundary).toBeVisible();
+  await expect(page.locator('a[href="/admin"]')).toBeVisible();
+  await expect(page.locator('button[type="submit"]')).toBeDisabled();
+  await boundary.locator("[data-cfp-applicant-context-confirm]").click();
+  await expect(page.locator('button[type="submit"]')).toBeEnabled();
+});
+
 async function selectSearchable(
   page: import("@playwright/test").Page,
   label: string,
