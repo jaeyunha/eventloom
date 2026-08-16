@@ -25,7 +25,6 @@ import {
   closeCfpNowConfiguration,
   configurationFromServer,
   createEmptyCfpConfiguration,
-  dateFromInstant,
   editorFieldType,
   fieldKeyForRuleField,
   fieldKeyFromLabel,
@@ -121,6 +120,65 @@ function PreviewField({
   );
 }
 
+export function CfpEventIdentityFields({
+  eventName,
+  slug,
+  timezone,
+  organizationId,
+}: {
+  eventName: string;
+  slug: string;
+  timezone: string;
+  organizationId: string;
+}) {
+  return (
+    <>
+      <div className={styles.fieldGroup}>
+        <label htmlFor="event-name">Event name</label>
+        <input id="event-name" name="eventName" required readOnly value={eventName} />
+      </div>
+      <div className={styles.fieldGroup}>
+        <label htmlFor="event-slug">Public URL slug</label>
+        <input
+          id="event-slug"
+          name="slug"
+          required
+          readOnly
+          pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+          title="Use lowercase letters, numbers, and hyphens."
+          value={slug}
+        />
+        <p className={styles.fieldHint}>
+          {slug
+            ? `/cfp/organizations/${organizationId}/events/${slug}`
+            : "Public URL unavailable until the authoritative event slug loads."}
+        </p>
+      </div>
+      <div className={styles.fieldGroup}>
+        <label htmlFor="event-timezone">Event timezone</label>
+        <select
+          id="event-timezone"
+          name="timezone"
+          required
+          value={timezone}
+          disabled
+          aria-describedby="event-timezone-help"
+        >
+          {TIMEZONE_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <p id="event-timezone-help">
+          Event identity is authoritative. <a href="/admin/events">Change it in Event details.</a>
+        </p>
+        <p className={styles.fieldHint}>Dates shown to applicants use this timezone.</p>
+      </div>
+    </>
+  );
+}
+
 function RuleTree({ rule }: { rule: CfpRule }) {
   if (rule.type === "condition") {
     return (
@@ -144,6 +202,46 @@ function RuleTree({ rule }: { rule: CfpRule }) {
   );
 }
 
+export function CfpPastCloseConfirmation({
+  closesAt,
+  persistedClosesAt,
+  timezone,
+  now,
+  acknowledged,
+  onAcknowledgedChange,
+}: {
+  closesAt: string;
+  persistedClosesAt?: string | undefined;
+  timezone: string;
+  now: Date;
+  acknowledged: boolean;
+  onAcknowledgedChange: (acknowledged: boolean) => void;
+}) {
+  if (!isCfpCloseDatePast(closesAt, now, timezone, persistedClosesAt)) return null;
+
+  return (
+    <>
+      <p className={styles.fieldHint} role="note">
+        Server-authoritative status: Closed. This CFP is closed to new submissions. Public visitors
+        see the closed portal and speakers cannot edit until an organizer records an audited reopen.
+      </p>
+      <label className={styles.toggleRow}>
+        <input
+          id="confirm-past-close"
+          name="confirmPastClose"
+          type="checkbox"
+          checked={acknowledged}
+          onChange={(event) => onAcknowledgedChange(event.target.checked)}
+        />
+        <span>
+          <strong>Confirm past close date</strong>
+          <small>I understand this save keeps the CFP closed.</small>
+        </span>
+      </label>
+    </>
+  );
+}
+
 export function CfpEditor({
   eventId: fallbackEventId,
   organizationId,
@@ -163,6 +261,7 @@ export function CfpEditor({
   const [preparedPublishVersion, setPreparedPublishVersion] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [historicalCfpDates, setHistoricalCfpDates] = useState<readonly string[]>([]);
   const [pastCloseAcknowledged, setPastCloseAcknowledged] = useState(false);
   const [previewResponses, setPreviewResponses] = useState<Record<string, string>>({});
   const [previewSelections, setPreviewSelections] = useState({
@@ -181,12 +280,23 @@ export function CfpEditor({
   const resolvedFormId = requestedFormId ?? configuration.id;
   const cfpNow = new Date();
   const minimumCfpDate = cfpMinimumDate(cfpNow, configuration.timezone);
+  const maximumCfpDate =
+    configuration.eventStartsAt === undefined
+      ? undefined
+      : cfpMinimumDate(new Date(configuration.eventStartsAt), configuration.timezone);
   const dateValidationError = validateCfpDateRange(
     configuration.opensAt,
     configuration.closesAt,
     configuration.timezone,
+    configuration.persistedOpensAt,
+    configuration.persistedClosesAt,
   );
-  const closeDatePast = isCfpCloseDatePast(configuration.closesAt, cfpNow, configuration.timezone);
+  const closeDatePast = isCfpCloseDatePast(
+    configuration.closesAt,
+    cfpNow,
+    configuration.timezone,
+    configuration.persistedClosesAt,
+  );
   const effectiveClosed = configuration.status === "closed" || closeDatePast;
 
   useEffect(() => {
@@ -205,6 +315,15 @@ export function CfpEditor({
     })
       .then(({ event: eventConfiguration, form: formConfiguration }) => {
         if (!active) return;
+        const loadedOpensAt = cfpMinimumDate(
+          new Date(eventConfiguration.opensAt),
+          eventConfiguration.timezone,
+        );
+        const loadedClosesAt = cfpMinimumDate(
+          new Date(eventConfiguration.closesAt),
+          eventConfiguration.timezone,
+        );
+        setHistoricalCfpDates([loadedOpensAt, loadedClosesAt]);
         if (formConfiguration !== undefined) {
           setConfiguration((current) =>
             configurationFromServer(current, eventConfiguration, formConfiguration),
@@ -221,8 +340,13 @@ export function CfpEditor({
               eventName: eventConfiguration.name,
               slug: eventConfiguration.slug,
               timezone: eventConfiguration.timezone,
-              opensAt: dateFromInstant(eventConfiguration.opensAt),
-              closesAt: dateFromInstant(eventConfiguration.closesAt),
+              ...(eventConfiguration.eventStartsAt === undefined
+                ? {}
+                : { eventStartsAt: eventConfiguration.eventStartsAt }),
+              opensAt: loadedOpensAt,
+              closesAt: loadedClosesAt,
+              persistedOpensAt: eventConfiguration.opensAt,
+              persistedClosesAt: eventConfiguration.closesAt,
             };
           });
         }
@@ -377,6 +501,10 @@ export function CfpEditor({
         formId: resolvedFormId,
       });
       setConfiguration((current) => configurationFromServer(current, saved.event, saved.form));
+      setHistoricalCfpDates([
+        cfpMinimumDate(new Date(saved.event.opensAt), saved.event.timezone),
+        cfpMinimumDate(new Date(saved.event.closesAt), saved.event.timezone),
+      ]);
       setSaveState("saved");
       return saved;
     } catch (error) {
@@ -442,6 +570,10 @@ export function CfpEditor({
         formId: resolvedFormId,
       });
       setConfiguration((current) => configurationFromServer(current, savedEvent, savedForm));
+      setHistoricalCfpDates([
+        cfpMinimumDate(new Date(savedEvent.opensAt), savedEvent.timezone),
+        cfpMinimumDate(new Date(savedEvent.closesAt), savedEvent.timezone),
+      ]);
       setSaveState("saved");
       setSaveError(null);
     } catch (error) {
@@ -733,50 +865,12 @@ export function CfpEditor({
             </p>
 
             <div className={styles.formGrid}>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="event-name">Event name</label>
-                <input
-                  id="event-name"
-                  name="eventName"
-                  required
-                  value={configuration.eventName}
-                  onChange={(event) => updateConfiguration("eventName", event.target.value)}
-                />
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="event-slug">Public URL slug</label>
-                <input
-                  id="event-slug"
-                  name="slug"
-                  required
-                  pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-                  title="Use lowercase letters, numbers, and hyphens."
-                  value={configuration.slug}
-                  onChange={(event) => updateConfiguration("slug", event.target.value)}
-                />
-                <p className={styles.fieldHint}>
-                  {publicRoute
-                    ? `/cfp/organizations/${resolvedOrganizationId}/events/${configuration.slug}`
-                    : "Public URL unavailable until the authoritative event slug loads."}
-                </p>
-              </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="event-timezone">Event timezone</label>
-                <select
-                  id="event-timezone"
-                  name="timezone"
-                  required
-                  value={configuration.timezone}
-                  onChange={(event) => updateConfiguration("timezone", event.target.value)}
-                >
-                  {TIMEZONE_OPTIONS.map((timezone) => (
-                    <option key={timezone} value={timezone}>
-                      {timezone}
-                    </option>
-                  ))}
-                </select>
-                <p className={styles.fieldHint}>Dates shown to applicants use this timezone.</p>
-              </div>
+              <CfpEventIdentityFields
+                eventName={configuration.eventName}
+                slug={configuration.slug}
+                timezone={configuration.timezone}
+                organizationId={resolvedOrganizationId}
+              />
               <div className={styles.dateRangeGroup}>
                 <EventDatePicker
                   mode="range"
@@ -784,7 +878,9 @@ export function CfpEditor({
                   endsAt={configuration.closesAt}
                   scheduleDates={[]}
                   minimumDateTime={minimumCfpDate ? `${minimumCfpDate}T00:00` : undefined}
+                  maximumDateTime={maximumCfpDate ? `${maximumCfpDate}T23:59` : undefined}
                   minimumEndDate={configuration.opensAt}
+                  unchangedValues={historicalCfpDates}
                   dateOnly
                   showModeToggle={false}
                   showTimeControls={false}
@@ -807,32 +903,18 @@ export function CfpEditor({
                     {dateValidationError}
                   </p>
                 ) : null}
-                {closeDatePast ? (
-                  <>
-                    <p className={styles.fieldHint} role="note">
-                      Server-authoritative status: Closed. This CFP is closed to new submissions.
-                      Public visitors see the closed portal and speakers cannot edit until an
-                      organizer records an audited reopen.
-                    </p>
-                    <label className={styles.toggleRow}>
-                      <input
-                        id="confirm-past-close"
-                        name="confirmPastClose"
-                        type="checkbox"
-                        checked={pastCloseAcknowledged}
-                        onChange={(event) => {
-                          setPastCloseAcknowledged(event.target.checked);
-                          setSaveError(null);
-                          setSaveState("idle");
-                        }}
-                      />
-                      <span>
-                        <strong>Confirm past close date</strong>
-                        <small>I understand this save keeps the CFP closed.</small>
-                      </span>
-                    </label>
-                  </>
-                ) : null}
+                <CfpPastCloseConfirmation
+                  closesAt={configuration.closesAt}
+                  persistedClosesAt={configuration.persistedClosesAt}
+                  timezone={configuration.timezone}
+                  now={cfpNow}
+                  acknowledged={pastCloseAcknowledged}
+                  onAcknowledgedChange={(acknowledged) => {
+                    setPastCloseAcknowledged(acknowledged);
+                    setSaveError(null);
+                    setSaveState("idle");
+                  }}
+                />
                 {effectiveClosed && !closeDatePast ? (
                   <p className={styles.fieldHint} role="note">
                     This CFP is marked closed. The public portal is closed and speaker edits remain

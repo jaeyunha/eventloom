@@ -14,13 +14,10 @@ import type {
   AgendaTrack,
 } from "./types";
 
-export type AgendaCatalogSyncValue<T> = T | PromiseLike<T>;
-
 export interface AgendaCatalogSyncInput {
   readonly tenantId: string;
   readonly eventId: string;
   readonly actorId?: string;
-  readonly timeZone?: string;
   readonly minimumTravelMinutes?: number;
 }
 
@@ -35,10 +32,6 @@ export interface AgendaCatalogEngine {
   updateCatalog(input: UpdateAgendaCatalogInput): Promise<AgendaDraft>;
 }
 
-export type AgendaEventTimeZone =
-  | string
-  | ((eventId: string) => AgendaCatalogSyncValue<string>)
-  | ((tenantId: string, eventId: string) => AgendaCatalogSyncValue<string>);
 export type AgendaActorId = string | ((input: AgendaCatalogSyncInput) => string);
 
 export interface AgendaCatalogSynchronizerOptions {
@@ -46,10 +39,6 @@ export interface AgendaCatalogSynchronizerOptions {
   readonly agendaEngine?: AgendaCatalogEngine;
   readonly catalogReader?: AgendaCatalogReader;
   readonly sessionService?: AgendaCatalogReader;
-  readonly eventTimeZone?: AgendaEventTimeZone;
-  readonly timeZone?: AgendaEventTimeZone;
-  readonly timeZoneForEvent?: AgendaEventTimeZone;
-  readonly getEventTimeZone?: AgendaEventTimeZone;
   readonly minimumTravelMinutes?: number;
   readonly actorId?: AgendaActorId;
   readonly maxRetries?: number;
@@ -83,7 +72,6 @@ const DEFAULT_MAX_RETRIES = 3;
 export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContract {
   readonly #engine: AgendaCatalogEngine;
   readonly #catalogReader: AgendaCatalogReader;
-  readonly #eventTimeZone: AgendaEventTimeZone | undefined;
   readonly #minimumTravelMinutes: number;
   readonly #actorId: AgendaActorId | undefined;
   readonly #maxRetries: number;
@@ -135,11 +123,6 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     }
     this.#engine = engine;
     this.#catalogReader = catalogReader;
-    this.#eventTimeZone =
-      options.eventTimeZone ??
-      options.timeZone ??
-      options.timeZoneForEvent ??
-      options.getEventTimeZone;
     this.#minimumTravelMinutes = options.minimumTravelMinutes ?? DEFAULT_MINIMUM_TRAVEL_MINUTES;
     this.#actorId = options.actorId;
     this.#maxRetries = maxRetries;
@@ -150,42 +133,24 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     tenantId: string,
     eventId: string,
     actorId?: string,
-    timeZone?: string,
   ): Promise<AgendaDraft>;
   async ensureInitialized(
     inputOrTenantId: AgendaCatalogSyncInput | string,
     positionalEventId?: string,
     positionalActorId?: string,
-    positionalTimeZone?: string,
   ): Promise<AgendaDraft> {
-    const input = normalizeInput(
-      inputOrTenantId,
-      positionalEventId,
-      positionalActorId,
-      positionalTimeZone,
-    );
+    const input = normalizeInput(inputOrTenantId, positionalEventId, positionalActorId);
     return (await this.initialize(input)).draft;
   }
 
   async synchronize(input: AgendaCatalogSyncInput): Promise<AgendaDraft>;
-  async synchronize(
-    tenantId: string,
-    eventId: string,
-    actorId?: string,
-    timeZone?: string,
-  ): Promise<AgendaDraft>;
+  async synchronize(tenantId: string, eventId: string, actorId?: string): Promise<AgendaDraft>;
   async synchronize(
     inputOrTenantId: AgendaCatalogSyncInput | string,
     positionalEventId?: string,
     positionalActorId?: string,
-    positionalTimeZone?: string,
   ): Promise<AgendaDraft> {
-    const input = normalizeInput(
-      inputOrTenantId,
-      positionalEventId,
-      positionalActorId,
-      positionalTimeZone,
-    );
+    const input = normalizeInput(inputOrTenantId, positionalEventId, positionalActorId);
     const initialized = await this.initialize(input);
     let draft = initialized.draft;
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
@@ -234,10 +199,8 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     }
 
     const catalog = await this.readCatalog(input);
-    const timeZone = await this.resolveTimeZone(input);
     const createInput: CreateAgendaInput = {
       eventId: input.eventId,
-      timeZone,
       minimumTravelMinutes: this.resolveMinimumTravelMinutes(input),
       actorId: this.resolveActorId(input),
       ...catalog,
@@ -263,21 +226,6 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     );
   }
 
-  private async resolveTimeZone(input: AgendaCatalogSyncInput): Promise<string> {
-    if (input.timeZone !== undefined) return input.timeZone;
-    const source = this.#eventTimeZone;
-    if (typeof source === "string") return source;
-    if (typeof source === "function") {
-      const resolver = source as (...args: string[]) => AgendaCatalogSyncValue<string>;
-      return await (source.length < 2
-        ? resolver(input.eventId)
-        : resolver(input.tenantId, input.eventId));
-    }
-    throw new Error(
-      `An event time zone is required to initialize the agenda for event ${input.eventId}.`,
-    );
-  }
-
   private resolveMinimumTravelMinutes(input: AgendaCatalogSyncInput): number {
     return input.minimumTravelMinutes ?? this.#minimumTravelMinutes;
   }
@@ -293,7 +241,6 @@ function normalizeInput(
   inputOrTenantId: AgendaCatalogSyncInput | string,
   positionalEventId?: string,
   positionalActorId?: string,
-  positionalTimeZone?: string,
 ): AgendaCatalogSyncInput {
   if (typeof inputOrTenantId !== "string") return inputOrTenantId;
   if (positionalEventId === undefined) {
@@ -303,7 +250,6 @@ function normalizeInput(
     tenantId: inputOrTenantId,
     eventId: positionalEventId,
     ...(positionalActorId === undefined ? {} : { actorId: positionalActorId }),
-    ...(positionalTimeZone === undefined ? {} : { timeZone: positionalTimeZone }),
   };
 }
 

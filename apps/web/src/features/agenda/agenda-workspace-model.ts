@@ -73,7 +73,9 @@ export function safeScheduleId(value: string): string {
 }
 
 function scheduleDates(data: AgendaWorkspaceData): readonly string[] {
-  return eventDates(data.event.startsOn, data.event.endsOn);
+  return data.event.scheduleDates?.length
+    ? data.event.scheduleDates
+    : eventDates(data.event.startsOn, data.event.endsOn);
 }
 
 export function deriveAgendaViewGroups(

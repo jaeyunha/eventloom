@@ -1,5 +1,10 @@
 import { canonicalizeTimeZone } from "../agenda/timezone";
 import {
+  assertEventTemporalDependencies,
+  EventTemporalDependencyConflictError,
+  type EventTemporalDependencySource,
+} from "./event-temporal-dependencies";
+import {
   type ArchiveEventInput,
   type CreateEventInput,
   type Event,
@@ -74,6 +79,8 @@ export interface EventServiceOptions {
   clock?: () => Date;
   generateId?: () => string;
 }
+
+export type { EventTemporalDependencySource } from "./event-temporal-dependencies";
 
 const DEFAULT_CFP_SETTINGS: EventCfpSettings = {
   enabled: false,
@@ -472,6 +479,19 @@ function eventLocalDate(instantValue: string, timeZoneValue: string): string {
   return `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
 }
 
+function requireCurrentOrFutureEventDate(
+  value: string | null,
+  label: string,
+  timeZoneValue: string,
+  now: string,
+  currentValue?: string | null,
+): void {
+  if (value === null || value === currentValue) return;
+  if (eventLocalDate(value, timeZoneValue) < eventLocalDate(now, timeZoneValue)) {
+    throw validation(`${label} cannot be before today.`);
+  }
+}
+
 function normalizeScheduleDates(
   value: unknown,
   startsAt: string,
@@ -586,6 +606,15 @@ function normalizeCfpSettings(
   return { enabled, opensAt, closesAt };
 }
 
+function requireCfpBeforeEvent(cfpSettings: EventCfpSettings, eventStartsAt: string): void {
+  if (
+    (cfpSettings.opensAt !== null && Date.parse(cfpSettings.opensAt) > Date.parse(eventStartsAt)) ||
+    (cfpSettings.closesAt !== null && Date.parse(cfpSettings.closesAt) > Date.parse(eventStartsAt))
+  ) {
+    throw validation("The CFP window must finish before the event begins.");
+  }
+}
+
 function normalizeCalendarSettings(
   input: EventDefaultCalendarSettingsInput | undefined,
   current: EventDefaultCalendarSettings,
@@ -625,11 +654,17 @@ function eventInputOrganization(input: { organizationId?: string }): string | un
 
 export class EventService {
   readonly #repository: EventRepository;
+  readonly #temporalDependencies: EventTemporalDependencySource;
   readonly #clock: () => Date;
   readonly #generateId: () => string;
 
-  constructor(repository: EventRepository, options: EventServiceOptions = {}) {
+  constructor(
+    repository: EventRepository,
+    temporalDependencies: EventTemporalDependencySource,
+    options: EventServiceOptions = {},
+  ) {
     this.#repository = repository;
+    this.#temporalDependencies = temporalDependencies;
     this.#clock = options.clock ?? (() => new Date());
     this.#generateId = options.generateId ?? (() => crypto.randomUUID());
   }
@@ -674,6 +709,7 @@ export class EventService {
       input.id === undefined ? text(this.#generateId(), "event id", 128) : eventId(input.id);
     const venue = optionalText(input.venue, "venue");
     const cfpSettings = normalizeCfpSettings(input.cfpSettings);
+    requireCfpBeforeEvent(cfpSettings, startsAt);
     const defaultCalendarSettings = normalizeCalendarSettings(
       input.defaultCalendarSettings,
       {
@@ -686,6 +722,10 @@ export class EventService {
     );
     const embedConfigurations = normalizeEmbedConfigurations(input.embedConfigurations);
     const now = this.instant(this.#clock(), "clock");
+    requireCurrentOrFutureEventDate(startsAt, "Event start", eventTimeZone, now);
+    requireCurrentOrFutureEventDate(endsAt, "Event end", eventTimeZone, now);
+    requireCurrentOrFutureEventDate(cfpSettings.opensAt, "CFP opening", eventTimeZone, now);
+    requireCurrentOrFutureEventDate(cfpSettings.closesAt, "CFP closing", eventTimeZone, now);
     const event: Event = {
       id,
       organizationId,
@@ -779,6 +819,7 @@ export class EventService {
       input.venue === undefined ? current.venue : optionalText(input.venue, "venue");
     const nextStatus = input.status === undefined ? current.status : status(input.status);
     const cfpSettings = normalizeCfpSettings(input.cfpSettings, current.cfpSettings);
+    requireCfpBeforeEvent(cfpSettings, nextStartsAt);
     const defaultCalendarSettings = normalizeCalendarSettings(
       input.defaultCalendarSettings,
       current.defaultCalendarSettings,
@@ -790,6 +831,28 @@ export class EventService {
       current.embedConfigurations ?? [],
     );
     const now = this.instant(this.#clock(), "clock");
+    requireCurrentOrFutureEventDate(
+      nextStartsAt,
+      "Event start",
+      nextTimeZone,
+      now,
+      current.startsAt,
+    );
+    requireCurrentOrFutureEventDate(nextEndsAt, "Event end", nextTimeZone, now, current.endsAt);
+    requireCurrentOrFutureEventDate(
+      cfpSettings.opensAt,
+      "CFP opening",
+      nextTimeZone,
+      now,
+      current.cfpSettings.opensAt,
+    );
+    requireCurrentOrFutureEventDate(
+      cfpSettings.closesAt,
+      "CFP closing",
+      nextTimeZone,
+      now,
+      current.cfpSettings.closesAt,
+    );
     const updated: Event = {
       ...current,
       slug: nextSlug,
@@ -807,6 +870,14 @@ export class EventService {
       updatedAt: now,
       updatedBy: userId,
     };
+    try {
+      await assertEventTemporalDependencies(this.#temporalDependencies, current, updated);
+    } catch (error) {
+      if (error instanceof EventTemporalDependencyConflictError) {
+        throw conflict(error.message);
+      }
+      throw error;
+    }
     const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,

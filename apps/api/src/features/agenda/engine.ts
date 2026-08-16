@@ -1,6 +1,12 @@
 import { detectAgendaConflicts, detectReleasedSpeakerCommitmentConflicts } from "./conflicts";
 import { AgendaRepositoryConflictError } from "./infrastructure";
-import { canonicalizeTimeZone, resolveLocalDateTime } from "./timezone";
+import {
+  AgendaTimeZoneError,
+  canonicalizeTimeZone,
+  disambiguationForInstant,
+  localDateInTimeZone,
+  resolveLocalDateTime,
+} from "./timezone";
 import type {
   AcceptAgendaSuggestionChangeInput,
   AgendaAuditEntry,
@@ -73,9 +79,182 @@ export class AgendaValidationError extends AgendaError {
   }
 }
 
+export type AgendaEntryTemporalIssueCode =
+  | "after_event_end"
+  | "ambiguous_local_time"
+  | "before_event_start"
+  | "date_not_allowed"
+  | "invalid_local_date_time"
+  | "invalid_time_zone"
+  | "nonexistent_local_time";
+
+export class AgendaEntryTemporalValidationError extends AgendaError {
+  constructor(
+    readonly entryIndex: number,
+    readonly field: "startsAtLocal" | "endsAtLocal",
+    readonly issueCode: AgendaEntryTemporalIssueCode,
+    message: string,
+  ) {
+    super("INVALID_AGENDA", message);
+    this.name = "AgendaEntryTemporalValidationError";
+  }
+}
+
+export interface AgendaEventSchedule {
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly timeZone: string;
+  readonly scheduleDates?: readonly string[];
+}
+
+export function validateAgendaEntriesWithinEvent(
+  entries: readonly {
+    readonly startsAtLocal: string;
+    readonly endsAtLocal: string;
+    readonly startDisambiguation?: "earlier" | "later" | undefined;
+    readonly endDisambiguation?: "earlier" | "later" | undefined;
+  }[],
+  event: AgendaEventSchedule,
+): void {
+  const eventStart = Date.parse(event.startsAt);
+  const eventEnd = Date.parse(event.endsAt);
+  if (!Number.isFinite(eventStart) || !Number.isFinite(eventEnd) || eventEnd < eventStart) {
+    throw new AgendaError("INVALID_AGENDA", "The event schedule boundaries are invalid.");
+  }
+  const allowedDates = new Set(
+    event.scheduleDates?.length
+      ? event.scheduleDates
+      : eventDateRange(
+          localDateInTimeZone(event.startsAt, event.timeZone),
+          localDateInTimeZone(event.endsAt, event.timeZone),
+        ),
+  );
+
+  entries.forEach((entry, entryIndex) => {
+    const start = resolveAgendaBoundary(
+      entry.startsAtLocal,
+      event.timeZone,
+      entry.startDisambiguation,
+      entryIndex,
+      "startsAtLocal",
+    );
+    const end = resolveAgendaBoundary(
+      entry.endsAtLocal,
+      event.timeZone,
+      entry.endDisambiguation,
+      entryIndex,
+      "endsAtLocal",
+    );
+    const startDate = start.localDateTime.slice(0, 10);
+    const endDate = end.localDateTime.slice(0, 10);
+    if (startDate !== endDate || !allowedDates.has(startDate)) {
+      throw new AgendaEntryTemporalValidationError(
+        entryIndex,
+        "startsAtLocal",
+        "date_not_allowed",
+        "The agenda entry must start and end on an allowed event schedule date.",
+      );
+    }
+    if (Date.parse(start.instant) < eventStart) {
+      throw new AgendaEntryTemporalValidationError(
+        entryIndex,
+        "startsAtLocal",
+        "before_event_start",
+        "The agenda entry starts before the event begins.",
+      );
+    }
+    if (Date.parse(end.instant) > eventEnd) {
+      throw new AgendaEntryTemporalValidationError(
+        entryIndex,
+        "endsAtLocal",
+        "after_event_end",
+        "The agenda entry ends after the event finishes.",
+      );
+    }
+  });
+}
+
+function validateStoredAgendaEntriesWithinEvent(
+  entries: readonly Pick<AgendaEntry, "startsAt" | "endsAt" | "startsAtLocal" | "endsAtLocal">[],
+  event: AgendaEventSchedule,
+): void {
+  const eventStart = Date.parse(event.startsAt);
+  const eventEnd = Date.parse(event.endsAt);
+  const allowedDates = new Set(
+    event.scheduleDates?.length
+      ? event.scheduleDates
+      : eventDateRange(
+          localDateInTimeZone(event.startsAt, event.timeZone),
+          localDateInTimeZone(event.endsAt, event.timeZone),
+        ),
+  );
+  entries.forEach((entry, entryIndex) => {
+    const startDate = entry.startsAtLocal.slice(0, 10);
+    if (startDate !== entry.endsAtLocal.slice(0, 10) || !allowedDates.has(startDate)) {
+      throw new AgendaEntryTemporalValidationError(
+        entryIndex,
+        "startsAtLocal",
+        "date_not_allowed",
+        "The agenda entry must start and end on an allowed event schedule date.",
+      );
+    }
+    if (Date.parse(entry.startsAt) < eventStart) {
+      throw new AgendaEntryTemporalValidationError(
+        entryIndex,
+        "startsAtLocal",
+        "before_event_start",
+        "The agenda entry starts before the event begins.",
+      );
+    }
+    if (Date.parse(entry.endsAt) > eventEnd) {
+      throw new AgendaEntryTemporalValidationError(
+        entryIndex,
+        "endsAtLocal",
+        "after_event_end",
+        "The agenda entry ends after the event finishes.",
+      );
+    }
+  });
+}
+
+function resolveAgendaBoundary(
+  localDateTime: string,
+  timeZone: string,
+  disambiguation: "earlier" | "later" | undefined,
+  entryIndex: number,
+  field: "startsAtLocal" | "endsAtLocal",
+) {
+  try {
+    return resolveLocalDateTime(localDateTime, timeZone, disambiguation);
+  } catch (error) {
+    if (!(error instanceof AgendaTimeZoneError)) throw error;
+    const issueCode: AgendaEntryTemporalIssueCode =
+      error.code === "AMBIGUOUS_LOCAL_TIME"
+        ? "ambiguous_local_time"
+        : error.code === "NONEXISTENT_LOCAL_TIME"
+          ? "nonexistent_local_time"
+          : error.code === "INVALID_TIME_ZONE"
+            ? "invalid_time_zone"
+            : "invalid_local_date_time";
+    throw new AgendaEntryTemporalValidationError(entryIndex, field, issueCode, error.message);
+  }
+}
+
+function eventDateRange(start: string, end: string): readonly string[] {
+  const dates: string[] = [];
+  const cursor = new Date(`${start}T00:00:00.000Z`);
+  const last = new Date(`${end}T00:00:00.000Z`);
+  while (cursor <= last) {
+    dates.push(
+      `${String(cursor.getUTCFullYear()).padStart(4, "0")}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}-${String(cursor.getUTCDate()).padStart(2, "0")}`,
+    );
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 export interface CreateAgendaInput extends AgendaCatalog {
   eventId: string;
-  timeZone: string;
   minimumTravelMinutes: number;
   actorId: string;
 }
@@ -121,6 +300,7 @@ export interface AgendaEngineOptions {
   idGenerator?: AgendaIdGenerator;
   suggestionProvider?: AgendaSuggestionProvider;
   agendaSuggestionProvider?: AgendaSuggestionProvider;
+  eventScheduleForEvent?: (eventId: string) => Promise<AgendaEventSchedule | null>;
 }
 
 const outboxTypes: readonly AgendaOutboxEventType[] = [
@@ -174,6 +354,9 @@ export class AgendaEngine {
   readonly #clock: AgendaClock;
   readonly #idGenerator: AgendaIdGenerator;
   readonly #suggestionProvider: AgendaSuggestionProvider | null;
+  readonly #eventScheduleForEvent:
+    | ((eventId: string) => Promise<AgendaEventSchedule | null>)
+    | null;
 
   constructor(
     readonly repository: AgendaRepository,
@@ -187,6 +370,7 @@ export class AgendaEngine {
       ({ nextId: (prefix) => `${prefix}_${crypto.randomUUID()}` } satisfies AgendaIdGenerator);
     this.#suggestionProvider =
       options.suggestionProvider ?? options.agendaSuggestionProvider ?? null;
+    this.#eventScheduleForEvent = options.eventScheduleForEvent ?? null;
   }
 
   async createAgenda(input: CreateAgendaInput): Promise<AgendaDraft> {
@@ -195,7 +379,8 @@ export class AgendaEngine {
       requireNonEmpty(input.actorId, "actorId");
       validateMinimumTravelMinutes(input.minimumTravelMinutes);
       const catalog = normalizeCatalog(input);
-      const timeZone = canonicalizeTimeZone(input.timeZone);
+      const eventSchedule = await this.requireEventSchedule(input.eventId);
+      const timeZone = canonicalizeTimeZone(eventSchedule.timeZone);
       const existing = await this.repository.load(input.eventId);
       if (existing !== null) {
         throw new AgendaError(
@@ -918,13 +1103,27 @@ export class AgendaEngine {
     ) => Promise<{ state: AgendaState; result: T; changed?: boolean }>,
   ): Promise<T> {
     return this.mutationLock.runExclusive(eventId, async () => {
+      const eventSchedule = await this.requireEventSchedule(eventId);
       const current = await this.requireState(eventId);
-      const change = await operation(current);
-      if (change.changed === false) {
+      const authoritative = alignAgendaTimeZone(current, eventSchedule.timeZone);
+      const change = await operation(authoritative.state);
+      if (change.changed === false && !authoritative.changed) {
         return structuredClone(change.result);
       }
+      const nextState =
+        change.changed === false
+          ? { ...change.state, stateVersion: current.stateVersion + 1 }
+          : change.state;
+      assertAgendaTimeZone(nextState, eventSchedule.timeZone);
+      validateStoredAgendaEntriesWithinEvent(nextState.draft.entries, eventSchedule);
+      const published = nextState.revisions.find(
+        (revision) => revision.id === nextState.currentPublishedRevisionId,
+      );
+      if (published !== undefined) {
+        validateStoredAgendaEntriesWithinEvent(published.entries, eventSchedule);
+      }
       try {
-        await this.repository.compareAndSwap(eventId, current.stateVersion, change.state);
+        await this.repository.compareAndSwap(eventId, current.stateVersion, nextState);
       } catch (error) {
         if (error instanceof AgendaRepositoryConflictError) {
           throw new AgendaError(
@@ -936,6 +1135,17 @@ export class AgendaEngine {
       }
       return structuredClone(change.result);
     });
+  }
+
+  private async requireEventSchedule(eventId: string): Promise<AgendaEventSchedule> {
+    const event = await this.#eventScheduleForEvent?.(eventId);
+    if (event === null || event === undefined) {
+      throw new AgendaError(
+        "AGENDA_NOT_FOUND",
+        `Authoritative event metadata was not found for agenda ${eventId}`,
+      );
+    }
+    return { ...event, timeZone: canonicalizeTimeZone(event.timeZone) };
   }
 
   private async requireState(eventId: string): Promise<AgendaState> {
@@ -1488,6 +1698,12 @@ function toMinutes(value: string): number {
 }
 
 function toEntryInput(entry: AgendaEntry): AgendaEntryInput {
+  const startDisambiguation =
+    entry.startDisambiguation ??
+    disambiguationForInstant(entry.startsAtLocal, entry.timeZone, entry.startsAt);
+  const endDisambiguation =
+    entry.endDisambiguation ??
+    disambiguationForInstant(entry.endsAtLocal, entry.timeZone, entry.endsAt);
   return {
     id: entry.id,
     sessionId: entry.sessionId,
@@ -1495,8 +1711,68 @@ function toEntryInput(entry: AgendaEntry): AgendaEntryInput {
     trackIds: entry.trackIds,
     startsAtLocal: entry.startsAtLocal,
     endsAtLocal: entry.endsAtLocal,
+    ...(startDisambiguation === undefined ? {} : { startDisambiguation }),
+    ...(endDisambiguation === undefined ? {} : { endDisambiguation }),
   };
 }
+function agendaEntries(state: AgendaState): readonly AgendaEntry[] {
+  return [
+    ...state.draft.entries,
+    ...state.revisions.flatMap((revision) => revision.entries),
+    ...state.suggestionRuns.flatMap((run) => [
+      ...run.baseEntries,
+      ...run.proposedEntries,
+      ...run.diff.changes.flatMap((change) => [
+        ...(change.before === null ? [] : [change.before]),
+        ...(change.after === null ? [] : [change.after]),
+      ]),
+    ]),
+  ];
+}
+
+function assertAgendaTimeZone(state: AgendaState, authoritativeTimeZone: string): void {
+  const timeZone = canonicalizeTimeZone(authoritativeTimeZone);
+  const mismatched =
+    state.timeZone !== timeZone ||
+    state.draft.timeZone !== timeZone ||
+    state.revisions.some((revision) => revision.timeZone !== timeZone) ||
+    agendaEntries(state).some((entry) => entry.timeZone !== timeZone);
+  if (mismatched) {
+    throw new AgendaError(
+      "CONCURRENT_MODIFICATION",
+      `Agenda timezone must match the authoritative event timezone ${timeZone}`,
+    );
+  }
+}
+
+function alignAgendaTimeZone(
+  state: AgendaState,
+  authoritativeTimeZone: string,
+): { readonly state: AgendaState; readonly changed: boolean } {
+  const timeZone = canonicalizeTimeZone(authoritativeTimeZone);
+  try {
+    assertAgendaTimeZone(state, timeZone);
+    return { state, changed: false };
+  } catch (error) {
+    if (!(error instanceof AgendaError) || error.code !== "CONCURRENT_MODIFICATION") throw error;
+  }
+  if (agendaEntries(state).length > 0) {
+    throw new AgendaError(
+      "CONCURRENT_MODIFICATION",
+      "The event timezone changed while the agenda contained temporal state",
+    );
+  }
+  return {
+    changed: true,
+    state: {
+      ...state,
+      timeZone,
+      draft: { ...state.draft, timeZone },
+      revisions: state.revisions.map((revision) => ({ ...revision, timeZone })),
+    },
+  };
+}
+
 function normalizeCatalog(catalog: AgendaCatalog): AgendaCatalog {
   validateUniqueIds(catalog.sessions, "session");
   validateUniqueIds(catalog.rooms, "room");
@@ -1583,6 +1859,12 @@ function materializeEntries(
       startsAtLocal: start.localDateTime,
       endsAtLocal: end.localDateTime,
       timeZone: state.timeZone,
+      ...(input.startDisambiguation === undefined
+        ? {}
+        : { startDisambiguation: input.startDisambiguation }),
+      ...(input.endDisambiguation === undefined
+        ? {}
+        : { endDisambiguation: input.endDisambiguation }),
     };
   });
 }

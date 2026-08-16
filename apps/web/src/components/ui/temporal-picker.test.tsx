@@ -62,4 +62,39 @@ describe("TemporalPicker", () => {
     expect(markup).toContain('data-temporal-picker="single"');
     expect(markup).not.toContain('type="date"');
   });
+
+  it("surfaces an explicit choice for an ambiguous event-local time", () => {
+    const markup = renderToStaticMarkup(
+      createElement(TemporalPicker, {
+        id: "review-fold",
+        mode: "single",
+        precision: "date-time",
+        value: "2026-11-01T01:30",
+        label: "Review deadline",
+        timeZone: "America/Los_Angeles",
+        onChange: () => undefined,
+        onDisambiguationChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('data-temporal-state="ambiguous"');
+  });
+
+  it("renders an authoritative instant in the supplied event timezone", () => {
+    const markup = renderToStaticMarkup(
+      createElement(TemporalPicker, {
+        id: "review-later-fold",
+        mode: "single",
+        precision: "date-time",
+        value: "2026-11-01T09:30:00.000Z",
+        label: "Review deadline",
+        valueTimeZone: "America/Los_Angeles",
+        onChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('value="01:30"');
+    expect(markup).toContain('value="later"');
+    expect(markup).toContain('aria-pressed="true"');
+  });
 });

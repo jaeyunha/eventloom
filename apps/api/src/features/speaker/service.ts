@@ -1,4 +1,6 @@
 import {
+  calendarDateDeadline,
+  localDateInTimeZone,
   standardImageUploadMimeTypes,
   standardPresentationUploadMimeTypes,
   standardSupportingFileUploadMimeTypes,
@@ -35,6 +37,7 @@ import type {
   SpeakerDeliverablesMatrix,
   SpeakerDeliverablesQuery,
   SpeakerEventResource,
+  SpeakerEventTemporalContext,
   SpeakerFormAnswer,
   SpeakerImportIssue,
   SpeakerImportPreview,
@@ -230,6 +233,7 @@ export interface SpeakerReminderEligibility {
   readonly participantId: string;
   readonly title: string;
   readonly dueAt: string | null;
+  readonly deadlineAt: string | null;
   readonly reminderOffsetsMinutes: readonly number[];
   readonly eligible: boolean;
   readonly reason:
@@ -241,8 +245,16 @@ export interface SpeakerReminderEligibility {
     | "no_reminder_offset";
 }
 
+export interface SpeakerEventTemporalSource {
+  getEventTemporalContext(
+    organizationId: string,
+    eventId: string,
+  ): Promise<SpeakerEventTemporalContext | null>;
+}
+
 export interface SpeakerServiceOptions {
   speakerSender: string;
+  eventTemporalSource?: SpeakerEventTemporalSource;
   now?: () => Date;
   generateId?: () => string;
   delivery?: SpeakerReminderDelivery;
@@ -1074,15 +1086,32 @@ function normalizeMaxBytes(value: number | undefined): number {
 
 function normalizeDueAt(value: string | undefined): string | undefined {
   if (value === undefined || value.trim().length === 0) return undefined;
-  const normalized = value.trim();
-  const parsed = Date.parse(normalized);
-  if (!Number.isFinite(parsed)) {
-    throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The due date is invalid.");
-  }
-  return normalized.length === 10 ? normalized : new Date(parsed).toISOString();
+  return strictCalendarDate(value, "The due date");
 }
+const calendarDatePattern = /^\d{4}-\d{2}-\d{2}$/u;
+
+function strictCalendarDate(value: string, label: string): string {
+  const normalized = value;
+  if (!calendarDatePattern.test(normalized)) {
+    throw new SpeakerServiceError("VALIDATION_ERROR", 400, `${label} must use YYYY-MM-DD.`);
+  }
+  const [year, month, day] = normalized.split("-").map(Number);
+  const roundTrip = new Date(0);
+  roundTrip.setUTCFullYear(year ?? 0, (month ?? 0) - 1, day ?? 0);
+  roundTrip.setUTCHours(0, 0, 0, 0);
+  if (
+    roundTrip.getUTCFullYear() !== year ||
+    roundTrip.getUTCMonth() + 1 !== month ||
+    roundTrip.getUTCDate() !== day
+  ) {
+    throw new SpeakerServiceError("VALIDATION_ERROR", 400, `${label} is invalid.`);
+  }
+  return normalized;
+}
+
 function normalizeTravelLogistics(
   value: Partial<SpeakerTravelLogistics> | undefined,
+  legacyTimeZone?: string,
 ): SpeakerTravelLogistics {
   const source = value ?? {};
   if (source.travelRequired !== undefined && typeof source.travelRequired !== "boolean") {
@@ -1094,11 +1123,13 @@ function normalizeTravelLogistics(
       throw new SpeakerServiceError("VALIDATION_ERROR", 400, `${label} is invalid.`);
     }
     if (candidate.trim().length === 0) return null;
-    const normalized = normalizeDueAt(candidate);
-    if (normalized === undefined) {
-      throw new SpeakerServiceError("VALIDATION_ERROR", 400, `${label} is invalid.`);
+    if (legacyTimeZone !== undefined && !calendarDatePattern.test(candidate.trim())) {
+      if (!Number.isFinite(Date.parse(candidate))) {
+        throw new SpeakerServiceError("VALIDATION_ERROR", 400, `${label} is invalid.`);
+      }
+      return localDateInTimeZone(candidate, legacyTimeZone);
     }
-    return normalized;
+    return strictCalendarDate(candidate, label);
   };
   const bounded = (candidate: unknown, label: string, maximum: number): string => {
     if (candidate === undefined) return "";
@@ -1107,10 +1138,19 @@ function normalizeTravelLogistics(
     }
     return normalizeOptionalProfileText(candidate, label, maximum);
   };
+  const arrivalAt = dateValue(source.arrivalAt, "Arrival date");
+  const departureAt = dateValue(source.departureAt, "Departure date");
+  if (arrivalAt !== null && departureAt !== null && arrivalAt > departureAt) {
+    throw new SpeakerServiceError(
+      "VALIDATION_ERROR",
+      400,
+      "Departure date must be on or after arrival date.",
+    );
+  }
   return {
     travelRequired: source.travelRequired ?? false,
-    arrivalAt: dateValue(source.arrivalAt, "Arrival date"),
-    departureAt: dateValue(source.departureAt, "Departure date"),
+    arrivalAt,
+    departureAt,
     accommodation: bounded(source.accommodation, "Accommodation", 500),
     dietaryRequirements: bounded(source.dietaryRequirements, "Dietary requirements", 2_000),
     accessibilityNeeds: bounded(source.accessibilityNeeds, "Accessibility needs", 2_000),
@@ -1118,11 +1158,14 @@ function normalizeTravelLogistics(
   };
 }
 
-function travelLogisticsFrom(value: unknown): SpeakerTravelLogistics {
+function travelLogisticsFrom(value: unknown, legacyTimeZone?: string): SpeakerTravelLogistics {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return normalizeTravelLogistics(undefined);
+    return normalizeTravelLogistics(undefined, legacyTimeZone);
   }
-  return normalizeTravelLogistics(value as Partial<SpeakerTravelLogistics>);
+  return normalizeTravelLogistics(
+    value as Partial<SpeakerTravelLogistics>,
+    legacyTimeZone ?? "UTC",
+  );
 }
 
 const speakerSenderEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
@@ -1174,10 +1217,30 @@ function normalizeSocialLinks(
   return result;
 }
 
+function taskDeadlineEpoch(
+  task: Pick<SpeakerTask, "dueAt" | "dueDate">,
+  eventTimeZone: string | undefined,
+): number | null {
+  const dueDate = task.dueAt ?? task.dueDate;
+  return dueDate === undefined || eventTimeZone === undefined
+    ? null
+    : calendarDateDeadline(dueDate, eventTimeZone).epochMilliseconds;
+}
+
+function taskIsOverdue(
+  task: Pick<SpeakerTask, "dueAt" | "dueDate">,
+  now: Date,
+  eventTimeZone: string | undefined,
+): boolean {
+  const deadlineEpoch = taskDeadlineEpoch(task, eventTimeZone);
+  return deadlineEpoch !== null && now.getTime() >= deadlineEpoch;
+}
+
 function taskStatusForAssets(
   task: SpeakerTask,
   assets: readonly SpeakerAsset[],
   now: Date,
+  eventTimeZone: string | undefined,
 ): SpeakerDeliverableRow["status"] {
   const latest = assets
     .slice()
@@ -1190,11 +1253,7 @@ function taskStatusForAssets(
     if (task.status === "completed" || task.status === "waived") return task.status;
     return "uploaded";
   }
-  if (
-    task.dueAt !== undefined &&
-    Date.parse(task.dueAt) < now.getTime() &&
-    !["completed", "waived"].includes(task.status)
-  ) {
+  if (taskIsOverdue(task, now, eventTimeZone) && !["completed", "waived"].includes(task.status)) {
     return "overdue";
   }
   return task.status;
@@ -1484,6 +1543,7 @@ export class SpeakerService {
   private readonly delivery: SpeakerReminderDelivery | undefined;
   private readonly speakerSender: string;
   private readonly communications: SpeakerCommunications | undefined;
+  private readonly eventTemporalSource: SpeakerEventTemporalSource | undefined;
   private readonly reminderCache = new Map<string, SpeakerReminderQueueResult>();
 
   constructor(
@@ -1496,7 +1556,45 @@ export class SpeakerService {
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.delivery = options.delivery ?? options.invitationDelivery ?? options.reminderDelivery;
     this.communications = options.communications;
+    this.eventTemporalSource = options.eventTemporalSource;
   }
+
+  private async eventTemporalContext(
+    organizationId: string,
+    eventId: string,
+  ): Promise<SpeakerEventTemporalContext | undefined> {
+    const context = await this.eventTemporalSource?.getEventTemporalContext(
+      organizationId,
+      eventId,
+    );
+    if (context === null || context === undefined) return undefined;
+    if (context.organizationId !== organizationId || context.eventId !== eventId) throw notFound();
+    localDateInTimeZone(this.now().toISOString(), context.timeZone);
+    localDateInTimeZone(context.startsAt, context.timeZone);
+    localDateInTimeZone(context.endsAt, context.timeZone);
+    return context;
+  }
+
+  private async validateSelectedDeadline(
+    organizationId: string,
+    eventId: string,
+    dueAt: string | undefined,
+    unchangedValue?: string,
+  ): Promise<void> {
+    if (dueAt === undefined || dueAt === unchangedValue) return;
+    const context = await this.eventTemporalContext(organizationId, eventId);
+    if (context === undefined) return;
+    const selectedDate = dueAt.length === 10 ? dueAt : localDateInTimeZone(dueAt, context.timeZone);
+    const today = localDateInTimeZone(this.now().toISOString(), context.timeZone);
+    if (selectedDate < today) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        `The due date must be on or after ${today} in ${context.timeZone}.`,
+      );
+    }
+  }
+
   async resolveEventParticipant(
     input: Omit<ResolveEventParticipantInput, "createParticipantId">,
   ): Promise<SpeakerParticipantResolution> {
@@ -1653,6 +1751,11 @@ export class SpeakerService {
             primaryParticipantId === undefined ? [] : [primaryParticipantId],
             visibleSubmissions,
           );
+          const organizationId = contextScope.tenantId ?? context.organizationId;
+          const temporalContext =
+            organizationId === undefined
+              ? undefined
+              : await this.eventTemporalContext(organizationId, context.eventId);
           return {
             id: context.id,
             eventId: context.eventId,
@@ -1663,6 +1766,7 @@ export class SpeakerService {
             submissionIds,
             participantIds: primaryParticipantId === undefined ? [] : [primaryParticipantId],
             ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+            ...(temporalContext === undefined ? {} : { temporalContext }),
           };
         },
       ),
@@ -1722,11 +1826,16 @@ export class SpeakerService {
       primaryParticipantId === undefined ? [] : [primaryParticipantId],
       submissions,
     );
+    const temporalContext =
+      scope.tenantId === undefined
+        ? undefined
+        : await this.eventTemporalContext(scope.tenantId, eventId);
     return {
       id: `portal:${eventId}`,
       eventId,
       name: eventId,
       capabilities,
+      ...(temporalContext === undefined ? {} : { temporalContext }),
       submissionIds: unique(submissionIds),
       participantIds: primaryParticipantId === undefined ? [] : [primaryParticipantId],
       ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
@@ -1826,7 +1935,20 @@ export class SpeakerService {
           );
     const profiles = this.projectProfiles(eventId, projectedScope, rawProfiles);
     const tasks = this.projectTasks(eventId, projectedScope, rawTasks, submissions);
-    const context = this.projectPortalContext(eventId, projectedScope, submissions, contexts);
+    const projectedContext = this.projectPortalContext(
+      eventId,
+      projectedScope,
+      submissions,
+      contexts,
+    );
+    const temporalContext =
+      projectedScope.tenantId === undefined
+        ? undefined
+        : await this.eventTemporalContext(projectedScope.tenantId, eventId);
+    const context = {
+      ...projectedContext,
+      ...(temporalContext === undefined ? {} : { temporalContext }),
+    };
     const rosterSubmission = submissions.find((submission) => submission.status === "accepted");
     const rawRoster =
       primaryParticipantId === undefined ||
@@ -2332,6 +2454,7 @@ export class SpeakerService {
         ? description
         : normalizeUserText(input.instructions, "The task instructions", 10_000, true);
     const dueAt = normalizeDueAt(input.dueAt ?? input.dueDate);
+    await this.validateSelectedDeadline(scope.tenantId, input.eventId, dueAt);
     const allowedMimeTypes = normalizeMimeTypes(input.allowedMimeTypes);
     const maxBytes =
       input.maxBytes === undefined && input.maxSizeBytes === undefined
@@ -2533,6 +2656,12 @@ export class SpeakerService {
       );
     }
     const updatedDueAt = normalizeDueAt(input.dueAt ?? input.dueDate);
+    await this.validateSelectedDeadline(
+      scope.tenantId,
+      input.eventId,
+      updatedDueAt,
+      current.dueAt ?? current.dueDate,
+    );
     const updatedDescription =
       input.description === undefined
         ? input.instructions === undefined
@@ -2721,6 +2850,7 @@ export class SpeakerService {
       if (taskAssets === undefined) byTask.set(asset.taskId, [asset]);
       else taskAssets.push(asset);
     }
+    const temporalContext = await this.eventTemporalContext(scope.tenantId, eventId);
     const rows: SpeakerDeliverableRow[] = [];
     for (const task of tasks) {
       if (filters.participantId !== undefined && task.participantId !== filters.participantId)
@@ -2736,7 +2866,7 @@ export class SpeakerService {
             sameSpeakerSubmission(asset.submissionId, task.submissionId)),
       );
       const currentAsset = singleCurrentAsset(taskAssets);
-      const status = taskStatusForAssets(task, taskAssets, this.now());
+      const status = taskStatusForAssets(task, taskAssets, this.now(), temporalContext?.timeZone);
       const incomplete = !["completed", "waived", "uploaded"].includes(status);
       if (
         statusFilter !== "all" &&
@@ -2760,6 +2890,7 @@ export class SpeakerService {
     return {
       organizationId: scope.tenantId,
       eventId,
+      ...(temporalContext === undefined ? {} : { temporalContext }),
       items: rows,
       total: rows.length,
       filters: { ...filters },
@@ -2910,6 +3041,7 @@ export class SpeakerService {
     const participantFilter = participantIds === undefined ? undefined : new Set(participantIds);
     const taskFilter = taskIds === undefined ? undefined : new Set(taskIds);
     const now = this.now();
+    const temporalContext = await this.eventTemporalContext(scope.tenantId, input.eventId);
     const candidates: {
       asset: SpeakerAsset;
       task: SpeakerTask | undefined;
@@ -2926,7 +3058,10 @@ export class SpeakerService {
       if (asset.taskId !== undefined && task === undefined) continue;
       if (taskFilter !== undefined && (task === undefined || !taskFilter.has(task.id))) continue;
       const taskAssets = task === undefined ? [] : (assetsByTask.get(task.id) ?? []);
-      const status = task === undefined ? "uploaded" : taskStatusForAssets(task, taskAssets, now);
+      const status =
+        task === undefined
+          ? "uploaded"
+          : taskStatusForAssets(task, taskAssets, now, temporalContext?.timeZone);
       if (!deliverableStatusMatches(input.status, status)) continue;
       const rawSessionId = asset.submissionId ?? task?.submissionId ?? null;
       const submission =
@@ -3711,10 +3846,11 @@ export class SpeakerService {
       );
     }
     const socialLinks = normalizeSocialLinks(input.socialLinks ?? input.social);
+    const temporalContext = await this.eventTemporalContext(scope.tenantId, input.eventId);
     const currentTravelLogistics =
       current.travelLogistics === undefined
         ? undefined
-        : travelLogisticsFrom(current.travelLogistics);
+        : travelLogisticsFrom(current.travelLogistics, temporalContext?.timeZone);
     const travelLogistics =
       input.travelLogistics === undefined
         ? undefined
@@ -3806,10 +3942,14 @@ export class SpeakerService {
         ? undefined
         : normalizeOptionalProfileText(input.company, "The speaker company", 200);
     const socialLinks = normalizeSocialLinks(input.socialLinks ?? input.social);
+    const temporalContext =
+      scope.tenantId === undefined
+        ? undefined
+        : await this.eventTemporalContext(scope.tenantId, input.eventId);
     const currentTravelLogistics =
       profile.travelLogistics === undefined
         ? undefined
-        : travelLogisticsFrom(profile.travelLogistics);
+        : travelLogisticsFrom(profile.travelLogistics, temporalContext?.timeZone);
     const travelLogistics =
       input.travelLogistics === undefined
         ? undefined
@@ -4012,6 +4152,7 @@ export class SpeakerService {
     const requestedRecipients =
       input.recipientIds === undefined ? undefined : new Set(input.recipientIds);
     const referenceNow = input.now ?? this.now();
+    const temporalContext = await this.eventTemporalContext(scope.tenantId, input.eventId);
     const tasks = await this.repository.listTasks(input.eventId, scope.participantIds);
     const allowedSubmissions = new Set(scope.submissionIds);
     const items = tasks
@@ -4038,7 +4179,11 @@ export class SpeakerService {
           (offset) => Number.isSafeInteger(offset) && offset >= 0,
         );
         const complete = ["completed", "submitted", "waived"].includes(task.status);
-        const dueTime = dueAt === null ? Number.NaN : Date.parse(dueAt);
+        const deadline =
+          dueAt === null || temporalContext === undefined
+            ? null
+            : calendarDateDeadline(dueAt, temporalContext.timeZone);
+        const dueTime = deadline?.epochMilliseconds ?? Number.NaN;
         const due = Number.isFinite(dueTime) && dueTime <= referenceNow.getTime();
         const inWindow =
           Number.isFinite(dueTime) &&
@@ -4059,6 +4204,7 @@ export class SpeakerService {
           participantId: task.participantId,
           title: task.title,
           dueAt,
+          deadlineAt: deadline?.instant ?? null,
           reminderOffsetsMinutes: offsets,
           eligible: !complete && Number.isFinite(dueTime) && (due || inWindow),
           reason,
@@ -6518,8 +6664,13 @@ export class SpeakerService {
     const biography = importText(input.biography, "The speaker biography", 20_000);
     const status = importText(input.status, "The speaker status", 80);
     const socialLinks = normalizeSocialLinks(input.socialLinks) ?? {};
+    const temporalContext = await this.eventTemporalContext(input.organizationId, input.eventId);
+    const currentTravelLogistics = travelLogisticsFrom(
+      currentProfile.travelLogistics,
+      temporalContext?.timeZone,
+    );
     const travelLogistics = normalizeTravelLogistics({
-      ...(currentProfile.travelLogistics ?? {}),
+      ...currentTravelLogistics,
       ...(input.travelLogistics ?? {}),
     });
     const duplicate = projection.entries.find(
@@ -7221,11 +7372,12 @@ export class SpeakerService {
     };
   }
 
-  private materializeOrganizerSpeakerMutationProjection(
+  private async materializeOrganizerSpeakerMutationProjection(
     organizationId: string,
     eventId: string,
     projection: OrganizerSpeakerMutationProjection,
-  ): SpeakerWorkspaceRoster {
+  ): Promise<SpeakerWorkspaceRoster> {
+    const temporalContext = await this.eventTemporalContext(organizationId, eventId);
     const profileByParticipant = new Map(
       projection.profiles
         .filter(
@@ -7244,6 +7396,7 @@ export class SpeakerService {
         projection.acceptedSubmissions,
         projection.tasks,
         projection.assets,
+        temporalContext?.timeZone,
       ),
     );
     const recordsByIdentity = new Map<string, SpeakerWorkspaceRecord>();
@@ -7261,6 +7414,7 @@ export class SpeakerService {
     return {
       organizationId,
       eventId,
+      ...(temporalContext === undefined ? {} : { temporalContext }),
       speakers: [...recordsByIdentity.values()].sort(
         (left, right) =>
           left.displayName.localeCompare(right.displayName) ||
@@ -7454,6 +7608,7 @@ export class SpeakerService {
     submissions: readonly SpeakerSubmission[],
     tasks: readonly SpeakerTask[],
     assets: readonly SpeakerAsset[],
+    eventTimeZone?: string,
   ): SpeakerWorkspaceRecord {
     const participantAssets = assets.filter((asset) => asset.participantId === participantId);
     const canonicalAssets = participantAssets.map((asset) => this.workspaceAsset(asset, null));
@@ -7467,8 +7622,7 @@ export class SpeakerService {
     const overdue = participantTasks.filter((task) => {
       if (task.status === "overdue") return true;
       return (
-        task.dueAt !== undefined &&
-        Date.parse(task.dueAt) < this.now().getTime() &&
+        taskIsOverdue(task, this.now(), eventTimeZone) &&
         !["completed", "submitted", "waived"].includes(task.status)
       );
     }).length;
@@ -7481,7 +7635,10 @@ export class SpeakerService {
       company: profile?.company ?? entry.company ?? "",
       biography: profile?.biography ?? entry.biography ?? "",
       socialLinks: profile?.socialLinks ?? profile?.social ?? entry.socialLinks ?? {},
-      travelLogistics: travelLogisticsFrom(profile?.travelLogistics ?? entry.travelLogistics),
+      travelLogistics: travelLogisticsFrom(
+        profile?.travelLogistics ?? entry.travelLogistics,
+        eventTimeZone,
+      ),
       headshotAssetId: profile?.headshotAssetId ?? entry.headshotAssetId ?? null,
       status: profile?.status ?? entry.organizerStatus ?? entry.workflowStatus ?? entry.status,
       sessions: submissions

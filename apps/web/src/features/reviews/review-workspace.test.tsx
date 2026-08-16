@@ -1583,7 +1583,21 @@ describe("review workspace", () => {
         requests.push(url.toString());
         const path = url.pathname.replace("/api/admin/evaluations", "");
         if (path === "/organizer/workspace") {
-          return json({ plan, submissions, assignments, progress, aggregates, decisions });
+          return json({
+            event: {
+              id: "summit-2026",
+              name: "Summit 2026",
+              timeZone: "America/Los_Angeles",
+              startsAt: "2099-08-01T16:00:00.000Z",
+              endsAt: "2099-08-31T23:00:00.000Z",
+            },
+            plan,
+            submissions,
+            assignments,
+            progress,
+            aggregates,
+            decisions,
+          });
         }
         throw new Error(`Unexpected evaluation request: ${url.toString()}`);
       }),

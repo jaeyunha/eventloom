@@ -63,6 +63,7 @@ export function eventCfpFromRow(row: EventCfpRow): EventCfp {
     slug: row.slug,
     name: row.name,
     timezone: row.timeZone,
+    eventStartsAt: row.startsAt,
     opensAt: row.cfpOpensAt ?? row.startsAt,
     closesAt: row.cfpClosesAt ?? row.endsAt,
   });
@@ -99,47 +100,27 @@ export class D1CfpRepository implements CfpRepository {
 
   async saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void> {
     const current = await this.getEvent(event.tenantId, event.id);
-    if ((current?.version ?? null) !== expectedVersion)
+    if (current === null) throw new CfpError("NOT_FOUND", "The event was not found.");
+    if (current.version !== expectedVersion)
       throw conflict("The event CFP configuration has changed.");
-    const statement =
-      current === null
-        ? this.#db
-            .prepare(
-              `INSERT INTO events (id, organization_id, slug, name, status, time_zone, starts_at, ends_at, cfp_enabled, cfp_opens_at, cfp_closes_at, default_duration_minutes, default_calendar_time_zone, version, created_at, updated_at, created_by, updated_by)
-               VALUES (?, ?, ?, ?, 'active', ?, ?, ?, 1, ?, ?, 30, ?, ?, ?, ?, 'cfp', 'cfp')`,
-            )
-            .bind(
-              event.id,
-              event.tenantId,
-              event.slug,
-              event.name,
-              event.timezone,
-              event.opensAt,
-              event.closesAt,
-              event.opensAt,
-              event.closesAt,
-              event.timezone,
-              event.version,
-              this.#now(),
-              this.#now(),
-            )
-        : this.#db
-            .prepare(
-              `UPDATE events SET slug = ?, name = ?, time_zone = ?, cfp_enabled = 1, cfp_opens_at = ?, cfp_closes_at = ?, version = ?, updated_at = ?
-               WHERE organization_id = ? AND id = ? AND version = ?`,
-            )
-            .bind(
-              event.slug,
-              event.name,
-              event.timezone,
-              event.opensAt,
-              event.closesAt,
-              event.version,
-              this.#now(),
-              event.tenantId,
-              event.id,
-              expectedVersion,
-            );
+    const statement = this.#db
+      .prepare(
+        `UPDATE events SET cfp_enabled = 1, cfp_opens_at = ?, cfp_closes_at = ?, version = ?, updated_at = ?
+         WHERE organization_id = ? AND id = ? AND version = ?
+           AND julianday(?) <= julianday(starts_at)
+           AND julianday(?) <= julianday(starts_at)`,
+      )
+      .bind(
+        event.opensAt,
+        event.closesAt,
+        event.version,
+        this.#now(),
+        event.tenantId,
+        event.id,
+        expectedVersion,
+        event.opensAt,
+        event.closesAt,
+      );
     const [result] = await this.#db.batch([statement]);
     if ((result?.meta?.changes ?? 0) !== 1)
       throw conflict("The event CFP configuration has changed.");

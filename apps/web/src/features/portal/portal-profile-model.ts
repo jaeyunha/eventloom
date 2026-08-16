@@ -1,3 +1,8 @@
+import {
+  isStrictCalendarDate,
+  normalizeEventDateValue,
+  type SpeakerEventTemporalContext,
+} from "../speakers/speaker-temporal-policy";
 import { validatePortalSocialUrl } from "./api";
 import { validateBiography } from "./model";
 import type { PortalProfile, PortalTravelLogistics } from "./types";
@@ -49,7 +54,11 @@ const profileFieldOrder: readonly ProfileField[] = [
   "travelNotes",
 ];
 
-export function profileDraftFor(profile: PortalProfile): ProfileDraft {
+export function profileDraftFor(
+  profile: PortalProfile,
+  temporalContext?: SpeakerEventTemporalContext,
+): ProfileDraft {
+  const timeZone = temporalContext?.timeZone ?? "UTC";
   return {
     biography: profile.biography,
     jobTitle: profile.jobTitle ?? "",
@@ -57,8 +66,8 @@ export function profileDraftFor(profile: PortalProfile): ProfileDraft {
     twitter: profile.socialLinks?.twitter ?? "",
     linkedin: profile.socialLinks?.linkedin ?? "",
     travelRequired: profile.travelLogistics?.travelRequired ?? false,
-    arrivalAt: profile.travelLogistics?.arrivalAt ?? "",
-    departureAt: profile.travelLogistics?.departureAt ?? "",
+    arrivalAt: normalizeEventDateValue(profile.travelLogistics?.arrivalAt, timeZone),
+    departureAt: normalizeEventDateValue(profile.travelLogistics?.departureAt, timeZone),
     accommodation: profile.travelLogistics?.accommodation ?? "",
     dietaryRequirements: profile.travelLogistics?.dietaryRequirements ?? "",
     accessibilityNeeds: profile.travelLogistics?.accessibilityNeeds ?? "",
@@ -135,20 +144,17 @@ export function validateProfileDraft(draft: ProfileDraft, headshot: File | null)
   if (twitterError) errors.twitter = twitterError;
   const linkedinError = validatePortalSocialUrl(draft.linkedin, "linkedin");
   if (linkedinError) errors.linkedin = linkedinError;
-  const arrivalTime = draft.arrivalAt ? Date.parse(draft.arrivalAt) : null;
-  const departureTime = draft.departureAt ? Date.parse(draft.departureAt) : null;
-  if (draft.arrivalAt && Number.isNaN(arrivalTime)) {
-    errors.arrivalAt = "Enter a valid arrival date and time.";
+  if (draft.arrivalAt && !isStrictCalendarDate(draft.arrivalAt)) {
+    errors.arrivalAt = "Enter a valid arrival date using YYYY-MM-DD.";
   }
-  if (draft.departureAt && Number.isNaN(departureTime)) {
-    errors.departureAt = "Enter a valid departure date and time.";
+  if (draft.departureAt && !isStrictCalendarDate(draft.departureAt)) {
+    errors.departureAt = "Enter a valid departure date using YYYY-MM-DD.";
   } else if (
-    arrivalTime !== null &&
-    departureTime !== null &&
-    !Number.isNaN(arrivalTime) &&
-    departureTime < arrivalTime
+    isStrictCalendarDate(draft.arrivalAt) &&
+    isStrictCalendarDate(draft.departureAt) &&
+    draft.departureAt < draft.arrivalAt
   ) {
-    errors.departureAt = "Departure must be after arrival.";
+    errors.departureAt = "Departure must be on or after arrival.";
   }
   if (headshot?.size === 0) errors.headshot = "Headshot cannot be empty.";
   else if (headshot && headshot.size > maxHeadshotBytes) {

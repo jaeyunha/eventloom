@@ -1,15 +1,21 @@
 "use client";
 
+import type { TimeDisambiguation } from "@eventloom/contracts";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TemporalDisambiguation } from "@/components/ui/temporal-disambiguation";
+import {
+  isTemporalDateDisabled,
+  rangeBoundaryTimeBounds,
+  temporalTimeBounds,
+} from "@/components/ui/temporal-picker-model";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "./event-date-picker.module.css";
 import {
   datePart,
   eventDatesBetween,
-  isEventDateDisabled,
   localDateKey,
   parseDateOnly,
   sortedUniqueDates,
@@ -29,7 +35,19 @@ export interface EventDatePickerProps extends EventDateSelectionValue {
   readonly id?: string;
   readonly selectionMode?: "single" | "range";
   readonly minimumDateTime?: string | undefined;
+  readonly maximumDateTime?: string | undefined;
   readonly minimumEndDate?: string | undefined;
+  readonly allowedDates?: readonly string[] | undefined;
+  readonly unchangedValues?: readonly string[] | undefined;
+  readonly timeZone?: string | undefined;
+  readonly startDisambiguation?: TimeDisambiguation | undefined;
+  readonly endDisambiguation?: TimeDisambiguation | undefined;
+  readonly onStartDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
+  readonly onEndDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
   readonly dateOnly?: boolean;
   readonly showModeToggle?: boolean;
   readonly showTimeControls?: boolean;
@@ -123,7 +141,15 @@ export function EventDatePicker({
   scheduleDates,
   selectionMode = "range",
   minimumDateTime,
+  maximumDateTime,
   minimumEndDate,
+  allowedDates,
+  unchangedValues,
+  timeZone,
+  startDisambiguation,
+  endDisambiguation,
+  onStartDisambiguationChange,
+  onEndDisambiguationChange,
   dateOnly = false,
   showModeToggle = true,
   showTimeControls = true,
@@ -147,6 +173,21 @@ export function EventDatePicker({
   const endDate = datePart(endsAt);
   const minimumDate = minimumDateTime?.slice(0, 10) ?? "";
   const minimumEndDateValue = minimumEndDate?.slice(0, 10) ?? "";
+  const constraints = {
+    ...(minimumDateTime === undefined ? {} : { minimum: minimumDateTime }),
+    ...(maximumDateTime === undefined ? {} : { maximum: maximumDateTime }),
+    ...(allowedDates === undefined ? {} : { allowedDates }),
+    ...(unchangedValues === undefined ? {} : { unchangedValues }),
+  };
+
+  function resetDisambiguation(boundary?: "start" | "end") {
+    if (boundary === undefined || boundary === "start") {
+      onStartDisambiguationChange?.(undefined);
+    }
+    if (boundary === undefined || boundary === "end") {
+      onEndDisambiguationChange?.(undefined);
+    }
+  }
   const initialMonth = parseDateOnly(scheduleDates[0] || startDate || minimumDate) ?? new Date();
   const [visibleMonth, setVisibleMonth] = useState(
     () => new Date(initialMonth.getFullYear(), initialMonth.getMonth(), 1, 12),
@@ -159,6 +200,7 @@ export function EventDatePicker({
 
   function changeMode(nextMode: EventDateMode) {
     if (nextMode === mode) return;
+    resetDisambiguation();
     if (nextMode === "individual") {
       onChange({
         mode: nextMode,
@@ -180,6 +222,7 @@ export function EventDatePicker({
   }
 
   function selectRangeDate(date: string) {
+    resetDisambiguation(isSingleSelection ? "start" : activeBoundary);
     if (isSingleSelection) {
       const nextValue = selectionDateTime(date, timePart(startsAt, defaultStartTime), dateOnly);
       onChange({
@@ -212,6 +255,7 @@ export function EventDatePicker({
   }
 
   function selectIndividualDate(date: string) {
+    resetDisambiguation();
     const nextDates = toggleEventDate(scheduleDates, date);
     const firstDate = nextDates[0] ?? "";
     const lastDate = nextDates.at(-1) ?? "";
@@ -232,6 +276,7 @@ export function EventDatePicker({
   }
 
   function updateTime(boundary: "start" | "end", time: string) {
+    resetDisambiguation(boundary);
     if (boundary === "start") {
       const nextStart = localDateTime(startDate, time);
       onChange({
@@ -251,6 +296,7 @@ export function EventDatePicker({
   }
 
   function clearSelection() {
+    resetDisambiguation();
     onChange({
       mode,
       startsAt: "",
@@ -393,12 +439,14 @@ export function EventDatePicker({
             {cells.map((cell) => {
               const dateDisabled =
                 disabled ||
-                isEventDateDisabled(
-                  cell.dateKey,
-                  minimumDate,
-                  mode === "range" && !isSingleSelection ? minimumEndDateValue : "",
-                  activeBoundary,
-                );
+                isTemporalDateDisabled(cell.dateKey, constraints) ||
+                (mode === "range" &&
+                  !isSingleSelection &&
+                  activeBoundary === "end" &&
+                  minimumEndDateValue !== "" &&
+                  (dateOnly
+                    ? cell.dateKey <= minimumEndDateValue
+                    : cell.dateKey < minimumEndDateValue));
               const individuallySelected = selectedDates.includes(cell.dateKey);
               const inRange =
                 mode === "range" &&
@@ -453,35 +501,93 @@ export function EventDatePicker({
             {showTimeControls ? (
               <>
                 <div className={styles.timeGrid} data-single={isSingleSelection}>
-                  <label htmlFor={`${id}-time`}>
-                    <span className={styles.detailLabel}>
-                      <Clock3 aria-hidden="true" />
-                      {startTimeLabel}
-                    </span>
-                    <Input
-                      aria-label={startTimeLabel}
-                      disabled={disabled || startDate === ""}
-                      id={`${id}-time`}
-                      type="time"
-                      value={startDate === "" ? "" : timePart(startsAt, defaultStartTime)}
-                      onChange={(event) => updateTime("start", event.target.value)}
-                    />
-                  </label>
-                  {isSingleSelection ? null : (
-                    <label htmlFor={`${id}-end-time`}>
+                  <div className={styles.timeField}>
+                    <label htmlFor={`${id}-time`}>
                       <span className={styles.detailLabel}>
                         <Clock3 aria-hidden="true" />
-                        {endTimeLabel}
+                        {startTimeLabel}
                       </span>
                       <Input
-                        aria-label={endTimeLabel}
-                        disabled={disabled || endDate === ""}
-                        id={`${id}-end-time`}
+                        aria-label={startTimeLabel}
+                        disabled={disabled || startDate === ""}
+                        id={`${id}-time`}
+                        max={
+                          (isSingleSelection
+                            ? temporalTimeBounds(startDate, constraints)
+                            : rangeBoundaryTimeBounds(
+                                "start",
+                                startDate,
+                                startsAt,
+                                endsAt,
+                                constraints,
+                              )
+                          ).maximum
+                        }
+                        min={
+                          (isSingleSelection
+                            ? temporalTimeBounds(startDate, constraints)
+                            : rangeBoundaryTimeBounds(
+                                "start",
+                                startDate,
+                                startsAt,
+                                endsAt,
+                                constraints,
+                              )
+                          ).minimum
+                        }
                         type="time"
-                        value={endDate === "" ? "" : timePart(endsAt, defaultEndTime)}
-                        onChange={(event) => updateTime("end", event.target.value)}
+                        value={startDate === "" ? "" : timePart(startsAt, defaultStartTime)}
+                        onChange={(event) => updateTime("start", event.target.value)}
                       />
                     </label>
+                    {timeZone === undefined ? null : (
+                      <TemporalDisambiguation
+                        id={`${id}-start`}
+                        label={startLabel}
+                        localDateTime={startsAt}
+                        timeZone={timeZone}
+                        value={startDisambiguation}
+                        disabled={disabled}
+                        onChange={(value) => onStartDisambiguationChange?.(value)}
+                      />
+                    )}
+                  </div>
+                  {isSingleSelection ? null : (
+                    <div className={styles.timeField}>
+                      <label htmlFor={`${id}-end-time`}>
+                        <span className={styles.detailLabel}>
+                          <Clock3 aria-hidden="true" />
+                          {endTimeLabel}
+                        </span>
+                        <Input
+                          aria-label={endTimeLabel}
+                          disabled={disabled || endDate === ""}
+                          id={`${id}-end-time`}
+                          max={
+                            rangeBoundaryTimeBounds("end", endDate, startsAt, endsAt, constraints)
+                              .maximum
+                          }
+                          min={
+                            rangeBoundaryTimeBounds("end", endDate, startsAt, endsAt, constraints)
+                              .minimum
+                          }
+                          type="time"
+                          value={endDate === "" ? "" : timePart(endsAt, defaultEndTime)}
+                          onChange={(event) => updateTime("end", event.target.value)}
+                        />
+                      </label>
+                      {timeZone === undefined ? null : (
+                        <TemporalDisambiguation
+                          id={`${id}-end`}
+                          label={endLabel}
+                          localDateTime={endsAt}
+                          timeZone={timeZone}
+                          value={endDisambiguation}
+                          disabled={disabled}
+                          onChange={(value) => onEndDisambiguationChange?.(value)}
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
                 <p className={styles.timeHint}>{timeHint}</p>

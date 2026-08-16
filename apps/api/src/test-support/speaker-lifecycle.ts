@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { SpeakerService } from "../features/speaker/service";
+import { SpeakerService, type SpeakerServiceOptions } from "../features/speaker/service";
 import { R2PrivateAssetGateway } from "../infrastructure/cloudflare/private-assets";
 import { D1SpeakerRepository } from "../infrastructure/cloudflare/repositories/speaker";
 import { SqliteD1 } from "./sqlite-d1";
@@ -126,7 +126,7 @@ function seedDatabase(database: SqliteD1): void {
 
 export interface SpeakerLifecycleFixture {
   readonly database: SqliteD1;
-  createPhase(): {
+  createPhase(options?: Pick<SpeakerServiceOptions, "eventTemporalSource" | "now">): {
     repository: D1SpeakerRepository;
     assets: R2PrivateAssetGateway;
     service: SpeakerService;
@@ -141,7 +141,7 @@ export function createSpeakerLifecycleFixture(): SpeakerLifecycleFixture {
   seedDatabase(database);
   return {
     database,
-    createPhase() {
+    createPhase(options) {
       const repository = new D1SpeakerRepository(database as unknown as D1Database);
       const assets = new R2PrivateAssetGateway(
         bucket as unknown as R2Bucket,
@@ -153,8 +153,11 @@ export function createSpeakerLifecycleFixture(): SpeakerLifecycleFixture {
         assets,
         service: new SpeakerService(repository, assets, {
           speakerSender: "speakers@example.test",
-          now: () => new Date(speakerLifecycleNow),
+          now: options?.now ?? (() => new Date(speakerLifecycleNow)),
           generateId: () => `lifecycle-${++idSequence}`,
+          ...(options?.eventTemporalSource === undefined
+            ? {}
+            : { eventTemporalSource: options.eventTemporalSource }),
         }),
       };
     },

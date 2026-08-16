@@ -1,3 +1,5 @@
+import { localDateInTimeZone } from "@eventloom/contracts";
+import { z } from "zod";
 import { advisoryUnavailable, closed, conflict, forbidden, invalidInput, notFound } from "./errors";
 import type {
   EvaluationRepository,
@@ -192,6 +194,7 @@ export interface EvaluationOrganizerWorkspaceDiagnostic {
   readonly message: string;
 }
 export interface EvaluationOrganizerWorkspace {
+  readonly event: EvaluationEventMetadata;
   readonly plan: EvaluationPlan;
   readonly submissions: readonly EvaluationSubmissionRecord[];
   readonly assignments: readonly EvaluationAssignment[];
@@ -199,6 +202,18 @@ export interface EvaluationOrganizerWorkspace {
   readonly aggregates: readonly EvaluationAggregate[];
   readonly decisions: Readonly<Record<string, EvaluationDecision>>;
   readonly diagnostics?: readonly EvaluationOrganizerWorkspaceDiagnostic[];
+}
+
+export interface EvaluationEventMetadata {
+  readonly id: string;
+  readonly name: string;
+  readonly timeZone: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
+export interface EvaluationEventMetadataSource {
+  getEventMetadata(tenantId: string, eventId: string): Promise<EvaluationEventMetadata | null>;
 }
 
 export interface AssignReviewersInput {
@@ -292,10 +307,27 @@ function requirePositiveInteger(value: number, field: string): void {
   }
 }
 
-function requireInstant(value: string | null | undefined, field: string): void {
-  if (value !== null && value !== undefined && !Number.isFinite(Date.parse(value))) {
-    throw invalidInput(`${field} must be an ISO-8601 instant or null.`);
+const evaluationInstantSchema = z.iso.datetime({ offset: true });
+
+function canonicalInstant(
+  value: string | null | undefined,
+  field: string,
+): string | null | undefined {
+  if (value === null || value === undefined) return value;
+  if (!evaluationInstantSchema.safeParse(value).success) {
+    throw invalidInput(`${field} must be an ISO-8601 instant with an explicit UTC offset or null.`);
   }
+  return new Date(value).toISOString();
+}
+
+function normalizeRounds(rounds: readonly ReviewRound[]): readonly ReviewRound[] {
+  return rounds.map((round) => ({
+    ...round,
+    ...(round.opensAt === undefined
+      ? {}
+      : { opensAt: canonicalInstant(round.opensAt, "Round open date") }),
+    closesAt: canonicalInstant(round.closesAt, "Round close date") ?? null,
+  }));
 }
 
 function hasRole(actor: EvaluationActor, eventId: string, role: "organizer" | "reviewer"): boolean {
@@ -413,8 +445,6 @@ function validateRounds(rounds: readonly ReviewRound[]): void {
     requireText(round.id, "Round id", 100);
     requireText(round.name, "Round name", 200);
     requirePositiveInteger(round.sequence, "Round sequence");
-    requireInstant(round.opensAt, "Round open date");
-    requireInstant(round.closesAt, "Round close date");
     if (
       round.opensAt !== null &&
       round.opensAt !== undefined &&
@@ -442,6 +472,65 @@ function validateRounds(rounds: readonly ReviewRound[]): void {
     sequences.add(round.sequence);
   }
 }
+
+function validatePlanTemporalIntegrity(input: {
+  readonly currentPlan?: EvaluationPlan | undefined;
+  readonly closesAt: string | null;
+  readonly rounds: readonly ReviewRound[];
+  readonly event: EvaluationEventMetadata;
+  readonly now: Date;
+}): void {
+  const eventEndsAt = Date.parse(input.event.endsAt);
+  if (!Number.isFinite(eventEndsAt)) {
+    throw invalidInput("The event end date is invalid.");
+  }
+  const today = localDateInTimeZone(input.now.toISOString(), input.event.timeZone);
+  const currentRounds = new Map(input.currentPlan?.rounds.map((round) => [round.id, round]) ?? []);
+  const boundaries = [
+    {
+      label: "Plan close date",
+      value: input.closesAt,
+      current: input.currentPlan?.closesAt,
+    },
+    ...input.rounds.flatMap((round) => {
+      const current = currentRounds.get(round.id);
+      return [
+        {
+          label: `Round ${round.sequence} open date`,
+          value: round.opensAt,
+          current: current?.opensAt,
+        },
+        {
+          label: `Round ${round.sequence} close date`,
+          value: round.closesAt,
+          current: current?.closesAt,
+        },
+      ];
+    }),
+  ];
+  for (const boundary of boundaries) {
+    if (boundary.value === undefined || boundary.value === null) continue;
+    const boundaryTime = Date.parse(boundary.value);
+    if (boundaryTime > eventEndsAt) {
+      throw invalidInput(`${boundary.label} cannot be after the event ends.`);
+    }
+    if (
+      boundary.value !== boundary.current &&
+      localDateInTimeZone(boundary.value, input.event.timeZone) < today
+    ) {
+      throw invalidInput(`${boundary.label} cannot be before today.`);
+    }
+  }
+  const finalRound = [...input.rounds].sort((left, right) => right.sequence - left.sequence)[0];
+  if (
+    input.closesAt !== null &&
+    finalRound?.closesAt != null &&
+    Date.parse(input.closesAt) < Date.parse(finalRound.closesAt)
+  ) {
+    throw invalidInput("Plan close date cannot be before the final round closes.");
+  }
+}
+
 function roundsRequireBlind(rounds: readonly ReviewRound[]): boolean {
   return rounds.some(
     (round) =>
@@ -844,6 +933,7 @@ export class EvaluationService {
   readonly #acceptanceHandoffInFlight = new Map<string, Promise<void>>();
   readonly #repository: EvaluationRepository;
   readonly #submissions: SubmissionReviewSource;
+  readonly #eventSource: EvaluationEventMetadataSource;
   readonly #clock: () => Date;
   readonly #aiSuggestionProvider:
     | EvaluationAiSuggestionProvider
@@ -854,10 +944,12 @@ export class EvaluationService {
   constructor(
     repository: EvaluationRepository,
     submissions: SubmissionReviewSource,
+    eventSource: EvaluationEventMetadataSource,
     options: EvaluationServiceOptions = {},
   ) {
     this.#repository = repository;
     this.#submissions = submissions;
+    this.#eventSource = eventSource;
     this.#clock = options.clock ?? (() => new Date());
     this.#acceptanceHandoff = options.acceptanceHandoff;
     this.#decisionProjection = options.decisionProjection;
@@ -867,6 +959,13 @@ export class EvaluationService {
       options.aiSuggestionProducer,
     );
   }
+
+  async #eventMetadata(tenantId: string, eventId: string): Promise<EvaluationEventMetadata> {
+    const event = await this.#eventSource.getEventMetadata(tenantId, eventId);
+    if (event === null) throw notFound("The event could not be found.");
+    return event;
+  }
+
   async listPlans(actor: EvaluationActor, eventId?: string): Promise<readonly EvaluationPlan[]> {
     if (actor.kind !== "human") throw forbidden();
     const plans = await this.#repository.listPlans(actor.tenantId, eventId);
@@ -923,6 +1022,7 @@ export class EvaluationService {
   ): Promise<EvaluationOrganizerWorkspace> {
     const normalizedEventId = requireText(eventId, "Event id", 100);
     requireHumanOrganizer(actor, normalizedEventId);
+    const event = await this.#eventMetadata(actor.tenantId, normalizedEventId);
     const normalizedPreferredPlanId =
       preferredPlanId === undefined ? undefined : requireText(preferredPlanId, "Plan id", 100);
     const listedPlansPromise = this.#repository.listPlans(actor.tenantId, normalizedEventId);
@@ -1028,6 +1128,7 @@ export class EvaluationService {
       planDecisions.map((decision) => [decision.submissionId, decision] as const),
     );
     return {
+      event,
       plan,
       submissions,
       assignments: effectiveAssignments,
@@ -1075,13 +1176,14 @@ export class EvaluationService {
     const id = requireText(input.id, "Plan id", 100);
     const eventId = requireText(input.eventId, "Event id", 100);
     const name = requireText(input.name, "Plan name", 200);
-    requireInstant(input.closesAt, "Plan close date");
+    const closesAt = canonicalInstant(input.closesAt, "Plan close date") ?? null;
+    const rounds = normalizeRounds(input.rounds);
     requirePositiveInteger(input.assignmentRule.reviewsPerSubmission, "Reviews per submission");
     requirePositiveInteger(
       input.assignmentRule.maxAssignmentsPerReviewer,
       "Maximum assignments per reviewer",
     );
-    validateRounds(input.rounds);
+    validateRounds(rounds);
     const reviewerProjection = normalizeProjection(
       input.reviewerProjection ?? input.evaluatorProjection ?? input.projection,
     );
@@ -1089,7 +1191,15 @@ export class EvaluationService {
       throw conflict("An evaluation plan with this id already exists.");
     }
 
-    const now = this.#clock().toISOString();
+    const now = this.#clock();
+    const event = await this.#eventMetadata(actor.tenantId, eventId);
+    validatePlanTemporalIntegrity({
+      closesAt,
+      rounds,
+      event,
+      now,
+    });
+    const nowIso = now.toISOString();
     const plan: EvaluationPlan = {
       id,
       tenantId: actor.tenantId,
@@ -1097,13 +1207,13 @@ export class EvaluationService {
       name,
       status: "draft",
       blindReview: input.blindReview || roundsRequireBlind(input.rounds),
-      closesAt: input.closesAt,
+      closesAt,
       assignmentRule: { ...input.assignmentRule },
-      rounds: structuredClone(input.rounds),
+      rounds: structuredClone(rounds),
       reviewerProjection,
       version: 1,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
     await this.#repository.putPlan(plan, null);
     return plan;
@@ -1125,16 +1235,27 @@ export class EvaluationService {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
     const name = input.name === undefined ? plan.name : requireText(input.name, "Plan name", 200);
-    const closesAt = input.closesAt === undefined ? plan.closesAt : input.closesAt;
-    requireInstant(closesAt, "Plan close date");
+    const closesAt =
+      input.closesAt === undefined
+        ? plan.closesAt
+        : (canonicalInstant(input.closesAt, "Plan close date") ?? null);
     const assignmentRule = input.assignmentRule ?? plan.assignmentRule;
     requirePositiveInteger(assignmentRule.reviewsPerSubmission, "Reviews per submission");
     requirePositiveInteger(
       assignmentRule.maxAssignmentsPerReviewer,
       "Maximum assignments per reviewer",
     );
-    const rounds = input.rounds === undefined ? plan.rounds : input.rounds;
+    const rounds = input.rounds === undefined ? plan.rounds : normalizeRounds(input.rounds);
     validateRounds(rounds);
+    const nowDate = this.#clock();
+    const event = await this.#eventMetadata(actor.tenantId, plan.eventId);
+    validatePlanTemporalIntegrity({
+      currentPlan: plan,
+      closesAt,
+      rounds,
+      event,
+      now: nowDate,
+    });
     const reviewerProjectionInput =
       input.reviewerProjection ?? input.evaluatorProjection ?? input.projection;
     const reviewerProjection = normalizeProjection(
@@ -1143,7 +1264,7 @@ export class EvaluationService {
         plan.evaluatorProjection ??
         plan.projection,
     );
-    const now = this.#clock().toISOString();
+    const now = nowDate.toISOString();
     const updated: EvaluationPlan = {
       ...plan,
       name,
@@ -1181,6 +1302,14 @@ export class EvaluationService {
     if (source.version !== input.expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
+    const event = await this.#eventMetadata(actor.tenantId, source.eventId);
+    validatePlanTemporalIntegrity({
+      currentPlan: source,
+      closesAt: source.closesAt,
+      rounds: source.rounds,
+      event,
+      now: this.#clock(),
+    });
     const now = this.#clock().toISOString();
     const revision: EvaluationPlan = {
       ...structuredClone(source),
@@ -1218,6 +1347,14 @@ export class EvaluationService {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
     const now = this.#clock();
+    const event = await this.#eventMetadata(actor.tenantId, plan.eventId);
+    validatePlanTemporalIntegrity({
+      currentPlan: plan,
+      closesAt: plan.closesAt,
+      rounds: plan.rounds,
+      event,
+      now,
+    });
     const gradingLockedAt = plan.gradingLockedAt ?? now.toISOString();
     const nextVersion = plan.version + 1;
     if (plan.closesAt !== null && Date.parse(plan.closesAt) <= now.getTime()) {
@@ -1286,14 +1423,22 @@ export class EvaluationService {
     if (plan.version !== input.expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
-    requireInstant(input.closesAt, "closesAt");
+    const closesAt = canonicalInstant(input.closesAt, "closesAt") ?? null;
     const now = this.#clock();
-    if (input.closesAt !== null && Date.parse(input.closesAt) <= now.getTime()) {
+    if (closesAt !== null && Date.parse(closesAt) <= now.getTime()) {
       throw invalidInput("closesAt must be in the future.");
     }
+    const event = await this.#eventMetadata(actor.tenantId, plan.eventId);
+    validatePlanTemporalIntegrity({
+      currentPlan: plan,
+      closesAt,
+      rounds: plan.rounds,
+      event,
+      now,
+    });
     const updated: EvaluationPlan = {
       ...plan,
-      closesAt: input.closesAt,
+      closesAt,
       version: plan.version + 1,
       updatedAt: now.toISOString(),
     };

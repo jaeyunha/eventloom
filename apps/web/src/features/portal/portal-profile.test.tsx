@@ -30,6 +30,8 @@ vi.mock("../../components/ui", () => {
     FieldLabel: element("label"),
     Input: element("input"),
     Textarea: element("textarea"),
+    TemporalPicker: ({ startValue, endValue }: { startValue: string; endValue: string }) =>
+      createElement("div", { "data-temporal-picker": "range" }, `${startValue}:${endValue}`),
     Button: element("button"),
     Checkbox: ({
       checked,
@@ -57,8 +59,8 @@ const profile: PortalProfile = {
   },
   travelLogistics: {
     travelRequired: true,
-    arrivalAt: "2026-09-10T14:00",
-    departureAt: "2026-09-13T09:00",
+    arrivalAt: "2026-09-10",
+    departureAt: "2026-09-13",
     accommodation: "Conference hotel",
     dietaryRequirements: "Vegetarian",
     accessibilityNeeds: "Step-free route",
@@ -69,6 +71,30 @@ const profile: PortalProfile = {
 };
 
 describe("portal profile", () => {
+  it("converts legacy travel timestamps with the authoritative event timezone", () => {
+    expect(
+      profileDraftFor(
+        {
+          ...profile,
+          travelLogistics: {
+            travelRequired: true,
+            arrivalAt: "2026-09-10T06:30:00.000Z",
+            departureAt: "2026-09-13",
+            accommodation: "Conference hotel",
+            dietaryRequirements: "Vegetarian",
+            accessibilityNeeds: "Step-free route",
+            travelNotes: "Train preferred",
+          },
+        },
+        {
+          timeZone: "America/Los_Angeles",
+          startsAt: "2026-09-10T16:00:00.000Z",
+          endsAt: "2026-09-13T23:00:00.000Z",
+        },
+      ).arrivalAt,
+    ).toBe("2026-09-09");
+  });
+
   it("round-trips every public and private field through the existing save payload", () => {
     const draft = profileDraftFor(profile);
     expect(draft).toMatchObject({
@@ -78,8 +104,8 @@ describe("portal profile", () => {
       twitter: profile.socialLinks?.twitter,
       linkedin: profile.socialLinks?.linkedin,
       travelRequired: true,
-      arrivalAt: "2026-09-10T14:00",
-      departureAt: "2026-09-13T09:00",
+      arrivalAt: "2026-09-10",
+      departureAt: "2026-09-13",
       accommodation: "Conference hotel",
       dietaryRequirements: "Vegetarian",
       accessibilityNeeds: "Step-free route",
@@ -126,12 +152,12 @@ describe("portal profile", () => {
       ...profileDraftFor(profile),
       twitter: "javascript:alert(1)",
       linkedin: "https://example.com/not-linkedin",
-      departureAt: "2026-09-09T09:00",
+      departureAt: "2026-09-09",
     };
     const errors = validateProfileDraft(draft, null);
     expect(errors.twitter).toContain("HTTP or HTTPS");
     expect(errors.linkedin).toContain("matching profile network");
-    expect(errors.departureAt).toContain("after arrival");
+    expect(errors.departureAt).toContain("on or after arrival");
 
     const twitter = { focus: vi.fn() } as unknown as HTMLInputElement;
     const linkedin = { focus: vi.fn() } as unknown as HTMLInputElement;
@@ -200,6 +226,7 @@ describe("portal profile", () => {
     expect(publicMarkup).toContain('aria-describedby="profile-twitter-error"');
     expect(publicMarkup).not.toContain('id="profile-linkedin-error"');
     expect(privateMarkup).toContain("Private event logistics");
+    expect(privateMarkup).toContain('data-temporal-picker="range"');
     expect(privateMarkup).toContain("not published");
     expect(privateMarkup).toContain("Dietary requirements");
     expect(privateMarkup).not.toContain("aria-invalid");

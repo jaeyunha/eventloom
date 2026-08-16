@@ -3,6 +3,7 @@ import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../comp
 import { Input } from "../../components/ui/input";
 import { TemporalPicker } from "../../components/ui/temporal-picker";
 import { Textarea } from "../../components/ui/textarea";
+import { type SpeakerEventTemporalContext, travelDateWarnings } from "./speaker-temporal-policy";
 import styles from "./speaker-workspace.module.css";
 import type { CreateDraft, EditDraft } from "./speaker-workspace-types";
 
@@ -10,11 +11,17 @@ export function ProfileFields({
   draft,
   onChange,
   disabled,
+  temporalContext,
 }: Readonly<{
   draft: CreateDraft | EditDraft;
   onChange: (field: keyof CreateDraft, value: string | boolean) => void;
   disabled: boolean;
+  temporalContext?: SpeakerEventTemporalContext;
 }>) {
+  const travelWarnings =
+    temporalContext === undefined
+      ? []
+      : travelDateWarnings(draft.arrivalAt, draft.departureAt, temporalContext);
   return (
     <FieldGroup className={styles.actionsStack}>
       <div className={styles.fieldGrid}>
@@ -141,6 +148,11 @@ export function ProfileFields({
                 onChange("departureAt", end);
               }}
             />
+            {travelWarnings.map((warning) => (
+              <p key={warning} className={styles.muted} role="status">
+                {warning}
+              </p>
+            ))}
           </Field>
           <Field>
             <FieldLabel htmlFor="speaker-accommodation">Accommodation</FieldLabel>

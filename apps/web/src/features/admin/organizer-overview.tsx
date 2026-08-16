@@ -1055,7 +1055,8 @@ export function OrganizerEventEditor({
   );
   const [formError, setFormError] = useState<string | null>(null);
   const eventSlugPreview = normalizeOrganizerEventSlug(values.slug || values.name);
-  const minimumDateTime = event ? undefined : organizerEventMinimumDateTimeLocal(values.timeZone);
+  const minimumDateTime = organizerEventMinimumDateTimeLocal(values.timeZone);
+  const originalValues = event === undefined ? undefined : organizerEventEditorFormValues(event);
 
   useEffect(() => {
     setValues(organizerEventEditorFormValues(event));
@@ -1072,7 +1073,18 @@ export function OrganizerEventEditor({
 
   async function submit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
-    const result = validateOrganizerEventForm(values, { allowPastDates: event !== undefined });
+    const result = validateOrganizerEventForm(values, {
+      ...(event === undefined
+        ? {}
+        : {
+            currentEvent: {
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+              cfpOpensAt: event.cfpSettings.opensAt,
+              cfpClosesAt: event.cfpSettings.closesAt,
+            },
+          }),
+    });
     if (!result.input) {
       setFormError(result.error ?? "Check the event fields.");
       return;
@@ -1173,7 +1185,18 @@ export function OrganizerEventEditor({
             value={values.timeZone}
             placeholder="America/Los_Angeles"
             required
-            onChange={(formEvent) => updateValue("timeZone", formEvent.target.value)}
+            onChange={(formEvent) => {
+              const timeZone = formEvent.target.value;
+              setValues((current) => ({
+                ...current,
+                timeZone,
+                startDisambiguation: undefined,
+                endDisambiguation: undefined,
+                cfpOpenDisambiguation: undefined,
+                cfpCloseDisambiguation: undefined,
+              }));
+              if (formError) setFormError(null);
+            }}
           />
           <span className={styles.eventFieldDescription}>
             All event and agenda times are entered and shown in this time zone.
@@ -1193,6 +1216,20 @@ export function OrganizerEventEditor({
         endsAt={values.endsAt}
         scheduleDates={values.scheduleDates}
         minimumDateTime={minimumDateTime}
+        unchangedValues={
+          originalValues === undefined
+            ? undefined
+            : [originalValues.startsAt, originalValues.endsAt]
+        }
+        timeZone={values.timeZone}
+        startDisambiguation={values.startDisambiguation}
+        endDisambiguation={values.endDisambiguation}
+        onStartDisambiguationChange={(value) =>
+          setValues((current) => ({ ...current, startDisambiguation: value }))
+        }
+        onEndDisambiguationChange={(value) =>
+          setValues((current) => ({ ...current, endDisambiguation: value }))
+        }
         onChange={(selection: EventDateSelectionValue) => {
           setValues((current) => ({
             ...current,
@@ -1251,6 +1288,29 @@ export function OrganizerEventEditor({
                 startName="cfpSettings.opensAt"
                 endName="cfpSettings.closesAt"
                 minimumDateTime={minimumDateTime}
+                maximumDateTime={values.startsAt}
+                unchangedValues={
+                  originalValues === undefined
+                    ? undefined
+                    : [originalValues.cfpOpensAt, originalValues.cfpClosesAt].filter(
+                        (value) => value !== "",
+                      )
+                }
+                timeZone={values.timeZone}
+                startDisambiguation={values.cfpOpenDisambiguation}
+                endDisambiguation={values.cfpCloseDisambiguation}
+                onStartDisambiguationChange={(value) =>
+                  setValues((current) => ({
+                    ...current,
+                    cfpOpenDisambiguation: value,
+                  }))
+                }
+                onEndDisambiguationChange={(value) =>
+                  setValues((current) => ({
+                    ...current,
+                    cfpCloseDisambiguation: value,
+                  }))
+                }
                 eyebrow="CFP schedule"
                 description="Set the proposal window directly on the calendar."
                 clearable

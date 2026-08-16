@@ -84,6 +84,61 @@ async function atomic(
   }
 }
 
+function canonicalPlanBoundaries(plan: EvaluationPlan): EvaluationPlan {
+  const canonical = (value: string | null | undefined): string | null | undefined => {
+    if (value === null || value === undefined) return value;
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) writeConflict("Evaluation plan contains an invalid boundary.");
+    return new Date(timestamp).toISOString();
+  };
+  return {
+    ...plan,
+    closesAt: canonical(plan.closesAt) ?? null,
+    rounds: plan.rounds.map((round) => ({
+      ...round,
+      ...(round.opensAt === undefined ? {} : { opensAt: canonical(round.opensAt) }),
+      closesAt: canonical(round.closesAt) ?? null,
+    })),
+  };
+}
+
+function latestPlanBoundary(plan: EvaluationPlan): string | null {
+  const boundaries = [
+    plan.closesAt,
+    ...plan.rounds.flatMap((round) => [round.opensAt, round.closesAt]),
+  ].filter((value): value is string => value != null);
+  return boundaries.sort((left, right) => right.localeCompare(left))[0] ?? null;
+}
+
+function planWithinEventGuard(database: D1Database, plan: EvaluationPlan): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+       SELECT 1
+         FROM review_plans p
+         JOIN events e
+           ON e.organization_id = p.organization_id
+          AND e.id = p.event_id
+        WHERE p.organization_id = ?
+          AND p.event_id = ?
+          AND p.id = ?
+          AND (p.closes_at IS NULL OR p.closes_at <= e.ends_at)
+          AND NOT EXISTS (
+            SELECT 1
+              FROM review_rounds r
+             WHERE r.organization_id = p.organization_id
+               AND r.event_id = p.event_id
+               AND r.plan_id = p.id
+               AND (
+                 (r.opens_at IS NOT NULL AND r.opens_at > e.ends_at)
+                 OR (r.closes_at IS NOT NULL AND r.closes_at > e.ends_at)
+               )
+          )
+     )`,
+    [plan.tenantId, plan.eventId, plan.id],
+  );
+}
+
 function assignmentFromRow(row: Row): EvaluationAssignment {
   const predecessorAssignmentId = nullableText(row.predecessor_assignment_id);
   const successorAssignmentId = nullableText(row.successor_assignment_id);
@@ -210,6 +265,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
+    plan = canonicalPlanBoundaries(plan);
     const projection = plan.reviewerProjection ?? plan.evaluatorProjection ?? plan.projection;
     const commands: D1PreparedStatement[] = [
       expectedVersion === null
@@ -335,11 +391,26 @@ export class D1EvaluationRepository implements EvaluationRepository {
         ),
       );
     }
+    const latestBoundary = latestPlanBoundary(plan);
+    commands.push(
+      guard(
+        this.database,
+        `EXISTS (
+           SELECT 1
+             FROM events
+            WHERE organization_id = ?
+              AND id = ?
+              AND (? IS NULL OR ends_at >= ?)
+         )`,
+        [plan.tenantId, plan.eventId, latestBoundary, latestBoundary],
+      ),
+    );
     for (const round of plan.rounds) this.addRoundStatements(commands, plan, round);
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
   }
 
   async putPlanState(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+    plan = canonicalPlanBoundaries(plan);
     const commands = [
       updateGuard(
         this.database,
@@ -366,10 +437,39 @@ export class D1EvaluationRepository implements EvaluationRepository {
         ],
       ),
     ];
+    commands.push(
+      guard(
+        this.database,
+        `EXISTS (
+           SELECT 1
+             FROM review_plans p
+             JOIN events e
+               ON e.organization_id = p.organization_id
+              AND e.id = p.event_id
+            WHERE p.organization_id = ?
+              AND p.event_id = ?
+              AND p.id = ?
+              AND (p.closes_at IS NULL OR p.closes_at <= e.ends_at)
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM review_rounds r
+                 WHERE r.organization_id = p.organization_id
+                   AND r.event_id = p.event_id
+                   AND r.plan_id = p.id
+                   AND (
+                     (r.opens_at IS NOT NULL AND r.opens_at > e.ends_at)
+                     OR (r.closes_at IS NOT NULL AND r.closes_at > e.ends_at)
+                   )
+              )
+         )`,
+        [plan.tenantId, plan.eventId, plan.id],
+      ),
+    );
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
   }
 
   async putPlanSchedule(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+    plan = canonicalPlanBoundaries(plan);
     const commands = [
       updateGuard(
         this.database,
@@ -393,6 +493,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
         ],
       ),
     ];
+    commands.push(planWithinEventGuard(this.database, plan));
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
   }
 

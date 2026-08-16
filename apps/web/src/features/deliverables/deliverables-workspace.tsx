@@ -57,6 +57,11 @@ import {
 import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import {
+  deadlineAfterEventWarning,
+  deadlineTemporalPolicy,
+  type SpeakerEventTemporalContext,
+} from "@/features/speakers/speaker-temporal-policy";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createDeliverablesApi,
@@ -209,6 +214,7 @@ export interface DeliverablesSnapshot {
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
   readonly matrix?: DeliverableTaskMatrix;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
 }
 
@@ -251,6 +257,7 @@ export interface DeliverablesWorkspaceViewProps {
   readonly profiles: readonly DeliverableSpeakerProfile[];
   readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
   readonly matrixItems?: readonly DeliverableMatrixItem[];
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly loading?: boolean;
   readonly busy?: boolean;
   readonly error?: string | null;
@@ -698,6 +705,7 @@ function DeliverablesSummary({
   onFilter,
   participants,
   busy,
+  temporalContext,
   onCreateTask,
 }: {
   readonly rows: readonly DeliverableRow[];
@@ -705,6 +713,7 @@ function DeliverablesSummary({
   readonly onFilter: (filter: ContentRequestStatusFilter) => void;
   readonly participants: readonly DeliverableSubjectParticipant[];
   readonly busy: boolean;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }) {
   const metrics = contentRequestMetrics(rows);
@@ -727,6 +736,7 @@ function DeliverablesSummary({
         <TaskComposer
           participants={participants}
           busy={busy}
+          {...(temporalContext === undefined ? {} : { temporalContext })}
           {...(onCreateTask === undefined ? {} : { onCreateTask })}
         />
       </div>
@@ -751,10 +761,12 @@ function DeliverablesSummary({
 function TaskComposer({
   participants,
   busy,
+  temporalContext,
   onCreateTask,
 }: Readonly<{
   participants: readonly DeliverableSubjectParticipant[];
   busy: boolean;
+  temporalContext?: SpeakerEventTemporalContext;
   onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }>) {
   const [open, setOpen] = useState(false);
@@ -776,6 +788,10 @@ function TaskComposer({
   const [formError, setFormError] = useState<string | null>(null);
   const assignmentCount = assigneeIds.length;
   const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
+  const deadlinePolicy =
+    temporalContext === undefined ? null : deadlineTemporalPolicy(temporalContext);
+  const deadlineWarning =
+    temporalContext === undefined ? null : deadlineAfterEventWarning(dueAt, temporalContext);
 
   function toggleAssignee(id: string): void {
     setAssigneeIds((current) =>
@@ -923,8 +939,14 @@ function TaskComposer({
                     label="Due date"
                     eyebrow="Request deadline"
                     description="Choose the exact day this content is due."
+                    minimumDateTime={deadlinePolicy?.minimumDate}
                     onChange={setDueAt}
                   />
+                  {deadlineWarning ? (
+                    <p className={mutedClass} role="status">
+                      {deadlineWarning}
+                    </p>
+                  ) : null}
                 </div>
               </div>
               <div className={fieldClass}>
@@ -2106,6 +2128,7 @@ export function DeliverablesWorkspaceView({
   profiles,
   speakerContentHistory,
   matrixItems,
+  temporalContext,
   loading = false,
   busy = false,
   error = null,
@@ -2399,6 +2422,7 @@ export function DeliverablesWorkspaceView({
                 onFilter={(status) => setFilters((current) => ({ ...current, status }))}
                 participants={participants}
                 busy={busy}
+                {...(temporalContext === undefined ? {} : { temporalContext })}
                 {...(onCreateTask === undefined ? {} : { onCreateTask })}
               />
               <DeliverablesTable
@@ -2835,7 +2859,14 @@ export async function loadDeliverablesCoreSnapshot(
       : matrixAssets(matrix);
   const profiles = requiredDeliverablesCoreValue(profilesResult, "speaker profiles");
 
-  return { sessions, tasks, assets, profiles, ...(matrix === undefined ? {} : { matrix }) };
+  return {
+    sessions,
+    tasks,
+    assets,
+    profiles,
+    ...(matrix === undefined ? {} : { matrix }),
+    ...(matrix?.temporalContext === undefined ? {} : { temporalContext: matrix.temporalContext }),
+  };
 }
 export interface DeliverablesWorkspaceScope {
   readonly api: DeliverablesApi;
@@ -4208,6 +4239,9 @@ export function DeliverablesWorkspace({
       assets={renderedAssets}
       profiles={renderedProfiles}
       {...(renderedMatrix === undefined ? {} : { matrixItems: renderedMatrix.items })}
+      {...(renderedMatrix?.temporalContext === undefined
+        ? {}
+        : { temporalContext: renderedMatrix.temporalContext })}
       loading={renderedStateIsCurrent ? loading : seededCoreData === undefined}
       loadingSessionHistories={renderedStateIsCurrent && loadingSessionHistories}
       busy={renderedStateIsCurrent && busy}

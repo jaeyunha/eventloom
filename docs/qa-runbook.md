@@ -98,7 +98,7 @@ Production receives only a bounded smoke check after the complete staging workfl
 - Roll back to a prior revision and verify the new corrective revision and public projections.
 - Verify one calendar invitation uses `calendar@sessionboard.namuh.co` as organizer and a UID ending in `@calendar.sessionboard.namuh.co`; verify update/cancel idempotency without duplicate delivery.
 
-The agenda resolver has a DST-aware contract, but two current implementation gaps must remain explicit: changing an event timezone does not yet have a delivered full draft migration/revalidation workflow, and the API does not yet expose stable DST-specific error mapping for nonexistent or ambiguous local times. Exercise such cases only as diagnostics, record the observed response, and never mark either gap as a passing delivered feature.
+The agenda resolver and API have stable DST-specific error mapping for nonexistent and ambiguous local times. Those route errors are source-present and locally tested, but no deployed or staging observation has been recorded. Changing an event timezone still lacks a delivered full draft migration/revalidation workflow. Exercise DST cases locally or as deployment diagnostics, record the observed boundary, and never treat local tests as release evidence.
 
 ### API, webhooks, and delivery failures
 
@@ -205,9 +205,9 @@ Keep these evidence classes separate in every result:
   `report.json`. It is not a replacement for a manual row.
 
 Local or mocked AI diagnostics may be useful troubleshooting, but they are
-never release evidence. The two known calendar gaps (timezone migration and
-stable DST-specific error mapping) remain limitations even when a local
-resolver test passes.
+never release evidence. Timezone migration remains a known calendar limitation.
+Stable DST-specific route errors are source-present and locally tested, but
+remain without deployed or staging evidence.
 
 ## Evaluator manual evidence workflow
 

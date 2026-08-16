@@ -73,7 +73,19 @@ function principal(organizationId = "org-a"): AuthPrincipal {
   };
 }
 
-function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
+function createEngine(
+  provider?: AgendaSuggestionProvider,
+  eventSchedule: {
+    startsAt: string;
+    endsAt: string;
+    timeZone: string;
+    scheduleDates?: readonly string[];
+  } = {
+    startsAt: "2026-01-01T00:00:00.000Z",
+    endsAt: "2028-01-01T00:00:00.000Z",
+    timeZone: "UTC",
+  },
+): AgendaEngine {
   let sequence = 0;
   const idGenerator: AgendaIdGenerator = {
     nextId: (prefix) => `${prefix}-${++sequence}`,
@@ -81,6 +93,7 @@ function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
   return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
     idGenerator,
     ...(provider === undefined ? {} : { suggestionProvider: provider }),
+    eventScheduleForEvent: async () => eventSchedule,
   });
 }
 
@@ -91,7 +104,6 @@ async function initialize(
   await engine.createAgenda({
     eventId: "event-a",
     actorId: "organizer-1",
-    timeZone: "UTC",
     minimumTravelMinutes: 0,
     ...agendaCatalog,
   });
@@ -366,17 +378,54 @@ describe("canonical agenda draft routes", () => {
     expect(organizationIdForEvent).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledTimes(1);
   });
+  it("does not accept a caller-selected timezone when creating an agenda", async () => {
+    const eventSchedule = {
+      startsAt: "2026-08-10T16:00:00.000Z",
+      endsAt: "2026-08-10T23:00:00.000Z",
+      timeZone: "America/Los_Angeles",
+    };
+    const injectedEngine = createEngine(undefined, eventSchedule);
+    const injectedApp = appFor(injectedEngine);
+    const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+    const injected = await injectedApp.request(root, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...catalog,
+        timeZone: "UTC",
+        minimumTravelMinutes: 0,
+      }),
+    });
+    expect(injected.status).toBe(400);
+
+    const engine = createEngine(undefined, eventSchedule);
+    const app = appFor(engine);
+    const created = await app.request(root, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...catalog, minimumTravelMinutes: 0 }),
+    });
+    expect(created.status).toBe(201);
+    expect(await responseData<AgendaDraft>(created)).toMatchObject({
+      timeZone: "America/Los_Angeles",
+    });
+  });
+
   it("uses authoritative event metadata for an empty organizer workspace", async () => {
-    const engine = createEngine();
-    await initialize(engine);
-    const eventMetadataForEvent = vi.fn(async () => ({
+    const eventMetadata = {
       slug: "devflow-conf-2027",
       name: "DevFlow Conf 2027",
       timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:30:00.000Z",
+      endsAt: "2027-05-15T00:30:00.000Z",
       startsOn: "2027-05-12",
       endsOn: "2027-05-14",
+      scheduleDates: ["2027-05-12", "2027-05-14"],
       venueName: "DevFlow venue",
-    }));
+    } as const;
+    const engine = createEngine(undefined, eventMetadata);
+    await initialize(engine);
+    const eventMetadataForEvent = vi.fn(async () => eventMetadata);
     const app = appFor(engine, principal(), "org-a", undefined, eventMetadataForEvent);
 
     const response = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
@@ -387,8 +436,11 @@ describe("canonical agenda draft routes", () => {
         id: string;
         name: string;
         timeZone: string;
+        startsAt: string;
+        endsAt: string;
         startsOn: string;
         endsOn: string;
+        scheduleDates: readonly string[];
       };
       draft: { entries: readonly unknown[] };
     }>(response);
@@ -396,8 +448,11 @@ describe("canonical agenda draft routes", () => {
       id: "event-a",
       name: "DevFlow Conf 2027",
       timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:30:00.000Z",
+      endsAt: "2027-05-15T00:30:00.000Z",
       startsOn: "2027-05-12",
       endsOn: "2027-05-14",
+      scheduleDates: ["2027-05-12", "2027-05-14"],
     });
     expect(data.draft.entries).toHaveLength(0);
     expect(eventMetadataForEvent).toHaveBeenCalledTimes(1);
@@ -450,11 +505,13 @@ describe("canonical agenda draft routes", () => {
     });
     expect(eventMetadataForEvent).toHaveBeenCalledTimes(2);
   });
-  it("enforces authoritative event dates on draft writes and publication", async () => {
+  it("enforces authoritative event instants and sparse dates with field-level DST errors", async () => {
     const metadata = async () => ({
       slug: "devflow-conf-2027",
       name: "DevFlow Conf 2027",
       timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:30:00.000Z",
+      endsAt: "2027-05-15T00:30:00.000Z",
       startsOn: "2027-05-12",
       endsOn: "2027-05-14",
       scheduleDates: ["2027-05-12", "2027-05-14"],
@@ -470,7 +527,7 @@ describe("canonical agenda draft routes", () => {
       endsAtLocal,
     });
 
-    const engine = createEngine();
+    const engine = createEngine(undefined, await metadata());
     await initialize(engine);
     const app = appFor(engine, principal(), "org-a", undefined, metadata);
     const valid = await app.request(`${root}/draft`, {
@@ -485,7 +542,9 @@ describe("canonical agenda draft routes", () => {
 
     for (const invalidEntry of [
       entry("2026-08-12T09:00", "2026-08-12T10:00"),
+      entry("2027-05-12T09:00", "2027-05-12T10:00"),
       entry("2027-05-13T09:00", "2027-05-13T10:00"),
+      entry("2027-05-14T17:00", "2027-05-14T18:00"),
       entry("2027-05-12T23:30", "2027-05-13T00:30"),
     ]) {
       const response = await app.request(`${root}/draft`, {
@@ -518,6 +577,61 @@ describe("canonical agenda draft routes", () => {
     });
     expect(publish.status).toBe(400);
     expect(await responseError(publish)).toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const foldMetadata = async () => ({
+      slug: "fall-back",
+      name: "Fall Back",
+      timeZone: "America/Los_Angeles",
+      startsAt: "2026-11-01T07:00:00.000Z",
+      endsAt: "2026-11-01T12:00:00.000Z",
+      startsOn: "2026-11-01",
+      endsOn: "2026-11-01",
+      scheduleDates: ["2026-11-01"],
+      venueName: null,
+    });
+    const foldEngine = createEngine(undefined, await foldMetadata());
+    await initialize(foldEngine);
+    const foldApp = appFor(foldEngine, principal(), "org-a", undefined, foldMetadata);
+    const ambiguous = await foldApp.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [entry("2026-11-01T01:30", "2026-11-01T02:15")],
+      }),
+    });
+    expect(ambiguous.status).toBe(400);
+    expect(await responseError(ambiguous)).toMatchObject({
+      code: "VALIDATION_FAILED",
+      details: [
+        {
+          path: ["entries", 0, "startsAtLocal"],
+          code: "agenda.ambiguous_local_time",
+        },
+      ],
+    });
+
+    const resolved = await foldApp.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [
+          {
+            ...entry("2026-11-01T01:30", "2026-11-01T02:15"),
+            startDisambiguation: "later",
+          },
+        ],
+      }),
+    });
+    expect(resolved.status).toBe(200);
+    const foldWorkspace = await foldApp.request(root);
+    expect(foldWorkspace.status).toBe(200);
+    expect(
+      await responseData<{ draft: { entries: readonly Record<string, unknown>[] } }>(foldWorkspace),
+    ).toMatchObject({
+      draft: { entries: [{ startDisambiguation: "later" }] },
+    });
   });
   it("projects the root workspace and supports full-draft create/update/remove, preview, and publish", async () => {
     const engine = createEngine();

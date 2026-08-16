@@ -27,6 +27,7 @@ export const eventCfpSchema = z
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     name: z.string().trim().min(1).max(200),
     timezone: z.string().trim().min(1).max(100),
+    eventStartsAt: isoInstantSchema.optional(),
     opensAt: isoInstantSchema,
     closesAt: isoInstantSchema,
   })

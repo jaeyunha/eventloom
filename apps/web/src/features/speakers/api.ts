@@ -25,6 +25,14 @@ export interface SpeakerSocialLinks {
   readonly linkedin?: string;
   readonly website?: string;
 }
+export interface SpeakerEventTemporalContext {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly timeZone: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
 export interface SpeakerTravelLogistics {
   readonly travelRequired: boolean;
   readonly arrivalAt: string | null;
@@ -188,6 +196,7 @@ export interface SpeakerRecord {
 export interface SpeakerRosterEnvelope {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly speakers: readonly SpeakerRecord[];
 }
 

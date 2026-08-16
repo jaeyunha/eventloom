@@ -1,6 +1,8 @@
 "use client";
 
+import type { TimeDisambiguation } from "@eventloom/contracts";
 import { EventDatePicker, type EventDateSelectionValue } from "@/features/admin/event-date-picker";
+import { useZonedTemporalRange, useZonedTemporalValue } from "./zoned-temporal-value";
 
 interface TemporalPickerBaseProps {
   readonly id: string;
@@ -8,8 +10,14 @@ interface TemporalPickerBaseProps {
   readonly eyebrow?: string | undefined;
   readonly description?: string | undefined;
   readonly minimumDateTime?: string | undefined;
+  readonly maximumDateTime?: string | undefined;
+  readonly allowedDates?: readonly string[] | undefined;
+  readonly unchangedValues?: readonly string[] | undefined;
+  readonly timeZone?: string | undefined;
+  readonly valueTimeZone?: string | undefined;
   readonly clearable?: boolean | undefined;
   readonly disabled?: boolean | undefined;
+  readonly onValidityChange?: ((isValid: boolean) => void) | undefined;
   readonly layout?: "split" | "stacked" | undefined;
 }
 
@@ -19,6 +27,8 @@ interface SingleTemporalPickerProps extends TemporalPickerBaseProps {
   readonly label: string;
   readonly name?: string | undefined;
   readonly defaultTime?: string | undefined;
+  readonly disambiguation?: TimeDisambiguation | undefined;
+  readonly onDisambiguationChange?: ((value: TimeDisambiguation | undefined) => void) | undefined;
   readonly onChange: (value: string) => void;
 }
 
@@ -31,6 +41,14 @@ interface RangeTemporalPickerProps extends TemporalPickerBaseProps {
   readonly startName?: string | undefined;
   readonly endName?: string | undefined;
   readonly minimumEndDate?: string | undefined;
+  readonly startDisambiguation?: TimeDisambiguation | undefined;
+  readonly endDisambiguation?: TimeDisambiguation | undefined;
+  readonly onStartDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
+  readonly onEndDisambiguationChange?:
+    | ((value: TimeDisambiguation | undefined) => void)
+    | undefined;
   readonly onChange: (value: Readonly<{ start: string; end: string }>) => void;
 }
 
@@ -44,6 +62,17 @@ function pickerDescription(props: TemporalPickerProps): string {
 }
 
 export function TemporalPicker(props: TemporalPickerProps) {
+  if (props.valueTimeZone !== undefined) {
+    return props.mode === "single" ? (
+      <ZonedSingleTemporalPicker {...props} valueTimeZone={props.valueTimeZone} />
+    ) : (
+      <ZonedRangeTemporalPicker {...props} valueTimeZone={props.valueTimeZone} />
+    );
+  }
+  return <LocalTemporalPicker {...props} />;
+}
+
+function LocalTemporalPicker(props: TemporalPickerProps) {
   const dateOnly = props.precision === "date";
   if (props.mode === "single") {
     const updateValue = (selection: EventDateSelectionValue) => {
@@ -60,6 +89,12 @@ export function TemporalPicker(props: TemporalPickerProps) {
           endsAt={props.value}
           scheduleDates={[]}
           minimumDateTime={props.minimumDateTime}
+          maximumDateTime={props.maximumDateTime}
+          allowedDates={props.allowedDates}
+          unchangedValues={props.unchangedValues}
+          timeZone={props.timeZone}
+          startDisambiguation={props.disambiguation}
+          onStartDisambiguationChange={props.onDisambiguationChange}
           dateOnly={dateOnly}
           showModeToggle={false}
           showTimeControls={!dateOnly}
@@ -96,7 +131,15 @@ export function TemporalPicker(props: TemporalPickerProps) {
         endsAt={props.endValue}
         scheduleDates={[]}
         minimumDateTime={props.minimumDateTime}
+        maximumDateTime={props.maximumDateTime}
         minimumEndDate={props.minimumEndDate}
+        allowedDates={props.allowedDates}
+        unchangedValues={props.unchangedValues}
+        timeZone={props.timeZone}
+        startDisambiguation={props.startDisambiguation}
+        endDisambiguation={props.endDisambiguation}
+        onStartDisambiguationChange={props.onStartDisambiguationChange}
+        onEndDisambiguationChange={props.onEndDisambiguationChange}
         dateOnly={dateOnly}
         showModeToggle={false}
         showTimeControls={!dateOnly}
@@ -112,5 +155,53 @@ export function TemporalPicker(props: TemporalPickerProps) {
         onChange={updateRange}
       />
     </div>
+  );
+}
+
+function ZonedSingleTemporalPicker(
+  props: SingleTemporalPickerProps & Readonly<{ valueTimeZone: string }>,
+) {
+  const zoned = useZonedTemporalValue({
+    value: props.value,
+    valueTimeZone: props.valueTimeZone,
+    onChange: props.onChange,
+    onValidityChange: props.onValidityChange,
+  });
+  return (
+    <LocalTemporalPicker
+      {...props}
+      value={zoned.localValue}
+      timeZone={props.valueTimeZone}
+      disambiguation={zoned.disambiguation}
+      onChange={zoned.updateDraft}
+      onDisambiguationChange={zoned.updateDisambiguation}
+      valueTimeZone={undefined}
+    />
+  );
+}
+
+function ZonedRangeTemporalPicker(
+  props: RangeTemporalPickerProps & Readonly<{ valueTimeZone: string }>,
+) {
+  const zoned = useZonedTemporalRange({
+    startValue: props.startValue,
+    endValue: props.endValue,
+    valueTimeZone: props.valueTimeZone,
+    onChange: props.onChange,
+    onValidityChange: props.onValidityChange,
+  });
+  return (
+    <LocalTemporalPicker
+      {...props}
+      startValue={zoned.startLocal}
+      endValue={zoned.endLocal}
+      timeZone={props.valueTimeZone}
+      startDisambiguation={zoned.startDisambiguation}
+      endDisambiguation={zoned.endDisambiguation}
+      onChange={zoned.updateRange}
+      onStartDisambiguationChange={zoned.updateStartDisambiguation}
+      onEndDisambiguationChange={zoned.updateEndDisambiguation}
+      valueTimeZone={undefined}
+    />
   );
 }

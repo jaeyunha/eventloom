@@ -1,5 +1,6 @@
 "use client";
 
+import { formatInstantInTimeZone, type TimeDisambiguation } from "@eventloom/contracts";
 import { CalendarDays, CheckCircle2, Clock3, Save } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -164,11 +165,21 @@ function suggestionApiFor(api: AgendaApi | null): AgendaSuggestionApi | null {
     : null;
 }
 
+function agendaBoundaryLocal(instant: string | undefined, timeZone: string): string | undefined {
+  if (instant === undefined) return undefined;
+  try {
+    return formatInstantInTimeZone(instant, timeZone);
+  } catch {
+    return undefined;
+  }
+}
+
 interface EntryFormProps {
   entry?: AgendaEntry;
   sessions: readonly AgendaSession[];
   rooms: AgendaWorkspaceData["rooms"];
   tracks: readonly AgendaTrack[];
+  event: AgendaWorkspaceData["event"];
   eventStart: string;
   busy: boolean;
   initialPlacement?: AgendaTimetablePlacement;
@@ -187,6 +198,7 @@ function EntryForm({
   sessions,
   rooms,
   tracks,
+  event,
   eventStart,
   busy,
   initialPlacement,
@@ -209,6 +221,12 @@ function EntryForm({
   );
   const [endsAtLocal, setEndsAtLocal] = useState(
     entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
+  );
+  const [startDisambiguation, setStartDisambiguation] = useState<TimeDisambiguation | undefined>(
+    entry?.startDisambiguation,
+  );
+  const [endDisambiguation, setEndDisambiguation] = useState<TimeDisambiguation | undefined>(
+    entry?.endDisambiguation,
   );
   const [formError, setFormError] = useState<string | null>(null);
   const [roomCreatorOpen, setRoomCreatorOpen] = useState(false);
@@ -279,6 +297,8 @@ function EntryForm({
       trackIds,
       startsAtLocal,
       endsAtLocal,
+      ...(startDisambiguation === undefined ? {} : { startDisambiguation }),
+      ...(endDisambiguation === undefined ? {} : { endDisambiguation }),
     });
   }
 
@@ -404,6 +424,18 @@ function EntryForm({
           endLabel="Ends"
           eyebrow="Session schedule"
           description="Choose the session window on the calendar, then confirm the local times."
+          minimumDateTime={agendaBoundaryLocal(event.startsAt, event.timeZone)}
+          maximumDateTime={agendaBoundaryLocal(event.endsAt, event.timeZone)}
+          allowedDates={
+            event.scheduleDates?.length
+              ? event.scheduleDates
+              : eventDates(event.startsOn, event.endsOn)
+          }
+          timeZone={event.timeZone}
+          startDisambiguation={startDisambiguation}
+          endDisambiguation={endDisambiguation}
+          onStartDisambiguationChange={setStartDisambiguation}
+          onEndDisambiguationChange={setEndDisambiguation}
           clearable
           onChange={({ start, end }) => {
             setStartsAtLocal(start);
@@ -1317,6 +1349,7 @@ export function AgendaBoard({
                     sessions={data.unscheduledSessions}
                     rooms={data.rooms}
                     tracks={data.tracks}
+                    event={data.event}
                     eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
                     busy={busy}
                     onCancel={() => {
@@ -1346,6 +1379,7 @@ export function AgendaBoard({
                       sessions={[]}
                       rooms={data.rooms}
                       tracks={data.tracks}
+                      event={data.event}
                       eventStart={resolveAgendaPlacementDate(selectedDay, data.event.startsOn)}
                       busy={busy}
                       onCancel={() => setEditingEntryId(null)}

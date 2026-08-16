@@ -11,6 +11,7 @@ import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
+import { localDateInTimeZone } from "../features/agenda/timezone";
 import type { AgendaEntry, AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { RequestAuthenticator } from "../features/auth/authenticator";
 import type { AuthPrincipal } from "../features/auth/types";
@@ -1344,6 +1345,7 @@ function cfpEventFromRecord(value: JsonRecord): EventCfp {
     slug: textValue(value, "slug") ?? id,
     name: textValue(value, "name", "title") ?? id,
     timezone: textValue(value, "timezone", "timeZone") ?? "UTC",
+    eventStartsAt: startsAt,
     opensAt,
     closesAt: Date.parse(closesAt) > Date.parse(opensAt) ? closesAt : endsFallback,
   };
@@ -1488,13 +1490,13 @@ export class AirtableCfpRepository implements CfpRepository {
       existingRaw === undefined
         ? undefined
         : cfpEventFromRecord(existingRaw as unknown as JsonRecord);
-    if (
-      (existing?.version ?? null) !== expectedVersion ||
-      (existing !== undefined && existing.tenantId !== event.tenantId)
-    ) {
+    if (existing === undefined || existingRaw === undefined) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
+    }
+    if (existing.version !== expectedVersion || existing.tenantId !== event.tenantId) {
       throw new CfpError("CONFLICT", "The event CFP configuration has changed.");
     }
-    if (existingRaw !== undefined && isCanonicalEventRecord(existingRaw as unknown as JsonRecord)) {
+    if (isCanonicalEventRecord(existingRaw as unknown as JsonRecord)) {
       const canonical = eventRecord(existingRaw as unknown as JsonRecord);
       const updated: Event = {
         ...canonical,
@@ -1507,10 +1509,13 @@ export class AirtableCfpRepository implements CfpRepository {
         },
       };
       await this.#events.update(event.id, updated as unknown as EventCfp);
-    } else if (existing === undefined) {
-      await this.#events.create(clone(event));
     } else {
-      await this.#events.update(event.id, clone(event));
+      await this.#events.update(event.id, {
+        ...(existingRaw as unknown as JsonRecord),
+        version: event.version,
+        opensAt: event.opensAt,
+        closesAt: event.closesAt,
+      } as unknown as EventCfp);
     }
   }
 
@@ -7823,7 +7828,43 @@ export function createD1ApplicationDependencies(
 ): ApiDependencies {
   const cfpRepository = options.businessRepositories.cfp;
   const eventRepository = options.businessRepositories.events;
-  const eventService = new EventService(eventRepository);
+  const eventService = new EventService(eventRepository, {
+    async reviewBoundaries(organizationId, eventId) {
+      const plans = await options.businessRepositories.evaluations.listPlans(
+        organizationId,
+        eventId,
+      );
+      return plans.flatMap((plan) => [
+        ...(plan.closesAt === null ? [] : [{ label: "Review deadline", occursAt: plan.closesAt }]),
+        ...plan.rounds.flatMap((round) => [
+          ...(round.opensAt == null
+            ? []
+            : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
+          ...(round.closesAt == null
+            ? []
+            : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
+        ]),
+      ]);
+    },
+    async agendaState(_organizationId, eventId) {
+      const state = await options.businessRepositories.agenda.load(eventId);
+      return state === null ? null : { timeZone: state.timeZone };
+    },
+    async agendaEntries(_organizationId, eventId) {
+      const state = await options.businessRepositories.agenda.load(eventId);
+      if (state === null) return [];
+      const published = state.revisions.find(
+        (revision) => revision.id === state.currentPublishedRevisionId,
+      );
+      return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
+        label: `Agenda entry ${entry.id}`,
+        startsAt: entry.startsAt,
+        endsAt: entry.endsAt,
+        startsAtLocal: entry.startsAtLocal,
+        endsAtLocal: entry.endsAtLocal,
+      }));
+    },
+  });
   const publicationRepository = options.businessRepositories.programPublication;
   let publicationService!: ProgramPublicationService;
   publicationService = new ProgramPublicationService(publicationRepository, {
@@ -7878,6 +7919,20 @@ export function createD1ApplicationDependencies(
     delivery: speakerDelivery,
     communications: new CommunicationSpeakerCommunications(communicationService, options.webOrigin),
     speakerSender: options.senderAddresses.speakers,
+    eventTemporalSource: {
+      async getEventTemporalContext(organizationId, eventId) {
+        const event = await eventRepository.getEvent(organizationId, eventId);
+        return event === null
+          ? null
+          : {
+              organizationId: event.organizationId,
+              eventId: event.id,
+              timeZone: event.timeZone,
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+            };
+      },
+    },
   });
   const cfpService = new CfpService({
     repository: cfpRepository,
@@ -7920,17 +7975,33 @@ export function createD1ApplicationDependencies(
   const agendaEngine = new AgendaEngine(
     agendaRepository,
     new CloudflareAgendaMutationLock(options.agendaCoordinator),
-    options.aiProviders?.agenda === undefined
-      ? {}
-      : { suggestionProvider: options.aiProviders.agenda },
+    {
+      ...(options.aiProviders?.agenda === undefined
+        ? {}
+        : { suggestionProvider: options.aiProviders.agenda }),
+      async eventScheduleForEvent(eventId) {
+        const row = await options.database
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
+          .bind(eventId)
+          .first<{ organization_id: string }>();
+        if (row === null) return null;
+        const event = await eventRepository.getEvent(row.organization_id, eventId);
+        return event === null
+          ? null
+          : {
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+              timeZone: event.timeZone,
+              ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
+            };
+      },
+    },
   );
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
     engine: agendaEngine,
     catalogReader: {
       getAgendaCatalog: (tenantId, eventId) => sessionService.getAgendaCatalog(tenantId, eventId),
     },
-    eventTimeZone: (tenantId, eventId) =>
-      eventRepository.getEvent(tenantId, eventId).then((event) => event?.timeZone ?? "UTC"),
   });
   const cacheInvalidatingAgendaCatalogSynchronizer = {
     ensureInitialized: agendaCatalogSynchronizer.ensureInitialized.bind(agendaCatalogSynchronizer),
@@ -7989,19 +8060,37 @@ export function createD1ApplicationDependencies(
     queue: options.outboxQueue,
     senderAddresses: options.senderAddresses,
   });
-  const evaluationService = new EvaluationService(evaluationRepository, evaluationSource, {
-    acceptanceHandoff,
-    decisionProjection: new AirtableEvaluationDecisionProjection(
-      cfpRepository,
-      options.database,
-      options.outboxQueue,
-      communicationRepository,
-      options.senderAddresses,
-    ),
-    ...(options.aiProviders?.evaluations === undefined
-      ? {}
-      : { aiSuggestionProvider: options.aiProviders.evaluations }),
-  });
+  const evaluationService = new EvaluationService(
+    evaluationRepository,
+    evaluationSource,
+    {
+      async getEventMetadata(tenantId, eventId) {
+        const event = await eventRepository.getEvent(tenantId, eventId);
+        return event === null
+          ? null
+          : {
+              id: event.id,
+              name: event.name,
+              timeZone: event.timeZone,
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+            };
+      },
+    },
+    {
+      acceptanceHandoff,
+      decisionProjection: new AirtableEvaluationDecisionProjection(
+        cfpRepository,
+        options.database,
+        options.outboxQueue,
+        communicationRepository,
+        options.senderAddresses,
+      ),
+      ...(options.aiProviders?.evaluations === undefined
+        ? {}
+        : { aiSuggestionProvider: options.aiProviders.evaluations }),
+    },
+  );
   const evaluationDependencies = {
     service: evaluationService,
     reminders: new AirtableEvaluationReminderBoundary(
@@ -8353,8 +8442,11 @@ export function createD1ApplicationDependencies(
           slug: event.slug,
           name: event.name,
           timeZone: event.timeZone,
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
           startsOn,
           endsOn,
+          ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
           venueName: event.venue,
         };
       },
@@ -8499,8 +8591,8 @@ export function createD1ApplicationDependencies(
             slug: event.slug,
             name: event.name,
             timeZone: event.timeZone,
-            startsOn: eventDateOnly(event.startsAt, event.timeZone) ?? event.startsAt.slice(0, 10),
-            endsOn: eventDateOnly(event.endsAt, event.timeZone) ?? event.endsAt.slice(0, 10),
+            startsOn: localDateInTimeZone(event.startsAt, event.timeZone),
+            endsOn: localDateInTimeZone(event.endsAt, event.timeZone),
             venueName: event.venue,
           },
           revision: {

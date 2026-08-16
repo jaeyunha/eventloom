@@ -1730,20 +1730,35 @@ describe("fixture local runtime composition", () => {
   });
 
   it("seeds an open CFP with deterministic draft creation", async () => {
-    const service = createLocalCfpService();
-    await service.saveEvent(
-      {
-        id: "demo-event",
-        tenantId: LOCAL_ORGANIZATION_ID,
-        version: 1,
-        slug: "demo-event",
-        name: "Open Sessionboard Conference",
-        timezone: "America/Los_Angeles",
-        opensAt: "2026-08-01T07:00:00.000Z",
-        closesAt: "2026-09-15T07:00:00.000Z",
+    let authoritativeEvent: EventCfp = {
+      id: "demo-event",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      version: 1,
+      slug: "demo-event",
+      name: "Open Sessionboard Conference",
+      timezone: "America/Los_Angeles",
+      eventStartsAt: "2026-10-01T16:00:00.000Z",
+      opensAt: "2026-08-01T07:00:00.000Z",
+      closesAt: "2026-09-15T07:00:00.000Z",
+    };
+    const service = createLocalCfpService(undefined, undefined, {
+      async getEvent(tenantId, eventId) {
+        return authoritativeEvent.tenantId === tenantId && authoritativeEvent.id === eventId
+          ? structuredClone(authoritativeEvent)
+          : null;
       },
-      null,
-    );
+      async getEventBySlug(tenantId, eventSlug) {
+        return authoritativeEvent.tenantId === tenantId && authoritativeEvent.slug === eventSlug
+          ? structuredClone(authoritativeEvent)
+          : null;
+      },
+      async saveEvent(event, expectedVersion) {
+        if (authoritativeEvent.version !== expectedVersion) {
+          throw new Error("event version conflict");
+        }
+        authoritativeEvent = structuredClone(event);
+      },
+    });
     await seedLocalCfpForm(service, {
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId: "demo-event",
@@ -2848,6 +2863,17 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       new AirtableSubmissionReviewSource(
         new AirtableCfpRepository({ baseId: "base-test", transport }),
       ),
+      {
+        async getEventMetadata(_requestedTenantId, requestedEventId) {
+          return {
+            id: requestedEventId,
+            name: "Review event",
+            timeZone: "UTC",
+            startsAt: "2026-08-09T00:00:00.000Z",
+            endsAt: "2099-12-31T23:59:00.000Z",
+          };
+        },
+      },
     );
     transport.requests.length = 0;
     const startedAt = performance.now();

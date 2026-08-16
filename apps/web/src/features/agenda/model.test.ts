@@ -104,6 +104,16 @@ describe("agenda workspace model", () => {
     expect(days[0]?.label).toBe("Friday, September 18");
     expect(days[0]?.entries[0]?.title).toBe("Opening keynote");
   });
+  it("uses sparse authoritative schedule dates without inventing intervening days", () => {
+    const days = agendaDays([], {
+      startsOn: "2026-09-18",
+      endsOn: "2026-09-20",
+      scheduleDates: ["2026-09-18", "2026-09-20"],
+    });
+
+    expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-20"]);
+  });
+
   it("uses the authoritative event range for empty days and excludes out-of-range draft dates", () => {
     const outsideEntry = data.draft.entries[0];
     if (!outsideEntry) throw new Error("Expected fixture entry.");

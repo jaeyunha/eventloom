@@ -13,10 +13,7 @@ export default defineConfig({
       name: "agenda-test-jsx-transform",
       enforce: "pre",
       transform(source, id) {
-        if (
-          (!id.includes("/features/agenda/") && !id.includes("/components/")) ||
-          !id.endsWith(".tsx")
-        ) {
+        if (!id.includes("/apps/web/src/") || !id.endsWith(".tsx")) {
           return undefined;
         }
         return {

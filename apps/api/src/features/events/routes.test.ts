@@ -8,6 +8,7 @@ import {
 } from "./routes";
 import {
   EventService,
+  type EventTemporalDependencySource,
   InMemoryEventRepository,
   InMemoryProgramPublicationRepository,
   ProgramPublicationService,
@@ -28,15 +29,149 @@ function actor(organizationId = "org-a", role: EventActor["role"] = "owner"): Ev
   return { organizationId, userId: "organizer-1", role, kind: "user" };
 }
 
-function createService() {
+function createService(
+  temporalDependencies: EventTemporalDependencySource = {
+    async agendaState() {
+      return null;
+    },
+    async agendaEntries() {
+      return [];
+    },
+    async reviewBoundaries() {
+      return [];
+    },
+  },
+) {
   let sequence = 0;
   const repository = new InMemoryEventRepository();
-  const service = new EventService(repository, {
+  const service = new EventService(repository, temporalDependencies, {
     clock: () => new Date(firstNow.getTime() + sequence * 1_000),
     generateId: () => `generated-${++sequence}`,
   });
   return { repository, service };
 }
+
+describe("event temporal dependencies", () => {
+  it("rejects shortening an event beneath active review or agenda boundaries", async () => {
+    const { service } = createService({
+      async agendaState() {
+        return { timeZone: "America/Los_Angeles" };
+      },
+      async reviewBoundaries() {
+        return [
+          {
+            label: "Final review deadline",
+            occursAt: "2026-10-03T16:00:00.000Z",
+          },
+        ];
+      },
+      async agendaEntries() {
+        return [
+          {
+            label: "Published keynote",
+            startsAt: "2026-10-03T15:00:00.000Z",
+            endsAt: "2026-10-03T16:00:00.000Z",
+            startsAtLocal: "2026-10-03T08:00:00",
+            endsAtLocal: "2026-10-03T09:00:00",
+          },
+        ];
+      },
+    });
+    const created = await service.createEvent(actor(), createInput());
+
+    await expect(
+      service.updateEvent(actor(), {
+        eventId: created.id,
+        expectedVersion: created.version,
+        endsAt: "2026-10-02T17:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("rejects timezone changes when even an empty agenda state exists", async () => {
+    const { service } = createService({
+      async agendaState() {
+        return { timeZone: "America/Los_Angeles" };
+      },
+      async agendaEntries() {
+        return [];
+      },
+      async reviewBoundaries() {
+        return [];
+      },
+    });
+    const created = await service.createEvent(actor(), createInput());
+
+    await expect(
+      service.updateEvent(actor(), {
+        eventId: created.id,
+        expectedVersion: created.version,
+        timeZone: "UTC",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("preserves exact historical event dates but rejects changed past values", async () => {
+    let now = new Date("2026-08-01T12:00:00.000Z");
+    const repository = new InMemoryEventRepository();
+    const service = new EventService(
+      repository,
+      {
+        async agendaState() {
+          return null;
+        },
+        async agendaEntries() {
+          return [];
+        },
+        async reviewBoundaries() {
+          return [];
+        },
+      },
+      {
+        clock: () => new Date(now),
+        generateId: () => crypto.randomUUID(),
+      },
+    );
+    const created = await service.createEvent(actor(), {
+      ...createInput(),
+      startsAt: "2026-08-05T16:00:00.000Z",
+      endsAt: "2026-08-06T00:00:00.000Z",
+      scheduleDates: ["2026-08-05"],
+      cfpSettings: { enabled: false, opensAt: null, closesAt: null },
+    });
+    now = new Date("2026-08-10T12:00:00.000Z");
+
+    const unchanged = await service.updateEvent(actor(), {
+      eventId: created.id,
+      expectedVersion: created.version,
+      name: "Updated historical event",
+    });
+    await expect(
+      service.updateEvent(actor(), {
+        eventId: unchanged.id,
+        expectedVersion: unchanged.version,
+        startsAt: "2026-08-06T16:00:00.000Z",
+        endsAt: "2026-08-07T00:00:00.000Z",
+        scheduleDates: ["2026-08-06"],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("rejects an event CFP window that extends past event start", async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createEvent(actor(), {
+        ...createInput(),
+        cfpSettings: {
+          enabled: true,
+          opensAt: "2026-09-01T16:00:00.000Z",
+          closesAt: "2026-10-02T16:00:00.000Z",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
 
 function createInput(overrides: Partial<Parameters<EventService["createEvent"]>[1]> = {}) {
   return {

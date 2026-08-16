@@ -254,7 +254,7 @@ describe("D1EvaluationRepository compound CAS", () => {
         name: "Review",
         status: "open",
         blindReview: false,
-        closesAt: "2026-09-01T00:00:00.000Z",
+        closesAt: "2026-08-31T20:00:00-04:00",
         assignmentRule: {
           reviewsPerSubmission: 1,
           maxAssignmentsPerReviewer: 5,
@@ -270,6 +270,10 @@ describe("D1EvaluationRepository compound CAS", () => {
     const sql = database.statements.map((entry) => entry.sql).join("\n");
     expect(sql).toContain("UPDATE review_plans");
     expect(sql).toContain("closes_at");
+    expect(
+      database.statements.find((entry) => entry.sql.includes("SET closes_at"))?.values[0],
+    ).toBe("2026-09-01T00:00:00.000Z");
+    expect(database.statements.at(-1)?.values).toEqual(["org-1", "event-1", "plan-1"]);
     expect(sql).not.toContain("DELETE FROM review_rounds");
     expect(sql).not.toContain("review_rubrics");
     expect(sql).not.toContain("review_assignments");

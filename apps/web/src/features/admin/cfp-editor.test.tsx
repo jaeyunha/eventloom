@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CfpApi } from "../cfp/api";
-import { CfpEditor } from "./cfp-editor";
+import { CfpEditor, CfpEventIdentityFields, CfpPastCloseConfirmation } from "./cfp-editor";
 import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 import {
   cfpActiveSectionThreshold,
@@ -58,6 +58,22 @@ describe("CFP editor", () => {
     expect(cfpSectionScrollOffset(52, 64)).toBe(132);
     expect(cfpActiveSectionThreshold(52, 64)).toBe(156);
     expect(cfpContainerScrollTop(120, 460, 48, 64)).toBe(452);
+  });
+
+  it("renders authoritative event identity as read-only and directs edits to Event details", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CfpEventIdentityFields, {
+        eventName: "DevFlow Conference",
+        slug: "devflow-conf",
+        timezone: "America/New_York",
+        organizationId: "organization-1",
+      }),
+    );
+
+    expect(markup).toMatch(/<input(?=[^>]*name="eventName")(?=[^>]*readOnly="")[^>]*>/);
+    expect(markup).toMatch(/<input(?=[^>]*name="slug")(?=[^>]*readOnly="")[^>]*>/);
+    expect(markup).toMatch(/<select(?=[^>]*name="timezone")(?=[^>]*disabled="")[^>]*>/);
+    expect(markup).toContain('href="/admin/events"');
   });
 
   it("starts in a truthful loading state without fixture configuration", () => {
@@ -156,6 +172,55 @@ describe("CFP editor", () => {
     );
     expect(isCfpCloseDatePast("2026-08-01", new Date("2026-08-10T00:00:00.000Z"))).toBe(true);
   });
+
+  it("validates unchanged same-local-date boundaries using their exact persisted instants", () => {
+    expect(
+      validateCfpDateRange(
+        "2026-08-16",
+        "2026-08-16",
+        "America/Los_Angeles",
+        "2026-08-16T17:45:12.345Z",
+        "2026-08-16T23:30:45.678Z",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not classify an unchanged later-today close instant as past", () => {
+    const now = new Date("2026-08-16T20:00:00.000Z");
+
+    expect(isCfpCloseDatePast("2026-08-16", now, "America/Los_Angeles")).toBe(true);
+    expect(
+      isCfpCloseDatePast("2026-08-16", now, "America/Los_Angeles", "2026-08-16T23:30:45.678Z"),
+    ).toBe(false);
+  });
+
+  it("does not render a past-close warning for an unchanged later-today close instant", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CfpPastCloseConfirmation, {
+        closesAt: "2026-08-16",
+        persistedClosesAt: "2026-08-16T23:30:45.678Z",
+        timezone: "America/Los_Angeles",
+        now: new Date("2026-08-16T20:00:00.000Z"),
+        acknowledged: false,
+        onAcknowledgedChange: () => undefined,
+      }),
+    );
+
+    const pastMarkup = renderToStaticMarkup(
+      createElement(CfpPastCloseConfirmation, {
+        closesAt: "2026-08-16",
+        persistedClosesAt: "2026-08-16T19:30:45.678Z",
+        timezone: "America/Los_Angeles",
+        now: new Date("2026-08-16T20:00:00.000Z"),
+        acknowledged: false,
+        onAcknowledgedChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toBe("");
+    expect(markup).not.toContain("Confirm past close date");
+    expect(pastMarkup).toContain("Confirm past close date");
+  });
   it("computes the CFP minimum date in the configured timezone", () => {
     const now = new Date("2026-08-16T06:30:00.000Z");
     expect(cfpMinimumDate(now, "America/Los_Angeles")).toBe("2026-08-15");
@@ -236,6 +301,104 @@ describe("CFP editor", () => {
         formId: "devflow-cfp",
       }),
     ).rejects.toThrow("form persistence failed");
+  });
+
+  it("loads CFP dates in the event timezone instead of slicing UTC dates", () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    const form = toFormConfiguration(configuration, "organization-1", "devflow-conf-2027");
+    const loaded = configurationFromServer(
+      configuration,
+      {
+        id: "devflow-conf-2027",
+        tenantId: "organization-1",
+        version: 4,
+        slug: "devflow-conf-2027",
+        name: "DevFlow Conference 2027",
+        timezone: "America/Los_Angeles",
+        opensAt: "2027-01-05T07:30:00.000Z",
+        closesAt: "2027-02-15T07:30:00.000Z",
+      },
+      form,
+    );
+
+    expect(loaded.opensAt).toBe("2027-01-04");
+    expect(loaded.closesAt).toBe("2027-02-14");
+  });
+
+  it("preserves exact non-midnight CFP instants through an unrelated save", async () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    const form = toFormConfiguration(configuration, "organization-1", "devflow-conf-2027");
+    const event = {
+      id: "devflow-conf-2027",
+      tenantId: "organization-1",
+      version: 4,
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conference 2027",
+      timezone: "America/Los_Angeles",
+      eventStartsAt: "2027-03-01T17:00:00.000Z",
+      opensAt: "2027-01-05T17:45:12.345Z",
+      closesAt: "2027-02-15T23:30:45.678Z",
+    };
+    const loaded = configurationFromServer(configuration, event, form);
+    loaded.welcomeBody = "An unrelated copy edit.";
+    let savedEventInput: unknown;
+    const api = {
+      saveEvent: async (input: Parameters<CfpApi["saveEvent"]>[0]) => {
+        savedEventInput = input.event;
+        return input.event;
+      },
+      saveForm: async (input: Parameters<CfpApi["saveForm"]>[0]) => input.form,
+    } as CfpApi;
+
+    await persistCfpConfiguration(api, {
+      configuration: loaded,
+      organizationId: "organization-1",
+      eventId: "devflow-conf-2027",
+      formId: form.id,
+    });
+
+    expect(savedEventInput).toMatchObject({
+      opensAt: event.opensAt,
+      closesAt: event.closesAt,
+    });
+  });
+
+  it("converts an intentionally changed CFP date to event-local midnight", async () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    const form = toFormConfiguration(configuration, "organization-1", "devflow-conf-2027");
+    const event = {
+      id: "devflow-conf-2027",
+      tenantId: "organization-1",
+      version: 4,
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conference 2027",
+      timezone: "America/Los_Angeles",
+      eventStartsAt: "2027-03-01T17:00:00.000Z",
+      opensAt: "2027-01-05T17:45:12.345Z",
+      closesAt: "2027-02-15T23:30:45.678Z",
+    };
+    const loaded = configurationFromServer(configuration, event, form);
+    loaded.opensAt = "2027-01-06";
+    let savedEventInput: unknown;
+    const api = {
+      saveEvent: async (input: Parameters<CfpApi["saveEvent"]>[0]) => {
+        savedEventInput = input.event;
+        return input.event;
+      },
+      saveForm: async (input: Parameters<CfpApi["saveForm"]>[0]) => input.form,
+    } as CfpApi;
+
+    await persistCfpConfiguration(api, {
+      configuration: loaded,
+      organizationId: "organization-1",
+      eventId: "devflow-conf-2027",
+      formId: form.id,
+    });
+
+    expect(savedEventInput).toMatchObject({
+      opensAt: "2027-01-06T08:00:00.000Z",
+      closesAt: event.closesAt,
+    });
   });
 
   it("repairs missing core proposal fields when loading an existing form", () => {
