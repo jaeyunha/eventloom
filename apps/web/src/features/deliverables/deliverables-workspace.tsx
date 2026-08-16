@@ -183,14 +183,13 @@ const contentCollectionNavigationCache =
   createContentCollectionNavigationCache<DeliverablesSnapshot>();
 
 export async function authorizeContentCollectionNavigationSnapshot(
-  api: Pick<DeliverablesApi, "listSessions">,
+  api: Pick<DeliverablesApi, "listDeliverableMatrix">,
   snapshot: DeliverablesSnapshot,
   signal?: AbortSignal,
-): Promise<DeliverablesSnapshot> {
-  return {
-    ...snapshot,
-    sessions: await api.listSessions(signal),
-  };
+): Promise<DeliverablesSnapshot | undefined> {
+  if (api.listDeliverableMatrix === undefined) return undefined;
+  await api.listDeliverableMatrix(signal === undefined ? {} : { signal });
+  return snapshot;
 }
 
 export interface DeliverablesWorkspaceProps {
@@ -2267,7 +2266,7 @@ export function DeliverablesWorkspaceView({
           <CardContent className={styles.switcherWrap}>
             <nav
               className={styles.modeNav}
-              aria-label="Content requests and uploaded files"
+              aria-label="Content collection sections"
               data-mode-switcher
             >
               <Link href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
@@ -3010,7 +3009,7 @@ export function DeliverablesWorkspace({
 
   function invalidateCachedEventViews(): void {
     contentCollectionNavigationCache.invalidateEvent({ organizationId, eventId });
-    setCacheWriteEnabled(true);
+    setCacheWriteEnabled(false);
   }
 
   const refreshSpeakerContentHistory = useCallback(
@@ -3061,6 +3060,7 @@ export function DeliverablesWorkspace({
       setMatrix(next);
       setTasks(next.items.map((item) => item.task));
       if (mode === "deliverables") setAssets(matrixAssets(next));
+      setCacheWriteEnabled(true);
       return true;
     } catch (reason) {
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
@@ -3104,19 +3104,23 @@ export function DeliverablesWorkspace({
               signal,
             );
             if (!isCurrent()) return;
-            setSessions(authorizedSnapshot.sessions);
-            setTasks(authorizedSnapshot.tasks);
-            setAssets(authorizedSnapshot.assets);
-            setProfiles(authorizedSnapshot.profiles);
-            setSpeakerContentHistory(
-              speakerContentHistoryStatesForProfiles(
-                authorizedSnapshot.profiles,
-                authorizedSnapshot.speakerContentHistory,
-              ),
-            );
-            setMatrix(authorizedSnapshot.matrix);
-            setCapabilityMessages([]);
-            return;
+            if (authorizedSnapshot === undefined) {
+              contentCollectionNavigationCache.invalidate(navigationCacheScope);
+            } else {
+              setSessions(authorizedSnapshot.sessions);
+              setTasks(authorizedSnapshot.tasks);
+              setAssets(authorizedSnapshot.assets);
+              setProfiles(authorizedSnapshot.profiles);
+              setSpeakerContentHistory(
+                speakerContentHistoryStatesForProfiles(
+                  authorizedSnapshot.profiles,
+                  authorizedSnapshot.speakerContentHistory,
+                ),
+              );
+              setMatrix(authorizedSnapshot.matrix);
+              setCapabilityMessages([]);
+              return;
+            }
           } catch (reason) {
             contentCollectionNavigationCache.invalidate(navigationCacheScope);
             if (isCurrent()) setError(messageFromError(reason));
@@ -3491,6 +3495,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.createTask(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateCachedEventViews();
       setTasks((current) => [...current, next]);
       await refreshMatrix(scope);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
@@ -3984,6 +3989,7 @@ export function DeliverablesWorkspace({
           try {
             const next = await reviewAsset(input);
             if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+            invalidateCachedEventViews();
             setAssets((current) => current.map((asset) => (asset.id === next.id ? next : asset)));
             await refreshMatrix(scope);
             if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;

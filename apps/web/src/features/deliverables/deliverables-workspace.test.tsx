@@ -535,9 +535,14 @@ function deferred<T>(): {
 }
 
 describe("deliverables core request starter", () => {
-  it("revalidates cached snapshots through the event-scoped sessions endpoint", async () => {
-    const authorizedSessions = [{ ...session, title: "Freshly authorized session" }];
-    const listSessions = vi.fn().mockResolvedValue(authorizedSessions);
+  it("revalidates cached snapshots through the privileged deliverables endpoint", async () => {
+    const listDeliverableMatrix = vi.fn().mockResolvedValue({
+      organizationId: "org-1",
+      eventId: "event-1",
+      total: 0,
+      filters: {},
+      items: [],
+    });
     const cachedSnapshot = {
       sessions: [session],
       tasks: [task],
@@ -546,21 +551,18 @@ describe("deliverables core request starter", () => {
     };
 
     await expect(
-      authorizeContentCollectionNavigationSnapshot({ listSessions }, cachedSnapshot),
-    ).resolves.toEqual({
-      ...cachedSnapshot,
-      sessions: authorizedSessions,
-    });
-    expect(listSessions).toHaveBeenCalledOnce();
+      authorizeContentCollectionNavigationSnapshot({ listDeliverableMatrix }, cachedSnapshot),
+    ).resolves.toBe(cachedSnapshot);
+    expect(listDeliverableMatrix).toHaveBeenCalledOnce();
   });
 
   it("rejects cached snapshots when the authorization probe fails", async () => {
     const authorizationError = new Error("Organizer access was revoked.");
-    const listSessions = vi.fn().mockRejectedValue(authorizationError);
+    const listDeliverableMatrix = vi.fn().mockRejectedValue(authorizationError);
 
     await expect(
       authorizeContentCollectionNavigationSnapshot(
-        { listSessions },
+        { listDeliverableMatrix },
         {
           sessions: [session],
           tasks: [task],
@@ -569,6 +571,20 @@ describe("deliverables core request starter", () => {
         },
       ),
     ).rejects.toBe(authorizationError);
+  });
+
+  it("falls back to a full load when the privileged authorization endpoint is unavailable", async () => {
+    await expect(
+      authorizeContentCollectionNavigationSnapshot(
+        {},
+        {
+          sessions: [session],
+          tasks: [task],
+          assets: [],
+          profiles: [],
+        },
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("starts the sessions and matrix requests before either deferred response settles", async () => {

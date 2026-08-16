@@ -112,9 +112,7 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
 
   await page.goto(`${eventBase}/deliverables`);
   await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
-  await expect(
-    page.getByRole("navigation", { name: "Content requests and uploaded files" }),
-  ).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Content collection sections" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open request" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Open request" }).first().click();
   await expect(page.getByRole("dialog").getByText("Request detail")).toBeVisible();
@@ -155,7 +153,7 @@ test("organizer keeps content operations bounded on mobile", async ({ page }, te
   await page.setViewportSize({ width: 390, height: 844 });
 
   await page.goto(`${eventBase}/deliverables`);
-  await expect(page.getByRole("heading", { level: 1, name: "Content requests" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
   await expect(page.getByText("Switch section: Requests")).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({
