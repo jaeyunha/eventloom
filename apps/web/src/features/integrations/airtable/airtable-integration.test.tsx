@@ -295,6 +295,57 @@ describe("airtable integration UI", () => {
     expect(typeof api.retry).toBe("function");
     expect(typeof api.resolveConflict).toBe("function");
   });
+  it("normalizes the deployed disconnected status payload before rendering", async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: { state: "disconnected", baseId: null } }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const api = createAirtableIntegrationApi("https://api.example.test", fetcher);
+
+    const snapshot = await api.getSnapshot("org-a");
+
+    expect(snapshot).toEqual({
+      state: "disconnected",
+      baseMapping: null,
+      projection: {
+        health: "healthy",
+        lastProjectedAt: null,
+        projectedLast24Hours: 0,
+        failedLast24Hours: 0,
+        lastFailure: null,
+      },
+      conflicts: [],
+    });
+    const markup = render({ initialSnapshot: snapshot });
+    expect(markup).toContain("Disconnected");
+    expect(markup).toContain(">Connect Airtable<");
+  });
+
+  it("rejects malformed connected status payloads with an integration API error", async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              state: "connected",
+              baseMapping: null,
+              conflicts: [],
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    const api = createAirtableIntegrationApi("https://api.example.test", fetcher);
+
+    await expect(api.getSnapshot("org-a")).rejects.toMatchObject({
+      name: "AirtableIntegrationApiError",
+      code: "AIRTABLE_INVALID_RESPONSE",
+      status: 502,
+      message: "The Airtable integration API returned an invalid status response.",
+    });
+  });
 
   it("factory uses the canonical backend paths, methods, JSON, and idempotency headers", async () => {
     const responses = [

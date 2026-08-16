@@ -137,6 +137,147 @@ async function toApiError(response: Response): Promise<AirtableIntegrationApiErr
   );
 }
 
+const AIRTABLE_STATUS_INVALID_CODE = "AIRTABLE_INVALID_RESPONSE";
+const AIRTABLE_STATUS_INVALID_MESSAGE =
+  "The Airtable integration API returned an invalid status response.";
+const AIRTABLE_STATUS_INVALID_STATUS = 502;
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAirtableConnectionState(value: unknown): value is AirtableConnectionState {
+  return (
+    value === "disconnected" ||
+    value === "authorizing" ||
+    value === "connected" ||
+    value === "paused" ||
+    value === "reauthorization_required"
+  );
+}
+
+function isAirtableSyncDirection(value: unknown): value is AirtableSyncDirection {
+  return value === "to_airtable" || value === "from_airtable" || value === "bidirectional";
+}
+
+function isAirtableConflictResolution(value: unknown): value is AirtableConflictResolution {
+  return value === "use_d1" || value === "use_airtable" || value === "manual";
+}
+
+function isAirtableProjectionHealth(value: unknown): value is AirtableProjectionHealth {
+  return value === "healthy" || value === "degraded" || value === "failed";
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isAirtableTableMapping(value: unknown): value is AirtableTableMapping {
+  return (
+    isRecord(value) &&
+    typeof value.tableId === "string" &&
+    typeof value.tableName === "string" &&
+    typeof value.localResource === "string" &&
+    typeof value.keyField === "string" &&
+    isAirtableSyncDirection(value.syncDirection)
+  );
+}
+
+function isAirtableBaseMapping(value: unknown): value is AirtableBaseMapping {
+  return (
+    isRecord(value) &&
+    typeof value.baseId === "string" &&
+    typeof value.baseName === "string" &&
+    Array.isArray(value.tableMappings) &&
+    value.tableMappings.every(isAirtableTableMapping)
+  );
+}
+
+function isAirtableProjectionFailure(value: unknown): value is AirtableProjectionFailure {
+  return (
+    isRecord(value) &&
+    typeof value.projectionId === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.occurredAt === "string" &&
+    typeof value.retryable === "boolean"
+  );
+}
+
+function isAirtableProjectionStatus(value: unknown): value is AirtableProjectionStatus {
+  return (
+    isRecord(value) &&
+    isAirtableProjectionHealth(value.health) &&
+    (value.lastProjectedAt === null || typeof value.lastProjectedAt === "string") &&
+    isNonNegativeInteger(value.projectedLast24Hours) &&
+    isNonNegativeInteger(value.failedLast24Hours) &&
+    (value.lastFailure === null || isAirtableProjectionFailure(value.lastFailure))
+  );
+}
+
+function isAirtableConflict(value: unknown): value is AirtableConflict {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.resource === "string" &&
+    typeof value.recordId === "string" &&
+    typeof value.localUpdatedAt === "string" &&
+    typeof value.remoteUpdatedAt === "string" &&
+    typeof value.summary === "string" &&
+    (value.resolution === null || isAirtableConflictResolution(value.resolution))
+  );
+}
+
+function isAirtableIntegrationSnapshot(value: unknown): value is AirtableIntegrationSnapshot {
+  return (
+    isRecord(value) &&
+    isAirtableConnectionState(value.state) &&
+    (value.baseMapping === null || isAirtableBaseMapping(value.baseMapping)) &&
+    isAirtableProjectionStatus(value.projection) &&
+    Array.isArray(value.conflicts) &&
+    value.conflicts.every(isAirtableConflict)
+  );
+}
+
+function disconnectedAirtableSnapshot(): AirtableIntegrationSnapshot {
+  return {
+    state: "disconnected",
+    baseMapping: null,
+    projection: {
+      health: "healthy",
+      lastProjectedAt: null,
+      projectedLast24Hours: 0,
+      failedLast24Hours: 0,
+      lastFailure: null,
+    },
+    conflicts: [],
+  };
+}
+
+function invalidAirtableStatusResponse(): AirtableIntegrationApiError {
+  return new AirtableIntegrationApiError(
+    AIRTABLE_STATUS_INVALID_CODE,
+    AIRTABLE_STATUS_INVALID_MESSAGE,
+    AIRTABLE_STATUS_INVALID_STATUS,
+  );
+}
+
+function parseAirtableIntegrationSnapshot(value: unknown): AirtableIntegrationSnapshot {
+  if (
+    isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    value.state === "disconnected" &&
+    value.baseId === null
+  ) {
+    return disconnectedAirtableSnapshot();
+  }
+  if (!isAirtableIntegrationSnapshot(value)) {
+    throw invalidAirtableStatusResponse();
+  }
+  return value;
+}
+
 function idempotencyKey(): string {
   return `web-${crypto.randomUUID()}`;
 }
@@ -173,11 +314,12 @@ export function createAirtableIntegrationApi(
   }
 
   return {
-    getSnapshot(organizationId, signal) {
-      return request<AirtableIntegrationSnapshot>(`${airtablePath(organizationId)}/status`, {
+    async getSnapshot(organizationId, signal) {
+      const status = await request<unknown>(`${airtablePath(organizationId)}/status`, {
         cache: "no-store",
         ...(signal === undefined ? {} : { signal }),
       });
+      return parseAirtableIntegrationSnapshot(status);
     },
     startOAuth(organizationId) {
       return request<{ readonly authorizationUrl: string }>(
