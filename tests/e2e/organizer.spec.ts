@@ -21,6 +21,7 @@ const ORGANIZATION_ID = "local-organization";
 const PRIMARY_EVENT_ID = "open-sessionboard-conf";
 const SECONDARY_EVENT_ID = "devflow-conf-2027";
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
+const DISTINCT_PRIMARY_EVENT_SLUG = "test-summit-local";
 
 const corsHeaders = {
   "access-control-allow-credentials": "true",
@@ -37,6 +38,7 @@ interface OrganizerApiHarness {
 interface InstallOrganizerApiOptions {
   readonly includeSecondaryEvent?: boolean;
   readonly primaryEndsAt?: string;
+  readonly primaryEventSlug?: string;
 }
 
 function eventRecord(input: {
@@ -323,7 +325,7 @@ async function installOrganizerApi(
 ): Promise<OrganizerApiHarness> {
   const primaryEvent = eventRecord({
     id: PRIMARY_EVENT_ID,
-    slug: PRIMARY_EVENT_ID,
+    slug: options.primaryEventSlug ?? PRIMARY_EVENT_ID,
     name: "Eventloom Conference",
     startsAt: "2026-09-18T16:00:00.000Z",
     endsAt: options.primaryEndsAt ?? "2026-09-19T23:00:00.000Z",
@@ -839,7 +841,9 @@ test("canonical Settings navigation stays organization and event qualified", asy
   authSession,
   page,
 }) => {
-  const api = await installOrganizerApi(page, authSession);
+  const api = await installOrganizerApi(page, authSession, {
+    primaryEventSlug: DISTINCT_PRIMARY_EVENT_SLUG,
+  });
 
   await page.goto(organizationEventsUrl());
   const eventSettingsLink = page
@@ -852,18 +856,37 @@ test("canonical Settings navigation stays organization and event qualified", asy
     timeout: 15_000,
   });
   await expect(
-    page.getByText(`Organization ${ORGANIZATION_ID} · Public slug ${PRIMARY_EVENT_ID}`, {
+    page.getByText(`Organization ${ORGANIZATION_ID} · Public slug ${DISTINCT_PRIMARY_EVENT_SLUG}`, {
       exact: true,
     }),
   ).toBeVisible();
-  const settingsNavigation = page.getByRole("complementary", {
-    name: "Event settings sections",
-  });
-  await expect(settingsNavigation).toBeVisible();
-  await expect(settingsNavigation.getByRole("link", { name: /Session workflow/u })).toHaveAttribute(
+  const visibleSettingsSectionLink = async (name: RegExp) => {
+    const desktopNavigation = page.getByRole("complementary", {
+      name: "Event settings sections",
+    });
+    if (!(await desktopNavigation.isVisible())) {
+      const trigger = page.getByRole("button", { name: "Choose event settings section" });
+      await expect(trigger).toBeVisible();
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+    }
+    return page.getByRole("link", { name });
+  };
+  const initialWorkflowSettingsLink = await visibleSettingsSectionLink(/Session workflow/u);
+  await expect(initialWorkflowSettingsLink).toHaveAttribute(
     "href",
     `${settingsUrl(PRIMARY_EVENT_ID)}/workflow`,
   );
+  for (const [name, section] of [
+    [/Session workflow/u, "workflow"],
+    [/Rooms and venues/u, "rooms"],
+    [/Session classification/u, "classification"],
+    [/Change history/u, "history"],
+  ] as const) {
+    const link = await visibleSettingsSectionLink(name);
+    const href = await link.getAttribute("href");
+    expect(href).toBe(`${settingsUrl(PRIMARY_EVENT_ID)}/${section}`);
+    expect(href).not.toContain(DISTINCT_PRIMARY_EVENT_SLUG);
+  }
 
   const programNavigation = page.getByRole("navigation", { name: "Program organizer navigation" });
   const agendaLink = programNavigation.getByRole("link", { name: "Agenda", exact: true });
@@ -885,6 +908,46 @@ test("canonical Settings navigation stays organization and event qualified", asy
     programSettingsLink.click(),
   ]);
   await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  const eventCollectionPath = `/api/admin/organizations/${ORGANIZATION_ID}/events`;
+  const settingsWorkspaceReadCount = () =>
+    api.requests.filter((request) => {
+      if (request.method() !== "GET") return false;
+      const pathname = new URL(request.url()).pathname;
+      return pathname === eventCollectionPath || pathname.includes("/sessions/");
+    }).length;
+  const readsBeforeSectionNavigation = settingsWorkspaceReadCount();
+
+  const roomsSettingsLink = await visibleSettingsSectionLink(/Rooms and venues/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/rooms$`)),
+    roomsSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Rooms and venues" })).toBeVisible();
+
+  const classificationSettingsLink = await visibleSettingsSectionLink(/Session classification/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/classification$`)),
+    classificationSettingsLink.click(),
+  ]);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Session classification" }),
+  ).toBeVisible();
+
+  const historySettingsLink = await visibleSettingsSectionLink(/Change history/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/history$`)),
+    historySettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Change history" })).toBeVisible();
+
+  const workflowSettingsLink = await visibleSettingsSectionLink(/Session workflow/u);
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}/workflow$`)),
+    workflowSettingsLink.click(),
+  ]);
+  await expect(page.getByRole("heading", { level: 1, name: "Session workflow" })).toBeVisible();
+  expect(settingsWorkspaceReadCount()).toBe(readsBeforeSectionNavigation);
   const settingsRequests = api.requests.filter(
     (request) =>
       request.method() === "GET" && new URL(request.url()).pathname.includes("/sessions/"),

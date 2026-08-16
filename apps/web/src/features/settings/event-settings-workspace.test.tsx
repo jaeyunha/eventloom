@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { qualifiedEventContext } from "../admin/admin-shell";
+import { OrganizerEventWorkspaceProvider } from "../admin/organizer-event-workspace";
 import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
@@ -14,6 +15,11 @@ import {
   type SessionSettingsRecord,
   validateRoomInput,
 } from "./api";
+import {
+  createEventSettingsNavigationCache,
+  EVENT_SETTINGS_NAVIGATION_CACHE_TTL_MS,
+  isCompleteEventSettingsNavigationCacheSnapshot,
+} from "./event-settings-navigation-cache";
 import { eventSettingsSectionHref } from "./event-settings-sections";
 import {
   canCommitEventSettingsAsyncCompletion,
@@ -142,6 +148,63 @@ describe("event settings mutation persistence", () => {
       ),
     ).rejects.toThrow("write failed");
     expect(refreshed).toBe(false);
+  });
+});
+describe("event settings navigation cache", () => {
+  it("normalizes scopes without allowing one organization or event to reuse another", () => {
+    const cache = createEventSettingsNavigationCache({ now: () => 10 });
+    const snapshot = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "loaded" as const },
+      eventIdentity: { id: "event-a", name: "Summit 2026", slug: "summit-2026" },
+    };
+
+    cache.set({ organizationId: " org_a ", eventId: " event-a " }, snapshot);
+
+    expect(cache.get({ organizationId: "org_a", eventId: "event-a" })).toEqual(snapshot);
+    expect(cache.get({ organizationId: "org_b", eventId: "event-a" })).toBeUndefined();
+    expect(cache.get({ organizationId: "org_a", eventId: "event-b" })).toBeUndefined();
+  });
+
+  it("expires entries at the bounded navigation-cache lifetime", () => {
+    let now = 100;
+    const cache = createEventSettingsNavigationCache({ now: () => now });
+    const snapshot = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "loaded" as const },
+    };
+
+    cache.set({ organizationId: "org_a", eventId: "event-a" }, snapshot);
+    expect(cache.get({ organizationId: "org_a", eventId: "event-a" })).toEqual(snapshot);
+
+    now += EVENT_SETTINGS_NAVIGATION_CACHE_TTL_MS;
+    expect(cache.get({ organizationId: "org_a", eventId: "event-a" })).toBeUndefined();
+  });
+
+  it("reuses complete entries but keeps incomplete data reloadable and supports invalidation", () => {
+    const cache = createEventSettingsNavigationCache({ now: () => 1 });
+    const scope = { organizationId: "org_a", eventId: "event-a" };
+    const identity = { id: "event-a", name: "Summit 2026", slug: "summit-2026" };
+    const partial = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "error" as const },
+      eventIdentity: identity,
+    };
+    const completeWithoutIdentity = {
+      state: { status: "loaded" as const, data: overview, detailsStatus: "loaded" as const },
+    };
+    const complete = {
+      ...completeWithoutIdentity,
+      eventIdentity: identity,
+    };
+
+    cache.set(scope, partial);
+    expect(isCompleteEventSettingsNavigationCacheSnapshot(cache.get(scope))).toBe(false);
+    expect(cache.get(scope)).toEqual(partial);
+    cache.set(scope, completeWithoutIdentity);
+    expect(isCompleteEventSettingsNavigationCacheSnapshot(cache.get(scope))).toBe(false);
+
+    cache.set(scope, complete);
+    expect(isCompleteEventSettingsNavigationCacheSnapshot(cache.get(scope))).toBe(true);
+    cache.invalidate(scope);
+    expect(cache.get(scope)).toBeUndefined();
   });
 });
 
@@ -458,6 +521,43 @@ describe("event settings view", () => {
     expect(output).toContain("Summit 2026");
     expect(output).toContain("Organization org_a · Public slug summit-2026");
     expect(output).not.toContain("Organization org_a · Event event-a");
+  });
+  it("keeps section links on the canonical event ID when the public slug differs", () => {
+    const organizationId = "org_a";
+    const eventId = "87aadc17-ec67-4f29-8b0f-8fc6733da05d";
+    const eventSlug = "test-summit-local";
+    const output = renderToStaticMarkup(
+      createElement(
+        OrganizerEventWorkspaceProvider,
+        {
+          event: {
+            id: eventId,
+            name: "Test Summit",
+            slug: eventSlug,
+          },
+          organizationId,
+        },
+        createElement(EventSettingsWorkspaceView, {
+          organizationId,
+          eventId,
+          eventIdentity: {
+            id: eventId,
+            name: "Test Summit",
+            slug: eventSlug,
+          },
+          state: { status: "loaded", data: { ...overview, eventId, organizationId } },
+        }),
+      ),
+    );
+
+    for (const section of eventSettingsSectionNavigation) {
+      expect(output).toContain(
+        `href="${eventSettingsSectionHref(organizationId, eventId, section.id)}"`,
+      );
+      expect(output).not.toContain(
+        `href="${eventSettingsSectionHref(organizationId, eventSlug, section.id)}"`,
+      );
+    }
   });
 
   it("explains how session classification values affect the program", () => {
