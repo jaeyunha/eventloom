@@ -106,9 +106,9 @@ export function mapEvaluatorAssignment(
   const resolvedEventId = context.assignment.eventId || plan.eventId;
   return {
     organizationId: plan.organizationId ?? resolvedEventId,
-    organizationName: plan.organizationName ?? plan.organizationId ?? resolvedEventId,
+    organizationName: plan.organizationName ?? "Organization",
     eventId: resolvedEventId,
-    eventName: plan.eventName ?? resolvedEventId,
+    eventName: plan.eventName ?? "Assigned event",
     dueAt: round.closesAt ?? plan.closesAt,
     planId: context.assignment.planId || plan.id,
     planName: plan.name,

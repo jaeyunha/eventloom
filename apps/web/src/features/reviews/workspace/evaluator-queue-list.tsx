@@ -1,32 +1,23 @@
 "use client";
 
-import styles from "../review-workspace.module.css";
 import type { ReviewerQueueController } from "./evaluator-queue-controller";
 import { ReviewerQueueFilters } from "./evaluator-queue-filters";
 import { ReviewerQueueRows } from "./evaluator-queue-rows";
+import styles from "./reviewer-queue.module.css";
 
 export function ReviewerQueueList({
   controller,
 }: Readonly<{ controller: ReviewerQueueController }>) {
-  const { filteredItems, inboxItems } = controller;
   return (
-    <section
-      className={`${styles.section} ${styles.reviewerQueuePanel}`}
-      aria-labelledby="review-queue-heading"
-    >
-      <div className={styles.sectionHeading}>
-        <div>
-          <p className={styles.sectionEyebrow}>Assigned work</p>
-          <h2 id="review-queue-heading">Submissions to review</h2>
-          <p className={styles.sectionIntro}>
-            Open one scorecard at a time. Drafts stay saved while you move through the queue.
-          </p>
-        </div>
-        <span className={styles.mutedLabel}>
-          {filteredItems.length} of {inboxItems.length}
-        </span>
-      </div>
+    <section className={styles.panel} aria-label="Assigned reviews">
       <ReviewerQueueFilters controller={controller} />
+      <div aria-hidden="true" className={styles.columns} data-reviewer-column-headings="true">
+        <span data-reviewer-column="title">Title</span>
+        <span data-reviewer-column="context">Event / round</span>
+        <span data-reviewer-column="due">Due</span>
+        <span data-reviewer-column="status">Status</span>
+        <span />
+      </div>
       <ReviewerQueueRows controller={controller} />
     </section>
   );

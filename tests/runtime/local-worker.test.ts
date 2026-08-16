@@ -356,10 +356,16 @@ describe.sequential("composed local Worker", () => {
     const reviewerData = await jsonData<{
       assignments: Array<{
         assignment: { reviewerId: string; status: string; submissionId: string };
+        plan: { eventName: string };
       }>;
     }>(reviewerWorkspace);
     expect(reviewerWorkspace.status).toBe(200);
     expect(reviewerData.assignments.length).toBeGreaterThan(1);
+    expect(
+      reviewerData.assignments.every(
+        ({ plan }) => plan.eventName === "Open Sessionboard Conference",
+      ),
+    ).toBe(true);
     expect(
       reviewerData.assignments.every(
         ({ assignment }) => assignment.reviewerId === "local-reviewer",

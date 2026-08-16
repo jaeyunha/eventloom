@@ -252,6 +252,19 @@ surfaces:
 CFP and reviewer flows inherit the focused-flow, object-detail, status, and
 progress patterns established by this wave.
 
+### Public CFP submission window
+
+- The progress rail contains event identity and application progress only.
+  Submission availability, deadlines, and account limits belong in the main
+  application flow where applicants make decisions.
+- Render one submission-window notice across all viewport sizes. Do not keep
+  separate desktop-rail and mobile-form copies in the DOM.
+- The notice is a quiet contextual status strip, not a sidebar card. Keep the
+  current status and concise guidance first, then present opening and closing
+  timestamps as two compact date facts.
+- A formatted timestamp is one semantic value. Date, time, and meridiem must
+  stay together; never leave `AM` or `PM` stranded on a separate line.
+
 ## 6. Motion and interaction
 
 - Motion only communicates navigation, drawer, dialog, hover, focus, or state
@@ -288,3 +301,70 @@ progress patterns established by this wave.
 - The initial marketing product proof uses representative static DOM data rather
   than an authenticated live dashboard embed, so the landing page remains
   fast, privacy-safe, and deterministic.
+
+## 9. Reviewer collection and scorecard drawer
+
+### 9.1 Reviewer queue
+
+- The reviewer queue is a collection surface, not a permanent list-detail
+  split. It uses the full available content canvas so submission titles,
+  assignment context, filters, due dates, and status remain readable.
+- The page header is a compact title, not a dashboard hero. A single icon-only
+  filter trigger sits at the collection edge. Status filtering belongs inside
+  the same compact menu as organization, event, round, track, due, and grouping;
+  never render a permanent row of status tabs.
+- Assigned submissions use one Linear-like collection grammar: no bordered
+  table and no row-by-row card chrome. Desktop uses a concise labeled grid for
+  Title, Event / round, Due, and Status, plus an unlabeled open action.
+  Labels are muted, regular-weight, and aligned to the exact row columns rather
+  than styled as small bold admin-table headings. Phones wrap the same
+  information into a compact summary with status and action paired beneath it.
+- Rows float on the collection surface without permanent separators. Hover,
+  focus, selected, overdue, and completion states use restrained token-based
+  background or inset emphasis.
+- The title is the primary row label and remains one line. Long titles use
+  ellipsis while preserving the complete accessible name and native hover
+  disclosure. Event, round, track, and due date are muted aligned context;
+  status and the open action stay visually paired.
+- The default queue is ungrouped. Reviewers may opt into organization, event,
+  round, or due-date grouping from the filter menu. The menu is a narrow,
+  borderless stack of labeled value rows rather than a grid of boxed form
+  fields.
+- Raw UUIDs, database keys, provider identifiers, and submission references
+  never appear in the reviewer queue. The title and review-round context are the
+  reviewer-facing identity; the focused drawer may retain its short reference
+  only where direct support disambiguation is useful.
+
+### 9.2 Review drawer
+
+- Opening an assignment slides a focused scorecard sheet from the right while
+  retaining the queue as spatial context. The sheet is the only detail surface;
+  do not keep a second permanent detail column behind it.
+- On wide screens the sheet is between 38rem and 56rem wide and never exceeds
+  roughly two-thirds of the workspace. Below the tablet breakpoint it becomes a
+  full-screen sheet.
+- The sheet has a compact sticky toolbar with close, previous/next assignment,
+  and the short submission reference. Focus moves into the sheet on open,
+  Escape closes it when autosave permits, and focus returns to the originating
+  queue row.
+- Submission context is presented as concise metadata followed by the abstract
+  and reviewer-visible fields. The rubric remains one contiguous form with
+  criterion-local advisory AI help, a single conflict path, autosave status,
+  and one primary submit/progression action.
+- The scorecard body scrolls independently. Its action bar stays visible without
+  covering fields, works with the software keyboard, and respects safe-area
+  insets.
+
+### 9.3 Responsive and accessibility behavior
+
+- Desktop rows preserve a stable identity/status/action rhythm beneath one quiet
+  Linear-like label row. The labels and values share one grid definition;
+  supporting metadata collapses before the title does.
+- Phone rows become touch-safe stacked summaries with title, event/round,
+  due/status, and one clear open action. No reviewer workflow requires
+  horizontal scrolling.
+- The drawer remains usable at 200% text zoom. Score choices wrap without
+  clipping, focus remains visible, and sticky regions never obscure the active
+  field.
+- Motion communicates the drawer transition only, uses transform and opacity,
+  and is removed under `prefers-reduced-motion`.
