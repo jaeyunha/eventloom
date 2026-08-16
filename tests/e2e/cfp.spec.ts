@@ -234,9 +234,10 @@ test("account access mode stays locked while authentication is pending", async (
   await expect(page.locator('[data-cfp-account-mode="sign_up"]')).toBeDisabled();
   await expect(page.getByRole("button", { name: "Signing in…" })).toBeDisabled();
 
+  const submissionNavigation = page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
   releaseAuthentication();
   await submit;
-  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
+  await submissionNavigation;
 });
 
 test("submitter completes the account-first CFP with two participants", async ({
