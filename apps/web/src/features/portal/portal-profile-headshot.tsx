@@ -1,7 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { Button, Card, CardContent, CardHeader, CardTitle } from "../../components/ui";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import styles from "./portal-profile.module.css";
 import { formatPortalDate, formatPortalFileSize, portalAssetStateLabel } from "./portal-ui-model";
 import type { PortalAsset, PortalDownloadGrant, PortalProfile } from "./types";

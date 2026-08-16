@@ -2,17 +2,17 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "../../../components/layout";
+import { PageHeader } from "../../../components/layout/page-header";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
 import {
-  Badge,
-  Button,
   Card,
   CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "../../../components/ui";
+} from "../../../components/ui/card";
 import styles from "../integrations.module.css";
 import {
   type AirtableConflictResolution,

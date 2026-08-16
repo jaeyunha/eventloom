@@ -8,20 +8,18 @@ import {
 } from "@eventloom/contracts";
 import Link from "next/link";
 import { type FormEvent, useState } from "react";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
 import {
-  Badge,
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-  Field,
-  FieldDescription,
-  FieldLabel,
-  Input,
-} from "../../components/ui";
+} from "../../components/ui/card";
+import { Field, FieldDescription, FieldLabel } from "../../components/ui/field";
+import { Input } from "../../components/ui/input";
 import styles from "./integrations.module.css";
 import type {
   ApiKeySummary,

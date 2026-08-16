@@ -1,7 +1,8 @@
 "use client";
 
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
-import { Button, Textarea } from "../../components/ui";
+import { Button } from "../../components/ui/button";
+import { Textarea } from "../../components/ui/textarea";
 import { WorkspaceFormSection, WorkspaceState } from "../../components/workspace/workspace-state";
 import { assetPointerLabels } from "./portal-assets";
 import { usePortal } from "./portal-provider";
