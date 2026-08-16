@@ -193,6 +193,14 @@ export interface EvaluationOrganizerWorkspaceDiagnostic {
   readonly code: "decisions_unavailable";
   readonly message: string;
 }
+export interface EvaluationOrganizerSubmittedReview {
+  readonly id: string;
+  readonly roundId: string;
+  readonly submissionId: string;
+  readonly reviewerId: string;
+  readonly comment: string;
+  readonly submittedAt: string;
+}
 export interface EvaluationOrganizerWorkspace {
   readonly event: EvaluationEventMetadata;
   readonly plan: EvaluationPlan;
@@ -200,6 +208,7 @@ export interface EvaluationOrganizerWorkspace {
   readonly assignments: readonly EvaluationAssignment[];
   readonly progress: EvaluationProgress;
   readonly aggregates: readonly EvaluationAggregate[];
+  readonly submittedReviews: readonly EvaluationOrganizerSubmittedReview[];
   readonly decisions: Readonly<Record<string, EvaluationDecision>>;
   readonly diagnostics?: readonly EvaluationOrganizerWorkspaceDiagnostic[];
 }
@@ -1137,6 +1146,30 @@ export class EvaluationService {
     const decisions = Object.fromEntries(
       planDecisions.map((decision) => [decision.submissionId, decision] as const),
     );
+    const effectiveAssignmentIds = new Set(effectiveAssignments.map((assignment) => assignment.id));
+    const submittedReviews = reviews
+      .flatMap((review): readonly EvaluationOrganizerSubmittedReview[] => {
+        if (review.submittedAt === null || !effectiveAssignmentIds.has(review.assignmentId)) {
+          return [];
+        }
+        return [
+          {
+            id: review.id,
+            roundId: review.roundId,
+            submissionId: review.submissionId,
+            reviewerId: review.reviewerId,
+            comment: review.comment,
+            submittedAt: review.submittedAt,
+          },
+        ];
+      })
+      .sort(
+        (left, right) =>
+          left.submissionId.localeCompare(right.submissionId) ||
+          left.roundId.localeCompare(right.roundId) ||
+          left.submittedAt.localeCompare(right.submittedAt) ||
+          left.reviewerId.localeCompare(right.reviewerId),
+      );
     return {
       event,
       plan,
@@ -1144,6 +1177,7 @@ export class EvaluationService {
       assignments: effectiveAssignments,
       progress: progressForAssignments(plan, effectiveAssignments),
       aggregates,
+      submittedReviews,
       decisions,
       ...(diagnostics === undefined ? {} : { diagnostics }),
     };

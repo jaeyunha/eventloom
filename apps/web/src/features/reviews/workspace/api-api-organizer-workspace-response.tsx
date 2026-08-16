@@ -6,6 +6,7 @@ import type { ApiDecision } from "./api-api-decision";
 import type { ApiPlan } from "./api-api-plan";
 import type { ApiProgress } from "./api-api-progress";
 import type { ApiSubmission } from "./api-api-submission";
+import type { ApiSubmittedReview } from "./api-api-submitted-review";
 
 export interface ApiEvaluationEventMetadata {
   readonly id: string;
@@ -22,5 +23,6 @@ export interface ApiOrganizerWorkspaceResponse {
   readonly assignments: readonly ApiAssignment[];
   readonly progress: ApiProgress;
   readonly aggregates: readonly ApiAggregate[];
+  readonly submittedReviews: readonly ApiSubmittedReview[];
   readonly decisions: Readonly<Record<string, ApiDecision>>;
 }

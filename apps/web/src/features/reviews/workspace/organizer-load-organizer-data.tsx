@@ -69,6 +69,7 @@ export async function loadOrganizerData(
   );
   return {
     ...mapPlan(plan, eventId, aggregateEntries, mappedProgress, workspace.decisions, assignments),
+    submittedReviews: workspace.submittedReviews,
     eventName: workspace.event.name,
     eventTimeZone: workspace.event.timeZone,
     eventStartsAt: workspace.event.startsAt,

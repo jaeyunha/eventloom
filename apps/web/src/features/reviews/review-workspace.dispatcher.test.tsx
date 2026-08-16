@@ -64,6 +64,7 @@ function organizerSeed(): ReviewPlanSeed {
     assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 5 },
     rounds: [assignment.round],
     aggregates: [],
+    submittedReviews: [],
     assignments: [],
     progress: {
       totalAssignments: 0,
