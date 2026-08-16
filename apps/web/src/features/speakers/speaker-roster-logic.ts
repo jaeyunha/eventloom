@@ -12,6 +12,16 @@ import {
   type ProgressFilter,
 } from "./speaker-workspace-types";
 
+const SPEAKER_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeZone: "UTC",
+});
+const SPEAKER_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
+
 export function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   label: string,
@@ -107,17 +117,13 @@ export function dateLabel(value: string | null | undefined): string {
   if (!value) return "No due date";
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(parsed);
+  return SPEAKER_DATE_FORMATTER.format(parsed);
 }
 
 export function dateTimeLabel(value: string): string {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  }).format(parsed);
+  return SPEAKER_DATE_TIME_FORMATTER.format(parsed);
 }
 
 export function assetSize(value: number): string {

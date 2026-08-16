@@ -87,6 +87,13 @@ const sortLabels: Record<SortKey, string> = {
   updatedAt: "Last updated",
 };
 
+const SUBMISSION_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
 function apiBaseUrl(): string {
   return "";
 }
@@ -99,12 +106,7 @@ function submissionHref(eventId: string, submissionId: string, organizationId: s
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(value));
+  return SUBMISSION_DATE_FORMATTER.format(new Date(value));
 }
 
 function initials(name: string): string {

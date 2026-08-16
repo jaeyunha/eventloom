@@ -50,6 +50,11 @@ import {
 import styles from "./member-workspace.module.css";
 import { inviteRolesForOrganization } from "./member-workspace-model";
 
+const MEMBER_UPDATED_AT_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeZone: "UTC",
+});
+
 export interface MemberWorkspaceProps {
   readonly organizationId: string;
   readonly baseUrl?: string;
@@ -188,7 +193,7 @@ function formatDate(value: string | null | undefined): string {
   if (!value) return "Date unavailable";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "Date unavailable";
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(date);
+  return MEMBER_UPDATED_AT_FORMATTER.format(date);
 }
 
 function StatusMessage({ message, error = false }: Readonly<{ message: string; error?: boolean }>) {

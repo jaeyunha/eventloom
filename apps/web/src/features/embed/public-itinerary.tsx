@@ -11,6 +11,29 @@ import {
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
+const ITINERARY_EVENT_DATE_KEY_OPTIONS = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+} as const;
+const ITINERARY_EVENT_DATE_KEY_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const ITINERARY_EVENT_DAY_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+function itineraryEventDateKeyFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = ITINERARY_EVENT_DATE_KEY_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en", {
+    ...ITINERARY_EVENT_DATE_KEY_OPTIONS,
+    timeZone,
+  });
+  ITINERARY_EVENT_DATE_KEY_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
 
 function uniqueValues(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
@@ -26,12 +49,7 @@ function truncateDescription(value: string): string {
 function eventDateKey(value: string, timeZone: string): string {
   const instant = new Date(value);
   if (Number.isNaN(instant.valueOf())) return "";
-  const parts = new Intl.DateTimeFormat("en", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone,
-  }).formatToParts(instant);
+  const parts = itineraryEventDateKeyFormatter(timeZone).formatToParts(instant);
   const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
   return `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`;
@@ -55,12 +73,7 @@ function eventBoundaryTimestamp(value: string): number | null {
 }
 
 function eventDayLabel(date: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${date}T00:00:00.000Z`));
+  return ITINERARY_EVENT_DAY_LABEL_FORMATTER.format(new Date(`${date}T00:00:00.000Z`));
 }
 
 function publicEventDays(

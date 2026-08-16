@@ -155,6 +155,115 @@ export function speakerSurname(displayName: string): string {
 const baseNameCollator = new Intl.Collator("en", { sensitivity: "base" });
 const exactNameCollator = new Intl.Collator("en", { sensitivity: "variant" });
 
+const EMBED_EVENT_DATE_KEY_OPTIONS = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+} as const;
+const EMBED_DAY_LABEL_OPTIONS = {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+} as const;
+const EMBED_TIME_LABEL_OPTIONS = {
+  hour: "numeric",
+  minute: "2-digit",
+} as const;
+const EMBED_SESSION_DATE_OPTIONS = {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+} as const;
+const EMBED_SESSION_DATE_TIME_OPTIONS = {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+} as const;
+const EMBED_DATE_TIME_RANGE_OPTIONS = {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+} as const;
+const EMBED_EVENT_DATE_KEY_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const EMBED_DAY_LABEL_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const EMBED_TIME_LABEL_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const EMBED_SESSION_DATE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const EMBED_SESSION_DATE_TIME_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const EMBED_DATE_TIME_RANGE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+const EMBED_UTC_DAY_LABEL_FORMATTER = new Intl.DateTimeFormat("en", {
+  ...EMBED_DAY_LABEL_OPTIONS,
+  timeZone: "UTC",
+});
+
+function embedEventDateKeyFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EMBED_EVENT_DATE_KEY_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en", {
+    ...EMBED_EVENT_DATE_KEY_OPTIONS,
+    timeZone,
+  });
+  EMBED_EVENT_DATE_KEY_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
+function embedDayLabelFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EMBED_DAY_LABEL_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en", {
+    ...EMBED_DAY_LABEL_OPTIONS,
+    timeZone,
+  });
+  EMBED_DAY_LABEL_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
+function embedTimeLabelFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EMBED_TIME_LABEL_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en", {
+    ...EMBED_TIME_LABEL_OPTIONS,
+    timeZone,
+  });
+  EMBED_TIME_LABEL_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
+function embedSessionDateFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EMBED_SESSION_DATE_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    ...EMBED_SESSION_DATE_OPTIONS,
+    timeZone,
+  });
+  EMBED_SESSION_DATE_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
+function embedSessionDateTimeFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EMBED_SESSION_DATE_TIME_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    ...EMBED_SESSION_DATE_TIME_OPTIONS,
+    timeZone,
+  });
+  EMBED_SESSION_DATE_TIME_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
+function embedDateTimeRangeFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = EMBED_DATE_TIME_RANGE_FORMATTER_CACHE.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    ...EMBED_DATE_TIME_RANGE_OPTIONS,
+    timeZone,
+  });
+  EMBED_DATE_TIME_RANGE_FORMATTER_CACHE.set(timeZone, formatter);
+  return formatter;
+}
+
 export function sortSpeakersBySurname(
   speakers: readonly PublishedSpeaker[],
 ): readonly PublishedSpeaker[] {
@@ -414,12 +523,7 @@ function eventDateKey(value: string, timeZone: string): string {
   if (Number.isNaN(instant.valueOf())) {
     return "";
   }
-  const parts = new Intl.DateTimeFormat("en", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone,
-  }).formatToParts(instant);
+  const parts = embedEventDateKeyFormatter(timeZone).formatToParts(instant);
   const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
   return `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`;
@@ -492,18 +596,8 @@ export function publicAgendaDays(
   timeZone: string,
   event?: Pick<PublishedEvent, "startsOn" | "endsOn">,
 ): readonly PublicAgendaDay[] {
-  const dateFormatter = new Intl.DateTimeFormat("en", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    timeZone,
-  });
-  const emptyDateFormatter = new Intl.DateTimeFormat("en", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+  const dateFormatter = embedDayLabelFormatter(timeZone);
+  const emptyDateFormatter = EMBED_UTC_DAY_LABEL_FORMATTER;
   const eventDates = authoritativeEventDates(event);
   const eventDateSet = eventDates === null ? null : new Set(eventDates);
   const byDate = new Map<string, PublishedAgendaEntry[]>();
@@ -541,11 +635,7 @@ export function formatPublishedTime(value: string, timeZone: string): string {
   if (Number.isNaN(instant.valueOf())) {
     return value;
   }
-  return new Intl.DateTimeFormat("en", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone,
-  }).format(instant);
+  return embedTimeLabelFormatter(timeZone).format(instant);
 }
 
 export interface PublishedSessionSchedule {
@@ -570,12 +660,7 @@ export function formatPublishedSessionSchedule(
       timeLabel: endsAt,
     };
   }
-  const dateLabel = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    timeZone,
-  }).format(start);
+  const dateLabel = embedSessionDateFormatter(timeZone).format(start);
   const startTime = formatPublishedTime(startsAt, timeZone);
   const endTime = formatPublishedTime(endsAt, timeZone);
   const [startClock, startPeriod] = startTime.split(" ");
@@ -589,25 +674,12 @@ export function formatPublishedSessionSchedule(
       timeLabel: `${compactStart} – ${endTime}`,
     };
   }
+  const endDateTime = embedSessionDateTimeFormatter(timeZone).format(end);
   return {
     dateLabel,
-    endTimeLabel: new Intl.DateTimeFormat("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone,
-    }).format(end),
+    endTimeLabel: endDateTime,
     startTimeLabel: startTime,
-    timeLabel: `${startTime} – ${new Intl.DateTimeFormat("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone,
-    }).format(end)}`,
+    timeLabel: `${startTime} – ${endDateTime}`,
   };
 }
 
@@ -621,13 +693,7 @@ export function formatPublishedDateTimeRange(
   if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) {
     return `${startsAt} – ${endsAt}`;
   }
-  const dateFormatter = new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone,
-  });
+  const dateFormatter = embedDateTimeRangeFormatter(timeZone);
   const startDate = dateFormatter.format(start);
   const startTime = formatPublishedTime(startsAt, timeZone);
   const endTime = formatPublishedTime(endsAt, timeZone);

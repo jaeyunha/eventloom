@@ -1,5 +1,14 @@
 import { createMemberApi, type OrganizationMember } from "../members/api";
 
+const SUBMISSION_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+
 export type SubmissionStatus =
   | "draft"
   | "submitted"
@@ -819,14 +828,7 @@ export async function loadOrganizerEventIdentity(
 }
 
 export function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "UTC",
-  }).format(new Date(value));
+  return SUBMISSION_DATE_TIME_FORMATTER.format(new Date(value));
 }
 
 export type SubmissionListState =

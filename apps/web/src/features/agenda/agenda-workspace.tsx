@@ -89,6 +89,13 @@ import type {
   AgendaWorkspaceData,
 } from "./types";
 
+const AGENDA_COMPACT_SCHEDULE_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
 function messageFrom(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -428,6 +435,7 @@ function EntryForm({
     </form>
   );
 }
+
 
 interface AgendaBoardProps {
   organizationId: string;

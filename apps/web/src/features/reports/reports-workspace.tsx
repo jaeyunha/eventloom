@@ -144,6 +144,11 @@ const FILTER_OPERATORS: readonly {
   { value: "isNull", label: "is empty" },
   { value: "isNotNull", label: "is not empty" },
 ];
+const REPORT_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
 
 function apiBaseUrl(explicit: string | undefined): string {
   return (explicit ?? "").trim().replace(/\/+$/u, "");
@@ -266,11 +271,7 @@ function seededRun(eventId: string, definition: ReportDefinition): ReportRun {
 function dateLabel(value: string): string {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  }).format(parsed);
+  return REPORT_DATE_FORMATTER.format(parsed);
 }
 
 function displayValue(value: unknown): string {
