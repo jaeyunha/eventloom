@@ -44,21 +44,6 @@
   padding: 0.3rem 0.4rem;
 }
 
-.brandMark {
-  display: grid;
-  width: 1.8rem;
-  height: 1.8rem;
-  flex: none;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--sidebar-border) 84%, transparent);
-  border-radius: 0.45rem;
-  background: var(--sidebar-primary);
-  color: var(--sidebar-primary-foreground);
-  font-size: 0.65rem;
-  font-weight: 780;
-  letter-spacing: -0.02em;
-}
-
 .brandCopy {
   display: grid;
   min-width: 0;

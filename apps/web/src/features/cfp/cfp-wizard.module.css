@@ -146,21 +146,6 @@
   overflow-wrap: anywhere;
 }
 
-.brandMark {
-  display: inline-grid;
-  width: 2rem;
-  height: 2rem;
-  flex: none;
-  place-items: center;
-  border: 1px solid var(--sidebar-border);
-  border-radius: var(--radius-md);
-  background: var(--sidebar-primary);
-  color: var(--sidebar-primary-foreground);
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
 .publicBrandCopy {
   display: grid;
   min-width: 0;

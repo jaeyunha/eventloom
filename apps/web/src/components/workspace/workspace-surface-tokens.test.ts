@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const ownedStyles = [
   "./settings-ui.module.css",
+  "./workspace-brand-mark.module.css",
   "./workspace-content.module.css",
   "./workspace-navigation.module.css",
   "./role-workspace-shell.module.css",
@@ -45,6 +46,18 @@ const workspaceShellSource = readFileSync(
   fileURLToPath(new URL("./workspace-shell.tsx", import.meta.url)),
   "utf8",
 );
+const roleWorkspaceSource = readFileSync(
+  fileURLToPath(new URL("./role-workspace-shell.tsx", import.meta.url)),
+  "utf8",
+);
+const adminRailSource = readFileSync(
+  fileURLToPath(new URL("../../features/admin/admin-shell-rail.tsx", import.meta.url)),
+  "utf8",
+);
+const cfpWizardSource = readFileSync(
+  fileURLToPath(new URL("../../features/cfp/cfp-wizard.tsx", import.meta.url)),
+  "utf8",
+);
 const workHubSource = readFileSync(
   fileURLToPath(new URL("../../features/work/work-hub.tsx", import.meta.url)),
   "utf8",
@@ -56,7 +69,7 @@ const directColorDeclaration =
 describe("workspace semantic surfaces", () => {
   it("defines one reusable light and dark workspace layer contract", () => {
     expect(globalStyles).toMatch(
-      /:root\s*\{[\s\S]*--workspace-outer:\s*#f3f3f5;[\s\S]*--workspace-pane:\s*#ffffff;[\s\S]*--workspace-surface:\s*#ffffff;[\s\S]*--workspace-subtle:\s*#f7f7f8;/u,
+      /:root\s*\{[\s\S]*--workspace-outer:\s*#f3f3f5;[\s\S]*--workspace-pane:\s*#f7f7f8;[\s\S]*--workspace-surface:\s*#ffffff;[\s\S]*--workspace-subtle:\s*#f4f4f6;/u,
     );
     expect(globalStyles).toMatch(
       /\.dark\s*\{[\s\S]*--workspace-outer:\s*#0b0b0d;[\s\S]*--workspace-pane:\s*#151517;[\s\S]*--workspace-surface:\s*#1c1c1f;[\s\S]*--workspace-subtle:\s*#232327;/u,
@@ -100,6 +113,20 @@ describe("workspace semantic surfaces", () => {
     expect(workspaceShellSource).toContain('data-role-workspace-shell="true"');
     expect(workHubSource).toContain('data-role-workspace-shell="true"');
     expect(workHubSource).toContain("className={styles.frame}");
+  });
+
+  it("uses the organizer brand mark across organizer, participant, speaker, and CFP shells", () => {
+    const brandMarkStyles = styleSource.get("./workspace-brand-mark.module.css") ?? "";
+
+    expect(adminRailSource).toMatch(/import\s+\{\s*WorkspaceBrandMark\s*\}/u);
+    expect(roleWorkspaceSource).toMatch(/import\s+\{\s*WorkspaceBrandMark\s*\}/u);
+    expect(cfpWizardSource).toMatch(/import\s+\{\s*WorkspaceBrandMark\s*\}/u);
+    expect(adminRailSource).toMatch(/<WorkspaceBrandMark\s*\/>/u);
+    expect(roleWorkspaceSource).toMatch(/<WorkspaceBrandMark\s*\/>/u);
+    expect(cfpWizardSource).toMatch(/<WorkspaceBrandMark\s*\/>/u);
+    expect(brandMarkStyles).toMatch(
+      /\.mark\s*\{[^}]*width:\s*var\(--space-7\)[^}]*height:\s*var\(--space-7\)[^}]*border-radius:\s*var\(--radius-md\)[^}]*background:\s*var\(--primary\)[^}]*color:\s*var\(--primary-foreground\)[^}]*font-size:\s*0\.75rem[^}]*font-weight:\s*600/su,
+    );
   });
 
   it("keeps the account hub inside the same layered workspace frame", () => {

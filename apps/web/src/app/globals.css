@@ -2446,9 +2446,9 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
   --workspace-outer: #f3f3f5;
-  --workspace-pane: #ffffff;
+  --workspace-pane: #f7f7f8;
   --workspace-surface: #ffffff;
-  --workspace-subtle: #f7f7f8;
+  --workspace-subtle: #f4f4f6;
   --workspace-divider: #e4e4e7;
   --workspace-divider-strong: #d2d2d6;
   --workspace-pane-edge: var(--workspace-divider);

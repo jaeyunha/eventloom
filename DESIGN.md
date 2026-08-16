@@ -109,7 +109,7 @@ levels rather than inventing a new visual grammar per feature.
 - Warning surface/text: `#fff5df` / `#a66811`
 - Failure surface/text: `#fff0ee` / `#c44138`
 - Authenticated workspace layers, light: outer chrome `#f3f3f5`, document pane
-  `#ffffff`, operational surface `#ffffff`, subdued surface `#f7f7f8`.
+  `#f7f7f8`, operational surface `#ffffff`, subdued surface `#f4f4f6`.
 - Authenticated workspace layers, dark: outer chrome `#0b0b0d`, document pane
   `#151517`, operational surface `#1c1c1f`, subdued surface `#232327`.
 - Workspace pane edges: use the standard cool border in light mode and a
@@ -154,6 +154,12 @@ levels rather than inventing a new visual grammar per feature.
   pane over the outer navigation chrome. Organizer, reviewer, participant,
   speaker, applicant, and account-level work surfaces use the same geometry;
   theme changes alter tokens, not layout.
+- The desktop document pane keeps an 8px inset from the outer chrome in both
+  themes. Light mode uses the off-white canvas token for the pane so that this
+  spacing and the white operational surfaces remain visibly distinct.
+- Organizer, reviewer, applicant, accepted-speaker, and CFP shells use one
+  shared rounded-square `EL` brand mark. Workspace labels identify the current
+  role; color, shape, size, and theme behavior do not vary by route.
 - The dark sidebar is always the deepest layer. The document pane is slightly
   lighter, and cards or operational panels are lighter again. Sidebar-to-pane
   separation must remain quiet and borderless in appearance.

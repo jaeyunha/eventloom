@@ -92,19 +92,6 @@
   text-decoration: none;
 }
 
-.brandMark {
-  display: grid;
-  width: var(--space-7);
-  height: var(--space-7);
-  flex: none;
-  place-items: center;
-  border-radius: var(--radius-md);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: var(--admin-text-small);
-  font-weight: 600;
-}
-
 .brandCopy {
   display: grid;
   min-width: 0;

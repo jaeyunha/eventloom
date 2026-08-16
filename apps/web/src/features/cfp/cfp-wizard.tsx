@@ -19,6 +19,7 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
+import { WorkspaceBrandMark } from "../../components/workspace/workspace-brand-mark";
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
@@ -418,9 +419,7 @@ function PublicCfpShell({
       navigation={
         <div className={styles.contextRail}>
           <div className={styles.publicBrand}>
-            <span aria-hidden="true" className={styles.brandMark}>
-              E
-            </span>
+            <WorkspaceBrandMark />
             <span className={styles.publicBrandCopy}>
               <strong>{resolvedOrganizationName}</strong>
               <span>Applicant workspace</span>
