@@ -54,7 +54,7 @@ function assignment(id = "assignment-1"): EvaluatorAssignment {
 }
 
 describe("evaluator workspace composition", () => {
-  it("uses the shared list-detail geometry and unified status vocabulary for the queue", () => {
+  it("uses the reviewer collection geometry and unified status vocabulary for the queue", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         mode: "evaluator",
@@ -63,9 +63,44 @@ describe("evaluator workspace composition", () => {
     );
 
     expect(markup).toContain('aria-label="Assigned reviews"');
-    expect(markup).toContain('aria-label="Reviewer queue guidance"');
+    expect(markup).toContain('data-reviewer-collection="true"');
     expect(markup).toContain('data-tone="warning"');
     expect(markup).toContain("Needs review");
+  });
+
+  it("renders the queue as the durable collection surface without a permanent detail pane", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        mode: "evaluator",
+        initialState: { queue: [{ assignment: assignment() }] },
+      }),
+    );
+
+    expect(markup.includes('data-reviewer-collection="true"')).toBe(true);
+    expect(markup.includes('data-reviewer-assignment-id="assignment-1"')).toBe(true);
+    expect(markup.includes('aria-label="Reviewer queue guidance"')).toBe(false);
+  });
+
+  it("replaces opaque submission references with a short reviewer-facing reference", () => {
+    const technicalReference = "SUBMISSION_753F52A9-4872-4700-9B52-D9AEF7E30D4A";
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        mode: "evaluator",
+        initialState: {
+          queue: [
+            {
+              assignment: {
+                ...assignment(),
+                reference: technicalReference,
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(markup.includes(technicalReference)).toBe(false);
+    expect(markup.includes("SUB-753F52")).toBe(true);
   });
 
   it("uses shared progress and sticky action primitives for one scorecard action bar", () => {

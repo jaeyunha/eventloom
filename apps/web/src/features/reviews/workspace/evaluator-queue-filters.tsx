@@ -2,13 +2,15 @@
 
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import styles from "../review-workspace.module.css";
+import { ListFilter } from "lucide-react";
+import { Popover } from "radix-ui";
 import type {
   ReviewerInboxFilters,
   ReviewerInboxGroupBy,
   ReviewerInboxStatusView,
 } from "../reviewer-inbox";
 import type { ReviewerQueueController } from "./evaluator-queue-controller";
+import styles from "./reviewer-queue.module.css";
 
 export function ReviewerQueueFilters({
   controller,
@@ -28,9 +30,10 @@ export function ReviewerQueueFilters({
     filtersActive,
     clearFilters,
   } = controller;
+  const activeFilterCount = Object.values(filters).filter((value) => value !== "all").length;
   return (
-    <>
-      <fieldset className={styles.reviewerStatusViews}>
+    <div className={styles.controls}>
+      <fieldset className={styles.statusViews}>
         <legend className={styles.srOnly}>Review status views</legend>
         {(
           [
@@ -53,131 +56,150 @@ export function ReviewerQueueFilters({
           </Button>
         ))}
       </fieldset>
-      <fieldset className={styles.reviewerFilterBar}>
-        <legend className={styles.srOnly}>Reviewer inbox filters</legend>
-        <label className={styles.reviewerFilterField}>
-          <span>Organization</span>
-          <select
-            value={filters.organizationId}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                organizationId: event.target.value,
-                eventId: "all",
-                roundKey: "all",
-              }))
-            }
-          >
-            <option value="all">All organizations</option>
-            {organizationOptions.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.reviewerFilterField}>
-          <span>Event</span>
-          <select
-            value={filters.eventId}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                eventId: event.target.value,
-                roundKey: "all",
-              }))
-            }
-          >
-            <option value="all">All events</option>
-            {eventOptions.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.reviewerFilterField}>
-          <span>Round</span>
-          <select
-            value={filters.roundKey}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                roundKey: event.target.value,
-              }))
-            }
-          >
-            <option value="all">All rounds</option>
-            {roundOptions.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.reviewerFilterField}>
-          <span>Due</span>
-          <select
-            value={filters.due}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                due: event.target.value as ReviewerInboxFilters["due"],
-              }))
-            }
-          >
-            <option value="all">Any time</option>
-            <option value="overdue">Overdue</option>
-            <option value="today">Today</option>
-            <option value="next-7-days">Next 7 days</option>
-            <option value="later">Later</option>
-            <option value="none">No deadline</option>
-          </select>
-        </label>
-        <label className={styles.reviewerFilterField}>
-          <span>Track</span>
-          <select
-            value={filters.track}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                track: event.target.value,
-              }))
-            }
-          >
-            <option value="all">All tracks</option>
-            <option value="none">No track</option>
-            {trackOptions.map((track) => (
-              <option key={track} value={track}>
-                {track}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.reviewerFilterField}>
-          <span>Group by</span>
-          <select
-            value={groupBy}
-            onChange={(event) => setGroupBy(event.target.value as ReviewerInboxGroupBy)}
-          >
-            <option value="event">Event</option>
-            <option value="organization">Organization</option>
-            <option value="round">Round</option>
-            <option value="due">Due date</option>
-          </select>
-        </label>
-        {filtersActive ? (
-          <Button
-            className={styles.reviewerClearFilters}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={clearFilters}
-          >
-            Clear filters
+      <Popover.Root>
+        <Popover.Trigger asChild>
+          <Button className={styles.filterTrigger} size="sm" type="button" variant="outline">
+            <ListFilter aria-hidden="true" />
+            Filters
+            {activeFilterCount > 0 ? <Badge variant="secondary">{activeFilterCount}</Badge> : null}
           </Button>
-        ) : null}
-      </fieldset>
-    </>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            align="end"
+            aria-label="Reviewer filters"
+            className={styles.filterPopover}
+            sideOffset={8}
+          >
+            <div className={styles.filterPopoverHeader}>
+              <div>
+                <strong>Filters</strong>
+                <span>Refine assigned reviews</span>
+              </div>
+              {filtersActive ? (
+                <Button size="sm" type="button" variant="ghost" onClick={clearFilters}>
+                  Clear
+                </Button>
+              ) : null}
+            </div>
+            <fieldset className={styles.filterBar}>
+              <legend className={styles.srOnly}>Reviewer inbox filters</legend>
+              <label className={styles.filterField}>
+                <span>Organization</span>
+                <select
+                  value={filters.organizationId}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      organizationId: event.target.value,
+                      eventId: "all",
+                      roundKey: "all",
+                    }))
+                  }
+                >
+                  <option value="all">All</option>
+                  {organizationOptions.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.filterField}>
+                <span>Event</span>
+                <select
+                  value={filters.eventId}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      eventId: event.target.value,
+                      roundKey: "all",
+                    }))
+                  }
+                >
+                  <option value="all">All</option>
+                  {eventOptions.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.filterField}>
+                <span>Round</span>
+                <select
+                  value={filters.roundKey}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      roundKey: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="all">All</option>
+                  {roundOptions.map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.filterField}>
+                <span>Due</span>
+                <select
+                  value={filters.due}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      due: event.target.value as ReviewerInboxFilters["due"],
+                    }))
+                  }
+                >
+                  <option value="all">Any time</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="today">Today</option>
+                  <option value="next-7-days">Next 7 days</option>
+                  <option value="later">Later</option>
+                  <option value="none">No deadline</option>
+                </select>
+              </label>
+              <label className={styles.filterField}>
+                <span>Track</span>
+                <select
+                  value={filters.track}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      track: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="all">All</option>
+                  <option value="none">No track</option>
+                  {trackOptions.map((track) => (
+                    <option key={track} value={track}>
+                      {track}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.filterField}>
+                <span>Group by</span>
+                <select
+                  value={groupBy}
+                  onChange={(event) => setGroupBy(event.target.value as ReviewerInboxGroupBy)}
+                >
+                  <option value="none">None</option>
+                  <option value="event">Event</option>
+                  <option value="organization">Organization</option>
+                  <option value="round">Round</option>
+                  <option value="due">Due date</option>
+                </select>
+              </label>
+            </fieldset>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+    </div>
   );
 }

@@ -726,7 +726,7 @@ test("speaker workspace reflows at 320px with 200% text zoom", async ({ page }) 
   expect(layout.mainCount).toBe(1);
 });
 
-test("reviewer queue opens one focused scorecard without hiding assigned work", async ({
+test("reviewer queue opens one focused scorecard drawer without resizing assigned work", async ({
   context,
   page,
 }, testInfo) => {
@@ -747,16 +747,49 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
   ] as const) {
     await page.setViewportSize(viewport);
     await page.goto(reviewerUrl);
+    await page.evaluate(() => window.scrollTo(0, 0));
 
-    const queue = page.locator('section[aria-labelledby="review-queue-heading"]');
-    const firstAction = queue
-      .locator('[aria-label^="Open scorecard for"]')
-      .filter({ hasText: "Start review" })
-      .first();
+    const queue = page.locator('nav[aria-label="Assigned reviews"]');
+    const firstAction = queue.getByRole("button", { name: /Open scorecard/u }).first();
+    const firstTitle = queue.getByRole("heading", { level: 3 }).first();
+    const filterButton = queue.getByRole("button", { name: /^Filters/u });
 
     await expect(queue).toBeVisible();
     await expect(firstAction).toBeVisible();
     await expect(firstAction).toHaveText("Start review");
+    await expect(filterButton).toBeVisible();
+    const titleText = await firstTitle.textContent();
+    const titleMetrics = await firstTitle.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        overflow: style.overflow,
+        textOverflow: style.textOverflow,
+        title: element.getAttribute("title"),
+        whiteSpace: style.whiteSpace,
+      };
+    });
+    expect(titleMetrics.title).toBe(titleText);
+    expect(titleMetrics.overflow).toBe("hidden");
+    expect(titleMetrics.textOverflow).toBe("ellipsis");
+    expect(titleMetrics.whiteSpace).toBe("nowrap");
+
+    await page.screenshot({
+      path: testInfo.outputPath(`reviewer-queue-${viewport.name}.png`),
+      fullPage: false,
+    });
+
+    await filterButton.click();
+    await expect(page.getByLabel("Reviewer filters")).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath(`reviewer-filters-${viewport.name}.png`),
+      fullPage: false,
+    });
+    await page.keyboard.press("Escape");
+    await expect(page.getByLabel("Reviewer filters")).toBeHidden();
+
+    await firstAction.focus();
+    await expect(firstAction).toBeFocused();
+    const queueBeforeOpen = await queue.boundingBox();
 
     const actionMetrics = await firstAction.evaluate((element) => {
       const range = document.createRange();
@@ -771,11 +804,39 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     expect(actionMetrics.lineCount).toBe(1);
     expect(actionMetrics.whiteSpace).toBe("nowrap");
 
+    const drawerSettled = page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            observer.disconnect();
+            reject(new Error("Reviewer drawer transition did not finish."));
+          }, 1_000);
+          const finish = () => {
+            window.clearTimeout(timeout);
+            observer.disconnect();
+            requestAnimationFrame(() => resolve());
+          };
+          const observer = new MutationObserver(() => {
+            const drawer = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
+            if (drawer === null) return;
+            const style = getComputedStyle(drawer);
+            if (style.transitionDuration === "0s" && style.animationDuration === "0s") {
+              finish();
+              return;
+            }
+            drawer.addEventListener("transitionend", finish, { once: true });
+            drawer.addEventListener("animationend", finish, { once: true });
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+        }),
+    );
     await firstAction.click();
 
-    const scorecard = page.locator('section[id^="scorecard-"]');
+    const scorecard = page.getByRole("dialog");
+    const closeReview = scorecard.getByRole("button", { name: "Close review" });
     await expect(scorecard).toBeVisible();
-    await expect(scorecard).toBeFocused();
+    await drawerSettled;
+    await expect(closeReview).toBeFocused();
     await expect(page.locator("#review-workspace")).toHaveCount(1);
     await expect(page.locator("#review-content")).toHaveCount(1);
     await expect(scorecard.getByRole("button", { name: "Submit review" })).toHaveCount(1);
@@ -783,12 +844,23 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     await expect(scorecard.getByRole("button", { name: "Save draft" })).toHaveCount(0);
     await expect(scorecard.getByRole("button", { name: "Declare conflict" })).toBeVisible();
     await expect(scorecard.getByRole("spinbutton", { name: /Human score/u })).toHaveCount(0);
+    const scorecardScroll = scorecard.locator('[data-reviewer-scorecard-scroll="true"]');
+    const scorecardFooter = scorecard.locator('[data-reviewer-scorecard-footer="true"]');
+    await expect(scorecardScroll).toBeVisible();
+    await expect(scorecardFooter).toBeVisible();
+    const scorecardRegions = await Promise.all([
+      scorecardScroll.boundingBox(),
+      scorecardFooter.boundingBox(),
+    ]);
+    expect(scorecardRegions[0]).not.toBeNull();
+    expect(scorecardRegions[1]).not.toBeNull();
+    expect(scorecardRegions[0]?.y + (scorecardRegions[0]?.height ?? 0)).toBeLessThanOrEqual(
+      (scorecardRegions[1]?.y ?? 0) + 1,
+    );
 
-    if (viewport.name === "mobile") {
-      await expect(queue).toBeHidden();
-    } else {
-      await expect(queue).toBeVisible();
-    }
+    await expect(queue).toBeVisible();
+    const queueAfterOpen = await queue.boundingBox();
+    expect(queueAfterOpen?.width).toBe(queueBeforeOpen?.width);
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
@@ -796,14 +868,30 @@ test("reviewer queue opens one focused scorecard without hiding assigned work", 
     }));
     expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
 
-    await page.getByRole("button", { name: "Back to reviewer queue" }).click();
-    await expect(firstAction).toBeFocused();
-    await page.evaluate(() => window.scrollTo(0, 0));
+    const scorecardBox = await scorecard.boundingBox();
+    expect(scorecardBox).not.toBeNull();
+    expect(scorecardBox?.width ?? 0).toBeLessThanOrEqual(viewport.width);
+    if (viewport.name === "desktop") {
+      expect(scorecardBox?.width ?? 0).toBeGreaterThanOrEqual(608);
+      expect(scorecardBox?.width ?? 0).toBeLessThanOrEqual(896);
+    } else {
+      expect(scorecardBox?.width ?? 0).toBeGreaterThanOrEqual(viewport.width - 1);
+    }
 
     await page.screenshot({
-      path: testInfo.outputPath(`reviewer-workbench-${viewport.name}.png`),
-      fullPage: true,
+      path: testInfo.outputPath(`reviewer-drawer-${viewport.name}.png`),
+      fullPage: false,
     });
+
+    await closeReview.click();
+    await expect(scorecard).toBeHidden();
+    await expect(firstAction).toBeFocused();
+
+    await firstAction.click();
+    await expect(scorecard).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(scorecard).toBeHidden();
+    await expect(firstAction).toBeFocused();
   }
 });
 

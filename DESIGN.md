@@ -288,3 +288,60 @@ progress patterns established by this wave.
 - The initial marketing product proof uses representative static DOM data rather
   than an authenticated live dashboard embed, so the landing page remains
   fast, privacy-safe, and deterministic.
+
+## 9. Reviewer collection and scorecard drawer
+
+### 9.1 Reviewer queue
+
+- The reviewer queue is a collection surface, not a permanent list-detail
+  split. It uses the full available content canvas so submission titles,
+  assignment context, filters, due dates, and status remain readable.
+- The page header is a compact title, not a dashboard hero. Status segmentation
+  and one filter trigger form the toolbar beneath it; secondary organization,
+  event, round, track, due, and grouping controls live in a focused popover
+  rather than consuming permanent page height.
+- Assigned submissions render as flat rows separated by hairlines. Selected,
+  hover, focus, overdue, and completion states use restrained token-based
+  emphasis rather than nested cards.
+- The title is the primary row label and remains one line. Long titles use
+  ellipsis while preserving the complete accessible name and native hover
+  disclosure. Event, round, track, due date, and review status are supporting
+  columns that may collapse into labeled metadata on smaller screens.
+- The default queue is ungrouped. Reviewers may opt into organization, event,
+  round, or due-date grouping from the filter popover.
+- Raw UUIDs, database keys, provider identifiers, and long opaque submission
+  references never appear in reviewer-facing copy. When disambiguation is
+  useful, render a short human-readable submission reference only.
+
+### 9.2 Review drawer
+
+- Opening an assignment slides a focused scorecard sheet from the right while
+  retaining the queue as spatial context. The sheet is the only detail surface;
+  do not keep a second permanent detail column behind it.
+- On wide screens the sheet is between 38rem and 56rem wide and never exceeds
+  roughly two-thirds of the workspace. Below the tablet breakpoint it becomes a
+  full-screen sheet.
+- The sheet has a compact sticky toolbar with close, previous/next assignment,
+  and the short submission reference. Focus moves into the sheet on open,
+  Escape closes it when autosave permits, and focus returns to the originating
+  queue row.
+- Submission context is presented as concise metadata followed by the abstract
+  and reviewer-visible fields. The rubric remains one contiguous form with
+  criterion-local advisory AI help, a single conflict path, autosave status,
+  and one primary submit/progression action.
+- The scorecard body scrolls independently. Its action bar stays visible without
+  covering fields, works with the software keyboard, and respects safe-area
+  insets.
+
+### 9.3 Responsive and accessibility behavior
+
+- Desktop rows preserve aligned operational columns. At intermediate widths,
+  lower-priority columns hide or fold into metadata before titles truncate.
+- Phone rows become touch-safe stacked summaries with title, event/round,
+  due/status, and one clear open action. No reviewer workflow requires
+  horizontal scrolling.
+- The drawer remains usable at 200% text zoom. Score choices wrap without
+  clipping, focus remains visible, and sticky regions never obscure the active
+  field.
+- Motion communicates the drawer transition only, uses transform and opacity,
+  and is removed under `prefers-reduced-motion`.
