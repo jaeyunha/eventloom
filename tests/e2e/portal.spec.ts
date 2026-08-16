@@ -378,3 +378,25 @@ test("published resources and wiki stay event-scoped and cross-event portal acce
   expect(JSON.stringify(api.payloads)).not.toContain("objectKey");
   expect(JSON.stringify(api.payloads)).not.toContain("privateNote");
 });
+
+test("optional resource failure stays local while accepted session data remains usable", async ({
+  authSession,
+  page,
+}) => {
+  await installPortalApi(page, authSession, { unavailableResource: "resources" });
+
+  await page.goto("/portal?workspace=co-speakers");
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Designing calm incident response" }),
+  ).toBeVisible();
+  await expect(page.getByText("Workspace data unavailable", { exact: true })).toHaveCount(0);
+
+  await page.goto("/portal?workspace=resources");
+  await expect(page.getByRole("heading", { level: 1, name: "Event guide" })).toBeVisible();
+  await expect(page.getByText("Event resources unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("The requested speaker resource was not found.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Welcome to Evaluator Summit" }),
+  ).toBeVisible();
+});

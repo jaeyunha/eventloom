@@ -78,6 +78,11 @@ export interface PortalWorkspaceState {
   wiki: PortalWikiPage[];
 }
 
+export interface PortalWorkspaceGuideErrors {
+  resources: string | null;
+  wiki: string | null;
+}
+
 const emptyWorkspace: PortalWorkspaceState = {
   rosters: {},
   assets: [],
@@ -88,6 +93,11 @@ const emptyWorkspace: PortalWorkspaceState = {
   taskResponseHistories: {},
   resources: [],
   wiki: [],
+};
+
+const emptyWorkspaceGuideErrors: PortalWorkspaceGuideErrors = {
+  resources: null,
+  wiki: null,
 };
 
 interface PortalContextValue {
@@ -104,6 +114,7 @@ interface PortalContextValue {
   switchContext(contextId: string): Promise<boolean>;
   view: PortalView | null;
   workspace: PortalWorkspaceState;
+  workspaceGuideErrors: PortalWorkspaceGuideErrors;
   workspaceLoading: boolean;
   workspaceError: string | null;
   loading: boolean;
@@ -203,6 +214,8 @@ export function PortalProvider({
   const [capabilities, setCapabilities] = useState<PortalCapability[]>([]);
   const [view, setView] = useState<PortalView | null>(null);
   const [workspace, setWorkspace] = useState<PortalWorkspaceState>(emptyWorkspace);
+  const [workspaceGuideErrors, setWorkspaceGuideErrors] =
+    useState<PortalWorkspaceGuideErrors>(emptyWorkspaceGuideErrors);
   const [loading, setLoading] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -228,6 +241,7 @@ export function PortalProvider({
 
   const clearWorkspace = useCallback(() => {
     setWorkspace(emptyWorkspace);
+    setWorkspaceGuideErrors(emptyWorkspaceGuideErrors);
     setWorkspaceError(null);
     setWorkspaceLoading(false);
   }, []);
@@ -236,6 +250,7 @@ export function PortalProvider({
     async (target: PortalContext, nextView: PortalView, signal?: AbortSignal): Promise<void> => {
       const generation = ++loadGeneration.current;
       setWorkspaceLoading(true);
+      setWorkspaceGuideErrors(emptyWorkspaceGuideErrors);
       setWorkspaceError(null);
       setWorkspace(emptyWorkspace);
 
@@ -250,17 +265,25 @@ export function PortalProvider({
         resources: [],
         wiki: [],
       };
+      const nextGuideErrors: PortalWorkspaceGuideErrors = {
+        resources: null,
+        wiki: null,
+      };
       const failures: unknown[] = [];
       const formTasks = nextView.tasks.filter(
         (task) => task.type === "form" && taskBelongsToPortalContext(task, target),
       );
 
-      const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
+      const safely = async <T,>(
+        operation: () => Promise<T>,
+        fallback: T,
+        onFailure: (error: unknown) => void = (error) => failures.push(error),
+      ): Promise<T> => {
         try {
           return await operation();
         } catch (operationError) {
           if (!isAbort(operationError)) {
-            failures.push(operationError);
+            onFailure(operationError);
           }
           return fallback;
         }
@@ -311,7 +334,13 @@ export function PortalProvider({
         nextView.resources !== undefined
           ? Promise.resolve([...nextView.resources])
           : listResources !== undefined && hasPortalCapability(target.capabilities, "resource-read")
-            ? safely(() => listResources(target.eventId, signal), [] as PortalResource[])
+            ? safely(
+                () => listResources(target.eventId, signal),
+                [] as PortalResource[],
+                (resourceError) => {
+                  nextGuideErrors.resources = messageFrom(resourceError);
+                },
+              )
             : Promise.resolve([] as PortalResource[]);
 
       const listWiki = api.listWiki;
@@ -319,7 +348,13 @@ export function PortalProvider({
         nextView.wiki !== undefined
           ? Promise.resolve([...nextView.wiki])
           : listWiki !== undefined && hasPortalCapability(target.capabilities, "resource-read")
-            ? safely(() => listWiki(target.eventId, signal), [] as PortalWikiPage[])
+            ? safely(
+                () => listWiki(target.eventId, signal),
+                [] as PortalWikiPage[],
+                (wikiError) => {
+                  nextGuideErrors.wiki = messageFrom(wikiError);
+                },
+              )
             : Promise.resolve([] as PortalWikiPage[]);
 
       const taskLoad =
@@ -412,6 +447,7 @@ export function PortalProvider({
         return;
       }
       setWorkspace(nextWorkspace);
+      setWorkspaceGuideErrors(nextGuideErrors);
       if (failures.length > 0) {
         setWorkspaceError(messageFrom(failures[0]));
       }
@@ -1787,6 +1823,7 @@ export function PortalProvider({
       switchContext,
       view,
       workspace,
+      workspaceGuideErrors,
       workspaceLoading,
       workspaceError,
       loading,
@@ -1860,6 +1897,7 @@ export function PortalProvider({
       uploadWorkspaceFile,
       view,
       workspace,
+      workspaceGuideErrors,
       workspaceError,
       workspaceLoading,
     ],

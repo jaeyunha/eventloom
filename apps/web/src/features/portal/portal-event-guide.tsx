@@ -21,14 +21,18 @@ export interface EventGuideWorkspaceViewProps {
   readonly eventName: string;
   readonly available: boolean;
   readonly resources: readonly PortalResource[];
+  readonly resourceError?: string | null;
   readonly wiki: readonly PortalWikiPage[];
+  readonly wikiError?: string | null;
 }
 
 export function EventGuideWorkspaceView({
   eventName,
   available,
   resources,
+  resourceError = null,
   wiki,
+  wikiError = null,
 }: EventGuideWorkspaceViewProps) {
   const items = useMemo<readonly GuideItem[]>(
     () => [
@@ -63,19 +67,33 @@ export function EventGuideWorkspaceView({
         }
       />
 
+      {available && resourceError ? (
+        <WorkspaceState
+          variant="error"
+          title="Event resources unavailable"
+          description={resourceError}
+        />
+      ) : null}
+      {available && wikiError ? (
+        <WorkspaceState
+          variant="error"
+          title="Event guide pages unavailable"
+          description={wikiError}
+        />
+      ) : null}
       {!available ? (
         <WorkspaceState
           variant="error"
           title="Event guide unavailable"
           description="This event context did not grant access to published participant guidance."
         />
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && resourceError === null && wikiError === null ? (
         <WorkspaceState
           variant="empty"
           title="Nothing published yet"
           description="The event team has not published resources or guide pages for participants."
         />
-      ) : (
+      ) : items.length > 0 ? (
         <WorkspaceSurface
           title="Published guide"
           description="Content is supplied by the event team and rendered with unsafe markup and URLs removed."
@@ -118,7 +136,7 @@ export function EventGuideWorkspaceView({
             }
           />
         </WorkspaceSurface>
-      )}
+      ) : null}
     </div>
   );
 }
