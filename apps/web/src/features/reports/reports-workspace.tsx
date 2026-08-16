@@ -1784,7 +1784,6 @@ export function ReportsWorkspace({
   }
 
   async function saveDefinition(): Promise<void> {
-    const api = apiRef.current;
     if (draft.name.trim().length === 0) {
       setRequestError("Enter a report name before saving.");
       return;
@@ -1869,7 +1868,6 @@ export function ReportsWorkspace({
   }
 
   async function confirmDelete(): Promise<void> {
-    const api = apiRef.current;
     if (deleteInFlightRef.current) return;
     const candidate = deleteCandidate;
     if (candidate === null) return;
@@ -1898,7 +1896,6 @@ export function ReportsWorkspace({
   }
 
   async function runReport(preview: boolean): Promise<void> {
-    const api = apiRef.current;
     if (selectedDefinition === null) {
       setRequestError("Save the report before running it.");
       return;
@@ -1949,7 +1946,6 @@ export function ReportsWorkspace({
   }
 
   async function downloadRun(run: ReportRun): Promise<void> {
-    const api = apiRef.current;
     if (api === null && !testMode) {
       setRequestError("The reports API is not configured.");
       return;

@@ -39,8 +39,11 @@ import {
 import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
 import { CharacterCount, Field, Input } from "./cfp-field";
 import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
-import { type CfpStartupStore, useCfpStartupStore } from "./cfp-startup-provider";
+import { useCfpStartupStore } from "./cfp-startup-provider";
 import { CfpSubmissionWindow } from "./cfp-submission-window";
+
+type CfpStartupStore = ReturnType<typeof useCfpStartupStore>;
+
 import styles from "./cfp-wizard.module.css";
 import {
   canSaveCfpDraftAtStep,
@@ -707,7 +710,6 @@ function participantAnswersFromServer(submission: CfpServerSubmission): Particip
     submission.participants.map((participant) => [participant.id, { ...participant.answers }]),
   );
 }
-
 
 function participantValue(
   participant: CfpParticipant,

@@ -3123,8 +3123,6 @@ export function DeliverablesWorkspace({
       epoch: previousScope.epoch + 1,
     };
   }, [api, eventId, mode, organizationId]);
-    };
-  }, [api, eventId, organizationId]);
   useLayoutEffect(() => {
     scopeRef.current = currentScope;
   }, [currentScope]);
@@ -3328,7 +3326,6 @@ export function DeliverablesWorkspace({
       setLoading(true);
       setError(null);
       setLoadingSessionHistories(false);
-      const messages: string[] = [];
       if (!fresh && cachedCoreData !== undefined) {
         try {
           const authorizedSnapshot = await authorizeContentCollectionNavigationSnapshot(

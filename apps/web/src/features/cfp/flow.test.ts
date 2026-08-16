@@ -60,6 +60,9 @@ describe("CFP flow", () => {
     expect(cfpWizardSource).toContain('<Link href="/admin">Return to organizer workspace</Link>');
     expect(cfpWizardSource).not.toContain('<a href="/admin">Return to organizer workspace</a>');
     expect(cfpWizardSource).toContain(
+      '<Link href="/login?next=%2Fportal%2Fsubmissions">Use another account</Link>',
+    );
+    expect(cfpWizardSource).not.toContain(
       '<a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>',
     );
   });
