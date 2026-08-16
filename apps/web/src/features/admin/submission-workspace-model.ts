@@ -653,7 +653,7 @@ export function mergeCanonicalSubmissionEvaluation(
   );
   const reviewerDisplayLabel = (reviewerId: string): string => {
     const member = reviewerMembers.find((candidate) => candidate.userId === reviewerId);
-    return member?.name?.trim() || member?.email || reviewerId;
+    return member?.name?.trim() || member?.email || "Assigned reviewer";
   };
 
   const decisionTimeline =
@@ -667,7 +667,7 @@ export function mergeCanonicalSubmissionEvaluation(
                 ? "Rejected"
                 : "Waitlisted",
           at: transition.decidedAt,
-          detail: `${transition.reason} (organizer ${transition.decidedBy}).`,
+          detail: `${transition.reason} (recorded by an organizer).`,
         }));
   return {
     ...submission,
