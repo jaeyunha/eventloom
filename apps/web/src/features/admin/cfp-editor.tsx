@@ -161,7 +161,7 @@ export function CfpEditor({
   const previewResultRef = useRef<HTMLDivElement | null>(null);
   const saveInFlightRef = useRef(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
-  const [preparedPublishVersion, setPreparedPublishVersion] = useState<number | null>(null);
+  const preparedPublishVersionRef = useRef<number | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pastCloseAcknowledged, setPastCloseAcknowledged] = useState(false);
@@ -401,7 +401,7 @@ export function CfpEditor({
     setSaveError(null);
     const saved = await saveConfiguration({ validateForPublish: true });
     if (saved === null) return;
-    setPreparedPublishVersion(saved.form.version);
+    preparedPublishVersionRef.current = saved.form.version;
     setPublishDialogOpen(true);
   }
   async function handleCloseNow(): Promise<void> {
@@ -472,7 +472,7 @@ export function CfpEditor({
         status: published.status,
         formVersion: published.version,
       }));
-      setPreparedPublishVersion(null);
+      preparedPublishVersionRef.current = null;
       setSaveState("saved");
     } catch (error) {
       setSaveState("error");
@@ -1557,7 +1557,7 @@ export function CfpEditor({
         open={publishDialogOpen}
         onOpenChange={(open) => {
           setPublishDialogOpen(open);
-          if (!open) setPreparedPublishVersion(null);
+          if (!open) preparedPublishVersionRef.current = null;
         }}
       >
         <AlertDialogContent>
@@ -1573,7 +1573,7 @@ export function CfpEditor({
             <AlertDialogAction
               disabled={saveState === "saving"}
               onClick={() => {
-                const expectedVersion = preparedPublishVersion;
+                const expectedVersion = preparedPublishVersionRef.current;
                 setPublishDialogOpen(false);
                 void handlePublish(expectedVersion);
               }}
