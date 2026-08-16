@@ -89,6 +89,36 @@ const LOCAL_MAIL_INBOX_URL =
 
 const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
 
+const PARTICIPANT_IDENTITY_FIELDS: CfpFormField[] = [
+  {
+    id: "participant-first-name",
+    sectionId: "participants",
+    key: "firstName",
+    label: "First Name",
+    kind: "text",
+    required: true,
+    options: [],
+  },
+  {
+    id: "participant-last-name",
+    sectionId: "participants",
+    key: "lastName",
+    label: "Last Name",
+    kind: "text",
+    required: true,
+    options: [],
+  },
+  {
+    id: "participant-email",
+    sectionId: "participants",
+    key: "email",
+    label: "Email",
+    kind: "email",
+    required: true,
+    options: [],
+  },
+];
+
 export function getCfpCompletionHandoffStorageKey(
   organizationId: string,
   eventId: string,
@@ -3043,37 +3073,8 @@ function DynamicParticipantsFields({
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
   const configuredIdentityKeys = new Set(form.participantFields.map((field) => field.key));
-  const identityFields: CfpFormField[] = [
-    {
-      id: "participant-first-name",
-      sectionId: "participants",
-      key: "firstName",
-      label: "First Name",
-      kind: "text",
-      required: true,
-      options: [],
-    },
-    {
-      id: "participant-last-name",
-      sectionId: "participants",
-      key: "lastName",
-      label: "Last Name",
-      kind: "text",
-      required: true,
-      options: [],
-    },
-    {
-      id: "participant-email",
-      sectionId: "participants",
-      key: "email",
-      label: "Email",
-      kind: "email",
-      required: true,
-      options: [],
-    },
-  ];
   const fields = [
-    ...identityFields.filter((field) => !configuredIdentityKeys.has(field.key)),
+    ...PARTICIPANT_IDENTITY_FIELDS.filter((field) => !configuredIdentityKeys.has(field.key)),
     ...form.participantFields,
   ];
 
