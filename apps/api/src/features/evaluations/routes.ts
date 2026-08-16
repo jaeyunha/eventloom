@@ -442,10 +442,12 @@ export function createEvaluationRoutes(
   });
   routes.get("/reviewer/workspace", async (context) => {
     const eventId = context.req.query("eventId");
+    const organizationId = context.req.query("organizationId");
     return context.json({
       data: await service.listReviewerWorkspace(
         actor(context),
         eventId === undefined ? undefined : eventId,
+        organizationId === undefined ? undefined : organizationId,
       ),
     });
   });

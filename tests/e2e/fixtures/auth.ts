@@ -23,7 +23,7 @@ function sessionFor(role: E2eRole): E2eAuthSession {
   const identities: Record<E2eRole, Pick<E2eAuthSession, "userId" | "email" | "displayName">> = {
     organizer: {
       userId: "user-organizer-e2e",
-      email: "jaeyunha0317@gmail.com",
+      email: "organizer@example.test",
       displayName: "Olivia Organizer",
     },
     reviewer: {

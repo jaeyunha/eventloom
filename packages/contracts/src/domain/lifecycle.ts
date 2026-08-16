@@ -67,14 +67,3 @@ export const webhookDeliveryStatuses = [
 ] as const;
 export const webhookDeliveryStatusSchema = z.enum(webhookDeliveryStatuses);
 export type WebhookDeliveryStatus = z.infer<typeof webhookDeliveryStatusSchema>;
-
-export const integrationPublicationStatuses = [
-  "preview",
-  "queued",
-  "publishing",
-  "succeeded",
-  "partially_failed",
-  "failed",
-] as const;
-export const integrationPublicationStatusSchema = z.enum(integrationPublicationStatuses);
-export type IntegrationPublicationStatus = z.infer<typeof integrationPublicationStatusSchema>;

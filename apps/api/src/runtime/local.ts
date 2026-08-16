@@ -3069,7 +3069,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         organizationId: LOCAL_ORGANIZATION_ID,
         eventId: "demo-event",
         endpointUrl: "https://hooks.local.eventloom.test/demo",
-        events: ["agenda.published", "integration.publication_completed"],
+        events: ["agenda.published"],
         active: true,
         signingSecret: "local-demo-webhook-secret-20260808-000000",
         signingSecretLastFour: "0000",

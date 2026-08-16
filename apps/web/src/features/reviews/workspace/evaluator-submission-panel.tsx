@@ -7,8 +7,13 @@ import { compactSubmissionReference } from "./model-compact-submission-reference
 
 export function EvaluatorSubmissionPanel({
   controller,
+  pageHeading = false,
   showReference = true,
-}: Readonly<{ controller: EvaluatorController; showReference?: boolean }>) {
+}: Readonly<{
+  controller: EvaluatorController;
+  pageHeading?: boolean;
+  showReference?: boolean;
+}>) {
   const {
     assignment,
     identityRedacted,
@@ -32,7 +37,11 @@ export function EvaluatorSubmissionPanel({
       <div className={styles.sectionHeading}>
         <div>
           <p className={styles.sectionEyebrow}>{contextLabels.join(" · ")}</p>
-          <h2 id="assigned-submission-heading">{assignment.title}</h2>
+          {pageHeading ? (
+            <h1 id="assigned-submission-heading">{assignment.title}</h1>
+          ) : (
+            <h2 id="assigned-submission-heading">{assignment.title}</h2>
+          )}
         </div>
         <div className={styles.submissionHeadingMeta}>
           {showReference ? (

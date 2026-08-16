@@ -3,6 +3,7 @@
 import { activeVerifiedReviewers } from "../../members/api";
 import { EvaluatorWorkspace } from "./evaluator-evaluator-workspace";
 import { ReviewerQueueWorkspace } from "./evaluator-queue-reviewer-queue-workspace";
+import { reviewerQueueHref } from "./evaluator-review-route-state";
 import { OrganizerDetailStatus } from "./organizer-organizer-detail-status";
 import { OrganizerPlanCreation } from "./organizer-organizer-plan-creation";
 import { OrganizerWorkspace } from "./organizer-organizer-workspace";
@@ -16,9 +17,11 @@ export function ReviewWorkspaceDispatcher({
   controller: ReviewWorkspaceController;
 }>) {
   const {
+    assignmentId,
     mode,
     explicitOrganizationId,
     eventId,
+    initialSelectedAssignmentId,
     baseUrl,
     reviewerQueueMode,
     seed,
@@ -49,11 +52,28 @@ export function ReviewWorkspaceDispatcher({
   if (error !== null) return <WorkspaceStatus {...statusProps} message={error} error />;
   if (mode === "evaluator") {
     if (reviewerQueueMode)
-      return <ReviewerQueueWorkspace entries={queue ?? []} baseUrl={baseUrl} />;
+      return (
+        <ReviewerQueueWorkspace
+          entries={queue ?? []}
+          baseUrl={baseUrl}
+          initialSelectedAssignmentId={initialSelectedAssignmentId}
+        />
+      );
     return assignment === null ? (
       <WorkspaceStatus {...statusProps} message="No review assignment is available." error />
     ) : (
-      <EvaluatorWorkspace assignment={assignment} baseUrl={baseUrl} />
+      <EvaluatorWorkspace
+        assignment={assignment}
+        baseUrl={baseUrl}
+        returnHref={
+          assignmentId === undefined
+            ? undefined
+            : reviewerQueueHref({
+                organizationId: explicitOrganizationId,
+                eventId,
+              })
+        }
+      />
     );
   }
   if (missingPlan && eventId !== undefined) {
