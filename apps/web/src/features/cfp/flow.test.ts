@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   type CfpAuthenticatedSession,
@@ -32,7 +33,21 @@ import {
   syncPrimaryParticipant,
 } from "./types";
 
+const cfpWizardSource = readFileSync(new URL("./cfp-wizard.tsx", import.meta.url), "utf8");
+
 describe("CFP flow", () => {
+  it("mounts the public application flow inside the shared workspace shell", () => {
+    expect(cfpWizardSource).toContain(
+      'import { ThemeToggle } from "../../components/product-shell/theme-toggle";',
+    );
+    expect(cfpWizardSource).toContain(
+      'import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";',
+    );
+    expect(cfpWizardSource).toContain("<WorkspaceShell");
+    expect(cfpWizardSource).toContain("<WorkspaceContextBar");
+    expect(cfpWizardSource).toContain("<ThemeToggle />");
+  });
+
   it("starts draft saving only after authentication reaches the proposal", () => {
     expect(
       (["welcome", "account", "submission", "participants", "review"] as const).map((step) =>
@@ -130,6 +145,7 @@ describe("CFP flow", () => {
         name: "Speaker",
         firstName: "Speaker",
         lastName: "",
+        memberships: [],
       }),
     ).toBe(false);
     expect(shouldAuthenticateCfpAccount("submission", null)).toBe(false);

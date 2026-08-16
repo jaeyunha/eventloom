@@ -220,7 +220,7 @@
   width: clamp(1rem, 4vw, 2.5rem);
   height: 1px;
   margin: 1rem 0.65rem 0;
-  background: var(--sb-color-border-strong);
+  background: color-mix(in oklch, var(--foreground) 24%, var(--border));
   content: "";
 }
 
@@ -229,7 +229,7 @@
   grid-template-columns: 2rem auto;
   gap: 0.65rem;
   align-items: center;
-  color: var(--sb-color-muted);
+  color: var(--foreground);
   text-decoration: none;
 }
 
@@ -238,10 +238,10 @@
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border: 2px solid var(--sb-color-subtle);
+  border: 2px solid color-mix(in oklch, var(--foreground) 28%, var(--border));
   border-radius: 50%;
-  background: var(--sb-color-surface);
-  color: var(--sb-color-muted);
+  background: var(--background);
+  color: var(--foreground);
   font-size: 0.8rem;
   font-weight: 800;
 }
@@ -255,28 +255,29 @@
 }
 
 .stepDescription {
-  color: var(--sb-color-muted);
+  color: var(--muted-foreground);
   font-size: 0.75rem;
   font-weight: 500;
 }
 
 .stepCurrent .stepMarker {
-  border-color: var(--sb-color-brand);
-  color: var(--sb-color-brand-strong);
+  border-color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 10%, transparent);
+  color: var(--foreground);
 }
 
 .stepCurrent .stepLabel {
-  color: var(--sb-color-brand-strong);
+  color: var(--foreground);
 }
 
 .stepComplete .stepMarker {
-  border-color: var(--sb-color-accent);
-  background: var(--sb-color-accent);
-  color: #ffffff;
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .stepComplete .stepLabel {
-  color: var(--sb-color-ink);
+  color: var(--foreground);
 }
 
 .field {

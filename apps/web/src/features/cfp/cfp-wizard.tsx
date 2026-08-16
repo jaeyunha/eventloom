@@ -12,12 +12,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { ThemeToggle } from "../../components/product-shell/theme-toggle";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
 import { Stepper } from "../../components/ui/stepper";
+import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
   CfpApiError,
@@ -32,6 +34,7 @@ import {
   isCfpSchemaVersionConflict,
   type PublishedCfp,
 } from "./api";
+import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
 import { CharacterCount, Field, Input } from "./cfp-field";
 import { useCfpStartupStore } from "./cfp-startup-provider";
 import styles from "./cfp-wizard.module.css";
@@ -315,6 +318,35 @@ function fileStateKey(fieldKey: string, participantIndex?: number): string {
 function fileNameStorageKey(assetId: string): string {
   return `eventloom:cfp-upload-name:v1:${assetId}`;
 }
+function clearCfpVerificationContinuationFromBrowser(
+  identity: { organizationId: string; eventId: string; formId: string } | null,
+): void {
+  if (identity === null || typeof window === "undefined") return;
+  clearCfpVerificationContinuation(identity, window.localStorage);
+}
+
+function readPersistedFileNames(
+  form: CfpPublishedForm | undefined,
+  answers: DynamicAnswers,
+  storage: Pick<Storage, "getItem">,
+): Record<string, string> {
+  const fileNames: Record<string, string> = {};
+  for (const field of form?.submissionFields ?? []) {
+    if (field.kind !== "file_request") continue;
+    const answer = answers[field.key];
+    const persistedAssetId =
+      typeof answer === "object" &&
+      answer !== null &&
+      "assetId" in answer &&
+      typeof answer.assetId === "string"
+        ? answer.assetId
+        : undefined;
+    if (persistedAssetId === undefined) continue;
+    const persistedFileName = storage.getItem(fileNameStorageKey(persistedAssetId));
+    if (persistedFileName !== null) fileNames[persistedAssetId] = persistedFileName;
+  }
+  return fileNames;
+}
 
 interface CfpWizardProps {
   eventSlug: string;
@@ -395,71 +427,105 @@ function PublicCfpShell({
   const resolvedOrganizationName = organization?.name ?? "Eventloom";
   const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
   const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
+  const resolvedStepName = step === undefined ? "Submission complete" : STEP_LABELS[step];
 
   return (
-    <main className={styles.viewport}>
-      <header className={styles.publicHeader}>
-        <div className={styles.publicBrand}>
-          <span aria-hidden="true" className={styles.brandMark}>
-            E
-          </span>
-          <span>{resolvedOrganizationName}</span>
-        </div>
-        <div className={styles.publicHeaderContext}>
-          <span>{resolvedEventName}</span>
-          <span aria-hidden="true" className={styles.publicHeaderDivider}>
-            /
-          </span>
-          <span>{resolvedFormName}</span>
-        </div>
-      </header>
-      <Card className={`${styles.card} ${className ?? ""}`}>
-        <div className={styles.publicShell}>
-          <aside aria-label="Event and submission context" className={styles.contextRail}>
-            <div className={styles.railIntro}>
-              <p className={styles.railKicker}>Call for proposals</p>
-              <p className={styles.railEventName}>{resolvedEventName}</p>
-              <p className={styles.railFormName}>{resolvedFormName}</p>
+    <WorkspaceShell
+      className={styles.publicWorkspace ?? ""}
+      contentBodyClassName={styles.publicContentBody ?? ""}
+      contextBar={
+        <WorkspaceContextBar
+          actions={
+            <div className={styles.publicThemeAction}>
+              <ThemeToggle />
             </div>
-            {step ? (
-              <CfpProgress step={step} />
-            ) : (
-              <p className={styles.railComplete}>Submission complete</p>
-            )}
+          }
+          className={styles.publicContextBar ?? ""}
+          event={resolvedEventName}
+          metadata={resolvedStepName}
+          organization={resolvedOrganizationName}
+        />
+      }
+      mainClassName={styles.publicMain ?? ""}
+      mainId="cfp-main"
+      navigation={
+        <div className={styles.contextRail}>
+          <div className={styles.publicBrand}>
+            <span aria-hidden="true" className={styles.brandMark}>
+              E
+            </span>
+            <span className={styles.publicBrandCopy}>
+              <strong>{resolvedOrganizationName}</strong>
+              <span>Applicant workspace</span>
+            </span>
+          </div>
+          <Separator className={styles.railSeparator} />
+          <div className={styles.railIntro}>
+            <p className={styles.railKicker}>Call for proposals</p>
+            <p className={styles.railEventName}>{resolvedEventName}</p>
+            <p className={styles.railFormName}>{resolvedFormName}</p>
+          </div>
+          {step ? (
+            <CfpProgress step={step} />
+          ) : (
+            <p className={styles.railComplete}>Submission complete</p>
+          )}
+          {event ? (
+            <>
+              <Separator className={styles.railSeparator} />
+              <section className={styles.deadlineCard} aria-labelledby="cfp-window-heading">
+                <p id="cfp-window-heading" className={styles.deadlineLabel}>
+                  Submission window
+                </p>
+                <dl className={styles.railMeta}>
+                  <div>
+                    <dt>Opens</dt>
+                    <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
+                  </div>
+                  <div>
+                    <dt>Closes</dt>
+                    <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
+                  </div>
+                </dl>
+              </section>
+              {form ? (
+                <p className={styles.limitText}>
+                  Up to {formSubmissionLimit(form)} proposal
+                  {formSubmissionLimit(form) === 1 ? "" : "s"} per account
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      }
+    >
+      <div className={styles.viewport}>
+        <Card className={`${styles.card} ${className ?? ""}`}>
+          <div className={styles.formColumn}>
             {event ? (
-              <>
-                <Separator className={styles.railSeparator} />
-                <section className={styles.deadlineCard} aria-labelledby="cfp-window-heading">
-                  <p id="cfp-window-heading" className={styles.deadlineLabel}>
-                    Submission window
-                  </p>
-                  <dl className={styles.railMeta}>
-                    <div>
-                      <dt>Opens</dt>
-                      <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
-                    </div>
-                    <div>
-                      <dt>Closes</dt>
-                      <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
-                    </div>
-                  </dl>
-                </section>
+              <section className={styles.mobileContextCard} aria-label="Submission window">
+                <div>
+                  <span>Opens</span>
+                  <strong>{formatCfpWindowDate(event.opensAt, event.timezone)}</strong>
+                </div>
+                <div>
+                  <span>Closes</span>
+                  <strong>{formatCfpWindowDate(event.closesAt, event.timezone)}</strong>
+                </div>
                 {form ? (
-                  <p className={styles.limitText}>
+                  <p>
                     Up to {formSubmissionLimit(form)} proposal
                     {formSubmissionLimit(form) === 1 ? "" : "s"} per account
                   </p>
                 ) : null}
-              </>
+              </section>
             ) : null}
-          </aside>
-          <div className={styles.formColumn}>
             {step ? <CfpProgress mobile step={step} /> : null}
             {children}
           </div>
-        </div>
-      </Card>
-    </main>
+        </Card>
+      </div>
+    </WorkspaceShell>
   );
 }
 
@@ -1095,6 +1161,10 @@ export function CfpWizard({
   );
   const [verificationState, setVerificationState] = useState<CfpVerificationState | null>(null);
   const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
+  const requiresApplicantContextConfirmation =
+    authenticatedSession !== null &&
+    identity !== null &&
+    shouldConfirmCfpApplicantContext(authenticatedSession, identity.organizationId);
   const [password, setPassword] = useState("");
   const [accountMode, setAccountMode] = useState<CfpAccountMode>("sign_in");
   const [errors, setErrors] = useState<ValidationErrors>({});
@@ -1908,7 +1978,7 @@ export function CfpWizard({
   }
 
   function useDifferentVerificationEmail(): void {
-    if (identity) clearCfpVerificationContinuation(identity, window.localStorage);
+    if (identity) clearCfpVerificationContinuationFromBrowser(identity);
     setVerificationState(null);
     setPassword("");
     updateDraft((current) => ({
@@ -2035,6 +2105,7 @@ export function CfpWizard({
             errors={errors}
             onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
             password={password}
+            requiresApplicantContextConfirmation={requiresApplicantContextConfirmation}
             setAccountMode={setAccountMode}
             setPassword={setPassword}
             updateDraft={updateDraft}
@@ -2115,7 +2186,7 @@ export function CfpWizard({
                 disabled={
                   mutationPending ||
                   (step === "account" &&
-                    authenticatedSession !== null &&
+                    requiresApplicantContextConfirmation &&
                     !confirmedApplicantContext)
                 }
                 type="submit"
@@ -2217,6 +2288,7 @@ function AccountStep({
   confirmedApplicantContext,
   onConfirmApplicantContext,
   password,
+  requiresApplicantContextConfirmation,
   setAccountMode,
   setPassword,
   updateDraft,
@@ -2228,6 +2300,7 @@ function AccountStep({
   confirmedApplicantContext: boolean;
   onConfirmApplicantContext: () => void;
   password: string;
+  requiresApplicantContextConfirmation: boolean;
   setAccountMode: (mode: CfpAccountMode) => void;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
@@ -2287,15 +2360,21 @@ function AccountStep({
             ? "Sign in"
             : "Create account"}
       </h1>
-      {authenticatedSession && !confirmedApplicantContext ? (
-        <div className={styles.identityBoundary} role="note">
+      {authenticatedSession !== null &&
+      requiresApplicantContextConfirmation &&
+      !confirmedApplicantContext ? (
+        <div className={styles.identityBoundary} data-cfp-applicant-context-boundary role="note">
           <strong>You are entering the applicant portal</strong>
           <p>
             This proposal will belong to {authenticatedSession.email}. Organizer and reviewer
             permissions are not used here.
           </p>
           <div className={styles.identityBoundaryActions}>
-            <Button type="button" onClick={onConfirmApplicantContext}>
+            <Button
+              data-cfp-applicant-context-confirm
+              onClick={onConfirmApplicantContext}
+              type="button"
+            >
               Continue as applicant
             </Button>
             <Button asChild type="button" variant="outline">
@@ -3507,6 +3586,10 @@ function ReviewStep({
 }) {
   const router = useRouter();
   const submissionDetails = cfpReviewSubmissionDetails(form, draft, answers);
+  const [persistedFileNames, setPersistedFileNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setPersistedFileNames(readPersistedFileNames(form, answers, window.sessionStorage));
+  }, [answers, form]);
   const uploadedFiles =
     form?.submissionFields.flatMap((field) => {
       if (field.kind !== "file_request") return [];
@@ -3521,9 +3604,7 @@ function ReviewStep({
           : undefined;
       if (uploadState?.status !== "ready" && persistedAssetId === undefined) return [];
       const persistedFileName =
-        persistedAssetId === undefined
-          ? undefined
-          : (window.sessionStorage.getItem(fileNameStorageKey(persistedAssetId)) ?? undefined);
+        persistedAssetId === undefined ? undefined : persistedFileNames[persistedAssetId];
       return [
         {
           key: field.key,
