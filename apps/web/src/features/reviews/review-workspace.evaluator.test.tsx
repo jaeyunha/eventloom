@@ -95,7 +95,7 @@ describe("evaluator workspace composition", () => {
     expect(markup).toContain('data-reviewer-column-headings="true"');
   });
 
-  it("replaces opaque submission references with a short reviewer-facing reference", () => {
+  it("does not show submission references in the reviewer queue", () => {
     const technicalReference = "SUBMISSION_753F52A9-4872-4700-9B52-D9AEF7E30D4A";
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
@@ -114,7 +114,7 @@ describe("evaluator workspace composition", () => {
     );
 
     expect(markup.includes(technicalReference)).toBe(false);
-    expect(markup.includes("SUB-753F52")).toBe(true);
+    expect(markup.includes("SUB-753F52")).toBe(false);
   });
 
   it("uses shared progress and sticky action primitives for one scorecard action bar", () => {

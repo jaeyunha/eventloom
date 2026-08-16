@@ -302,7 +302,7 @@ progress patterns established by this wave.
   never render a permanent row of status tabs.
 - Assigned submissions use one Linear-like collection grammar: no bordered
   table and no row-by-row card chrome. Desktop uses a concise labeled grid for
-  Submission, Event / round, Due, and Status, plus an unlabeled open action.
+  Title, Event / round, Due, and Status, plus an unlabeled open action.
   Labels are muted, regular-weight, and aligned to the exact row columns rather
   than styled as small bold admin-table headings. Phones wrap the same
   information into a compact summary with status and action paired beneath it.
@@ -311,15 +311,16 @@ progress patterns established by this wave.
   background or inset emphasis.
 - The title is the primary row label and remains one line. Long titles use
   ellipsis while preserving the complete accessible name and native hover
-  disclosure. Event, round, track, and due date are muted inline metadata, not
-  standalone table columns. Status and the open action stay visually paired.
+  disclosure. Event, round, track, and due date are muted aligned context;
+  status and the open action stay visually paired.
 - The default queue is ungrouped. Reviewers may opt into organization, event,
   round, or due-date grouping from the filter menu. The menu is a narrow,
   borderless stack of labeled value rows rather than a grid of boxed form
   fields.
-- Raw UUIDs, database keys, provider identifiers, and long opaque submission
-  references never appear in reviewer-facing copy. When disambiguation is
-  useful, render a short human-readable submission reference only.
+- Raw UUIDs, database keys, provider identifiers, and submission references
+  never appear in the reviewer queue. The title and review-round context are the
+  reviewer-facing identity; the focused drawer may retain its short reference
+  only where direct support disambiguation is useful.
 
 ### 9.2 Review drawer
 

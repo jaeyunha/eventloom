@@ -7990,6 +7990,7 @@ export function createD1ApplicationDependencies(
     senderAddresses: options.senderAddresses,
   });
   const evaluationService = new EvaluationService(evaluationRepository, evaluationSource, {
+    eventSource: eventRepository,
     acceptanceHandoff,
     decisionProjection: new AirtableEvaluationDecisionProjection(
       cfpRepository,

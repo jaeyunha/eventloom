@@ -5,7 +5,6 @@ import { Button } from "../../../components/ui/button";
 import { EvaluatorAssignmentStatusBadge } from "./assignment-evaluator-assignment-status-badge";
 import type { ReviewerQueueController } from "./evaluator-queue-controller";
 import { reviewerSelectionBlocked } from "./evaluator-queue-reviewer-selection-blocked";
-import { compactSubmissionReference } from "./model-compact-submission-reference";
 import styles from "./reviewer-queue.module.css";
 
 export function ReviewerQueueRows({
@@ -68,25 +67,22 @@ export function ReviewerQueueRows({
             ) : null}
             <li className={`${styles.card} ${isSelected ? styles.cardSelected : ""}`}>
               <div className={styles.row} data-reviewer-row-layout="summary">
-                <span className={styles.reference}>
-                  {compactSubmissionReference(assignment.reference)}
-                </span>
-                <h3 className={styles.title} title={assignment.title}>
+                <h3 className={styles.title} data-reviewer-column="title" title={assignment.title}>
                   {assignment.title}
                 </h3>
                 <div className={styles.meta}>
-                  <span className={styles.context}>
+                  <span className={styles.context} data-reviewer-column="context">
                     {assignment.eventName} · {assignment.round.name}
                     {assignment.track === undefined || assignment.track === null
                       ? null
                       : ` · ${assignment.track}`}
                   </span>
-                  <span className={styles.due}>
+                  <span className={styles.due} data-reviewer-column="due">
                     <span className={styles.mobileDueLabel}>Due </span>
                     {assignment.round.closesAt}
                   </span>
                 </div>
-                <div className={styles.status}>
+                <div className={styles.status} data-reviewer-column="status">
                   <EvaluatorAssignmentStatusBadge
                     status={isSubmitted ? "submitted" : assignment.assignmentStatus}
                   />
@@ -105,6 +101,7 @@ export function ReviewerQueueRows({
                   }}
                   aria-label={`Open scorecard for ${assignment.title}`}
                   aria-pressed={isSelected}
+                  data-reviewer-column="action"
                   disabled={blocked}
                 >
                   {isSelected ? "Review open" : actionLabel}

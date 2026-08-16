@@ -760,12 +760,50 @@ test("reviewer queue opens one focused scorecard drawer without resizing assigne
     await expect(firstAction).toHaveText("Start review");
     await expect(filterButton).toBeVisible();
     await expect(queue.getByRole("group", { name: "Review status views" })).toHaveCount(0);
+    await expect(queue).not.toContainText(/\bSUB(?:MISSION)?[-_]/iu);
     const columnHeadings = queue.locator('[data-reviewer-column-headings="true"]');
     await expect(columnHeadings).toHaveCount(1);
     if (viewport.name === "desktop") {
       await expect(columnHeadings).toBeVisible();
+      await expect(columnHeadings.locator(":scope > span")).toHaveText([
+        "Title",
+        "Event / round",
+        "Due",
+        "Status",
+        "",
+      ]);
+      const columnAlignment = await page.evaluate(() => {
+        const headings = document.querySelector<HTMLElement>(
+          '[data-reviewer-column-headings="true"]',
+        );
+        const row = document.querySelector<HTMLElement>('[data-reviewer-row-layout="summary"]');
+        if (headings === null || row === null) return null;
+        const names = ["title", "context", "due", "status"] as const;
+        return {
+          headingGrid: getComputedStyle(headings).gridTemplateColumns,
+          rowGrid: getComputedStyle(row).gridTemplateColumns,
+          offsets: names.map((name) => {
+            const heading = headings.querySelector<HTMLElement>(`[data-reviewer-column="${name}"]`);
+            const value = row.querySelector<HTMLElement>(`[data-reviewer-column="${name}"]`);
+            if (heading === null || value === null) return Number.POSITIVE_INFINITY;
+            return Math.abs(
+              heading.getBoundingClientRect().left - value.getBoundingClientRect().left,
+            );
+          }),
+        };
+      });
+      expect(columnAlignment).not.toBeNull();
+      expect(columnAlignment?.headingGrid).toBe(columnAlignment?.rowGrid);
+      expect(columnAlignment?.offsets.every((offset) => offset <= 1)).toBe(true);
     } else {
       await expect(columnHeadings).toBeHidden();
+      const mobileAlignment = await firstRow.evaluate((row) => {
+        const title = row.querySelector<HTMLElement>('[data-reviewer-column="title"]');
+        const context = row.querySelector<HTMLElement>('[data-reviewer-column="context"]');
+        if (title === null || context === null) return Number.POSITIVE_INFINITY;
+        return Math.abs(title.getBoundingClientRect().left - context.getBoundingClientRect().left);
+      });
+      expect(mobileAlignment).toBeLessThanOrEqual(1);
     }
     const titleText = await firstTitle.textContent();
     const titleMetrics = await firstTitle.evaluate((element) => {
