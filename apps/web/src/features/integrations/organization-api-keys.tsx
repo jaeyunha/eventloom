@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { SettingGroup, SettingRow } from "@/components/workspace/settings-ui";
 import { createIntegrationAdminApi, IntegrationAdminApiError } from "./api";
+import { apiKeyExpirationInstant, minimumApiKeyExpirationLocal } from "./api-key-expiration-model";
 import styles from "./organization-integrations-workspace.module.css";
 import type { ApiKeySummary, OneTimeSecret } from "./types";
 
@@ -80,7 +81,7 @@ export function OrganizationApiKeys({ organizationId }: OrganizationApiKeysProps
         organizationId,
         label: String(data.get("label") ?? "").trim(),
         scopes: [...selectedScopes],
-        expiresAt: expiration.length === 0 ? null : new Date(expiration).toISOString(),
+        expiresAt: apiKeyExpirationInstant(expiration),
       });
       setCreated(result);
       setKeys(await api.listApiKeys(organizationId));
@@ -143,10 +144,11 @@ export function OrganizationApiKeys({ organizationId }: OrganizationApiKeysProps
             mode="single"
             precision="date-time"
             value={expiration}
-            label="Expiration"
+            label="Expiration date and time"
             name="expiresAt"
             eyebrow="Access lifetime"
-            description="Choose when this key should stop working, or leave it unset."
+            description="Choose the local date and time when this key should stop working, or leave it unset."
+            minimumDateTime={minimumApiKeyExpirationLocal()}
             clearable
             onChange={setExpiration}
           />
