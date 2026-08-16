@@ -35,6 +35,7 @@ import {
 } from "./deliverables-workspace";
 import { projectFileFamilies } from "./file-family-model";
 import { FileReviewDrawerBody } from "./file-review-drawer";
+
 const deliverablesWorkspaceSource = readFileSync(
   fileURLToPath(new URL("./deliverables-workspace.tsx", import.meta.url)),
   "utf8",
@@ -43,6 +44,20 @@ const fileLibrarySource = readFileSync(
   fileURLToPath(new URL("./file-library.tsx", import.meta.url)),
   "utf8",
 );
+describe("deliverables workspace navigation", () => {
+  it("uses client navigation for authenticated workspace destinations", () => {
+    expect(deliverablesWorkspaceSource).toContain('import Link from "next/link";');
+    expect(deliverablesWorkspaceSource).toContain("<Link href={href}>Open Sessions</Link>");
+    expect(deliverablesWorkspaceSource).toContain("<Link href={href}>Open Speakers</Link>");
+    expect(deliverablesWorkspaceSource).toContain("<Link href={deliverablesHref}");
+    expect(deliverablesWorkspaceSource).toContain("<Link href={filesHref}");
+    expect(deliverablesWorkspaceSource).not.toContain("<a href={deliverablesHref}");
+    expect(deliverablesWorkspaceSource).not.toContain("<a href={filesHref}");
+    expect(fileLibrarySource).toContain('import Link from "next/link";');
+    expect(fileLibrarySource).toContain("<Link");
+    expect(fileLibrarySource).toContain("Create a content request");
+  });
+});
 
 function storedManifestZip(manifest: unknown): Uint8Array {
   const payload = new TextEncoder().encode(`${JSON.stringify(manifest)}\n`);

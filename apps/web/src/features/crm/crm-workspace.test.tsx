@@ -4,14 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { CrmWorkspaceView } from "./crm-workspace";
 import { createCrmApi } from "./crm-workspace-api";
 import {
-  createCrmWorkspaceReadCoordinator,
-  refreshCrmAnalyticsAfterContactSave,
-  refreshCrmDuplicatesAfterContactSave,
   type CrmAnalytics,
   type CrmApi,
   type CrmContact,
   type CrmEvent,
   type CrmSegment,
+  createCrmWorkspaceReadCoordinator,
+  refreshCrmAnalyticsAfterContactSave,
+  refreshCrmDuplicatesAfterContactSave,
 } from "./crm-workspace-model";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -366,9 +366,7 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("View contacts");
     expect(markup).toContain("Open event workspace");
     expect(markup).toContain("Canonical relationship created");
-    expect(markup).toContain(
-      'href="/admin/organizations/org%2Fone/events/event%2Fone"',
-    );
+    expect(markup).toContain('href="/admin/organizations/org%2Fone/events/event%2Fone"');
     expect(markup).not.toContain("eventloom-summit");
   });
   it("replaces stale directory controls with an accessible loading state", () => {

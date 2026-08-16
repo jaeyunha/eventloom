@@ -1044,9 +1044,7 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain(
-      `href="/admin/organizations/org-selected/events/${eventId}/reviews"`,
-    );
+    expect(markup).toContain(`href="/admin/organizations/org-selected/events/${eventId}/reviews"`);
     expect(markup).not.toContain(eventSlug);
   });
 
