@@ -29,7 +29,7 @@ export function ThemeToggle() {
       <DropdownMenuTrigger asChild>
         <Button
           aria-label="Choose color theme"
-          className="product-theme-toggle"
+          className="product-theme-toggle size-11 rounded-[var(--radius-sm)]"
           size="icon"
           title="Choose color theme"
           type="button"

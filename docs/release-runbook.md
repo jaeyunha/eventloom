@@ -63,7 +63,10 @@ Stop the release when any of the following is true:
 - Cloudflare token policy lacks Workers Scripts Edit, D1 Edit, R2 Edit, or Queues Edit, or migration compatibility/backup recovery is unreviewed.
 - A deployed health origin, `WEB_ORIGIN`, API origin, CORS policy, auth callback, or same-origin web proxy does not match the selected environment file.
 - Tenant isolation, private-data handling, email/calendar idempotency, webhook signatures, publication locking, rollback, or API error safety fails.
-- Sender verification/suppression evidence, real OpenSend delivery evidence, or required Airtable/D1 boundary observations are missing.
+- Sender verification/suppression evidence, real OpenSend delivery evidence, or
+  required D1 boundary observations are missing. When Airtable is enabled and
+  composed into the candidate runtime, its required boundary evidence is also
+  missing.
 - Security, accessibility, performance, rollback ownership, evaluator accounts, license, walkthrough, or submission assets are not ready.
 - A credential, magic link, private browser recording, generated build, secret-bearing environment file, or unrelated unreviewed work is present.
 
@@ -76,13 +79,18 @@ Create an operator-owned record outside the repository containing:
 - Candidate version, commit SHA, clean/dirty result, UTC start time, release owner, and rollback owner.
 - Local, staging, and production web/API origins, plus the observed `workers_dev` state.
 - Cloudflare Worker deployment/version IDs and D1/R2/Queue names/IDs (never tokens).
-- Airtable base labels/IDs and data classification (never tokens).
+- When Airtable is enabled, its base labels/IDs and data classification (never
+  tokens).
 - OpenSend URL, sender verification state, staging suppression/allowlist state, delivery IDs, and redacted message headers.
 - Evaluator seed/repair manifest version and synthetic identity keys (never passwords or inbox contents).
 - Local Playwright/axe report paths explicitly labeled local.
 - Staging Ever session IDs, staging `codex-cua` target/app state, and redacted screenshots explicitly labeled staging.
-- Real Airtable, D1, R2, Queue, OpenSend, webhook, and calendar observations; distinguish each from unit fakes.
-- Preflight JSON, migration compatibility/backup evidence, deployment log references, rollback plan, Forge/GitHub privacy observations, and final go/no-go approvals.
+- Real D1, R2, Queue, OpenSend, webhook, and calendar observations, plus Airtable
+  observations only when the adapter is enabled and composed; distinguish every
+  boundary from unit fakes.
+- Preflight JSON, migration compatibility/backup evidence, deployment log
+  references, rollback plan, sanitized Forge/GitHub visibility observations, and
+  final go/no-go approvals.
 
 ## 1. Candidate and repository integrity
 
@@ -99,8 +107,9 @@ sf repo get jaeyunha/open-sessionboard
 Accept only when the candidate status is clean, the intended Forge and GitHub
 mirror remotes are present, both mirrors point to the approved candidate, the
 license is Elastic License 2.0, and no `.env`, Wrangler state, secrets, test
-results, browser profile, recording, or generated build is tracked. Visibility
-changes remain explicit owner actions after this gate.
+results, browser profile, recording, or generated build is tracked. Repository
+publication is governed independently by
+[`public-release.md`](public-release.md).
 
 ## 2. Automated and local browser evidence
 
@@ -140,9 +149,10 @@ node scripts/release/preflight.mjs \
 Repeat online with `CLOUDFLARE_API_AUDIT_TOKEN` and `FORGE_API_TOKEN` from the
 secret manager and no `--offline`. The preflight must confirm each selected
 environment's consistent web/API/auth origin contract, real D1 IDs,
-environment-suffixed R2/Queue resources, isolated Airtable/OpenSend
-credentials, account-restricted token policy, migration readiness, and exact
-Forge repository identity. It accepts private or public mirror visibility and
+environment-suffixed R2/Queue resources, isolated OpenSend credentials,
+account-restricted token policy, migration readiness, and exact Forge repository
+identity. When Airtable is selected, also verify its isolated credentials and
+resource boundary. The preflight accepts private or public mirror visibility and
 does not deploy or seed.
 
 Inspect D1 migrations before any mutation. Retain the compatibility analysis, a usable backup/time-travel recovery point, migration output, and a named recovery owner. A dry run or preflight cannot prove that a migrated schema is compatible with the currently deployed Worker.
@@ -224,7 +234,10 @@ After preflight and migration approval, deploy the API Worker with the guarded s
 node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 ```
 
-The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment configuration, applies remote D1 migrations, and deploys the Worker. If migration succeeds while deployment fails, stop, keep the mirrors private, and execute the recorded recovery path before retrying.
+The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment
+configuration, applies remote D1 migrations, and deploys the Worker. If migration
+succeeds while deployment fails, stop the product release, leave repository
+visibility unchanged, and execute the recorded recovery path before retrying.
 
 Set `AI_PROVIDER=disabled` or `AI_PROVIDER=openai`. OpenAI is optional only
 when disabled, and `OPENAI_API_KEY` is required when `AI_PROVIDER=openai`.
@@ -268,13 +281,24 @@ Then run the seeded workflow from [Browser QA](qa-runbook.md) against the real r
 7. Keyboard, screen-reader, CUA focus/spatial checks, narrow/wide layouts, loading/empty/error/forbidden/retry states.
 8. Selected-field content remix through the real provider, human edit/apply/reject, reload/audit, stale rejection, and proof that unselected fields and unapplied output never alter source data.
 
-Ever and `codex-cua` must use synthetic identities and the deployed staging origin. Local Playwright results cannot substitute for these sessions. Evidence must show the real isolated Airtable/D1/R2/Queue/OpenSend/webhook boundaries, not mocked routes.
+Ever and `codex-cua` must use synthetic identities and the deployed staging
+origin. Local Playwright results cannot substitute for these sessions. Evidence
+must show the real isolated D1/R2/Queue/OpenSend/webhook boundaries, not mocked
+routes. When Airtable is disabled or not composed, prove that state and its
+non-dependency; require real Airtable boundary evidence only when the adapter is
+enabled in the exported runtime.
 
 Also disable or misconfigure the selected AI provider and prove the rest of the application still works while AI controls/endpoints return an explicit unavailable state. Provider configuration and mocked tests are not AI feature acceptance.
 
 ## 5. Security, privacy, performance, and known gaps
 
-Before production, inspect staging evidence for cross-tenant and cross-user denials, sanitized rich text, private non-cacheable assets, scoped API keys, webhook replay/deduplication, publication locks, immutable public projections, and Airtable/D1 authority boundaries. Exercise and record request errors, Queue/outbox lag, Airtable retries/rate limits, OpenSend bounces/complaints, webhook delivery, and calendar failure signals with alert ownership.
+Before production, inspect staging evidence for cross-tenant and cross-user
+denials, sanitized rich text, private non-cacheable assets, scoped API keys,
+webhook replay/deduplication, publication locks, immutable public projections,
+and D1 authority boundaries. Exercise and record request errors, Queue/outbox
+lag, OpenSend bounces/complaints, webhook delivery, and calendar failure signals
+with alert ownership. Add Airtable authority, retry, and rate-limit evidence only
+when the adapter is enabled and composed in the candidate.
 
 Use reproducible reports for the governing budgets:
 
@@ -323,7 +347,9 @@ production smoke with dedicated demo fixtures:
 - one controlled webhook test delivery and redacted status view;
 - production OpenSend/calendar status with no real participant broadcast.
 
-Do not replay the full staging dataset into production or mutate a live agenda as a smoke test. Keep both mirrors private until the final visibility gate.
+Do not replay the full staging dataset into production or mutate a live agenda
+as a smoke test. Repository visibility does not change the required production
+safety boundary.
 
 ## 6a. Evaluator manual evidence and finalization gate
 
@@ -407,7 +433,10 @@ Check every item against the same production candidate:
 - [ ] Read-only preflight and migration compatibility/recovery review passed.
 - [ ] API and web deployments, health checks, CORS, cookies, and same-origin proxy behavior were observed.
 - [ ] Staging Ever and `codex-cua` evidence passed on the candidate with synthetic identities.
-- [ ] Real Airtable, D1, R2, Queue, OpenSend, webhook, and calendar boundary evidence is attached separately from local fakes.
+- [ ] Real D1, R2, Queue, OpenSend, webhook, and calendar boundary evidence is
+      attached separately from local fakes; Airtable is either proven disabled
+      and non-authoritative or, when enabled and composed, covered by real
+      boundary evidence.
 - [ ] CFP, portal, review, human decision, CRM, agenda/publication, embeds/API, security, accessibility, and performance scenarios passed.
 - [ ] Real-provider staging evidence covers agenda, evaluation, and remix proposals; provenance, human apply/edit/reject, reload/audit, stale handling, unavailable behavior, and no automatic consequential action are proven.
 - [ ] Calendar request/update/cancel evidence shows one stable UID and no duplicate event.
@@ -416,28 +445,32 @@ Check every item against the same production candidate:
 - [ ] Rollback and monitoring owners are active; secrets and private artifacts are absent.
 - [ ] Demo accounts, license, evaluator walkthrough, screenshots/video, and competition fields are final and redacted.
 
-Any unchecked item is a no-go and the mirrors remain private.
+Any unchecked item is a product-release no-go. Repository visibility remains
+governed independently by [`public-release.md`](public-release.md).
 
-## 8. Final visibility transition
+## 8. Repository publication status
 
-Public visibility is the final release action, never a development step:
+Source-repository publication may occur before a deployed product release. This
+runbook never treats public visibility as feature, provider, staging, or
+production evidence.
 
-1. Re-run the read-only Forge and GitHub visibility observations and attach only
-   sanitized host/owner/repository/state output; never retain credential-bearing
-   remote URLs.
-2. Obtain recorded repository-owner and license/third-party-rights approval bound
-   to the candidate SHA and every mirror that will change visibility.
-3. Using the supported authenticated provider controls, change visibility only
-   for the intentionally selected public mirror(s). Do not change ownership,
-   default branch, history, or remotes.
-4. Immediately re-read visibility for every changed mirror and record operator,
-   UTC time, command/UI evidence, and public URL.
-5. Confirm unauthenticated readers can see the approved candidate tree and
-   selected reachable history, the README, and the Elastic License 2.0 license,
-   with no secrets, private artifacts, unapproved copied material, tags, releases,
-   or provider-hosted artifacts.
+1. Record the current Forge and GitHub visibility using sanitized
+   host/owner/repository/state output; never retain credential-bearing remote
+   URLs.
+2. Confirm both mirrors expose the approved source commit and intended reachable
+   history. If a required mirror is still private, complete
+   [`public-release.md`](public-release.md) before changing it.
+3. Verify public mirrors as an unauthenticated reader and record the observed
+   URL, commit, operator, and UTC time.
+4. Bind release and competition copy to the observed public repository URL and
+   exact candidate commit without implying that source visibility proves the
+   hosted deployment.
 
-If visibility cannot be verified, treat the product as unreleased. If a private artifact or credential is exposed, stop submission, return affected mirrors to private, rotate the credential, remove the exposure at its source, and repeat the gate on a new candidate.
+A visibility verification failure blocks public-repository and competition
+submission evidence; it does not by itself redefine deployed product behavior.
+If a private artifact or credential is exposed, return affected mirrors to
+private, rotate the credential, remove the exposure at its source, and repeat
+the publication checklist on a new candidate.
 
 ## 9. Competition submission checklist
 
@@ -448,9 +481,13 @@ If visibility cannot be verified, treat the product as unreleased. If a private 
 - [ ] Evaluator walkthrough follows CFP → portal → review → CRM → agenda → publication → embeds/API.
 - [ ] OpenAPI link points to the verified production runtime document.
 - [ ] Screenshots/video are from the release commit and contain no private data or secrets.
-- [ ] Cloudflare, Airtable, Forge, OpenSend, API, accessibility, security, and performance evidence is included without unsupported claims.
+- [ ] Cloudflare, Forge, OpenSend, API, enabled integrations, accessibility,
+      security, and performance evidence is included without unsupported claims.
 - [ ] Known limitations match the current contract, including operator-supplied deployment origins and calendar implementation gaps.
 - [ ] Submission title, description, URLs, credentials, category, contact fields, deadline, and timezone were reviewed by a second person.
 - [ ] Portal confirmation/receipt and UTC submission time are retained.
 
-After submission, monitor request errors, Queue/outbox lag, webhook delivery, Airtable retries, OpenSend bounces/complaints, and calendar failure state. Post-submission monitoring does not replace the pre-release gate.
+After submission, monitor request errors, Queue/outbox lag, webhook delivery,
+OpenSend bounces/complaints, calendar failure state, and Airtable retries only
+when that adapter is enabled. Post-submission monitoring does not replace the
+pre-release gate.

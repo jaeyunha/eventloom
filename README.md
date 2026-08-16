@@ -1,89 +1,119 @@
 # Eventloom
 
-> **Status:** Eventloom is source-present and under active development. All product
-> areas remain **partial** and no area is **release-verified**. Local tests,
-> fixtures, configured providers, and repository visibility are not release
-> evidence. See the [product contract](spec/eventloom.md) and
-> [release runbook](docs/release-runbook.md).
+[![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic%202.0-5b5bd6.svg)](LICENSE)
+[![Bun 1.3.14](https://img.shields.io/badge/Bun-1.3.14-black?logo=bun)](package.json)
+[![Cloudflare Workers](https://img.shields.io/badge/runtime-Cloudflare%20Workers-F38020?logo=cloudflare)](ARCHITECTURE.md)
+[![Status: active development](https://img.shields.io/badge/status-active%20development-f59e0b.svg)](spec/eventloom.md)
 
-Eventloom is a source-available, program-side Sessionboard alternative for event
-production teams. It covers CFP intake, speaker operations, human-authoritative
-review and communications, conflict-safe scheduling, publication, and public
-distribution. The built-in Speaker CRM is supported scope; Eventloom is not a
-general marketing CRM or a full event-commerce platform.
+**Run an event program from call for papers to published agenda—without
+spreadsheets becoming the system of record or AI taking control.**
 
-## Product scope
+Eventloom is a source-available workspace for conference and event-production
+teams. It brings CFP intake, speaker operations, structured review,
+communications, scheduling, publication, and a built-in Speaker CRM into one
+tenant-safe system.
 
-The supported contract includes:
+> [!IMPORTANT]
+> Eventloom is in active development. The source and local test suites are
+> substantial, but every product area remains **partial** and no area is
+> **release-verified**. Repository visibility, local fixtures, and configured
+> providers are not production-readiness claims. See the
+> [product contract](spec/eventloom.md) for exact status.
 
-- organizer administration for events, sessions, rooms, tracks, statuses, CFP
-  forms, tasks, files, reports, integrations, and publication history;
-- participant portals and an organization-scoped Speaker CRM with contacts,
-  imports, tags, custom fields, segments, notes, duplicate handling, and outreach;
-- versioned review plans, blind review, assignments, reproducible scoring, and
-  human accept, waitlist, or reject decisions;
-- versioned OpenSend communications with recipient snapshots, delivery history,
-  reminders, and RFC 5545 calendar lifecycle messages;
-- private, conflict-safe agenda drafts and immutable published projections for
-  speaker galleries, agendas, embeds, JSON, iCal, and webhooks;
-- audited CSV/XLSX reports and human-applied advisory AI for evaluation, agenda,
-  and content-remix suggestions; and
-- email/password and magic-link authentication with verified email.
+[Quick start](#quick-start) · [Architecture](#architecture) ·
+[Self-hosting](#self-hosting) · [Documentation](#documentation) ·
+[License](#license)
 
-The currently mounted public-v1 API is intentionally narrower than that product
-contract: it exposes discovery and webhook administration through scoped bearer
-keys. Generic program-resource routes remain withheld until their public
-projections and concurrency contracts are publication-safe.
+## Why Eventloom
 
-Accelevents, social OAuth, payment, SMS, external CRM synchronization, marketing
-automation, sponsorship/exhibitor management, multilingual workflows, and
-transcription/media AI are unsupported. See [`spec/eventloom.md`](spec/eventloom.md)
-for the complete status vocabulary, invariants, and non-goals.
+Event program work is unusually connected: a CFP answer becomes review context,
+a decision becomes a message, an accepted proposal becomes a session, and a
+schedule change becomes a calendar update and public revision. Splitting those
+steps across forms, spreadsheets, inboxes, and page builders creates drift.
 
-## Runtime architecture
+Eventloom is built around five principles:
+
+- **One authoritative program record.** D1 owns business and operational state;
+  external systems are adapters, never fallback databases.
+- **Humans remain authoritative.** Review outcomes, messages, schedules, and
+  publication require explicit human action. AI produces private suggestions,
+  not decisions.
+- **Publication is immutable and explainable.** Draft changes cannot silently
+  alter public projections; publication and rollback create auditable revisions.
+- **Tenant safety is structural.** Authentication, organization/event grants,
+  optimistic concurrency, idempotency, and private-file authorization are server
+  responsibilities.
+- **Integrations fail independently.** Queued, typed, retryable side effects keep
+  Airtable, mail, calendar, webhook, or AI failures from blocking ordinary
+  product reads and writes.
+
+## Supported product scope
+
+The supported product contract covers the following areas. The table describes
+scope, not release verification.
+
+| Area | Supported scope |
+| --- | --- |
+| CFP | Versioned forms, reusable/custom fields, conditional rules, autosave, participant intake, files, close dates, and submission limits |
+| Speaker operations | Account-bound portal contexts, profiles, tasks, deliverables, private files, comments, reminders, and authorized exports |
+| Speaker CRM | Organization-scoped contacts, CSV import, tags, custom fields, segments, pipeline stages, notes, history, deduplication, merges, and outreach |
+| Review and decisions | Versioned plans, rounds, rubrics, assignments, blind review, conflict abstention, reproducible grades, and human accept/waitlist/reject decisions |
+| Communications and calendar | Versioned templates, recipient snapshots, delivery history, reminders, and idempotent RFC 5545 request/update/cancel messages |
+| Agenda and publication | Private versioned drafts, hard conflict checks, warning overrides, atomic publication, rollback, public agendas, galleries, embeds, JSON, and iCal |
+| Reports and advisory AI | Audited CSV/XLSX reports plus private, provenance-labeled agenda, evaluation, and remix suggestions that require human apply/edit/reject |
+| API and webhooks | Scoped bearer keys, stable errors, pagination, idempotency, optimistic concurrency, signed webhooks, and publication-safe projections |
+| CLI and agent skill | Read-only multi-profile access discovery and role-aware workflows with fail-closed local context |
+
+Eventloom is not trying to be a ticketing, payment, sponsorship, exhibitor,
+marketing-automation, SMS, transcription, or general event-commerce platform.
+Accelevents and social OAuth are not supported current integrations.
+
+## Architecture
 
 ```text
-browser
-  -> Next.js same-origin /api/* gateway
-  -> separately deployed Hono Worker
-  -> D1 business and operational authority
-     + Durable Object coordination
-     + R2 private files and export artifacts
-     + D1 outbox and one multiplexed Cloudflare Queue
-     + optional provider adapters
+Browser
+  └── Next.js web application
+        └── same-origin /api/* gateway ───────────────┐
+Scoped API clients and provider callbacks ────────────┤
+Cloudflare Queue and Cron events ─────────────────────┤
+                                                      ▼
+                                               Hono API Worker
+                                                 ├── D1
+                                                 │     authoritative business + operational state
+                                                 ├── Durable Objects
+                                                 │     ordered tenant/event coordination
+                                                 ├── R2
+                                                 │     private files and export artifacts
+                                                 ├── Cloudflare Queue
+                                                 │     communications, calendar, webhooks, cache work
+                                                 ├── OpenSend
+                                                 │     email and calendar delivery
+                                                 ├── OpenAI Responses
+                                                 │     optional, advisory-only AI
+                                                 └── Airtable
+                                                       optional organization adapter
 ```
 
-- **Next.js web** renders the UI and forwards same-origin API requests. It never
-  receives provider credentials or direct D1, R2, Durable Object, or Airtable
-  access.
-- **Hono Worker** authenticates requests, enforces tenant/event authorization,
-  validates domain commands, and accepts HTTP, Queue, and Cron Trigger events.
-- **D1** is authoritative for product and operational state. Durable Objects
-  serialize selected tenant/event mutations; D1 concurrency checks remain final.
-- **R2 and Queue** hold authorized private artifacts and typed asynchronous work
-  for communications, calendar, webhooks, and cache invalidation.
-- **Airtable** is optional and never authoritative. Its outbound and controlled
-  inbound components are implemented and tested in isolation, but they are not
-  yet composed into the exported Queue/scheduled/webhook runtime. Ordinary
-  product reads and writes do not depend on Airtable.
-- **Advisory AI** uses OpenAI Responses only when `AI_PROVIDER=openai`. Provider
-  output is private and inert until an authorized human applies, edits, or rejects
-  it. Set `AI_PROVIDER=disabled` to run without OpenAI.
+The browser never receives provider credentials or direct D1, R2, Durable
+Object, Queue, or Airtable access. The Worker derives tenant and event authority
+from the authenticated principal and server-side grants.
 
-OpenSend is required by the current integrated API runtime. Sender addresses and
-calendar UID domains are deployment-owned verified identities. The
-`sessionboard.namuh.co` identities described in the architecture are hosted
-defaults, not source-compiled self-hosting requirements.
+Airtable projection and controlled-inbound components exist and are tested in
+isolation, but are not yet composed into the exported Queue, scheduled, and
+webhook runtime. Ordinary Eventloom reads and writes do not depend on Airtable.
 
-## Local development
+Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for state ownership, concurrency,
+integration, authentication, and deployment boundaries.
 
-### Prerequisites
+## Quick start
 
-- Bun **1.3.14** (the version pinned in `package.json`)
-- Docker with Compose for Mailpit and `make dev`
-- Node.js on `PATH` for the deployment and release scripts that invoke `node`
+### Requirements
 
-### Start the integrated local runtime
+- [Bun](https://bun.sh/) **1.3.14**
+- Docker with Compose for local Mailpit
+- Node.js on `PATH` for deployment/release scripts
+
+### Run the integrated local stack
 
 ```bash
 git clone https://github.com/jaeyunha/eventloom.git
@@ -92,129 +122,185 @@ bun install
 cp .env.example .env
 ```
 
-Set a random `BETTER_AUTH_SECRET`. If no backend-only OpenAI key is available,
-set `AI_PROVIDER=disabled`; the committed template intentionally selects OpenAI
-for explicit local AI work and rejects an empty key.
+Set a random `BETTER_AUTH_SECRET` in `.env`. To run without an OpenAI key, set:
+
+```dotenv
+AI_PROVIDER=disabled
+```
+
+Prepare local D1 and start the web app, API Worker, Mailpit, and local mail
+bridge:
 
 ```bash
 bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
-Local endpoints:
+| Service | URL |
+| --- | --- |
+| Web application | <http://127.0.0.1:3015> |
+| API Worker | <http://127.0.0.1:8787> |
+| Mailpit | <http://127.0.0.1:8025> |
 
-- web: `http://127.0.0.1:3015`
-- API: `http://127.0.0.1:8787`
-- Mailpit: `http://127.0.0.1:8025`
-
-The integrated runtime has no committed universal login. Create accounts through
-the real signup and grant flows. For deterministic fixture work only:
+Create accounts through the real signup and grant flows. Deterministic fixture
+personas are available for focused development only:
 
 ```bash
 RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev
 ```
 
-Fixture personas do not represent normal local or deployed credentials. Detailed
-environment isolation, account, provider, and worktree guidance lives in
-[`docs/setup.md`](docs/setup.md).
+Fixture accounts are not deployment credentials. See
+[`docs/setup.md`](docs/setup.md) for environment isolation, account setup,
+provider configuration, and worktree guidance.
 
-## Quality commands
+## Repository layout
 
-| Command | Purpose |
-| --- | --- |
-| `make check` | Typecheck, lint, and formatting checks |
-| `make test` | Unit, script, API integration, and runtime integration tests |
-| `make test-e2e` | Isolated local Playwright suite |
-| `make build` | Build every workspace package |
-| `make all` | `check`, `test`, and local Playwright; does not build deployables |
-| `bun run test:eval` | Separate evaluator tooling diagnostics, not part of `make all` |
+```text
+apps/web/               Next.js browser application and same-origin API gateway
+apps/api/               Hono Worker, domain services, D1, R2, Queue, and Cron
+packages/contracts/     Shared Zod contracts and domain types
+packages/cli/           Eventloom CLI and bundled agent skill
+openapi/                Checked-in public API contract
+spec/eventloom.md       Authoritative supported scope and status
+docs/                   Setup, API, QA, deployment, and release operations
+skills/eventloom/       Read-only Eventloom agent skill source
+```
 
-Local and mocked checks are not deployed release evidence. Release candidates
-must also pass the clean build, staging, provider, accessibility, performance,
-security, and manual gates in the QA and release runbooks.
+## Development and verification
 
-## Eventloom CLI and agent skill
+```bash
+make check      # typecheck, lint, and formatting checks
+make test       # unit, script, API integration, and runtime integration tests
+make test-e2e   # isolated local Playwright suite
+make build      # build every workspace package
+make all        # check + test + Playwright; does not build deployables
+```
 
-The repository includes a read-only, multi-profile CLI. It discovers access from
-the authenticated API, resolves roles and grants on the server for every request,
-and fails closed when local context is stale or ambiguous.
+`bun run test:eval` runs separate evaluator-tooling diagnostics and is not part
+of `make all`.
+
+Local and mocked checks do not replace staging, provider, accessibility,
+performance, security, and manual evidence for a production release.
+
+### Worktrees
+
+The repository includes a helper for isolated changes:
+
+```bash
+./hack/create_worktree.sh my-change github/main
+```
+
+It creates a worktree below `~/wt/open-sessionboard`, provisions safe local
+environment files, and installs the pinned dependencies. Use
+`./hack/cleanup_worktree.sh my-change` when the branch is finished.
+
+## CLI and agent skill
+
+Build and place the CLI on your current shell path:
 
 ```bash
 bun run --filter @eventloom/cli build
 export PATH="$PWD/packages/cli/dist:$PATH"
+```
+
+Authenticate a profile and discover server-authorized access:
+
+```bash
 eventloom auth login --profile work --api-url https://api.example.com
 eventloom access list --profile work
 eventloom context use --profile work --organization org_123 --event event_456
 eventloom organizer status --profile work
 ```
 
-Profiles live below `~/.eventloom` in permission-hardened plaintext files. Protect
-that directory and its backups because authenticated session material is
-sensitive. The CLI does not expose a generic raw mutation surface.
+Profiles live below `~/.eventloom` in permission-hardened plaintext files.
+Protect that directory and its backups because authenticated session material is
+sensitive. The CLI deliberately has no generic raw mutation surface.
 
-The built executable bundles [`skills/eventloom`](skills/eventloom):
+Install the bundled skill globally or into an ignored project-local agent
+configuration:
 
 ```bash
 eventloom skill install --agent all --global
-# or, for an ignored project-local installation
 eventloom skill install --agent all --project
 ```
 
 The installer records a manifest, refuses to overwrite modified installations,
-and stages replacements with rollback. Consequential product actions remain
-human-controlled.
+and stages replacements with rollback.
 
-## Self-hosting on Cloudflare
+## Self-hosting
 
-A deployment needs Cloudflare Workers, D1, Durable Objects, R2, Queues, two HTTPS
-origins (web and API), and an OpenSend endpoint with verified deployment-owned
-senders. OpenAI and Airtable are optional.
+A deployment uses Cloudflare Workers, D1, Durable Objects, R2, Queues, separate
+HTTPS web/API origins, and an OpenSend endpoint with verified deployment-owned
+sender identities. OpenAI and Airtable are optional.
+
+Start with isolated staging and production configuration:
 
 ```bash
 cp .env.cloudflare.example .env.cloudflare-staging
 cp .env.cloudflare.example .env.cloudflare-production
 node scripts/cloudflare/dry-run.mjs staging
 node scripts/cloudflare/deploy-web.mjs staging --dry-run
-make check
-make test
 ```
 
-Keep staging and production D1, R2, Queue, sender, provider, and credential
-resources separate. Resource IDs belong in ignored `.env.cloudflare-*` files;
-provider keys, `BETTER_AUTH_SECRET`, and cache-invalidation material belong in
-Cloudflare Worker Secrets. Generated Wrangler configuration is ignored.
+Keep D1 databases, R2 buckets, Queues, sender identities, provider resources,
+and credentials separate by environment. Resource identifiers belong in ignored
+`.env.cloudflare-*` files; credentials belong in Cloudflare Worker Secrets.
 
-After the staging configuration and preflight pass:
+After staging preflight passes:
 
 ```bash
 node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
 
-Do not repeat this for production until staging passes
-[`docs/qa-runbook.md`](docs/qa-runbook.md). Source availability and deployable
-configuration do not imply production readiness.
+Do not treat deployable configuration as production readiness. Follow
+[`docs/deployment-readiness.md`](docs/deployment-readiness.md),
+[`docs/qa-runbook.md`](docs/qa-runbook.md), and
+[`docs/release-runbook.md`](docs/release-runbook.md) before a production release.
+
+## Contributing
+
+Focused fixes and well-scoped improvements are welcome.
+
+1. Read [`AGENTS.md`](AGENTS.md), [`spec/eventloom.md`](spec/eventloom.md), and
+   the relevant architecture or operational guide.
+2. Work in a dedicated branch or worktree and preserve unrelated changes.
+3. Add behavioral coverage for observable changes; do not weaken existing tests.
+4. Run the focused tests while editing, then the full relevant gate.
+5. Open a pull request that separates local/mock evidence from deployed evidence.
+
+For larger changes, describe the user workflow, system boundary, and acceptance
+criteria before implementation. Keep credentials, provider payloads, browser
+profiles, recordings, generated output, and private evidence out of commits.
+
+## Project status
+
+Eventloom is pre-release software under active development. The checked-in source
+implements broad end-to-end workflows, but release status is governed by
+[`spec/eventloom.md`](spec/eventloom.md) and the QA/release runbooks. Public
+source availability does not mean a hosted deployment has passed those gates.
+
+The currently mounted public-v1 API is narrower than the full product contract:
+it exposes discovery and webhook administration through scoped bearer keys.
+Generic program-resource routes remain withheld until their public projections
+and concurrency contracts are publication-safe.
 
 ## Documentation
 
 - [Product contract and current status](spec/eventloom.md)
 - [Architecture and state ownership](ARCHITECTURE.md)
 - [Visual and interaction contract](DESIGN.md)
-- [Setup and deployment configuration](docs/setup.md)
+- [Setup and environment isolation](docs/setup.md)
 - [API guide](docs/api.md) and [OpenAPI contract](openapi/openapi.yaml)
-- [Calendar semantics](docs/calendar-semantics.md)
+- [Calendar and timezone semantics](docs/calendar-semantics.md)
 - [Deployment readiness](docs/deployment-readiness.md)
 - [QA runbook](docs/qa-runbook.md)
 - [Release runbook](docs/release-runbook.md)
-- [Public repository checklist](docs/public-release.md)
+- [Repository publication checklist](docs/public-release.md)
 - [Evidence policy](evidence/README.md)
-
-GitHub and Forge are intentional mirrors. Visibility is an operator-controlled
-release action and does not prove feature or deployment verification. The
-[public repository checklist](docs/public-release.md) governs history scanning,
-artifact rights, contributor approval, and the final visibility transition.
 
 ## License
 
-Elastic License 2.0 (`Elastic-2.0`). Eventloom is source-available software, not
-OSI-approved open-source software.
+Eventloom is licensed under the [Elastic License 2.0](LICENSE)
+(`Elastic-2.0`). It is **source-available**, not OSI-approved open-source
+software. Changing that classification requires an explicit licensing decision.
