@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { ReportsWorkspace } from "@/features/reports/reports-workspace";
 
 export const metadata: Metadata = {
-  title: "Reports workspace",
-  description: "Create, run, and audit event-scoped program reports.",
+  title: "Reports & exports",
+  description: "Download common event data or save reusable event-scoped exports.",
 };
 
 interface ReportsPageProps {
