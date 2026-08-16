@@ -94,6 +94,42 @@ grep -F -- '--no-install' "$REUSE_OUTPUT" >/dev/null || \
 )
 assert test ! -e "$OVERRIDE/eventloom/no-env/.env"
 
+# Agent provider routing is visible in the manual launch command even when the
+# host launcher is disabled.
+DEFAULT_PROVIDER_OUTPUT="$TMP/default-provider.out"
+(
+  cd "$REPO"
+  OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --no-launch --no-install --env-mode none \
+      --prompt 'default provider prompt' no-env main >"$DEFAULT_PROVIDER_OUTPUT"
+)
+assert grep -F 'Start GJC manually from the worktree' "$DEFAULT_PROVIDER_OUTPUT"
+assert grep -F 'gjc --tmux' "$DEFAULT_PROVIDER_OUTPUT"
+
+OMO_PROVIDER_OUTPUT="$TMP/omo-provider.out"
+(
+  cd "$REPO"
+  OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --provider omo --no-launch --no-install --env-mode none \
+      --prompt 'OMO provider prompt' no-env main >"$OMO_PROVIDER_OUTPUT"
+)
+assert grep -F 'Start OMO manually from the worktree' "$OMO_PROVIDER_OUTPUT"
+assert grep -F 'exec omo ' "$OMO_PROVIDER_OUTPUT"
+if grep -F 'gjc --tmux' "$OMO_PROVIDER_OUTPUT" >/dev/null; then
+  fail 'OMO provider output included the GJC launcher'
+fi
+
+INVALID_PROVIDER_OUTPUT="$TMP/invalid-provider.out"
+if (
+  cd "$REPO" && OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --provider unknown --no-launch --no-install invalid-provider main \
+      >"$INVALID_PROVIDER_OUTPUT" 2>&1
+); then
+  fail 'invalid provider was accepted'
+fi
+assert grep -F 'invalid provider: unknown' "$INVALID_PROVIDER_OUTPUT"
+assert test ! -e "$OVERRIDE/eventloom/invalid-provider"
+
 # The default local mode creates only regular, sanitized development files.
 (
   cd "$REPO"

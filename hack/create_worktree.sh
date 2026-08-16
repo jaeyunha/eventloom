@@ -12,11 +12,12 @@ Options:
   --env-mode <mode>  local (default), symlink, copy, or none.
   --no-install       Skip `bun install --frozen-lockfile`.
   --refresh-env      Replace existing worktree environment files.
+  --provider <name>  gjc (default) or omo.
   --launcher <name>  cmux (default), auto, or none.
   --no-launch        Create/setup only; alias for `--launcher none`.
   --focus            Focus the newly created cmux workspace.
-  --prompt <text>    Start GJC with this literal task prompt.
-  --prompt-file <p>  Read the GJC task prompt from a file.
+  --prompt <text>    Start the selected agent with this literal task prompt.
+  --prompt-file <p>  Read the selected agent task prompt from a file.
   --help             Show this help.
 
 The default base ref is `main`. Worktrees are created under
@@ -85,6 +86,7 @@ registered_branch_at_path() {
 ENV_MODE=local
 INSTALL=true
 REFRESH_ENV=false
+PROVIDER=gjc
 LAUNCHER=cmux
 FOCUS=false
 PROMPT=''
@@ -104,6 +106,11 @@ while [ $# -gt 0 ]; do
     --refresh-env)
       REFRESH_ENV=true
       shift
+      ;;
+    --provider)
+      [ $# -ge 2 ] || fail '--provider requires gjc or omo'
+      PROVIDER=$2
+      shift 2
       ;;
     --launcher)
       [ $# -ge 2 ] || fail '--launcher requires auto, cmux, or none'
@@ -145,6 +152,10 @@ done
 case "$ENV_MODE" in
   local|symlink|copy|none) ;;
   *) fail "invalid env mode: $ENV_MODE" ;;
+esac
+case "$PROVIDER" in
+  gjc|omo) ;;
+  *) fail "invalid provider: $PROVIDER" ;;
 esac
 case "$LAUNCHER" in
   auto|cmux|none) ;;
@@ -335,13 +346,23 @@ BRANCH_SLUG=${BRANCH_SLUG%-}
 SESSION_DIGEST=$(printf '%s\0%s' "$GIT_COMMON_DIR" "$WORKTREE_NAME" | \
   git -C "$REPO_ROOT" hash-object --stdin)
 SESSION_DIGEST=${SESSION_DIGEST:0:12}
-GJC_TMUX_SESSION="gjc-${REPO_NAME}-${BRANCH_SLUG}-${SESSION_DIGEST}"
-GJC_PROMPT_DIR="$GIT_COMMON_DIR/gjc-worktree-prompts"
-GJC_PROMPT_FILE="$GJC_PROMPT_DIR/$SESSION_DIGEST.txt"
-mkdir -p "$GJC_PROMPT_DIR"
-printf 'Prompt: %s\n' "$PROMPT" > "$GJC_PROMPT_FILE"
-chmod go-rwx "$GJC_PROMPT_FILE" 2>/dev/null || true
-GJC_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux \"\$(cat $(shell_quote "$GJC_PROMPT_FILE"))\""
+AGENT_PROMPT_DIR="$GIT_COMMON_DIR/gjc-worktree-prompts"
+AGENT_PROMPT_FILE="$AGENT_PROMPT_DIR/$SESSION_DIGEST.txt"
+mkdir -p "$AGENT_PROMPT_DIR"
+printf 'Prompt: %s\n' "$PROMPT" > "$AGENT_PROMPT_FILE"
+chmod go-rwx "$AGENT_PROMPT_FILE" 2>/dev/null || true
+
+case "$PROVIDER" in
+  gjc)
+    AGENT_LABEL=GJC
+    GJC_TMUX_SESSION="gjc-${REPO_NAME}-${BRANCH_SLUG}-${SESSION_DIGEST}"
+    AGENT_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux \"\$(cat $(shell_quote "$AGENT_PROMPT_FILE"))\""
+    ;;
+  omo)
+    AGENT_LABEL=OMO
+    AGENT_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec omo \"\$(cat $(shell_quote "$AGENT_PROMPT_FILE"))\""
+    ;;
+esac
 
 SELECTED_LAUNCHER=$LAUNCHER
 if [ "$SELECTED_LAUNCHER" = auto ]; then
@@ -353,7 +374,8 @@ if [ "$SELECTED_LAUNCHER" = auto ]; then
 fi
 
 print_manual_command() {
-  printf 'Start GJC manually from the worktree with:\n%s\n' "$GJC_COMMAND"
+  printf 'Start %s manually from the worktree with:\n%s\n' \
+    "$AGENT_LABEL" "$AGENT_COMMAND"
 }
 
 launch_cmux() {
@@ -367,7 +389,7 @@ launch_cmux() {
     new-workspace
     --name "$workspace_name"
     --cwd "$WORKTREE_PATH"
-    --command "$GJC_COMMAND"
+    --command "$AGENT_COMMAND"
     --focus "$FOCUS"
   )
   if ! cmux "${args[@]}"; then
@@ -387,5 +409,8 @@ esac
 printf '\nWorktree ready: %s\n' "$WORKTREE_PATH"
 printf 'Branch: %s\n' "$WORKTREE_NAME"
 printf 'Base: %s\n' "$BASE_REF"
-printf 'GJC tmux session: %s\n' "$GJC_TMUX_SESSION"
+printf 'Agent provider: %s\n' "$AGENT_LABEL"
+if [ "$PROVIDER" = gjc ]; then
+  printf 'GJC tmux session: %s\n' "$GJC_TMUX_SESSION"
+fi
 printf 'Remove it safely with:\n  ./hack/cleanup_worktree.sh %q\n' "$WORKTREE_NAME"
