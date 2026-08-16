@@ -57,7 +57,9 @@ social proof, and automation-as-authority framing.
 The product uses four recurring surface levels:
 
 - **Workspace shell:** global navigation, organization/event switcher, command
-  palette, and account controls.
+  palette, and account controls on the outer chrome, with one rounded document
+  pane layered above it. The outer chrome, document pane, and nested operational
+  surfaces are three reusable levels rather than route-specific colors.
 - **Collection view:** filterable table, list, board, or timeline with saved
   views, counts, bulk selection, and one clear creation action.
 - **Object detail:** persistent object identity, metadata, status, activity,
@@ -106,6 +108,15 @@ levels rather than inventing a new visual grammar per feature.
 - Success surface/text: `#e9f7f1` / `#17835c`
 - Warning surface/text: `#fff5df` / `#a66811`
 - Failure surface/text: `#fff0ee` / `#c44138`
+- Authenticated workspace layers, light: outer chrome `#f3f3f5`, document pane
+  `#ffffff`, operational surface `#ffffff`, subdued surface `#f7f7f8`.
+- Authenticated workspace layers, dark: outer chrome `#0b0b0d`, document pane
+  `#151517`, operational surface `#1c1c1f`, subdued surface `#232327`.
+- Workspace pane edges: use the standard cool border in light mode and a
+  near-transparent edge in dark mode. Tonal separation must carry the dark
+  hierarchy; never draw a conspicuous gray ring between sidebar and pane.
+- Workspace accent/progress colors are shared semantic tokens. Feature CSS must
+  not invent raw active, completed, or idle colors for individual routes.
 - Radius: 6px controls, 9px panels, full-pill status only
 - Spacing rhythm: 4px base; primary increments 8, 12, 16, 24, 32px
 - Marketing atmosphere: cool white-to-indigo wash, subtle 24px grid, one
@@ -139,6 +150,13 @@ levels rather than inventing a new visual grammar per feature.
 ## 4. Layout and responsive behavior
 
 - Desktop uses a fixed shadcn sidebar and a single main document scroll.
+- Authenticated desktop workspaces place that document in one inset rounded
+  pane over the outer navigation chrome. Organizer, reviewer, participant,
+  speaker, applicant, and account-level work surfaces use the same geometry;
+  theme changes alter tokens, not layout.
+- The dark sidebar is always the deepest layer. The document pane is slightly
+  lighter, and cards or operational panels are lighter again. Sidebar-to-pane
+  separation must remain quiet and borderless in appearance.
 - Main content is capped at 1180px with 24px desktop gutters.
 - Collection-heavy workspaces may use the full available content width when
   columns, timelines, or split panes benefit from it; text-heavy detail content
@@ -163,7 +181,13 @@ levels rather than inventing a new visual grammar per feature.
 
 ## 5. Reusable primitives and states
 
-- `AdminShell`: cool canvas, grouped sidebar, sticky context bar.
+- `WorkspaceShell`: shared outer chrome, inset document pane, quiet edge,
+  single document scroll, sticky context region, and mobile full-viewport
+  fallback.
+- `RoleWorkspaceShell`: the same layer contract composed with the shadcn
+  sidebar for reviewer and participant role navigation.
+- `AdminShell`: grouped organizer navigation and event context composed inside
+  `WorkspaceShell`; it does not define a separate color system.
 - `WorkspaceHeader`: breadcrumb or scope switcher, object identity, status,
   supporting metadata, and ordered primary/secondary actions.
 - `CollectionToolbar`: view switcher, query, filters, sort, grouping, saved

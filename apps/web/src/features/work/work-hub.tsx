@@ -18,46 +18,48 @@ export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
     Boolean,
   ).length;
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-role-workspace-shell="true">
       <a className={styles.skipLink} href="#workspaces">
         Skip to workspaces
       </a>
-      <header className={styles.topbar}>
-        <div className={styles.topbarInner}>
-          <Link className={styles.brand} href="/work" aria-label="Eventloom work hub">
-            <span className={styles.brandMark} aria-hidden="true">
-              EL
-            </span>
-            <span>
-              <strong>Eventloom</strong>
-              <small>Work hub</small>
-            </span>
-          </Link>
-          <div className={styles.accountActions}>
-            <span className={styles.identity}>
-              <strong>{model.identity.name ?? "Account"}</strong>
-              <small>{model.identity.email}</small>
-            </span>
-            <ThemeToggle />
-            <Button type="button" variant="ghost" onClick={() => void signOutAccount()}>
-              <LogOut data-icon="inline-start" aria-hidden="true" /> Sign out
-            </Button>
+      <div className={styles.frame}>
+        <header className={styles.topbar}>
+          <div className={styles.topbarInner}>
+            <Link className={styles.brand} href="/work" aria-label="Eventloom work hub">
+              <span className={styles.brandMark} aria-hidden="true">
+                EL
+              </span>
+              <span>
+                <strong>Eventloom</strong>
+                <small>Work hub</small>
+              </span>
+            </Link>
+            <div className={styles.accountActions}>
+              <span className={styles.identity}>
+                <strong>{model.identity.name ?? "Account"}</strong>
+                <small>{model.identity.email}</small>
+              </span>
+              <ThemeToggle />
+              <Button type="button" variant="ghost" onClick={() => void signOutAccount()}>
+                <LogOut data-icon="inline-start" aria-hidden="true" /> Sign out
+              </Button>
+            </div>
           </div>
-        </div>
-      </header>
-      <main className={styles.main}>
-        <section className={styles.heading} aria-labelledby="work-heading">
-          <p className={styles.eyebrow}>
-            One account · {availableCount} workspace{availableCount === 1 ? "" : "s"}
-          </p>
-          <h1 id="work-heading">Where do you want to work?</h1>
-          <p>
-            Your access follows your assignments and memberships. Move between contexts without
-            signing in again.
-          </p>
-        </section>
-        <WorkHubCards model={model} />
-      </main>
+        </header>
+        <main className={styles.main}>
+          <section className={styles.heading} aria-labelledby="work-heading">
+            <p className={styles.eyebrow}>
+              One account · {availableCount} workspace{availableCount === 1 ? "" : "s"}
+            </p>
+            <h1 id="work-heading">Where do you want to work?</h1>
+            <p>
+              Your access follows your assignments and memberships. Move between contexts without
+              signing in again.
+            </p>
+          </section>
+          <WorkHubCards model={model} />
+        </main>
+      </div>
     </div>
   );
 }

@@ -90,18 +90,18 @@
   min-height: calc(100svh - 3.0625rem);
   place-items: start center;
   padding: clamp(var(--space-4), 3vw, var(--space-6));
-  background: var(--background);
+  background: var(--workspace-pane);
   color: var(--foreground);
 }
 
 .publicWorkspace {
   min-height: 100svh;
-  background: var(--sidebar);
+  background: var(--workspace-outer);
   color: var(--foreground);
 }
 
 .publicMain {
-  background: var(--background);
+  background: var(--workspace-pane);
 }
 
 .publicContentBody {
@@ -197,9 +197,9 @@
   gap: 0;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--card);
+  background: var(--workspace-surface);
   color: var(--card-foreground);
   box-shadow: none;
 }
@@ -847,7 +847,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  box-shadow: 0 1px 2px rgb(23 23 23 / 4%);
+  box-shadow: none;
 }
 
 .reviewCard {
@@ -1062,7 +1062,7 @@
   padding: var(--space-3) clamp(var(--space-5), 5vw, var(--space-8));
   border-top: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-  box-shadow: 0 -0.75rem 1.5rem rgb(23 23 23 / 6%);
+  box-shadow: var(--workspace-sticky-shadow);
   backdrop-filter: blur(12px);
 }
 
@@ -1547,7 +1547,7 @@
 
 .card {
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
 }
 
 .card::before {
@@ -1560,7 +1560,7 @@
 
 .contextRail {
   padding: var(--space-5);
-  background: var(--color-surface);
+  background: var(--workspace-outer);
 }
 
 .applicantIdentity {

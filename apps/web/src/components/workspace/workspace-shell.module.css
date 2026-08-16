@@ -2,7 +2,7 @@
   display: grid;
   grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr);
   min-height: 100dvh;
-  background: var(--sidebar);
+  background: var(--workspace-outer);
   color: var(--foreground);
 }
 
@@ -11,7 +11,7 @@
   min-height: 0;
   border-right: 0;
   overflow: hidden;
-  background: var(--sidebar);
+  background: var(--workspace-outer);
 }
 
 .insetPanel {
@@ -20,10 +20,10 @@
   max-height: calc(100svh - var(--space-4));
   margin: var(--space-2);
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--workspace-pane-edge);
   border-radius: var(--radius-lg);
-  background: var(--background);
-  box-shadow: var(--shadow-card);
+  background: var(--workspace-pane);
+  box-shadow: var(--workspace-pane-shadow);
 }
 
 .main {
@@ -65,8 +65,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.5rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--background);
+  border-bottom: 1px solid var(--workspace-divider);
+  background: var(--workspace-pane);
 }
 
 .contextScope,

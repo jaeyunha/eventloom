@@ -6,10 +6,15 @@ const ownedStyles = [
   "./settings-ui.module.css",
   "./workspace-content.module.css",
   "./workspace-navigation.module.css",
+  "./role-workspace-shell.module.css",
   "./workspace-shell.module.css",
   "./workspace-state.module.css",
   "./workspace-ui.module.css",
   "../../features/admin/admin-shell.module.css",
+  "../../features/cfp/cfp-progress.module.css",
+  "../../features/cfp/cfp-submission-window.module.css",
+  "../../features/cfp/cfp-wizard.module.css",
+  "../../features/events/event-overview-workspace.module.css",
   "../../features/portal/portal-dashboard.module.css",
   "../../features/portal/portal-profile.module.css",
   "../../features/portal/portal-shell.module.css",
@@ -23,6 +28,7 @@ const ownedStyles = [
   "../../features/reviews/review-workspace.module.css",
   "../../features/reviews/reviewer-shell.module.css",
   "../../features/speakers/speaker-workspace.module.css",
+  "../../features/work/work-hub.module.css",
 ] as const;
 
 const styleSource = new Map(
@@ -35,11 +41,101 @@ const globalStyles = readFileSync(
   fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
   "utf8",
 );
+const workspaceShellSource = readFileSync(
+  fileURLToPath(new URL("./workspace-shell.tsx", import.meta.url)),
+  "utf8",
+);
+const workHubSource = readFileSync(
+  fileURLToPath(new URL("../../features/work/work-hub.tsx", import.meta.url)),
+  "utf8",
+);
 
 const directColorDeclaration =
   /^\s*(?:--[\w-]+|background(?:-color)?|border(?:-(?:block|inline)(?:-(?:start|end))?|-(?:top|right|bottom|left))?(?:-color)?|box-shadow|color|outline):[^;]*(?:#[\da-f]{3,8}\b|\brgba?\(|\b(?:black|white)\b)/imu;
 
 describe("workspace semantic surfaces", () => {
+  it("defines one reusable light and dark workspace layer contract", () => {
+    expect(globalStyles).toMatch(
+      /:root\s*\{[\s\S]*--workspace-outer:\s*#f3f3f5;[\s\S]*--workspace-pane:\s*#ffffff;[\s\S]*--workspace-surface:\s*#ffffff;[\s\S]*--workspace-subtle:\s*#f7f7f8;/u,
+    );
+    expect(globalStyles).toMatch(
+      /\.dark\s*\{[\s\S]*--workspace-outer:\s*#0b0b0d;[\s\S]*--workspace-pane:\s*#151517;[\s\S]*--workspace-surface:\s*#1c1c1f;[\s\S]*--workspace-subtle:\s*#232327;/u,
+    );
+    expect(globalStyles).toContain("--workspace-pane-edge:");
+    expect(globalStyles).toContain("--workspace-pane-shadow:");
+    expect(globalStyles).toContain("--workspace-accent:");
+    expect(globalStyles).toContain("--workspace-accent-soft:");
+    expect(globalStyles).toContain("--workspace-progress-idle:");
+    expect(globalStyles).toMatch(
+      /:root\s*\{[\s\S]*--workspace-pane-edge:\s*var\(--workspace-divider\)/su,
+    );
+    expect(globalStyles).toMatch(/\.dark\s*\{[\s\S]*--workspace-pane-edge:\s*transparent/su);
+    expect(globalStyles).toMatch(
+      /\[data-role-workspace-shell="true"\]\s*\{[\s\S]*--background:\s*var\(--workspace-pane\);[\s\S]*--sidebar:\s*var\(--workspace-outer\);/su,
+    );
+  });
+
+  it("uses the shared tonal layers in both workspace shell implementations", () => {
+    const standardShell = styleSource.get("./workspace-shell.module.css") ?? "";
+    const roleShell = styleSource.get("./role-workspace-shell.module.css") ?? "";
+
+    for (const [name, css] of [
+      ["WorkspaceShell", standardShell],
+      ["RoleWorkspaceShell", roleShell],
+    ] as const) {
+      expect(css, name).toMatch(/\.shell\s*\{[^}]*background:\s*var\(--workspace-outer\)/su);
+      expect(css, name).toMatch(
+        /\.(?:insetPanel|inset)\s*\{[^}]*border:\s*1px solid var\(--workspace-pane-edge\)/su,
+      );
+      expect(css, name).toMatch(
+        /\.(?:insetPanel|inset)\s*\{[^}]*background:\s*var\(--workspace-pane\)/su,
+      );
+      expect(css, name).toMatch(
+        /\.(?:insetPanel|inset)\s*\{[^}]*box-shadow:\s*var\(--workspace-pane-shadow\)/su,
+      );
+    }
+  });
+
+  it("marks every shared and account shell with the workspace theme scope", () => {
+    expect(workspaceShellSource).toContain('data-role-workspace-shell="true"');
+    expect(workHubSource).toContain('data-role-workspace-shell="true"');
+    expect(workHubSource).toContain("className={styles.frame}");
+  });
+
+  it("keeps the account hub inside the same layered workspace frame", () => {
+    const css = styleSource.get("../../features/work/work-hub.module.css") ?? "";
+
+    expect(css).toMatch(/\.shell\s*\{[^}]*background:\s*var\(--workspace-outer\)/su);
+    expect(css).toMatch(
+      /\.frame\s*\{[^}]*border:\s*1px solid var\(--workspace-pane-edge\)[^}]*background:\s*var\(--workspace-pane\)/su,
+    );
+  });
+
+  it("keeps the CFP document quiet inside the shared inset pane", () => {
+    const css = styleSource.get("../../features/cfp/cfp-wizard.module.css") ?? "";
+
+    expect(css).toMatch(/\.publicWorkspace\s*\{[^}]*background:\s*var\(--workspace-outer\)/su);
+    expect(css).toMatch(/\.publicMain\s*\{[^}]*background:\s*var\(--workspace-pane\)/su);
+    expect(css).toMatch(
+      /\.card\s*\{[^}]*border:\s*0;[^}]*background:\s*var\(--workspace-surface\)/su,
+    );
+  });
+
+  it("keeps organizer progress states on shared workspace accent tokens", () => {
+    const css = styleSource.get("../../features/events/event-overview-workspace.module.css") ?? "";
+
+    expect(css).toMatch(/\.phaseActive\s*\{[^}]*background:\s*var\(--workspace-accent-soft\)/su);
+    expect(css).toMatch(
+      /\.phaseProgress\s*\{[\s\S]*background:\s*var\(--workspace-progress-idle\)/su,
+    );
+    expect(css).toMatch(
+      /\.phaseActive \.phaseProgress,\s*\.phaseDone \.phaseProgress\s*\{[\s\S]*background:\s*var\(--workspace-accent\)/su,
+    );
+    expect(css).toMatch(
+      /\.attentionIcon,\s*\.activityIcon\s*\{[\s\S]*color:\s*var\(--workspace-accent\);[\s\S]*background:\s*var\(--workspace-accent-soft\)/su,
+    );
+  });
+
   it("keeps owned workspace colors on global semantic tokens", () => {
     for (const [file, css] of styleSource) {
       expect(css, file).not.toMatch(directColorDeclaration);
@@ -57,7 +153,7 @@ describe("workspace semantic surfaces", () => {
 
     for (const file of routeStyles) {
       const css = styleSource.get(file) ?? "";
-      expect(css, file).toMatch(/var\(--(?:background|card)\)/u);
+      expect(css, file).toMatch(/var\(--(?:background|card|workspace-(?:pane|surface))\)/u);
       expect(css, file).toContain("var(--foreground)");
       expect(css, file).toContain("var(--muted-foreground)");
       expect(css, file).toContain("var(--border)");

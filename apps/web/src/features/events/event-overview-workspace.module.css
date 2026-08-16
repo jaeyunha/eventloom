@@ -55,7 +55,7 @@
 
 .phaseActive {
   color: var(--foreground);
-  background: color-mix(in srgb, #eef2ff 72%, var(--card));
+  background: var(--workspace-accent-soft);
 }
 
 .phaseLabel {
@@ -77,13 +77,13 @@
   margin-top: 0.35rem;
   border: 2px solid var(--card);
   border-radius: 50%;
-  background: #a4a9b4;
+  background: var(--workspace-progress-idle);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 86%, transparent);
 }
 
 .phaseActive .phaseProgress,
 .phaseDone .phaseProgress {
-  background: #5b5bd6;
+  background: var(--workspace-accent);
 }
 
 .attentionList,
@@ -142,8 +142,8 @@
   height: 1.7rem;
   place-items: center;
   border-radius: 0.45rem;
-  color: #5b5bd6;
-  background: color-mix(in srgb, #eef2ff 82%, var(--card));
+  color: var(--workspace-accent);
+  background: var(--workspace-accent-soft);
 }
 
 .attentionText,

@@ -1,12 +1,12 @@
 .adminShell {
-  --admin-sidebar-bg: color-mix(in srgb, var(--sidebar) 96%, var(--foreground) 4%);
+  --admin-sidebar-bg: var(--workspace-outer);
   --admin-ink: var(--foreground);
   --admin-muted: var(--muted-foreground);
   --admin-subtle: var(--muted-foreground);
-  --admin-canvas: var(--background);
-  --admin-surface: var(--card);
-  --admin-border: var(--border);
-  --admin-border-strong: var(--input);
+  --admin-canvas: var(--workspace-pane);
+  --admin-surface: var(--workspace-surface);
+  --admin-border: var(--workspace-divider);
+  --admin-border-strong: var(--workspace-divider-strong);
   --admin-brand: var(--primary);
   --admin-brand-strong: var(--foreground);
   --admin-brand-soft: var(--accent);
@@ -2333,13 +2333,13 @@
   --admin-brand: var(--primary);
   --admin-brand-strong: var(--foreground);
   --admin-brand-soft: var(--accent);
-  background: var(--background);
+  background: var(--workspace-outer);
   color: var(--foreground);
 }
 
 :global(.dark) .adminInset,
 :global(.dark) .adminMain {
-  background: var(--background);
+  background: var(--workspace-pane);
 }
 
 :global(.dark) .workspaceHeader {
@@ -2367,7 +2367,7 @@
 
 :global(.dark) .accountFooter {
   border-top-color: var(--border);
-  background: var(--sidebar);
+  background: var(--workspace-outer);
 }
 
 :global(.dark) .commandButton,
@@ -2532,7 +2532,7 @@
 
 :global(.dark) .calendarRail {
   border-color: var(--border);
-  background: var(--sidebar);
+  background: var(--workspace-surface);
 }
 
 :global(.dark) .calendarCellOutside {

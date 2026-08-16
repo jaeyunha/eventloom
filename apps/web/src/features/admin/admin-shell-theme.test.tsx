@@ -26,7 +26,7 @@ describe("organizer workspace theme", () => {
   it("defines organizer aliases on the mounted shell in both themes", () => {
     expect(shellStyles).toContain(".adminShell {");
     expect(shellStyles).toContain("--admin-ink: var(--foreground)");
-    expect(shellStyles).toContain("--admin-border: var(--border)");
+    expect(shellStyles).toContain("--admin-border: var(--workspace-divider)");
     expect(shellStyles).toContain("--admin-settings-content-width: 52rem");
     expect(shellStyles).toContain(":global(.dark) .adminShell");
     expect(shellStyles).toContain(":global(.dark) .workspaceHeader");
@@ -51,7 +51,7 @@ describe("organizer workspace theme", () => {
       /\.adminMain\s*\{[\s\S]*scroll-padding-top:\s*var\(--admin-sticky-offset\);/u,
     );
     expect(workspaceShellStyles).toMatch(
-      /\.insetPanel\s*\{[\s\S]*border:\s*1px solid var\(--border\);/u,
+      /\.insetPanel\s*\{[\s\S]*border:\s*1px solid var\(--workspace-pane-edge\);/u,
     );
     expect(workspaceShellStyles).toMatch(
       /\.desktopNavigation\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow:\s*hidden;/u,
