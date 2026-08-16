@@ -2,6 +2,10 @@
 
 import { AlertCircle, CheckCircle2, Clock3, FileUp, ListChecks } from "lucide-react";
 import { StatusBadge, type StatusTone } from "../../components/workspace";
+import {
+  deadlineAfterEventWarning,
+  type SpeakerEventTemporalContext,
+} from "../speakers/speaker-temporal-policy";
 import { taskSubjectPresentation } from "./portal-task-model";
 import styles from "./portal-tasks.module.css";
 import { formatPortalDate } from "./portal-ui-model";
@@ -43,6 +47,7 @@ interface Props {
   readonly submissions: readonly PortalSubmission[];
   readonly selectedId: string | null;
   readonly filter: TaskFilter;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly onFilter: (filter: TaskFilter) => void;
   readonly onSelect: (taskId: string) => void;
 }
@@ -53,6 +58,7 @@ export function PortalTaskInbox({
   submissions,
   selectedId,
   filter,
+  temporalContext,
   onFilter,
   onSelect,
 }: Props) {
@@ -74,6 +80,10 @@ export function PortalTaskInbox({
       <ol className={styles.taskList}>
         {tasks.map((task) => {
           const subject = taskSubjectPresentation(task, profiles, submissions);
+          const deadlineWarning =
+            temporalContext === undefined || task.dueAt === undefined
+              ? null
+              : deadlineAfterEventWarning(task.dueAt.slice(0, 10), temporalContext);
           return (
             <li key={task.id}>
               <button
@@ -89,6 +99,9 @@ export function PortalTaskInbox({
                     <StatusBadge tone={tone(task)}>{statusLabel(task)}</StatusBadge>
                   </span>
                   <span className={styles.taskSubject}>{subject.label}</span>
+                  {deadlineWarning ? (
+                    <span className={styles.taskSubject}>{deadlineWarning}</span>
+                  ) : null}
                   <span className={styles.taskRowMeta}>
                     <span>
                       {formatPortalDate(task.dueAt)

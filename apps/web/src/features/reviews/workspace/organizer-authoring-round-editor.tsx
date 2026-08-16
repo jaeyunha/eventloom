@@ -1,12 +1,16 @@
 "use client";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
 import type { ApiPlan } from "./api-api-plan";
-import { dateTimeLocalValue } from "./model-date-time-local-value";
-import { isoDateTimeValue } from "./model-iso-date-time-value";
 import type { OrganizerAuthoringController } from "./organizer-authoring-controller";
 import { OrganizerCriterionEditor } from "./organizer-authoring-criterion-editor";
 import { OrganizerRoundTargeting } from "./organizer-authoring-round-targeting";
+import {
+  reviewLocalValue,
+  reviewRoundScheduleField,
+  reviewTemporalConstraints,
+} from "./review-temporal-policy";
 export function OrganizerRoundEditor({
   controller,
   round,
@@ -16,7 +20,18 @@ export function OrganizerRoundEditor({
   round: ApiPlan["rounds"][number];
   roundIndex: number;
 }>) {
-  const { busy, status, rounds, updateRound, addCriterion, removeRound } = controller;
+  const { busy, status, rounds, updateRound, addCriterion, removeRound, setTemporalFieldValidity } =
+    controller;
+  const { eventTimeZone, eventStartsAt, eventEndsAt } = controller.seed;
+  const constraints =
+    eventTimeZone === undefined || eventStartsAt === undefined || eventEndsAt === undefined
+      ? undefined
+      : reviewTemporalConstraints({
+          timeZone: eventTimeZone,
+          startsAt: eventStartsAt,
+          endsAt: eventEndsAt,
+        });
+  const originalRound = controller.seed.rounds.find((candidate) => candidate.id === round.id);
   return (
     <fieldset
       className={`${styles.scoreCard} ${styles.authoringRoundCard}`}
@@ -59,38 +74,39 @@ export function OrganizerRoundEditor({
           }}
         />
       </div>
-      <div className={styles.authoringScheduleGrid}>
-        <div className={styles.formField}>
-          <label htmlFor={`${round.id}-opens-at`}>Round opens</label>
-          <input
-            id={`${round.id}-opens-at`}
-            type="datetime-local"
-            value={dateTimeLocalValue(round.opensAt)}
-            onChange={(event) => {
-              const nextOpensAt = isoDateTimeValue(event.currentTarget.value);
-              updateRound(roundIndex, (current) => ({
-                ...current,
-                opensAt: nextOpensAt,
-              }));
-            }}
-          />
-        </div>
-        <div className={styles.formField}>
-          <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
-          <input
-            id={`${round.id}-closes-at`}
-            type="datetime-local"
-            value={dateTimeLocalValue(round.closesAt)}
-            onChange={(event) => {
-              const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
-              updateRound(roundIndex, (current) => ({
-                ...current,
-                closesAt: nextClosesAt,
-              }));
-            }}
-          />
-        </div>
-      </div>
+      <TemporalPicker
+        id={`${round.id}-schedule`}
+        mode="range"
+        precision="date-time"
+        startValue={round.opensAt ?? ""}
+        endValue={round.closesAt ?? ""}
+        valueTimeZone={eventTimeZone}
+        startLabel="Round opens"
+        endLabel="Round closes"
+        eyebrow={`Round ${roundIndex + 1} schedule`}
+        description="Choose the review window directly on the calendar."
+        minimumDateTime={constraints?.minimum}
+        maximumDateTime={constraints?.maximum}
+        unchangedValues={
+          eventTimeZone === undefined
+            ? undefined
+            : [originalRound?.opensAt, originalRound?.closesAt]
+                .filter((value): value is string => value != null && value !== "")
+                .map((value) => reviewLocalValue(value, eventTimeZone))
+        }
+        clearable
+        disabled={busy || status !== "draft"}
+        onChange={({ start, end }) => {
+          updateRound(roundIndex, (current) => ({
+            ...current,
+            opensAt: start === "" ? null : start,
+            closesAt: end === "" ? null : end,
+          }));
+        }}
+        onValidityChange={(isValid) =>
+          setTemporalFieldValidity(reviewRoundScheduleField(round.id), isValid)
+        }
+      />
       <div className={styles.formField}>
         <label htmlFor={`${round.id}-anonymization`}>Anonymization / blind review</label>
         <select

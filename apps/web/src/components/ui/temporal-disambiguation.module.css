@@ -1,0 +1,36 @@
+.choice,
+.error {
+  margin: 0.65rem 0 0;
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.choice {
+  border: 1px solid color-mix(in srgb, var(--amber-600) 34%, var(--border));
+  background: color-mix(in srgb, var(--amber-500) 8%, var(--card));
+  padding: 0.7rem;
+}
+
+.choice legend {
+  padding-inline: 0.2rem;
+  font-weight: 650;
+}
+
+.choice p {
+  margin: 0 0 0.55rem;
+  color: var(--muted-foreground);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.error {
+  border: 1px solid color-mix(in srgb, var(--destructive) 38%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 8%, var(--card));
+  padding: 0.65rem 0.7rem;
+  color: var(--destructive);
+}

@@ -17,7 +17,6 @@ const input: AgendaCatalogSyncInput = {
   tenantId: "tenant-a",
   eventId: "event-a",
   actorId: "organizer-a",
-  timeZone: "UTC",
 };
 
 function catalog(): AgendaCatalog {
@@ -47,6 +46,16 @@ function catalog(): AgendaCatalog {
   };
 }
 
+function testAgendaEngine(repository: InMemoryAgendaRepository, timeZone = "UTC"): AgendaEngine {
+  return new AgendaEngine(repository, new InMemoryAgendaMutationLock(), {
+    eventScheduleForEvent: async () => ({
+      startsAt: "2026-01-01T00:00:00.000Z",
+      endsAt: "2028-01-01T00:00:00.000Z",
+      timeZone,
+    }),
+  });
+}
+
 function setup(initial = catalog()) {
   let current = structuredClone(initial);
   const reader: AgendaCatalogReader = {
@@ -55,11 +64,15 @@ function setup(initial = catalog()) {
   const repository = new InMemoryAgendaRepository();
   const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock(), {
     clock: { now: () => new Date("2026-08-09T12:00:00.000Z") },
+    eventScheduleForEvent: async () => ({
+      startsAt: "2026-01-01T00:00:00.000Z",
+      endsAt: "2028-01-01T00:00:00.000Z",
+      timeZone: "UTC",
+    }),
   });
   const synchronizer = new AgendaCatalogSynchronizer({
     engine,
     catalogReader: reader,
-    eventTimeZone: "UTC",
     actorId: "organizer-a",
     minimumTravelMinutes: 10,
   });
@@ -108,7 +121,7 @@ describe("agenda catalog synchronization", () => {
   it("refreshes a catalog change that becomes visible while initialization commits", async () => {
     let current = catalog();
     const repository = new InMemoryAgendaRepository();
-    const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock());
+    const engine = testAgendaEngine(repository);
     const refreshed = {
       ...catalog(),
       rooms: [...catalog().rooms, { id: "room-b", name: "Workshop room", capacity: 40 }],
@@ -127,7 +140,6 @@ describe("agenda catalog synchronization", () => {
       catalogReader: {
         getAgendaCatalog: async () => structuredClone(current),
       },
-      eventTimeZone: "UTC",
     });
 
     const synchronized = await synchronizer.synchronize(input);
@@ -160,7 +172,7 @@ describe("agenda catalog synchronization", () => {
     let current = catalog();
     let updateCount = 0;
     const repository = new InMemoryAgendaRepository();
-    const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock());
+    const engine = testAgendaEngine(repository);
     const synchronizer = new AgendaCatalogSynchronizer({
       engine: {
         getDraft: (eventId) => engine.getDraft(eventId),
@@ -181,7 +193,6 @@ describe("agenda catalog synchronization", () => {
       catalogReader: {
         getAgendaCatalog: async () => structuredClone(current),
       },
-      eventTimeZone: "UTC",
     });
 
     const synchronized = await synchronizer.synchronize(input);
@@ -355,7 +366,6 @@ describe("agenda catalog synchronization", () => {
         },
       },
       catalogReader: reader,
-      eventTimeZone: "UTC",
     });
 
     await retrying.ensureInitialized(input);
@@ -367,16 +377,12 @@ describe("agenda catalog synchronization", () => {
   it("lets SessionService inject synchronization after catalog mutations", async () => {
     const repository = new InMemorySessionRepository();
     let service!: SessionService;
-    const engine = new AgendaEngine(
-      new InMemoryAgendaRepository(),
-      new InMemoryAgendaMutationLock(),
-    );
+    const engine = testAgendaEngine(new InMemoryAgendaRepository());
     const synchronizer = new AgendaCatalogSynchronizer({
       engine,
       catalogReader: {
         getAgendaCatalog: (tenantId, eventId) => service.getAgendaCatalog(tenantId, eventId),
       },
-      eventTimeZone: "UTC",
     });
     service = new SessionService(repository, { agendaCatalogSynchronizer: synchronizer });
     const actor = { tenantId: "tenant-a", userId: "organizer-a", role: "organizer" as const };
@@ -510,7 +516,19 @@ describe("agenda catalog synchronization", () => {
     const events = new AirtableEventRepository({ baseId, transport });
     const sessions = new AirtableSessionRepository({ baseId, transport });
     const agendaRepository = new InMemoryAgendaRepository();
-    const engine = new AgendaEngine(agendaRepository, new InMemoryAgendaMutationLock());
+    const engine = new AgendaEngine(agendaRepository, new InMemoryAgendaMutationLock(), {
+      eventScheduleForEvent: async (agendaEventId) => {
+        const event = await events.getEvent(tenantId, agendaEventId);
+        return event === null
+          ? null
+          : {
+              startsAt: event.startsAt,
+              endsAt: event.endsAt,
+              timeZone: event.timeZone,
+              ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
+            };
+      },
+    });
     let service!: SessionService;
     const synchronizer = new AgendaCatalogSynchronizer({
       engine,
@@ -518,8 +536,6 @@ describe("agenda catalog synchronization", () => {
         getAgendaCatalog: (catalogTenantId, catalogEventId) =>
           service.getAgendaCatalog(catalogTenantId, catalogEventId),
       },
-      eventTimeZone: (catalogTenantId, catalogEventId) =>
-        events.getEvent(catalogTenantId, catalogEventId).then((event) => event?.timeZone ?? "UTC"),
     });
     service = new SessionService(sessions, { agendaCatalogSynchronizer: synchronizer });
 

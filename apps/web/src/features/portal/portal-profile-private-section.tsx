@@ -12,8 +12,13 @@ import {
   FieldGroup,
   FieldLabel,
   Input,
+  TemporalPicker,
   Textarea,
 } from "../../components/ui";
+import {
+  type SpeakerEventTemporalContext,
+  travelDateWarnings,
+} from "../speakers/speaker-temporal-policy";
 import styles from "./portal-profile.module.css";
 import {
   type ProfileDraft,
@@ -30,6 +35,7 @@ interface PrivateLogisticsSectionProps {
   readonly errors: ProfileErrors;
   readonly disabled: boolean;
   readonly fieldRefs: FieldRefs;
+  readonly temporalContext?: SpeakerEventTemporalContext;
   readonly onChange: (field: keyof ProfileDraft, value: string | boolean) => void;
 }
 
@@ -43,8 +49,13 @@ export function PrivateLogisticsSection({
   errors,
   disabled,
   fieldRefs,
+  temporalContext,
   onChange,
 }: PrivateLogisticsSectionProps) {
+  const travelWarnings =
+    temporalContext === undefined
+      ? []
+      : travelDateWarnings(draft.arrivalAt, draft.departureAt, temporalContext);
   return (
     <section aria-labelledby="private-logistics-heading">
       <Card>
@@ -73,33 +84,34 @@ export function PrivateLogisticsSection({
               </div>
             </Field>
             <div className={styles.fieldGrid}>
-              <Field data-invalid={Boolean(errors.arrivalAt)}>
-                <FieldLabel htmlFor="profile-arrival">Arrival</FieldLabel>
-                <Input
-                  ref={fieldRefs.arrivalAt as RefCallback<HTMLInputElement>}
-                  id="profile-arrival"
-                  value={draft.arrivalAt}
-                  placeholder="2026-09-10T14:00"
+              <Field
+                style={{ gridColumn: "1 / -1" }}
+                data-invalid={Boolean(errors.arrivalAt || errors.departureAt)}
+              >
+                <TemporalPicker
+                  id="profile-travel-window"
+                  mode="range"
+                  precision="date"
+                  startValue={draft.arrivalAt}
+                  endValue={draft.departureAt}
+                  startLabel="Arrival date"
+                  endLabel="Departure date"
+                  eyebrow="Travel window"
+                  description="Choose date-only travel details. Dates outside the event are allowed and flagged for review."
+                  clearable
                   disabled={disabled}
-                  aria-invalid={errors.arrivalAt ? true : undefined}
-                  aria-describedby={errors.arrivalAt ? "profile-arrivalAt-error" : undefined}
-                  onChange={(event) => onChange("arrivalAt", event.currentTarget.value)}
+                  onChange={({ start, end }) => {
+                    onChange("arrivalAt", start);
+                    onChange("departureAt", end);
+                  }}
                 />
                 <ErrorMessage field="arrivalAt" errors={errors} />
-              </Field>
-              <Field data-invalid={Boolean(errors.departureAt)}>
-                <FieldLabel htmlFor="profile-departure">Departure</FieldLabel>
-                <Input
-                  ref={fieldRefs.departureAt as RefCallback<HTMLInputElement>}
-                  id="profile-departure"
-                  value={draft.departureAt}
-                  placeholder="2026-09-13T09:00"
-                  disabled={disabled}
-                  aria-invalid={errors.departureAt ? true : undefined}
-                  aria-describedby={errors.departureAt ? "profile-departureAt-error" : undefined}
-                  onChange={(event) => onChange("departureAt", event.currentTarget.value)}
-                />
                 <ErrorMessage field="departureAt" errors={errors} />
+                {travelWarnings.map((warning) => (
+                  <FieldDescription key={warning} role="status">
+                    {warning}
+                  </FieldDescription>
+                ))}
               </Field>
               <Field data-invalid={Boolean(errors.accommodation)}>
                 <FieldLabel htmlFor="profile-accommodation">Accommodation</FieldLabel>

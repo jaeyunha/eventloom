@@ -484,7 +484,7 @@
 .timeFields {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.8rem;
 }
 
@@ -1844,14 +1844,13 @@
   background: var(--color-brand-soft);
 }
 
-.agendaEditorBody .entryForm select,
-.agendaEditorBody .entryForm input[type="datetime-local"] {
+.agendaEditorBody .entryForm select {
   min-height: 3.15rem;
   background: var(--color-surface);
 }
 
 .agendaEditorBody .timeFields {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .agendaEditorBody .formActions {

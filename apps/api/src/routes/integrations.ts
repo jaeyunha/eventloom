@@ -14,6 +14,11 @@ import {
   type WebhookSubscriptionRecord,
   type WebhookSubscriptionRepository,
 } from "../integrations/webhooks/types";
+import {
+  ApiKeyExpirationError,
+  normalizeApiKeyExpiration,
+  normalizeStoredApiKeyExpiration,
+} from "./api-key-expiration";
 
 export interface IntegrationEvent {
   readonly id: string;
@@ -75,6 +80,7 @@ export interface IntegrationWebhookDelivery {
 }
 
 export interface IntegrationAdminRouteDependencies {
+  readonly clock?: () => Date;
   readonly getEvent: (organizationId: string, eventId: string) => Promise<IntegrationEvent | null>;
   readonly getDeliveryStatus: (
     organizationId: string,
@@ -140,12 +146,7 @@ const organizationIdSchema = z.string().trim().min(1).max(200);
 const providerSchema = z.literal("opensend");
 const credentialSchema = z.object({ secret: z.string().trim().min(1).max(512) }).strict();
 const apiScopeSchema = z.enum(apiScopes);
-const expirationSchema = z
-  .string()
-  .trim()
-  .max(80)
-  .refine((value) => !Number.isNaN(Date.parse(value)), "The expiration date is invalid.")
-  .nullable();
+const expirationSchema = z.string().trim().min(1).max(80).nullable();
 const webhookEndpointSchema = z
   .string()
   .url()
@@ -268,6 +269,24 @@ function isoDate(value: Date | string): string {
   return Number.isNaN(parsed.valueOf()) ? new Date(0).toISOString() : parsed.toISOString();
 }
 
+function apiKeyExpiration(
+  dependencies: IntegrationAdminRouteDependencies,
+  value: string | null,
+): string | null {
+  try {
+    return normalizeApiKeyExpiration(value, dependencies.clock?.() ?? new Date());
+  } catch (error) {
+    if (error instanceof ApiKeyExpirationError) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", error.message, 400);
+    }
+    throw error;
+  }
+}
+
+function apiKeyView(summary: IntegrationApiKeySummary): IntegrationApiKeySummary {
+  return { ...summary, expiresAt: normalizeStoredApiKeyExpiration(summary.expiresAt) };
+}
+
 function webhookView(
   subscription: WebhookSubscriptionRecord,
   lastDelivery: IntegrationWebhookDelivery | null,
@@ -335,7 +354,7 @@ export function createIntegrationAdminRoutes(
           publishedAgendaRevisionId: event.publishedAgendaRevisionId,
         },
         delivery,
-        apiKeys,
+        apiKeys: apiKeys.map(apiKeyView),
         webhooks,
       },
     });
@@ -368,6 +387,7 @@ export function createIntegrationAdminRoutes(
       organizationId: event.organizationId,
       eventId: event.id,
       ...body,
+      expiresAt: apiKeyExpiration(dependencies, body.expiresAt),
     });
     return context.json({ data: { id: created.summary.id, secret: created.secret } }, 201);
   });
@@ -505,7 +525,8 @@ export function createOrganizationApiKeyAdminRoutes(
   routes.get("/", async (context) => {
     const organizationId = organizationFor(context);
     context.header("cache-control", "private, no-store");
-    return context.json({ data: await dependencies.listApiKeys(organizationId) });
+    const apiKeys = await dependencies.listApiKeys(organizationId);
+    return context.json({ data: apiKeys.map(apiKeyView) });
   });
 
   routes.post("/", async (context) => {
@@ -520,7 +541,7 @@ export function createOrganizationApiKeyAdminRoutes(
       eventId: body.eventId ?? null,
       label: body.label,
       scopes: body.scopes,
-      expiresAt: body.expiresAt,
+      expiresAt: apiKeyExpiration(dependencies, body.expiresAt),
     });
     return context.json({ data: { id: created.summary.id, secret: created.secret } }, 201);
   });

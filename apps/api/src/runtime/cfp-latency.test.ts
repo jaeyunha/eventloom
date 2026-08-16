@@ -418,6 +418,44 @@ describe("organizer CFP submission latency", () => {
     expect(fake.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
   });
 
+  it("preserves authoritative Airtable event identity while updating CFP-owned fields", async () => {
+    const fake = new FakeAirtableTransport();
+    seed(fake, 0);
+    const repository = new AirtableCfpRepository({ baseId, transport: fake });
+
+    await repository.saveEvent(
+      {
+        ...event,
+        version: 2,
+        slug: "forged-slug",
+        name: "Forged name",
+        timezone: "UTC",
+        opensAt: "2027-01-02T08:00:00.000Z",
+        closesAt: "2027-06-02T07:00:00.000Z",
+      },
+      1,
+    );
+
+    await expect(repository.getEvent(tenantId, eventId)).resolves.toMatchObject({
+      id: event.id,
+      tenantId: event.tenantId,
+      version: 2,
+      slug: event.slug,
+      name: event.name,
+      timezone: event.timezone,
+      opensAt: "2027-01-02T08:00:00.000Z",
+      closesAt: "2027-06-02T07:00:00.000Z",
+    });
+  });
+
+  it("does not create a missing authoritative Airtable event through CFP persistence", async () => {
+    const fake = new FakeAirtableTransport();
+    const repository = new AirtableCfpRepository({ baseId, transport: fake });
+
+    await expect(repository.saveEvent(event, null)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fake.requests.some((request) => request.method === "POST")).toBe(false);
+  });
+
   it("checks the live submission version before updating by Airtable record id", async () => {
     const fake = new FakeAirtableTransport();
     seed(fake, 1);

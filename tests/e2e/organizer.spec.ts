@@ -811,8 +811,8 @@ test("dedicated Events page creates an event with canonical timezone and dates",
   await eventSchedule.getByRole("button", { name: "Thu, Mar 18, 2027" }).click();
   await eventSchedule.getByRole("button", { name: /Ends Mar 18, 2027/u }).click();
   await eventSchedule.getByRole("button", { name: "Fri, Mar 19, 2027" }).click();
-  await page.getByLabel("Event start time").fill("09:00");
-  await page.getByLabel("Event end time").fill("16:30");
+  await page.getByLabel("Start time").fill("09:00");
+  await page.getByLabel("End time").fill("16:30");
   await page.getByRole("textbox", { name: /^Event location\b/u }).fill("DevFlow Studio");
   await page.getByRole("button", { name: "Create event", exact: true }).click();
 
@@ -1097,8 +1097,8 @@ test("agenda day navigation supports direct multi-day jumps at responsive widths
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Schedule session" }).click();
-    await expect(page.getByLabel("Starts")).toHaveValue(/^2026-09-24T/u);
-    await expect(page.getByLabel("Ends")).toHaveValue(/^2026-09-24T/u);
+    await expect(page.getByRole("button", { name: "Starts Sep 24" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Ends Sep 24" })).toBeVisible();
     await page.keyboard.press("Escape");
 
     const layout = await page.evaluate(() => ({

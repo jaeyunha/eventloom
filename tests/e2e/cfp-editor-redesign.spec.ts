@@ -175,7 +175,8 @@ test("CFP editor keeps every configuration section usable on a compact desktop",
 test("CFP editor lets incomplete draft save attempts reach persistence", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${eventBase}/cfp`);
-  await page.getByLabel("Event name").fill("");
+  await page.getByRole("button", { name: "Messaging" }).click();
+  await page.getByLabel("Form label").fill("");
 
   const saveRequest = page.waitForRequest(
     (request) =>

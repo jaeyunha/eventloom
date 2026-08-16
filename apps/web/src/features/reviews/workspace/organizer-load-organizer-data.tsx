@@ -67,5 +67,11 @@ export async function loadOrganizerData(
     workspace.aggregates,
     selectedRoundId,
   );
-  return mapPlan(plan, eventId, aggregateEntries, mappedProgress, workspace.decisions, assignments);
+  return {
+    ...mapPlan(plan, eventId, aggregateEntries, mappedProgress, workspace.decisions, assignments),
+    eventName: workspace.event.name,
+    eventTimeZone: workspace.event.timeZone,
+    eventStartsAt: workspace.event.startsAt,
+    eventEndsAt: workspace.event.endsAt,
+  };
 }

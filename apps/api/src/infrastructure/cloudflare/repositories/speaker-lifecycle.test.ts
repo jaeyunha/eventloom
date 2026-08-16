@@ -345,7 +345,7 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         status: "travel_confirmed",
         travelLogistics: {
           travelRequired: true,
-          arrivalAt: "2100-01-09T18:00:00.000Z",
+          arrivalAt: "2100-01-09",
           accommodation: "Conference hotel",
           dietaryRequirements: "Vegetarian",
           travelNotes: "Airport transfer requested.",
@@ -368,7 +368,7 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
           accountId: organizerAccountId,
           title,
           description: `${title} before arrival.`,
-          dueAt: "2100-01-01T00:00:00.000Z",
+          dueAt: "2100-01-01",
           assignments: [{ participantId, submissionId: null }],
         });
         const taskId = assigned.tasks[0]?.taskId;

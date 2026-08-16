@@ -64,6 +64,14 @@ export const speakerPortalCapabilities = [
 
 export type SpeakerPortalCapability = (typeof speakerPortalCapabilities)[number];
 
+export interface SpeakerEventTemporalContext {
+  organizationId: string;
+  eventId: string;
+  timeZone: string;
+  startsAt: string;
+  endsAt: string;
+}
+
 export interface SpeakerPortalContext {
   id: string;
   organizationId?: string;
@@ -75,6 +83,7 @@ export interface SpeakerPortalContext {
   submissionIds: readonly string[];
   participantIds: readonly string[];
   primaryParticipantId?: string;
+  temporalContext?: SpeakerEventTemporalContext;
 }
 
 export interface SpeakerPortalContextScopeProjection {
@@ -364,6 +373,7 @@ export interface SpeakerWorkspaceRecord {
 export interface SpeakerWorkspaceRoster {
   organizationId: string;
   eventId: string;
+  temporalContext?: SpeakerEventTemporalContext;
   speakers: readonly SpeakerWorkspaceRecord[];
 }
 
@@ -576,6 +586,7 @@ export interface SpeakerDeliverablesQuery {
 export interface SpeakerDeliverablesMatrix {
   organizationId: string;
   eventId: string;
+  temporalContext?: SpeakerEventTemporalContext;
   items: readonly SpeakerDeliverableRow[];
   total: number;
   filters: SpeakerDeliverablesQuery;

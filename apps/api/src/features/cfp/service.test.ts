@@ -24,6 +24,7 @@ const event: EventCfp = {
   slug: "future-conf",
   name: "Future Conf",
   timezone: "America/Los_Angeles",
+  eventStartsAt: "2026-08-12T16:00:00.000Z",
   opensAt: "2026-08-01T07:00:00.000Z",
   closesAt: "2026-08-10T07:00:00.000Z",
 };
@@ -169,7 +170,8 @@ class MemoryRepository implements CfpRepository {
 
   async saveEvent(value: EventCfp, expectedVersion: number | null): Promise<void> {
     const current = this.events.get(value.id);
-    if ((current?.version ?? null) !== expectedVersion) {
+    if (current === undefined) throw new CfpError("NOT_FOUND", "event not found");
+    if (current.version !== expectedVersion) {
       throw new CfpError("CONFLICT", "event version conflict");
     }
     this.events.set(value.id, structuredClone(value));
@@ -408,6 +410,86 @@ function buildOrganizerSubmission(overrides: Partial<Submission> = {}): Submissi
     ...overrides,
   };
 }
+
+describe("CFP event schedule integrity", () => {
+  it("requires an existing authoritative event", async () => {
+    const { service, repository } = createFixture();
+    repository.events.delete(event.id);
+    const { eventStartsAt: _omitted, ...newEvent } = event;
+
+    await expect(service.saveEvent(newEvent, null)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(repository.events.size).toBe(0);
+  });
+
+  it("preserves authoritative event identity while updating CFP-owned fields", async () => {
+    const { service } = createFixture();
+
+    await expect(
+      service.saveEvent(
+        {
+          ...event,
+          version: 2,
+          slug: "forged-slug",
+          name: "Forged name",
+          timezone: "UTC",
+          eventStartsAt: "2026-08-20T16:00:00.000Z",
+          opensAt: "2026-08-09T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).resolves.toEqual({
+      ...event,
+      version: 2,
+      opensAt: "2026-08-09T07:00:00.000Z",
+    });
+  });
+
+  it("preserves unchanged historical CFP dates but rejects changed past dates", async () => {
+    const { service } = createFixture();
+
+    await expect(service.saveEvent(event, event.version)).resolves.toEqual(event);
+    await expect(
+      service.saveEvent(
+        {
+          ...event,
+          opensAt: "2026-08-02T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects a CFP close after the authoritative event start when request metadata is omitted", async () => {
+    const { service } = createFixture();
+    const { eventStartsAt: _omitted, ...request } = event;
+
+    await expect(
+      service.saveEvent(
+        {
+          ...request,
+          closesAt: "2026-08-13T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects CFP boundaries after the authoritative event start despite fabricated request metadata", async () => {
+    const { service } = createFixture();
+
+    await expect(
+      service.saveEvent(
+        {
+          ...event,
+          eventStartsAt: "2026-08-20T16:00:00.000Z",
+          opensAt: "2026-08-13T07:00:00.000Z",
+          closesAt: "2026-08-14T07:00:00.000Z",
+        },
+        event.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+});
 async function completeValidDraft(
   service: CfpService,
   idempotencyPrefix = "flow",

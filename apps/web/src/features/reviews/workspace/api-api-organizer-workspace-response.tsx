@@ -7,7 +7,16 @@ import type { ApiPlan } from "./api-api-plan";
 import type { ApiProgress } from "./api-api-progress";
 import type { ApiSubmission } from "./api-api-submission";
 
+export interface ApiEvaluationEventMetadata {
+  readonly id: string;
+  readonly name: string;
+  readonly timeZone: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
 export interface ApiOrganizerWorkspaceResponse {
+  readonly event: ApiEvaluationEventMetadata;
   readonly plan: ApiPlan;
   readonly submissions: readonly ApiSubmission[];
   readonly assignments: readonly ApiAssignment[];

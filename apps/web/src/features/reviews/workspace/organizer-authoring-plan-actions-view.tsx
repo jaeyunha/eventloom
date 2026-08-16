@@ -1,11 +1,17 @@
 "use client";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
 import { authoringDateLabel } from "./model-authoring-date-label";
-import { dateTimeLocalValue } from "./model-date-time-local-value";
-import { isoDateTimeValue } from "./model-iso-date-time-value";
 import type { OrganizerAuthoringController } from "./organizer-authoring-controller";
+import {
+  reviewExtendsPastEventStart,
+  reviewLocalValue,
+  reviewPlanClosesAtField,
+  reviewTemporalConstraints,
+} from "./review-temporal-policy";
 
 export function OrganizerPlanActionsView({
   controller,
@@ -19,6 +25,7 @@ export function OrganizerPlanActionsView({
     criterionCount,
     planClosesAt,
     setPlanClosesAt,
+    setTemporalFieldValidity,
     busy,
     isDraft,
     saveSchedule,
@@ -26,6 +33,15 @@ export function OrganizerPlanActionsView({
     transition,
     reviseToDraft,
   } = controller;
+  const { eventTimeZone, eventStartsAt, eventEndsAt } = controller.seed;
+  const constraints =
+    eventTimeZone === undefined || eventStartsAt === undefined || eventEndsAt === undefined
+      ? undefined
+      : reviewTemporalConstraints({
+          timeZone: eventTimeZone,
+          startsAt: eventStartsAt,
+          endsAt: eventEndsAt,
+        });
   return (
     <aside className={styles.authoringAside} aria-label="Plan authoring summary">
       <div className={styles.authoringAsideInner}>
@@ -53,13 +69,36 @@ export function OrganizerPlanActionsView({
         </dl>
         {status === "open" ? (
           <div className={styles.authoringDeadlineEditor}>
-            <label htmlFor="evaluation-plan-closes-at">Overall review deadline</label>
-            <input
+            {eventStartsAt !== undefined &&
+            reviewExtendsPastEventStart([planClosesAt], eventStartsAt) ? (
+              <Alert data-review-after-event-start="">
+                <AlertTitle>Review continues after the event begins</AlertTitle>
+                <AlertDescription>
+                  This is allowed, but the deadline cannot exceed the event end.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            <TemporalPicker
               id="evaluation-plan-closes-at"
-              type="datetime-local"
-              value={dateTimeLocalValue(planClosesAt)}
-              onChange={(event) =>
-                setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")
+              mode="single"
+              precision="date-time"
+              value={planClosesAt}
+              valueTimeZone={eventTimeZone}
+              label="Overall review deadline"
+              eyebrow="Plan schedule"
+              description="Update the deadline without exposing browser-native date controls."
+              minimumDateTime={constraints?.minimum}
+              maximumDateTime={constraints?.maximum}
+              unchangedValues={
+                eventTimeZone === undefined || controller.seed.closesAt === ""
+                  ? undefined
+                  : [reviewLocalValue(controller.seed.closesAt, eventTimeZone)]
+              }
+              clearable
+              disabled={busy}
+              onChange={setPlanClosesAt}
+              onValidityChange={(isValid) =>
+                setTemporalFieldValidity(reviewPlanClosesAtField, isValid)
               }
             />
             <Button type="button" onClick={() => void saveSchedule()} disabled={busy}>

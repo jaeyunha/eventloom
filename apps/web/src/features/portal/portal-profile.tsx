@@ -36,8 +36,9 @@ function PortalProfileContent() {
     (candidate) => candidate.participantId === context?.primaryParticipantId,
   );
   const headshot = profile ? portalProfileHeadshot(profile, view?.assets ?? []) : undefined;
+  const temporalContext = context?.temporalContext;
   const [draft, setDraft] = useState<ProfileDraft | null>(
-    profile ? profileDraftFor(profile) : null,
+    profile ? profileDraftFor(profile, temporalContext) : null,
   );
   const [selectedHeadshot, setSelectedHeadshot] = useState<File | null>(null);
   const [errors, setErrors] = useState<ProfileErrors>({});
@@ -51,13 +52,13 @@ function PortalProfileContent() {
 
   useEffect(() => {
     if (!profile) return;
-    setDraft(profileDraftFor(profile));
+    setDraft(profileDraftFor(profile, temporalContext));
     setSelectedHeadshot(null);
     setErrors({});
     setSaveError(null);
     const fileInput = fieldElements.current.headshot as HTMLInputElement | undefined;
     if (fileInput) fileInput.value = "";
-  }, [profile]);
+  }, [profile, temporalContext]);
 
   useEffect(() => {
     if (selectedContextId !== undefined) setSaved(false);
@@ -99,7 +100,7 @@ function PortalProfileContent() {
     context?.eventId === loadedProfile.eventId &&
     context.primaryParticipantId === loadedProfile.participantId;
   const canEditProfile = can("profile-self") && profileContextIsValid;
-  const initialDraft = profileDraftFor(loadedProfile);
+  const initialDraft = profileDraftFor(loadedProfile, temporalContext);
   const hasChanges = profileDraftIsDirty(loadedDraft, initialDraft) || selectedHeadshot !== null;
   const headshotTask = view.tasks.find(
     (task) =>
@@ -132,7 +133,7 @@ function PortalProfileContent() {
   }
 
   function resetDraft() {
-    setDraft(profileDraftFor(loadedProfile));
+    setDraft(profileDraftFor(loadedProfile, temporalContext));
     setSelectedHeadshot(null);
     setErrors({});
     setSaveError(null);
@@ -226,6 +227,7 @@ function PortalProfileContent() {
               errors={errors}
               disabled={disabled}
               fieldRefs={fieldRefs}
+              {...(temporalContext === undefined ? {} : { temporalContext })}
               onChange={updateDraft}
             />
           </div>

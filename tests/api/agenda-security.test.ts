@@ -27,7 +27,6 @@ const ownerHeaders = {
 };
 
 const catalog = {
-  timeZone: "America/New_York",
   minimumTravelMinutes: 10,
   sessions: [
     {
@@ -117,6 +116,11 @@ function fixture() {
     {
       clock: { now: () => new Date("2026-08-08T12:00:00.000Z") },
       idGenerator: { nextId: (prefix) => `${prefix}-${++id}` },
+      eventScheduleForEvent: async () => ({
+        startsAt: "2026-01-01T05:00:00.000Z",
+        endsAt: "2027-01-01T04:59:59.999Z",
+        timeZone: "America/New_York",
+      }),
     },
   );
   const app = createApp({

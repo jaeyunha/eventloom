@@ -34,6 +34,9 @@ describe("organization integrations workspace", () => {
     expect(markup).toContain("Airtable projection");
     expect(markup).toContain("Developer API");
     expect(markup).toContain("Create API key");
+    expect(markup).toContain("Expiration date and time");
+    expect(markup).toContain("Time");
+    expect(markup).not.toContain('type="date"');
     expect(markup).toContain("Event bindings");
     expect(markup).toContain("/admin/organizations/org%2Fone/events");
     expect(markup).not.toContain("Airtable remains authoritative");

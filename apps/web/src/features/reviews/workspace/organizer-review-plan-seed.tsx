@@ -23,6 +23,9 @@ export interface ReviewPlanSeed {
   >;
   eventId: string;
   eventName: string;
+  eventTimeZone?: string | undefined;
+  eventStartsAt?: string | undefined;
+  eventEndsAt?: string | undefined;
   planName: string;
   status: PlanStatus;
   opensAt: string;

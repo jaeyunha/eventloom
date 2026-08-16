@@ -73,6 +73,9 @@ export function useOrganizerAuthoringState({
   const [assignmentPreview, setAssignmentPreview] = useState<DistributionPreview | null>(null);
   const [assignmentPreviewKey, setAssignmentPreviewKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [unresolvedTemporalFields, setUnresolvedTemporalFields] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [assignmentSubmissionId, setAssignmentSubmissionId] = useState("");
   const [assignmentReviewerIds, setAssignmentReviewerIds] = useState<readonly string[]>([]);
   const [assignmentReviewerQuery, setAssignmentReviewerQuery] = useState("");
@@ -94,6 +97,17 @@ export function useOrganizerAuthoringState({
   const visibleAssignmentReviewerMembers = matchingAssignmentReviewerMembers.slice(0, 8);
   const assignmentReviewerSelectionDisabled =
     busy || status !== "open" || reviewerMembersLoading || reviewerMembersError !== null;
+
+  function setTemporalFieldValidity(field: string, isValid: boolean): void {
+    setUnresolvedTemporalFields((current) => {
+      const hasField = current.has(field);
+      if (hasField === !isValid) return current;
+      const next = new Set(current);
+      if (isValid) next.delete(field);
+      else next.add(field);
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (assignmentTarget === undefined) return;
@@ -175,6 +189,8 @@ export function useOrganizerAuthoringState({
     setAssignmentPreviewKey,
     message,
     setMessage,
+    unresolvedTemporalFields,
+    setTemporalFieldValidity,
     assignmentSubmissionId,
     setAssignmentSubmissionId,
     assignmentReviewerIds,

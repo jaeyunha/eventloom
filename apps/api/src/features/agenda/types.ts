@@ -63,6 +63,8 @@ export interface AgendaEntry {
   startsAtLocal: string;
   endsAtLocal: string;
   timeZone: string;
+  startDisambiguation?: TimeDisambiguation;
+  endDisambiguation?: TimeDisambiguation;
   metadata?: AgendaEntryPublicMetadata;
 }
 export type AgendaSuggestionRunStatus = "pending" | "rejected" | "superseded" | "stale" | "applied";

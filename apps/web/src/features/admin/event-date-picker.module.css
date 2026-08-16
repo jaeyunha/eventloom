@@ -34,6 +34,13 @@
   line-height: 1.5;
 }
 
+.headingActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
 .eyebrow,
 .detailLabel {
   color: var(--muted-foreground);
@@ -148,6 +155,10 @@
   grid-template-columns: 1fr;
 }
 
+.pickerLayout[data-layout="stacked"] {
+  grid-template-columns: 1fr;
+}
+
 .calendar {
   padding: 1rem 1.15rem 1.15rem;
 }
@@ -166,11 +177,15 @@
 }
 
 .monthControls {
-  display: flex;
-  gap: 0.15rem;
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(2, 44px);
+  gap: 0.25rem;
 }
 
 .monthControls button {
+  width: 44px;
+  height: 44px;
   color: var(--muted-foreground);
 }
 
@@ -194,7 +209,8 @@
 
 .day {
   position: relative;
-  min-height: 2.45rem;
+  min-width: 44px;
+  min-height: 44px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -243,6 +259,11 @@
   background: color-mix(in srgb, var(--muted) 24%, transparent);
 }
 
+.detailsStacked {
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-left: 0;
+}
+
 .selectedDates {
   display: grid;
   gap: 0.55rem;
@@ -283,6 +304,11 @@
   gap: 0.65rem;
 }
 
+.timeGrid[data-single="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.timeField,
 .timeGrid label {
   display: grid;
   gap: 0.38rem;
@@ -311,6 +337,11 @@
     display: grid;
   }
 
+  .headingActions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
   .modeToggle {
     width: 100%;
   }
@@ -332,9 +363,21 @@
 @media (max-width: 34rem) {
   .heading,
   .summary,
-  .calendar,
   .details {
     padding-inline: 0.8rem;
+  }
+
+  .headingActions {
+    width: auto;
+    justify-content: flex-start;
+  }
+
+  .calendar {
+    padding-inline: 0;
+  }
+
+  .day {
+    scroll-margin-bottom: calc(4.75rem + env(safe-area-inset-bottom));
   }
 
   .rangeSummary {

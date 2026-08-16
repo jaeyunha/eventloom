@@ -1,3 +1,4 @@
+import { localDateInTimeZone } from "@eventloom/contracts";
 import {
   type AuditEntry,
   type CfpForm,
@@ -1052,10 +1053,49 @@ export class CfpService {
         issues: parsed.error.issues,
       });
     }
-    const event = {
+    const requestedEvent = {
       ...parsed.data,
       name: sanitizePlainText(parsed.data.name),
     };
+    const current = await this.#repository.getEvent(requestedEvent.tenantId, requestedEvent.id);
+    if (current === null) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
+    }
+    const event = {
+      ...requestedEvent,
+      slug: current.slug,
+      name: current.name,
+      timezone: current.timezone,
+      eventStartsAt: current.eventStartsAt,
+    };
+    if (current.eventStartsAt === undefined) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "The authoritative event start is unavailable for CFP schedule validation.",
+      );
+    }
+    const today = localDateInTimeZone(this.#clock.now().toISOString(), event.timezone);
+    const changedPastBoundary =
+      (event.opensAt !== current.opensAt &&
+        localDateInTimeZone(event.opensAt, event.timezone) < today) ||
+      (event.closesAt !== current.closesAt &&
+        localDateInTimeZone(event.closesAt, event.timezone) < today);
+    if (changedPastBoundary) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "New CFP dates cannot be before today in the event time zone.",
+      );
+    }
+    if (
+      event.eventStartsAt !== undefined &&
+      (Date.parse(event.opensAt) > Date.parse(event.eventStartsAt) ||
+        Date.parse(event.closesAt) > Date.parse(event.eventStartsAt))
+    ) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "The CFP window must finish before the event begins.",
+      );
+    }
     await this.#repository.saveEvent(event, expectedVersion);
     return event;
   }

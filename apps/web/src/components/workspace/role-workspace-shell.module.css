@@ -203,6 +203,11 @@
     padding-inline: 0.6rem;
   }
 
+  .main {
+    padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+  }
+
   .pageContext span {
     display: none;
   }
