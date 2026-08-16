@@ -26,13 +26,13 @@ current tree does not make the existing history publication-safe. Before
 changing visibility, choose and record whether publication uses the current
 history, rewritten history, or a separate sanitized repository.
 
-A 2026-08-16 preparation scan ran Gitleaks 8.30.1 across the complete reachable
-history. Thirty findings were individually reviewed as test fixtures, stable
-IDs, source identifiers, or import paths; their exact historical fingerprints
-are recorded in `.gitleaksignore`. A second scan reported no leaks. This is
-preparation evidence only: rerun the scanner against the final public candidate,
-and re-review every finding if history is rewritten because commit fingerprints
-will change.
+A 2026-08-16 preparation scan ran Gitleaks 8.30.1 across both the complete
+reachable history and current tree. Thirty historical findings and fifteen
+current-tree findings were individually reviewed as test fixtures, stable IDs,
+source identifiers, or import paths; their exact fingerprints are recorded in
+`.gitleaksignore`. Repeat scans reported no leaks. This is preparation evidence
+only: rerun both scanners against the final public candidate, and re-review every
+finding if history is rewritten because commit fingerprints will change.
 
 ## Source that can remain public after review
 
@@ -54,10 +54,12 @@ to deploy or mutate remote resources is not itself a reason to hide source
 code; it is a reason to require least-privilege credentials and explicit
 confirmation.
 
-Run the repeatable history scan from the repository root:
+Run the repeatable history, current-tree, and dependency scans from the
+repository root:
 
 ```bash
 go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --redact=100
+go run github.com/zricethezav/gitleaks/v8@v8.30.1 dir . --redact=100
 bun audit
 ```
 
@@ -65,6 +67,7 @@ bun audit
 
 - [ ] Run a secret scanner against the complete public history, not only the
       working tree.
+- [ ] Run a secret scanner against the exact current candidate tree.
 - [ ] Record whether publication uses current history, rewritten history, or a
       separate sanitized repository.
 - [ ] Review every tracked source snapshot, transcript, screenshot, and

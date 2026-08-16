@@ -112,11 +112,12 @@ describe("Eventloom skill installer", () => {
     },
   );
 
-  it("installs all agents and defaults to global without touching repository skills-lock.json", async () => {
+  it("installs all agents globally without touching a project skills lock", async () => {
     const home = await temporary("eventloom-skill-home-");
     const cwd = await temporary("eventloom-skill-project-");
-    const lockPath = join(root, "skills-lock.json");
-    const before = await readFile(lockPath);
+    const lockPath = join(cwd, "skills-lock.json");
+    const before = Buffer.from('{"sentinel":"project-owned"}\n');
+    await writeFile(lockPath, before);
     const output = io();
 
     expect(

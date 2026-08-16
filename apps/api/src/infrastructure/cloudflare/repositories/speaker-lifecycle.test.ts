@@ -1159,7 +1159,7 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
       accountId: organizerAccountId,
       title: "Confirm invitation details",
       description: "Review the speaker portal invitation.",
-      dueAt: "2100-01-01T00:00:00.000Z",
+      dueAt: "2100-01-01",
       assignments: [{ participantId, submissionId: null }],
     });
     fixture.database.executeScript(`

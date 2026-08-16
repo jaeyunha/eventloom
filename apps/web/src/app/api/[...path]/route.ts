@@ -135,22 +135,30 @@ async function proxy(request: NextRequest, context: ApiProxyContext): Promise<Re
   };
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  let upstream: Response;
-  try {
-    upstream = await fetch(target, {
-      method: request.method,
-      headers,
-      redirect: "manual",
-      cache: "no-store",
-      signal: upstreamController.signal,
-      ...(hasBody ? { body: request.body, duplex: "half" } : {}),
-    });
-  } catch (error) {
-    cleanup();
-    if (timedOut) {
-      return gatewayTimeout(request);
+  const retryableRead = request.method === "GET" || request.method === "HEAD";
+  let upstream: Response | undefined;
+  let attempt = 0;
+  while (upstream === undefined) {
+    try {
+      upstream = await fetch(target, {
+        method: request.method,
+        headers,
+        redirect: "manual",
+        cache: "no-store",
+        signal: upstreamController.signal,
+        ...(hasBody ? { body: request.body, duplex: "half" } : {}),
+      });
+    } catch (error) {
+      if (retryableRead && attempt === 0 && !timedOut && !upstreamController.signal.aborted) {
+        attempt += 1;
+        continue;
+      }
+      cleanup();
+      if (timedOut) {
+        return gatewayTimeout(request);
+      }
+      throw error;
     }
-    throw error;
   }
 
   const responseHeaders = new Headers(upstream.headers);
