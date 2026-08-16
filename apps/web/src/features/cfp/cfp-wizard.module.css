@@ -1025,14 +1025,22 @@
 
 /* -------------------------------------------------------- action footer */
 
+.accountModeFieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .accountModeSwitch {
   display: grid;
+  width: 100%;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   margin-top: var(--space-5);
 }
 
-.accountModeSwitch > * {
+.accountModeSwitch [data-slot="toggle-group-item"] {
   width: 100%;
 }
 

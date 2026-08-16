@@ -19,6 +19,7 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "../../components/ui/toggle-group";
 import { WorkspaceBrandMark } from "../../components/workspace/workspace-brand-mark";
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
@@ -1749,6 +1750,20 @@ export function CfpWizard({
     }));
   }
 
+  function changeAccountMode(nextMode: CfpAccountMode): void {
+    setAccountMode(nextMode);
+    setSaveError(null);
+    setErrors((current) => {
+      if (nextMode === "sign_up") return current;
+
+      const next = { ...current };
+      delete next["account.firstName"];
+      delete next["account.lastName"];
+      delete next["account.acceptedTerms"];
+      return next;
+    });
+  }
+
   useEffect(() => {
     if (
       step !== "account" ||
@@ -1865,10 +1880,10 @@ export function CfpWizard({
             confirmedApplicantContext={confirmedApplicantContext}
             draft={draft}
             errors={errors}
+            onAccountModeChange={changeAccountMode}
             onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
             password={password}
             requiresApplicantContextConfirmation={requiresApplicantContextConfirmation}
-            setAccountMode={setAccountMode}
             setPassword={setPassword}
             updateDraft={updateDraft}
             verificationState={verificationState}
@@ -2048,10 +2063,10 @@ function AccountStep({
   draft,
   errors,
   confirmedApplicantContext,
+  onAccountModeChange,
   onConfirmApplicantContext,
   password,
   requiresApplicantContextConfirmation,
-  setAccountMode,
   setPassword,
   updateDraft,
   authenticatedSession,
@@ -2060,10 +2075,10 @@ function AccountStep({
 }: StepFormProps & {
   accountMode: CfpAccountMode;
   confirmedApplicantContext: boolean;
+  onAccountModeChange: (mode: CfpAccountMode) => void;
   onConfirmApplicantContext: () => void;
   password: string;
   requiresApplicantContextConfirmation: boolean;
-  setAccountMode: (mode: CfpAccountMode) => void;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
   verificationState: CfpVerificationState | null;
@@ -2119,8 +2134,8 @@ function AccountStep({
         {authenticatedSession
           ? `Continue as ${authenticatedSession.name}`
           : accountMode === "sign_in"
-            ? "Sign in"
-            : "Create account"}
+            ? "Sign in to continue"
+            : "Create your account"}
       </h1>
       {authenticatedSession !== null &&
       requiresApplicantContextConfirmation &&
@@ -2151,38 +2166,42 @@ function AccountStep({
       {!authenticatedSession ? (
         <p>
           {accountMode === "sign_in"
-            ? "Enter the email and password for your existing Eventloom account."
-            : "Create an Eventloom account to own this proposal and receive submission updates."}
+            ? "Use your existing Eventloom account to continue to your proposal."
+            : "Create an Eventloom account to save this proposal and receive updates."}
         </p>
       ) : null}
       {!authenticatedSession ? (
-        <fieldset className={styles.accountModeSwitch}>
-          <legend className="sr-only">Account mode</legend>
-          <Button
-            aria-pressed={accountMode === "sign_in"}
-            onClick={() => setAccountMode("sign_in")}
-            type="button"
-            variant={accountMode === "sign_in" ? "default" : "outline"}
+        <fieldset className={styles.accountModeFieldset} data-cfp-account-access="true">
+          <legend className="sr-only">Account access</legend>
+          <ToggleGroup
+            className={styles.accountModeSwitch}
+            onValueChange={(value) => {
+              if (value === "sign_in" || value === "sign_up") onAccountModeChange(value);
+            }}
+            spacing={0}
+            type="single"
+            value={accountMode}
+            variant="outline"
           >
-            Sign in
-          </Button>
-          <Button
-            aria-pressed={accountMode === "sign_up"}
-            onClick={() => setAccountMode("sign_up")}
-            type="button"
-            variant={accountMode === "sign_up" ? "default" : "outline"}
-          >
-            Create account
-          </Button>
+            <ToggleGroupItem
+              aria-label="Existing account"
+              data-cfp-account-mode="sign_in"
+              value="sign_in"
+            >
+              Existing account
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              aria-label="Create account"
+              data-cfp-account-mode="sign_up"
+              value="sign_up"
+            >
+              Create account
+            </ToggleGroupItem>
+          </ToggleGroup>
         </fieldset>
       ) : null}
       <div className={styles.sectionPanel}>
-        <Field
-          error={errors["account.email"]}
-          label="Your Email Address:"
-          name="account.email"
-          required
-        >
+        <Field error={errors["account.email"]} label="Email address" name="account.email" required>
           {(controlProps) => (
             <Input
               {...controlProps}
@@ -2207,14 +2226,14 @@ function AccountStep({
           <>
             <Field
               error={errors["account.password"]}
-              label="Password:"
+              label="Password"
               name="account.password"
               required
             >
               {(controlProps) => (
                 <Input
                   {...controlProps}
-                  autoComplete="current-password"
+                  autoComplete={accountMode === "sign_up" ? "new-password" : "current-password"}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
                   value={password}
@@ -2244,7 +2263,7 @@ function AccountStep({
             <div className={styles.twoColumns}>
               <Field
                 error={errors["account.firstName"]}
-                label="First Name"
+                label="First name"
                 name="account.firstName"
                 required
               >
@@ -2267,7 +2286,7 @@ function AccountStep({
               </Field>
               <Field
                 error={errors["account.lastName"]}
-                label="Last Name"
+                label="Last name"
                 name="account.lastName"
                 required
               >
