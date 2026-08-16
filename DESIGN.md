@@ -252,6 +252,19 @@ surfaces:
 CFP and reviewer flows inherit the focused-flow, object-detail, status, and
 progress patterns established by this wave.
 
+### Public CFP submission window
+
+- The progress rail contains event identity and application progress only.
+  Submission availability, deadlines, and account limits belong in the main
+  application flow where applicants make decisions.
+- Render one submission-window notice across all viewport sizes. Do not keep
+  separate desktop-rail and mobile-form copies in the DOM.
+- The notice is a quiet contextual status strip, not a sidebar card. Keep the
+  current status and concise guidance first, then present opening and closing
+  timestamps as two compact date facts.
+- A formatted timestamp is one semantic value. Date, time, and meridiem must
+  stay together; never leave `AM` or `PM` stranded on a separate line.
+
 ## 6. Motion and interaction
 
 - Motion only communicates navigation, drawer, dialog, hover, focus, or state

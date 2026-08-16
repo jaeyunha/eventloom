@@ -390,8 +390,8 @@
   display: none;
 }
 
-.mobileSubmissionWindow {
-  display: none;
+.submissionWindow {
+  margin-bottom: var(--space-5);
 }
 
 .formColumn > * {
@@ -1304,14 +1304,6 @@
     background: var(--muted);
   }
 
-  .mobileSubmissionWindow {
-    display: block;
-    margin-bottom: var(--space-5);
-  }
-
-  .mobileSubmissionWindow > * {
-    margin-top: 0;
-  }
   .mobileContextCard div {
     display: grid;
     min-width: 0;
