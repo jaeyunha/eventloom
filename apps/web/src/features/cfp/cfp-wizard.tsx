@@ -38,7 +38,7 @@ import {
 import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
 import { CharacterCount, Field, Input } from "./cfp-field";
 import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
-import { useCfpStartupStore } from "./cfp-startup-provider";
+import { type CfpStartupStore, useCfpStartupStore } from "./cfp-startup-provider";
 import { CfpSubmissionWindow } from "./cfp-submission-window";
 import styles from "./cfp-wizard.module.css";
 import {
@@ -929,6 +929,74 @@ function reloadPinnedDraft(): void {
   window.location.reload();
 }
 
+type CfpStartupData = {
+  readonly publishedCfp: PublishedCfp;
+  readonly session: CfpAuthenticatedSession | null;
+  readonly canonicalIdentity: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly formId: string;
+  };
+};
+
+type CfpPinnedDraftResult =
+  | { readonly status: "resume"; readonly saved: CfpServerSubmission }
+  | { readonly status: "reset" }
+  | { readonly status: "stale"; readonly submissionId: string };
+
+function throwIfCfpStartupAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+}
+
+async function loadCfpStartup(
+  api: CfpApi,
+  startupStore: CfpStartupStore,
+  routeIdentity: { organizationId: string; eventId: string; formId?: string },
+  signal: AbortSignal,
+): Promise<CfpStartupData> {
+  const startup = startupStore.load(api, routeIdentity);
+  const [publishedCfp, session] = await Promise.all([startup.published, startup.session]);
+  throwIfCfpStartupAborted(signal);
+  return {
+    publishedCfp,
+    session,
+    canonicalIdentity: {
+      organizationId: routeIdentity.organizationId,
+      eventId: publishedCfp.event.id,
+      formId: publishedCfp.form.id,
+    },
+  };
+}
+
+async function loadCfpPinnedDraft(
+  api: CfpApi,
+  identity: CfpStartupData["canonicalIdentity"],
+  pointer: string,
+  step: CfpStep,
+  signal: AbortSignal,
+): Promise<CfpPinnedDraftResult> {
+  try {
+    const saved = await api.loadDraft({
+      organizationId: identity.organizationId,
+      eventId: identity.eventId,
+      submissionId: pointer,
+      signal,
+    });
+    throwIfCfpStartupAborted(signal);
+    return canResumeCfpSubmission(saved.status, step)
+      ? { status: "resume", saved }
+      : { status: "reset" };
+  } catch (error) {
+    if (isCfpSchemaVersionConflict(error)) {
+      return { status: "stale", submissionId: pointer };
+    }
+    if (!(error instanceof CfpApiError) || (error.status !== 401 && error.status !== 404)) {
+      throw error;
+    }
+    return { status: "reset" };
+  }
+}
+
 export function CfpWizard({
   eventSlug,
   step,
@@ -1071,114 +1139,165 @@ export function CfpWizard({
     setAuthenticatedSession(null);
     setVerificationState(null);
     verificationResumeRequestedRef.current = false;
-    let active = true;
     const controller = new AbortController();
+    const scope = { active: true };
+    const ownsScope = () => scope.active && !controller.signal.aborted;
+    const handleStartupError = (error: unknown): void => {
+      if (!ownsScope()) return;
+      if (isCfpSchemaVersionConflict(error)) {
+        formVersionRef.current = null;
+        setStaleFormConflict({
+          submissionId: submissionIdRef.current,
+          pinnedDraftUnavailable: submissionIdRef.current === null,
+        });
+      }
+      setSaveState("error");
+      setSaveError(
+        mutationErrorMessage(error, "The published CFP could not be loaded. Refresh to try again."),
+      );
+      setHydrated(true);
+    };
+    const applyVerificationContinuation = (
+      canonicalIdentity: CfpStartupData["canonicalIdentity"],
+      session: CfpAuthenticatedSession | null,
+      verificationContinuation: Awaited<ReturnType<typeof readCfpVerificationContinuation>> | null,
+    ): void => {
+      if (verificationContinuation === null) return;
+      const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
+      if (session === null) {
+        setDraft((current) => ({
+          ...current,
+          account: verificationContinuation.account,
+        }));
+        setVerificationState({
+          status: "waiting",
+          email: verificationContinuation.account.email,
+        });
+      } else if (session.email === continuationEmail) {
+        setDraft((current) =>
+          syncPrimaryParticipant(
+            draftWithAuthenticatedSession(
+              {
+                ...current,
+                account: verificationContinuation.account,
+              },
+              session,
+            ),
+          ),
+        );
+        setVerificationState({ status: "resuming", email: session.email });
+      } else {
+        clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
+      }
+    };
+    const applyReset = (
+      publishedCfp: PublishedCfp,
+      session: CfpAuthenticatedSession | null,
+      initialDraftForScope: CfpDraft,
+      pointerKey: string,
+      clearPointer: boolean,
+    ): void => {
+      if (clearPointer) window.localStorage.removeItem(pointerKey);
+      submissionIdRef.current = null;
+      versionRef.current = 1;
+      formVersionRef.current = publishedCfp.form.version;
+      setStaleFormConflict(null);
+      setDynamicAnswers({});
+      setParticipantAnswers({});
+      setFileUploadStates({});
+      setErrors({});
+      setPassword("");
+      setSaveState("idle");
+      setSaveError(null);
+      setDraft(
+        session
+          ? draftWithAuthenticatedSession(initialDraftForScope, session)
+          : initialDraftForScope,
+      );
+    };
     if (!routeIdentity) {
       setSaveState("error");
       setHydrated(true);
       return () => {
-        active = false;
+        scope.active = false;
         fileDraftCreationRef.current = null;
         controller.abort();
         mutationGateRef.current?.invalidate();
       };
     }
 
-    void (async () => {
-      try {
-        const startup = startupStore.load(api, routeIdentity);
-        const [publishedCfp, session] = await Promise.all([startup.published, startup.session]);
-        if (!active) return;
-        setAuthenticatedSession(session);
-        setPublished(publishedCfp);
-        const canonicalIdentity = {
-          organizationId: routeIdentity.organizationId,
-          eventId: publishedCfp.event.id,
-          formId: publishedCfp.form.id,
-        };
-        const verificationContinuation =
-          step === "account"
-            ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
-            : null;
-        const activeFormId = canonicalIdentity.formId;
-        const pointerKey = getCfpSubmissionPointerStorageKey(
-          canonicalIdentity.organizationId,
-          canonicalIdentity.eventId,
-          activeFormId,
-        );
-        if (step === "welcome" || step === "account") {
-          window.sessionStorage.removeItem(
-            getCfpCompletionHandoffStorageKey(
-              canonicalIdentity.organizationId,
-              canonicalIdentity.eventId,
-              activeFormId,
-            ),
+    void loadCfpStartup(api, startupStore, routeIdentity, controller.signal).then(
+      ({ publishedCfp, session, canonicalIdentity }) => {
+        if (!ownsScope()) return;
+        try {
+          setAuthenticatedSession(session);
+          setPublished(publishedCfp);
+          const verificationContinuation =
+            step === "account"
+              ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
+              : null;
+          const pointerKey = getCfpSubmissionPointerStorageKey(
+            canonicalIdentity.organizationId,
+            canonicalIdentity.eventId,
+            canonicalIdentity.formId,
           );
-        }
-        const pointer = window.localStorage.getItem(pointerKey);
-        if (pointer) {
-          try {
-            const saved = await api.loadDraft({
-              organizationId: canonicalIdentity.organizationId,
-              eventId: canonicalIdentity.eventId,
-              submissionId: pointer,
-              signal: controller.signal,
-            });
-            if (!active) return;
-            if (canResumeCfpSubmission(saved.status, step)) {
-              submissionIdRef.current = saved.id;
-              versionRef.current = saved.version;
-              formVersionRef.current = saved.formVersion;
-              setStaleFormConflict(null);
-              setDynamicAnswers(submissionAnswersFromServer(saved));
-              setParticipantAnswers(participantAnswersFromServer(saved));
-              setDraft(
-                session
-                  ? draftWithAuthenticatedSession(draftFromSubmission(eventSlug, saved), session)
-                  : draftFromSubmission(eventSlug, saved),
-              );
-            } else {
-              window.localStorage.removeItem(pointerKey);
-              submissionIdRef.current = null;
-              versionRef.current = 1;
-              formVersionRef.current = publishedCfp.form.version;
-              setStaleFormConflict(null);
-              setDynamicAnswers({});
-              setParticipantAnswers({});
-              setFileUploadStates({});
-              setErrors({});
-              setPassword("");
-              setSaveState("idle");
-              setSaveError(null);
-              setDraft(
-                session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft,
-              );
-            }
-          } catch (error) {
-            if (isCfpSchemaVersionConflict(error)) {
-              formVersionRef.current = null;
-              setStaleFormConflict({ submissionId: pointer, pinnedDraftUnavailable: true });
-              setHydrated(true);
-              return;
-            }
-            if (!(error instanceof CfpApiError) || (error.status !== 401 && error.status !== 404)) {
-              throw error;
-            }
-            window.localStorage.removeItem(pointerKey);
-            submissionIdRef.current = null;
-            versionRef.current = 1;
-            formVersionRef.current = publishedCfp.form.version;
-            setStaleFormConflict(null);
-            setDynamicAnswers({});
-            setParticipantAnswers({});
-            setFileUploadStates({});
-            setErrors({});
-            setPassword("");
-            setSaveState("idle");
-            setSaveError(null);
-            setDraft(session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft);
+          if (step === "welcome" || step === "account") {
+            window.sessionStorage.removeItem(
+              getCfpCompletionHandoffStorageKey(
+                canonicalIdentity.organizationId,
+                canonicalIdentity.eventId,
+                canonicalIdentity.formId,
+              ),
+            );
           }
-        } else {
+          const pointer = window.localStorage.getItem(pointerKey);
+          if (pointer) {
+            void loadCfpPinnedDraft(api, canonicalIdentity, pointer, step, controller.signal).then(
+              (pinnedDraft) => {
+                if (!ownsScope()) return;
+                try {
+                  if (pinnedDraft.status === "stale") {
+                    formVersionRef.current = null;
+                    setStaleFormConflict({
+                      submissionId: pinnedDraft.submissionId,
+                      pinnedDraftUnavailable: true,
+                    });
+                    setHydrated(true);
+                    return;
+                  }
+                  if (pinnedDraft.status === "resume") {
+                    const saved = pinnedDraft.saved;
+                    submissionIdRef.current = saved.id;
+                    versionRef.current = saved.version;
+                    formVersionRef.current = saved.formVersion;
+                    setStaleFormConflict(null);
+                    setDynamicAnswers(submissionAnswersFromServer(saved));
+                    setParticipantAnswers(participantAnswersFromServer(saved));
+                    setDraft(
+                      session
+                        ? draftWithAuthenticatedSession(
+                            draftFromSubmission(eventSlug, saved),
+                            session,
+                          )
+                        : draftFromSubmission(eventSlug, saved),
+                    );
+                  } else {
+                    applyReset(publishedCfp, session, initialDraft, pointerKey, true);
+                  }
+                  applyVerificationContinuation(
+                    canonicalIdentity,
+                    session,
+                    verificationContinuation,
+                  );
+                  setHydrated(true);
+                } catch (error) {
+                  handleStartupError(error);
+                }
+              },
+              handleStartupError,
+            );
+            return;
+          }
           formVersionRef.current = publishedCfp.form.version;
           submissionIdRef.current = null;
           versionRef.current = 1;
@@ -1191,58 +1310,17 @@ export function CfpWizard({
           setPassword("");
           setSaveState("idle");
           setSaveError(null);
+          applyVerificationContinuation(canonicalIdentity, session, verificationContinuation);
+          setHydrated(true);
+        } catch (error) {
+          handleStartupError(error);
         }
-        if (verificationContinuation !== null) {
-          const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
-          if (session === null) {
-            setDraft((current) => ({
-              ...current,
-              account: verificationContinuation.account,
-            }));
-            setVerificationState({
-              status: "waiting",
-              email: verificationContinuation.account.email,
-            });
-          } else if (session.email === continuationEmail) {
-            setDraft((current) =>
-              syncPrimaryParticipant(
-                draftWithAuthenticatedSession(
-                  {
-                    ...current,
-                    account: verificationContinuation.account,
-                  },
-                  session,
-                ),
-              ),
-            );
-            setVerificationState({ status: "resuming", email: session.email });
-          } else {
-            clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
-          }
-        }
-        setHydrated(true);
-      } catch (error) {
-        if (!active) return;
-        if (isCfpSchemaVersionConflict(error)) {
-          formVersionRef.current = null;
-          setStaleFormConflict({
-            submissionId: submissionIdRef.current,
-            pinnedDraftUnavailable: submissionIdRef.current === null,
-          });
-        }
-        setSaveState("error");
-        setSaveError(
-          mutationErrorMessage(
-            error,
-            "The published CFP could not be loaded. Refresh to try again.",
-          ),
-        );
-        setHydrated(true);
-      }
-    })();
+      },
+      handleStartupError,
+    );
 
     return () => {
-      active = false;
+      scope.active = false;
       fileDraftCreationRef.current = null;
       controller.abort();
       mutationGateRef.current?.invalidate();
