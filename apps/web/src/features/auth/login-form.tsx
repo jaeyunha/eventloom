@@ -17,9 +17,9 @@ import {
   normalizedOrganizerEmail,
   ORGANIZER_DOMAIN_ERROR_MESSAGE,
   resolveLoginConfig,
-  resolveLoginLandingRoute,
   resolveLoginWorkspace,
   SIGNUP_PASSWORD_POLICY_MESSAGE,
+  safeLoginLandingRoute,
   signInAndRedirect,
   signupPasswordError,
 } from "./login-form-model";
@@ -155,7 +155,7 @@ export function LoginForm({
         setVerificationRequired(true);
       } else {
         const session = await api.getSession();
-        redirect(resolveLoginLandingRoute(session, returnTo));
+        redirect(safeLoginLandingRoute(session, returnTo));
         return;
       }
     } catch (failure) {

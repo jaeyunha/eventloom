@@ -1,4 +1,4 @@
-import { type LoginApi, resolveLoginLandingRoute } from "@/features/auth/login-form-model";
+import { type LoginApi, safeLoginLandingRoute } from "@/features/auth/login-form-model";
 import { type MemberApi, MemberApiError } from "./api";
 
 export const MEMBER_SETUP_PASSWORD_POLICY_MESSAGE =
@@ -63,7 +63,7 @@ export async function completeMemberSetup(input: {
       email: activated.member.email,
       password: input.password,
     });
-    return resolveLoginLandingRoute(await input.loginApi.getSession());
+    return safeLoginLandingRoute(await input.loginApi.getSession());
   } catch {
     throw new MemberSetupActivatedSignInRequiredError(activated.member.email);
   }
