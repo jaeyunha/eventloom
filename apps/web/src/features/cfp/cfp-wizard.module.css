@@ -1060,6 +1060,20 @@
   backdrop-filter: blur(12px);
 }
 
+.accountActions {
+  position: static;
+  justify-content: flex-end;
+  margin: var(--space-7) 0 0;
+  padding: var(--space-3) 0 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.accountActions > span {
+  display: none;
+}
+
 .forwardActions {
   display: flex;
   flex-wrap: wrap;

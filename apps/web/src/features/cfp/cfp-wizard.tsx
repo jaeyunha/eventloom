@@ -1930,7 +1930,10 @@ export function CfpWizard({
         ) : null}
 
         <div
-          className={`${styles.actions} ${step === "account" ? styles.actionsSingleSecondary : ""}`}
+          className={`${styles.actions} ${
+            step === "account" ? `${styles.actionsSingleSecondary} ${styles.accountActions}` : ""
+          }`}
+          data-cfp-actions="true"
         >
           {step !== "welcome" ? (
             <Button
@@ -1971,10 +1974,16 @@ export function CfpWizard({
                 {step === "welcome" ? "Continue →" : null}
                 {step === "account"
                   ? authenticatedSession
-                    ? "Continue →"
+                    ? mutationPending
+                      ? "Continuing…"
+                      : "Continue to proposal"
                     : accountMode === "sign_in"
-                      ? "Sign in →"
-                      : "Create account →"
+                      ? mutationPending
+                        ? "Signing in…"
+                        : "Sign in and continue"
+                      : mutationPending
+                        ? "Creating account…"
+                        : "Create account and continue"
                   : null}
                 {step === "submission" ? "Next step →" : null}
                 {step === "participants" ? "Continue to review →" : null}
@@ -1984,8 +1993,8 @@ export function CfpWizard({
           </div>
         </div>
       </form>
-      {step !== "welcome" ? (
-        <div className={styles.sessionFooter}>
+      {step !== "welcome" && step !== "account" ? (
+        <div className={styles.sessionFooter} data-cfp-session-footer="true">
           {verificationState?.status === "waiting"
             ? `Verification email sent to ${verificationState.email}.`
             : verificationState?.status === "resuming"
@@ -2219,9 +2228,7 @@ function AccountStep({
           )}
         </Field>
         {authenticatedSession ? (
-          <p role="status">
-            You are signed in as {authenticatedSession.email}. No password is needed to continue.
-          </p>
+          <p role="status">Signed in as {authenticatedSession.email}.</p>
         ) : (
           <>
             <Field
