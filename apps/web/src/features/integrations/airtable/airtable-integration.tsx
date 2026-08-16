@@ -436,7 +436,7 @@ export function AirtableIntegration({
                     </div>
                   ) : null}
                   {showDisconnect ? (
-                    <div className={styles.confirmation}>
+                    <label className={styles.confirmation}>
                       <input
                         id="airtable-confirm-disconnect"
                         type="checkbox"
@@ -447,7 +447,7 @@ export function AirtableIntegration({
                         I understand projection will stop and existing Airtable tables will keep
                         their last values until I reconnect.
                       </span>
-                    </div>
+                    </label>
                   ) : null}
                   {showDisconnect ? (
                     <div className={styles.actionRow}>
