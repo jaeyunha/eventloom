@@ -192,15 +192,6 @@ export function OverviewSection({
           </Card>
         </Link>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Source-of-truth boundary</CardTitle>
-          <CardDescription>
-            D1 remains authoritative for event and program records. Airtable is an optional
-            asynchronous projection and validated inbound adapter.
-          </CardDescription>
-        </CardHeader>
-      </Card>
     </div>
   );
 }

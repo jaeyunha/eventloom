@@ -85,7 +85,7 @@ describe("integration admin UI", () => {
     expect(markup).toContain("API keys");
     expect(markup).toContain("Webhooks");
     expect(markup).toContain("Needs attention");
-    expect(markup).toContain("Source-of-truth boundary");
+    expect(markup.match(/data-slot="card"/g) ?? []).toHaveLength(3);
     expect(markup).not.toContain("Integration settings unavailable");
     expect(markup).not.toContain('role="alert"');
   });

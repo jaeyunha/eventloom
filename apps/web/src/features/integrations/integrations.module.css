@@ -565,6 +565,20 @@
   }
 }
 
+@media (max-width: 64rem) {
+  .settingsNavigation {
+    display: flex;
+    gap: var(--sb-space-2);
+    overflow-x: auto;
+    padding-block: var(--sb-space-2);
+    background: var(--sb-color-surface);
+  }
+
+  .settingsNavigation a {
+    flex: 0 0 auto;
+  }
+}
+
 @media (max-width: 54rem) {
   .statusGrid,
   .twoColumn,

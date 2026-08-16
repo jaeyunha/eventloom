@@ -91,6 +91,9 @@ test("switching integration sections keeps the loaded snapshot", async ({ page }
   await navigation.getByRole("link", { name: "Overview", exact: true }).click();
   await expect(page).toHaveURL(INTEGRATIONS_PATH, { timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "Integrations", exact: true })).toBeVisible();
+  await expect(page.locator('[data-slot="card"]')).toHaveCount(3);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(navigation).toHaveCSS("display", "flex");
 
   expect(snapshotRequests).toBe(1);
 });

@@ -6,6 +6,7 @@ import {
   CfpEditor,
   cfpActiveSectionThreshold,
   cfpContainerScrollTop,
+  cfpMinimumDate,
   cfpSectionScrollOffset,
   closeCfpNowConfiguration,
   closeCfpNowInstant,
@@ -154,6 +155,11 @@ describe("CFP editor", () => {
       "Enter valid open and close dates.",
     );
     expect(isCfpCloseDatePast("2026-08-01", new Date("2026-08-10T00:00:00.000Z"))).toBe(true);
+  });
+  it("computes the CFP minimum date in the configured timezone", () => {
+    const now = new Date("2026-08-16T06:30:00.000Z");
+    expect(cfpMinimumDate(now, "America/Los_Angeles")).toBe("2026-08-15");
+    expect(cfpMinimumDate(now, "Asia/Singapore")).toBe("2026-08-16");
   });
   it("computes a server close-now instant without violating the open boundary", () => {
     const now = new Date("2026-08-10T13:46:51.000Z");

@@ -1,5 +1,12 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { eventDatesBetween, toggleEventDate } from "./event-date-picker";
+import { EventDatePicker } from "./event-date-picker";
+import {
+  eventDatesBetween,
+  isEventDateDisabled,
+  toggleEventDate,
+} from "./event-date-picker-model";
 
 describe("event date selection", () => {
   it("expands a continuous range and supports non-consecutive individual days", () => {
@@ -21,5 +28,41 @@ describe("event date selection", () => {
       "2026-09-19",
       "2026-09-20",
     ]);
+  });
+  it("renders a range-only date-only calendar without event-only controls", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EventDatePicker, {
+        mode: "range",
+        startsAt: "2026-08-20",
+        endsAt: "2026-08-24",
+        scheduleDates: [],
+        minimumDateTime: "2026-08-16T00:00",
+        minimumEndDate: "2026-08-20",
+        dateOnly: true,
+        showModeToggle: false,
+        showTimeControls: false,
+        eyebrow: "CFP schedule",
+        title: "When is the CFP open?",
+        description: "Choose when applicants can submit proposals.",
+        startLabel: "Open",
+        endLabel: "Close",
+        onChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("CFP schedule");
+    expect(markup).toContain(">Open<");
+    expect(markup).toContain(">Close<");
+    expect(markup).toContain('data-details-hidden="true"');
+    expect(markup).not.toContain("Individual days");
+    expect(markup).not.toContain('type="time"');
+  });
+
+  it("disables dates before the minimum and the selected open date while choosing close", () => {
+    expect(isEventDateDisabled("2026-08-15", "2026-08-16")).toBe(true);
+    expect(isEventDateDisabled("2026-08-16", "2026-08-16")).toBe(false);
+    expect(isEventDateDisabled("2026-08-20", "2026-08-16", "2026-08-20", "end")).toBe(true);
+    expect(isEventDateDisabled("2026-08-21", "2026-08-16", "2026-08-20", "end")).toBe(false);
+    expect(isEventDateDisabled("2026-08-20", "2026-08-16", "2026-08-20", "start")).toBe(false);
   });
 });
