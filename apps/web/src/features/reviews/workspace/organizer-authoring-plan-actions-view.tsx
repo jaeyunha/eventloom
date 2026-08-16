@@ -1,4 +1,5 @@
 "use client";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
@@ -53,14 +54,17 @@ export function OrganizerPlanActionsView({
         </dl>
         {status === "open" ? (
           <div className={styles.authoringDeadlineEditor}>
-            <label htmlFor="evaluation-plan-closes-at">Overall review deadline</label>
-            <input
+            <TemporalPicker
               id="evaluation-plan-closes-at"
-              type="datetime-local"
+              mode="single"
+              precision="date-time"
               value={dateTimeLocalValue(planClosesAt)}
-              onChange={(event) =>
-                setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")
-              }
+              label="Overall review deadline"
+              eyebrow="Plan schedule"
+              description="Update the deadline without exposing browser-native date controls."
+              clearable
+              disabled={busy}
+              onChange={(value) => setPlanClosesAt(isoDateTimeValue(value) ?? "")}
             />
             <Button type="button" onClick={() => void saveSchedule()} disabled={busy}>
               {busy ? "Saving…" : "Update review deadline"}

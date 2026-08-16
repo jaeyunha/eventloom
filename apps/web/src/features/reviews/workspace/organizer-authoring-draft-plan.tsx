@@ -1,4 +1,5 @@
 "use client";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
 import { dateTimeLocalValue } from "./model-date-time-local-value";
@@ -42,15 +43,17 @@ export function OrganizerDraftPlan({
               onChange={(event) => setName(event.currentTarget.value)}
             />
           </div>
-          <div className={styles.formField}>
-            <label htmlFor="evaluation-plan-closes-at">Overall review deadline</label>
-            <input
+          <div className={styles.authoringDatePicker}>
+            <TemporalPicker
               id="evaluation-plan-closes-at"
-              type="datetime-local"
+              mode="single"
+              precision="date-time"
               value={dateTimeLocalValue(planClosesAt)}
-              onChange={(event) =>
-                setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")
-              }
+              label="Overall review deadline"
+              eyebrow="Plan schedule"
+              description="Choose the final deadline reviewers should work toward."
+              clearable
+              onChange={(value) => setPlanClosesAt(isoDateTimeValue(value) ?? "")}
             />
           </div>
           <div className={styles.formField}>

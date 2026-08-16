@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { SettingGroup, SettingRow } from "@/components/workspace/settings-ui";
 import { createIntegrationAdminApi, IntegrationAdminApiError } from "./api";
 import styles from "./organization-integrations-workspace.module.css";
@@ -36,6 +37,7 @@ export function OrganizationApiKeys({ organizationId }: OrganizationApiKeysProps
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expiration, setExpiration] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -69,7 +71,6 @@ export function OrganizationApiKeys({ organizationId }: OrganizationApiKeysProps
     if (busy || selectedScopes.size === 0) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const expiration = String(data.get("expiresAt") ?? "").trim();
 
     setBusy(true);
     setError(null);
@@ -84,6 +85,7 @@ export function OrganizationApiKeys({ organizationId }: OrganizationApiKeysProps
       setCreated(result);
       setKeys(await api.listApiKeys(organizationId));
       setSelectedScopes(new Set());
+      setExpiration("");
       form.reset();
     } catch (reason) {
       setError(errorMessage(reason));
@@ -136,8 +138,18 @@ export function OrganizationApiKeys({ organizationId }: OrganizationApiKeysProps
         <form className={styles.keyForm} onSubmit={(event) => void createKey(event)}>
           <Label htmlFor="organization-api-key-label">Label</Label>
           <Input id="organization-api-key-label" name="label" required />
-          <Label htmlFor="organization-api-key-expires">Expiration</Label>
-          <Input id="organization-api-key-expires" name="expiresAt" type="datetime-local" />
+          <TemporalPicker
+            id="organization-api-key-expires"
+            mode="single"
+            precision="date-time"
+            value={expiration}
+            label="Expiration"
+            name="expiresAt"
+            eyebrow="Access lifetime"
+            description="Choose when this key should stop working, or leave it unset."
+            clearable
+            onChange={setExpiration}
+          />
           <fieldset className={styles.scopeGrid}>
             <legend>Scopes</legend>
             {apiScopes.map((scope) => (

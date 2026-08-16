@@ -20,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createScopedReadFlightCoordinator,
@@ -1055,10 +1056,6 @@ export function OrganizerEventEditor({
   const [formError, setFormError] = useState<string | null>(null);
   const eventSlugPreview = normalizeOrganizerEventSlug(values.slug || values.name);
   const minimumDateTime = event ? undefined : organizerEventMinimumDateTimeLocal(values.timeZone);
-  const cfpCloseMinimum =
-    minimumDateTime === undefined || values.cfpOpensAt > minimumDateTime
-      ? values.cfpOpensAt || minimumDateTime
-      : minimumDateTime;
 
   useEffect(() => {
     setValues(organizerEventEditorFormValues(event));
@@ -1242,29 +1239,26 @@ export function OrganizerEventEditor({
             </span>
           </div>
           {values.cfpEnabled ? (
-            <div className={styles.eventTwoColumn}>
-              <label className={styles.eventField} htmlFor="organizer-event-cfp-opens-at">
-                <span className={styles.eventFieldLabel}>CFP opens</span>
-                <Input
-                  id="organizer-event-cfp-opens-at"
-                  name="cfpSettings.opensAt"
-                  type="datetime-local"
-                  value={values.cfpOpensAt}
-                  min={minimumDateTime}
-                  onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
-                />
-              </label>
-              <label className={styles.eventField} htmlFor="organizer-event-cfp-closes-at">
-                <span className={styles.eventFieldLabel}>CFP closes</span>
-                <Input
-                  id="organizer-event-cfp-closes-at"
-                  name="cfpSettings.closesAt"
-                  type="datetime-local"
-                  value={values.cfpClosesAt}
-                  min={cfpCloseMinimum}
-                  onChange={(formEvent) => updateValue("cfpClosesAt", formEvent.target.value)}
-                />
-              </label>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <TemporalPicker
+                id="organizer-event-cfp-window"
+                mode="range"
+                precision="date-time"
+                startValue={values.cfpOpensAt}
+                endValue={values.cfpClosesAt}
+                startLabel="CFP opens"
+                endLabel="CFP closes"
+                startName="cfpSettings.opensAt"
+                endName="cfpSettings.closesAt"
+                minimumDateTime={minimumDateTime}
+                eyebrow="CFP schedule"
+                description="Set the proposal window directly on the calendar."
+                clearable
+                onChange={({ start, end }) => {
+                  updateValue("cfpOpensAt", start);
+                  updateValue("cfpClosesAt", end);
+                }}
+              />
             </div>
           ) : null}
         </fieldset>

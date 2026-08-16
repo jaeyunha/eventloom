@@ -1,6 +1,7 @@
 import { Checkbox } from "../../components/ui/checkbox";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../components/ui/field";
 import { Input } from "../../components/ui/input";
+import { TemporalPicker } from "../../components/ui/temporal-picker";
 import { Textarea } from "../../components/ui/textarea";
 import styles from "./speaker-workspace.module.css";
 import type { CreateDraft, EditDraft } from "./speaker-workspace-types";
@@ -122,24 +123,23 @@ export function ProfileFields({
           </FieldLabel>
         </Field>
         <div className={styles.fieldGrid}>
-          <Field>
-            <FieldLabel htmlFor="speaker-arrival">Arrival date</FieldLabel>
-            <Input
-              id="speaker-arrival"
-              type="date"
-              value={draft.arrivalAt}
-              onChange={(event) => onChange("arrivalAt", event.target.value)}
+          <Field style={{ gridColumn: "1 / -1" }}>
+            <TemporalPicker
+              id="speaker-travel-window"
+              mode="range"
+              precision="date"
+              startValue={draft.arrivalAt}
+              endValue={draft.departureAt}
+              startLabel="Arrival date"
+              endLabel="Departure date"
+              eyebrow="Travel window"
+              description="Choose the speaker's arrival and departure dates."
+              clearable
               disabled={disabled}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="speaker-departure">Departure date</FieldLabel>
-            <Input
-              id="speaker-departure"
-              type="date"
-              value={draft.departureAt}
-              onChange={(event) => onChange("departureAt", event.target.value)}
-              disabled={disabled}
+              onChange={({ start, end }) => {
+                onChange("arrivalAt", start);
+                onChange("departureAt", end);
+              }}
             />
           </Field>
           <Field>

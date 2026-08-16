@@ -23,6 +23,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import {
   StatusBadge,
   WorkspaceBreadcrumb,
@@ -393,22 +394,22 @@ function EntryForm({
         </div>
       ) : null}
       <div className={styles.timeFields}>
-        <label>
-          <span>Starts</span>
-          <input
-            type="datetime-local"
-            value={startsAtLocal}
-            onChange={(event) => setStartsAtLocal(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Ends</span>
-          <input
-            type="datetime-local"
-            value={endsAtLocal}
-            onChange={(event) => setEndsAtLocal(event.target.value)}
-          />
-        </label>
+        <TemporalPicker
+          id={`agenda-entry-${entry?.id ?? "new"}-schedule`}
+          mode="range"
+          precision="date-time"
+          startValue={startsAtLocal}
+          endValue={endsAtLocal}
+          startLabel="Starts"
+          endLabel="Ends"
+          eyebrow="Session schedule"
+          description="Choose the session window on the calendar, then confirm the local times."
+          clearable
+          onChange={({ start, end }) => {
+            setStartsAtLocal(start);
+            setEndsAtLocal(end);
+          }}
+        />
       </div>
       {formError ? (
         <p className={styles.formError} role="alert">

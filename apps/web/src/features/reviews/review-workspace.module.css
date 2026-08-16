@@ -1180,6 +1180,12 @@
   }
 }
 
+@media (max-width: 34rem) {
+  #review-panel-setup [data-temporal-picker] {
+    margin-inline: -0.75rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .skipLink {
     transition: none;
@@ -3756,6 +3762,15 @@
 #review-panel-setup .authoringScheduleGrid {
   gap: var(--space-3);
   margin-top: var(--space-4);
+}
+
+#review-panel-setup .authoringDatePicker {
+  grid-column: 1 / -1;
+  min-inline-size: 0;
+}
+
+#review-panel-setup .authoringDeadlineEditor [data-temporal-picker] {
+  min-inline-size: 0;
 }
 
 #review-panel-setup .authoringRoundCard {

@@ -1,4 +1,5 @@
 "use client";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
 import type { ApiPlan } from "./api-api-plan";
@@ -59,38 +60,26 @@ export function OrganizerRoundEditor({
           }}
         />
       </div>
-      <div className={styles.authoringScheduleGrid}>
-        <div className={styles.formField}>
-          <label htmlFor={`${round.id}-opens-at`}>Round opens</label>
-          <input
-            id={`${round.id}-opens-at`}
-            type="datetime-local"
-            value={dateTimeLocalValue(round.opensAt)}
-            onChange={(event) => {
-              const nextOpensAt = isoDateTimeValue(event.currentTarget.value);
-              updateRound(roundIndex, (current) => ({
-                ...current,
-                opensAt: nextOpensAt,
-              }));
-            }}
-          />
-        </div>
-        <div className={styles.formField}>
-          <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
-          <input
-            id={`${round.id}-closes-at`}
-            type="datetime-local"
-            value={dateTimeLocalValue(round.closesAt)}
-            onChange={(event) => {
-              const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
-              updateRound(roundIndex, (current) => ({
-                ...current,
-                closesAt: nextClosesAt,
-              }));
-            }}
-          />
-        </div>
-      </div>
+      <TemporalPicker
+        id={`${round.id}-schedule`}
+        mode="range"
+        precision="date-time"
+        startValue={dateTimeLocalValue(round.opensAt)}
+        endValue={dateTimeLocalValue(round.closesAt)}
+        startLabel="Round opens"
+        endLabel="Round closes"
+        eyebrow={`Round ${roundIndex + 1} schedule`}
+        description="Choose the review window directly on the calendar."
+        clearable
+        disabled={busy || status !== "draft"}
+        onChange={({ start, end }) => {
+          updateRound(roundIndex, (current) => ({
+            ...current,
+            opensAt: isoDateTimeValue(start),
+            closesAt: isoDateTimeValue(end),
+          }));
+        }}
+      />
       <div className={styles.formField}>
         <label htmlFor={`${round.id}-anonymization`}>Anonymization / blind review</label>
         <select

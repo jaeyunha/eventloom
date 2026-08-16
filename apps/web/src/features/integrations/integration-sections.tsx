@@ -21,6 +21,7 @@ import {
   FieldDescription,
   FieldLabel,
   Input,
+  TemporalPicker,
 } from "../../components/ui";
 import styles from "./integrations.module.css";
 import type {
@@ -201,6 +202,7 @@ export function ApiKeysSection({
   actions,
 }: Readonly<{ keys: readonly ApiKeySummary[]; actions: IntegrationActions }>) {
   const [selectedScopes, setSelectedScopes] = useState<ReadonlySet<ApiScope>>(new Set());
+  const [expiresAt, setExpiresAt] = useState("");
 
   function toggleScope(scope: ApiScope) {
     setSelectedScopes((current) => {
@@ -221,11 +223,12 @@ export function ApiKeysSection({
     const created = await actions.createApiKey({
       label: String(data.get("label") ?? ""),
       scopes: [...selectedScopes],
-      expiresAt: String(data.get("expiresAt") ?? "").trim() || null,
+      expiresAt: expiresAt.trim() || null,
     });
     if (created) {
       form.reset();
       setSelectedScopes(new Set());
+      setExpiresAt("");
     }
   }
 
@@ -252,9 +255,19 @@ export function ApiKeysSection({
                   required
                 />
               </Field>
-              <Field>
-                <FieldLabel htmlFor="api-key-expiry">Expires</FieldLabel>
-                <Input id="api-key-expiry" name="expiresAt" type="date" />
+              <Field style={{ gridColumn: "1 / -1" }}>
+                <TemporalPicker
+                  id="api-key-expiry"
+                  mode="single"
+                  precision="date"
+                  value={expiresAt}
+                  label="Expires"
+                  name="expiresAt"
+                  eyebrow="Access lifetime"
+                  description="Choose an expiration date, or leave it unset for a long-running integration."
+                  clearable
+                  onChange={setExpiresAt}
+                />
                 <FieldDescription>
                   Leave blank only for long-running server integrations.
                 </FieldDescription>

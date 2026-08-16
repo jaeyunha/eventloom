@@ -54,6 +54,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TemporalPicker } from "@/components/ui/temporal-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
@@ -913,14 +914,16 @@ function TaskComposer({
                     required
                   />
                 </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-due-date">Due date</Label>
-                  <Input
+                <div className={fieldClass} style={{ gridColumn: "1 / -1" }}>
+                  <TemporalPicker
                     id="task-due-date"
-                    type="date"
+                    mode="single"
+                    precision="date"
                     value={dueAt}
-                    onChange={(event) => setDueAt(event.currentTarget.value)}
-                    required
+                    label="Due date"
+                    eyebrow="Request deadline"
+                    description="Choose the exact day this content is due."
+                    onChange={setDueAt}
                   />
                 </div>
               </div>
