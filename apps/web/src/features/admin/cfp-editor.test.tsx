@@ -10,6 +10,7 @@ import {
   closeCfpNowConfiguration,
   closeCfpNowInstant,
   configurationFromServer,
+  createEmptyCfpConfiguration,
   isCfpCloseDatePast,
   loadCfpEditorConfiguration,
   persistCfpConfiguration,
@@ -22,6 +23,10 @@ import {
 import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 
 describe("CFP editor", () => {
+  it("defaults new CFPs to twenty proposals per account", () => {
+    expect(createEmptyCfpConfiguration("summit-2026").proposalLimit).toBe(20);
+  });
+
   it("blocks forward editor navigation until the current step is valid", () => {
     expect(
       resolveCfpEditorStepIndex({

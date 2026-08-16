@@ -181,7 +181,7 @@ function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
   ];
 }
 
-function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
+export function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
   return {
     eventName: "",
     slug: "",
@@ -189,7 +189,7 @@ function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
     opensAt: "",
     closesAt: "",
     participantLimit: 1,
-    proposalLimit: 3,
+    proposalLimit: 20,
     reminderEmails: false,
     adminNotifications: false,
     welcomeTitle: "",
