@@ -5,7 +5,7 @@
 .progressLabel {
   margin: 0 0 0.65rem;
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -101,7 +101,7 @@
 
 .mobileHeader span {
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
 }
 
 .mobileHeader strong {

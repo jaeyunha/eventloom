@@ -49,36 +49,4 @@ describe("ReviewerShell", () => {
     expect(css).toContain("var(--sidebar-border)");
     expect(css).toContain("var(--muted-foreground)");
   });
-
-  it("keeps reviewer queue rows as full-width stacked semantic surfaces", () => {
-    const css = readFileSync(
-      fileURLToPath(new URL("./review-workspace.module.css", import.meta.url)),
-      "utf8",
-    );
-
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.submissionList\s*\{[^}]*display:\s*grid;[^}]*gap:\s*0\.5rem;/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.submissionRow\s*\{[^}]*display:\s*grid;[^}]*width:\s*100%;[^}]*background:\s*var\(--card\);/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.submissionMeta\s*\{[^}]*grid-column:\s*1 \/ -1;[^}]*min-width:\s*0;/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.filterGrid\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.reviewerFilterBar\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.reviewerWorkbench\s*\{[^}]*grid-template-columns:\s*minmax\(24rem, 0\.8fr\) minmax\(0, 1\.4fr\);/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.reviewerQueueRow\s*\{[^}]*grid-template-columns:\s*minmax\(12rem, 1fr\) auto;/su,
-    );
-    expect(css).toMatch(
-      /\.evaluatorQueueMode \.reviewerQueueSummary\s*\{[^}]*width:\s*100%;[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/su,
-    );
-  });
 });

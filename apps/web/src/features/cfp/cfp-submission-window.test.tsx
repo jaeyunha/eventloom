@@ -20,6 +20,8 @@ describe("CFP submission window", () => {
     expect(markup).toContain("<dt>Closes</dt>");
     expect(markup).toContain("Up to 3 proposals per account");
     expect(markup).toContain('dateTime="2026-08-18T00:00:00.000Z"');
+    expect(markup).toContain('data-cfp-submission-window="true"');
+    expect(markup.match(/data-cfp-window-value="true"/gu)).toHaveLength(2);
   });
 
   it("uses explicit closed language without relying only on color", () => {

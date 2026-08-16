@@ -8046,6 +8046,7 @@ export function createD1ApplicationDependencies(
     invitationCreator: options.eventRoleInvitationAdapters.speakerCreator,
   });
   const evaluationService = new EvaluationService(evaluationRepository, evaluationSource, {
+    eventSource: eventRepository,
     acceptanceHandoff,
     decisionProjection: new AirtableEvaluationDecisionProjection(
       cfpRepository,

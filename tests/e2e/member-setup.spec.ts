@@ -98,6 +98,28 @@ test("an invited evaluator sets a password, reaches the work hub, and opens the 
       }),
     });
   });
+  await page.route("**/api/account/reviewer-workspace", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: corsHeaders,
+      body: JSON.stringify({
+        data: {
+          organizations: [
+            {
+              organization: { id: ORGANIZATION_ID, name: "AI Engineer" },
+              assignments: [
+                {
+                  assignment: { status: "assigned" },
+                  plan: { eventName: "Evaluation Event" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+  });
   await page.route("**/api/admin/evaluations/reviewer/workspace", async (route) => {
     await route.fulfill({
       status: 200,

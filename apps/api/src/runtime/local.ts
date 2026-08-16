@@ -2882,6 +2882,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   };
   const evaluationService = new EvaluationService(evaluationRepository, evaluationSubmissions, {
     clock: () => new Date(SEEDED_AT),
+    eventSource: eventRepository,
     acceptanceHandoff: localAcceptanceHandoff,
     ...(aiProviders?.evaluations === undefined
       ? {}

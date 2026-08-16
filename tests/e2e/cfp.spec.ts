@@ -428,8 +428,16 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   await page.goto("/cfp/organizations/evaluator-org/events/mobile-progress");
 
   const progressNavigations = page.getByRole("navigation", { name: "Submission progress" });
+  const submissionWindow = page.locator('[data-cfp-submission-window="true"]');
   await expect(progressNavigations).toHaveCount(1);
   await expect(progressNavigations).toBeVisible();
+  await expect(submissionWindow).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]'),
+  ).toHaveCount(1);
   await expect(progressNavigations.getByText("Get started", { exact: true })).toBeVisible();
   await expect(progressNavigations.getByText("Review", { exact: true })).toBeVisible();
   await expect(progressNavigations.locator('[aria-current="step"]')).toHaveCount(1);
@@ -463,6 +471,9 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   const currentCompactStep = compactProgress.locator('[aria-current="step"]');
   await expect(currentCompactStep).toHaveCount(1);
   await expect(currentCompactStep).toContainText("Get started");
+  for (const value of await submissionWindow.locator("time").all()) {
+    await expect(value).toHaveCSS("white-space", "nowrap");
+  }
 
   const fitsViewport = await page.evaluate(
     () =>
@@ -1236,7 +1247,12 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await expect(completedProgress).toBeVisible();
   await expect(completedProgress.getByText("Submission complete", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Open for submissions", { exact: true }).filter({ visible: true }),
+    page.locator('[data-cfp-main-flow] [data-cfp-submission-window="true"]').filter({
+      visible: true,
+    }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-cfp-context-rail] [data-cfp-submission-window="true"]'),
   ).toHaveCount(0);
   expect(
     await page.evaluate(

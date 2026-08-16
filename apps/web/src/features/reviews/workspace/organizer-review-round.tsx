@@ -9,7 +9,9 @@ export interface ReviewRound {
   readonly roundRevision?: number | undefined;
   readonly rubricRevision?: number | undefined;
   opensAt: string;
+  opensAtIso?: string | undefined;
   closesAt: string;
+  closesAtIso?: string | undefined;
   completionPercent: number;
   blindReview?: boolean | undefined;
   anonymization?: "none" | "single" | "double" | undefined;

@@ -1,10 +1,11 @@
 "use client";
 
+import { Fragment } from "react";
 import { Button } from "../../../components/ui/button";
-import styles from "../review-workspace.module.css";
 import { EvaluatorAssignmentStatusBadge } from "./assignment-evaluator-assignment-status-badge";
 import type { ReviewerQueueController } from "./evaluator-queue-controller";
 import { reviewerSelectionBlocked } from "./evaluator-queue-reviewer-selection-blocked";
+import styles from "./reviewer-queue.module.css";
 
 export function ReviewerQueueRows({
   controller,
@@ -13,7 +14,6 @@ export function ReviewerQueueRows({
     selectedId,
     pendingAutosaveAssignmentId,
     submittedAtById,
-    groupBy,
     queueActionRefs,
     restoreQueueFocusIdRef,
     inboxItems,
@@ -24,7 +24,7 @@ export function ReviewerQueueRows({
   } = controller;
   if (inboxItems.length === 0)
     return (
-      <div className={styles.emptyQueue} role="status">
+      <div className={styles.empty} role="status">
         <h3>No assigned reviews yet</h3>
         <p>
           This queue is assignment-driven. An organizer must assign a submission before it appears
@@ -34,7 +34,7 @@ export function ReviewerQueueRows({
     );
   if (filteredItems.length === 0)
     return (
-      <div className={styles.filteredQueueEmpty} role="status">
+      <div className={styles.filteredEmpty} role="status">
         <h3>No reviews match these filters</h3>
         <Button size="sm" type="button" variant="outline" onClick={clearFilters}>
           Clear filters
@@ -42,7 +42,7 @@ export function ReviewerQueueRows({
       </div>
     );
   return (
-    <div className={styles.reviewerQueueList}>
+    <ul className={styles.list}>
       {visibleEntries.map(({ assignment, groupCount, groupLabel, groupStart }) => {
         const isSelected = assignment.id === selectedId;
         const isSubmitted =
@@ -58,43 +58,41 @@ export function ReviewerQueueRows({
             ? "Resume review"
             : "Start review";
         return (
-          <article
-            className={`${styles.reviewerQueueCard} ${isSelected ? styles.reviewerQueueCardSelected : ""}`}
-            key={assignment.id}
-          >
+          <Fragment key={assignment.id}>
             {groupStart ? (
-              <div className={styles.reviewerGroupHeader}>
+              <li className={styles.groupHeader}>
                 <strong>{groupLabel}</strong>
                 <span>{groupCount}</span>
-              </div>
+              </li>
             ) : null}
-            <div className={styles.reviewerQueueRow}>
-              <div className={styles.reviewerQueueContent}>
-                <div className={styles.reviewerQueueSummary}>
-                  <div>
-                    <p className={styles.sectionEyebrow}>
-                      {groupBy === "event"
-                        ? assignment.planName
-                        : `${assignment.eventName} · ${assignment.planName}`}
-                    </p>
-                    <h3>{assignment.title}</h3>
-                  </div>
-                  <span className={styles.mutedLabel}>{assignment.reference}</span>
+            <li className={`${styles.card} ${isSelected ? styles.cardSelected : ""}`}>
+              <div className={styles.row} data-reviewer-row-layout="summary">
+                <h3 className={styles.title} data-reviewer-column="title" title={assignment.title}>
+                  {assignment.title}
+                </h3>
+                <div className={styles.meta}>
+                  <span className={styles.context} data-reviewer-column="context">
+                    {assignment.eventName} · {assignment.round.name}
+                    {assignment.track === undefined || assignment.track === null
+                      ? null
+                      : ` · ${assignment.track}`}
+                  </span>
+                  <span className={styles.due} data-reviewer-column="due">
+                    <span className={styles.mobileDueLabel}>Due </span>
+                    {assignment.round.closesAt}
+                  </span>
                 </div>
-                <div className={styles.reviewerQueueMeta}>
-                  <span>{assignment.round.name}</span>
-                  <span>Due {assignment.round.closesAt}</span>
+                <div className={styles.status} data-reviewer-column="status">
+                  <EvaluatorAssignmentStatusBadge
+                    status={isSubmitted ? "submitted" : assignment.assignmentStatus}
+                  />
                 </div>
-              </div>
-              <div className={styles.reviewerQueueFooter}>
-                <EvaluatorAssignmentStatusBadge
-                  status={isSubmitted ? "submitted" : assignment.assignmentStatus}
-                />
                 <button
                   ref={(element) => {
                     queueActionRefs.current[assignment.id] = element;
                   }}
-                  className={styles.reviewerQueueAction}
+                  className={styles.action}
+                  data-reviewer-assignment-id={assignment.id}
                   data-action-kind={isSubmitted ? "secondary" : "primary"}
                   type="button"
                   onClick={() => {
@@ -103,15 +101,16 @@ export function ReviewerQueueRows({
                   }}
                   aria-label={`Open scorecard for ${assignment.title}`}
                   aria-pressed={isSelected}
+                  data-reviewer-column="action"
                   disabled={blocked}
                 >
                   {isSelected ? "Review open" : actionLabel}
                 </button>
               </div>
-            </div>
-          </article>
+            </li>
+          </Fragment>
         );
       })}
-    </div>
+    </ul>
   );
 }
