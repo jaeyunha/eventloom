@@ -2125,13 +2125,13 @@ function WelcomeStep({
       <section aria-labelledby="resources-title" className={styles.welcomeResources}>
         <h2 id="resources-title">Resources</h2>
         <ul>
-          <li>
+          <li id="speaker-agreement">
             <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
           </li>
-          <li>
+          <li id="application-faq">
             <a href="#application-faq">FAQs for the Speaker Application Process</a>
           </li>
-          <li>
+          <li id="speaker-resources">
             <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
           </li>
         </ul>
@@ -2411,8 +2411,8 @@ function AccountStep({
                 type="checkbox"
               />
               <span>
-                I agree to the <a href="#terms">Terms of Service</a> and{" "}
-                <a href="#privacy">Privacy Policy</a>.{" "}
+                I agree to the <Link href="/terms">Terms of Service</Link> and{" "}
+                <Link href="/privacy">Privacy Policy</Link>.{" "}
                 <span aria-hidden="true" className={styles.required}>
                   *
                 </span>
