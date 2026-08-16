@@ -173,6 +173,7 @@ export interface PublicAgendaViewProps {
   readonly displayFields?: readonly EmbedDisplayField[] | null;
 }
 const EMPTY_TRACK_LIST: readonly string[] = [];
+const EMPTY_SPEAKER_LIST: readonly PublishedSpeaker[] = [];
 
 const DEFAULT_AGENDA_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "title",
@@ -200,7 +201,7 @@ export function PublicAgendaView({
   const { agenda } = program;
   const speakers = publishedProjectionsMatch(program.agenda, program.speakers)
     ? program.speakers.speakers
-    : [];
+    : EMPTY_SPEAKER_LIST;
   const displayFieldList = displayFields ?? DEFAULT_AGENDA_DISPLAY_FIELDS;
   const showField = (field: EmbedDisplayField): boolean =>
     agendaIncludeField(displayFieldList, field);

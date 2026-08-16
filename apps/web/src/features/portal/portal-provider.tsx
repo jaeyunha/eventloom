@@ -89,6 +89,7 @@ const emptyWorkspace: PortalWorkspaceState = {
   resources: [],
   wiki: [],
 };
+const EMPTY_PARTICIPANT_ID_LIST: readonly string[] = [];
 
 interface PortalContextValue {
   eventId: string;
@@ -220,7 +221,8 @@ export function PortalProvider({
   const eventId = context?.eventId ?? "";
   const eventQuery = eventId ? `?event=${encodeURIComponent(eventId)}` : "";
   const authorizedParticipantIds =
-    contexts.find((candidate) => candidate.id === context?.id)?.participantIds ?? [];
+    contexts.find((candidate) => candidate.id === context?.id)?.participantIds ??
+    EMPTY_PARTICIPANT_ID_LIST;
   const can = useCallback(
     (capability: PortalCapability) => capabilities.includes(capability),
     [capabilities],
