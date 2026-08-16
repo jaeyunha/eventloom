@@ -2,7 +2,15 @@
 
 import { CalendarDays, CheckCircle2, Clock3, Save } from "lucide-react";
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -88,13 +96,6 @@ import type {
   AgendaValidationReport,
   AgendaWorkspaceData,
 } from "./types";
-
-const AGENDA_COMPACT_SCHEDULE_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  timeZone: "UTC",
-});
 
 function messageFrom(error: unknown): string {
   if (error instanceof Error) {
@@ -187,6 +188,45 @@ interface EntryFormProps {
   }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
   onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
 }
+type EntryFormState = {
+  sessionId: string;
+  roomId: string;
+  trackIds: readonly string[];
+  startsAtLocal: string;
+  endsAtLocal: string;
+};
+
+type EntryFormAction =
+  | { type: "session-changed"; sessionId: string }
+  | { type: "room-changed"; roomId: string }
+  | { type: "track-toggled"; trackId: string }
+  | { type: "track-added"; trackId: string }
+  | { type: "starts-at-changed"; startsAtLocal: string }
+  | { type: "ends-at-changed"; endsAtLocal: string };
+
+function entryFormReducer(state: EntryFormState, action: EntryFormAction): EntryFormState {
+  switch (action.type) {
+    case "session-changed":
+      return { ...state, sessionId: action.sessionId };
+    case "room-changed":
+      return { ...state, roomId: action.roomId };
+    case "track-toggled":
+      return {
+        ...state,
+        trackIds: state.trackIds.includes(action.trackId)
+          ? state.trackIds.filter((trackId) => trackId !== action.trackId)
+          : [...state.trackIds, action.trackId],
+      };
+    case "track-added":
+      return state.trackIds.includes(action.trackId)
+        ? state
+        : { ...state, trackIds: [...state.trackIds, action.trackId] };
+    case "starts-at-changed":
+      return { ...state, startsAtLocal: action.startsAtLocal };
+    case "ends-at-changed":
+      return { ...state, endsAtLocal: action.endsAtLocal };
+  }
+}
 
 function EntryForm({
   entry,
@@ -203,20 +243,15 @@ function EntryForm({
   onCreateTrack,
 }: EntryFormProps) {
   const firstSession = entry?.sessionId ?? initialSessionId ?? sessions[0]?.id ?? "";
-  const [sessionId, setSessionId] = useState(firstSession);
-  const [roomId, setRoomId] = useState(
-    entry?.roomId ?? initialPlacement?.roomId ?? rooms[0]?.id ?? "",
-  );
-  const [trackIds, setTrackIds] = useState<readonly string[]>(
-    entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
-  );
+  const [formState, dispatchForm] = useReducer(entryFormReducer, {
+    sessionId: firstSession,
+    roomId: entry?.roomId ?? initialPlacement?.roomId ?? rooms[0]?.id ?? "",
+    trackIds: entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
+    startsAtLocal: entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
+    endsAtLocal: entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
+  });
+  const { sessionId, roomId, trackIds, startsAtLocal, endsAtLocal } = formState;
   const trackIdSet = useMemo(() => new Set(trackIds), [trackIds]);
-  const [startsAtLocal, setStartsAtLocal] = useState(
-    entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
-  );
-  const [endsAtLocal, setEndsAtLocal] = useState(
-    entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
-  );
   const [formError, setFormError] = useState<string | null>(null);
   const [roomCreatorOpen, setRoomCreatorOpen] = useState(false);
   const [trackCreatorOpen, setTrackCreatorOpen] = useState(false);
@@ -224,15 +259,13 @@ function EntryForm({
   const [roomCapacity, setRoomCapacity] = useState("");
   const [trackName, setTrackName] = useState("");
   useEffect(() => {
-    if (!entry && initialSessionId) setSessionId(initialSessionId);
+    if (!entry && initialSessionId) {
+      dispatchForm({ type: "session-changed", sessionId: initialSessionId });
+    }
   }, [entry, initialSessionId]);
 
   function toggleTrack(trackId: string) {
-    setTrackIds((current) =>
-      current.includes(trackId)
-        ? current.filter((candidate) => candidate !== trackId)
-        : [...current, trackId],
-    );
+    dispatchForm({ type: "track-toggled", trackId });
   }
 
   async function createRoom() {
@@ -245,7 +278,7 @@ function EntryForm({
     }
     const room = await onCreateRoom({ name, capacity });
     if (room) {
-      setRoomId(room.id);
+      dispatchForm({ type: "room-changed", roomId: room.id });
       setRoomName("");
       setRoomCapacity("");
       setRoomCreatorOpen(false);
@@ -262,7 +295,7 @@ function EntryForm({
     }
     const track = await onCreateTrack({ name });
     if (track) {
-      setTrackIds((current) => (current.includes(track.id) ? current : [...current, track.id]));
+      dispatchForm({ type: "track-added", trackId: track.id });
       setTrackName("");
       setTrackCreatorOpen(false);
       setFormError(null);
@@ -299,7 +332,12 @@ function EntryForm({
       ) : (
         <label>
           <span>Accepted session</span>
-          <select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>
+          <select
+            value={sessionId}
+            onChange={(event) =>
+              dispatchForm({ type: "session-changed", sessionId: event.target.value })
+            }
+          >
             {sessions.map((session) => (
               <option key={session.id} value={session.id}>
                 {session.title} · {session.format} ·{" "}
@@ -314,7 +352,10 @@ function EntryForm({
       )}
       <label>
         <span>Room</span>
-        <select value={roomId} onChange={(event) => setRoomId(event.target.value)}>
+        <select
+          value={roomId}
+          onChange={(event) => dispatchForm({ type: "room-changed", roomId: event.target.value })}
+        >
           {rooms.map((room) => (
             <option key={room.id} value={room.id}>
               {room.name} ({room.capacity} seats)
@@ -406,7 +447,9 @@ function EntryForm({
           <input
             type="datetime-local"
             value={startsAtLocal}
-            onChange={(event) => setStartsAtLocal(event.target.value)}
+            onChange={(event) =>
+              dispatchForm({ type: "starts-at-changed", startsAtLocal: event.target.value })
+            }
           />
         </label>
         <label>
@@ -414,7 +457,9 @@ function EntryForm({
           <input
             type="datetime-local"
             value={endsAtLocal}
-            onChange={(event) => setEndsAtLocal(event.target.value)}
+            onChange={(event) =>
+              dispatchForm({ type: "ends-at-changed", endsAtLocal: event.target.value })
+            }
           />
         </label>
       </div>
@@ -436,7 +481,6 @@ function EntryForm({
     </form>
   );
 }
-
 
 interface AgendaBoardProps {
   organizationId: string;
@@ -505,7 +549,12 @@ export function AgendaBoard({
     [data.draft.entries, endsOn, startsOn],
   );
   const [selectedDay, setSelectedDay] = useState(() => eventDays[0]?.date ?? "");
-  const [selectedSuggestionChanges, setSelectedSuggestionChanges] = useState<readonly string[]>([]);
+  const suggestionOwnerKey = suggestionRun?.id ?? null;
+  const [selectedSuggestionChangesByRun, setSelectedSuggestionChangesByRun] = useState<
+    Record<string, readonly string[]>
+  >({});
+  const selectedSuggestionChanges =
+    suggestionOwnerKey === null ? [] : (selectedSuggestionChangesByRun[suggestionOwnerKey] ?? []);
   const viewTabRefs = useRef<Partial<Record<AgendaViewMode, HTMLButtonElement | null>>>({});
   const currentRevision = data.currentPublishedRevision;
   const editingEntry =
@@ -526,16 +575,17 @@ export function AgendaBoard({
     preview === null ? null : preview.conflicts.length + preview.releaseConflicts.length;
 
   useEffect(() => {
-    const suggestionId = suggestionRun?.id;
-    if (suggestionId || suggestionRun === null || suggestionRun === undefined) {
-      setSelectedSuggestionChanges([]);
-    }
-  }, [suggestionRun]);
-  useEffect(() => {
     if (!eventDays.some((day) => day.date === selectedDay)) {
       setSelectedDay(eventDays[0]?.date ?? "");
     }
   }, [eventDays, selectedDay]);
+  function updateSuggestionSelection(changeIds: readonly string[]) {
+    if (suggestionOwnerKey === null) return;
+    setSelectedSuggestionChangesByRun((current) => ({
+      ...current,
+      [suggestionOwnerKey]: changeIds,
+    }));
+  }
   function selectView(nextView: AgendaViewMode) {
     setViewMode(nextView);
   }
@@ -914,13 +964,14 @@ export function AgendaBoard({
 
             {hasRooms ? (
               <AgendaSuggestionPanel
+                key={`${data.event.id}:${suggestionRun?.id ?? "none"}`}
                 run={suggestionRun ?? null}
                 currentDraftVersion={data.draft.version}
                 busy={busy}
                 busyOperation={busyOperation}
                 eligibleUnscheduledCount={data.unscheduledSessions.length}
                 selectedChangeIds={selectedSuggestionChanges}
-                onSelectionChange={setSelectedSuggestionChanges}
+                onSelectionChange={updateSuggestionSelection}
                 onGenerate={onGenerateSuggestion}
                 onRegenerate={onRegenerateSuggestion}
                 onReject={onRejectSuggestion}
@@ -1443,10 +1494,15 @@ export function AgendaSuggestionPanel({
     useState<ExistingSessionTimesSelection>("keep");
   const [ignoreExistingRooms, setIgnoreExistingRooms] = useState(false);
   const suggestionOptionsDisabled = busy || onGenerate === undefined;
-  const [suggestionsOpen, setSuggestionsOpen] = useState(run !== null);
-  useEffect(() => {
-    if (run !== null) setSuggestionsOpen(true);
-  }, [run]);
+  const suggestionOwnerKey = run?.id ?? "__no-suggestion-run__";
+  const [suggestionsOpenByRun, setSuggestionsOpenByRun] = useState<Record<string, boolean>>({});
+  const suggestionsOpen = suggestionsOpenByRun[suggestionOwnerKey] ?? run !== null;
+  function updateSuggestionsOpen(open: boolean) {
+    setSuggestionsOpenByRun((current) => ({
+      ...current,
+      [suggestionOwnerKey]: open,
+    }));
+  }
 
   function toggleChange(changeId: string) {
     onSelectionChange(
@@ -1458,7 +1514,7 @@ export function AgendaSuggestionPanel({
 
   return (
     <Card className={styles.suggestionCard} size="sm">
-      <Collapsible open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
+      <Collapsible open={suggestionsOpen} onOpenChange={updateSuggestionsOpen}>
         <div className={styles.inspectorHeading}>
           <div>
             <p className={styles.eyebrow}>Optional advisory</p>

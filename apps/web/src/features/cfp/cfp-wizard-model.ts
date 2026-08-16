@@ -7,15 +7,6 @@ import type {
 import { getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import type { CfpDraft, CfpStep } from "./types";
 
-type FormFieldOption =
-  | string
-  | {
-      value: string;
-      label?: string;
-      description?: string;
-      disabled?: boolean;
-    };
-
 export type DynamicAnswers = Record<string, unknown>;
 export type ParticipantAnswers = Record<string, DynamicAnswers>;
 
@@ -82,44 +73,6 @@ export function canSaveCfpDraftAtStep(step: CfpStep | "complete"): boolean {
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-function optionDetails(option: FormFieldOption): {
-  value: string;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-} {
-  if (typeof option === "string") return { value: option, label: option };
-  return {
-    value: option.value,
-    label: option.label ?? option.value,
-    ...(option.description === undefined ? {} : { description: option.description }),
-    ...(option.disabled === undefined ? {} : { disabled: option.disabled }),
-  };
-}
-
-export function fieldOptions(field: CfpFormField): Array<ReturnType<typeof optionDetails>> {
-  return field.options.flatMap((option) => {
-    if (typeof option === "string") return [optionDetails(option)];
-    if (!isRecord(option) || typeof option.value !== "string") return [];
-    return [
-      optionDetails({
-        value: option.value,
-        ...(typeof option.label === "string" ? { label: option.label } : {}),
-        ...(typeof option.description === "string" ? { description: option.description } : {}),
-        ...(typeof option.disabled === "boolean" ? { disabled: option.disabled } : {}),
-      }),
-    ];
-  });
-}
-
-export function fieldConfig(field: CfpFormField, key: string): unknown {
-  if (isRecord(field.fileRequest) && key in field.fileRequest) return field.fileRequest[key];
-  if (isRecord(field.config) && key in field.config) return field.config[key];
-  const rawField = field as unknown as Record<string, unknown>;
-  return key in rawField ? rawField[key] : undefined;
-}
-
 export function isFileField(field: CfpFormField): boolean {
   return ["file", "file_request", "upload"].includes(field.kind.toLowerCase().replaceAll("-", "_"));
 }

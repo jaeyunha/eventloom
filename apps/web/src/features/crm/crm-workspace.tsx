@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -469,6 +470,497 @@ function parseCsvPreview(csv: string): {
     issues,
   };
 }
+type CrmStateUpdate<T> = T | ((current: T) => T);
+
+function resolveCrmStateUpdate<T>(current: T, update: CrmStateUpdate<T>): T {
+  return typeof update === "function" ? (update as (current: T) => T)(current) : update;
+}
+
+type CrmMergeViewState = {
+  readonly mergeSelection: readonly string[];
+  readonly mergeReviewPlanKey: string | null;
+  readonly mergeReviewOpen: boolean;
+  readonly mergeConfirmed: boolean;
+  readonly mergeSubmitting: boolean;
+  readonly mergeCompleted: boolean;
+  readonly mergeCompletedContactId: string | null;
+  readonly mergeFieldWinners: Partial<Record<CrmMergeScalarField, string>>;
+  readonly mergeCustomFieldWinners: Record<string, string>;
+  readonly pipelineStage: CrmPipelineStage;
+  readonly pipelineNote: string;
+};
+
+type CrmMergeViewAction =
+  | {
+      readonly type: "merge-selection-changed";
+      readonly contactId: string;
+      readonly checked: boolean;
+    }
+  | {
+      readonly type: "set-merge-review-plan-key";
+      readonly value: CrmStateUpdate<string | null>;
+    }
+  | {
+      readonly type: "set-merge-review-open";
+      readonly value: CrmStateUpdate<boolean>;
+    }
+  | {
+      readonly type: "set-merge-confirmed";
+      readonly value: CrmStateUpdate<boolean>;
+    }
+  | {
+      readonly type: "set-merge-submitting";
+      readonly value: CrmStateUpdate<boolean>;
+    }
+  | {
+      readonly type: "set-merge-completed";
+      readonly value: CrmStateUpdate<boolean>;
+    }
+  | {
+      readonly type: "set-merge-completed-contact-id";
+      readonly value: CrmStateUpdate<string | null>;
+    }
+  | {
+      readonly type: "set-merge-field-winners";
+      readonly value: CrmStateUpdate<Partial<Record<CrmMergeScalarField, string>>>;
+    }
+  | {
+      readonly type: "set-merge-custom-field-winners";
+      readonly value: CrmStateUpdate<Record<string, string>>;
+    }
+  | { readonly type: "set-pipeline-stage"; readonly value: CrmStateUpdate<CrmPipelineStage> }
+  | { readonly type: "set-pipeline-note"; readonly value: CrmStateUpdate<string> }
+  | { readonly type: "contact-changed"; readonly pipelineStage: CrmPipelineStage | undefined }
+  | {
+      readonly type: "open-merge-review";
+      readonly fieldWinners: Partial<Record<CrmMergeScalarField, string>>;
+      readonly customFieldWinners: Record<string, string>;
+    }
+  | { readonly type: "close-merge-review" }
+  | { readonly type: "merge-completed"; readonly contactId: string };
+
+function crmMergeViewReducer(
+  state: CrmMergeViewState,
+  action: CrmMergeViewAction,
+): CrmMergeViewState {
+  switch (action.type) {
+    case "merge-selection-changed":
+      return {
+        ...state,
+        mergeSelection: action.checked
+          ? [...new Set([...state.mergeSelection, action.contactId])]
+          : state.mergeSelection.filter((id) => id !== action.contactId),
+        mergeReviewOpen: false,
+        mergeConfirmed: false,
+        mergeCompleted: false,
+        mergeReviewPlanKey: null,
+        mergeCompletedContactId: null,
+      };
+    case "set-merge-review-plan-key":
+      return {
+        ...state,
+        mergeReviewPlanKey: resolveCrmStateUpdate(state.mergeReviewPlanKey, action.value),
+      };
+    case "set-merge-review-open":
+      return {
+        ...state,
+        mergeReviewOpen: resolveCrmStateUpdate(state.mergeReviewOpen, action.value),
+      };
+    case "set-merge-confirmed":
+      return {
+        ...state,
+        mergeConfirmed: resolveCrmStateUpdate(state.mergeConfirmed, action.value),
+      };
+    case "set-merge-submitting":
+      return {
+        ...state,
+        mergeSubmitting: resolveCrmStateUpdate(state.mergeSubmitting, action.value),
+      };
+    case "set-merge-completed":
+      return {
+        ...state,
+        mergeCompleted: resolveCrmStateUpdate(state.mergeCompleted, action.value),
+      };
+    case "set-merge-completed-contact-id":
+      return {
+        ...state,
+        mergeCompletedContactId: resolveCrmStateUpdate(state.mergeCompletedContactId, action.value),
+      };
+    case "set-merge-field-winners":
+      return {
+        ...state,
+        mergeFieldWinners: resolveCrmStateUpdate(state.mergeFieldWinners, action.value),
+      };
+    case "set-merge-custom-field-winners":
+      return {
+        ...state,
+        mergeCustomFieldWinners: resolveCrmStateUpdate(state.mergeCustomFieldWinners, action.value),
+      };
+    case "set-pipeline-stage":
+      return { ...state, pipelineStage: resolveCrmStateUpdate(state.pipelineStage, action.value) };
+    case "set-pipeline-note":
+      return { ...state, pipelineNote: resolveCrmStateUpdate(state.pipelineNote, action.value) };
+    case "contact-changed":
+      return {
+        ...state,
+        pipelineStage: action.pipelineStage ?? state.pipelineStage,
+        mergeSelection: [],
+        mergeReviewPlanKey: null,
+        mergeReviewOpen: false,
+        mergeConfirmed: false,
+        mergeFieldWinners: {},
+        mergeCustomFieldWinners: {},
+      };
+    case "open-merge-review":
+      return {
+        ...state,
+        mergeFieldWinners: action.fieldWinners,
+        mergeCustomFieldWinners: action.customFieldWinners,
+        mergeConfirmed: false,
+        mergeCompleted: false,
+        mergeCompletedContactId: null,
+        mergeReviewOpen: true,
+      };
+    case "close-merge-review":
+      return { ...state, mergeReviewOpen: false, mergeConfirmed: false };
+    case "merge-completed":
+      return {
+        ...state,
+        mergeCompleted: true,
+        mergeCompletedContactId: action.contactId,
+      };
+  }
+}
+
+type CrmDirectoryState = {
+  readonly contacts: readonly CrmContact[];
+  readonly segments: readonly CrmSegment[];
+  readonly events: readonly CrmEvent[];
+  readonly analytics: CrmAnalytics | null;
+  readonly contactsLoading: boolean;
+  readonly segmentsLoading: boolean;
+  readonly eventsLoading: boolean;
+  readonly analyticsLoading: boolean;
+};
+
+type CrmDirectoryAction =
+  | {
+      readonly type: "set-contacts";
+      readonly value: CrmStateUpdate<readonly CrmContact[]>;
+    }
+  | {
+      readonly type: "set-segments";
+      readonly value: CrmStateUpdate<readonly CrmSegment[]>;
+    }
+  | {
+      readonly type: "set-events";
+      readonly value: CrmStateUpdate<readonly CrmEvent[]>;
+    }
+  | {
+      readonly type: "set-analytics";
+      readonly value: CrmStateUpdate<CrmAnalytics | null>;
+    }
+  | { readonly type: "set-contacts-loading"; readonly value: CrmStateUpdate<boolean> }
+  | { readonly type: "set-segments-loading"; readonly value: CrmStateUpdate<boolean> }
+  | { readonly type: "set-events-loading"; readonly value: CrmStateUpdate<boolean> }
+  | { readonly type: "set-analytics-loading"; readonly value: CrmStateUpdate<boolean> }
+  | {
+      readonly type: "replace-contact";
+      readonly contact: CrmContact;
+    }
+  | { readonly type: "append-segment"; readonly segment: CrmSegment }
+  | { readonly type: "segment-contacts-loaded"; readonly contacts: readonly CrmContact[] };
+
+function crmDirectoryReducer(
+  state: CrmDirectoryState,
+  action: CrmDirectoryAction,
+): CrmDirectoryState {
+  switch (action.type) {
+    case "set-contacts":
+      return { ...state, contacts: resolveCrmStateUpdate(state.contacts, action.value) };
+    case "set-segments":
+      return { ...state, segments: resolveCrmStateUpdate(state.segments, action.value) };
+    case "set-events":
+      return { ...state, events: resolveCrmStateUpdate(state.events, action.value) };
+    case "set-analytics":
+      return { ...state, analytics: resolveCrmStateUpdate(state.analytics, action.value) };
+    case "set-contacts-loading":
+      return {
+        ...state,
+        contactsLoading: resolveCrmStateUpdate(state.contactsLoading, action.value),
+      };
+    case "set-segments-loading":
+      return {
+        ...state,
+        segmentsLoading: resolveCrmStateUpdate(state.segmentsLoading, action.value),
+      };
+    case "set-events-loading":
+      return {
+        ...state,
+        eventsLoading: resolveCrmStateUpdate(state.eventsLoading, action.value),
+      };
+    case "set-analytics-loading":
+      return {
+        ...state,
+        analyticsLoading: resolveCrmStateUpdate(state.analyticsLoading, action.value),
+      };
+    case "replace-contact": {
+      const without = state.contacts.filter((contact) => contact.id !== action.contact.id);
+      return {
+        ...state,
+        contacts: [...without, action.contact].sort((left, right) =>
+          displayName(left).localeCompare(displayName(right)),
+        ),
+      };
+    }
+    case "append-segment":
+      return { ...state, segments: [...state.segments, action.segment] };
+    case "segment-contacts-loaded":
+      return { ...state, contacts: action.contacts };
+  }
+}
+type CrmContactSelectionState = {
+  readonly selectedContact: CrmContact | undefined;
+  readonly selectedContactIds: readonly string[];
+  readonly history: readonly CrmHistoryEntry[];
+  readonly pipelineHistory: readonly CrmPipelineEntry[];
+  readonly notes: readonly CrmNote[];
+  readonly duplicates: CrmDuplicateReport | null;
+  readonly outreachRecipients: readonly CrmContact[];
+  readonly outreachPreview: CrmOutreachPreview | null;
+  readonly outreachResults: readonly CrmOutreachCommand[];
+  readonly lastAddedEventId: string | null;
+  readonly lastEventResult: CrmEventProjectionResult | null;
+};
+
+type CrmContactSelectionAction =
+  | {
+      readonly type: "set-selected-contact";
+      readonly value: CrmStateUpdate<CrmContact | undefined>;
+    }
+  | {
+      readonly type: "set-selected-contact-ids";
+      readonly value: CrmStateUpdate<readonly string[]>;
+    }
+  | { readonly type: "set-history"; readonly value: CrmStateUpdate<readonly CrmHistoryEntry[]> }
+  | {
+      readonly type: "set-pipeline-history";
+      readonly value: CrmStateUpdate<readonly CrmPipelineEntry[]>;
+    }
+  | { readonly type: "set-notes"; readonly value: CrmStateUpdate<readonly CrmNote[]> }
+  | {
+      readonly type: "set-duplicates";
+      readonly value: CrmStateUpdate<CrmDuplicateReport | null>;
+    }
+  | {
+      readonly type: "set-outreach-recipients";
+      readonly value: CrmStateUpdate<readonly CrmContact[]>;
+    }
+  | {
+      readonly type: "set-outreach-preview";
+      readonly value: CrmStateUpdate<CrmOutreachPreview | null>;
+    }
+  | {
+      readonly type: "set-outreach-results";
+      readonly value: CrmStateUpdate<readonly CrmOutreachCommand[]>;
+    }
+  | {
+      readonly type: "set-last-added-event-id";
+      readonly value: CrmStateUpdate<string | null>;
+    }
+  | {
+      readonly type: "set-last-event-result";
+      readonly value: CrmStateUpdate<CrmEventProjectionResult | null>;
+    }
+  | {
+      readonly type: "contact-loaded";
+      readonly contact: CrmContact;
+      readonly history: readonly CrmHistoryEntry[];
+      readonly pipelineHistory: readonly CrmPipelineEntry[];
+      readonly notes: readonly CrmNote[];
+      readonly duplicates: CrmDuplicateReport;
+    }
+  | {
+      readonly type: "selection-changed";
+      readonly contactIds: readonly string[];
+      readonly recipients: readonly CrmContact[];
+    }
+  | { readonly type: "start-add" }
+  | { readonly type: "cancel-edit" }
+  | {
+      readonly type: "contact-saved";
+      readonly contact: CrmContact;
+    }
+  | { readonly type: "pipeline-contact-updated"; readonly contact: CrmContact }
+  | { readonly type: "note-added"; readonly note: CrmNote }
+  | {
+      readonly type: "event-added";
+      readonly eventId: string;
+      readonly result: CrmEventProjectionResult;
+    }
+  | {
+      readonly type: "outreach-preview-created";
+      readonly recipients: readonly CrmContact[];
+      readonly preview: CrmOutreachPreview;
+    }
+  | { readonly type: "outreach-results-set"; readonly results: readonly CrmOutreachCommand[] };
+
+function crmContactSelectionReducer(
+  state: CrmContactSelectionState,
+  action: CrmContactSelectionAction,
+): CrmContactSelectionState {
+  switch (action.type) {
+    case "set-selected-contact":
+      return {
+        ...state,
+        selectedContact: resolveCrmStateUpdate(state.selectedContact, action.value),
+      };
+    case "set-selected-contact-ids":
+      return {
+        ...state,
+        selectedContactIds: resolveCrmStateUpdate(state.selectedContactIds, action.value),
+      };
+    case "set-history":
+      return { ...state, history: resolveCrmStateUpdate(state.history, action.value) };
+    case "set-pipeline-history":
+      return {
+        ...state,
+        pipelineHistory: resolveCrmStateUpdate(state.pipelineHistory, action.value),
+      };
+    case "set-notes":
+      return { ...state, notes: resolveCrmStateUpdate(state.notes, action.value) };
+    case "set-duplicates":
+      return { ...state, duplicates: resolveCrmStateUpdate(state.duplicates, action.value) };
+    case "set-outreach-recipients":
+      return {
+        ...state,
+        outreachRecipients: resolveCrmStateUpdate(state.outreachRecipients, action.value),
+      };
+    case "set-outreach-preview":
+      return {
+        ...state,
+        outreachPreview: resolveCrmStateUpdate(state.outreachPreview, action.value),
+      };
+    case "set-outreach-results":
+      return {
+        ...state,
+        outreachResults: resolveCrmStateUpdate(state.outreachResults, action.value),
+      };
+    case "set-last-added-event-id":
+      return {
+        ...state,
+        lastAddedEventId: resolveCrmStateUpdate(state.lastAddedEventId, action.value),
+      };
+    case "set-last-event-result":
+      return {
+        ...state,
+        lastEventResult: resolveCrmStateUpdate(state.lastEventResult, action.value),
+      };
+    case "contact-loaded":
+      return {
+        ...state,
+        selectedContact: action.contact,
+        history: action.history,
+        pipelineHistory: action.pipelineHistory,
+        notes: action.notes,
+        duplicates: action.duplicates,
+        outreachRecipients: [action.contact],
+        outreachPreview: null,
+        outreachResults: [],
+        lastAddedEventId: null,
+        lastEventResult: null,
+      };
+    case "selection-changed":
+      return {
+        ...state,
+        selectedContactIds: action.contactIds,
+        outreachRecipients: action.recipients,
+        outreachPreview: null,
+        outreachResults: [],
+      };
+    case "start-add":
+      return {
+        ...state,
+        selectedContactIds: [],
+        selectedContact: undefined,
+        duplicates: null,
+      };
+    case "cancel-edit":
+      return { ...state, selectedContact: undefined };
+    case "contact-saved":
+      return {
+        ...state,
+        selectedContact: action.contact,
+        outreachRecipients: [action.contact],
+      };
+    case "pipeline-contact-updated":
+      return { ...state, selectedContact: action.contact };
+    case "note-added":
+      return { ...state, notes: [action.note, ...state.notes] };
+    case "event-added":
+      return {
+        ...state,
+        lastAddedEventId: action.eventId,
+        lastEventResult: action.result,
+      };
+    case "outreach-preview-created":
+      return {
+        ...state,
+        outreachRecipients: action.recipients,
+        outreachPreview: action.preview,
+        outreachResults: [],
+      };
+    case "outreach-results-set":
+      return { ...state, outreachResults: action.results };
+  }
+}
+type CrmMergeRequestState = {
+  readonly preview: CrmMergePreview | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly planKey: string | null;
+  readonly result: CrmMergeResult | null;
+};
+
+type CrmMergeRequestAction =
+  | { readonly type: "preview-start" }
+  | {
+      readonly type: "preview-success";
+      readonly preview: CrmMergePreview;
+      readonly planKey: string;
+    }
+  | { readonly type: "preview-error"; readonly error: string }
+  | { readonly type: "preview-finished" }
+  | { readonly type: "merge-result"; readonly result: CrmMergeResult };
+
+function crmMergeRequestReducer(
+  state: CrmMergeRequestState,
+  action: CrmMergeRequestAction,
+): CrmMergeRequestState {
+  switch (action.type) {
+    case "preview-start":
+      return {
+        ...state,
+        preview: null,
+        planKey: null,
+        error: null,
+        loading: true,
+      };
+    case "preview-success":
+      return {
+        ...state,
+        preview: action.preview,
+        planKey: action.planKey,
+        loading: false,
+      };
+    case "preview-error":
+      return { ...state, error: action.error, loading: false };
+    case "preview-finished":
+      return { ...state, loading: false };
+    case "merge-result":
+      return { ...state, result: action.result };
+  }
+}
 function Card({
   title,
   eyebrow,
@@ -504,10 +996,6 @@ function ContactEditor({
 }>) {
   const [draft, setDraft] = useState<ContactDraft>(() => contactDraft(contact));
   const [formError, setFormError] = useState<string | null>(null);
-  useEffect(() => {
-    setDraft(contactDraft(contact));
-    setFormError(null);
-  }, [contact]);
 
   function update(key: keyof ContactDraft, value: string): void {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -1275,10 +1763,49 @@ export function CrmWorkspaceView({
     initialImportCsv.trim() ? parseCsvPreview(initialImportCsv) : null,
   );
   const [noteBody, setNoteBody] = useState("");
-  const [pipelineStage, setPipelineStage] = useState<CrmPipelineStage>(
-    selectedContact?.pipelineStage ?? "new",
-  );
-  const [pipelineNote, setPipelineNote] = useState("");
+  const [mergeViewState, dispatchMergeView] = useReducer(crmMergeViewReducer, {
+    mergeSelection: [],
+    mergeReviewPlanKey: null,
+    mergeReviewOpen: false,
+    mergeConfirmed: false,
+    mergeSubmitting: false,
+    mergeCompleted: false,
+    mergeCompletedContactId: null,
+    mergeFieldWinners: {},
+    mergeCustomFieldWinners: {},
+    pipelineStage: selectedContact?.pipelineStage ?? "new",
+    pipelineNote: "",
+  });
+  const {
+    mergeSelection,
+    mergeReviewPlanKey,
+    mergeReviewOpen,
+    mergeConfirmed,
+    mergeSubmitting,
+    mergeCompleted,
+    mergeCompletedContactId,
+    mergeFieldWinners,
+    mergeCustomFieldWinners,
+    pipelineStage,
+    pipelineNote,
+  } = mergeViewState;
+  const setMergeReviewPlanKey = (value: CrmStateUpdate<string | null>): void =>
+    dispatchMergeView({ type: "set-merge-review-plan-key", value });
+  const setMergeConfirmed = (value: CrmStateUpdate<boolean>): void =>
+    dispatchMergeView({ type: "set-merge-confirmed", value });
+  const setMergeCompleted = (value: CrmStateUpdate<boolean>): void =>
+    dispatchMergeView({ type: "set-merge-completed", value });
+  const setMergeCompletedContactId = (value: CrmStateUpdate<string | null>): void =>
+    dispatchMergeView({ type: "set-merge-completed-contact-id", value });
+  const setMergeFieldWinners = (
+    value: CrmStateUpdate<Partial<Record<CrmMergeScalarField, string>>>,
+  ): void => dispatchMergeView({ type: "set-merge-field-winners", value });
+  const setMergeCustomFieldWinners = (value: CrmStateUpdate<Record<string, string>>): void =>
+    dispatchMergeView({ type: "set-merge-custom-field-winners", value });
+  const setPipelineStage = (value: CrmStateUpdate<CrmPipelineStage>): void =>
+    dispatchMergeView({ type: "set-pipeline-stage", value });
+  const setPipelineNote = (value: CrmStateUpdate<string>): void =>
+    dispatchMergeView({ type: "set-pipeline-note", value });
   const [eventId, setEventId] = useState("");
   const [eventRole, setEventRole] = useState<"speaker" | "prospect" | "attendee" | "sponsor">(
     "prospect",
@@ -1291,19 +1818,6 @@ export function CrmWorkspaceView({
   const [outreachBody, setOutreachBody] = useState(
     "Hi {{first_name}},\n\nWe would love to have you join us.",
   );
-  const [mergeSelection, setMergeSelection] = useState<readonly string[]>([]);
-  const [mergeReviewPlanKey, setMergeReviewPlanKey] = useState<string | null>(null);
-  const [mergeReviewOpen, setMergeReviewOpen] = useState(false);
-  const [mergeConfirmed, setMergeConfirmed] = useState(false);
-  const [mergeSubmitting, setMergeSubmitting] = useState(false);
-  const [mergeCompleted, setMergeCompleted] = useState(false);
-  const [mergeCompletedContactId, setMergeCompletedContactId] = useState<string | null>(null);
-  const [mergeFieldWinners, setMergeFieldWinners] = useState<
-    Partial<Record<CrmMergeScalarField, string>>
-  >({});
-  const [mergeCustomFieldWinners, setMergeCustomFieldWinners] = useState<Record<string, string>>(
-    {},
-  );
   const mergeSubmitRef = useRef(false);
   const duplicateReviewRef = useRef<HTMLDivElement>(null);
   const outreachComposerRef = useRef<HTMLDivElement>(null);
@@ -1311,6 +1825,10 @@ export function CrmWorkspaceView({
   const [showImport, setShowImport] = useState(initialImportOpen);
   const [noteError, setNoteError] = useState<string | null>(null);
   const initialImportPreviewRequested = useRef(false);
+  const effectiveOutreachSegmentId =
+    outreachSegmentId === "__selected__" && selectedContactIds.length === 0
+      ? ""
+      : outreachSegmentId;
   useEffect(() => {
     if (
       !initialImportPreviewRequested.current &&
@@ -1322,22 +1840,14 @@ export function CrmWorkspaceView({
     }
   }, [initialImportCsv, onPreviewImport]);
   useEffect(() => {
-    if (selectedContact) setPipelineStage(selectedContact.pipelineStage);
-    setMergeSelection([]);
-    setMergeReviewPlanKey(null);
-    setMergeReviewOpen(false);
-    setMergeConfirmed(false);
-    setMergeFieldWinners({});
-    setMergeCustomFieldWinners({});
+    dispatchMergeView({
+      type: "contact-changed",
+      pipelineStage: selectedContact?.pipelineStage,
+    });
   }, [selectedContact]);
   useEffect(() => {
     if (lastAddedEventId) setEventId(lastAddedEventId);
   }, [lastAddedEventId]);
-
-  useEffect(() => {
-    if (selectedContactIds.length === 0 && outreachSegmentId === "__selected__")
-      setOutreachSegmentId("");
-  }, [outreachSegmentId, selectedContactIds.length]);
 
   async function readImportFile(file: File): Promise<void> {
     try {
@@ -1383,8 +1893,8 @@ export function CrmWorkspaceView({
   async function previewOutreach(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (onPreviewOutreach === undefined) return;
-    const selectedAudience = outreachSegmentId === "__selected__";
-    const segmentId = selectedAudience ? outreachContextSegmentId : outreachSegmentId;
+    const selectedAudience = effectiveOutreachSegmentId === "__selected__";
+    const segmentId = selectedAudience ? outreachContextSegmentId : effectiveOutreachSegmentId;
     await onPreviewOutreach({
       subject: outreachSubject,
       body: outreachBody,
@@ -1509,19 +2019,17 @@ export function CrmWorkspaceView({
           ? (fallback?.contact.id ?? selectedContact.id)
           : selectedContact.id;
     }
-    setMergeFieldWinners(nextFieldWinners);
-    setMergeCustomFieldWinners(nextCustomFieldWinners);
-    setMergeConfirmed(false);
-    setMergeCompleted(false);
-    setMergeCompletedContactId(null);
-    setMergeReviewOpen(true);
+    dispatchMergeView({
+      type: "open-merge-review",
+      fieldWinners: nextFieldWinners,
+      customFieldWinners: nextCustomFieldWinners,
+    });
     requestMergePreview(nextFieldWinners, nextCustomFieldWinners);
   }
 
   function closeMergeReview(): void {
     if (mergeSubmitting) return;
-    setMergeReviewOpen(false);
-    setMergeConfirmed(false);
+    dispatchMergeView({ type: "close-merge-review" });
   }
 
   async function submitMerge(): Promise<void> {
@@ -1538,7 +2046,7 @@ export function CrmWorkspaceView({
     }
     const primaryContact = selectedContact;
     mergeSubmitRef.current = true;
-    setMergeSubmitting(true);
+    dispatchMergeView({ type: "set-merge-submitting", value: true });
     const fieldWinners = {} as Record<CrmMergeScalarField, string>;
     for (const { key: field } of CRM_MERGE_SCALAR_FIELDS) {
       fieldWinners[field] = mergeFieldWinners[field] ?? primaryContact.id;
@@ -1549,13 +2057,12 @@ export function CrmWorkspaceView({
         fieldWinners,
         customFieldWinners: { ...mergeCustomFieldWinners },
       });
-      setMergeCompleted(true);
-      setMergeCompletedContactId(primaryContact.id);
+      dispatchMergeView({ type: "merge-completed", contactId: primaryContact.id });
     } catch {
       // The owning workspace presents the API error; keep the review open for a retry.
     } finally {
       mergeSubmitRef.current = false;
-      setMergeSubmitting(false);
+      dispatchMergeView({ type: "set-merge-submitting", value: false });
     }
   }
   function focusDuplicateReview(): void {
@@ -2075,6 +2582,7 @@ export function CrmWorkspaceView({
         {showAddForm ? (
           <Card title="Add a CRM contact" eyebrow="New organization record">
             <ContactEditor
+              key={`${organizationId}:new`}
               busy={busy}
               onSave={async (draft) => {
                 await onSaveContact?.(draft);
@@ -2188,6 +2696,7 @@ export function CrmWorkspaceView({
                 )}
               </div>
               <ContactEditor
+                key={`${organizationId}:${selectedContact.id}:${selectedContact.version}`}
                 contact={selectedContact}
                 busy={busy}
                 onSave={async (draft) => onSaveContact?.(draft)}
@@ -2247,19 +2756,13 @@ export function CrmWorkspaceView({
                         type="checkbox"
                         checked={mergeSelectionSet.has(match.contact.id)}
                         aria-label={`Select ${displayName(match.contact)}`}
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked;
-                          setMergeSelection((current) =>
-                            checked
-                              ? [...new Set([...current, match.contact.id])]
-                              : current.filter((id) => id !== match.contact.id),
-                          );
-                          setMergeReviewOpen(false);
-                          setMergeConfirmed(false);
-                          setMergeCompleted(false);
-                          setMergeReviewPlanKey(null);
-                          setMergeCompletedContactId(null);
-                        }}
+                        onChange={(event) =>
+                          dispatchMergeView({
+                            type: "merge-selection-changed",
+                            contactId: match.contact.id,
+                            checked: event.currentTarget.checked,
+                          })
+                        }
                       />
                       {displayName(match.contact)} · {Math.round(match.score * 100)}% match (
                       {match.matchedFields.join(", ")})
@@ -2803,7 +3306,7 @@ export function CrmWorkspaceView({
             <Card
               title="Personalized outreach"
               eyebrow={
-                outreachSegmentId === "__selected__" && selectedContactIds.length > 0
+                effectiveOutreachSegmentId === "__selected__" && selectedContactIds.length > 0
                   ? `Communicate with ${selectedContactIds.length} selected contacts`
                   : "Preview before queueing"
               }
@@ -2813,7 +3316,7 @@ export function CrmWorkspaceView({
                   <span>Audience</span>
                   <select
                     aria-label="Outreach audience"
-                    value={outreachSegmentId}
+                    value={effectiveOutreachSegmentId}
                     onChange={(event) => setOutreachSegmentId(event.currentTarget.value)}
                   >
                     <option value="">This contact</option>
@@ -3019,16 +3522,60 @@ export function CrmWorkspace({
     () => providedApi ?? createCrmApi(apiBaseUrl, organizationId),
     [organizationId, providedApi],
   );
-  const [contacts, setContacts] = useState<readonly CrmContact[]>(initialContacts ?? []);
-  const [segments, setSegments] = useState<readonly CrmSegment[]>(initialSegments ?? []);
-  const [events, setEvents] = useState<readonly CrmEvent[]>(initialEvents ?? []);
-  const [analytics, setAnalytics] = useState<CrmAnalytics | null>(initialAnalytics ?? null);
-  const [selectedContact, setSelectedContact] = useState<CrmContact | undefined>();
-  const [selectedContactIds, setSelectedContactIds] = useState<readonly string[]>([]);
-  const [history, setHistory] = useState<readonly CrmHistoryEntry[]>([]);
-  const [pipelineHistory, setPipelineHistory] = useState<readonly CrmPipelineEntry[]>([]);
-  const [notes, setNotes] = useState<readonly CrmNote[]>([]);
-  const [duplicates, setDuplicates] = useState<CrmDuplicateReport | null>(null);
+  const [directoryState, dispatchDirectory] = useReducer(crmDirectoryReducer, {
+    contacts: initialContacts ?? [],
+    segments: initialSegments ?? [],
+    events: initialEvents ?? [],
+    analytics: initialAnalytics ?? null,
+    contactsLoading: initialContacts === undefined,
+    segmentsLoading: initialSegments === undefined,
+    eventsLoading: initialEvents === undefined,
+    analyticsLoading: initialAnalytics === undefined,
+  });
+  const {
+    contacts,
+    segments,
+    events,
+    analytics,
+    contactsLoading,
+    segmentsLoading,
+    eventsLoading,
+    analyticsLoading,
+  } = directoryState;
+  const [contactSelectionState, dispatchContactSelection] = useReducer(crmContactSelectionReducer, {
+    selectedContact: undefined,
+    selectedContactIds: [],
+    history: [],
+    pipelineHistory: [],
+    notes: [],
+    duplicates: null,
+    outreachRecipients: [],
+    outreachPreview: null,
+    outreachResults: [],
+    lastAddedEventId: null,
+    lastEventResult: null,
+  });
+  const {
+    selectedContact,
+    selectedContactIds,
+    history,
+    pipelineHistory,
+    notes,
+    duplicates,
+    outreachRecipients,
+    outreachPreview,
+    outreachResults,
+    lastAddedEventId,
+    lastEventResult,
+  } = contactSelectionState;
+  const setHistory = (value: CrmStateUpdate<readonly CrmHistoryEntry[]>): void =>
+    dispatchContactSelection({ type: "set-history", value });
+  const setPipelineHistory = (value: CrmStateUpdate<readonly CrmPipelineEntry[]>): void =>
+    dispatchContactSelection({ type: "set-pipeline-history", value });
+  const setDuplicates = (value: CrmStateUpdate<CrmDuplicateReport | null>): void =>
+    dispatchContactSelection({ type: "set-duplicates", value });
+  const setOutreachRecipients = (value: CrmStateUpdate<readonly CrmContact[]>): void =>
+    dispatchContactSelection({ type: "set-outreach-recipients", value });
   const [importResult, setImportResult] = useState<CrmImportResult | null>(null);
   const [importPreviewResult, setImportPreviewResult] = useState<CrmImportPreviewResult | null>(
     null,
@@ -3036,25 +3583,25 @@ export function CrmWorkspace({
   const [importPreviewLoading, setImportPreviewLoading] = useState(false);
   const [importPreviewError, setImportPreviewError] = useState<string | null>(null);
   const [importPreviewSource, setImportPreviewSource] = useState<string | null>(null);
-  const [outreachRecipients, setOutreachRecipients] = useState<readonly CrmContact[]>([]);
-  const [outreachPreview, setOutreachPreview] = useState<CrmOutreachPreview | null>(null);
-  const [outreachResults, setOutreachResults] = useState<readonly CrmOutreachCommand[]>([]);
-  const [lastAddedEventId, setLastAddedEventId] = useState<string | null>(null);
-  const [lastEventResult, setLastEventResult] = useState<CrmEventProjectionResult | null>(null);
-  const [mergePreview, setMergePreview] = useState<CrmMergePreview | null>(null);
-  const [mergePreviewLoading, setMergePreviewLoading] = useState(false);
-  const [mergePreviewError, setMergePreviewError] = useState<string | null>(null);
-  const [mergePreviewPlanKey, setMergePreviewPlanKey] = useState<string | null>(null);
-  const [mergeResult, setMergeResult] = useState<CrmMergeResult | null>(null);
+  const [mergeRequestState, dispatchMergeRequest] = useReducer(crmMergeRequestReducer, {
+    preview: null,
+    loading: false,
+    error: null,
+    planKey: null,
+    result: null,
+  });
+  const {
+    preview: mergePreview,
+    loading: mergePreviewLoading,
+    error: mergePreviewError,
+    planKey: mergePreviewPlanKey,
+    result: mergeResult,
+  } = mergeRequestState;
   const [query, setQuery] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
   const [tagsFilter, setTagsFilter] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<CrmPipelineStage | "">("");
   const [statusFilter, setStatusFilter] = useState<CrmContactStatus | "">("active");
-  const [contactsLoading, setContactsLoading] = useState(initialContacts === undefined);
-  const [segmentsLoading, setSegmentsLoading] = useState(initialSegments === undefined);
-  const [eventsLoading, setEventsLoading] = useState(initialEvents === undefined);
-  const [analyticsLoading, setAnalyticsLoading] = useState(initialAnalytics === undefined);
   const loading = contactsLoading || segmentsLoading || eventsLoading || analyticsLoading;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3103,14 +3650,14 @@ export function CrmWorkspace({
   const workspaceReadCoordinator = useMemo(
     () =>
       createCrmWorkspaceReadCoordinator(api, {
-        setContacts,
-        setSegments,
-        setEvents,
-        setAnalytics,
-        setContactsLoading,
-        setSegmentsLoading,
-        setEventsLoading,
-        setAnalyticsLoading,
+        setContacts: (value) => dispatchDirectory({ type: "set-contacts", value }),
+        setSegments: (value) => dispatchDirectory({ type: "set-segments", value }),
+        setEvents: (value) => dispatchDirectory({ type: "set-events", value }),
+        setAnalytics: (value) => dispatchDirectory({ type: "set-analytics", value }),
+        setContactsLoading: (value) => dispatchDirectory({ type: "set-contacts-loading", value }),
+        setSegmentsLoading: (value) => dispatchDirectory({ type: "set-segments-loading", value }),
+        setEventsLoading: (value) => dispatchDirectory({ type: "set-events-loading", value }),
+        setAnalyticsLoading: (value) => dispatchDirectory({ type: "set-analytics-loading", value }),
         setError,
       }),
     [api],
@@ -3196,16 +3743,14 @@ export function CrmWorkspace({
             api.findDuplicates(contactId),
           ]);
         if (generation !== selectionGeneration.current) return;
-        setSelectedContact(contact);
-        setHistory(nextHistory);
-        setPipelineHistory(nextPipelineHistory);
-        setNotes(nextNotes);
-        setDuplicates(nextDuplicates);
-        setOutreachRecipients([contact]);
-        setOutreachPreview(null);
-        setOutreachResults([]);
-        setLastAddedEventId(null);
-        setLastEventResult(null);
+        dispatchContactSelection({
+          type: "contact-loaded",
+          contact,
+          history: nextHistory,
+          pipelineHistory: nextPipelineHistory,
+          notes: nextNotes,
+          duplicates: nextDuplicates,
+        });
       } catch (reason) {
         if (generation === selectionGeneration.current) setError(messageFromError(reason));
       } finally {
@@ -3231,14 +3776,8 @@ export function CrmWorkspace({
             expectedVersion: existingContact.version,
           })
         : await api.createContact(input);
-      setSelectedContact(next);
-      setContacts((current) => {
-        const without = current.filter((contact) => contact.id !== next.id);
-        return [...without, next].sort((left, right) =>
-          displayName(left).localeCompare(displayName(right)),
-        );
-      });
-      setOutreachRecipients([next]);
+      dispatchContactSelection({ type: "contact-saved", contact: next });
+      dispatchDirectory({ type: "replace-contact", contact: next });
       setStatusMessage(
         existingContact ? "Contact changes saved." : "Contact added to the organization directory.",
       );
@@ -3320,22 +3859,27 @@ export function CrmWorkspace({
     mergePreviewRequestRef.current = key;
     const requestIsCurrent = () =>
       mergePreviewRequestRef.current === key && mergePreviewLeaseRef.current === requestLease;
-    setMergePreview(null);
-    setMergePreviewPlanKey(null);
-    setMergePreviewError(null);
-    setMergePreviewLoading(true);
+    dispatchMergeRequest({ type: "preview-start" });
     try {
       const result = await api.previewMerge(selectedContact.id, plan.duplicateContactIds, {
         fieldWinners: plan.fieldWinners,
         customFieldWinners: plan.customFieldWinners,
       });
       if (!requestIsCurrent()) return;
-      setMergePreview(result);
-      setMergePreviewPlanKey(key);
+      dispatchMergeRequest({
+        type: "preview-success",
+        preview: result,
+        planKey: key,
+      });
     } catch (reason) {
-      if (requestIsCurrent()) setMergePreviewError(messageFromError(reason));
+      if (requestIsCurrent()) {
+        dispatchMergeRequest({
+          type: "preview-error",
+          error: messageFromError(reason),
+        });
+      }
     } finally {
-      setMergePreviewLoading((current) => (requestIsCurrent() ? false : current));
+      if (requestIsCurrent()) dispatchMergeRequest({ type: "preview-finished" });
     }
   }
 
@@ -3349,7 +3893,7 @@ export function CrmWorkspace({
     setError(null);
     try {
       const next = await api.createSegment(input);
-      setSegments((current) => [...current, next]);
+      dispatchDirectory({ type: "append-segment", segment: next });
       setStatusMessage(`Saved dynamic segment “${next.name}”.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -3364,7 +3908,7 @@ export function CrmWorkspace({
     setError(null);
     try {
       const segmentContacts = await api.listSegmentContacts(segmentId);
-      setContacts(segmentContacts);
+      dispatchDirectory({ type: "segment-contacts-loaded", contacts: segmentContacts });
       setStatusMessage(
         `Showing ${segmentContacts.length} contact${segmentContacts.length === 1 ? "" : "s"} in this segment.`,
       );
@@ -3443,7 +3987,7 @@ export function CrmWorkspace({
           customFieldWinners: plan.customFieldWinners,
         },
       );
-      setMergeResult(result);
+      dispatchMergeRequest({ type: "merge-result", result });
       setStatusMessage(
         `Merge committed: survivor ${result.survivorId}; audit ${result.auditId}${result.idempotent ? " (idempotent replay)" : ""}.`,
       );
@@ -3469,10 +4013,10 @@ export function CrmWorkspace({
     setBusy(true);
     try {
       const next = await api.updatePipeline(contactId, stage);
-      setContacts((current) =>
-        current.map((candidate) => (candidate.id === next.id ? next : candidate)),
-      );
-      if (selectedContact?.id === next.id) setSelectedContact(next);
+      dispatchDirectory({ type: "replace-contact", contact: next });
+      if (selectedContact?.id === next.id) {
+        dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
+      }
       const [, nextPipelineHistory] = await Promise.all([
         loadAnalytics(),
         selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
@@ -3514,10 +4058,10 @@ export function CrmWorkspace({
               expectedVersion: contact.version,
             })
           : await api.updatePipeline(input.contactId, input.stage, enrollmentNote);
-      setContacts((current) =>
-        current.map((candidate) => (candidate.id === next.id ? next : candidate)),
-      );
-      if (selectedContact?.id === next.id) setSelectedContact(next);
+      dispatchDirectory({ type: "replace-contact", contact: next });
+      if (selectedContact?.id === next.id) {
+        dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
+      }
       const stageChanged = contact.pipelineStage !== next.pipelineStage;
       const [, nextPipelineHistory] = await Promise.all([
         stageChanged ? loadAnalytics() : Promise.resolve(),
@@ -3539,10 +4083,8 @@ export function CrmWorkspace({
     setError(null);
     try {
       const next = await api.updatePipeline(selectedContact.id, stage, note);
-      setSelectedContact(next);
-      setContacts((current) =>
-        current.map((candidate) => (candidate.id === next.id ? next : candidate)),
-      );
+      dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
+      dispatchDirectory({ type: "replace-contact", contact: next });
       const [nextPipelineHistory] = await Promise.all([
         api.getPipelineHistory(next.id),
         selectedContact.pipelineStage === next.pipelineStage ? Promise.resolve() : loadAnalytics(),
@@ -3563,7 +4105,7 @@ export function CrmWorkspace({
     setError(null);
     try {
       const note = await api.addNote(selectedContact.id, body);
-      setNotes((current) => [note, ...current]);
+      dispatchContactSelection({ type: "note-added", note });
       setStatusMessage("Note saved to the contact timeline.");
     } catch (reason) {
       setError(messageFromError(reason));
@@ -3590,8 +4132,11 @@ export function CrmWorkspace({
     eventIdentityRef.current = { fingerprint, key };
     try {
       const result = await api.addContactToEvent(selectedContact.id, input, key);
-      setLastAddedEventId(input.eventId);
-      setLastEventResult(result);
+      dispatchContactSelection({
+        type: "event-added",
+        eventId: input.eventId,
+        result,
+      });
       setStatusMessage(
         result.outcome === "created"
           ? "Canonical event relationship created."
@@ -3653,14 +4198,18 @@ export function CrmWorkspace({
         idempotencyKey: idempotencyKey("crm-outreach"),
       };
     });
-    setOutreachResults([]);
-    setOutreachPreview({
+    const nextOutreachPreview: CrmOutreachPreview = {
       subject: input.subject,
       body: input.body,
       count: recipientPreviews.length,
       recipients: recipientPreviews,
       ...(input.segmentId ? { segmentId: input.segmentId } : {}),
       ...(input.eventId ? { eventId: input.eventId } : {}),
+    };
+    dispatchContactSelection({
+      type: "outreach-preview-created",
+      recipients,
+      preview: nextOutreachPreview,
     });
     const issueCount = recipientPreviews.filter(
       (recipient) => recipient.unknownTags.length > 0,
@@ -3710,7 +4259,7 @@ export function CrmWorkspace({
           );
         }),
       );
-      setOutreachResults(results);
+      dispatchContactSelection({ type: "outreach-results-set", results });
       const queuedCount = results.reduce((count, result) => count + result.queuedCount, 0);
       const sentCount = results.reduce((count, result) => count + result.sentCount, 0);
       const failedCount = results.reduce((count, result) => count + result.failedCount, 0);
@@ -3763,22 +4312,21 @@ export function CrmWorkspace({
       onRefresh={() => void refresh()}
       onSelectContact={(contactId) => void selectContact(contactId)}
       onSelectionChange={(contactIds) => {
-        setSelectedContactIds(contactIds);
         const selected = new Set(contactIds);
-        setOutreachRecipients(contacts.filter((contact) => selected.has(contact.id)));
-        setOutreachPreview(null);
-        setOutreachResults([]);
+        dispatchContactSelection({
+          type: "selection-changed",
+          contactIds,
+          recipients: contacts.filter((contact) => selected.has(contact.id)),
+        });
       }}
       onStartAdd={() => {
         selectionGeneration.current += 1;
-        setSelectedContactIds([]);
-        setSelectedContact(undefined);
-        setDuplicates(null);
+        dispatchContactSelection({ type: "start-add" });
       }}
       onSaveContact={saveContact}
       onCancelEdit={() => {
         selectionGeneration.current += 1;
-        setSelectedContact(undefined);
+        dispatchContactSelection({ type: "cancel-edit" });
       }}
       onImport={importContacts}
       onPreviewImport={previewImport}
@@ -3816,6 +4364,3 @@ export function CrmWorkspace({
     />
   );
 }
-
-export const CRMWorkspace = CrmWorkspace;
-export const CRMWorkspaceView = CrmWorkspaceView;

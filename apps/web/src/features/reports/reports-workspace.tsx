@@ -10,7 +10,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -548,7 +548,7 @@ type SavedReportListProps = Readonly<{
   readonly busy: boolean;
 }>;
 
-export function SavedReportList({
+function SavedReportList({
   eventId,
   definitions,
   runs,
@@ -660,7 +660,7 @@ type ReportDefinitionEditorProps = Readonly<{
   onDelete: (trigger: HTMLElement) => void;
 }>;
 
-export function ReportDefinitionEditor({
+function ReportDefinitionEditor({
   selectedDefinition,
   draft,
   availableFields,
@@ -1076,7 +1076,7 @@ type ReportRunControlsProps = Readonly<{
   onRun: () => void;
 }>;
 
-export function ReportRunControls({
+function ReportRunControls({
   selectedDefinition,
   format,
   busy,
@@ -1215,8 +1215,13 @@ type RunHistoryProps = Readonly<{
   onDownload: (run: ReportRun) => void;
 }>;
 
-export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
-  const [auditRun, setAuditRun] = useState<ReportRun | null>(null);
+type RunHistoryAction = { type: "audit-open"; run: ReportRun } | { type: "audit-close" };
+
+function runHistoryReducer(_state: ReportRun | null, action: RunHistoryAction): ReportRun | null {
+  return action.type === "audit-open" ? action.run : null;
+}
+function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
+  const [auditRun, dispatchAuditRun] = useReducer(runHistoryReducer, null);
   return (
     <section className={styles.section} id="report-history" aria-labelledby="run-history-heading">
       <div className={styles.sectionHeader}>
@@ -1264,7 +1269,7 @@ export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => setAuditRun(run)}
+                    onClick={() => dispatchAuditRun({ type: "audit-open", run })}
                   >
                     Audit details
                   </Button>
@@ -1285,7 +1290,10 @@ export function RunHistory({ runs, busy, onDownload }: RunHistoryProps) {
           </TableBody>
         </Table>
       )}
-      <Dialog open={auditRun !== null} onOpenChange={(open) => !open && setAuditRun(null)}>
+      <Dialog
+        open={auditRun !== null}
+        onOpenChange={(open) => !open && dispatchAuditRun({ type: "audit-close" })}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Export audit details</DialogTitle>
@@ -1402,6 +1410,220 @@ type SelectionRequest =
       readonly kind: "new";
       readonly draft?: ReportDefinitionInput;
     };
+type ReportsWorkspaceState = {
+  definitions: readonly ReportDefinition[];
+  runs: readonly ReportRun[];
+  selectedId: string | null;
+  draft: ReportDefinitionInput;
+  loading: boolean;
+  loadState: "ready" | "empty" | "unavailable";
+  loadError: string | null;
+  busy: boolean;
+  message: string | null;
+  requestError: string | null;
+  previewRun: ReportRun | null;
+  format: ReportFormat;
+  evaluationPlanId: string;
+  evaluationPlanVersion: string;
+  deleteCandidate: ReportDefinition | null;
+  deleteError: string | null;
+  retryToken: number;
+  selectionRequest: SelectionRequest | null;
+};
+
+type ReportsWorkspaceAction =
+  | {
+      type: "snapshot-applied";
+      definitions: readonly ReportDefinition[];
+      runs: readonly ReportRun[];
+    }
+  | { type: "load-started"; hasImmediateSnapshot: boolean; retryFresh: boolean }
+  | { type: "loading-changed"; loading: boolean }
+  | { type: "load-failed"; unavailable: boolean; message: string }
+  | { type: "definitions-created"; definition: ReportDefinition; message: string }
+  | { type: "definition-updated"; definition: ReportDefinition; message: string }
+  | {
+      type: "definition-deleted";
+      definitionId: string;
+      selected: boolean;
+      loadState: "ready" | "empty";
+      message: string;
+    }
+  | { type: "selection-applied"; request: SelectionRequest }
+  | { type: "selection-requested"; request: SelectionRequest }
+  | { type: "selection-cleared" }
+  | { type: "draft-replaced"; draft: ReportDefinitionInput }
+  | { type: "message-changed"; message: string | null }
+  | { type: "request-error-changed"; message: string | null }
+  | { type: "load-error-changed"; message: string | null }
+  | { type: "busy-changed"; busy: boolean }
+  | { type: "preview-changed"; run: ReportRun | null }
+  | { type: "format-changed"; format: ReportFormat }
+  | { type: "evaluation-plan-id-changed"; value: string }
+  | { type: "evaluation-plan-version-changed"; value: string }
+  | { type: "delete-requested"; candidate: ReportDefinition }
+  | { type: "delete-cleared" }
+  | { type: "delete-error-changed"; message: string | null }
+  | { type: "run-completed"; run: ReportRun; message: string }
+  | { type: "retry" };
+
+function initialReportsWorkspaceState(input: {
+  definitions: readonly ReportDefinition[];
+  runs: readonly ReportRun[];
+  testMode: boolean;
+  hasImmediateSnapshot: boolean;
+}): ReportsWorkspaceState {
+  const first = input.definitions[0];
+  return {
+    definitions: input.definitions,
+    runs: input.runs,
+    selectedId: first?.id ?? null,
+    draft: first === undefined ? newDraft() : draftFromDefinition(first),
+    loading: !input.testMode && !input.hasImmediateSnapshot,
+    loadState: input.definitions.length === 0 && input.hasImmediateSnapshot ? "empty" : "ready",
+    loadError: null,
+    busy: false,
+    message: null,
+    requestError: null,
+    previewRun: null,
+    format: "csv",
+    evaluationPlanId: "",
+    evaluationPlanVersion: "",
+    deleteCandidate: null,
+    deleteError: null,
+    retryToken: 0,
+    selectionRequest: null,
+  };
+}
+
+function reportsWorkspaceReducer(
+  state: ReportsWorkspaceState,
+  action: ReportsWorkspaceAction,
+): ReportsWorkspaceState {
+  switch (action.type) {
+    case "snapshot-applied": {
+      const first = action.definitions[0];
+      return {
+        ...state,
+        definitions: action.definitions,
+        runs: action.runs,
+        loadState: action.definitions.length === 0 ? "empty" : "ready",
+        selectedId: first?.id ?? null,
+        draft: first === undefined ? newDraft() : draftFromDefinition(first),
+      };
+    }
+    case "load-started":
+      return {
+        ...state,
+        loading: !action.hasImmediateSnapshot,
+        loadState: action.hasImmediateSnapshot ? state.loadState : "ready",
+        loadError: null,
+        ...(action.retryFresh ? { requestError: null } : {}),
+      };
+    case "loading-changed":
+      return { ...state, loading: action.loading };
+    case "load-failed":
+      return {
+        ...state,
+        loadError: action.message,
+        loadState: action.unavailable ? "unavailable" : "ready",
+        requestError: action.unavailable ? null : action.message,
+      };
+    case "definitions-created":
+      return {
+        ...state,
+        definitions: [...state.definitions, action.definition],
+        selectedId: action.definition.id,
+        draft: draftFromDefinition(action.definition),
+        loadState: "ready",
+        message: action.message,
+      };
+    case "definition-updated":
+      return {
+        ...state,
+        definitions: state.definitions.map((definition) =>
+          definition.id === action.definition.id ? action.definition : definition,
+        ),
+        draft: draftFromDefinition(action.definition),
+        message: action.message,
+      };
+    case "definition-deleted":
+      return {
+        ...state,
+        definitions: state.definitions.filter(
+          (definition) => definition.id !== action.definitionId,
+        ),
+        ...(action.selected
+          ? {
+              selectedId: null,
+              draft: newDraft(),
+              previewRun: null,
+              selectionRequest: null,
+            }
+          : {}),
+        deleteCandidate: null,
+        loadState: action.loadState,
+        message: action.message,
+      };
+    case "selection-applied": {
+      const request = action.request;
+      return {
+        ...state,
+        selectedId: request.kind === "new" ? null : request.definition.id,
+        draft:
+          request.kind === "new"
+            ? (request.draft ?? newDraft())
+            : draftFromDefinition(request.definition),
+        message: null,
+        requestError: null,
+        previewRun: null,
+        selectionRequest: null,
+      };
+    }
+    case "selection-requested":
+      return { ...state, selectionRequest: action.request };
+    case "selection-cleared":
+      return { ...state, selectionRequest: null };
+    case "draft-replaced":
+      return { ...state, draft: action.draft, message: null };
+    case "message-changed":
+      return { ...state, message: action.message };
+    case "request-error-changed":
+      return { ...state, requestError: action.message };
+    case "load-error-changed":
+      return { ...state, loadError: action.message };
+    case "busy-changed":
+      return { ...state, busy: action.busy };
+    case "preview-changed":
+      return { ...state, previewRun: action.run };
+    case "format-changed":
+      return { ...state, format: action.format };
+    case "evaluation-plan-id-changed":
+      return { ...state, evaluationPlanId: action.value };
+    case "evaluation-plan-version-changed":
+      return { ...state, evaluationPlanVersion: action.value };
+    case "delete-requested":
+      return {
+        ...state,
+        deleteCandidate: action.candidate,
+        deleteError: null,
+        requestError: null,
+      };
+    case "delete-cleared":
+      return { ...state, deleteCandidate: null, deleteError: null };
+    case "delete-error-changed":
+      return { ...state, deleteError: action.message };
+    case "run-completed":
+      return {
+        ...state,
+        runs: [action.run, ...state.runs.filter((candidate) => candidate.id !== action.run.id)],
+        previewRun: action.run,
+        message: action.message,
+      };
+    case "retry":
+      return { ...state, retryToken: state.retryToken + 1 };
+  }
+}
 
 export function DirtySelectionDialog({
   open,
@@ -1475,34 +1697,41 @@ export function ReportsWorkspace({
       return null;
     }
   }, [baseUrl, eventId, normalizedOrganizationId, testMode]);
-  const [definitions, setDefinitions] = useState<readonly ReportDefinition[]>(initialDefinitions);
-  const [runs, setRuns] = useState<readonly ReportRun[]>(initialRuns);
-  const [selectedId, setSelectedId] = useState<string | null>(initialDefinitions[0]?.id ?? null);
-  const [draft, setDraft] = useState<ReportDefinitionInput>(() =>
-    initialDefinitions[0] === undefined ? newDraft() : draftFromDefinition(initialDefinitions[0]),
+  const [workspaceState, dispatch] = useReducer(
+    reportsWorkspaceReducer,
+    {
+      definitions: initialDefinitions,
+      runs: initialRuns,
+      testMode,
+      hasImmediateSnapshot,
+    },
+    initialReportsWorkspaceState,
   );
-  const [loading, setLoading] = useState(!testMode && !hasImmediateSnapshot);
-  const [loadState, setLoadState] = useState<"ready" | "empty" | "unavailable">(
-    initialDefinitions.length === 0 && hasImmediateSnapshot ? "empty" : "ready",
-  );
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [requestError, setRequestError] = useState<string | null>(null);
-  const [previewRun, setPreviewRun] = useState<ReportRun | null>(null);
-  const [format, setFormat] = useState<ReportFormat>("csv");
-  const [evaluationPlanId, setEvaluationPlanId] = useState("");
-  const [evaluationPlanVersion, setEvaluationPlanVersion] = useState("");
-  const [deleteCandidate, setDeleteCandidate] = useState<ReportDefinition | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const {
+    definitions,
+    runs,
+    selectedId,
+    draft,
+    loading,
+    loadState,
+    loadError,
+    busy,
+    message,
+    requestError,
+    previewRun,
+    format,
+    evaluationPlanId,
+    evaluationPlanVersion,
+    deleteCandidate,
+    deleteError,
+    retryToken,
+    selectionRequest,
+  } = workspaceState;
   const deleteRestoreRef = useRef<HTMLElement | null>(null);
   const selectionRestoreRef = useRef<HTMLElement | null>(null);
   const deleteInFlightRef = useRef(false);
-
-  const [retryToken, setRetryToken] = useState(0);
   const retrySeenRef = useRef(0);
   const loadGenerationRef = useRef(0);
-  const [selectionRequest, setSelectionRequest] = useState<SelectionRequest | null>(null);
   const filterKeyState = useRef<RowKeyState<ReportFilter>>({
     map: new WeakMap(),
     nextId: 0,
@@ -1550,16 +1779,11 @@ export function ReportsWorkspace({
 
   const applySnapshot = useCallback(
     (snapshot: ReportsNavigationCacheSnapshot): void => {
-      const nextDefinitions = snapshot.definitions.filter(
-        (definition) => definition.eventId === eventId,
-      );
-      const nextRuns = snapshot.runs.filter((run) => run.eventId === eventId);
-      setDefinitions(nextDefinitions);
-      setRuns(nextRuns);
-      setLoadState(nextDefinitions.length === 0 ? "empty" : "ready");
-      const first = nextDefinitions[0];
-      setSelectedId(first?.id ?? null);
-      setDraft(first === undefined ? newDraft() : draftFromDefinition(first));
+      dispatch({
+        type: "snapshot-applied",
+        definitions: snapshot.definitions.filter((definition) => definition.eventId === eventId),
+        runs: snapshot.runs.filter((run) => run.eventId === eventId),
+      });
     },
     [eventId],
   );
@@ -1571,7 +1795,7 @@ export function ReportsWorkspace({
 
   useEffect(() => {
     if (testMode || api === null) {
-      setLoading(false);
+      dispatch({ type: "loading-changed", loading: false });
       return;
     }
     let active = true;
@@ -1579,12 +1803,13 @@ export function ReportsWorkspace({
     const immediateSnapshot =
       navigationCache?.peek<ReportsNavigationCacheSnapshot>(reportsCacheKey);
     if (immediateSnapshot !== undefined) applySnapshot(immediateSnapshot);
-    setLoading(immediateSnapshot === undefined);
-    if (immediateSnapshot === undefined) setLoadState("ready");
-    setLoadError(null);
-    if (retryToken > 0) setRequestError(null);
     const controller = new AbortController();
     const retryFresh = retryToken !== retrySeenRef.current;
+    dispatch({
+      type: "load-started",
+      hasImmediateSnapshot: immediateSnapshot !== undefined,
+      retryFresh,
+    });
     retrySeenRef.current = retryToken;
     const load = async (): Promise<ReportsNavigationCacheSnapshot> => {
       const [definitions, runs] = await Promise.all([
@@ -1615,12 +1840,10 @@ export function ReportsWorkspace({
         if (!isCurrent() || (reason instanceof DOMException && reason.name === "AbortError"))
           return;
         const unavailable = isUnavailableError(reason);
-        setLoadError(errorMessage(reason));
-        setLoadState(unavailable ? "unavailable" : "ready");
-        setRequestError(unavailable ? null : errorMessage(reason));
+        dispatch({ type: "load-failed", unavailable, message: errorMessage(reason) });
       })
       .finally(() => {
-        if (isCurrent()) setLoading(false);
+        if (isCurrent()) dispatch({ type: "loading-changed", loading: false });
       });
     return () => {
       active = false;
@@ -1638,17 +1861,7 @@ export function ReportsWorkspace({
   ]);
 
   function applySelection(request: SelectionRequest): void {
-    if (request.kind === "new") {
-      setSelectedId(null);
-      setDraft(request.draft ?? newDraft());
-    } else {
-      setSelectedId(request.definition.id);
-      setDraft(draftFromDefinition(request.definition));
-    }
-    setMessage(null);
-    setRequestError(null);
-    setPreviewRun(null);
-    setSelectionRequest(null);
+    dispatch({ type: "selection-applied", request });
   }
 
   function requestSelectDefinition(definition: ReportDefinition, trigger: HTMLElement): void {
@@ -1656,7 +1869,7 @@ export function ReportsWorkspace({
     if (definition.id === selectedId) return;
     if (isDirty) {
       selectionRestoreRef.current = trigger;
-      setSelectionRequest(request);
+      dispatch({ type: "selection-requested", request });
       return;
     }
     selectionRestoreRef.current = null;
@@ -1672,7 +1885,7 @@ export function ReportsWorkspace({
     };
     if (isDirty) {
       selectionRestoreRef.current = trigger;
-      setSelectionRequest(request);
+      dispatch({ type: "selection-requested", request });
       return;
     }
     selectionRestoreRef.current = null;
@@ -1681,14 +1894,11 @@ export function ReportsWorkspace({
   function requestDeleteCandidate(candidate: ReportDefinition, trigger: HTMLElement): void {
     if (deleteInFlightRef.current) return;
     deleteRestoreRef.current = trigger;
-    setDeleteError(null);
-    setRequestError(null);
-    setDeleteCandidate(candidate);
+    dispatch({ type: "delete-requested", candidate });
   }
 
   function updateDraft(update: (current: ReportDefinitionInput) => ReportDefinitionInput): void {
-    setDraft((current) => normalizeDraft(update(current)));
-    setMessage(null);
+    dispatch({ type: "draft-replaced", draft: normalizeDraft(update(draft)) });
   }
 
   function toggleRelationship(relationship: ReportRelationship, checked: boolean): void {
@@ -1790,20 +2000,23 @@ export function ReportsWorkspace({
 
   async function saveDefinition(): Promise<void> {
     if (draft.name.trim().length === 0) {
-      setRequestError("Enter a report name before saving.");
+      dispatch({ type: "request-error-changed", message: "Enter a report name before saving." });
       return;
     }
     if (draft.fields.length === 0) {
-      setRequestError("Select at least one report field before saving.");
+      dispatch({
+        type: "request-error-changed",
+        message: "Select at least one report field before saving.",
+      });
       return;
     }
     if (api === null && !testMode) {
-      setRequestError("The reports API is not configured.");
+      dispatch({ type: "request-error-changed", message: "The reports API is not configured." });
       return;
     }
-    setBusy(true);
-    setRequestError(null);
-    setMessage(null);
+    dispatch({ type: "busy-changed", busy: true });
+    dispatch({ type: "request-error-changed", message: null });
+    dispatch({ type: "message-changed", message: null });
     try {
       if (selectedDefinition === null) {
         if (api === null) {
@@ -1823,21 +2036,21 @@ export function ReportsWorkspace({
             createdAt: seeded.createdAt,
             updatedAt: seeded.updatedAt,
           };
-          setDefinitions((current) => [...current, created]);
-          setSelectedId(created.id);
-          setDraft(draftFromDefinition(created));
-          setLoadState("ready");
-          setMessage("Report saved at version 1.");
+          dispatch({
+            type: "definitions-created",
+            definition: created,
+            message: "Report saved at version 1.",
+          });
           invalidateReportsCache();
           return;
         }
         const created = await api.createDefinition(draft);
         invalidateReportsCache();
-        setDefinitions((current) => [...current, created]);
-        setSelectedId(created.id);
-        setDraft(draftFromDefinition(created));
-        setLoadState("ready");
-        setMessage(`Report saved at version ${created.version}.`);
+        dispatch({
+          type: "definitions-created",
+          definition: created,
+          message: `Report saved at version ${created.version}.`,
+        });
       } else {
         if (api === null) {
           const updated = {
@@ -1846,11 +2059,11 @@ export function ReportsWorkspace({
             version: selectedDefinition.version + 1,
             updatedAt: new Date().toISOString(),
           } satisfies ReportDefinition;
-          setDefinitions((current) =>
-            current.map((item) => (item.id === updated.id ? updated : item)),
-          );
-          setDraft(draftFromDefinition(updated));
-          setMessage(`Report saved at version ${updated.version}.`);
+          dispatch({
+            type: "definition-updated",
+            definition: updated,
+            message: `Report saved at version ${updated.version}.`,
+          });
           invalidateReportsCache();
           return;
         }
@@ -1859,16 +2072,16 @@ export function ReportsWorkspace({
           expectedVersion: selectedDefinition.version,
         });
         invalidateReportsCache();
-        setDefinitions((current) =>
-          current.map((item) => (item.id === updated.id ? updated : item)),
-        );
-        setDraft(draftFromDefinition(updated));
-        setMessage(`Report saved at version ${updated.version}.`);
+        dispatch({
+          type: "definition-updated",
+          definition: updated,
+          message: `Report saved at version ${updated.version}.`,
+        });
       }
     } catch (reason: unknown) {
-      setRequestError(errorMessage(reason));
+      dispatch({ type: "request-error-changed", message: errorMessage(reason) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "busy-changed", busy: false });
     }
   }
 
@@ -1877,36 +2090,41 @@ export function ReportsWorkspace({
     const candidate = deleteCandidate;
     if (candidate === null) return;
     if (api === null && !testMode) {
-      setDeleteError("The reports API is not configured.");
+      dispatch({
+        type: "delete-error-changed",
+        message: "The reports API is not configured.",
+      });
       return;
     }
     deleteInFlightRef.current = true;
-    setBusy(true);
-    setDeleteError(null);
-    setRequestError(null);
+    dispatch({ type: "busy-changed", busy: true });
+    dispatch({ type: "delete-error-changed", message: null });
+    dispatch({ type: "request-error-changed", message: null });
     try {
       if (api !== null) await api.deleteDefinition(candidate.id, candidate.version);
       invalidateReportsCache();
-      setDefinitions((current) => current.filter((definition) => definition.id !== candidate.id));
-      if (selectedId === candidate.id) applySelection({ kind: "new" });
-      setDeleteCandidate(null);
-      setLoadState(definitions.length > 1 ? "ready" : "empty");
-      setMessage("Saved report deleted. Existing immutable run audit records remain available.");
+      dispatch({
+        type: "definition-deleted",
+        definitionId: candidate.id,
+        selected: selectedId === candidate.id,
+        loadState: definitions.length > 1 ? "ready" : "empty",
+        message: "Saved report deleted. Existing immutable run audit records remain available.",
+      });
     } catch (reason: unknown) {
-      setDeleteError(errorMessage(reason));
+      dispatch({ type: "delete-error-changed", message: errorMessage(reason) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "busy-changed", busy: false });
       deleteInFlightRef.current = false;
     }
   }
 
   async function runReport(preview: boolean): Promise<void> {
     if (selectedDefinition === null) {
-      setRequestError("Save the report before running it.");
+      dispatch({ type: "request-error-changed", message: "Save the report before running it." });
       return;
     }
     if (api === null && !testMode) {
-      setRequestError("The reports API is not configured.");
+      dispatch({ type: "request-error-changed", message: "The reports API is not configured." });
       return;
     }
     const planVersion = evaluationPlanVersion.trim();
@@ -1915,12 +2133,15 @@ export function ReportsWorkspace({
       numericPlanVersion !== undefined &&
       (!Number.isSafeInteger(numericPlanVersion) || numericPlanVersion < 1)
     ) {
-      setRequestError("Evaluation plan version must be a positive integer.");
+      dispatch({
+        type: "request-error-changed",
+        message: "Evaluation plan version must be a positive integer.",
+      });
       return;
     }
-    setBusy(true);
-    setRequestError(null);
-    setMessage(null);
+    dispatch({ type: "busy-changed", busy: true });
+    dispatch({ type: "request-error-changed", message: null });
+    dispatch({ type: "message-changed", message: null });
     try {
       const run =
         api === null
@@ -1936,32 +2157,35 @@ export function ReportsWorkspace({
                 : { evaluationPlanVersion: numericPlanVersion }),
             });
       invalidateReportsCache();
-      setRuns((current) => [run, ...current.filter((candidate) => candidate.id !== run.id)]);
-      setPreviewRun(run);
-      setMessage(
-        preview
+      dispatch({
+        type: "run-completed",
+        run,
+        message: preview
           ? `Preview generated from report version ${run.definitionVersion}.`
           : `Report run ${run.id} completed with ${run.audit.rowCount} row${run.audit.rowCount === 1 ? "" : "s"}.`,
-      );
+      });
     } catch (reason: unknown) {
-      setRequestError(errorMessage(reason));
+      dispatch({ type: "request-error-changed", message: errorMessage(reason) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "busy-changed", busy: false });
     }
   }
 
   async function downloadRun(run: ReportRun): Promise<void> {
     if (api === null && !testMode) {
-      setRequestError("The reports API is not configured.");
+      dispatch({ type: "request-error-changed", message: "The reports API is not configured." });
       return;
     }
     if (typeof document === "undefined") {
-      setRequestError("Report downloads require a browser.");
+      dispatch({
+        type: "request-error-changed",
+        message: "Report downloads require a browser.",
+      });
       return;
     }
-    setBusy(true);
-    setRequestError(null);
-    setMessage(null);
+    dispatch({ type: "busy-changed", busy: true });
+    dispatch({ type: "request-error-changed", message: null });
+    dispatch({ type: "message-changed", message: null });
     try {
       const download =
         api === null
@@ -1978,11 +2202,11 @@ export function ReportsWorkspace({
       anchor.download = download.fileName;
       anchor.click();
       URL.revokeObjectURL(url);
-      setMessage(`${download.fileName} is ready to download.`);
+      dispatch({ type: "message-changed", message: `${download.fileName} is ready to download.` });
     } catch (reason: unknown) {
-      setRequestError(errorMessage(reason));
+      dispatch({ type: "request-error-changed", message: errorMessage(reason) });
     } finally {
-      setBusy(false);
+      dispatch({ type: "busy-changed", busy: false });
     }
   }
 
@@ -1993,12 +2217,11 @@ export function ReportsWorkspace({
         <UnavailableState
           eventId={eventId}
           message={loadError ?? "The reports capability is unavailable."}
-          onRetry={() => setRetryToken((value) => value + 1)}
+          onRetry={() => dispatch({ type: "retry" })}
         />
       </main>
     );
   }
-
   return (
     <main className={styles.page} data-report-workspace-mode="outcome-first">
       <a className={styles.skipLink} href="#reports-content">
@@ -2076,8 +2299,10 @@ export function ReportsWorkspace({
             onAddSort={addSort}
             onUpdateSort={updateSort}
             onRemoveSort={removeSort}
-            onEvaluationPlanId={setEvaluationPlanId}
-            onEvaluationPlanVersion={setEvaluationPlanVersion}
+            onEvaluationPlanId={(value) => dispatch({ type: "evaluation-plan-id-changed", value })}
+            onEvaluationPlanVersion={(value) =>
+              dispatch({ type: "evaluation-plan-version-changed", value })
+            }
             onSave={() => void saveDefinition()}
             onDelete={(trigger) =>
               selectedDefinition && requestDeleteCandidate(selectedDefinition, trigger)
@@ -2087,7 +2312,7 @@ export function ReportsWorkspace({
             selectedDefinition={selectedDefinition}
             format={format}
             busy={busy}
-            onFormat={setFormat}
+            onFormat={(value) => dispatch({ type: "format-changed", format: value })}
             onPreview={() => void runReport(true)}
             onRun={() => void runReport(false)}
           />
@@ -2109,14 +2334,13 @@ export function ReportsWorkspace({
         onRestoreFocus={restoreDeleteFocus}
         onOpenChange={(open) => {
           if (open || busy) return;
-          setDeleteCandidate(null);
-          setDeleteError(null);
+          dispatch({ type: "delete-cleared" });
         }}
         onConfirm={() => void confirmDelete()}
       />
       <DirtySelectionDialog
         open={selectionRequest !== null}
-        onOpenChange={(open) => !open && setSelectionRequest(null)}
+        onOpenChange={(open) => !open && dispatch({ type: "selection-cleared" })}
         onRestoreFocus={restoreSelectionFocus}
         onDiscard={() => selectionRequest && applySelection(selectionRequest)}
       />

@@ -6,6 +6,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -293,6 +294,254 @@ function draftEqual(left: TemplateDraft, right: TemplateDraft): boolean {
     left.variables.join("\u0000") === right.variables.join("\u0000")
   );
 }
+type CommunicationStateUpdate<T> = T | ((current: T) => T);
+
+function resolveCommunicationStateUpdate<T>(current: T, update: CommunicationStateUpdate<T>): T {
+  return typeof update === "function" ? (update as (current: T) => T)(current) : update;
+}
+
+type CommunicationsTemplateState = {
+  readonly templates: readonly CommunicationTemplate[];
+  readonly preview: CommunicationPreview | null;
+  readonly send: CommunicationSend | null;
+  readonly selectedTemplateId: string;
+  readonly selectedTemplateVersion: number | undefined;
+  readonly creatingTemplate: boolean;
+  readonly selectedAudience: CommunicationAudience;
+};
+
+type CommunicationsTemplateAction =
+  | {
+      readonly type: "templates-loaded";
+      readonly templates: readonly CommunicationTemplate[];
+    }
+  | {
+      readonly type: "set-templates";
+      readonly value: CommunicationStateUpdate<readonly CommunicationTemplate[]>;
+    }
+  | { readonly type: "template-replaced"; readonly template: CommunicationTemplate }
+  | { readonly type: "set-preview"; readonly preview: CommunicationPreview | null }
+  | { readonly type: "set-send"; readonly send: CommunicationSend | null }
+  | {
+      readonly type: "set-selected-template-id";
+      readonly value: CommunicationStateUpdate<string>;
+    }
+  | {
+      readonly type: "set-selected-template-version";
+      readonly value: CommunicationStateUpdate<number | undefined>;
+    }
+  | {
+      readonly type: "select-template";
+      readonly templateId: string;
+      readonly templateVersion: number | undefined;
+    }
+  | { readonly type: "set-creating-template"; readonly creating: boolean }
+  | { readonly type: "set-audience"; readonly audience: CommunicationAudience }
+  | { readonly type: "invalidate-preview" };
+
+function sortCommunicationTemplates(
+  templates: readonly CommunicationTemplate[],
+): readonly CommunicationTemplate[] {
+  return [...templates].sort(
+    (left, right) => left.id.localeCompare(right.id) || left.version - right.version,
+  );
+}
+
+function communicationsTemplateReducer(
+  state: CommunicationsTemplateState,
+  action: CommunicationsTemplateAction,
+): CommunicationsTemplateState {
+  switch (action.type) {
+    case "templates-loaded": {
+      const currentSelectionIsPresent =
+        state.selectedTemplateId.length > 0 &&
+        state.selectedTemplateVersion !== undefined &&
+        action.templates.some(
+          (template) =>
+            template.id === state.selectedTemplateId &&
+            template.version === state.selectedTemplateVersion,
+        );
+      const first = action.templates[0];
+      return {
+        ...state,
+        templates: action.templates,
+        ...(currentSelectionIsPresent
+          ? {}
+          : {
+              selectedTemplateId: first?.id ?? "",
+              selectedTemplateVersion: first?.version,
+            }),
+      };
+    }
+    case "set-templates":
+      return {
+        ...state,
+        templates: resolveCommunicationStateUpdate(state.templates, action.value),
+      };
+    case "template-replaced":
+      return {
+        ...state,
+        templates: sortCommunicationTemplates([
+          ...state.templates.filter(
+            (template) =>
+              !(template.id === action.template.id && template.version === action.template.version),
+          ),
+          action.template,
+        ]),
+        preview: null,
+        selectedTemplateId: action.template.id,
+        selectedTemplateVersion: action.template.version,
+        creatingTemplate: false,
+      };
+    case "set-preview":
+      return { ...state, preview: action.preview };
+    case "set-send":
+      return { ...state, send: action.send };
+    case "set-selected-template-id":
+      return {
+        ...state,
+        selectedTemplateId: resolveCommunicationStateUpdate(state.selectedTemplateId, action.value),
+      };
+    case "set-selected-template-version":
+      return {
+        ...state,
+        selectedTemplateVersion: resolveCommunicationStateUpdate(
+          state.selectedTemplateVersion,
+          action.value,
+        ),
+      };
+    case "select-template":
+      return {
+        ...state,
+        selectedTemplateId: action.templateId,
+        selectedTemplateVersion: action.templateVersion,
+        creatingTemplate: false,
+      };
+    case "set-creating-template":
+      return { ...state, creatingTemplate: action.creating };
+    case "set-audience":
+      return { ...state, selectedAudience: action.audience };
+    case "invalidate-preview":
+      return { ...state, preview: null };
+  }
+}
+
+type CommunicationsReminderState = {
+  readonly runs: readonly ReminderRun[];
+  readonly dispatches: readonly ReminderDispatch[];
+  readonly facts: ReminderFacts | null;
+  readonly state: ReminderTruthState;
+  readonly error: string | null;
+};
+
+type CommunicationsReminderAction =
+  | { readonly type: "refresh-start" }
+  | {
+      readonly type: "snapshot-loaded";
+      readonly snapshot: CommunicationReminderTruthSnapshot;
+    }
+  | { readonly type: "load-failed"; readonly state: ReminderTruthState; readonly error: string }
+  | { readonly type: "run-recorded"; readonly run: ReminderRun }
+  | { readonly type: "set-runs"; readonly runs: readonly ReminderRun[] }
+  | { readonly type: "set-dispatches"; readonly dispatches: readonly ReminderDispatch[] }
+  | { readonly type: "set-facts"; readonly facts: ReminderFacts | null }
+  | { readonly type: "set-state"; readonly state: ReminderTruthState }
+  | { readonly type: "set-error"; readonly error: string | null };
+
+function communicationsReminderReducer(
+  state: CommunicationsReminderState,
+  action: CommunicationsReminderAction,
+): CommunicationsReminderState {
+  switch (action.type) {
+    case "refresh-start":
+      return { ...state, state: "pending", error: null };
+    case "snapshot-loaded":
+      return {
+        runs: action.snapshot.runs,
+        dispatches: action.snapshot.dispatches,
+        facts: action.snapshot.facts,
+        state: "ready",
+        error: null,
+      };
+    case "load-failed":
+      return { ...state, state: action.state, error: action.error };
+    case "run-recorded":
+      return {
+        ...state,
+        runs: [...state.runs.filter((run) => run.id !== action.run.id), action.run],
+        state: "ready",
+        error: null,
+      };
+    case "set-runs":
+      return { ...state, runs: action.runs };
+    case "set-dispatches":
+      return { ...state, dispatches: action.dispatches };
+    case "set-facts":
+      return { ...state, facts: action.facts };
+    case "set-state":
+      return { ...state, state: action.state };
+    case "set-error":
+      return { ...state, error: action.error };
+  }
+}
+
+type CommunicationsUiState = {
+  readonly loading: boolean;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly statusMessage: string | null;
+  readonly providerState: CommunicationProviderState;
+  readonly sendConfirmationOpen: boolean;
+};
+
+type CommunicationsUiAction =
+  | { readonly type: "set-loading"; readonly value: CommunicationStateUpdate<boolean> }
+  | { readonly type: "set-busy"; readonly value: CommunicationStateUpdate<boolean> }
+  | { readonly type: "set-error"; readonly value: CommunicationStateUpdate<string | null> }
+  | {
+      readonly type: "set-status-message";
+      readonly value: CommunicationStateUpdate<string | null>;
+    }
+  | {
+      readonly type: "set-provider-state";
+      readonly value: CommunicationStateUpdate<CommunicationProviderState>;
+    }
+  | {
+      readonly type: "set-send-confirmation-open";
+      readonly value: CommunicationStateUpdate<boolean>;
+    };
+
+function communicationsUiReducer(
+  state: CommunicationsUiState,
+  action: CommunicationsUiAction,
+): CommunicationsUiState {
+  switch (action.type) {
+    case "set-loading":
+      return { ...state, loading: resolveCommunicationStateUpdate(state.loading, action.value) };
+    case "set-busy":
+      return { ...state, busy: resolveCommunicationStateUpdate(state.busy, action.value) };
+    case "set-error":
+      return { ...state, error: resolveCommunicationStateUpdate(state.error, action.value) };
+    case "set-status-message":
+      return {
+        ...state,
+        statusMessage: resolveCommunicationStateUpdate(state.statusMessage, action.value),
+      };
+    case "set-provider-state":
+      return {
+        ...state,
+        providerState: resolveCommunicationStateUpdate(state.providerState, action.value),
+      };
+    case "set-send-confirmation-open":
+      return {
+        ...state,
+        sendConfirmationOpen: resolveCommunicationStateUpdate(
+          state.sendConfirmationOpen,
+          action.value,
+        ),
+      };
+  }
+}
 
 function resolveEditorTemplate(
   templates: readonly CommunicationTemplate[],
@@ -331,12 +580,6 @@ function TemplateEditor({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [internalApprovalDialogOpen, setInternalApprovalDialogOpen] = useState(false);
-
-  useEffect(() => {
-    setDraft(templateDraftFrom(selected));
-    setFormError(null);
-    setApprovalError(null);
-  }, [selected]);
 
   const persistedDraft = useMemo(() => templateDraftFrom(selected), [selected]);
   const dirty = !draftEqual(draft, persistedDraft);
@@ -1751,6 +1994,11 @@ export function CommunicationsWorkspaceView({
                     </CardContent>
                   </Card>
                   <TemplateEditor
+                    key={
+                      selectedForEditor === undefined
+                        ? "new"
+                        : `${selectedForEditor.id}:${selectedForEditor.version}`
+                    }
                     selected={selectedForEditor}
                     busy={busy}
                     {...(onCreateTemplate === undefined ? {} : { onCreateTemplate })}
@@ -1921,40 +2169,73 @@ function CommunicationsWorkspaceForScope({
   const hasImmediateReminderTruth = useRef(
     hasExplicitReminderTruth || cachedReminderTruth !== undefined,
   ).current;
-  const [templates, setTemplates] =
-    useState<readonly CommunicationTemplate[]>(initialTemplateValue);
-  const [preview, setPreview] = useState<CommunicationPreview | null>(initialPreview);
-  const [send, setSend] = useState<CommunicationSend | null>(initialSend);
-  const [reminderRuns, setReminderRuns] = useState<readonly ReminderRun[]>(
-    initialReminderTruth.runs,
-  );
-  const [reminderDispatches, setReminderDispatches] = useState<readonly ReminderDispatch[]>(
-    initialReminderTruth.dispatches,
-  );
-  const [reminderFacts, setReminderFacts] = useState<ReminderFacts | null>(
-    initialReminderTruth.facts,
-  );
-  const [reminderState, setReminderState] = useState<ReminderTruthState>(
-    hasImmediateReminderTruth ? "ready" : "idle",
-  );
-  const [reminderError, setReminderError] = useState<string | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(
-    initialTemplateValue[0]?.id ?? initialPreview?.templateId ?? "",
-  );
-  const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | undefined>(
-    initialTemplateValue[0]?.version ?? initialPreview?.templateVersion,
-  );
-  const [creatingTemplate, setCreatingTemplate] = useState(false);
-  const [selectedAudience, setSelectedAudience] = useState<CommunicationAudience>(
-    initialPreview?.audience ?? "all_participants",
-  );
-  const [loading, setLoading] = useState(!hasImmediateTemplateData);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [providerState, setProviderState] =
-    useState<CommunicationProviderState>(initialProviderState);
-  const [sendConfirmationOpen, setSendConfirmationOpen] = useState(false);
+  const [templateState, dispatchTemplate] = useReducer(communicationsTemplateReducer, {
+    templates: initialTemplateValue,
+    preview: initialPreview,
+    send: initialSend,
+    selectedTemplateId: initialTemplateValue[0]?.id ?? initialPreview?.templateId ?? "",
+    selectedTemplateVersion: initialTemplateValue[0]?.version ?? initialPreview?.templateVersion,
+    creatingTemplate: false,
+    selectedAudience: initialPreview?.audience ?? "all_participants",
+  });
+  const {
+    templates,
+    preview,
+    send,
+    selectedTemplateId,
+    selectedTemplateVersion,
+    creatingTemplate,
+    selectedAudience,
+  } = templateState;
+  const [reminderTruth, dispatchReminder] = useReducer(communicationsReminderReducer, {
+    runs: initialReminderTruth.runs,
+    dispatches: initialReminderTruth.dispatches,
+    facts: initialReminderTruth.facts,
+    state: hasImmediateReminderTruth ? "ready" : "idle",
+    error: null,
+  });
+  const {
+    runs: reminderRuns,
+    dispatches: reminderDispatches,
+    facts: reminderFacts,
+  } = reminderTruth;
+  const reminderState = reminderTruth.state;
+  const reminderError = reminderTruth.error;
+  const [uiState, dispatchUi] = useReducer(communicationsUiReducer, {
+    loading: !hasImmediateTemplateData,
+    busy: false,
+    error: null,
+    statusMessage: null,
+    providerState: initialProviderState,
+    sendConfirmationOpen: false,
+  });
+  const { loading, busy, error, statusMessage, providerState, sendConfirmationOpen } = uiState;
+  const setPreview = (value: CommunicationPreview | null): void =>
+    dispatchTemplate({ type: "set-preview", preview: value });
+  const setSend = (value: CommunicationSend | null): void =>
+    dispatchTemplate({ type: "set-send", send: value });
+  const setReminderState = (value: ReminderTruthState): void =>
+    dispatchReminder({ type: "set-state", state: value });
+  const setReminderError = (value: string | null): void =>
+    dispatchReminder({ type: "set-error", error: value });
+  const setSelectedTemplateId = (value: CommunicationStateUpdate<string>): void =>
+    dispatchTemplate({ type: "set-selected-template-id", value });
+  const setSelectedTemplateVersion = (value: CommunicationStateUpdate<number | undefined>): void =>
+    dispatchTemplate({ type: "set-selected-template-version", value });
+  const setCreatingTemplate = (value: boolean): void =>
+    dispatchTemplate({ type: "set-creating-template", creating: value });
+  const setSelectedAudience = (value: CommunicationAudience): void =>
+    dispatchTemplate({ type: "set-audience", audience: value });
+  const setBusy = (value: CommunicationStateUpdate<boolean>): void =>
+    dispatchUi({ type: "set-busy", value });
+  const setError = (value: CommunicationStateUpdate<string | null>): void =>
+    dispatchUi({ type: "set-error", value });
+  const setStatusMessage = (value: CommunicationStateUpdate<string | null>): void =>
+    dispatchUi({ type: "set-status-message", value });
+  const setProviderState = (value: CommunicationStateUpdate<CommunicationProviderState>): void =>
+    dispatchUi({ type: "set-provider-state", value });
+  const setSendConfirmationOpen = (value: CommunicationStateUpdate<boolean>): void =>
+    dispatchUi({ type: "set-send-confirmation-open", value });
   const idempotencyKeyRef = useRef<string | null>(null);
   const reminderIdempotencyKeyRef = useRef<string | null>(null);
   const templateLoadGenerationRef = useRef(0);
@@ -1992,8 +2273,8 @@ function CommunicationsWorkspaceForScope({
       sendConfirmationOpen: false,
       idempotencyKey: null,
     });
-    setPreview(next.preview);
-    setSendConfirmationOpen(next.sendConfirmationOpen);
+    dispatchTemplate({ type: "invalidate-preview" });
+    dispatchUi({ type: "set-send-confirmation-open", value: next.sendConfirmationOpen });
     idempotencyKeyRef.current = next.idempotencyKey;
   }, []);
 
@@ -2005,8 +2286,8 @@ function CommunicationsWorkspaceForScope({
     ) => {
       const generation = templateLoadGenerationRef.current + 1;
       templateLoadGenerationRef.current = generation;
-      if (showLoading) setLoading(true);
-      setError(null);
+      if (showLoading) dispatchUi({ type: "set-loading", value: true });
+      dispatchUi({ type: "set-error", value: null });
       await loadCommunicationTemplates({
         read: () =>
           initialRead ??
@@ -2017,23 +2298,10 @@ function CommunicationsWorkspaceForScope({
           communicationScopeKey ===
             `${normalizeCommunicationScopeId(organizationId)}:${normalizeCommunicationScopeId(eventId)}`,
         onLoaded: (loaded) => {
-          setTemplates(loaded);
-          const currentSelection = selectedTemplateSelectionRef.current;
-          const exactCurrent =
-            currentSelection !== undefined &&
-            loaded.some(
-              (template) =>
-                template.id === currentSelection.templateId &&
-                template.version === currentSelection.templateVersion,
-            );
-          if (!exactCurrent) {
-            const first = loaded[0];
-            setSelectedTemplateId(first?.id ?? "");
-            setSelectedTemplateVersion(first?.version);
-          }
+          dispatchTemplate({ type: "templates-loaded", templates: loaded });
         },
-        onError: setError,
-        onSettled: () => setLoading(false),
+        onError: (reason) => dispatchUi({ type: "set-error", value: reason }),
+        onSettled: () => dispatchUi({ type: "set-loading", value: false }),
       });
     },
     [communicationScopeKey, eventId, initialReadKey, organizationId],
@@ -2047,8 +2315,8 @@ function CommunicationsWorkspaceForScope({
         communicationScopeKey ===
           `${normalizeCommunicationScopeId(organizationId)}:${normalizeCommunicationScopeId(eventId)}` &&
         !signal?.aborted;
-      if (showPending) setReminderState("pending");
-      setReminderError(null);
+      if (showPending) dispatchReminder({ type: "refresh-start" });
+      else dispatchReminder({ type: "set-error", error: null });
       const load = async (
         requestSignal?: AbortSignal,
       ): Promise<CommunicationReminderTruthSnapshot> => {
@@ -2075,14 +2343,17 @@ function CommunicationsWorkspaceForScope({
                 load: () => load(),
               });
         if (!isCurrent()) return;
-        setReminderRuns(loaded.runs);
-        setReminderDispatches(loaded.dispatches);
-        setReminderFacts(loaded.facts);
-        setReminderState("ready");
+        dispatchReminder({
+          type: "snapshot-loaded",
+          snapshot: loaded,
+        });
       } catch (reason) {
         if (!isCurrent()) return;
-        setReminderState(reminderTruthStateFromError(reason));
-        setReminderError(messageFromError(reason));
+        dispatchReminder({
+          type: "load-failed",
+          state: reminderTruthStateFromError(reason),
+          error: messageFromError(reason),
+        });
       }
     },
     [
@@ -2101,15 +2372,24 @@ function CommunicationsWorkspaceForScope({
       navigationCache?.write(templateCacheKey, initialTemplates, templateCacheTags);
       return;
     }
-    setTemplates((current) => (hasImmediateTemplateData ? current : []));
-    setPreview(null);
-    setSend(null);
-    setSelectedTemplateId((current) => (hasImmediateTemplateData ? current : ""));
-    setSelectedTemplateVersion((current) => (hasImmediateTemplateData ? current : undefined));
-    setCreatingTemplate(false);
-    setSelectedAudience("all_participants");
-    setStatusMessage(null);
-    setSendConfirmationOpen(false);
+    dispatchTemplate({
+      type: "set-templates",
+      value: (current) => (hasImmediateTemplateData ? current : []),
+    });
+    dispatchTemplate({ type: "set-preview", preview: null });
+    dispatchTemplate({ type: "set-send", send: null });
+    dispatchTemplate({
+      type: "set-selected-template-id",
+      value: (current) => (hasImmediateTemplateData ? current : ""),
+    });
+    dispatchTemplate({
+      type: "set-selected-template-version",
+      value: (current) => (hasImmediateTemplateData ? current : undefined),
+    });
+    dispatchTemplate({ type: "set-creating-template", creating: false });
+    dispatchTemplate({ type: "set-audience", audience: "all_participants" });
+    dispatchUi({ type: "set-status-message", value: null });
+    dispatchUi({ type: "set-send-confirmation-open", value: false });
     idempotencyKeyRef.current = null;
     if (navigationCache !== null) {
       const read = navigationCache.read<readonly CommunicationTemplate[]>({
@@ -2160,19 +2440,16 @@ function CommunicationsWorkspaceForScope({
   ]);
 
   function replaceTemplate(next: CommunicationTemplate): void {
-    const nextTemplates = [
+    const nextTemplates = sortCommunicationTemplates([
       ...templates.filter(
         (template) => !(template.id === next.id && template.version === next.version),
       ),
       next,
-    ].sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+    ]);
     templateLoadGenerationRef.current += 1;
     navigationCache?.invalidate(templateCacheTags.slice(-1));
     navigationCache?.write(templateCacheKey, nextTemplates, templateCacheTags);
-    setTemplates(nextTemplates);
-    setSelectedTemplateId(next.id);
-    setSelectedTemplateVersion(next.version);
-    setCreatingTemplate(false);
+    dispatchTemplate({ type: "template-replaced", template: next });
     invalidatePreview();
   }
 
@@ -2401,9 +2678,8 @@ function CommunicationsWorkspaceForScope({
         },
         reminderTruthCacheTags,
       );
-      setReminderRuns(nextRuns);
+      dispatchReminder({ type: "run-recorded", run: next });
       reminderIdempotencyKeyRef.current = null;
-      setReminderState("ready");
       setStatusMessage(`Manual reminder run ${next.id} is ${statusLabel(next.state)}.`);
       await refreshDeliveryTruth(true);
     } catch (reason) {
@@ -2477,6 +2753,3 @@ export function CommunicationsWorkspace(props: CommunicationsWorkspaceProps) {
   const scopeKey = `${normalizeCommunicationScopeId(props.organizationId)}:${normalizeCommunicationScopeId(eventId)}`;
   return <CommunicationsWorkspaceForScope key={scopeKey} {...props} eventId={eventId} />;
 }
-
-export const CommunicationWorkspace = CommunicationsWorkspace;
-export const CommunicationWorkspaceView = CommunicationsWorkspaceView;

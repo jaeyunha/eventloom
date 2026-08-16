@@ -8,6 +8,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -118,6 +119,7 @@ const statusClass = styles.status;
 const bytesPerMegabyte = 1024 * 1024;
 const EMPTY_ASSET_HISTORY: readonly DeliverableAssetHistoryEntry[] = [];
 const EMPTY_COMMENTS: readonly DeliverableComment[] = [];
+const EMPTY_TASK_IDS: readonly string[] = [];
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
 export function deliverablesCoreCacheKey(
@@ -481,6 +483,29 @@ export interface ContentRequestFilters {
   readonly taskId: string;
   readonly status: ContentRequestStatusFilter;
 }
+interface DeliverablesViewOverrides {
+  readonly ownerKey: string;
+  readonly filters: ContentRequestFilters;
+  readonly selectedTaskIds: readonly string[];
+  readonly selectedAssignmentId: string | null;
+}
+
+const DEFAULT_CONTENT_REQUEST_FILTERS: ContentRequestFilters = {
+  query: "",
+  speakerId: "all",
+  sessionId: "all",
+  taskId: "all",
+  status: "all",
+};
+
+function initialDeliverablesViewOverrides(ownerKey: string): DeliverablesViewOverrides {
+  return {
+    ownerKey,
+    filters: DEFAULT_CONTENT_REQUEST_FILTERS,
+    selectedTaskIds: [],
+    selectedAssignmentId: null,
+  };
+}
 
 export interface ContentRequestMetrics {
   readonly all: number;
@@ -785,6 +810,120 @@ function DeliverablesSummary({
     </section>
   );
 }
+type TaskComposerState = {
+  readonly open: boolean;
+  readonly title: string;
+  readonly description: string;
+  readonly dueAt: string;
+  readonly acceptedAssetKind: DeliverableAssetKind;
+  readonly allowedMimeTypes: readonly string[];
+  readonly maxSizeMb: string;
+  readonly subjectType: "participant" | "session";
+  readonly assigneeIds: readonly string[];
+  readonly sessionByParticipant: Readonly<Record<string, string>>;
+  readonly formError: string | null;
+};
+
+type TaskComposerAction =
+  | { readonly type: "set-open"; readonly value: boolean }
+  | { readonly type: "set-title"; readonly value: string }
+  | { readonly type: "set-description"; readonly value: string }
+  | { readonly type: "set-due-at"; readonly value: string }
+  | { readonly type: "select-asset-kind"; readonly kind: DeliverableAssetKind }
+  | {
+      readonly type: "toggle-file-format";
+      readonly format: RequestFileFormat;
+      readonly checked: boolean;
+    }
+  | { readonly type: "set-max-size-mb"; readonly value: string }
+  | { readonly type: "set-subject-type"; readonly value: "participant" | "session" }
+  | { readonly type: "toggle-assignee"; readonly participantId: string }
+  | {
+      readonly type: "set-session";
+      readonly participantId: string;
+      readonly submissionId: string;
+    }
+  | { readonly type: "set-form-error"; readonly value: string | null }
+  | { readonly type: "reset" };
+
+function taskComposerInitialState(): TaskComposerState {
+  const policy = requestFilePolicyFor("slides");
+  return {
+    open: false,
+    title: "",
+    description: "",
+    dueAt: "",
+    acceptedAssetKind: policy.kind,
+    allowedMimeTypes: requestFilePolicyMimeTypes(policy),
+    maxSizeMb: String(policy.maxBytes / bytesPerMegabyte),
+    subjectType: "session",
+    assigneeIds: [],
+    sessionByParticipant: {},
+    formError: null,
+  };
+}
+
+function taskComposerReducer(
+  state: TaskComposerState,
+  action: TaskComposerAction,
+): TaskComposerState {
+  switch (action.type) {
+    case "set-open":
+      return { ...state, open: action.value };
+    case "set-title":
+      return { ...state, title: action.value };
+    case "set-description":
+      return { ...state, description: action.value };
+    case "set-due-at":
+      return { ...state, dueAt: action.value };
+    case "select-asset-kind": {
+      const policy = requestFilePolicyFor(action.kind);
+      return {
+        ...state,
+        acceptedAssetKind: action.kind,
+        allowedMimeTypes: requestFilePolicyMimeTypes(policy),
+        maxSizeMb: String(policy.maxBytes / bytesPerMegabyte),
+      };
+    }
+    case "toggle-file-format": {
+      const selected = new Set(state.allowedMimeTypes);
+      for (const mimeType of action.format.mimeTypes) {
+        if (action.checked) selected.add(mimeType);
+        else selected.delete(mimeType);
+      }
+      const policy = requestFilePolicyFor(state.acceptedAssetKind);
+      return {
+        ...state,
+        allowedMimeTypes: requestFilePolicyMimeTypes(policy).filter((mimeType) =>
+          selected.has(mimeType),
+        ),
+      };
+    }
+    case "set-max-size-mb":
+      return { ...state, maxSizeMb: action.value };
+    case "set-subject-type":
+      return { ...state, subjectType: action.value };
+    case "toggle-assignee": {
+      const assigneeIds = state.assigneeIds.includes(action.participantId)
+        ? state.assigneeIds.filter((id) => id !== action.participantId)
+        : [...state.assigneeIds, action.participantId];
+      return { ...state, assigneeIds };
+    }
+    case "set-session":
+      return {
+        ...state,
+        sessionByParticipant: {
+          ...state.sessionByParticipant,
+          [action.participantId]: action.submissionId,
+        },
+      };
+    case "set-form-error":
+      return { ...state, formError: action.value };
+    case "reset":
+      return taskComposerInitialState();
+  }
+  return state;
+}
 
 function TaskComposer({
   participants,
@@ -795,39 +934,31 @@ function TaskComposer({
   busy: boolean;
   onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }>) {
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [dueAt, setDueAt] = useState("");
-  const [acceptedAssetKind, setAcceptedAssetKind] = useState<DeliverableAssetKind>("slides");
-  const [allowedMimeTypes, setAllowedMimeTypes] = useState<readonly string[]>(() =>
-    requestFilePolicyMimeTypes(requestFilePolicyFor("slides")),
-  );
-  const [maxSizeMb, setMaxSizeMb] = useState(() =>
-    String(requestFilePolicyFor("slides").maxBytes / bytesPerMegabyte),
-  );
-  const [subjectType, setSubjectType] = useState<"participant" | "session">("session");
-  const [assigneeIds, setAssigneeIds] = useState<readonly string[]>([]);
-  const [sessionByParticipant, setSessionByParticipant] = useState<
-    Readonly<Record<string, string>>
-  >({});
-  const [formError, setFormError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(taskComposerReducer, undefined, taskComposerInitialState);
+  const {
+    open,
+    title,
+    description,
+    dueAt,
+    acceptedAssetKind,
+    allowedMimeTypes,
+    maxSizeMb,
+    subjectType,
+    assigneeIds,
+    sessionByParticipant,
+    formError,
+  } = state;
   const assignmentCount = assigneeIds.length;
   const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
   const assigneeIdSet = useMemo(() => new Set(assigneeIds), [assigneeIds]);
   const allowedMimeTypeSet = useMemo(() => new Set(allowedMimeTypes), [allowedMimeTypes]);
 
   function toggleAssignee(id: string): void {
-    setAssigneeIds((current) =>
-      current.includes(id) ? current.filter((candidate) => candidate !== id) : [...current, id],
-    );
+    dispatch({ type: "toggle-assignee", participantId: id });
   }
 
   function selectAssetKind(kind: DeliverableAssetKind): void {
-    const policy = requestFilePolicyFor(kind);
-    setAcceptedAssetKind(kind);
-    setAllowedMimeTypes(requestFilePolicyMimeTypes(policy));
-    setMaxSizeMb(String(policy.maxBytes / bytesPerMegabyte));
+    dispatch({ type: "select-asset-kind", kind });
   }
 
   function updateSelectedAssetKind(value: string): void {
@@ -840,16 +971,7 @@ function TaskComposer({
   }
 
   function toggleFileFormat(format: RequestFileFormat, checked: boolean): void {
-    setAllowedMimeTypes((current) => {
-      const selected = new Set(current);
-      for (const mimeType of format.mimeTypes) {
-        if (checked) selected.add(mimeType);
-        else selected.delete(mimeType);
-      }
-      return requestFilePolicyMimeTypes(selectedFilePolicy).filter((mimeType) =>
-        selected.has(mimeType),
-      );
-    });
+    dispatch({ type: "toggle-file-format", format, checked });
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -863,31 +985,41 @@ function TaskComposer({
       normalizedDescription.length === 0 ||
       normalizedDueAt.length === 0
     ) {
-      setFormError("Task name, instructions, and due date are required.");
+      dispatch({
+        type: "set-form-error",
+        value: "Task name, instructions, and due date are required.",
+      });
       return;
     }
     if (allowedMimeTypes.length === 0 || !Number.isSafeInteger(maxSize) || maxSize <= 0) {
-      setFormError("Choose at least one file format and a positive maximum size in MB.");
+      dispatch({
+        type: "set-form-error",
+        value: "Choose at least one file format and a positive maximum size in MB.",
+      });
       return;
     }
     if (assigneeIds.length === 0) {
-      setFormError("Choose at least one speaker assignee.");
+      dispatch({ type: "set-form-error", value: "Choose at least one speaker assignee." });
       return;
     }
     if (
       subjectType === "session" &&
       assigneeIds.some((participantId) => !sessionByParticipant[participantId])
     ) {
-      setFormError("Choose an explicit accepted session for every selected speaker.");
+      dispatch({
+        type: "set-form-error",
+        value: "Choose an explicit accepted session for every selected speaker.",
+      });
       return;
     }
     if (onCreateTask === undefined) {
-      setFormError(
-        "Task creation is unavailable because no organizer task endpoint is provisioned.",
-      );
+      dispatch({
+        type: "set-form-error",
+        value: "Task creation is unavailable because no organizer task endpoint is provisioned.",
+      });
       return;
     }
-    setFormError(null);
+    dispatch({ type: "set-form-error", value: null });
     try {
       await onCreateTask({
         title: normalizedTitle,
@@ -903,25 +1035,15 @@ function TaskComposer({
         acceptedAssetKinds: [acceptedAssetKind],
       });
     } catch (reason) {
-      setFormError(messageFromError(reason));
+      dispatch({ type: "set-form-error", value: messageFromError(reason) });
       return;
     }
-    setTitle("");
-    setDescription("");
-    setDueAt("");
-    const defaultFilePolicy = requestFilePolicyFor("slides");
-    setAcceptedAssetKind(defaultFilePolicy.kind);
-    setAllowedMimeTypes(requestFilePolicyMimeTypes(defaultFilePolicy));
-    setMaxSizeMb(String(defaultFilePolicy.maxBytes / bytesPerMegabyte));
-    setSubjectType("session");
-    setAssigneeIds([]);
-    setSessionByParticipant({});
-    setOpen(false);
+    dispatch({ type: "reset" });
   }
 
   return (
     <div className={styles.createTaskAction}>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(value) => dispatch({ type: "set-open", value })}>
         <DialogTrigger asChild>
           <Button type="button" disabled={onCreateTask === undefined}>
             {onCreateTask === undefined ? "Task creation unavailable" : "New content request"}
@@ -949,7 +1071,9 @@ function TaskComposer({
                   <Input
                     id="task-name"
                     value={title}
-                    onChange={(event) => setTitle(event.currentTarget.value)}
+                    onChange={(event) =>
+                      dispatch({ type: "set-title", value: event.currentTarget.value })
+                    }
                     placeholder="Upload Session Presentation"
                     required
                   />
@@ -960,7 +1084,9 @@ function TaskComposer({
                     id="task-due-date"
                     type="date"
                     value={dueAt}
-                    onChange={(event) => setDueAt(event.currentTarget.value)}
+                    onChange={(event) =>
+                      dispatch({ type: "set-due-at", value: event.currentTarget.value })
+                    }
                     required
                   />
                 </div>
@@ -971,7 +1097,9 @@ function TaskComposer({
                   id="task-instructions"
                   rows={3}
                   value={description}
-                  onChange={(event) => setDescription(event.currentTarget.value)}
+                  onChange={(event) =>
+                    dispatch({ type: "set-description", value: event.currentTarget.value })
+                  }
                   placeholder="Final slide deck as a PDF or PowerPoint file, 16:9 aspect ratio."
                   required
                 />
@@ -1038,7 +1166,9 @@ function TaskComposer({
                     max={selectedFilePolicy.maxBytes / bytesPerMegabyte}
                     step={1}
                     value={maxSizeMb}
-                    onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
+                    onChange={(event) =>
+                      dispatch({ type: "set-max-size-mb", value: event.currentTarget.value })
+                    }
                   />
                   <small className={mutedClass}>
                     Platform limit for {selectedFilePolicy.label.toLowerCase()}:{" "}
@@ -1063,7 +1193,12 @@ function TaskComposer({
                 <Label htmlFor="task-subject-type">Request subject</Label>
                 <Select
                   value={subjectType}
-                  onValueChange={(value) => setSubjectType(value as "participant" | "session")}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: "set-subject-type",
+                      value: value as "participant" | "session",
+                    })
+                  }
                 >
                   <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
                     <SelectValue />
@@ -1122,10 +1257,11 @@ function TaskComposer({
                                     ? {}
                                     : { value: sessionByParticipant[participant.id] })}
                                   onValueChange={(submissionId) =>
-                                    setSessionByParticipant((current) => ({
-                                      ...current,
-                                      [participant.id]: submissionId,
-                                    }))
+                                    dispatch({
+                                      type: "set-session",
+                                      participantId: participant.id,
+                                      submissionId,
+                                    })
                                   }
                                 >
                                   <SelectTrigger id={`task-session-${participant.id}`}>
@@ -1161,7 +1297,11 @@ function TaskComposer({
               </Alert>
             ) : null}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => dispatch({ type: "set-open", value: false })}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={busy || onCreateTask === undefined}>
@@ -2229,57 +2369,60 @@ export function DeliverablesWorkspaceView({
       }))
       .sort((left, right) => left.label.localeCompare(right.label));
   }, [profiles, rows, sessions]);
-  const [selectedTaskIds, setSelectedTaskIds] = useState<readonly string[]>([]);
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<ContentRequestFilters>({
-    query: "",
-    speakerId: "all",
-    sessionId: "all",
-    taskId: "all",
-    status: "all",
-  });
+  const viewOwnerKey = `${organizationId.trim()}\u0000${eventId.trim()}\u0000${mode}`;
+  const [viewOverrides, setViewOverrides] = useState<DeliverablesViewOverrides | null>(null);
+  const ownedViewOverrides = viewOverrides?.ownerKey === viewOwnerKey ? viewOverrides : undefined;
+  const filters = ownedViewOverrides?.filters ?? DEFAULT_CONTENT_REQUEST_FILTERS;
+  const selectedTaskIds = ownedViewOverrides?.selectedTaskIds ?? EMPTY_TASK_IDS;
+  const selectedAssignmentId = ownedViewOverrides?.selectedAssignmentId ?? null;
   const [reminderPreviewMode, setReminderPreviewMode] = useState<"selected" | "all" | null>(null);
+  const updateViewOverrides = useCallback(
+    (update: (current: DeliverablesViewOverrides) => DeliverablesViewOverrides): void => {
+      setViewOverrides((current) => {
+        const base =
+          current?.ownerKey === viewOwnerKey
+            ? current
+            : initialDeliverablesViewOverrides(viewOwnerKey);
+        return update(base);
+      });
+    },
+    [viewOwnerKey],
+  );
 
-  useEffect(() => {
-    const nextFilters = {
-      ...filters,
-      speakerId:
-        filters.speakerId !== "all" &&
-        !rows.some((row) => row.task.participantId === filters.speakerId)
-          ? "all"
-          : filters.speakerId,
-      sessionId:
-        filters.sessionId !== "all" &&
-        !rows.some((row) => (row.task.submissionId ?? "participant") === filters.sessionId)
-          ? "all"
-          : filters.sessionId,
-      taskId:
-        filters.taskId !== "all" && !rows.some((row) => row.task.id === filters.taskId)
-          ? "all"
-          : filters.taskId,
-    };
-    if (
-      nextFilters.speakerId !== filters.speakerId ||
-      nextFilters.sessionId !== filters.sessionId ||
-      nextFilters.taskId !== filters.taskId
-    ) {
-      setFilters(nextFilters);
-    }
+  const validFilters = useMemo<ContentRequestFilters>(() => {
+    const speakerId =
+      filters.speakerId !== "all" &&
+      rows.some((row) => row.task.participantId === filters.speakerId)
+        ? filters.speakerId
+        : "all";
+    const sessionId =
+      filters.sessionId !== "all" &&
+      rows.some((row) => (row.task.submissionId ?? "participant") === filters.sessionId)
+        ? filters.sessionId
+        : "all";
+    const taskId =
+      filters.taskId !== "all" && rows.some((row) => row.task.id === filters.taskId)
+        ? filters.taskId
+        : "all";
+    return { ...filters, speakerId, sessionId, taskId };
+  }, [filters, rows]);
+  const validSelectedTaskIds = useMemo(() => {
     const visibleOutstandingIds = new Set<string>();
-    for (const row of filterContentRequestRows(rows, nextFilters)) {
+    for (const row of filterContentRequestRows(rows, validFilters)) {
       if (isOutstanding(row.status)) visibleOutstandingIds.add(row.task.id);
     }
-    setSelectedTaskIds((current) => current.filter((taskId) => visibleOutstandingIds.has(taskId)));
-    setSelectedAssignmentId((current) =>
-      current !== null && rows.some((row) => row.task.id === current) ? current : null,
-    );
-  }, [filters, rows]);
+    return selectedTaskIds.filter((taskId) => visibleOutstandingIds.has(taskId));
+  }, [rows, selectedTaskIds, validFilters]);
+  const validSelectedAssignmentId =
+    selectedAssignmentId !== null && rows.some((row) => row.task.id === selectedAssignmentId)
+      ? selectedAssignmentId
+      : null;
 
   const selectedAssignment =
-    selectedAssignmentId === null
+    validSelectedAssignmentId === null
       ? undefined
-      : rows.find((row) => row.task.id === selectedAssignmentId);
-  const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
+      : rows.find((row) => row.task.id === validSelectedAssignmentId);
+  const selectedTaskIdSet = useMemo(() => new Set(validSelectedTaskIds), [validSelectedTaskIds]);
   const reminderPreviewRows = rows.filter(
     (row) =>
       isOutstanding(row.status) &&
@@ -2459,30 +2602,52 @@ export function DeliverablesWorkspaceView({
           {!filesMode ? (
             <>
               <DeliverablesSummary
+                key={viewOwnerKey}
                 rows={rows}
                 activeFilter={filters.status}
-                onFilter={(status) => setFilters((current) => ({ ...current, status }))}
+                onFilter={(status) =>
+                  updateViewOverrides((current) => ({
+                    ...current,
+                    filters: { ...current.filters, status },
+                  }))
+                }
                 participants={participants}
                 busy={busy}
                 {...(onCreateTask === undefined ? {} : { onCreateTask })}
               />
               <DeliverablesTable
                 rows={rows}
-                selectedTaskIds={selectedTaskIds}
-                selectedAssignmentId={selectedAssignmentId}
+                selectedTaskIds={validSelectedTaskIds}
+                selectedAssignmentId={validSelectedAssignmentId}
                 onToggleTask={(taskId) =>
-                  setSelectedTaskIds((current) =>
-                    current.includes(taskId)
-                      ? current.filter((candidate) => candidate !== taskId)
-                      : [...current, taskId],
-                  )
+                  updateViewOverrides((current) => ({
+                    ...current,
+                    selectedTaskIds: current.selectedTaskIds.includes(taskId)
+                      ? current.selectedTaskIds.filter((candidate) => candidate !== taskId)
+                      : [...current.selectedTaskIds, taskId],
+                  }))
                 }
-                onSetVisibleSelection={(taskIds) => setSelectedTaskIds([...taskIds])}
-                onOpenAssignment={setSelectedAssignmentId}
+                onSetVisibleSelection={(taskIds) =>
+                  updateViewOverrides((current) => ({
+                    ...current,
+                    selectedTaskIds: [...taskIds],
+                  }))
+                }
+                onOpenAssignment={(taskId) =>
+                  updateViewOverrides((current) => ({
+                    ...current,
+                    selectedAssignmentId: taskId,
+                  }))
+                }
                 onPreviewSelectedReminders={() => setReminderPreviewMode("selected")}
                 onPreviewAllReminders={() => setReminderPreviewMode("all")}
-                filters={filters}
-                onFiltersChange={setFilters}
+                filters={validFilters}
+                onFiltersChange={(nextFilters) =>
+                  updateViewOverrides((current) => ({
+                    ...current,
+                    filters: nextFilters,
+                  }))
+                }
                 busy={busy}
               />
             </>
@@ -2532,7 +2697,10 @@ export function DeliverablesWorkspaceView({
                       taskIds: reminderPreviewRows.map((row) => row.task.id),
                       recipientIds,
                     });
-                    setSelectedTaskIds([]);
+                    updateViewOverrides((current) => ({
+                      ...current,
+                      selectedTaskIds: [],
+                    }));
                     setReminderPreviewMode(null);
                   }}
                 />
@@ -2543,7 +2711,11 @@ export function DeliverablesWorkspaceView({
             <Sheet
               open={selectedAssignment !== undefined}
               onOpenChange={(open) => {
-                if (!open) setSelectedAssignmentId(null);
+                if (!open)
+                  updateViewOverrides((current) => ({
+                    ...current,
+                    selectedAssignmentId: null,
+                  }));
               }}
             >
               <SheetContent className={styles.assignmentSheet}>
@@ -2561,7 +2733,10 @@ export function DeliverablesWorkspaceView({
                         ? {}
                         : {
                             onInspectAsset: (assetId) => {
-                              setSelectedAssignmentId(null);
+                              updateViewOverrides((current) => ({
+                                ...current,
+                                selectedAssignmentId: null,
+                              }));
                               onInspectAsset(assetId);
                             },
                           })}
@@ -3065,6 +3240,352 @@ function canLoadDeliverablesCoreSnapshot(
   return api.listTasks !== undefined && api.listAssets !== undefined;
 }
 
+type DeliverablesWorkspaceState = {
+  readonly sessions: readonly DeliverableSession[];
+  readonly tasks: readonly DeliverableTask[];
+  readonly assets: readonly DeliverableAsset[];
+  readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly speakerContentHistory: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
+  readonly matrix: DeliverableTaskMatrix | undefined;
+  readonly loading: boolean;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly statusMessage: string | null;
+  readonly capabilityMessages: readonly string[];
+  readonly selectedAssetId: string | null;
+  readonly selectedSessionId: string | null;
+  readonly sessionHistory: readonly DeliverableContentHistoryEntry[] | undefined;
+  readonly sessionHistoryError: string | null;
+  readonly sessionHistoryKey: string | null;
+  readonly assetHistory: readonly DeliverableAssetHistoryEntry[];
+  readonly comments: readonly DeliverableComment[];
+  readonly loadingAssetDetails: boolean;
+  readonly assetHistoryError: string | null;
+  readonly commentsError: string | null;
+  readonly loadingSessionHistories: boolean;
+  readonly operationStates: Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>;
+};
+
+type DeliverablesWorkspaceStateValue<T> = T | ((current: T) => T);
+
+type DeliverablesWorkspaceAction =
+  | {
+      readonly type: "reset-scope";
+      readonly value: DeliverablesWorkspaceState;
+    }
+  | {
+      readonly type: "sessions";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["sessions"]>;
+    }
+  | {
+      readonly type: "tasks";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["tasks"]>;
+    }
+  | {
+      readonly type: "assets";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["assets"]>;
+    }
+  | {
+      readonly type: "profiles";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["profiles"]>;
+    }
+  | {
+      readonly type: "speaker-content-history";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["speakerContentHistory"]
+      >;
+    }
+  | {
+      readonly type: "matrix";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["matrix"]>;
+    }
+  | {
+      readonly type: "loading";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["loading"]>;
+    }
+  | {
+      readonly type: "busy";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["busy"]>;
+    }
+  | {
+      readonly type: "error";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["error"]>;
+    }
+  | {
+      readonly type: "status-message";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["statusMessage"]>;
+    }
+  | {
+      readonly type: "capability-messages";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["capabilityMessages"]
+      >;
+    }
+  | {
+      readonly type: "selected-asset-id";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["selectedAssetId"]
+      >;
+    }
+  | {
+      readonly type: "selected-session-id";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["selectedSessionId"]
+      >;
+    }
+  | {
+      readonly type: "session-history";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["sessionHistory"]>;
+    }
+  | {
+      readonly type: "session-history-error";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["sessionHistoryError"]
+      >;
+    }
+  | {
+      readonly type: "session-history-key";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["sessionHistoryKey"]
+      >;
+    }
+  | {
+      readonly type: "asset-history";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["assetHistory"]>;
+    }
+  | {
+      readonly type: "comments";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["comments"]>;
+    }
+  | {
+      readonly type: "loading-asset-details";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["loadingAssetDetails"]
+      >;
+    }
+  | {
+      readonly type: "asset-history-error";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["assetHistoryError"]
+      >;
+    }
+  | {
+      readonly type: "comments-error";
+      readonly value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["commentsError"]>;
+    }
+  | {
+      readonly type: "loading-session-histories";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["loadingSessionHistories"]
+      >;
+    }
+  | {
+      readonly type: "operation-states";
+      readonly value: DeliverablesWorkspaceStateValue<
+        DeliverablesWorkspaceState["operationStates"]
+      >;
+    };
+
+function resolveDeliverablesWorkspaceStateValue<T>(
+  current: T,
+  next: DeliverablesWorkspaceStateValue<T>,
+): T {
+  return typeof next === "function" ? (next as (current: T) => T)(current) : next;
+}
+
+function deliverablesWorkspaceReducer(
+  state: DeliverablesWorkspaceState,
+  action: DeliverablesWorkspaceAction,
+): DeliverablesWorkspaceState {
+  switch (action.type) {
+    case "reset-scope":
+      return action.value;
+    case "sessions":
+      return {
+        ...state,
+        sessions: resolveDeliverablesWorkspaceStateValue(state.sessions, action.value),
+      };
+    case "tasks":
+      return {
+        ...state,
+        tasks: resolveDeliverablesWorkspaceStateValue(state.tasks, action.value),
+      };
+    case "assets":
+      return {
+        ...state,
+        assets: resolveDeliverablesWorkspaceStateValue(state.assets, action.value),
+      };
+    case "profiles":
+      return {
+        ...state,
+        profiles: resolveDeliverablesWorkspaceStateValue(state.profiles, action.value),
+      };
+    case "speaker-content-history":
+      return {
+        ...state,
+        speakerContentHistory: resolveDeliverablesWorkspaceStateValue(
+          state.speakerContentHistory,
+          action.value,
+        ),
+      };
+    case "matrix":
+      return {
+        ...state,
+        matrix: resolveDeliverablesWorkspaceStateValue(state.matrix, action.value),
+      };
+    case "loading":
+      return {
+        ...state,
+        loading: resolveDeliverablesWorkspaceStateValue(state.loading, action.value),
+      };
+    case "busy":
+      return {
+        ...state,
+        busy: resolveDeliverablesWorkspaceStateValue(state.busy, action.value),
+      };
+    case "error":
+      return {
+        ...state,
+        error: resolveDeliverablesWorkspaceStateValue(state.error, action.value),
+      };
+    case "status-message":
+      return {
+        ...state,
+        statusMessage: resolveDeliverablesWorkspaceStateValue(state.statusMessage, action.value),
+      };
+    case "capability-messages":
+      return {
+        ...state,
+        capabilityMessages: resolveDeliverablesWorkspaceStateValue(
+          state.capabilityMessages,
+          action.value,
+        ),
+      };
+    case "selected-asset-id":
+      return {
+        ...state,
+        selectedAssetId: resolveDeliverablesWorkspaceStateValue(
+          state.selectedAssetId,
+          action.value,
+        ),
+      };
+    case "selected-session-id":
+      return {
+        ...state,
+        selectedSessionId: resolveDeliverablesWorkspaceStateValue(
+          state.selectedSessionId,
+          action.value,
+        ),
+      };
+    case "session-history":
+      return {
+        ...state,
+        sessionHistory: resolveDeliverablesWorkspaceStateValue(state.sessionHistory, action.value),
+      };
+    case "session-history-error":
+      return {
+        ...state,
+        sessionHistoryError: resolveDeliverablesWorkspaceStateValue(
+          state.sessionHistoryError,
+          action.value,
+        ),
+      };
+    case "session-history-key":
+      return {
+        ...state,
+        sessionHistoryKey: resolveDeliverablesWorkspaceStateValue(
+          state.sessionHistoryKey,
+          action.value,
+        ),
+      };
+    case "asset-history":
+      return {
+        ...state,
+        assetHistory: resolveDeliverablesWorkspaceStateValue(state.assetHistory, action.value),
+      };
+    case "comments":
+      return {
+        ...state,
+        comments: resolveDeliverablesWorkspaceStateValue(state.comments, action.value),
+      };
+    case "loading-asset-details":
+      return {
+        ...state,
+        loadingAssetDetails: resolveDeliverablesWorkspaceStateValue(
+          state.loadingAssetDetails,
+          action.value,
+        ),
+      };
+    case "asset-history-error":
+      return {
+        ...state,
+        assetHistoryError: resolveDeliverablesWorkspaceStateValue(
+          state.assetHistoryError,
+          action.value,
+        ),
+      };
+    case "comments-error":
+      return {
+        ...state,
+        commentsError: resolveDeliverablesWorkspaceStateValue(state.commentsError, action.value),
+      };
+    case "loading-session-histories":
+      return {
+        ...state,
+        loadingSessionHistories: resolveDeliverablesWorkspaceStateValue(
+          state.loadingSessionHistories,
+          action.value,
+        ),
+      };
+    case "operation-states":
+      return {
+        ...state,
+        operationStates: resolveDeliverablesWorkspaceStateValue(
+          state.operationStates,
+          action.value,
+        ),
+      };
+  }
+  return state;
+}
+
+function initialDeliverablesWorkspaceState(
+  seededCoreData: DeliverablesSnapshot | undefined,
+  speakerContentHistory:
+    | Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
+    | undefined,
+  cachedCoreData: DeliverablesSnapshot | undefined,
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+): DeliverablesWorkspaceState {
+  const profiles = seededCoreData?.profiles ?? [];
+  return {
+    sessions: seededCoreData?.sessions ?? [],
+    tasks: seededCoreData?.tasks ?? [],
+    assets: seededCoreData?.assets ?? [],
+    profiles,
+    speakerContentHistory: speakerContentHistoryStatesForProfiles(profiles, speakerContentHistory),
+    matrix: seededCoreData?.matrix,
+    loading: seededCoreData === undefined,
+    busy: false,
+    error: null,
+    statusMessage: null,
+    capabilityMessages:
+      cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
+    selectedAssetId: null,
+    selectedSessionId: seededCoreData?.sessions[0]?.id ?? null,
+    sessionHistory: undefined,
+    sessionHistoryError: null,
+    sessionHistoryKey: null,
+    assetHistory: [],
+    comments: [],
+    loadingAssetDetails: false,
+    assetHistoryError: null,
+    commentsError: null,
+    loadingSessionHistories: false,
+    operationStates: {},
+  };
+}
 export function DeliverablesWorkspace({
   eventId: fallbackEventId,
   organizationId,
@@ -3132,53 +3653,78 @@ export function DeliverablesWorkspace({
   useLayoutEffect(() => {
     scopeRef.current = currentScope;
   }, [currentScope]);
-  const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
-    seededCoreData?.sessions ?? [],
-  );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(seededCoreData?.tasks ?? []);
-  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(seededCoreData?.assets ?? []);
-  const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
-    seededCoreData?.profiles ?? [],
-  );
-  const [speakerContentHistory, setSpeakerContentHistory] = useState<
-    Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
-  >(() =>
-    speakerContentHistoryStatesForProfiles(
-      seededCoreData?.profiles ?? [],
+  const [workspaceState, dispatch] = useReducer(
+    deliverablesWorkspaceReducer,
+    initialDeliverablesWorkspaceState(
+      seededCoreData,
       initialData?.speakerContentHistory,
+      cachedCoreData,
+      api,
+      mode,
     ),
   );
-  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(seededCoreData?.matrix);
-  const [loading, setLoading] = useState(seededCoreData === undefined);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>(
-    cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
+  const {
+    sessions,
+    tasks,
+    assets,
+    profiles,
+    speakerContentHistory,
+    matrix,
+    loading,
+    busy,
+    error,
+    statusMessage,
+    capabilityMessages,
+    selectedAssetId,
+    selectedSessionId,
+    sessionHistory,
+    sessionHistoryError,
+    sessionHistoryKey,
+    assetHistory,
+    comments,
+    loadingAssetDetails,
+    assetHistoryError,
+    commentsError,
+    loadingSessionHistories,
+    operationStates,
+  } = workspaceState;
+  const setSessions = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["sessions"]>,
+  ) => dispatch({ type: "sessions", value });
+  const setTasks = (value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["tasks"]>) =>
+    dispatch({ type: "tasks", value });
+  const setAssets = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["assets"]>,
+  ) => dispatch({ type: "assets", value });
+  const setProfiles = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["profiles"]>,
+  ) => dispatch({ type: "profiles", value });
+  const setMatrix = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["matrix"]>,
+  ) => dispatch({ type: "matrix", value });
+  const setBusy = (value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["busy"]>) =>
+    dispatch({ type: "busy", value });
+  const setError = (value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["error"]>) =>
+    dispatch({ type: "error", value });
+  const setStatusMessage = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["statusMessage"]>,
+  ) => dispatch({ type: "status-message", value });
+  const setSelectedAssetId = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["selectedAssetId"]>,
+  ) => dispatch({ type: "selected-asset-id", value });
+  const setSelectedSessionId = useCallback(
+    (value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["selectedSessionId"]>) =>
+      dispatch({ type: "selected-session-id", value }),
+    [],
   );
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-    seededCoreData?.sessions[0]?.id ?? null,
-  );
-  const [sessionHistory, setSessionHistory] = useState<
-    readonly DeliverableContentHistoryEntry[] | undefined
-  >(undefined);
-  const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(null);
-  const [sessionHistoryKey, setSessionHistoryKey] = useState<string | null>(null);
+  const setOperationStates = (
+    value: DeliverablesWorkspaceStateValue<DeliverablesWorkspaceState["operationStates"]>,
+  ) => dispatch({ type: "operation-states", value });
   const sessionHistoryCacheRef = useRef<DeliverablesSessionHistoryCache>(new Map());
   const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
   useLayoutEffect(() => {
     selectedAssetIdRef.current = selectedAssetId;
   }, [selectedAssetId]);
-  const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
-  const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
-  const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
-  const [assetHistoryError, setAssetHistoryError] = useState<string | null>(null);
-  const [commentsError, setCommentsError] = useState<string | null>(null);
-  const [loadingSessionHistories, setLoadingSessionHistories] = useState(false);
-  const [operationStates, setOperationStates] = useState<
-    Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>
-  >({});
   const busyLeaseRef = useRef(0);
   const sessionHistoryLeaseRef = useRef(0);
   const assetDetailsLeaseRef = useRef(0);
@@ -3197,37 +3743,20 @@ export function DeliverablesWorkspace({
     sessionHistoryLeaseRef.current += 1;
     assetDetailsLeaseRef.current += 1;
     loadGenerationRef.current += 1;
-    setSessions(seededCoreData?.sessions ?? []);
-    setTasks(seededCoreData?.tasks ?? []);
-    setAssets(seededCoreData?.assets ?? []);
-    setProfiles(seededCoreData?.profiles ?? []);
-    setSpeakerContentHistory(
-      speakerContentHistoryStatesForProfiles(
-        seededCoreData?.profiles ?? [],
-        initialData?.speakerContentHistory,
-      ),
-    );
-    setMatrix(seededCoreData?.matrix);
-    setLoading(seededCoreData === undefined);
-    setError(null);
-    setCapabilityMessages(
-      cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
-    );
     sessionHistoryCacheRef.current.clear();
-    setSelectedSessionId(null);
-    setSessionHistory(undefined);
-    setSessionHistoryError(null);
-    setSessionHistoryKey(null);
-    setLoadingSessionHistories(false);
-    setSelectedAssetId(null);
-    setAssetHistory([]);
-    setComments([]);
-    setAssetHistoryError(null);
-    setCommentsError(null);
-    setLoadingAssetDetails(false);
-    setBusy(false);
-    setStatusMessage(null);
-    setOperationStates({});
+    dispatch({
+      type: "reset-scope",
+      value: {
+        ...initialDeliverablesWorkspaceState(
+          seededCoreData,
+          initialData?.speakerContentHistory,
+          cachedCoreData,
+          api,
+          mode,
+        ),
+        selectedSessionId: null,
+      },
+    });
   }, [api, cachedCoreData, currentScope, initialData, mode, seededCoreData]);
 
   function recordOperation(
@@ -3248,34 +3777,46 @@ export function DeliverablesWorkspace({
       const isCurrent = (): boolean =>
         !signal?.aborted && isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
       if (!isCurrent()) return;
-      setSpeakerContentHistory((current) => ({
-        ...current,
-        [participantId]: speakerContentHistoryLoading(),
-      }));
+      dispatch({
+        type: "speaker-content-history",
+        value: (current) => ({
+          ...current,
+          [participantId]: speakerContentHistoryLoading(),
+        }),
+      });
       const listSpeakerContentHistory = api?.listSpeakerContentHistory;
       if (listSpeakerContentHistory === undefined) {
         if (!isCurrent()) return;
-        setSpeakerContentHistory((current) => ({
-          ...current,
-          [participantId]: speakerContentHistoryError(
-            new Error("The speaker content history endpoint is not provisioned."),
-          ),
-        }));
+        dispatch({
+          type: "speaker-content-history",
+          value: (current) => ({
+            ...current,
+            [participantId]: speakerContentHistoryError(
+              new Error("The speaker content history endpoint is not provisioned."),
+            ),
+          }),
+        });
         return;
       }
       try {
         const entries = await listSpeakerContentHistory(participantId, signal);
         if (!isCurrent()) return;
-        setSpeakerContentHistory((current) => ({
-          ...current,
-          [participantId]: speakerContentHistorySuccess(entries),
-        }));
+        dispatch({
+          type: "speaker-content-history",
+          value: (current) => ({
+            ...current,
+            [participantId]: speakerContentHistorySuccess(entries),
+          }),
+        });
       } catch (reason) {
         if (!isCurrent()) return;
-        setSpeakerContentHistory((current) => ({
-          ...current,
-          [participantId]: speakerContentHistoryError(reason),
-        }));
+        dispatch({
+          type: "speaker-content-history",
+          value: (current) => ({
+            ...current,
+            [participantId]: speakerContentHistoryError(reason),
+          }),
+        });
       }
     },
     [api],
@@ -3329,9 +3870,9 @@ export function DeliverablesWorkspace({
           return;
         }
         if (!isCurrent()) return;
-        setLoading(true);
-        setError(null);
-        setLoadingSessionHistories(false);
+        dispatch({ type: "loading", value: true });
+        dispatch({ type: "error", value: null });
+        dispatch({ type: "loading-session-histories", value: false });
         if (!fresh && cachedCoreData !== undefined) {
           try {
             const authorizedSnapshot = await authorizeContentCollectionNavigationSnapshot(
@@ -3343,24 +3884,25 @@ export function DeliverablesWorkspace({
             if (authorizedSnapshot === undefined) {
               invalidateDeliverablesCoreCache(scope);
             } else {
-              setSessions(authorizedSnapshot.sessions);
-              setTasks(authorizedSnapshot.tasks);
-              setAssets(authorizedSnapshot.assets);
-              setProfiles(authorizedSnapshot.profiles);
-              setSpeakerContentHistory(
-                speakerContentHistoryStatesForProfiles(
+              dispatch({ type: "sessions", value: authorizedSnapshot.sessions });
+              dispatch({ type: "tasks", value: authorizedSnapshot.tasks });
+              dispatch({ type: "assets", value: authorizedSnapshot.assets });
+              dispatch({ type: "profiles", value: authorizedSnapshot.profiles });
+              dispatch({
+                type: "speaker-content-history",
+                value: speakerContentHistoryStatesForProfiles(
                   authorizedSnapshot.profiles,
                   authorizedSnapshot.speakerContentHistory,
                 ),
-              );
-              setMatrix(authorizedSnapshot.matrix);
-              setCapabilityMessages([]);
+              });
+              dispatch({ type: "matrix", value: authorizedSnapshot.matrix });
+              dispatch({ type: "capability-messages", value: [] });
               return;
             }
           } catch (reason) {
             invalidateDeliverablesCoreCache(scope);
             if (isCurrent()) {
-              setError(messageFromError(reason));
+              dispatch({ type: "error", value: messageFromError(reason) });
             }
             return;
           }
@@ -3374,14 +3916,15 @@ export function DeliverablesWorkspace({
               load: () => loadDeliverablesCoreSnapshot(api, mode),
             });
             if (!isCurrent()) return;
-            setSessions(snapshot.sessions);
-            setTasks(snapshot.tasks);
-            setAssets(snapshot.assets);
-            setProfiles(snapshot.profiles);
-            setMatrix(snapshot.matrix);
+            dispatch({ type: "sessions", value: snapshot.sessions });
+            dispatch({ type: "tasks", value: snapshot.tasks });
+            dispatch({ type: "assets", value: snapshot.assets });
+            dispatch({ type: "profiles", value: snapshot.profiles });
+            dispatch({ type: "matrix", value: snapshot.matrix });
             if (mode === "deliverables") {
-              setSpeakerContentHistory(
-                speakerContentHistoryStatesForProfiles(
+              dispatch({
+                type: "speaker-content-history",
+                value: speakerContentHistoryStatesForProfiles(
                   snapshot.profiles,
                   Object.fromEntries(
                     snapshot.profiles.map((profile) => [
@@ -3390,11 +3933,14 @@ export function DeliverablesWorkspace({
                     ]),
                   ),
                 ),
-              );
+              });
             } else {
-              setSpeakerContentHistory({});
+              dispatch({ type: "speaker-content-history", value: {} });
             }
-            setCapabilityMessages([...deliverablesCapabilityMessages(api, mode)]);
+            dispatch({
+              type: "capability-messages",
+              value: [...deliverablesCapabilityMessages(api, mode)],
+            });
             return;
           } catch {
             // The uncached path preserves partial projections and capability errors.
@@ -3402,8 +3948,8 @@ export function DeliverablesWorkspace({
         }
         if (initialData !== undefined) return;
         if (!isCurrent()) return;
-        setLoading(true);
-        setError(null);
+        dispatch({ type: "loading", value: true });
+        dispatch({ type: "error", value: null });
         const messages: string[] = [];
         const requests = startDeliverablesCoreRequests(api, mode, signal);
         const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
@@ -3418,9 +3964,9 @@ export function DeliverablesWorkspace({
 
         if (sessionsResult?.ok === true) {
           const coreSessions = sessionsResult.value;
-          setSessions(coreSessions);
+          dispatch({ type: "sessions", value: coreSessions });
         } else if (sessionsResult !== undefined) {
-          setError(messageFromError(sessionsResult.reason));
+          dispatch({ type: "error", value: messageFromError(sessionsResult.reason) });
         }
 
         if (requests.matrix === undefined) {
@@ -3432,15 +3978,16 @@ export function DeliverablesWorkspace({
               "Task tracking unavailable: no organizer task projection endpoint is provisioned.",
             );
           } else if (tasksResult?.ok === true) {
-            setTasks(tasksResult.value);
+            dispatch({ type: "tasks", value: tasksResult.value });
           } else if (tasksResult !== undefined) {
             messages.push(`Task tracking unavailable: ${messageFromError(tasksResult.reason)}`);
           }
         } else if (matrixResult?.ok === true) {
           const nextMatrix = matrixResult.value;
-          setMatrix(nextMatrix);
-          setTasks(nextMatrix.items.map((item) => item.task));
-          if (mode === "deliverables") setAssets(matrixAssets(nextMatrix));
+          dispatch({ type: "matrix", value: nextMatrix });
+          dispatch({ type: "tasks", value: nextMatrix.items.map((item) => item.task) });
+          if (mode === "deliverables")
+            dispatch({ type: "assets", value: matrixAssets(nextMatrix) });
         } else if (matrixResult !== undefined) {
           messages.push(
             `Exact deliverables matrix unavailable: ${messageFromError(matrixResult.reason)}`,
@@ -3449,7 +3996,7 @@ export function DeliverablesWorkspace({
 
         if (requests.assets !== undefined) {
           if (assetsResult?.ok === true) {
-            setAssets(assetsResult.value);
+            dispatch({ type: "assets", value: assetsResult.value });
           } else if (assetsResult !== undefined) {
             messages.push(
               `Private asset library unavailable: ${messageFromError(assetsResult.reason)}`,
@@ -3464,10 +4011,11 @@ export function DeliverablesWorkspace({
         if (requests.profiles !== undefined) {
           if (profilesResult?.ok === true) {
             const loadedProfiles = profilesResult.value;
-            setProfiles(loadedProfiles);
+            dispatch({ type: "profiles", value: loadedProfiles });
             if (mode === "deliverables") {
-              setSpeakerContentHistory(
-                speakerContentHistoryStatesForProfiles(
+              dispatch({
+                type: "speaker-content-history",
+                value: speakerContentHistoryStatesForProfiles(
                   loadedProfiles,
                   Object.fromEntries(
                     loadedProfiles.map((profile) => [
@@ -3476,7 +4024,7 @@ export function DeliverablesWorkspace({
                     ]),
                   ),
                 ),
-              );
+              });
               void Promise.all(
                 loadedProfiles.map((profile) =>
                   refreshSpeakerContentHistory(profile.participantId, signal),
@@ -3484,7 +4032,7 @@ export function DeliverablesWorkspace({
               );
             }
           } else if (profilesResult !== undefined) {
-            setSpeakerContentHistory({});
+            dispatch({ type: "speaker-content-history", value: {} });
             messages.push(
               mode === "files"
                 ? `Speaker labels unavailable: ${messageFromError(profilesResult.reason)}`
@@ -3492,7 +4040,7 @@ export function DeliverablesWorkspace({
             );
           }
         } else if (mode === "files" || requests.matrix === undefined) {
-          setSpeakerContentHistory({});
+          dispatch({ type: "speaker-content-history", value: {} });
           messages.push(
             mode === "files"
               ? "Speaker labels are unavailable: the private profile endpoint is not provisioned for organizer access."
@@ -3505,9 +4053,10 @@ export function DeliverablesWorkspace({
             .catch((reason: unknown) => ({ ok: false as const, reason }));
           if (result.ok) {
             const loadedProfiles = result.value;
-            setProfiles(loadedProfiles);
-            setSpeakerContentHistory(
-              speakerContentHistoryStatesForProfiles(
+            dispatch({ type: "profiles", value: loadedProfiles });
+            dispatch({
+              type: "speaker-content-history",
+              value: speakerContentHistoryStatesForProfiles(
                 loadedProfiles,
                 Object.fromEntries(
                   loadedProfiles.map((profile) => [
@@ -3516,20 +4065,20 @@ export function DeliverablesWorkspace({
                   ]),
                 ),
               ),
-            );
+            });
             void Promise.all(
               loadedProfiles.map((profile) =>
                 refreshSpeakerContentHistory(profile.participantId, signal),
               ),
             );
           } else {
-            setSpeakerContentHistory({});
+            dispatch({ type: "speaker-content-history", value: {} });
             messages.push(
               `Speaker profile editing unavailable: ${messageFromError(result.reason)}`,
             );
           }
         } else {
-          setSpeakerContentHistory({});
+          dispatch({ type: "speaker-content-history", value: {} });
           messages.push(
             "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
           );
@@ -3565,15 +4114,17 @@ export function DeliverablesWorkspace({
           messages.push(
             `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
           );
-        setCapabilityMessages(messages);
+        dispatch({ type: "capability-messages", value: messages });
       } finally {
-        setLoading((current) =>
-          !signal?.aborted &&
-          loadGenerationRef.current === generation &&
-          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
-            ? false
-            : current,
-        );
+        dispatch({
+          type: "loading",
+          value: (current) =>
+            !signal?.aborted &&
+            loadGenerationRef.current === generation &&
+            isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+              ? false
+              : current,
+        });
       }
     },
     [
@@ -3602,14 +4153,17 @@ export function DeliverablesWorkspace({
     selectedSessionId ?? sessions.find((session) => session.eventId === eventId)?.id ?? null;
   useEffect(() => {
     if (mode === "files") return;
-    setSelectedSessionId((current) => {
-      if (
-        current !== null &&
-        sessions.some((session) => session.eventId === eventId && session.id === current)
-      ) {
-        return current;
-      }
-      return sessions.find((session) => session.eventId === eventId)?.id ?? null;
+    dispatch({
+      type: "selected-session-id",
+      value: (current) => {
+        if (
+          current !== null &&
+          sessions.some((session) => session.eventId === eventId && session.id === current)
+        ) {
+          return current;
+        }
+        return sessions.find((session) => session.eventId === eventId)?.id ?? null;
+      },
     });
   }, [eventId, mode, sessions]);
 
@@ -3630,22 +4184,22 @@ export function DeliverablesWorkspace({
           (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
         ) ?? sessions.find((session) => session.eventId === eventId);
       if (selected === undefined) {
-        setSessionHistory(undefined);
-        setSessionHistoryError(null);
-        setSessionHistoryKey(null);
+        dispatch({ type: "session-history", value: undefined });
+        dispatch({ type: "session-history-error", value: null });
+        dispatch({ type: "session-history-key", value: null });
       } else {
         key = deliverablesSessionHistoryKey(selected.id, selected.version);
-        setSessionHistoryKey(key);
-        setSessionHistoryError(null);
+        dispatch({ type: "session-history-key", value: key });
+        dispatch({ type: "session-history-error", value: null });
         if (selected.contentHistory !== undefined) {
           sessionHistoryCacheRef.current.set(key, {
             status: "fulfilled",
             value: selected.contentHistory,
           });
-          setSessionHistory(selected.contentHistory);
+          dispatch({ type: "session-history", value: selected.contentHistory });
         } else {
-          setSessionHistory(undefined);
-          setLoadingSessionHistories(true);
+          dispatch({ type: "session-history", value: undefined });
+          dispatch({ type: "loading-session-histories", value: true });
           historyRequest = startDeliverablesRequest(() =>
             loadDeliverablesSessionHistory(
               api,
@@ -3662,21 +4216,23 @@ export function DeliverablesWorkspace({
       completion = historyRequest
         .then((history) => {
           if (!isCurrent()) return;
-          setSessionHistory(history);
+          dispatch({ type: "session-history", value: history });
         })
         .catch((reason: unknown) => {
           if (!isCurrent()) return;
-          setSessionHistoryError(messageFromError(reason));
+          dispatch({ type: "session-history-error", value: messageFromError(reason) });
         });
     }
     void completion.finally(() =>
-      setLoadingSessionHistories((current) =>
-        !controller.signal.aborted &&
-        sessionHistoryLeaseRef.current === lease &&
-        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
-          ? false
-          : current,
-      ),
+      dispatch({
+        type: "loading-session-histories",
+        value: (current) =>
+          !controller.signal.aborted &&
+          sessionHistoryLeaseRef.current === lease &&
+          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+            ? false
+            : current,
+      }),
     );
     return () => {
       controller.abort();
@@ -3699,11 +4255,11 @@ export function DeliverablesWorkspace({
     if (selectedAssetId !== null) {
       const selected = assets.find((asset) => asset.id === selectedAssetId);
       if (selected !== undefined && selected.eventId === eventId) {
-        setLoadingAssetDetails(true);
-        setAssetHistory([]);
-        setComments([]);
-        setAssetHistoryError(null);
-        setCommentsError(null);
+        dispatch({ type: "loading-asset-details", value: true });
+        dispatch({ type: "asset-history", value: [] });
+        dispatch({ type: "comments", value: [] });
+        dispatch({ type: "asset-history-error", value: null });
+        dispatch({ type: "comments-error", value: null });
         const getAssetHistory = api.getAssetHistory;
         const listAssetComments = api.listAssetComments;
         const historyPromise =
@@ -3716,25 +4272,27 @@ export function DeliverablesWorkspace({
             : startDeliverablesRequest(() => listAssetComments(selected.id, controller.signal));
         const historySettled = settleDeliverablesRequest(historyPromise).then((result) => {
           if (!isCurrent() || result === undefined) return;
-          if (result.ok) setAssetHistory(result.value);
-          else setAssetHistoryError(messageFromError(result.reason));
+          if (result.ok) dispatch({ type: "asset-history", value: result.value });
+          else dispatch({ type: "asset-history-error", value: messageFromError(result.reason) });
         });
         const commentsSettled = settleDeliverablesRequest(commentsPromise).then((result) => {
           if (!isCurrent() || result === undefined) return;
-          if (result.ok) setComments(result.value);
-          else setCommentsError(messageFromError(result.reason));
+          if (result.ok) dispatch({ type: "comments", value: result.value });
+          else dispatch({ type: "comments-error", value: messageFromError(result.reason) });
         });
         completion = Promise.all([historySettled, commentsSettled]);
       }
     }
     void completion.finally(() =>
-      setLoadingAssetDetails((current) =>
-        !controller.signal.aborted &&
-        assetDetailsLeaseRef.current === lease &&
-        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
-          ? false
-          : current,
-      ),
+      dispatch({
+        type: "loading-asset-details",
+        value: (current) =>
+          !controller.signal.aborted &&
+          assetDetailsLeaseRef.current === lease &&
+          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+            ? false
+            : current,
+      }),
     );
     return () => controller.abort();
   }, [api, assets, eventId, selectedAssetId]);
@@ -3800,7 +4358,7 @@ export function DeliverablesWorkspace({
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       invalidateDeliverablesCoreCache(scope);
       if (selectedAssetIdRef.current === input.assetId) {
-        setComments((current) => [...current, next]);
+        dispatch({ type: "comments", value: (current) => [...current, next] });
       }
       setStatusMessage("Comment added to the immutable asset version.");
       recordOperation(
@@ -4379,10 +4937,10 @@ export function DeliverablesWorkspace({
       speakerContentHistory={renderedSpeakerContentHistory}
       {...(api?.createTask === undefined ? {} : { onCreateTask: createTask })}
       onInspectAsset={(assetId) => {
-        setAssetHistory([]);
-        setComments([]);
-        setAssetHistoryError(null);
-        setCommentsError(null);
+        dispatch({ type: "asset-history", value: [] });
+        dispatch({ type: "comments", value: [] });
+        dispatch({ type: "asset-history-error", value: null });
+        dispatch({ type: "comments-error", value: null });
         setSelectedAssetId(assetId);
       }}
       {...(!renderedStateIsCurrent || selectedSessionId === null ? {} : { selectedSessionId })}

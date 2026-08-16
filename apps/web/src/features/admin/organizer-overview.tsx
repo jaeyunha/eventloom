@@ -1075,7 +1075,7 @@ export interface OrganizerEventEditorProps {
   readonly onCancel?: () => void;
 }
 
-export function OrganizerEventEditor({
+function OrganizerEventEditor({
   event,
   busy = false,
   onSave,
@@ -1091,11 +1091,6 @@ export function OrganizerEventEditor({
     minimumDateTime === undefined || values.cfpOpensAt > minimumDateTime
       ? values.cfpOpensAt || minimumDateTime
       : minimumDateTime;
-
-  useEffect(() => {
-    setValues(organizerEventEditorFormValues(event));
-    setFormError(null);
-  }, [event]);
 
   function updateValue<K extends keyof OrganizerEventFormValues>(
     key: K,
@@ -1483,9 +1478,6 @@ function OrganizerEventsLoaded({
       return leftStart - rightStart;
     })
     .slice(0, 5);
-  useEffect(() => {
-    if (!onCreate || !onUpdate) setEditor(null);
-  }, [onCreate, onUpdate]);
 
   async function create(input: OrganizerEventCreateInput) {
     if (!onCreate) return;
@@ -1546,6 +1538,7 @@ function OrganizerEventsLoaded({
         >
           <CardContent className="pt-6">
             <OrganizerEventEditor
+              key={`${data.organizationId}:${editor}`}
               event={editingEvent}
               busy={busy}
               onCancel={() => setEditor(null)}
@@ -1870,6 +1863,7 @@ export function OrganizerEventsView({
         />
       ) : null}
       <OrganizerEventsLoaded
+        key={data.organizationId}
         data={data}
         busy={busy}
         notice={notice}

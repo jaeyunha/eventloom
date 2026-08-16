@@ -166,7 +166,10 @@ describe("embed workspace navigation cache", () => {
   it("routes initial snapshots through the cache and exposes explicit fresh retry", () => {
     expect(workspaceSource).toContain("navigationCache.read<EmbedWorkspaceCacheSnapshot>");
     expect(workspaceSource).toContain("fresh: true");
-    expect(workspaceSource).toContain("void load(controller.signal, reloadNonce > 0)");
+    expect(workspaceSource).toContain("fresh: reloadNonce > 0");
+    expect(workspaceSource).toContain(
+      "void loadEmbedWorkspace({ ...loadOptions, signal: controller.signal });",
+    );
     expect(workspaceSource).toContain(
       "embedConfigurations: eventEmbedConfigurations(event.embedConfigurations)",
     );

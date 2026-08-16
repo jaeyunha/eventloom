@@ -72,6 +72,10 @@ interface InviteDraft {
   readonly name: string;
   readonly role: MemberRole;
 }
+interface InviteRoleOverride {
+  readonly ownerKey: string;
+  readonly value: MemberRole;
+}
 
 interface WorkspaceOrganization {
   readonly organizationId: string;
@@ -314,6 +318,7 @@ export function MemberWorkspace({
     name: "",
     role: "reviewer",
   });
+  const [inviteRoleOverride, setInviteRoleOverride] = useState<InviteRoleOverride | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [organizations, setOrganizations] = useState<readonly WorkspaceOrganization[]>([]);
@@ -335,13 +340,12 @@ export function MemberWorkspace({
     [organizationId, organizations],
   );
   const inviteRoles = inviteRolesForOrganization(currentOrganization?.role);
-
-  useEffect(() => {
-    setInviteDraft((current) => {
-      const allowedRoles = inviteRolesForOrganization(currentOrganization?.role);
-      return allowedRoles.includes(current.role) ? current : { ...current, role: "reviewer" };
-    });
-  }, [currentOrganization?.role]);
+  const memberOwnerKey = organizationId.trim();
+  const inviteRoleCandidate =
+    inviteRoleOverride?.ownerKey === memberOwnerKey ? inviteRoleOverride.value : inviteDraft.role;
+  const inviteRole = inviteRoles.includes(inviteRoleCandidate)
+    ? inviteRoleCandidate
+    : (inviteRoles[0] ?? "reviewer");
 
   const loadOrganizations = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -454,7 +458,7 @@ export function MemberWorkspace({
       setNotice("Enter an email address to send an invitation.");
       return;
     }
-    if (!allowedRoles.includes(inviteDraft.role)) {
+    if (!allowedRoles.includes(inviteRole)) {
       setNotice("Your organization role can invite evaluators only.");
       return;
     }
@@ -463,10 +467,11 @@ export function MemberWorkspace({
     try {
       const result = await api.inviteMember({
         email,
-        role: inviteDraft.role,
+        role: inviteRole,
         ...(name ? { name } : {}),
       });
       setInviteDraft({ email: "", name: "", role: "reviewer" });
+      setInviteRoleOverride(null);
       setMembers((current) =>
         current.some((member) => member.userId === result.member.userId)
           ? current.map((member) =>
@@ -810,7 +815,11 @@ export function MemberWorkspace({
               </CardDescription>
             </CardHeader>
             <CardContent className={styles.cardContent}>
-              <form onSubmit={(event) => void inviteMember(event)} className={styles.formStack}>
+              <form
+                key={memberOwnerKey}
+                onSubmit={(event) => void inviteMember(event)}
+                className={styles.formStack}
+              >
                 <div className={styles.fieldGrid}>
                   <div className={styles.field}>
                     <Label htmlFor="invite-name">Name</Label>
@@ -840,9 +849,12 @@ export function MemberWorkspace({
                   <div className={styles.field}>
                     <Label htmlFor="invite-role">Access level</Label>
                     <Select
-                      value={inviteDraft.role}
+                      value={inviteRole}
                       onValueChange={(value) => {
-                        setInviteDraft((current) => ({ ...current, role: value as MemberRole }));
+                        setInviteRoleOverride({
+                          ownerKey: memberOwnerKey,
+                          value: value as MemberRole,
+                        });
                         setNotice(null);
                       }}
                       disabled={inviteBusy || api === null}

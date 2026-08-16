@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -977,6 +985,129 @@ function cachedEmbedWorkspaceSnapshot(
   }
   return snapshot;
 }
+
+type EmbedWorkspaceLoaderApi = Pick<
+  EmbedWorkspaceApi,
+  "getEvent" | "updateEvent" | "getPublication"
+>;
+
+interface EmbedWorkspaceLoadCallbacks {
+  readonly setState: (value: EmbedWorkspaceLoadState) => void;
+  readonly setLoadedApi: (value: EmbedWorkspaceLoaderApi) => void;
+  readonly setPublication: (value: EmbedPublicationMetadata | undefined) => void;
+  readonly setPublicationFresh: (value: boolean) => void;
+}
+
+interface EmbedWorkspaceLoadOptions {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly scopeKey: string;
+  readonly providedApi: EmbedWorkspaceLoaderApi | undefined;
+  readonly navigationCache: NavigationDataCache | null;
+  readonly cacheScope: EmbedWorkspaceCacheScope | null;
+  readonly fresh: boolean;
+  readonly signal: AbortSignal;
+  readonly isCurrentScope: () => boolean;
+  readonly callbacks: EmbedWorkspaceLoadCallbacks;
+}
+
+async function loadEmbedWorkspace(options: EmbedWorkspaceLoadOptions): Promise<void> {
+  const {
+    organizationId,
+    eventId,
+    scopeKey,
+    providedApi,
+    navigationCache,
+    cacheScope,
+    fresh,
+    signal,
+    isCurrentScope,
+    callbacks,
+  } = options;
+  const { setState, setLoadedApi, setPublication, setPublicationFresh } = callbacks;
+  const requestScopeKey = scopeKey;
+  if (!organizationId || !eventId) {
+    setState({
+      status: "error",
+      scopeKey: requestScopeKey,
+      message: "An organization and event context are required.",
+    });
+    return;
+  }
+
+  let api = providedApi;
+  if (!api) {
+    try {
+      api = createEmbedWorkspaceApi(organizationId);
+    } catch (error) {
+      if (!signal.aborted && isCurrentScope()) {
+        setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
+      }
+      return;
+    }
+  }
+  setLoadedApi(api);
+
+  const cachedAtStart = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
+  if (fresh && navigationCache !== null && cacheScope !== null) {
+    navigationCache.invalidate(cacheScope.invalidationTags);
+  }
+  if (fresh) {
+    setPublicationFresh(false);
+    setPublication(
+      publicationMetadataFromState(
+        null,
+        "loading",
+        "Loading the current organizer publication state.",
+      ),
+    );
+  }
+  if (fresh || cachedAtStart === undefined) {
+    setState({ status: "loading", scopeKey: requestScopeKey });
+  }
+
+  const loadEvent = async (requestSignal?: AbortSignal): Promise<EmbedWorkspaceCacheSnapshot> => {
+    const event = await api.getEvent(eventId, requestSignal);
+    if (requestSignal?.aborted) {
+      throw new DOMException("The request was aborted.", "AbortError");
+    }
+    if (event.organizationId !== organizationId || event.id !== eventId) {
+      throw new Error(
+        "The organizer event response does not match this organization and event context.",
+      );
+    }
+    const eventSnapshot = embedWorkspaceEventSnapshot(event);
+    const cachedPublication = fresh ? undefined : cachedAtStart?.publication;
+    return cachedPublication === undefined
+      ? { event: eventSnapshot }
+      : { event: eventSnapshot, publication: cachedPublication };
+  };
+
+  try {
+    const snapshot =
+      navigationCache !== null && cacheScope !== null
+        ? await navigationCache.read<EmbedWorkspaceCacheSnapshot>({
+            key: cacheScope.key,
+            tags: cacheScope.tags,
+            load: () => loadEvent(),
+            ...(fresh ? { fresh: true } : {}),
+          })
+        : await loadEvent(signal);
+    if (signal.aborted || !isCurrentScope()) return;
+    if (snapshot.event.organizationId !== organizationId || snapshot.event.id !== eventId) {
+      throw new Error("The cached organizer event response does not match this context.");
+    }
+    const loadedState = embedWorkspaceLoadedState(requestScopeKey, snapshot);
+    if (loadedState === null) {
+      throw new Error("The organizer event has no public slug.");
+    }
+    setState(loadedState);
+    if (snapshot.publication !== undefined) setPublication(snapshot.publication);
+  } catch (error) {
+    if (signal.aborted || !isCurrentScope()) return;
+    setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
+  }
+}
 function agendaValidationHref(organizationId: string, eventId: string): string {
   return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`;
 }
@@ -1055,6 +1186,205 @@ function MissingPublicProjection({
   );
 }
 
+type EmbedWorkspaceViewState = {
+  readonly widgetId: EmbedWidgetId;
+  readonly theme: EmbedTheme;
+  readonly outputFormat: EmbedOutputFormat;
+  readonly layout: EmbedLayout;
+  readonly accent: EmbedAccent;
+  readonly backgroundColor: string;
+  readonly textColor: string;
+  readonly customCss: string;
+  readonly displayFields: readonly EmbedFieldId[];
+  readonly trackIds: readonly string[];
+  readonly statuses: readonly string[];
+  readonly cacheRefreshMessage: string;
+  readonly previewNonce: number;
+  readonly configurations: readonly EmbedConfiguration[];
+  readonly selectedConfigurationId: string | null;
+  readonly configurationName: string;
+  readonly configurationStatusMessage: string;
+  readonly eventVersionState: number | null;
+  readonly persistenceBusy: boolean;
+  readonly snapshotScopeKey: string | null;
+};
+
+type EmbedWorkspaceViewAction =
+  | { readonly type: "scope-reset" }
+  | { readonly type: "reset-builder"; readonly message: string }
+  | { readonly type: "apply-configuration"; readonly configuration: EmbedConfiguration }
+  | { readonly type: "set-widget"; readonly value: EmbedWidgetId }
+  | { readonly type: "set-theme"; readonly value: EmbedTheme }
+  | { readonly type: "set-output-format"; readonly value: EmbedOutputFormat }
+  | { readonly type: "set-layout"; readonly value: EmbedLayout }
+  | { readonly type: "set-accent"; readonly value: EmbedAccent }
+  | { readonly type: "set-background-color"; readonly value: string }
+  | { readonly type: "set-text-color"; readonly value: string }
+  | { readonly type: "set-custom-css"; readonly value: string }
+  | { readonly type: "set-display-fields"; readonly value: readonly EmbedFieldId[] }
+  | { readonly type: "set-track-ids"; readonly value: readonly string[] }
+  | { readonly type: "set-statuses"; readonly value: readonly string[] }
+  | { readonly type: "set-cache-refresh-message"; readonly value: string }
+  | { readonly type: "increment-preview" }
+  | { readonly type: "set-configurations"; readonly value: readonly EmbedConfiguration[] }
+  | { readonly type: "set-selected-configuration-id"; readonly value: string | null }
+  | { readonly type: "set-configuration-name"; readonly value: string }
+  | { readonly type: "set-configuration-status-message"; readonly value: string }
+  | { readonly type: "set-event-version"; readonly value: number | null }
+  | { readonly type: "set-persistence-busy"; readonly value: boolean }
+  | { readonly type: "set-snapshot-scope-key"; readonly value: string | null };
+
+function embedWorkspaceViewDraftDefaults(): Pick<
+  EmbedWorkspaceViewState,
+  | "widgetId"
+  | "theme"
+  | "outputFormat"
+  | "layout"
+  | "accent"
+  | "backgroundColor"
+  | "textColor"
+  | "customCss"
+  | "displayFields"
+  | "trackIds"
+  | "statuses"
+  | "selectedConfigurationId"
+  | "configurationName"
+  | "configurationStatusMessage"
+> {
+  return {
+    widgetId: "sessions",
+    theme: "auto",
+    outputFormat: "styled-html",
+    layout: widgetFor("sessions").defaultLayout,
+    accent: DEFAULT_EMBED_ACCENT,
+    backgroundColor: "#ffffff",
+    textColor: "#20232b",
+    customCss: "",
+    displayFields: DEFAULT_EMBED_DISPLAY_FIELDS,
+    trackIds: [],
+    statuses: ["Approved"],
+    selectedConfigurationId: null,
+    configurationName: "",
+    configurationStatusMessage: "",
+  };
+}
+
+function initialEmbedWorkspaceViewState(
+  initialConfiguration: EmbedConfiguration | undefined,
+  initialLayout: EmbedLayout,
+  eventVersion: number | null | undefined,
+  configurations: readonly EmbedConfiguration[],
+  snapshotScopeKey: string | null,
+): EmbedWorkspaceViewState {
+  const defaults = embedWorkspaceViewDraftDefaults();
+  return {
+    ...defaults,
+    widgetId: initialConfiguration?.widgetId ?? defaults.widgetId,
+    theme: initialConfiguration?.theme ?? defaults.theme,
+    outputFormat: initialConfiguration?.outputFormat ?? defaults.outputFormat,
+    layout: initialLayout,
+    accent: initialConfiguration?.accent ?? defaults.accent,
+    backgroundColor: initialConfiguration?.backgroundColor ?? defaults.backgroundColor,
+    textColor: initialConfiguration?.textColor ?? defaults.textColor,
+    customCss: initialConfiguration?.customCss ?? defaults.customCss,
+    displayFields: initialConfiguration?.displayFields ?? defaults.displayFields,
+    trackIds: initialConfiguration?.trackIds ?? defaults.trackIds,
+    statuses: initialConfiguration?.statuses ?? defaults.statuses,
+    selectedConfigurationId: initialConfiguration?.id ?? defaults.selectedConfigurationId,
+    configurationName: initialConfiguration?.name ?? defaults.configurationName,
+    configurations,
+    cacheRefreshMessage: "",
+    previewNonce: 0,
+    configurationStatusMessage: "",
+    eventVersionState: eventVersion ?? null,
+    persistenceBusy: false,
+    snapshotScopeKey,
+  };
+}
+
+function embedWorkspaceViewReducer(
+  state: EmbedWorkspaceViewState,
+  action: EmbedWorkspaceViewAction,
+): EmbedWorkspaceViewState {
+  switch (action.type) {
+    case "scope-reset":
+      return initialEmbedWorkspaceViewState(
+        undefined,
+        widgetFor("sessions").defaultLayout,
+        null,
+        EMPTY_EMBED_CONFIGURATIONS,
+        null,
+      );
+    case "reset-builder":
+      return {
+        ...state,
+        ...embedWorkspaceViewDraftDefaults(),
+        configurationStatusMessage: action.message,
+      };
+    case "apply-configuration": {
+      const configurationWidget = widgetFor(action.configuration.widgetId);
+      return {
+        ...state,
+        selectedConfigurationId: action.configuration.id,
+        configurationName: action.configuration.name,
+        widgetId: action.configuration.widgetId,
+        theme: action.configuration.theme,
+        outputFormat: action.configuration.outputFormat,
+        layout: configurationWidget.layouts.includes(action.configuration.layout)
+          ? action.configuration.layout
+          : configurationWidget.defaultLayout,
+        accent: action.configuration.accent,
+        backgroundColor: action.configuration.backgroundColor,
+        textColor: action.configuration.textColor,
+        customCss: action.configuration.customCss,
+        displayFields: action.configuration.displayFields,
+        trackIds: action.configuration.trackIds,
+        statuses: action.configuration.statuses,
+      };
+    }
+    case "set-widget":
+      return { ...state, widgetId: action.value };
+    case "set-theme":
+      return { ...state, theme: action.value };
+    case "set-output-format":
+      return { ...state, outputFormat: action.value };
+    case "set-layout":
+      return { ...state, layout: action.value };
+    case "set-accent":
+      return { ...state, accent: action.value };
+    case "set-background-color":
+      return { ...state, backgroundColor: action.value };
+    case "set-text-color":
+      return { ...state, textColor: action.value };
+    case "set-custom-css":
+      return { ...state, customCss: action.value };
+    case "set-display-fields":
+      return { ...state, displayFields: action.value };
+    case "set-track-ids":
+      return { ...state, trackIds: action.value };
+    case "set-statuses":
+      return { ...state, statuses: action.value };
+    case "set-cache-refresh-message":
+      return { ...state, cacheRefreshMessage: action.value };
+    case "increment-preview":
+      return { ...state, previewNonce: state.previewNonce + 1 };
+    case "set-configurations":
+      return { ...state, configurations: action.value };
+    case "set-selected-configuration-id":
+      return { ...state, selectedConfigurationId: action.value };
+    case "set-configuration-name":
+      return { ...state, configurationName: action.value };
+    case "set-configuration-status-message":
+      return { ...state, configurationStatusMessage: action.value };
+    case "set-event-version":
+      return { ...state, eventVersionState: action.value };
+    case "set-persistence-busy":
+      return { ...state, persistenceBusy: action.value };
+    case "set-snapshot-scope-key":
+      return { ...state, snapshotScopeKey: action.value };
+  }
+  return state;
+}
 export function EmbedWorkspaceView({
   organizationId,
   eventId,
@@ -1090,42 +1420,82 @@ export function EmbedWorkspaceView({
     initialConfiguration && initialWidget.layouts.includes(initialConfiguration.layout)
       ? initialConfiguration.layout
       : initialWidget.defaultLayout;
-  const [widgetId, setWidgetId] = useState<EmbedWidgetId>(
-    initialConfiguration?.widgetId ?? "sessions",
+  const [viewState, dispatch] = useReducer(
+    embedWorkspaceViewReducer,
+    initialEmbedWorkspaceViewState(
+      initialConfiguration,
+      initialLayout,
+      eventVersion,
+      serverConfigurationList,
+      initialConfigurations === undefined ? null : scopeKey,
+    ),
   );
-  const [theme, setTheme] = useState<EmbedTheme>(initialConfiguration?.theme ?? "auto");
-  const [outputFormat, setOutputFormat] = useState<EmbedOutputFormat>(
-    initialConfiguration?.outputFormat ?? "styled-html",
+  const {
+    widgetId,
+    theme,
+    outputFormat,
+    layout,
+    accent,
+    backgroundColor,
+    textColor,
+    customCss,
+    displayFields,
+    trackIds,
+    statuses,
+    cacheRefreshMessage,
+    previewNonce,
+    configurations,
+    selectedConfigurationId,
+    configurationName,
+    configurationStatusMessage,
+    eventVersionState,
+    persistenceBusy,
+    snapshotScopeKey,
+  } = viewState;
+  const setTheme = useCallback((value: EmbedTheme) => dispatch({ type: "set-theme", value }), []);
+  const setOutputFormat = useCallback(
+    (value: EmbedOutputFormat) => dispatch({ type: "set-output-format", value }),
+    [],
   );
-  const [layout, setLayout] = useState<EmbedLayout>(initialLayout);
-  const [accent, setAccent] = useState<EmbedAccent>(
-    initialConfiguration?.accent ?? DEFAULT_EMBED_ACCENT,
+  const setLayout = useCallback(
+    (value: EmbedLayout) => dispatch({ type: "set-layout", value }),
+    [],
   );
-  const [backgroundColor, setBackgroundColor] = useState(
-    initialConfiguration?.backgroundColor ?? "#ffffff",
+  const setAccent = useCallback(
+    (value: EmbedAccent) => dispatch({ type: "set-accent", value }),
+    [],
   );
-  const [textColor, setTextColor] = useState(initialConfiguration?.textColor ?? "#20232b");
-  const [customCss, setCustomCss] = useState(initialConfiguration?.customCss ?? "");
-  const [displayFields, setDisplayFields] = useState<readonly EmbedFieldId[]>(
-    initialConfiguration?.displayFields ?? DEFAULT_EMBED_DISPLAY_FIELDS,
+  const setBackgroundColor = useCallback(
+    (value: string) => dispatch({ type: "set-background-color", value }),
+    [],
   );
-  const [trackIds, setTrackIds] = useState<readonly string[]>(initialConfiguration?.trackIds ?? []);
-  const [statuses, setStatuses] = useState<readonly string[]>(
-    initialConfiguration?.statuses ?? ["Approved"],
+  const setTextColor = useCallback(
+    (value: string) => dispatch({ type: "set-text-color", value }),
+    [],
   );
-  const [cacheRefreshMessage, setCacheRefreshMessage] = useState("");
-  const [previewNonce, setPreviewNonce] = useState(0);
-  const [configurations, setConfigurations] =
-    useState<readonly EmbedConfiguration[]>(serverConfigurationList);
-  const [selectedConfigurationId, setSelectedConfigurationId] = useState<string | null>(
-    initialConfiguration?.id ?? null,
+  const setCustomCss = useCallback(
+    (value: string) => dispatch({ type: "set-custom-css", value }),
+    [],
   );
-  const [configurationName, setConfigurationName] = useState(initialConfiguration?.name ?? "");
-  const [configurationStatusMessage, setConfigurationStatusMessage] = useState("");
-  const [eventVersionState, setEventVersionState] = useState<number | null>(eventVersion ?? null);
-  const [persistenceBusy, setPersistenceBusy] = useState(false);
-  const [snapshotScopeKey, setSnapshotScopeKey] = useState<string | null>(
-    initialConfigurations === undefined ? null : scopeKey,
+  const setDisplayFields = useCallback(
+    (value: readonly EmbedFieldId[]) => dispatch({ type: "set-display-fields", value }),
+    [],
+  );
+  const setTrackIds = useCallback(
+    (value: readonly string[]) => dispatch({ type: "set-track-ids", value }),
+    [],
+  );
+  const setStatuses = useCallback(
+    (value: readonly string[]) => dispatch({ type: "set-statuses", value }),
+    [],
+  );
+  const setCacheRefreshMessage = useCallback(
+    (value: string) => dispatch({ type: "set-cache-refresh-message", value }),
+    [],
+  );
+  const setConfigurationName = useCallback(
+    (value: string) => dispatch({ type: "set-configuration-name", value }),
+    [],
   );
   const activeScopeRef = useRef(scopeKey);
   const installedConfigurationScopeRef = useRef<string | null>(
@@ -1137,54 +1507,18 @@ export function EmbedWorkspaceView({
   }, [scopeKey]);
 
   const resetBuilder = useCallback((message = "") => {
-    setSelectedConfigurationId(null);
-    setConfigurationName("");
-    setWidgetId("sessions");
-    setTheme("auto");
-    setOutputFormat("styled-html");
-    setLayout(widgetFor("sessions").defaultLayout);
-    setAccent(DEFAULT_EMBED_ACCENT);
-    setBackgroundColor("#ffffff");
-    setTextColor("#20232b");
-    setCustomCss("");
-    setDisplayFields(DEFAULT_EMBED_DISPLAY_FIELDS);
-    setTrackIds([]);
-    setStatuses(["Approved"]);
-    setConfigurationStatusMessage(message);
+    dispatch({ type: "reset-builder", message });
   }, []);
 
   const applyConfiguration = useCallback((configuration: EmbedConfiguration) => {
-    const configurationWidget = widgetFor(configuration.widgetId);
-    setSelectedConfigurationId(configuration.id);
-    setConfigurationName(configuration.name);
-    setWidgetId(configuration.widgetId);
-    setTheme(configuration.theme);
-    setOutputFormat(configuration.outputFormat);
-    setLayout(
-      configurationWidget.layouts.includes(configuration.layout)
-        ? configuration.layout
-        : configurationWidget.defaultLayout,
-    );
-    setAccent(configuration.accent);
-    setBackgroundColor(configuration.backgroundColor);
-    setTextColor(configuration.textColor);
-    setCustomCss(configuration.customCss);
-    setDisplayFields(configuration.displayFields);
-    setTrackIds(configuration.trackIds);
-    setStatuses(configuration.statuses);
+    dispatch({ type: "apply-configuration", configuration });
   }, []);
 
   useEffect(() => {
     if (activeScopeRef.current !== scopeKey) {
       activeScopeRef.current = scopeKey;
       installedConfigurationScopeRef.current = null;
-      setConfigurations(EMPTY_EMBED_CONFIGURATIONS);
-      setEventVersionState(null);
-      setPersistenceBusy(false);
-      setPreviewNonce(0);
-      setCacheRefreshMessage("");
-      setSnapshotScopeKey(null);
-      resetBuilder();
+      dispatch({ type: "scope-reset" });
       return;
     }
     if (
@@ -1195,18 +1529,21 @@ export function EmbedWorkspaceView({
     }
 
     installedConfigurationScopeRef.current = scopeKey;
-    setConfigurations(serverConfigurationList);
-    setEventVersionState(eventVersion ?? null);
+    dispatch({ type: "set-configurations", value: serverConfigurationList });
+    dispatch({ type: "set-event-version", value: eventVersion ?? null });
     const activeConfiguration =
       serverConfigurationList.find((configuration) => configuration.enabled) ??
       serverConfigurationList[0];
     if (activeConfiguration) {
       applyConfiguration(activeConfiguration);
-      setConfigurationStatusMessage(`Loaded "${activeConfiguration.name}" from the event.`);
+      dispatch({
+        type: "set-configuration-status-message",
+        value: `Loaded "${activeConfiguration.name}" from the event.`,
+      });
     } else {
       resetBuilder();
     }
-    setSnapshotScopeKey(scopeKey);
+    dispatch({ type: "set-snapshot-scope-key", value: scopeKey });
   }, [
     applyConfiguration,
     eventVersion,
@@ -1227,14 +1564,20 @@ export function EmbedWorkspaceView({
         loading ||
         errorMessage
       ) {
-        setConfigurationStatusMessage("Event configuration transport is unavailable.");
+        dispatch({
+          type: "set-configuration-status-message",
+          value: "Event configuration transport is unavailable.",
+        });
         return false;
       }
       navigationCache?.invalidate(cacheScope?.invalidationTags ?? []);
       onEmbedMutation?.();
 
-      setPersistenceBusy(true);
-      setConfigurationStatusMessage("Saving event configuration…");
+      dispatch({ type: "set-persistence-busy", value: true });
+      dispatch({
+        type: "set-configuration-status-message",
+        value: "Saving event configuration…",
+      });
       try {
         const updatedEvent = await api.updateEvent(eventId, {
           expectedVersion,
@@ -1252,8 +1595,8 @@ export function EmbedWorkspaceView({
           updatedEvent.embedConfigurations,
         );
         installedConfigurationScopeRef.current = requestScopeKey;
-        setConfigurations(authoritativeConfigurations);
-        setEventVersionState(updatedEvent.version);
+        dispatch({ type: "set-configurations", value: authoritativeConfigurations });
+        dispatch({ type: "set-event-version", value: updatedEvent.version });
         if (navigationCache !== null && cacheScope !== null) {
           navigationCache.write(
             cacheScope.key,
@@ -1261,15 +1604,18 @@ export function EmbedWorkspaceView({
             cacheScope.tags,
           );
         }
-        setSnapshotScopeKey(requestScopeKey);
+        dispatch({ type: "set-snapshot-scope-key", value: requestScopeKey });
         return true;
       } catch (error) {
         if (currentScopeRef.current === requestScopeKey) {
-          setConfigurationStatusMessage(messageFrom(error));
+          dispatch({
+            type: "set-configuration-status-message",
+            value: messageFrom(error),
+          });
         }
         return false;
       } finally {
-        setPersistenceBusy(false);
+        dispatch({ type: "set-persistence-busy", value: false });
       }
     },
     [
@@ -1303,7 +1649,10 @@ export function EmbedWorkspaceView({
         return;
       }
       applyConfiguration(configuration);
-      setConfigurationStatusMessage(`Loaded "${configuration.name}".`);
+      dispatch({
+        type: "set-configuration-status-message",
+        value: `Loaded "${configuration.name}".`,
+      });
     },
     [applyConfiguration, configurations, resetBuilder, startNewConfiguration],
   );
@@ -1311,7 +1660,10 @@ export function EmbedWorkspaceView({
   const saveConfiguration = useCallback(async () => {
     const name = configurationName.trim();
     if (!name) {
-      setConfigurationStatusMessage("Enter a configuration name before saving.");
+      dispatch({
+        type: "set-configuration-status-message",
+        value: "Enter a configuration name before saving.",
+      });
       return;
     }
 
@@ -1341,11 +1693,12 @@ export function EmbedWorkspaceView({
       : [...configurations, nextConfiguration];
 
     if (!(await persistConfigurations(nextConfigurations))) return;
-    setSelectedConfigurationId(configurationId);
-    setConfigurationName(name);
-    setConfigurationStatusMessage(
-      existing ? `Updated "${name}" successfully.` : `Saved "${name}" successfully.`,
-    );
+    dispatch({ type: "set-selected-configuration-id", value: configurationId });
+    dispatch({ type: "set-configuration-name", value: name });
+    dispatch({
+      type: "set-configuration-status-message",
+      value: existing ? `Updated "${name}" successfully.` : `Saved "${name}" successfully.`,
+    });
   }, [
     accent,
     backgroundColor,
@@ -1372,16 +1725,17 @@ export function EmbedWorkspaceView({
         candidate.id === id ? { ...candidate, enabled } : candidate,
       );
       if (!(await persistConfigurations(nextConfigurations))) return;
-      setConfigurationStatusMessage(
-        `${enabled ? "Enabled" : "Disabled"} "${configuration.name}" successfully.`,
-      );
+      dispatch({
+        type: "set-configuration-status-message",
+        value: `${enabled ? "Enabled" : "Disabled"} "${configuration.name}" successfully.`,
+      });
     },
     [configurations, persistConfigurations],
   );
 
   const changeWidget = useCallback((nextWidgetId: EmbedWidgetId) => {
-    setWidgetId(nextWidgetId);
-    setLayout(widgetFor(nextWidgetId).defaultLayout);
+    dispatch({ type: "set-widget", value: nextWidgetId });
+    dispatch({ type: "set-layout", value: widgetFor(nextWidgetId).defaultLayout });
   }, []);
 
   const widget = widgetFor(widgetId);
@@ -1463,7 +1817,7 @@ export function EmbedWorkspaceView({
   const canDistribute = settingsWithIdentity !== null && selectedConfiguration?.enabled === true;
   const previewUrl = canDistribute ? publicEmbedUrl(settingsWithIdentity) : "";
   const refreshPreview = () => {
-    setPreviewNonce((value) => value + 1);
+    dispatch({ type: "increment-preview" });
     setCacheRefreshMessage(
       `Local preview refreshed at ${new Date().toLocaleTimeString()}. No remote cache was changed.`,
     );
@@ -1702,112 +2056,39 @@ export function EmbedWorkspace({
   useLayoutEffect(() => {
     currentScopeRef.current = scopeKey;
   }, [scopeKey]);
-
-  const load = useCallback(
-    async (signal?: AbortSignal, fresh = false) => {
-      const requestScopeKey = scopeKey;
-      if (!normalizedOrganizationId || !normalizedEventId) {
-        setState({
-          status: "error",
-          scopeKey: requestScopeKey,
-          message: "An organization and event context are required.",
-        });
-        return;
-      }
-
-      let api = providedApi;
-      if (!api) {
-        try {
-          api = createEmbedWorkspaceApi(normalizedOrganizationId);
-        } catch (error) {
-          if (!signal?.aborted && currentScopeRef.current === requestScopeKey) {
-            setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
-          }
-          return;
-        }
-      }
-      setLoadedApi(api);
-
-      const cachedAtStart = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
-      if (fresh && navigationCache !== null && cacheScope !== null) {
-        navigationCache.invalidate(cacheScope.invalidationTags);
-      }
-      if (fresh) {
-        setPublicationFresh(false);
-        setPublication(
-          publicationMetadataFromState(
-            null,
-            "loading",
-            "Loading the current organizer publication state.",
-          ),
-        );
-      }
-      if (fresh || cachedAtStart === undefined) {
-        setState({ status: "loading", scopeKey: requestScopeKey });
-      }
-
-      const loadEvent = async (
-        requestSignal?: AbortSignal,
-      ): Promise<EmbedWorkspaceCacheSnapshot> => {
-        const event = await api.getEvent(normalizedEventId, requestSignal);
-        if (requestSignal?.aborted) {
-          throw new DOMException("The request was aborted.", "AbortError");
-        }
-        if (event.organizationId !== normalizedOrganizationId || event.id !== normalizedEventId) {
-          throw new Error(
-            "The organizer event response does not match this organization and event context.",
-          );
-        }
-        const eventSnapshot = embedWorkspaceEventSnapshot(event);
-        const cachedPublication = fresh ? undefined : cachedAtStart?.publication;
-        return cachedPublication === undefined
-          ? { event: eventSnapshot }
-          : { event: eventSnapshot, publication: cachedPublication };
-      };
-
-      try {
-        const snapshot =
-          navigationCache !== null && cacheScope !== null
-            ? await navigationCache.read<EmbedWorkspaceCacheSnapshot>({
-                key: cacheScope.key,
-                tags: cacheScope.tags,
-                load: () => loadEvent(),
-                ...(fresh ? { fresh: true } : {}),
-              })
-            : await loadEvent(signal);
-        if (signal?.aborted || currentScopeRef.current !== requestScopeKey) return;
-        if (
-          snapshot.event.organizationId !== normalizedOrganizationId ||
-          snapshot.event.id !== normalizedEventId
-        ) {
-          throw new Error("The cached organizer event response does not match this context.");
-        }
-        const loadedState = embedWorkspaceLoadedState(requestScopeKey, snapshot);
-        if (loadedState === null) {
-          throw new Error("The organizer event has no public slug.");
-        }
-        setState(loadedState);
-        if (snapshot.publication !== undefined) setPublication(snapshot.publication);
-      } catch (error) {
-        if (signal?.aborted || currentScopeRef.current !== requestScopeKey) return;
-        setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
-      }
-    },
+  const loadOptions = useMemo<Omit<EmbedWorkspaceLoadOptions, "signal">>(
+    () => ({
+      organizationId: normalizedOrganizationId,
+      eventId: normalizedEventId,
+      scopeKey,
+      providedApi,
+      navigationCache,
+      cacheScope,
+      fresh: reloadNonce > 0,
+      isCurrentScope: () => currentScopeRef.current === scopeKey,
+      callbacks: {
+        setState,
+        setLoadedApi,
+        setPublication,
+        setPublicationFresh,
+      },
+    }),
     [
       cacheScope,
       navigationCache,
       normalizedEventId,
       normalizedOrganizationId,
       providedApi,
+      reloadNonce,
       scopeKey,
     ],
   );
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal, reloadNonce > 0);
+    void loadEmbedWorkspace({ ...loadOptions, signal: controller.signal });
     return () => controller.abort();
-  }, [load, reloadNonce]);
+  }, [loadOptions]);
 
   const retry = useCallback(() => {
     setReloadNonce((value) => value + 1);

@@ -228,6 +228,29 @@ const DEFAULT_AGENDA_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "track",
   "summary",
 ];
+interface PublicAgendaInteraction {
+  readonly ownerKey: string;
+  readonly day: string;
+  readonly query: string;
+  readonly track: string;
+  readonly format: string;
+  readonly room: string;
+  readonly viewerLocal: boolean;
+  readonly selectedEntryId: string | null;
+}
+
+function initialPublicAgendaInteraction(ownerKey: string): PublicAgendaInteraction {
+  return {
+    ownerKey,
+    day: "",
+    query: "",
+    track: "",
+    format: "",
+    room: "",
+    viewerLocal: false,
+    selectedEntryId: null,
+  };
+}
 
 function agendaIncludeField(
   displayFields: readonly EmbedDisplayField[],
@@ -249,13 +272,30 @@ export function PublicAgendaView({
   const displayFieldList = displayFields ?? DEFAULT_AGENDA_DISPLAY_FIELDS;
   const showField = (field: EmbedDisplayField): boolean =>
     agendaIncludeField(displayFieldList, field);
-  const [day, setDay] = useState("");
-  const [query, setQuery] = useState("");
-  const [track, setTrack] = useState("");
-  const [format, setFormat] = useState("");
-  const [room, setRoom] = useState("");
-  const [viewerLocal, setViewerLocal] = useState(false);
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const agendaOwnerKey = agenda.event.slug.trim();
+  const [interactionOverride, setInteractionOverride] = useState<PublicAgendaInteraction | null>(
+    null,
+  );
+  const ownedInteraction =
+    interactionOverride?.ownerKey === agendaOwnerKey ? interactionOverride : undefined;
+  const day = ownedInteraction?.day ?? "";
+  const query = ownedInteraction?.query ?? "";
+  const track = ownedInteraction?.track ?? "";
+  const format = ownedInteraction?.format ?? "";
+  const room = ownedInteraction?.room ?? "";
+  const viewerLocal = ownedInteraction?.viewerLocal ?? false;
+  const selectedEntryId = ownedInteraction?.selectedEntryId ?? null;
+  const updateInteraction = (
+    update: (current: PublicAgendaInteraction) => PublicAgendaInteraction,
+  ): void => {
+    setInteractionOverride((current) => {
+      const base =
+        current?.ownerKey === agendaOwnerKey
+          ? current
+          : initialPublicAgendaInteraction(agendaOwnerKey);
+      return update(base);
+    });
+  };
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const speakerSearchTermsBySessionId = useMemo(
@@ -281,6 +321,10 @@ export function PublicAgendaView({
     () => uniqueValues(agenda.entries.map((entry) => entry.roomName)),
     [agenda.entries],
   );
+  const validDay = day === "" || eventDays.some((eventDay) => eventDay.date === day) ? day : "";
+  const validTrack = track === "" || tracks.includes(track) ? track : "";
+  const validFormat = format === "" || formats.includes(format) ? format : "";
+  const validRoom = room === "" || rooms.includes(room) ? room : "";
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const normalizedQueryPattern = useMemo(
     () => literalSearchPattern(normalizedQuery),
@@ -288,10 +332,10 @@ export function PublicAgendaView({
   );
   const visibleEntries = useMemo(() => {
     const configuredTrackNames = new Set(trackList);
-    return filterAgendaEntries(agenda.entries, day, track, agenda.event.timeZone).filter(
+    return filterAgendaEntries(agenda.entries, validDay, validTrack, agenda.event.timeZone).filter(
       (entry) =>
-        (!format || entry.format === format) &&
-        (!room || entry.roomName === room) &&
+        (!validFormat || entry.format === validFormat) &&
+        (!validRoom || entry.roomName === validRoom) &&
         (trackList.length === 0 ||
           entry.trackNames.some((trackName) => configuredTrackNames.has(trackName))) &&
         (normalizedQueryPattern === null ||
@@ -300,19 +344,19 @@ export function PublicAgendaView({
   }, [
     agenda.entries,
     agenda.event.timeZone,
-    day,
-    format,
     normalizedQueryPattern,
     speakerSearchTermsBySessionId,
-    room,
-    track,
     trackList,
+    validDay,
+    validFormat,
+    validRoom,
+    validTrack,
   ]);
-  const hasFacetFilters = Boolean(normalizedQuery || track || format || room);
+  const hasFacetFilters = Boolean(normalizedQuery || validTrack || validFormat || validRoom);
   const visibleDays = useMemo(() => {
     const days = publicAgendaDays(visibleEntries, agenda.event.timeZone, agenda.event);
-    return day ? days.filter((eventDay) => eventDay.date === day) : days;
-  }, [agenda.event, day, visibleEntries]);
+    return validDay ? days.filter((eventDay) => eventDay.date === validDay) : days;
+  }, [agenda.event, validDay, visibleEntries]);
   const viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const displayTimeZone = viewerLocal ? viewerTimeZone : agenda.event.timeZone;
   const publicBase = `/api/public/events/${encodeURIComponent(agenda.event.slug)}`;
@@ -335,30 +379,16 @@ export function PublicAgendaView({
     }
     returnFocusRef.current = null;
   }, [selectedEntry, selectedEntryId]);
-  useEffect(() => {
-    if (day !== "" && !eventDays.some((eventDay) => eventDay.date === day)) {
-      setDay("");
-    }
-    if (track !== "" && !tracks.includes(track)) {
-      setTrack("");
-    }
-    if (format !== "" && !formats.includes(format)) {
-      setFormat("");
-    }
-    if (room !== "" && !rooms.includes(room)) {
-      setRoom("");
-    }
-  }, [day, eventDays, format, formats, room, rooms, track, tracks]);
-
   const openEntry = (entryId: string, target: HTMLElement) => {
     returnFocusRef.current = target;
-    setSelectedEntryId(entryId);
+    updateInteraction((current) => ({ ...current, selectedEntryId: entryId }));
   };
-  const closeEntry = () => setSelectedEntryId(null);
+  const closeEntry = () => updateInteraction((current) => ({ ...current, selectedEntryId: null }));
 
   if (selectedEntry) {
     return (
       <PublicAgendaSessionDetail
+        key={selectedEntry.id}
         entry={selectedEntry}
         displayTimeZone={displayTimeZone}
         onBack={closeEntry}
@@ -386,19 +416,30 @@ export function PublicAgendaView({
         ) : null}
       </div>
 
-      <form className={styles.agendaFilters} onSubmit={(event) => event.preventDefault()}>
+      <form
+        key={agendaOwnerKey}
+        className={styles.agendaFilters}
+        onSubmit={(event) => event.preventDefault()}
+      >
         <label>
           <span>Search sessions or speakers</span>
           <input
             type="search"
             value={query}
             placeholder="Search by title or speaker"
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) =>
+              updateInteraction((current) => ({ ...current, query: event.target.value }))
+            }
           />
         </label>
         <label>
           <span>Day</span>
-          <select value={day} onChange={(event) => setDay(event.target.value)}>
+          <select
+            value={validDay}
+            onChange={(event) =>
+              updateInteraction((current) => ({ ...current, day: event.target.value }))
+            }
+          >
             <option value="">All days</option>
             {eventDays.map((eventDay) => (
               <option key={eventDay.date} value={eventDay.date}>
@@ -409,7 +450,12 @@ export function PublicAgendaView({
         </label>
         <label>
           <span>Track</span>
-          <select value={track} onChange={(event) => setTrack(event.target.value)}>
+          <select
+            value={validTrack}
+            onChange={(event) =>
+              updateInteraction((current) => ({ ...current, track: event.target.value }))
+            }
+          >
             <option value="">All tracks</option>
             {tracks.map((trackName) => (
               <option key={trackName} value={trackName}>
@@ -420,7 +466,12 @@ export function PublicAgendaView({
         </label>
         <label>
           <span>Format</span>
-          <select value={format} onChange={(event) => setFormat(event.target.value)}>
+          <select
+            value={validFormat}
+            onChange={(event) =>
+              updateInteraction((current) => ({ ...current, format: event.target.value }))
+            }
+          >
             <option value="">All formats</option>
             {formats.map((formatName) => (
               <option key={formatName} value={formatName}>
@@ -431,7 +482,12 @@ export function PublicAgendaView({
         </label>
         <label>
           <span>Location</span>
-          <select value={room} onChange={(event) => setRoom(event.target.value)}>
+          <select
+            value={validRoom}
+            onChange={(event) =>
+              updateInteraction((current) => ({ ...current, room: event.target.value }))
+            }
+          >
             <option value="">All locations</option>
             {rooms.map((roomName) => (
               <option key={roomName} value={roomName}>
@@ -444,21 +500,26 @@ export function PublicAgendaView({
           <input
             type="checkbox"
             checked={viewerLocal}
-            onChange={(event) => setViewerLocal(event.target.checked)}
+            onChange={(event) =>
+              updateInteraction((current) => ({ ...current, viewerLocal: event.target.checked }))
+            }
           />
           <span>Show in my local time</span>
         </label>
-        {query || day || track || format || room ? (
+        {query || validDay || validTrack || validFormat || validRoom ? (
           <button
             className={styles.clearButton}
             type="button"
-            onClick={() => {
-              setQuery("");
-              setDay("");
-              setTrack("");
-              setFormat("");
-              setRoom("");
-            }}
+            onClick={() =>
+              updateInteraction((current) => ({
+                ...current,
+                query: "",
+                day: "",
+                track: "",
+                format: "",
+                room: "",
+              }))
+            }
           >
             Clear filters
           </button>

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import styles from "./embed.module.css";
 import {
   formatPublishedDateTimeRange,
@@ -196,6 +196,107 @@ function createCalendar(
   return `${lines.join("\r\n")}\r\n`;
 }
 
+type PublicItineraryState = {
+  readonly activeDay: string;
+  readonly query: string;
+  readonly track: string;
+  readonly format: string;
+  readonly room: string;
+  readonly filtersOpen: boolean;
+  readonly personalOnly: boolean;
+  readonly expandedDescriptions: ReadonlySet<string>;
+  readonly expandedDetails: ReadonlySet<string>;
+  readonly selectedIds: readonly string[];
+  readonly exportMessage: string;
+};
+
+type PublicItineraryAction =
+  | { readonly type: "set-active-day"; readonly value: string }
+  | { readonly type: "set-query"; readonly value: string }
+  | { readonly type: "set-track"; readonly value: string }
+  | { readonly type: "set-format"; readonly value: string }
+  | { readonly type: "set-room"; readonly value: string }
+  | { readonly type: "toggle-filters" }
+  | { readonly type: "select-day"; readonly value: string }
+  | { readonly type: "toggle-personal-view" }
+  | { readonly type: "clear-filters" }
+  | { readonly type: "toggle-selected"; readonly entryId: string }
+  | { readonly type: "set-selected-ids"; readonly value: readonly string[] }
+  | { readonly type: "set-export-message"; readonly value: string }
+  | { readonly type: "toggle-description"; readonly entryId: string }
+  | { readonly type: "toggle-details"; readonly entryId: string };
+
+function publicItineraryInitialState(activeDay: string): PublicItineraryState {
+  return {
+    activeDay,
+    query: "",
+    track: "",
+    format: "",
+    room: "",
+    filtersOpen: false,
+    personalOnly: false,
+    expandedDescriptions: new Set(),
+    expandedDetails: new Set(),
+    selectedIds: [],
+    exportMessage: "",
+  };
+}
+
+function publicItineraryReducer(
+  state: PublicItineraryState,
+  action: PublicItineraryAction,
+): PublicItineraryState {
+  switch (action.type) {
+    case "set-active-day":
+      return { ...state, activeDay: action.value };
+    case "set-query":
+      return { ...state, query: action.value };
+    case "set-track":
+      return { ...state, track: action.value };
+    case "set-format":
+      return { ...state, format: action.value };
+    case "set-room":
+      return { ...state, room: action.value };
+    case "toggle-filters":
+      return { ...state, filtersOpen: !state.filtersOpen };
+    case "select-day":
+      return { ...state, activeDay: action.value, personalOnly: false };
+    case "toggle-personal-view":
+      return {
+        ...state,
+        personalOnly: !state.personalOnly,
+        query: "",
+        track: "",
+        format: "",
+        room: "",
+      };
+    case "clear-filters":
+      return { ...state, query: "", track: "", format: "", room: "" };
+    case "toggle-selected": {
+      const selectedIds = state.selectedIds.includes(action.entryId)
+        ? state.selectedIds.filter((id) => id !== action.entryId)
+        : [...state.selectedIds, action.entryId];
+      return { ...state, selectedIds, exportMessage: "" };
+    }
+    case "set-selected-ids":
+      return { ...state, selectedIds: action.value };
+    case "set-export-message":
+      return { ...state, exportMessage: action.value };
+    case "toggle-description": {
+      const expandedDescriptions = new Set(state.expandedDescriptions);
+      if (expandedDescriptions.has(action.entryId)) expandedDescriptions.delete(action.entryId);
+      else expandedDescriptions.add(action.entryId);
+      return { ...state, expandedDescriptions };
+    }
+    case "toggle-details": {
+      const expandedDetails = new Set(state.expandedDetails);
+      if (expandedDetails.has(action.entryId)) expandedDetails.delete(action.entryId);
+      else expandedDetails.add(action.entryId);
+      return { ...state, expandedDetails };
+    }
+  }
+  return state;
+}
 export function PublicItineraryView({ program }: Readonly<{ program: PublishedProgram }>) {
   const { agenda, speakers } = program;
   const storageKey = `eventloom:public-schedule:${agenda.event.slug}`;
@@ -204,26 +305,33 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
     () => publicEventDays(agenda.entries, agenda.event),
     [agenda.entries, agenda.event],
   );
-  const [activeDay, setActiveDay] = useState(days[0]?.date ?? "");
-  const [query, setQuery] = useState("");
-  const [track, setTrack] = useState("");
-  const [format, setFormat] = useState("");
-  const [room, setRoom] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [personalOnly, setPersonalOnly] = useState(false);
-  const [expandedDescriptions, setExpandedDescriptions] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const [state, dispatch] = useReducer(
+    publicItineraryReducer,
+    days[0]?.date ?? "",
+    publicItineraryInitialState,
   );
-  const [expandedDetails, setExpandedDetails] = useState<ReadonlySet<string>>(() => new Set());
-  const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
-  const [exportMessage, setExportMessage] = useState("");
+  const {
+    activeDay,
+    query,
+    track,
+    format,
+    room,
+    filtersOpen,
+    personalOnly,
+    expandedDescriptions,
+    expandedDetails,
+    selectedIds,
+    exportMessage,
+  } = state;
   const storageKeyRef = useRef(storageKey);
   const storageLoadedRef = useRef(false);
   const hydratedSelectedIdsRef = useRef<readonly string[] | null>(null);
   const hydrationPendingRef = useRef(false);
 
   useEffect(() => {
-    if (!days.some((day) => day.date === activeDay)) setActiveDay(days[0]?.date ?? "");
+    if (!days.some((day) => day.date === activeDay)) {
+      dispatch({ type: "set-active-day", value: days[0]?.date ?? "" });
+    }
   }, [activeDay, days]);
 
   useEffect(() => {
@@ -241,7 +349,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
           )
         : [];
       hydratedSelectedIdsRef.current = selected;
-      setSelectedIds(selected);
+      dispatch({ type: "set-selected-ids", value: selected });
       if (current === null && stored !== null) {
         window.localStorage.setItem(storageKey, JSON.stringify(selected));
         window.localStorage.removeItem(legacyStorageKey);
@@ -249,7 +357,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
     } catch {
       const selected: readonly string[] = [];
       hydratedSelectedIdsRef.current = selected;
-      setSelectedIds(selected);
+      dispatch({ type: "set-selected-ids", value: selected });
     } finally {
       storageLoadedRef.current = true;
     }
@@ -318,33 +426,29 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
   const hasFilters = Boolean(query || track || format || room);
 
   const clearFilters = () => {
-    setQuery("");
-    setTrack("");
-    setFormat("");
-    setRoom("");
+    dispatch({ type: "clear-filters" });
   };
   const toggleSelected = (entryId: string) => {
-    setExportMessage("");
-    setSelectedIds((current) =>
-      current.includes(entryId) ? current.filter((id) => id !== entryId) : [...current, entryId],
-    );
+    dispatch({ type: "toggle-selected", entryId });
   };
   const togglePersonalView = () => {
-    setPersonalOnly((current) => !current);
-    setQuery("");
-    setTrack("");
-    setFormat("");
-    setRoom("");
+    dispatch({ type: "toggle-personal-view" });
   };
   const downloadCalendar = () => {
     const selectedEntries = agenda.entries.filter((entry) => selectedSet.has(entry.id));
     const entries = selectedEntries.length > 0 ? selectedEntries : visibleEntries;
     if (entries.length === 0) {
-      setExportMessage("Add a session before downloading a calendar file.");
+      dispatch({
+        type: "set-export-message",
+        value: "Add a session before downloading a calendar file.",
+      });
       return;
     }
     if (typeof Blob !== "function" || typeof URL.createObjectURL !== "function") {
-      setExportMessage("Calendar downloads are not supported in this browser.");
+      dispatch({
+        type: "set-export-message",
+        value: "Calendar downloads are not supported in this browser.",
+      });
       return;
     }
     const blob = new Blob([createCalendar(agenda.event.name, agenda.event.slug, entries)], {
@@ -358,9 +462,10 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-    setExportMessage(
-      `Downloaded ${entries.length} session${entries.length === 1 ? "" : "s"} for your calendar.`,
-    );
+    dispatch({
+      type: "set-export-message",
+      value: `Downloaded ${entries.length} session${entries.length === 1 ? "" : "s"} for your calendar.`,
+    });
   };
 
   return (
@@ -381,7 +486,9 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
               type="search"
               value={query}
               placeholder="Search by title or speaker"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) =>
+                dispatch({ type: "set-query", value: event.currentTarget.value })
+              }
             />
           </label>
           <button
@@ -389,7 +496,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
             type="button"
             aria-expanded={filtersOpen}
             aria-controls="itinerary-filters"
-            onClick={() => setFiltersOpen((open) => !open)}
+            onClick={() => dispatch({ type: "toggle-filters" })}
           >
             {filtersOpen ? "Hide filters" : "Filters"}
           </button>
@@ -424,7 +531,12 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
         >
           <label>
             <span>Track</span>
-            <select value={track} onChange={(event) => setTrack(event.target.value)}>
+            <select
+              value={track}
+              onChange={(event) =>
+                dispatch({ type: "set-track", value: event.currentTarget.value })
+              }
+            >
               <option value="">All tracks</option>
               {tracks.map((value) => (
                 <option key={value} value={value}>
@@ -435,7 +547,12 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
           </label>
           <label>
             <span>Format</span>
-            <select value={format} onChange={(event) => setFormat(event.target.value)}>
+            <select
+              value={format}
+              onChange={(event) =>
+                dispatch({ type: "set-format", value: event.currentTarget.value })
+              }
+            >
               <option value="">All formats</option>
               {formats.map((value) => (
                 <option key={value} value={value}>
@@ -446,7 +563,10 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
           </label>
           <label>
             <span>Location</span>
-            <select value={room} onChange={(event) => setRoom(event.target.value)}>
+            <select
+              value={room}
+              onChange={(event) => dispatch({ type: "set-room", value: event.currentTarget.value })}
+            >
               <option value="">All locations</option>
               {rooms.map((value) => (
                 <option key={value} value={value}>
@@ -487,10 +607,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
               aria-controls={
                 visibleDays.some((candidate) => candidate.date === day.date) ? panelId : undefined
               }
-              onClick={() => {
-                setPersonalOnly(false);
-                setActiveDay(day.date);
-              }}
+              onClick={() => dispatch({ type: "select-day", value: day.date })}
               onKeyDown={(event) => {
                 const currentIndex = days.findIndex((candidate) => candidate.date === day.date);
                 if (currentIndex < 0 || days.length < 2) return;
@@ -506,10 +623,9 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                 }
                 if (nextIndex < 0) return;
                 event.preventDefault();
-                setPersonalOnly(false);
                 const nextDay = days[nextIndex];
                 if (nextDay) {
-                  setActiveDay(nextDay.date);
+                  dispatch({ type: "select-day", value: nextDay.date });
                   document.getElementById(`itinerary-tab-${nextDay.date}`)?.focus();
                 }
               }}
@@ -595,11 +711,9 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                                 aria-expanded={isDescriptionExpanded}
                                 aria-controls={`itinerary-summary-${entry.id}`}
                                 onClick={() =>
-                                  setExpandedDescriptions((current) => {
-                                    const next = new Set(current);
-                                    if (next.has(entry.id)) next.delete(entry.id);
-                                    else next.add(entry.id);
-                                    return next;
+                                  dispatch({
+                                    type: "toggle-description",
+                                    entryId: entry.id,
                                   })
                                 }
                               >
@@ -653,11 +767,9 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                               aria-expanded={isDetailsExpanded}
                               aria-controls={`itinerary-details-${entry.id}`}
                               onClick={() =>
-                                setExpandedDetails((current) => {
-                                  const next = new Set(current);
-                                  if (next.has(entry.id)) next.delete(entry.id);
-                                  else next.add(entry.id);
-                                  return next;
+                                dispatch({
+                                  type: "toggle-details",
+                                  entryId: entry.id,
                                 })
                               }
                             >

@@ -1,7 +1,7 @@
 "use client";
 
 // allow: SIZE_OK — this module owns one Remix client state machine; visual sections are extracted.
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { StatusBadge, WorkspaceHeader } from "@/components/workspace/workspace-ui";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
@@ -71,6 +71,311 @@ export function remixNavigationCacheTags(
   const event = normalizeRemixScopeId(eventId);
   return [`organization:${organization}`, `event:${event}`, `remix:${event}`];
 }
+type RemixWorkspaceState = {
+  sourceType: RemixSourceType;
+  capabilityUnavailable: boolean;
+  capabilityMessage: string | null;
+  records: readonly RemixSourceRecord[];
+  candidates: readonly RemixCandidate[];
+  audit: readonly RemixAuditEntry[];
+  selectedSourceIds: readonly string[];
+  selectedCandidateId: string | null;
+  candidateFilter: RemixCandidate["status"] | "all";
+  search: string;
+  tagFilter: string;
+  trackFilter: string;
+  fields: readonly RemixField[];
+  tone: string;
+  guidance: string;
+  humanConfirmed: boolean;
+  draftContent: Readonly<Record<string, string>>;
+  loading: boolean;
+  busyAction: string | null;
+  error: string | null;
+  actionMessage: string | null;
+  actionError: string | null;
+  applyError: string | null;
+  applyDialogOpen: boolean;
+};
+
+type RemixWorkspaceAction =
+  | { type: "source-type-changed"; sourceType: RemixSourceType }
+  | { type: "capability-synced"; available: boolean }
+  | {
+      type: "snapshot-applied";
+      records: readonly RemixSourceRecord[];
+      candidates: readonly RemixCandidate[];
+      audit: readonly RemixAuditEntry[];
+    }
+  | { type: "loading-changed"; loading: boolean }
+  | { type: "load-error"; unavailable: boolean; message: string | null }
+  | { type: "source-toggled"; sourceId: string }
+  | { type: "candidate-selected"; candidateId: string }
+  | { type: "candidate-filter-changed"; filter: RemixCandidate["status"] | "all" }
+  | { type: "search-changed"; value: string }
+  | { type: "tag-filter-changed"; value: string }
+  | { type: "track-filter-changed"; value: string }
+  | { type: "field-toggled"; field: RemixField }
+  | { type: "tone-changed"; value: string }
+  | { type: "guidance-changed"; value: string }
+  | { type: "draft-changed"; field: string; value: string }
+  | { type: "human-confirmed"; value: boolean }
+  | { type: "operation-started"; action: string; clearApplyError: boolean }
+  | { type: "operation-finished" }
+  | { type: "action-message"; message: string | null }
+  | { type: "action-error"; message: string | null }
+  | { type: "apply-error"; message: string | null }
+  | { type: "generated"; candidates: readonly RemixCandidate[]; message: string }
+  | {
+      type: "regenerated";
+      candidates: readonly RemixCandidate[];
+      selectedCandidateId: string;
+      message: string;
+    }
+  | {
+      type: "candidate-rejected";
+      candidates: readonly RemixCandidate[];
+      audit: readonly RemixAuditEntry[];
+      message: string;
+    }
+  | {
+      type: "candidate-applied";
+      candidates: readonly RemixCandidate[];
+      audit: readonly RemixAuditEntry[];
+      message: string;
+    }
+  | { type: "apply-dialog-changed"; open: boolean };
+
+function remixDraftForCandidate(
+  candidate: RemixCandidate | undefined,
+): Readonly<Record<string, string>> {
+  if (candidate === undefined) return {};
+  const draft: Record<string, string> = {};
+  for (const field of candidate.fields) {
+    draft[field] = inputValue(valueForField(candidate.candidate, field));
+  }
+  return draft;
+}
+
+function initialRemixWorkspaceState(input: {
+  apiAvailable: boolean;
+  scopeValid: boolean;
+  hasSnapshot: boolean;
+  records: readonly RemixSourceRecord[];
+  candidates: readonly RemixCandidate[];
+  audit: readonly RemixAuditEntry[];
+}): RemixWorkspaceState {
+  return {
+    sourceType: "session",
+    capabilityUnavailable: !input.apiAvailable,
+    capabilityMessage: null,
+    records: input.records,
+    candidates: input.candidates,
+    audit: input.audit,
+    selectedSourceIds: [],
+    selectedCandidateId: input.candidates[0]?.id ?? null,
+    candidateFilter: "all",
+    search: "",
+    tagFilter: "",
+    trackFilter: "",
+    fields: ["title", "description"],
+    tone: "Clear and practical",
+    guidance: "Keep the author's meaning and make the outcome concrete.",
+    humanConfirmed: false,
+    draftContent: remixDraftForCandidate(input.candidates[0]),
+    loading: input.apiAvailable && input.scopeValid && !input.hasSnapshot,
+    busyAction: null,
+    error: input.scopeValid ? null : "Organization and event scope are required.",
+    actionMessage: null,
+    actionError: null,
+    applyError: null,
+    applyDialogOpen: false,
+  };
+}
+
+function remixWorkspaceReducer(
+  state: RemixWorkspaceState,
+  action: RemixWorkspaceAction,
+): RemixWorkspaceState {
+  switch (action.type) {
+    case "source-type-changed":
+      return {
+        ...state,
+        sourceType: action.sourceType,
+        selectedSourceIds: [],
+        fields: action.sourceType === "session" ? ["title", "description"] : ["biography"],
+        search: "",
+        tagFilter: "",
+        trackFilter: "",
+      };
+    case "capability-synced":
+      return action.available
+        ? { ...state, capabilityUnavailable: false, capabilityMessage: null }
+        : {
+            ...state,
+            capabilityUnavailable: true,
+            capabilityMessage: null,
+            loading: false,
+            records: [],
+            candidates: [],
+            audit: [],
+            selectedCandidateId: null,
+            draftContent: {},
+          };
+    case "snapshot-applied": {
+      const selectedCandidateId =
+        state.selectedCandidateId !== null &&
+        action.candidates.some((candidate) => candidate.id === state.selectedCandidateId)
+          ? state.selectedCandidateId
+          : (action.candidates[0]?.id ?? null);
+      const selectionChanged = selectedCandidateId !== state.selectedCandidateId;
+      return {
+        ...state,
+        records: action.records,
+        candidates: action.candidates,
+        audit: action.audit,
+        selectedCandidateId,
+        ...(selectionChanged
+          ? {
+              draftContent: remixDraftForCandidate(
+                action.candidates.find((candidate) => candidate.id === selectedCandidateId),
+              ),
+              humanConfirmed: false,
+            }
+          : {}),
+      };
+    }
+    case "loading-changed":
+      return { ...state, loading: action.loading };
+    case "load-error":
+      return {
+        ...state,
+        capabilityUnavailable: action.unavailable,
+        capabilityMessage: action.unavailable ? action.message : state.capabilityMessage,
+        error: action.unavailable ? state.error : action.message,
+        records: action.unavailable ? [] : state.records,
+        candidates: action.unavailable ? [] : state.candidates,
+        audit: action.unavailable ? [] : state.audit,
+      };
+    case "source-toggled":
+      return {
+        ...state,
+        selectedSourceIds: state.selectedSourceIds.includes(action.sourceId)
+          ? state.selectedSourceIds.filter((sourceId) => sourceId !== action.sourceId)
+          : [...state.selectedSourceIds, action.sourceId],
+      };
+    case "candidate-selected": {
+      const selectedCandidate = state.candidates.find(
+        (candidate) => candidate.id === action.candidateId,
+      );
+      return {
+        ...state,
+        selectedCandidateId: action.candidateId,
+        draftContent: remixDraftForCandidate(selectedCandidate),
+        humanConfirmed: false,
+        actionError: null,
+        actionMessage: null,
+      };
+    }
+    case "candidate-filter-changed":
+      return { ...state, candidateFilter: action.filter };
+    case "search-changed":
+      return { ...state, search: action.value };
+    case "tag-filter-changed":
+      return { ...state, tagFilter: action.value };
+    case "track-filter-changed":
+      return { ...state, trackFilter: action.value };
+    case "field-toggled":
+      return {
+        ...state,
+        fields: state.fields.includes(action.field)
+          ? state.fields.filter((field) => field !== action.field)
+          : [...state.fields, action.field],
+      };
+    case "tone-changed":
+      return { ...state, tone: action.value };
+    case "guidance-changed":
+      return { ...state, guidance: action.value };
+    case "draft-changed":
+      return { ...state, draftContent: { ...state.draftContent, [action.field]: action.value } };
+    case "human-confirmed":
+      return { ...state, humanConfirmed: action.value };
+    case "operation-started":
+      return {
+        ...state,
+        busyAction: action.action,
+        actionError: null,
+        actionMessage: null,
+        ...(action.clearApplyError ? { applyError: null } : {}),
+      };
+    case "operation-finished":
+      return { ...state, busyAction: null };
+    case "action-message":
+      return { ...state, actionMessage: action.message };
+    case "action-error":
+      return { ...state, actionError: action.message };
+    case "apply-error":
+      return { ...state, applyError: action.message };
+    case "generated": {
+      const first = action.candidates[0];
+      return {
+        ...state,
+        candidates: [...action.candidates, ...state.candidates],
+        ...(first === undefined
+          ? {}
+          : {
+              selectedCandidateId: first.id,
+              draftContent: remixDraftForCandidate(first),
+              humanConfirmed: false,
+            }),
+        actionMessage: action.message,
+      };
+    }
+    case "regenerated": {
+      const selectedCandidate = action.candidates.find(
+        (candidate) => candidate.id === action.selectedCandidateId,
+      );
+      return {
+        ...state,
+        candidates: action.candidates,
+        selectedCandidateId: action.selectedCandidateId,
+        draftContent: remixDraftForCandidate(selectedCandidate),
+        humanConfirmed: false,
+        actionMessage: action.message,
+      };
+    }
+    case "candidate-rejected": {
+      const selectedCandidate = action.candidates.find(
+        (candidate) => candidate.id === state.selectedCandidateId,
+      );
+      return {
+        ...state,
+        candidates: action.candidates,
+        audit: action.audit,
+        draftContent: remixDraftForCandidate(selectedCandidate),
+        humanConfirmed: false,
+        actionMessage: action.message,
+      };
+    }
+    case "candidate-applied": {
+      const selectedCandidate = action.candidates.find(
+        (candidate) => candidate.id === state.selectedCandidateId,
+      );
+      return {
+        ...state,
+        candidates: action.candidates,
+        audit: action.audit,
+        draftContent: remixDraftForCandidate(selectedCandidate),
+        humanConfirmed: false,
+        applyDialogOpen: false,
+        applyError: null,
+        actionMessage: action.message,
+      };
+    }
+    case "apply-dialog-changed":
+      return { ...state, applyDialogOpen: action.open };
+  }
+}
 
 export function RemixWorkspace({
   organizationId,
@@ -90,75 +395,79 @@ export function RemixWorkspace({
     }
   }, [apiOverride, normalizedOrganizationId, scopeValid]);
   const navigationCache = useNavigationDataCache();
-  const [sourceType, setSourceType] = useState<RemixSourceType>("session");
-  const remixCacheKey = useMemo(
-    () => remixNavigationCacheKey(normalizedOrganizationId, eventId, sourceType),
-    [eventId, normalizedOrganizationId, sourceType],
+  const initialSourceType: RemixSourceType = "session";
+  const initialCacheKey = remixNavigationCacheKey(
+    normalizedOrganizationId,
+    eventId,
+    initialSourceType,
   );
   const remixCacheTags = useMemo(
     () => remixNavigationCacheTags(normalizedOrganizationId, eventId),
     [eventId, normalizedOrganizationId],
   );
-  const cachedSnapshot = navigationCache?.peek<RemixNavigationCacheSnapshot>(remixCacheKey);
+  const cachedSnapshot = navigationCache?.peek<RemixNavigationCacheSnapshot>(initialCacheKey);
   const initialRecords =
     cachedSnapshot?.records.filter(
-      (record) => record.eventId === eventId && record.kind === sourceType,
+      (record) => record.eventId === eventId && record.kind === initialSourceType,
     ) ?? [];
   const initialCandidates =
     cachedSnapshot?.candidates.filter((candidate) => candidate.eventId === eventId) ?? [];
   const initialAudit = cachedSnapshot?.audit.filter((entry) => entry.eventId === eventId) ?? [];
-  const [capabilityUnavailable, setCapabilityUnavailable] = useState(api === null);
-  const [capabilityMessage, setCapabilityMessage] = useState<string | null>(null);
-  const sourceTypeInitialized = useRef(false);
-  const [records, setRecords] = useState<readonly RemixSourceRecord[]>(() => initialRecords);
-  const [candidates, setCandidates] = useState<readonly RemixCandidate[]>(() => initialCandidates);
-  const [audit, setAudit] = useState<readonly RemixAuditEntry[]>(() => initialAudit);
-  const [selectedSourceIds, setSelectedSourceIds] = useState<readonly string[]>([]);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
-    () => initialCandidates[0]?.id ?? null,
+  const [remixState, dispatch] = useReducer(
+    remixWorkspaceReducer,
+    {
+      apiAvailable: api !== null,
+      scopeValid,
+      hasSnapshot: cachedSnapshot !== undefined,
+      records: initialRecords,
+      candidates: initialCandidates,
+      audit: initialAudit,
+    },
+    initialRemixWorkspaceState,
   );
-  const [candidateFilter, setCandidateFilter] = useState<RemixCandidate["status"] | "all">("all");
-  const [search, setSearch] = useState("");
-  const [tagFilter, setTagFilter] = useState("");
-  const [trackFilter, setTrackFilter] = useState("");
-  const [fields, setFields] = useState<readonly RemixField[]>(["title", "description"]);
-  const [tone, setTone] = useState("Clear and practical");
-  const [guidance, setGuidance] = useState(
-    "Keep the author's meaning and make the outcome concrete.",
+  const {
+    sourceType,
+    capabilityUnavailable,
+    capabilityMessage,
+    records,
+    candidates,
+    audit,
+    selectedSourceIds,
+    selectedCandidateId,
+    candidateFilter,
+    search,
+    tagFilter,
+    trackFilter,
+    fields,
+    tone,
+    guidance,
+    humanConfirmed,
+    draftContent,
+    loading,
+    busyAction,
+    error,
+    actionMessage,
+    actionError,
+    applyError,
+    applyDialogOpen,
+  } = remixState;
+  const remixCacheKey = useMemo(
+    () => remixNavigationCacheKey(normalizedOrganizationId, eventId, sourceType),
+    [eventId, normalizedOrganizationId, sourceType],
   );
-  const [humanConfirmed, setHumanConfirmed] = useState(false);
-  const [draftContent, setDraftContent] = useState<Readonly<Record<string, string>>>({});
-  const [loading, setLoading] = useState(
-    api !== null && scopeValid && cachedSnapshot === undefined,
-  );
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(() =>
-    scopeValid ? null : "Organization and event scope are required.",
-  );
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [applyError, setApplyError] = useState<string | null>(null);
-  const [applyDialogOpen, setApplyDialogOpen] = useState(false);
   const applyButtonRef = useRef<HTMLButtonElement | null>(null);
   const loadGenerationRef = useRef(0);
 
   const applySnapshot = useCallback(
     (snapshot: RemixNavigationCacheSnapshot): void => {
-      const nextRecords = snapshot.records.filter(
-        (record) => record.eventId === eventId && record.kind === sourceType,
-      );
-      const nextCandidates = snapshot.candidates.filter(
-        (candidate) => candidate.eventId === eventId,
-      );
-      const nextAudit = snapshot.audit.filter((entry) => entry.eventId === eventId);
-      setRecords(nextRecords);
-      setCandidates(nextCandidates);
-      setAudit(nextAudit);
-      setSelectedCandidateId((current) =>
-        current !== null && nextCandidates.some((candidate) => candidate.id === current)
-          ? current
-          : (nextCandidates[0]?.id ?? null),
-      );
+      dispatch({
+        type: "snapshot-applied",
+        records: snapshot.records.filter(
+          (record) => record.eventId === eventId && record.kind === sourceType,
+        ),
+        candidates: snapshot.candidates.filter((candidate) => candidate.eventId === eventId),
+        audit: snapshot.audit.filter((entry) => entry.eventId === eventId),
+      });
     },
     [eventId, sourceType],
   );
@@ -169,31 +478,12 @@ export function RemixWorkspace({
   }
 
   useEffect(() => {
-    setCapabilityUnavailable(api === null);
-    setCapabilityMessage(null);
-    if (api === null) {
-      setLoading(false);
-      setRecords([]);
-      setCandidates([]);
-      setAudit([]);
-    }
+    dispatch({ type: "capability-synced", available: api !== null });
   }, [api]);
 
   useEffect(() => {
-    if (!sourceTypeInitialized.current) {
-      sourceTypeInitialized.current = true;
-      return;
-    }
-    setSelectedSourceIds([]);
-    setFields(sourceType === "session" ? ["title", "description"] : ["biography"]);
-    setSearch("");
-    setTagFilter("");
-    setTrackFilter("");
-  }, [sourceType]);
-
-  useEffect(() => {
     if (!scopeValid || api === null || capabilityUnavailable) {
-      setLoading(false);
+      dispatch({ type: "loading-changed", loading: false });
       return;
     }
     let active = true;
@@ -201,8 +491,8 @@ export function RemixWorkspace({
     const immediateSnapshot = navigationCache?.peek<RemixNavigationCacheSnapshot>(remixCacheKey);
     const hasImmediateSnapshot = immediateSnapshot !== undefined;
     if (immediateSnapshot !== undefined) applySnapshot(immediateSnapshot);
-    setLoading(!hasImmediateSnapshot);
-    setError(null);
+    dispatch({ type: "loading-changed", loading: !hasImmediateSnapshot });
+    dispatch({ type: "load-error", unavailable: false, message: null });
     const controller = new AbortController();
     const load = async (): Promise<RemixNavigationCacheSnapshot> => {
       const signal = navigationCache === null ? controller.signal : undefined;
@@ -237,17 +527,17 @@ export function RemixWorkspace({
         if (!isCurrent() || (reason instanceof DOMException && reason.name === "AbortError"))
           return;
         if (isCapabilityUnavailable(reason)) {
-          setCapabilityUnavailable(true);
-          setCapabilityMessage(reason instanceof Error ? reason.message : "Capability not found.");
-          setRecords([]);
-          setCandidates([]);
-          setAudit([]);
+          dispatch({
+            type: "load-error",
+            unavailable: true,
+            message: reason instanceof Error ? reason.message : "Capability not found.",
+          });
           return;
         }
-        setError(messageFrom(reason));
+        dispatch({ type: "load-error", unavailable: false, message: messageFrom(reason) });
       })
       .finally(() => {
-        if (isCurrent()) setLoading(false);
+        if (isCurrent()) dispatch({ type: "loading-changed", loading: false });
       });
     return () => {
       active = false;
@@ -276,8 +566,6 @@ export function RemixWorkspace({
         recordMatches(record, search, tagValues, trackValues),
     );
   }, [eventId, records, search, sourceType, tagFilter, trackFilter]);
-  const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
-  const selectedFieldSet = useMemo(() => new Set(fields), [fields]);
   const visibleCandidates = useMemo(
     () =>
       candidates.filter(
@@ -300,65 +588,52 @@ export function RemixWorkspace({
     humanConfirmed &&
     busyAction === null;
 
-  useEffect(() => {
-    if (selectedCandidate === undefined) {
-      setDraftContent({});
-      setHumanConfirmed(false);
-      return;
-    }
-    const nextDraft: Record<string, string> = {};
-    for (const field of selectedCandidate.fields) {
-      nextDraft[field] = inputValue(valueForField(selectedCandidate.candidate, field));
-    }
-    setDraftContent(nextDraft);
-    setHumanConfirmed(false);
-  }, [selectedCandidate]);
-
   function toggleSource(sourceId: string): void {
-    setSelectedSourceIds((current) =>
-      current.includes(sourceId) ? current.filter((id) => id !== sourceId) : [...current, sourceId],
-    );
+    dispatch({ type: "source-toggled", sourceId });
   }
 
   function toggleField(field: RemixField): void {
-    setFields((current) =>
-      current.includes(field)
-        ? current.filter((candidate) => candidate !== field)
-        : [...current, field],
-    );
+    dispatch({ type: "field-toggled", field });
   }
 
   function selectCandidate(candidateId: string): void {
-    setSelectedCandidateId(candidateId);
-    setActionError(null);
-    setActionMessage(null);
+    dispatch({ type: "candidate-selected", candidateId });
   }
 
   async function generate(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    setActionError(null);
-    setActionMessage(null);
+    dispatch({ type: "action-error", message: null });
+    dispatch({ type: "action-message", message: null });
     if (api === null) {
-      setActionError("Content remix is unavailable. No suggestion was created.");
+      dispatch({
+        type: "action-error",
+        message: "Content remix is unavailable. No suggestion was created.",
+      });
       return;
     }
     if (loading) {
-      setActionError("Event content is still loading. Try again in a moment.");
+      dispatch({
+        type: "action-error",
+        message: "Event content is still loading. Try again in a moment.",
+      });
       return;
     }
     if (selectedSourceIds.length === 0) {
-      setActionError("Select at least one session or speaker profile.");
+      dispatch({
+        type: "action-error",
+        message: "Select at least one session or speaker profile.",
+      });
       return;
     }
     if (fields.length === 0) {
-      setActionError("Select at least one field to rewrite.");
+      dispatch({ type: "action-error", message: "Select at least one field to rewrite." });
       return;
     }
     if (tone.trim().length === 0) {
-      setActionError("Describe the tone before generating.");
+      dispatch({ type: "action-error", message: "Describe the tone before generating." });
       return;
     }
-    setBusyAction("generate");
+    dispatch({ type: "operation-started", action: "generate", clearApplyError: false });
     try {
       const generated = await api.generate({
         eventId,
@@ -369,28 +644,28 @@ export function RemixWorkspace({
         ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
       });
       invalidateRemixCache();
-      setCandidates((current) => [...generated, ...current]);
-      const first = generated[0];
-      if (first !== undefined) setSelectedCandidateId(first.id);
-      setActionMessage(
-        `${generated.length} private suggestion${generated.length === 1 ? "" : "s"} ready for review.`,
-      );
+      dispatch({
+        type: "generated",
+        candidates: generated,
+        message: `${generated.length} private suggestion${generated.length === 1 ? "" : "s"} ready for review.`,
+      });
     } catch (reason: unknown) {
-      setActionError(messageFrom(reason));
+      dispatch({ type: "action-error", message: messageFrom(reason) });
     } finally {
-      setBusyAction(null);
+      dispatch({ type: "operation-finished" });
     }
   }
 
   async function regenerate(): Promise<void> {
     if (api === null) {
-      setActionError("Content remix is unavailable. No suggestion was regenerated.");
+      dispatch({
+        type: "action-error",
+        message: "Content remix is unavailable. No suggestion was regenerated.",
+      });
       return;
     }
     if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
-    setBusyAction("regenerate");
-    setActionError(null);
-    setActionMessage(null);
+    dispatch({ type: "operation-started", action: "regenerate", clearApplyError: false });
     try {
       const regenerated = await api.regenerate({
         eventId,
@@ -399,37 +674,41 @@ export function RemixWorkspace({
         ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
       });
       invalidateRemixCache();
-      setCandidates((current) => [
-        regenerated,
-        ...current.map((candidate) =>
-          candidate.id === selectedCandidate.id && candidate.status === "pending"
-            ? {
-                ...candidate,
-                status: "rejected" as const,
-                version: candidate.version + 1,
-                rejectionReason: "Superseded by regeneration.",
-              }
-            : candidate,
-        ),
-      ]);
-      setSelectedCandidateId(regenerated.id);
-      setActionMessage("A fresh suggestion is ready. The previous version remains in activity.");
+      dispatch({
+        type: "regenerated",
+        candidates: [
+          regenerated,
+          ...candidates.map((candidate) =>
+            candidate.id === selectedCandidate.id && candidate.status === "pending"
+              ? {
+                  ...candidate,
+                  status: "rejected" as const,
+                  version: candidate.version + 1,
+                  rejectionReason: "Superseded by regeneration.",
+                }
+              : candidate,
+          ),
+        ],
+        selectedCandidateId: regenerated.id,
+        message: "A fresh suggestion is ready. The previous version remains in activity.",
+      });
     } catch (reason: unknown) {
-      setActionError(messageFrom(reason));
+      dispatch({ type: "action-error", message: messageFrom(reason) });
     } finally {
-      setBusyAction(null);
+      dispatch({ type: "operation-finished" });
     }
   }
 
   async function reject(): Promise<void> {
     if (api === null) {
-      setActionError("Content remix is unavailable. No suggestion was rejected.");
+      dispatch({
+        type: "action-error",
+        message: "Content remix is unavailable. No suggestion was rejected.",
+      });
       return;
     }
     if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
-    setBusyAction("reject");
-    setActionError(null);
-    setActionMessage(null);
+    dispatch({ type: "operation-started", action: "reject", clearApplyError: false });
     try {
       const rejected = await api.reject({
         eventId,
@@ -437,25 +716,26 @@ export function RemixWorkspace({
         reason: "Rejected by the human organizer.",
       });
       invalidateRemixCache();
-      setCandidates((current) =>
-        current.map((candidate) => (candidate.id === rejected.id ? rejected : candidate)),
+      const nextCandidates = candidates.map((candidate) =>
+        candidate.id === rejected.id ? rejected : candidate,
       );
       const nextAudit = await api.listAudit(eventId);
-      setAudit(nextAudit.filter((entry) => entry.eventId === eventId));
-      setActionMessage("Suggestion rejected and recorded in activity.");
+      dispatch({
+        type: "candidate-rejected",
+        candidates: nextCandidates,
+        audit: nextAudit.filter((entry) => entry.eventId === eventId),
+        message: "Suggestion rejected and recorded in activity.",
+      });
     } catch (reason: unknown) {
-      setActionError(messageFrom(reason));
+      dispatch({ type: "action-error", message: messageFrom(reason) });
     } finally {
-      setBusyAction(null);
+      dispatch({ type: "operation-finished" });
     }
   }
 
   async function commitApply(): Promise<void> {
     if (api === null || selectedCandidate === undefined || !canApply) return;
-    setBusyAction("apply");
-    setActionError(null);
-    setApplyError(null);
-    setActionMessage(null);
+    dispatch({ type: "operation-started", action: "apply", clearApplyError: true });
     try {
       const content = allowedContentForApply(selectedCandidate, draftContent);
       const revision: RemixContentRevision = await api.apply({
@@ -465,36 +745,34 @@ export function RemixWorkspace({
         content,
       });
       invalidateRemixCache();
-      setCandidates((current) =>
-        current.map((candidate) =>
-          candidate.id === selectedCandidate.id
-            ? {
-                ...candidate,
-                status: "applied" as const,
-                version: candidate.version + 1,
-                candidate: revision.content,
-                appliedAt: revision.appliedAt,
-                appliedBy: revision.appliedBy,
-                appliedRevisionId: revision.id,
-              }
-            : candidate,
-        ),
+      const nextCandidates = candidates.map((candidate) =>
+        candidate.id === selectedCandidate.id
+          ? {
+              ...candidate,
+              status: "applied" as const,
+              version: candidate.version + 1,
+              candidate: revision.content,
+              appliedAt: revision.appliedAt,
+              appliedBy: revision.appliedBy,
+              appliedRevisionId: revision.id,
+            }
+          : candidate,
       );
       const nextAudit = await api.listAudit(eventId);
-      setAudit(nextAudit.filter((entry) => entry.eventId === eventId));
-      setHumanConfirmed(false);
-      setApplyDialogOpen(false);
-      setApplyError(null);
-      setActionMessage("Approved changes were applied and recorded in activity.");
+      dispatch({
+        type: "candidate-applied",
+        candidates: nextCandidates,
+        audit: nextAudit.filter((entry) => entry.eventId === eventId),
+        message: "Approved changes were applied and recorded in activity.",
+      });
     } catch (reason: unknown) {
       const message = messageFrom(reason);
-      setActionError(message);
-      setApplyError(message);
+      dispatch({ type: "action-error", message });
+      dispatch({ type: "apply-error", message });
     } finally {
-      setBusyAction(null);
+      dispatch({ type: "operation-finished" });
     }
   }
-
 
   if (!scopeValid) {
     return <ScopeStatus message="Organization and event scope are required." error />;
@@ -517,13 +795,15 @@ export function RemixWorkspace({
       <div className={styles.pageBody}>
         <RemixComposer
           sourceType={sourceType}
-          onSourceTypeChange={setSourceType}
+          onSourceTypeChange={(nextSourceType) =>
+            dispatch({ type: "source-type-changed", sourceType: nextSourceType })
+          }
           search={search}
-          onSearchChange={setSearch}
+          onSearchChange={(value) => dispatch({ type: "search-changed", value })}
           tagFilter={tagFilter}
-          onTagFilterChange={setTagFilter}
+          onTagFilterChange={(value) => dispatch({ type: "tag-filter-changed", value })}
           trackFilter={trackFilter}
-          onTrackFilterChange={setTrackFilter}
+          onTrackFilterChange={(value) => dispatch({ type: "track-filter-changed", value })}
           records={visibleRecords}
           selectedSourceIds={selectedSourceIds}
           onToggleSource={toggleSource}
@@ -533,9 +813,9 @@ export function RemixWorkspace({
           fields={fields}
           onToggleField={toggleField}
           tone={tone}
-          onToneChange={setTone}
+          onToneChange={(value) => dispatch({ type: "tone-changed", value })}
           guidance={guidance}
-          onGuidanceChange={setGuidance}
+          onGuidanceChange={(value) => dispatch({ type: "guidance-changed", value })}
           actionError={actionError}
           actionMessage={actionMessage}
           busyAction={busyAction}
@@ -545,28 +825,28 @@ export function RemixWorkspace({
           candidates={visibleCandidates}
           records={records}
           candidateFilter={candidateFilter}
-          onCandidateFilterChange={setCandidateFilter}
+          onCandidateFilterChange={(filter) =>
+            dispatch({ type: "candidate-filter-changed", filter })
+          }
           selectedCandidateId={selectedCandidateId}
           onSelectCandidate={selectCandidate}
           selectedCandidate={selectedCandidate}
           staleCandidate={staleCandidate}
           draftContent={draftContent}
-          onDraftChange={(field, value) =>
-            setDraftContent((current) => ({ ...current, [field]: value }))
-          }
+          onDraftChange={(field, value) => dispatch({ type: "draft-changed", field, value })}
           busyAction={busyAction}
           loading={loading}
           apiAvailable={api !== null}
           onRegenerate={() => void regenerate()}
           onReject={() => void reject()}
           humanConfirmed={humanConfirmed}
-          onHumanConfirmedChange={setHumanConfirmed}
+          onHumanConfirmedChange={(value) => dispatch({ type: "human-confirmed", value })}
           canApply={canApply}
           onOpenApply={() => {
             if (!canApply) return;
-            setApplyError(null);
-            setActionError(null);
-            setApplyDialogOpen(true);
+            dispatch({ type: "apply-error", message: null });
+            dispatch({ type: "action-error", message: null });
+            dispatch({ type: "apply-dialog-changed", open: true });
           }}
           applyButtonRef={applyButtonRef}
         />
@@ -574,7 +854,7 @@ export function RemixWorkspace({
       </div>
       <RemixApplyDialog
         open={applyDialogOpen}
-        onOpenChange={setApplyDialogOpen}
+        onOpenChange={(open) => dispatch({ type: "apply-dialog-changed", open })}
         busy={busyAction === "apply"}
         error={applyError}
         onConfirm={() => void commitApply()}

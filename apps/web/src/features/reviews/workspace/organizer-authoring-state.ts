@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { OrganizationMember } from "../../members/api";
 import type { ApiPlan } from "./api-api-plan";
 import type { DistributionPreview } from "./assignment-distribution-preview";
@@ -24,6 +24,20 @@ interface AssignmentFieldOverride {
   readonly ownerKey: string;
   readonly value: string;
 }
+interface AssignmentReviewerOverride {
+  readonly ownerKey: string;
+  readonly value: readonly string[];
+}
+
+interface AssignmentPreviewOverride {
+  readonly ownerKey: string;
+  readonly selectionKey: string;
+  readonly value: DistributionPreview | null;
+  readonly previewKey: string | null;
+}
+type AssignmentReviewerIdsUpdate =
+  | readonly string[]
+  | ((current: readonly string[]) => readonly string[]);
 
 export function useOrganizerAuthoringState({
   assignmentOnly = false,
@@ -76,39 +90,50 @@ export function useOrganizerAuthoringState({
   const [rounds, setRounds] = useState<readonly ApiPlan["rounds"][number][]>(initialRounds);
   const [assignmentRoundOverride, setAssignmentRoundOverride] =
     useState<AssignmentFieldOverride | null>(null);
-  const [assignmentPreview, setAssignmentPreview] = useState<DistributionPreview | null>(null);
-  const [assignmentPreviewKey, setAssignmentPreviewKey] = useState<string | null>(null);
+  const [assignmentPreviewOverride, setAssignmentPreviewOverride] =
+    useState<AssignmentPreviewOverride | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [assignmentSubmissionOverride, setAssignmentSubmissionOverride] =
     useState<AssignmentFieldOverride | null>(null);
-  const [assignmentReviewerIds, setAssignmentReviewerIds] = useState<readonly string[]>([]);
+  const [assignmentReviewerOverride, setAssignmentReviewerOverride] =
+    useState<AssignmentReviewerOverride | null>(null);
   const [assignmentReviewerQuery, setAssignmentReviewerQuery] = useState("");
   const [version, setVersion] = useState(seed.version);
   const [status, setStatus] = useState(seed.status);
   const [busy, setBusy] = useState(false);
-  const assignmentOwnerKey = JSON.stringify([
+  const assignmentFieldOwnerKey = JSON.stringify([
+    seed.eventId,
     seed.planId,
     assignmentTarget?.roundId ?? null,
     assignmentTarget?.submissionId ?? null,
   ]);
   const assignmentRoundCandidate =
-    assignmentRoundOverride?.ownerKey === assignmentOwnerKey
+    assignmentRoundOverride?.ownerKey === assignmentFieldOwnerKey
       ? assignmentRoundOverride.value
       : (assignmentTarget?.roundId ?? seed.rounds[0]?.id ?? initialRounds[0]?.id ?? "");
   const assignmentRoundId = rounds.some((round) => round.id === assignmentRoundCandidate)
     ? assignmentRoundCandidate
     : (rounds[0]?.id ?? "");
   const setAssignmentRoundId = (value: string): void => {
-    setAssignmentRoundOverride({ ownerKey: assignmentOwnerKey, value });
+    setAssignmentRoundOverride({ ownerKey: assignmentFieldOwnerKey, value });
   };
   const assignmentSubmissionId =
-    assignmentSubmissionOverride?.ownerKey === assignmentOwnerKey
+    assignmentSubmissionOverride?.ownerKey === assignmentFieldOwnerKey
       ? assignmentSubmissionOverride.value
       : (assignmentTarget?.submissionId ?? "");
   const setAssignmentSubmissionId = (value: string): void => {
-    setAssignmentSubmissionOverride({ ownerKey: assignmentOwnerKey, value });
+    setAssignmentSubmissionOverride({ ownerKey: assignmentFieldOwnerKey, value });
   };
-  const reviewerIdSet = new Set(reviewerMembers.map((member) => member.userId));
+  const assignmentOwnerKey = JSON.stringify([
+    seed.eventId,
+    seed.planId,
+    assignmentRoundId,
+    assignmentSubmissionId,
+  ]);
+  const reviewerIdSet = useMemo(
+    () => new Set(reviewerMembers.map((member) => member.userId)),
+    [reviewerMembers],
+  );
   const reviewerDirectoryReady = !reviewerMembersLoading && reviewerMembersError === null;
   const isDraft = status === "draft";
   const criterionCount = rounds.reduce((total, round) => total + round.rubric.criteria.length, 0);
@@ -124,39 +149,75 @@ export function useOrganizerAuthoringState({
   const assignmentReviewerSelectionDisabled =
     busy || status !== "open" || reviewerMembersLoading || reviewerMembersError !== null;
 
-  useEffect(() => {
-    const authoritativeReviewerIds = reviewerIdsForAssignmentTarget(
-      seed.assignments,
-      assignmentRoundId,
-      assignmentSubmissionId,
-    );
-    if (!reviewerDirectoryReady) {
-      setAssignmentReviewerIds(authoritativeReviewerIds);
-      return;
-    }
-    const allowedReviewerIds = new Set(reviewerMembers.map((member) => member.userId));
-    setAssignmentReviewerIds(
-      authoritativeReviewerIds.filter((reviewerId) => allowedReviewerIds.has(reviewerId)),
-    );
-  }, [
-    assignmentRoundId,
-    assignmentSubmissionId,
-    reviewerDirectoryReady,
-    reviewerMembers,
-    seed.assignments,
-  ]);
+  const authoritativeAssignmentReviewerIds = useMemo(
+    () =>
+      reviewerIdsForAssignmentTarget(seed.assignments, assignmentRoundId, assignmentSubmissionId),
+    [assignmentRoundId, assignmentSubmissionId, seed.assignments],
+  );
+  const defaultAssignmentReviewerIds = useMemo(() => {
+    if (!reviewerDirectoryReady) return authoritativeAssignmentReviewerIds;
+    return authoritativeAssignmentReviewerIds.filter((reviewerId) => reviewerIdSet.has(reviewerId));
+  }, [authoritativeAssignmentReviewerIds, reviewerDirectoryReady, reviewerIdSet]);
+  const assignmentReviewerIds =
+    assignmentReviewerOverride?.ownerKey === assignmentOwnerKey
+      ? assignmentReviewerOverride.value
+      : defaultAssignmentReviewerIds;
+  const setAssignmentReviewerIds = useCallback(
+    (next: AssignmentReviewerIdsUpdate): void => {
+      setAssignmentReviewerOverride((current) => {
+        const currentValue =
+          current?.ownerKey === assignmentOwnerKey ? current.value : defaultAssignmentReviewerIds;
+        const value = typeof next === "function" ? next(currentValue) : next;
+        if (
+          current?.ownerKey === assignmentOwnerKey &&
+          current.value.length === value.length &&
+          current.value.every((reviewerId, index) => reviewerId === value[index])
+        ) {
+          return current;
+        }
+        return { ownerKey: assignmentOwnerKey, value };
+      });
+    },
+    [assignmentOwnerKey, defaultAssignmentReviewerIds],
+  );
   const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerIds.join(",")}:${version}`;
-  const assignmentSelectionKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (assignmentSelectionKeyRef.current === null) {
-      assignmentSelectionKeyRef.current = assignmentSelectionKey;
-      return;
-    }
-    if (assignmentSelectionKeyRef.current === assignmentSelectionKey) return;
-    assignmentSelectionKeyRef.current = assignmentSelectionKey;
-    setAssignmentPreview(null);
-    setAssignmentPreviewKey(null);
-  }, [assignmentSelectionKey]);
+  const ownedAssignmentPreview =
+    assignmentPreviewOverride?.ownerKey === assignmentOwnerKey &&
+    assignmentPreviewOverride.selectionKey === assignmentSelectionKey
+      ? assignmentPreviewOverride
+      : null;
+  const assignmentPreview = ownedAssignmentPreview?.value ?? null;
+  const assignmentPreviewKey = ownedAssignmentPreview?.previewKey ?? null;
+  const setAssignmentPreview = useCallback(
+    (value: DistributionPreview | null): void => {
+      setAssignmentPreviewOverride((current) => ({
+        ownerKey: assignmentOwnerKey,
+        selectionKey: assignmentSelectionKey,
+        value,
+        previewKey:
+          current?.ownerKey === assignmentOwnerKey &&
+          current.selectionKey === assignmentSelectionKey
+            ? current.previewKey
+            : null,
+      }));
+    },
+    [assignmentOwnerKey, assignmentSelectionKey],
+  );
+  const setAssignmentPreviewKey = useCallback(
+    (previewKey: string | null): void => {
+      setAssignmentPreviewOverride((current) => ({
+        ownerKey: assignmentOwnerKey,
+        selectionKey: assignmentSelectionKey,
+        value:
+          current?.ownerKey === assignmentOwnerKey &&
+          current.selectionKey === assignmentSelectionKey
+            ? current.value
+            : null,
+        previewKey,
+      }));
+    },
+    [assignmentOwnerKey, assignmentSelectionKey],
+  );
   return {
     seed,
     baseUrl,

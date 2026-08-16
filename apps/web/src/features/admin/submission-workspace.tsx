@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -80,6 +88,240 @@ const reviewStatusLabels: Record<ReviewAssignment["status"], string> = {
 
 type SortKey = "title" | "status" | "updatedAt";
 type SortDirection = "asc" | "desc";
+type SubmissionListViewState = {
+  search: string;
+  status: SubmissionStatus | "all";
+  track: string;
+  format: string;
+  sortKey: SortKey;
+  sortDirection: SortDirection;
+};
+
+type SubmissionListViewAction =
+  | { type: "search-changed"; search: string }
+  | { type: "status-changed"; status: SubmissionStatus | "all" }
+  | { type: "track-changed"; track: string }
+  | { type: "format-changed"; format: string }
+  | { type: "sort-toggled"; sortKey: SortKey }
+  | { type: "filters-cleared" };
+
+const INITIAL_SUBMISSION_LIST_VIEW_STATE: SubmissionListViewState = {
+  search: "",
+  status: "all",
+  track: "all",
+  format: "all",
+  sortKey: "updatedAt",
+  sortDirection: "desc",
+};
+
+function submissionListViewReducer(
+  state: SubmissionListViewState,
+  action: SubmissionListViewAction,
+): SubmissionListViewState {
+  switch (action.type) {
+    case "search-changed":
+      return { ...state, search: action.search };
+    case "status-changed":
+      return { ...state, status: action.status };
+    case "track-changed":
+      return { ...state, track: action.track };
+    case "format-changed":
+      return { ...state, format: action.format };
+    case "sort-toggled":
+      return state.sortKey === action.sortKey
+        ? {
+            ...state,
+            sortDirection: state.sortDirection === "asc" ? "desc" : "asc",
+          }
+        : {
+            ...state,
+            sortKey: action.sortKey,
+            sortDirection: action.sortKey === "updatedAt" ? "desc" : "asc",
+          };
+    case "filters-cleared":
+      return { ...state, search: "", status: "all", track: "all", format: "all" };
+  }
+}
+type SubmissionListDataState = {
+  submissions: SubmissionRecord[];
+  loading: boolean;
+  loadFailure: SubmissionLoadFailure | null;
+  evaluationLoadState: ReviewDataState;
+  evaluationReloadVersion: number;
+  eventName: string;
+  eventSlug: string | null;
+  eventIdentityState: "loading" | "ready" | "failure";
+};
+
+type SubmissionListDataAction =
+  | { type: "load-reset"; preserveRows: boolean }
+  | { type: "scope-invalid"; message: string }
+  | { type: "event-identity-succeeded"; name: string; slug: string | null }
+  | { type: "event-identity-failed"; message: string }
+  | { type: "submissions-succeeded"; submissions: SubmissionRecord[] }
+  | {
+      type: "evaluation-succeeded";
+      submissions: SubmissionRecord[];
+      reviewState: ReviewDataState;
+    }
+  | {
+      type: "evaluation-failed";
+      submissions: SubmissionRecord[];
+      reviewState: ReviewDataState;
+    }
+  | { type: "load-failed"; failure: SubmissionLoadFailure }
+  | { type: "retry-requested" };
+
+const INITIAL_SUBMISSION_LIST_DATA_STATE: SubmissionListDataState = {
+  submissions: [],
+  loading: true,
+  loadFailure: null,
+  evaluationLoadState: { status: "pending" },
+  evaluationReloadVersion: 0,
+  eventName: initialOrganizerEventName(),
+  eventSlug: null,
+  eventIdentityState: "loading",
+};
+
+function submissionListDataReducer(
+  state: SubmissionListDataState,
+  action: SubmissionListDataAction,
+): SubmissionListDataState {
+  switch (action.type) {
+    case "load-reset":
+      return {
+        ...state,
+        submissions: action.preserveRows ? state.submissions : [],
+        loading: !action.preserveRows,
+        loadFailure: null,
+        evaluationLoadState: { status: "pending" },
+        eventName: initialOrganizerEventName(),
+        eventSlug: null,
+        eventIdentityState: "loading",
+      };
+    case "scope-invalid":
+      return {
+        ...state,
+        loading: false,
+        eventIdentityState: "failure",
+        loadFailure: {
+          kind: "failure",
+          message: action.message,
+        },
+      };
+    case "event-identity-succeeded":
+      return {
+        ...state,
+        eventName: action.name,
+        eventSlug: action.slug,
+        eventIdentityState: "ready",
+      };
+    case "event-identity-failed":
+      return {
+        ...state,
+        eventSlug: null,
+        eventIdentityState: "failure",
+        loadFailure: {
+          kind: "failure",
+          message: action.message,
+        },
+      };
+    case "submissions-succeeded":
+      return {
+        ...state,
+        submissions: action.submissions,
+        loading: false,
+      };
+    case "evaluation-succeeded":
+    case "evaluation-failed":
+      return {
+        ...state,
+        submissions: action.submissions,
+        evaluationLoadState: action.reviewState,
+      };
+    case "load-failed":
+      return {
+        ...state,
+        loading: false,
+        loadFailure: action.failure,
+      };
+    case "retry-requested":
+      return {
+        ...state,
+        evaluationReloadVersion: state.evaluationReloadVersion + 1,
+      };
+  }
+}
+type SubmissionDetailState = {
+  submission: SubmissionRecord | null;
+  loading: boolean;
+  loadError: string | null;
+  notFound: boolean;
+  reloadVersion: number;
+};
+
+type SubmissionDetailAction =
+  | { type: "load-started" }
+  | { type: "invalid-scope"; message: string }
+  | { type: "submission-not-found" }
+  | { type: "canonical-loaded"; submission: SubmissionRecord }
+  | { type: "enrichment-loaded"; submission: SubmissionRecord }
+  | { type: "enrichment-failed"; submission: SubmissionRecord }
+  | { type: "load-failed"; message: string }
+  | { type: "reload-requested" }
+  | { type: "decision-saved"; decision: EvaluationDecisionRecord };
+
+const INITIAL_SUBMISSION_DETAIL_STATE: SubmissionDetailState = {
+  submission: null,
+  loading: true,
+  loadError: null,
+  notFound: false,
+  reloadVersion: 0,
+};
+
+function submissionDetailReducer(
+  state: SubmissionDetailState,
+  action: SubmissionDetailAction,
+): SubmissionDetailState {
+  switch (action.type) {
+    case "load-started":
+      return { ...state, loading: true, loadError: null, notFound: false };
+    case "invalid-scope":
+      return { ...state, loading: false, loadError: action.message, notFound: false };
+    case "submission-not-found":
+      return { ...state, submission: null, loading: false, notFound: true };
+    case "canonical-loaded":
+      return { ...state, submission: action.submission, loading: false };
+    case "enrichment-loaded":
+      return { ...state, submission: action.submission };
+    case "enrichment-failed":
+      return { ...state, submission: action.submission };
+    case "load-failed":
+      return {
+        ...state,
+        submission: null,
+        loading: false,
+        loadError: action.message,
+        notFound: false,
+      };
+    case "reload-requested":
+      return { ...state, reloadVersion: state.reloadVersion + 1 };
+    case "decision-saved":
+      if (state.submission === null) return state;
+      return {
+        ...state,
+        submission: {
+          ...state.submission,
+          decision: action.decision,
+          status: decisionSubmissionStatus(action.decision.status),
+          reviewSummary: {
+            ...state.submission.reviewSummary,
+            recommendation: `${action.decision.status[0]?.toLocaleUpperCase() ?? ""}${action.decision.status.slice(1)}`,
+          },
+        },
+      };
+  }
+}
 
 const sortLabels: Record<SortKey, string> = {
   title: "Title",
@@ -211,36 +453,35 @@ export function SubmissionListWorkspace({
   selectedSubmissionId?: string;
 }>) {
   const eventId = useOrganizerEventId(fallbackEventId);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<SubmissionStatus | "all">("all");
-  const [track, setTrack] = useState("all");
-  const [format, setFormat] = useState("all");
-  const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [submissions, setSubmissions] = useState<SubmissionRecord[]>([]);
-  const canonicalRowsEventId = useRef<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadFailure, setLoadFailure] = useState<SubmissionLoadFailure | null>(null);
-  const [evaluationLoadState, setEvaluationLoadState] = useState<ReviewDataState>({
-    status: "pending",
-  });
-  const [evaluationReloadVersion, setEvaluationReloadVersion] = useState(0);
-  const baseUrl = apiBaseUrl();
-  const [eventName, setEventName] = useState(initialOrganizerEventName);
-  const [eventSlug, setEventSlug] = useState<string | null>(null);
-  const [eventIdentityState, setEventIdentityState] = useState<"loading" | "ready" | "failure">(
-    "loading",
+  const [viewState, dispatchView] = useReducer(
+    submissionListViewReducer,
+    INITIAL_SUBMISSION_LIST_VIEW_STATE,
   );
+  const { search, status, track, format, sortKey, sortDirection } = viewState;
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const canonicalRowsEventId = useRef<string | null>(null);
+  const [dataState, dispatchData] = useReducer(
+    submissionListDataReducer,
+    INITIAL_SUBMISSION_LIST_DATA_STATE,
+  );
+  const {
+    submissions,
+    loading,
+    loadFailure,
+    evaluationLoadState,
+    evaluationReloadVersion,
+    eventName,
+    eventSlug,
+    eventIdentityState,
+  } = dataState;
+  const baseUrl = apiBaseUrl();
 
   useEffect(() => {
     void evaluationReloadVersion;
     let active = true;
     if (organizationId === undefined || organizationId.trim().length === 0) {
-      setLoading(false);
-      setEventIdentityState("failure");
-      setLoadFailure({
-        kind: "failure",
+      dispatchData({
+        type: "scope-invalid",
         message: "An organization-scoped route is required to load submissions.",
       });
       return () => {
@@ -248,28 +489,22 @@ export function SubmissionListWorkspace({
       };
     }
     const rowsLoadedForEvent = canonicalRowsEventId.current === eventId;
-    if (!rowsLoadedForEvent) setSubmissions([]);
-    setLoading(!rowsLoadedForEvent);
-    setLoadFailure(null);
-    setEvaluationLoadState({ status: "pending" });
-    setEventName(initialOrganizerEventName());
-    setEventSlug(null);
-    setEventIdentityState("loading");
+    dispatchData({ type: "load-reset", preserveRows: rowsLoadedForEvent });
     const eventController = new AbortController();
     void loadOrganizerEventIdentity(baseUrl, organizationId, eventId, eventController.signal)
       .then((event) => {
         if (active) {
-          setEventName(event.name);
-          setEventSlug(event.slug);
-          setEventIdentityState("ready");
+          dispatchData({
+            type: "event-identity-succeeded",
+            name: event.name,
+            slug: event.slug,
+          });
         }
       })
       .catch((error: unknown) => {
         if (!active || eventController.signal.aborted) return;
-        setEventIdentityState("failure");
-        setEventSlug(null);
-        setLoadFailure({
-          kind: "failure",
+        dispatchData({
+          type: "event-identity-failed",
           message:
             error instanceof Error && error.message.trim().length > 0
               ? error.message
@@ -289,44 +524,43 @@ export function SubmissionListWorkspace({
         if (!active) return;
         const canonicalRows = records.map(mapCanonicalSubmission);
         canonicalRowsEventId.current = eventId;
-        setSubmissions(canonicalRows);
-        setLoading(false);
+        dispatchData({ type: "submissions-succeeded", submissions: canonicalRows });
         void workspacePromise.then(({ workspace, error }) => {
           if (!active) return;
           if (workspace === null) {
             const reviewState = reviewDataStateFromError(error);
-            setEvaluationLoadState(reviewState);
-            setSubmissions(
-              canonicalRows.map((record) => ({
+            dispatchData({
+              type: "evaluation-failed",
+              submissions: canonicalRows.map((record) => ({
                 ...record,
                 reviewData: reviewState,
               })),
-            );
+              reviewState,
+            });
             return;
           }
           const index = indexOrganizerEvaluationWorkspace(workspace);
           const reviewState = reviewDataStateForIndex(index);
-          setEvaluationLoadState(reviewState);
-          setSubmissions(
-            records.map((record) => ({
+          dispatchData({
+            type: "evaluation-succeeded",
+            submissions: records.map((record) => ({
               ...mergeCanonicalSubmissionEvaluation(record, index),
               reviewData: reviewState,
             })),
-          );
+            reviewState,
+          });
         });
       })
       .catch((reason: unknown) => {
         if (active) {
-          setLoadFailure(
-            submissionLoadFailure(
+          dispatchData({
+            type: "load-failed",
+            failure: submissionLoadFailure(
               reason instanceof ApiRequestError ? reason.status : undefined,
               reason instanceof Error ? reason.message : undefined,
             ),
-          );
+          });
         }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
       });
     return () => {
       eventController.abort();
@@ -377,12 +611,7 @@ export function SubmissionListWorkspace({
     filteredSubmissions.length > 0 && selectedVisibleCount === filteredSubmissions.length;
 
   function toggleSort(nextKey: SortKey) {
-    if (sortKey === nextKey) {
-      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
-      return;
-    }
-    setSortKey(nextKey);
-    setSortDirection(nextKey === "updatedAt" ? "desc" : "asc");
+    dispatchView({ type: "sort-toggled", sortKey: nextKey });
   }
 
   function toggleSelected(id: string) {
@@ -506,7 +735,11 @@ export function SubmissionListWorkspace({
                 <CardContent className={styles.listContent}>
                   <ReviewDataNotice
                     state={evaluationLoadState}
-                    onRetry={() => setEvaluationReloadVersion((current) => current + 1)}
+                    onRetry={() =>
+                      dispatchData({
+                        type: "retry-requested",
+                      })
+                    }
                     {...(eventSlug === null
                       ? {}
                       : {
@@ -522,14 +755,24 @@ export function SubmissionListWorkspace({
                         type="search"
                         value={search}
                         placeholder="Search submissions"
-                        onChange={(event) => setSearch(event.currentTarget.value)}
+                        onChange={(event) =>
+                          dispatchView({
+                            type: "search-changed",
+                            search: event.currentTarget.value,
+                          })
+                        }
                       />
                     </label>
                     <div className={styles.toolbarField}>
                       <span className={styles.srOnly}>Status</span>
                       <Select
                         value={status}
-                        onValueChange={(value) => setStatus(value as SubmissionStatus | "all")}
+                        onValueChange={(value) =>
+                          dispatchView({
+                            type: "status-changed",
+                            status: value as SubmissionStatus | "all",
+                          })
+                        }
                       >
                         <SelectTrigger id="submission-status" aria-label="Filter by status">
                           <SelectValue placeholder="All statuses" />
@@ -546,7 +789,12 @@ export function SubmissionListWorkspace({
                     </div>
                     <div className={styles.toolbarField}>
                       <span className={styles.srOnly}>Track</span>
-                      <Select value={track} onValueChange={setTrack}>
+                      <Select
+                        value={track}
+                        onValueChange={(value) =>
+                          dispatchView({ type: "track-changed", track: value })
+                        }
+                      >
                         <SelectTrigger id="submission-track" aria-label="Filter by track">
                           <SelectValue placeholder="All tracks" />
                         </SelectTrigger>
@@ -562,7 +810,12 @@ export function SubmissionListWorkspace({
                     </div>
                     <div className={styles.toolbarField}>
                       <span className={styles.srOnly}>Format</span>
-                      <Select value={format} onValueChange={setFormat}>
+                      <Select
+                        value={format}
+                        onValueChange={(value) =>
+                          dispatchView({ type: "format-changed", format: value })
+                        }
+                      >
                         <SelectTrigger id="submission-format" aria-label="Filter by format">
                           <SelectValue placeholder="All formats" />
                         </SelectTrigger>
@@ -582,12 +835,7 @@ export function SubmissionListWorkspace({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => {
-                          setSearch("");
-                          setStatus("all");
-                          setTrack("all");
-                          setFormat("all");
-                        }}
+                        onClick={() => dispatchView({ type: "filters-cleared" })}
                       >
                         Clear
                       </Button>
@@ -612,7 +860,11 @@ export function SubmissionListWorkspace({
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => setEvaluationReloadVersion((value) => value + 1)}
+                          onClick={() =>
+                            dispatchData({
+                              type: "retry-requested",
+                            })
+                          }
                         >
                           Retry submissions
                         </Button>
@@ -626,12 +878,7 @@ export function SubmissionListWorkspace({
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                          setSearch("");
-                          setStatus("all");
-                          setTrack("all");
-                          setFormat("all");
-                        }}
+                        onClick={() => dispatchView({ type: "filters-cleared" })}
                       >
                         Clear filters
                       </Button>
@@ -780,7 +1027,11 @@ export function SubmissionListWorkspace({
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setEvaluationReloadVersion((value) => value + 1)}
+                        onClick={() =>
+                          dispatchData({
+                            type: "retry-requested",
+                          })
+                        }
                       >
                         Retry submissions
                       </Button>
@@ -1079,27 +1330,26 @@ export function SubmissionDetailWorkspace({
   displayMode?: "page" | "panel";
 }>) {
   const baseUrl = apiBaseUrl();
-  const [submission, setSubmission] = useState<SubmissionRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
-  const [reloadVersion, setReloadVersion] = useState(0);
+  const [detailState, dispatchDetail] = useReducer(
+    submissionDetailReducer,
+    INITIAL_SUBMISSION_DETAIL_STATE,
+  );
+  const { submission, loading, loadError, notFound, reloadVersion } = detailState;
   const [eventName, setEventName] = useState(initialOrganizerEventName);
   const [eventSlug, setEventSlug] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     if (organizationId === undefined || organizationId.trim().length === 0) {
-      setLoading(false);
-      setNotFound(false);
-      setLoadError("An organization-scoped route is required to load submissions.");
+      dispatchDetail({
+        type: "invalid-scope",
+        message: "An organization-scoped route is required to load submissions.",
+      });
       return () => {
         active = false;
       };
     }
-    setLoading(true);
-    setLoadError(null);
-    setNotFound(false);
+    dispatchDetail({ type: "load-started" });
     setEventName(initialOrganizerEventName());
     setEventSlug(null);
     const controller = new AbortController();
@@ -1117,35 +1367,35 @@ export function SubmissionDetailWorkspace({
         if (!active) return;
         const envelope = records.find((candidate) => candidate.submission.id === submissionId);
         if (envelope === undefined) {
-          setSubmission(null);
-          setNotFound(true);
-          setLoading(false);
+          dispatchDetail({ type: "submission-not-found" });
           return;
         }
         const canonical = mapCanonicalSubmission(envelope);
-        setSubmission(canonical);
-        setLoading(false);
+        dispatchDetail({ type: "canonical-loaded", submission: canonical });
         void enrichCanonicalSubmission(baseUrl, envelope, organizationId)
           .then((loaded) => {
-            if (active) setSubmission(loaded);
+            if (active) {
+              dispatchDetail({ type: "enrichment-loaded", submission: loaded });
+            }
           })
           .catch((reason: unknown) => {
             if (active) {
-              setSubmission({
-                ...canonical,
-                reviewData: reviewDataStateFromError(reason),
+              dispatchDetail({
+                type: "enrichment-failed",
+                submission: {
+                  ...canonical,
+                  reviewData: reviewDataStateFromError(reason),
+                },
               });
             }
           });
       })
       .catch((reason: unknown) => {
         if (active) {
-          setSubmission(null);
-          setNotFound(false);
-          setLoadError(
-            reason instanceof Error ? reason.message : "Submission could not be loaded.",
-          );
-          setLoading(false);
+          dispatchDetail({
+            type: "load-failed",
+            message: reason instanceof Error ? reason.message : "Submission could not be loaded.",
+          });
         }
       });
     return () => {
@@ -1304,19 +1554,7 @@ export function SubmissionDetailWorkspace({
               submission={submission}
               baseUrl={baseUrl}
               onSaved={(decision) => {
-                setSubmission((current) =>
-                  current === null
-                    ? current
-                    : {
-                        ...current,
-                        decision,
-                        status: decisionSubmissionStatus(decision.status),
-                        reviewSummary: {
-                          ...current.reviewSummary,
-                          recommendation: `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`,
-                        },
-                      },
-                );
+                dispatchDetail({ type: "decision-saved", decision });
               }}
             />
             <AcceptedHandoffSummary submission={submission} />
@@ -1379,7 +1617,7 @@ export function SubmissionDetailWorkspace({
               ) : null}
               <ReviewDataNotice
                 state={submission.reviewData ?? { status: "ready" as const }}
-                onRetry={() => setReloadVersion((current) => current + 1)}
+                onRetry={() => dispatchDetail({ type: "reload-requested" })}
                 {...(eventSlug === null
                   ? {}
                   : {
@@ -1393,7 +1631,7 @@ export function SubmissionDetailWorkspace({
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => setReloadVersion((current) => current + 1)}
+                      onClick={() => dispatchDetail({ type: "reload-requested" })}
                     >
                       Retry submitted reviews
                     </Button>
@@ -1586,6 +1824,3 @@ function ReopenControl({
     </section>
   );
 }
-
-export const AdminSubmissionList = SubmissionListWorkspace;
-export const AdminSubmissionDetail = SubmissionDetailWorkspace;

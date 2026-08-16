@@ -1,6 +1,6 @@
 "use client";
 
-import { type SyntheticEvent, useEffect, useRef, useState } from "react";
+import { type SyntheticEvent, useEffect, useReducer, useRef } from "react";
 import { portalProfileHeadshot } from "./model";
 import styles from "./portal-profile.module.css";
 import { ProfileActions } from "./portal-profile-actions";
@@ -18,9 +18,118 @@ import {
 import { PrivateLogisticsSection, PublicProfileSection } from "./portal-profile-sections";
 import { usePortal } from "./portal-provider";
 import { EmptyState, InlineMutationError, PageHeading, PortalContentState } from "./portal-ui";
-import type { PortalDownloadGrant } from "./types";
+import type { PortalDownloadGrant, PortalProfile } from "./types";
 
 type ProfileControl = HTMLInputElement | HTMLTextAreaElement;
+type PortalProfileState = {
+  draft: ProfileDraft | null;
+  selectedHeadshot: File | null;
+  errors: ProfileErrors;
+  saveError: string | null;
+  saved: boolean;
+  headshotGrant: PortalDownloadGrant | null;
+  headshotLoading: boolean;
+  headshotError: string | null;
+};
+
+type PortalProfileAction =
+  | { type: "profile-loaded"; draft: ProfileDraft }
+  | { type: "draft-updated"; field: keyof ProfileDraft; value: string | boolean }
+  | { type: "headshot-selected"; file: File | null }
+  | { type: "draft-reset"; draft: ProfileDraft }
+  | { type: "submit-started" }
+  | { type: "save-error"; message: string }
+  | { type: "validation-failed"; errors: ProfileErrors }
+  | { type: "saved" }
+  | { type: "context-changed" }
+  | { type: "headshot-reset" }
+  | { type: "headshot-loading" }
+  | { type: "headshot-resolved"; grant: PortalDownloadGrant | null }
+  | { type: "headshot-failed"; message: string };
+
+function initialPortalProfileState(profile: PortalProfile | undefined): PortalProfileState {
+  return {
+    draft: profile ? profileDraftFor(profile) : null,
+    selectedHeadshot: null,
+    errors: {},
+    saveError: null,
+    saved: false,
+    headshotGrant: null,
+    headshotLoading: false,
+    headshotError: null,
+  };
+}
+
+function portalProfileReducer(
+  state: PortalProfileState,
+  action: PortalProfileAction,
+): PortalProfileState {
+  switch (action.type) {
+    case "profile-loaded":
+      return {
+        ...state,
+        draft: action.draft,
+        selectedHeadshot: null,
+        errors: {},
+        saveError: null,
+      };
+    case "draft-updated": {
+      if (!state.draft) return state;
+      const errors = { ...state.errors };
+      delete errors[action.field];
+      return {
+        ...state,
+        draft: { ...state.draft, [action.field]: action.value },
+        errors,
+        saveError: null,
+        saved: false,
+      };
+    }
+    case "headshot-selected": {
+      const errors = { ...state.errors };
+      delete errors.headshot;
+      return {
+        ...state,
+        selectedHeadshot: action.file,
+        errors,
+        saveError: null,
+        saved: false,
+      };
+    }
+    case "draft-reset":
+      return {
+        ...state,
+        draft: action.draft,
+        selectedHeadshot: null,
+        errors: {},
+        saveError: null,
+        saved: false,
+      };
+    case "submit-started":
+      return { ...state, saveError: null, saved: false };
+    case "save-error":
+      return { ...state, saveError: action.message, saved: false };
+    case "validation-failed":
+      return { ...state, errors: action.errors };
+    case "saved":
+      return { ...state, selectedHeadshot: null, saved: true };
+    case "context-changed":
+      return { ...state, saved: false };
+    case "headshot-reset":
+      return { ...state, headshotGrant: null, headshotError: null, headshotLoading: false };
+    case "headshot-loading":
+      return { ...state, headshotLoading: true };
+    case "headshot-resolved":
+      return {
+        ...state,
+        headshotGrant: action.grant,
+        headshotLoading: false,
+        headshotError: action.grant ? null : "A secure preview is not available right now.",
+      };
+    case "headshot-failed":
+      return { ...state, headshotLoading: false, headshotError: action.message };
+  }
+}
 
 export function PortalProfilePage() {
   return (
@@ -36,47 +145,43 @@ function PortalProfileContent() {
     (candidate) => candidate.participantId === context?.primaryParticipantId,
   );
   const headshot = profile ? portalProfileHeadshot(profile, view?.assets ?? []) : undefined;
-  const [draft, setDraft] = useState<ProfileDraft | null>(
-    profile ? profileDraftFor(profile) : null,
+  const [profileState, dispatch] = useReducer(
+    portalProfileReducer,
+    profile,
+    initialPortalProfileState,
   );
-  const [selectedHeadshot, setSelectedHeadshot] = useState<File | null>(null);
-  const [errors, setErrors] = useState<ProfileErrors>({});
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [headshotGrant, setHeadshotGrant] = useState<PortalDownloadGrant | null>(null);
-  const [headshotLoading, setHeadshotLoading] = useState(false);
-  const [headshotError, setHeadshotError] = useState<string | null>(null);
+  const {
+    draft,
+    selectedHeadshot,
+    errors,
+    saveError,
+    saved,
+    headshotGrant,
+    headshotLoading,
+    headshotError,
+  } = profileState;
   const fieldElements = useRef<Partial<Record<ProfileField, ProfileControl>>>({});
   const selectedContextId = context?.id;
 
   useEffect(() => {
     if (!profile) return;
-    setDraft(profileDraftFor(profile));
-    setSelectedHeadshot(null);
-    setErrors({});
-    setSaveError(null);
+    dispatch({ type: "profile-loaded", draft: profileDraftFor(profile) });
     const fileInput = fieldElements.current.headshot as HTMLInputElement | undefined;
     if (fileInput) fileInput.value = "";
   }, [profile]);
 
   useEffect(() => {
-    if (selectedContextId !== undefined) setSaved(false);
+    if (selectedContextId !== undefined) dispatch({ type: "context-changed" });
   }, [selectedContextId]);
 
   useEffect(() => {
     let cancelled = false;
-    setHeadshotGrant(null);
-    setHeadshotError(null);
-    if (headshot?.state !== "ready" || !can("asset-read")) {
-      setHeadshotLoading(false);
-      return;
-    }
-    setHeadshotLoading(true);
+    dispatch({ type: "headshot-reset" });
+    if (headshot?.state !== "ready" || !can("asset-read")) return;
+    dispatch({ type: "headshot-loading" });
     void downloadAsset(headshot.id).then((grant) => {
       if (cancelled) return;
-      setHeadshotLoading(false);
-      setHeadshotGrant(grant);
-      if (!grant) setHeadshotError("A secure preview is not available right now.");
+      dispatch({ type: "headshot-resolved", grant });
     });
     return () => {
       cancelled = true;
@@ -120,43 +225,36 @@ function PortalProfileContent() {
   );
 
   function updateDraft(field: keyof ProfileDraft, value: string | boolean) {
-    setDraft((current) => (current ? { ...current, [field]: value } : current));
-    setErrors((current) => {
-      if (!current[field]) return current;
-      const next = { ...current };
-      delete next[field];
-      return next;
-    });
-    setSaved(false);
-    setSaveError(null);
+    dispatch({ type: "draft-updated", field, value });
   }
 
   function resetDraft() {
-    setDraft(profileDraftFor(loadedProfile));
-    setSelectedHeadshot(null);
-    setErrors({});
-    setSaveError(null);
-    setSaved(false);
+    dispatch({ type: "draft-reset", draft: profileDraftFor(loadedProfile) });
     const fileInput = fieldElements.current.headshot as HTMLInputElement | undefined;
     if (fileInput) fileInput.value = "";
   }
 
   async function submitProfile(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
-    setSaved(false);
-    setSaveError(null);
+    dispatch({ type: "submit-started" });
     if (!canEditProfile) {
-      setSaveError("You do not have permission to edit this profile in the selected event.");
+      dispatch({
+        type: "save-error",
+        message: "You do not have permission to edit this profile in the selected event.",
+      });
       return;
     }
     const nextErrors = validateProfileDraft(loadedDraft, selectedHeadshot);
-    setErrors(nextErrors);
+    dispatch({ type: "validation-failed", errors: nextErrors });
     if (Object.keys(nextErrors).length > 0) {
       focusFirstInvalidProfileField(nextErrors, fieldElements.current);
       return;
     }
     if (selectedHeadshot && !can("asset-write")) {
-      setSaveError("You do not have permission to upload a headshot in this event.");
+      dispatch({
+        type: "save-error",
+        message: "You do not have permission to upload a headshot in this event.",
+      });
       return;
     }
     const didSave = await saveProfile({
@@ -164,10 +262,7 @@ function PortalProfileContent() {
       ...profilePayloadFor(loadedProfile, loadedDraft),
       ...(selectedHeadshot ? { headshot: selectedHeadshot } : {}),
     });
-    if (didSave) {
-      setSelectedHeadshot(null);
-      setSaved(true);
-    }
+    if (didSave) dispatch({ type: "saved" });
   }
 
   const disabled = savingProfile || !canEditProfile;
@@ -210,16 +305,7 @@ function PortalProfileContent() {
               selectedHeadshot={selectedHeadshot}
               fieldRefs={fieldRefs}
               onChange={updateDraft}
-              onHeadshotChange={(file) => {
-                setSelectedHeadshot(file);
-                setErrors((current) => {
-                  const next = { ...current };
-                  delete next.headshot;
-                  return next;
-                });
-                setSaved(false);
-                setSaveError(null);
-              }}
+              onHeadshotChange={(file) => dispatch({ type: "headshot-selected", file })}
             />
             <PrivateLogisticsSection
               draft={loadedDraft}

@@ -184,12 +184,6 @@ export function filterTasks(tasks: readonly PortalTask[], filter: TaskFilter): P
   return [...tasks];
 }
 
-export function findProfileForTask(task: PortalTask, profiles: readonly PortalProfile[]) {
-  return profiles.find(
-    (profile) => profile.eventId === task.eventId && profile.participantId === task.participantId,
-  );
-}
-
 export function findSubmissionForTask(task: PortalTask, submissions: readonly PortalSubmission[]) {
   if (task.submissionId === null) {
     return undefined;
@@ -273,14 +267,6 @@ export function scopePortalContextToAuthorizedParticipants(
       ? { selectedParticipantId: null }
       : { primaryParticipantId: primary, selectedParticipantId: primary }),
   };
-}
-
-export function scopePortalContextToParticipant(
-  context: PortalContext,
-  participantId: string | null,
-  submissionIds?: readonly string[],
-): PortalContext {
-  return scopePortalContextToAuthorizedParticipants(context, participantId, submissionIds);
 }
 
 /** Legacy primary-only projection retained for callers that intentionally request one participant. */
@@ -413,14 +399,6 @@ export function scopePortalViewToAuthorizedParticipants(
   };
 }
 
-export function scopePortalViewToParticipant(
-  view: PortalView | null | undefined,
-  context: PortalContext | null | undefined,
-  selectedParticipantId?: string | null,
-): PortalView {
-  return scopePortalViewToAuthorizedParticipants(view, context, selectedParticipantId);
-}
-
 /** Legacy primary-only projection retained for existing task/file callers. */
 export function scopePortalViewToPrimaryParticipant(
   view: PortalView | null | undefined,
@@ -506,8 +484,6 @@ export function classifyPortalProfileMutation(
   }
   return { state: "saved", revision: returnedProfile.version };
 }
-
-export const profileMutationStateFor = classifyPortalProfileMutation;
 
 export function portalProfileHeadshot(
   profile: PortalProfile,

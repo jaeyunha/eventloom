@@ -293,7 +293,7 @@ describe("speaker portal provider", () => {
     expect(providerSource.slice(switchStart, workspaceLoadStart)).not.toContain(
       "loadWorkspaceFor(",
     );
-    expect(providerSource.slice(switchStart, workspaceLoadStart)).toContain("setWorkspace(");
+    expect(providerSource.slice(switchStart, workspaceLoadStart)).toContain("workspaceDispatch({");
     expect(providerSource.slice(switchStart, workspaceLoadStart)).toContain(
       "loadGeneration.current += 1;",
     );

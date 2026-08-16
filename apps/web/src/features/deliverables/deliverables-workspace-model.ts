@@ -275,19 +275,10 @@ export interface DeliverablesWorkspaceScope {
   readonly epoch: number;
 }
 
-const committedDeliverablesScopes = new WeakSet<DeliverablesWorkspaceScope>();
-
-export function commitDeliverablesWorkspaceScope(scope: DeliverablesWorkspaceScope): void {
-  committedDeliverablesScopes.add(scope);
-}
-
 export function isDeliverablesWorkspaceScopeCurrent(
   expected: DeliverablesWorkspaceScope,
   current: DeliverablesWorkspaceScope,
 ): boolean {
-  if (committedDeliverablesScopes.has(expected) || committedDeliverablesScopes.has(current)) {
-    return expected === current;
-  }
   return (
     expected.epoch === current.epoch &&
     expected.api === current.api &&

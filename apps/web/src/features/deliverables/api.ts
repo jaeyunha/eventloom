@@ -422,7 +422,6 @@ export class DeliverablesApiError extends Error {
     this.traceId = traceId;
   }
 }
-export { DeliverablesApiError as DeliverableApiError };
 
 export type DeliverablesFetcher = (
   input: RequestInfo | URL,
@@ -1780,6 +1779,3 @@ export function createDeliverablesApi(
     },
   };
 }
-
-export const createDeliverableApi = createDeliverablesApi;
-export const createContentManagementApi = createDeliverablesApi;

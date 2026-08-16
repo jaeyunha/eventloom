@@ -543,6 +543,242 @@ type CfpVerificationState =
       readonly status: "resuming";
       readonly email: string;
     };
+type CfpStateUpdate<T> = T | ((current: T) => T);
+
+function resolveCfpStateUpdate<T>(current: T, update: CfpStateUpdate<T>): T {
+  return typeof update === "function" ? (update as (current: T) => T)(current) : update;
+}
+
+type CfpDraftState = {
+  readonly draft: CfpDraft;
+  readonly dynamicAnswers: DynamicAnswers;
+  readonly participantAnswers: ParticipantAnswers;
+  readonly fileUploadStates: FileUploadStates;
+};
+
+type CfpDraftAction =
+  | { readonly type: "set-draft"; readonly value: CfpStateUpdate<CfpDraft> }
+  | { readonly type: "set-dynamic-answers"; readonly value: CfpStateUpdate<DynamicAnswers> }
+  | {
+      readonly type: "set-participant-answers";
+      readonly value: CfpStateUpdate<ParticipantAnswers>;
+    }
+  | {
+      readonly type: "set-file-upload-states";
+      readonly value: CfpStateUpdate<FileUploadStates>;
+    }
+  | {
+      readonly type: "set-file-upload-state";
+      readonly key: string;
+      readonly state: FileUploadState;
+    }
+  | {
+      readonly type: "hydrate-submission";
+      readonly draft: CfpDraft;
+      readonly dynamicAnswers: DynamicAnswers;
+      readonly participantAnswers: ParticipantAnswers;
+    }
+  | { readonly type: "reset"; readonly draft: CfpDraft };
+
+function cfpDraftReducer(state: CfpDraftState, action: CfpDraftAction): CfpDraftState {
+  switch (action.type) {
+    case "set-draft":
+      return { ...state, draft: resolveCfpStateUpdate(state.draft, action.value) };
+    case "set-dynamic-answers":
+      return {
+        ...state,
+        dynamicAnswers: resolveCfpStateUpdate(state.dynamicAnswers, action.value),
+      };
+    case "set-participant-answers":
+      return {
+        ...state,
+        participantAnswers: resolveCfpStateUpdate(state.participantAnswers, action.value),
+      };
+    case "set-file-upload-states":
+      return {
+        ...state,
+        fileUploadStates: resolveCfpStateUpdate(state.fileUploadStates, action.value),
+      };
+    case "set-file-upload-state":
+      return {
+        ...state,
+        fileUploadStates: { ...state.fileUploadStates, [action.key]: action.state },
+      };
+    case "hydrate-submission":
+      return {
+        ...state,
+        draft: action.draft,
+        dynamicAnswers: action.dynamicAnswers,
+        participantAnswers: action.participantAnswers,
+      };
+    case "reset":
+      return {
+        draft: action.draft,
+        dynamicAnswers: {},
+        participantAnswers: {},
+        fileUploadStates: {},
+      };
+  }
+}
+
+type CfpSessionState = {
+  readonly published: PublishedCfp | null;
+  readonly authenticatedSession: CfpAuthenticatedSession | null;
+  readonly verificationState: CfpVerificationState | null;
+  readonly confirmedApplicantContext: boolean;
+  readonly password: string;
+  readonly accountMode: CfpAccountMode;
+};
+
+type CfpSessionAction =
+  | { readonly type: "set-published"; readonly value: CfpStateUpdate<PublishedCfp | null> }
+  | {
+      readonly type: "set-authenticated-session";
+      readonly value: CfpStateUpdate<CfpAuthenticatedSession | null>;
+    }
+  | {
+      readonly type: "set-verification-state";
+      readonly value: CfpStateUpdate<CfpVerificationState | null>;
+    }
+  | {
+      readonly type: "set-confirmed-applicant-context";
+      readonly value: CfpStateUpdate<boolean>;
+    }
+  | { readonly type: "set-password"; readonly value: CfpStateUpdate<string> }
+  | { readonly type: "set-account-mode"; readonly value: CfpStateUpdate<CfpAccountMode> }
+  | {
+      readonly type: "startup-loaded";
+      readonly published: PublishedCfp;
+      readonly authenticatedSession: CfpAuthenticatedSession | null;
+    }
+  | { readonly type: "reset-authentication" };
+
+function cfpSessionReducer(state: CfpSessionState, action: CfpSessionAction): CfpSessionState {
+  switch (action.type) {
+    case "set-published":
+      return { ...state, published: resolveCfpStateUpdate(state.published, action.value) };
+    case "set-authenticated-session":
+      return {
+        ...state,
+        authenticatedSession: resolveCfpStateUpdate(state.authenticatedSession, action.value),
+      };
+    case "set-verification-state":
+      return {
+        ...state,
+        verificationState: resolveCfpStateUpdate(state.verificationState, action.value),
+      };
+    case "set-confirmed-applicant-context":
+      return {
+        ...state,
+        confirmedApplicantContext: resolveCfpStateUpdate(
+          state.confirmedApplicantContext,
+          action.value,
+        ),
+      };
+    case "set-password":
+      return { ...state, password: resolveCfpStateUpdate(state.password, action.value) };
+    case "set-account-mode":
+      return { ...state, accountMode: resolveCfpStateUpdate(state.accountMode, action.value) };
+    case "startup-loaded":
+      return {
+        ...state,
+        published: action.published,
+        authenticatedSession: action.authenticatedSession,
+      };
+    case "reset-authentication":
+      return { ...state, authenticatedSession: null, verificationState: null };
+  }
+}
+
+type CfpStaleFormConflict = {
+  readonly submissionId: string | null;
+  readonly pinnedDraftUnavailable: boolean;
+};
+
+type CfpPersistenceState = {
+  readonly errors: ValidationErrors;
+  readonly hydrated: boolean;
+  readonly startupRevision: number;
+  readonly saveState: "idle" | "saving" | "saved" | "error";
+  readonly mutationPending: boolean;
+  readonly saveError: string | null;
+  readonly staleFormConflict: CfpStaleFormConflict | null;
+};
+
+type CfpPersistenceAction =
+  | { readonly type: "set-errors"; readonly value: CfpStateUpdate<ValidationErrors> }
+  | { readonly type: "set-hydrated"; readonly value: CfpStateUpdate<boolean> }
+  | { readonly type: "set-startup-revision"; readonly value: CfpStateUpdate<number> }
+  | {
+      readonly type: "set-save-state";
+      readonly value: CfpStateUpdate<CfpPersistenceState["saveState"]>;
+    }
+  | { readonly type: "set-mutation-pending"; readonly value: CfpStateUpdate<boolean> }
+  | { readonly type: "set-save-error"; readonly value: CfpStateUpdate<string | null> }
+  | {
+      readonly type: "set-stale-form-conflict";
+      readonly value: CfpStateUpdate<CfpStaleFormConflict | null>;
+    }
+  | {
+      readonly type: "startup-error";
+      readonly conflict: CfpStaleFormConflict | null | undefined;
+      readonly error: string;
+    }
+  | { readonly type: "local-change"; readonly resetSaveState: boolean }
+  | { readonly type: "refresh-start" };
+
+function cfpPersistenceReducer(
+  state: CfpPersistenceState,
+  action: CfpPersistenceAction,
+): CfpPersistenceState {
+  switch (action.type) {
+    case "set-errors":
+      return { ...state, errors: resolveCfpStateUpdate(state.errors, action.value) };
+    case "set-hydrated":
+      return { ...state, hydrated: resolveCfpStateUpdate(state.hydrated, action.value) };
+    case "set-startup-revision":
+      return {
+        ...state,
+        startupRevision: resolveCfpStateUpdate(state.startupRevision, action.value),
+      };
+    case "set-save-state":
+      return { ...state, saveState: resolveCfpStateUpdate(state.saveState, action.value) };
+    case "set-mutation-pending":
+      return {
+        ...state,
+        mutationPending: resolveCfpStateUpdate(state.mutationPending, action.value),
+      };
+    case "set-save-error":
+      return { ...state, saveError: resolveCfpStateUpdate(state.saveError, action.value) };
+    case "set-stale-form-conflict":
+      return {
+        ...state,
+        staleFormConflict: resolveCfpStateUpdate(state.staleFormConflict, action.value),
+      };
+    case "startup-error":
+      return {
+        ...state,
+        staleFormConflict:
+          action.conflict === undefined ? state.staleFormConflict : action.conflict,
+        saveState: "error",
+        saveError: action.error,
+        hydrated: true,
+      };
+    case "local-change":
+      return {
+        ...state,
+        errors: {},
+        saveError: null,
+        ...(action.resetSaveState ? { saveState: "idle" as const } : {}),
+      };
+    case "refresh-start":
+      return {
+        ...state,
+        hydrated: false,
+        startupRevision: state.startupRevision + 1,
+      };
+  }
+}
 
 function mutationIdempotencyKey(prefix: string): string {
   const suffix =
@@ -1016,11 +1252,29 @@ export function CfpWizard({
   }, [eventSlug, organizationId, formId]);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const startupStore = useCfpStartupStore();
-  const [draft, setDraft] = useState<CfpDraft>(initialDraft);
-  const [dynamicAnswers, setDynamicAnswers] = useState<DynamicAnswers>({});
-  const [participantAnswers, setParticipantAnswers] = useState<ParticipantAnswers>({});
-  const [fileUploadStates, setFileUploadStates] = useState<FileUploadStates>({});
-  const [published, setPublished] = useState<PublishedCfp | null>(null);
+  const [draftState, dispatchDraft] = useReducer(cfpDraftReducer, {
+    draft: initialDraft,
+    dynamicAnswers: {},
+    participantAnswers: {},
+    fileUploadStates: {},
+  });
+  const { draft, dynamicAnswers, participantAnswers, fileUploadStates } = draftState;
+  const [sessionState, dispatchSession] = useReducer(cfpSessionReducer, {
+    published: null,
+    authenticatedSession: null,
+    verificationState: null,
+    confirmedApplicantContext: false,
+    password: "",
+    accountMode: "sign_in" as CfpAccountMode,
+  });
+  const {
+    published,
+    authenticatedSession,
+    verificationState,
+    confirmedApplicantContext,
+    password,
+    accountMode,
+  } = sessionState;
   const identity = useMemo(() => {
     if (routeIdentity === null || published === null) return null;
     return {
@@ -1029,23 +1283,56 @@ export function CfpWizard({
       formId: published.form.id,
     };
   }, [published, routeIdentity]);
-  const [authenticatedSession, setAuthenticatedSession] = useState<CfpAuthenticatedSession | null>(
-    null,
-  );
-  const [verificationState, setVerificationState] = useState<CfpVerificationState | null>(null);
-  const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
   const requiresApplicantContextConfirmation =
     authenticatedSession !== null &&
     identity !== null &&
     shouldConfirmCfpApplicantContext(authenticatedSession, identity.organizationId);
-  const [password, setPassword] = useState("");
-  const [accountMode, setAccountMode] = useState<CfpAccountMode>("sign_in");
-  const [errors, setErrors] = useState<ValidationErrors>({});
-  const [hydrated, setHydrated] = useState(false);
-  const [startupRevision, setStartupRevision] = useState(0);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [mutationPending, setMutationPending] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [persistenceState, dispatchPersistence] = useReducer(cfpPersistenceReducer, {
+    errors: {},
+    hydrated: false,
+    startupRevision: 0,
+    saveState: "idle",
+    mutationPending: false,
+    saveError: null,
+    staleFormConflict: null,
+  });
+  const {
+    errors,
+    hydrated,
+    startupRevision,
+    saveState,
+    mutationPending,
+    saveError,
+    staleFormConflict,
+  } = persistenceState;
+  const setDraft = (value: CfpStateUpdate<CfpDraft>): void =>
+    dispatchDraft({ type: "set-draft", value });
+  const setDynamicAnswers = (value: CfpStateUpdate<DynamicAnswers>): void =>
+    dispatchDraft({ type: "set-dynamic-answers", value });
+  const setParticipantAnswers = (value: CfpStateUpdate<ParticipantAnswers>): void =>
+    dispatchDraft({ type: "set-participant-answers", value });
+  const setFileUploadStates = (value: CfpStateUpdate<FileUploadStates>): void =>
+    dispatchDraft({ type: "set-file-upload-states", value });
+  const setAuthenticatedSession = (value: CfpStateUpdate<CfpAuthenticatedSession | null>): void =>
+    dispatchSession({ type: "set-authenticated-session", value });
+  const setVerificationState = (value: CfpStateUpdate<CfpVerificationState | null>): void =>
+    dispatchSession({ type: "set-verification-state", value });
+  const setConfirmedApplicantContext = (value: CfpStateUpdate<boolean>): void =>
+    dispatchSession({ type: "set-confirmed-applicant-context", value });
+  const setPassword = (value: CfpStateUpdate<string>): void =>
+    dispatchSession({ type: "set-password", value });
+  const setAccountMode = (value: CfpStateUpdate<CfpAccountMode>): void =>
+    dispatchSession({ type: "set-account-mode", value });
+  const setErrors = (value: CfpStateUpdate<ValidationErrors>): void =>
+    dispatchPersistence({ type: "set-errors", value });
+  const setSaveState = (value: CfpStateUpdate<CfpPersistenceState["saveState"]>): void =>
+    dispatchPersistence({ type: "set-save-state", value });
+  const setMutationPending = (value: CfpStateUpdate<boolean>): void =>
+    dispatchPersistence({ type: "set-mutation-pending", value });
+  const setSaveError = (value: CfpStateUpdate<string | null>): void =>
+    dispatchPersistence({ type: "set-save-error", value });
+  const setStaleFormConflict = (value: CfpStateUpdate<CfpStaleFormConflict | null>): void =>
+    dispatchPersistence({ type: "set-stale-form-conflict", value });
   const submissionIdRef = useRef<string | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const verificationResumeRequestedRef = useRef(false);
@@ -1056,19 +1343,14 @@ export function CfpWizard({
   const mutationGateRef = useRef<CfpMutationGate | null>(null);
   const mutationOperationRef = useRef<CfpMutationOperation | null>(null);
   if (mutationGateRef.current === null) mutationGateRef.current = new CfpMutationGate();
-  const [staleFormConflict, setStaleFormConflict] = useState<{
-    submissionId: string | null;
-    pinnedDraftUnavailable: boolean;
-  } | null>(null);
   const submissionsClosed = cfpIsClosed(published?.event);
   function noteLocalChange(): void {
     draftRevisionRef.current += 1;
-    if (!mutationGateRef.current?.isActive()) {
+    const resetSaveState = !mutationGateRef.current?.isActive();
+    if (resetSaveState) {
       mutationOperationRef.current = null;
-      setSaveState("idle");
     }
-    setSaveError(null);
-    setErrors({});
+    dispatchPersistence({ type: "local-change", resetSaveState });
   }
 
   function beginMutation(): CfpMutationOperation | null {
@@ -1108,20 +1390,22 @@ export function CfpWizard({
     versionRef.current = saved.version;
     formVersionRef.current = saved.formVersion;
     if (draftRevisionRef.current !== localRevision) return;
-    setDynamicAnswers(submissionAnswersFromServer(saved));
-    setParticipantAnswers(participantAnswersFromServer(saved));
     const mappedDraft = draftFromSubmission(eventSlug, saved);
-    setDraft(
-      completedStep === "participant"
-        ? mappedDraft
-        : {
-            ...mappedDraft,
-            account: nextDraft.account,
-            submission: nextDraft.submission,
-            participants: nextDraft.participants,
-            secondaryContacts: nextDraft.secondaryContacts,
-          },
-    );
+    dispatchDraft({
+      type: "hydrate-submission",
+      dynamicAnswers: submissionAnswersFromServer(saved),
+      participantAnswers: participantAnswersFromServer(saved),
+      draft:
+        completedStep === "participant"
+          ? mappedDraft
+          : {
+              ...mappedDraft,
+              account: nextDraft.account,
+              submission: nextDraft.submission,
+              participants: nextDraft.participants,
+              secondaryContacts: nextDraft.secondaryContacts,
+            },
+    });
   }
 
   async function reconcileAuthoritativeVersion(): Promise<void> {
@@ -1138,8 +1422,7 @@ export function CfpWizard({
   }
 
   useEffect(() => {
-    setAuthenticatedSession(null);
-    setVerificationState(null);
+    dispatchSession({ type: "reset-authentication" });
     verificationResumeRequestedRef.current = false;
     const controller = new AbortController();
     const scope = { active: true, revision: startupRevision };
@@ -1147,18 +1430,21 @@ export function CfpWizard({
       scope.active && scope.revision === startupRevision && !controller.signal.aborted;
     const handleStartupError = (error: unknown): void => {
       if (!ownsScope()) return;
-      if (isCfpSchemaVersionConflict(error)) {
-        formVersionRef.current = null;
-        setStaleFormConflict({
-          submissionId: submissionIdRef.current,
-          pinnedDraftUnavailable: submissionIdRef.current === null,
-        });
-      }
-      setSaveState("error");
-      setSaveError(
-        mutationErrorMessage(error, "The published CFP could not be loaded. Refresh to try again."),
-      );
-      setHydrated(true);
+      const schemaConflict = isCfpSchemaVersionConflict(error);
+      if (schemaConflict) formVersionRef.current = null;
+      dispatchPersistence({
+        type: "startup-error",
+        conflict: schemaConflict
+          ? {
+              submissionId: submissionIdRef.current,
+              pinnedDraftUnavailable: submissionIdRef.current === null,
+            }
+          : undefined,
+        error: mutationErrorMessage(
+          error,
+          "The published CFP could not be loaded. Refresh to try again.",
+        ),
+      });
     };
     const applyVerificationContinuation = (
       canonicalIdentity: CfpStartupData["canonicalIdentity"],
@@ -1168,27 +1454,38 @@ export function CfpWizard({
       if (verificationContinuation === null) return;
       const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
       if (session === null) {
-        setDraft((current) => ({
-          ...current,
-          account: verificationContinuation.account,
-        }));
-        setVerificationState({
-          status: "waiting",
-          email: verificationContinuation.account.email,
+        dispatchDraft({
+          type: "set-draft",
+          value: (current) => ({
+            ...current,
+            account: verificationContinuation.account,
+          }),
+        });
+        dispatchSession({
+          type: "set-verification-state",
+          value: {
+            status: "waiting",
+            email: verificationContinuation.account.email,
+          },
         });
       } else if (session.email === continuationEmail) {
-        setDraft((current) =>
-          syncPrimaryParticipant(
-            draftWithAuthenticatedSession(
-              {
-                ...current,
-                account: verificationContinuation.account,
-              },
-              session,
+        dispatchDraft({
+          type: "set-draft",
+          value: (current) =>
+            syncPrimaryParticipant(
+              draftWithAuthenticatedSession(
+                {
+                  ...current,
+                  account: verificationContinuation.account,
+                },
+                session,
+              ),
             ),
-          ),
-        );
-        setVerificationState({ status: "resuming", email: session.email });
+        });
+        dispatchSession({
+          type: "set-verification-state",
+          value: { status: "resuming", email: session.email },
+        });
       } else {
         clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
       }
@@ -1204,23 +1501,24 @@ export function CfpWizard({
       submissionIdRef.current = null;
       versionRef.current = 1;
       formVersionRef.current = publishedCfp.form.version;
-      setStaleFormConflict(null);
-      setDynamicAnswers({});
-      setParticipantAnswers({});
-      setFileUploadStates({});
-      setErrors({});
-      setPassword("");
-      setSaveState("idle");
-      setSaveError(null);
-      setDraft(
-        session
+      dispatchPersistence({
+        type: "set-stale-form-conflict",
+        value: null,
+      });
+      dispatchDraft({
+        type: "reset",
+        draft: session
           ? draftWithAuthenticatedSession(initialDraftForScope, session)
           : initialDraftForScope,
-      );
+      });
+      dispatchPersistence({ type: "set-errors", value: {} });
+      dispatchSession({ type: "set-password", value: "" });
+      dispatchPersistence({ type: "set-save-state", value: "idle" });
+      dispatchPersistence({ type: "set-save-error", value: null });
     };
     if (!routeIdentity) {
-      setSaveState("error");
-      setHydrated(true);
+      dispatchPersistence({ type: "set-save-state", value: "error" });
+      dispatchPersistence({ type: "set-hydrated", value: true });
       return () => {
         scope.active = false;
         fileDraftCreationRef.current = null;
@@ -1233,8 +1531,11 @@ export function CfpWizard({
       ({ publishedCfp, session, canonicalIdentity }) => {
         if (!ownsScope()) return;
         try {
-          setAuthenticatedSession(session);
-          setPublished(publishedCfp);
+          dispatchSession({
+            type: "startup-loaded",
+            published: publishedCfp,
+            authenticatedSession: session,
+          });
           const verificationContinuation =
             step === "account"
               ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
@@ -1261,11 +1562,14 @@ export function CfpWizard({
                 try {
                   if (pinnedDraft.status === "stale") {
                     formVersionRef.current = null;
-                    setStaleFormConflict({
-                      submissionId: pinnedDraft.submissionId,
-                      pinnedDraftUnavailable: true,
+                    dispatchPersistence({
+                      type: "set-stale-form-conflict",
+                      value: {
+                        submissionId: pinnedDraft.submissionId,
+                        pinnedDraftUnavailable: true,
+                      },
                     });
-                    setHydrated(true);
+                    dispatchPersistence({ type: "set-hydrated", value: true });
                     return;
                   }
                   if (pinnedDraft.status === "resume") {
@@ -1273,17 +1577,21 @@ export function CfpWizard({
                     submissionIdRef.current = saved.id;
                     versionRef.current = saved.version;
                     formVersionRef.current = saved.formVersion;
-                    setStaleFormConflict(null);
-                    setDynamicAnswers(submissionAnswersFromServer(saved));
-                    setParticipantAnswers(participantAnswersFromServer(saved));
-                    setDraft(
-                      session
+                    dispatchPersistence({
+                      type: "set-stale-form-conflict",
+                      value: null,
+                    });
+                    dispatchDraft({
+                      type: "hydrate-submission",
+                      dynamicAnswers: submissionAnswersFromServer(saved),
+                      participantAnswers: participantAnswersFromServer(saved),
+                      draft: session
                         ? draftWithAuthenticatedSession(
                             draftFromSubmission(eventSlug, saved),
                             session,
                           )
                         : draftFromSubmission(eventSlug, saved),
-                    );
+                    });
                   } else {
                     applyReset(publishedCfp, session, initialDraft, pointerKey, true);
                   }
@@ -1292,7 +1600,7 @@ export function CfpWizard({
                     session,
                     verificationContinuation,
                   );
-                  setHydrated(true);
+                  dispatchPersistence({ type: "set-hydrated", value: true });
                 } catch (error) {
                   handleStartupError(error);
                 }
@@ -1304,17 +1612,20 @@ export function CfpWizard({
           formVersionRef.current = publishedCfp.form.version;
           submissionIdRef.current = null;
           versionRef.current = 1;
-          setStaleFormConflict(null);
-          setDraft(session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft);
-          setDynamicAnswers({});
-          setParticipantAnswers({});
-          setFileUploadStates({});
-          setErrors({});
-          setPassword("");
-          setSaveState("idle");
-          setSaveError(null);
+          dispatchPersistence({
+            type: "set-stale-form-conflict",
+            value: null,
+          });
+          dispatchDraft({
+            type: "reset",
+            draft: session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft,
+          });
+          dispatchPersistence({ type: "set-errors", value: {} });
+          dispatchSession({ type: "set-password", value: "" });
+          dispatchPersistence({ type: "set-save-state", value: "idle" });
+          dispatchPersistence({ type: "set-save-error", value: null });
           applyVerificationContinuation(canonicalIdentity, session, verificationContinuation);
-          setHydrated(true);
+          dispatchPersistence({ type: "set-hydrated", value: true });
         } catch (error) {
           handleStartupError(error);
         }
@@ -1599,14 +1910,17 @@ export function CfpWizard({
         );
         versionRef.current = result.submission.version;
         if (draftRevisionRef.current === submitRevision) {
-          setDynamicAnswers(submissionAnswersFromServer(result.submission));
-          setParticipantAnswers(participantAnswersFromServer(result.submission));
           const submittedDraft = draftFromSubmission(eventSlug, result.submission);
-          setDraft({
-            ...submittedDraft,
-            receipt: {
-              id: result.receipt.id,
-              submittedAt: result.receipt.submittedAt,
+          dispatchDraft({
+            type: "hydrate-submission",
+            dynamicAnswers: submissionAnswersFromServer(result.submission),
+            participantAnswers: participantAnswersFromServer(result.submission),
+            draft: {
+              ...submittedDraft,
+              receipt: {
+                id: result.receipt.id,
+                submittedAt: result.receipt.submittedAt,
+              },
             },
           });
         }
@@ -1834,8 +2148,7 @@ export function CfpWizard({
     }
   }
   function refreshPinnedDraft(): void {
-    setHydrated(false);
-    setStartupRevision((revision) => revision + 1);
+    dispatchPersistence({ type: "refresh-start" });
     router.refresh();
   }
 

@@ -1252,22 +1252,6 @@ export function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "The organizer event could not be loaded.";
 }
 
-export function revisionFromProjection(value: unknown): EmbedPublicRevision | null {
-  if (!isRecord(value)) return null;
-  const id = nonEmptyString(value.id);
-  const publishedAt = nonEmptyString(value.publishedAt);
-  const revisionNumber = value.number;
-  if (
-    !id ||
-    !publishedAt ||
-    typeof revisionNumber !== "number" ||
-    !Number.isFinite(revisionNumber)
-  ) {
-    return null;
-  }
-  return { id, number: revisionNumber, publishedAt };
-}
-
 export function publicationMetadataFromState(
   state: EmbedPublicationState | null,
   status: "loading" | "none" | "unavailable" | "pending" | "failed" | "served",

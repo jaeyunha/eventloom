@@ -563,13 +563,6 @@ function RoomForm({
   );
   const [formError, setFormError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setName(room?.name ?? "");
-    setCapacity(String(room?.capacity ?? ""));
-    setResourcesText((room?.resources ?? room?.resourceIds ?? []).join(", "));
-    setFormError(null);
-  }, [room]);
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const result = validateRoomForm(name, capacity, resourcesText);
@@ -854,6 +847,7 @@ function RoomsSection({
           </DialogHeader>
           {editingRoom ? (
             <RoomForm
+              key={editingRoom.id}
               room={editingRoom}
               busy={busy}
               onCancel={() => setEditingRoomId(null)}
@@ -1546,7 +1540,12 @@ export function EventSettingsWorkspaceView({
             </SettingGroup>
           ) : null}
           {section === "rooms" ? (
-            <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
+            <RoomsSection
+              key={eventSettingsWorkspaceScopeKey(organizationId, eventId)}
+              rooms={data.rooms}
+              busy={busy}
+              actions={actions}
+            />
           ) : null}
           {section === "classification" ? (
             <SettingGroup

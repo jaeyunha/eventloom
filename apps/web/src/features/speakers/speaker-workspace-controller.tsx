@@ -18,9 +18,10 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
-  useState,
 } from "react";
 import {
   StatusBadge,
@@ -121,6 +122,7 @@ import {
   type SpeakerReminderEligibilityEnvelope,
   type SpeakerRosterEnvelope,
   type SpeakerSession,
+  type SpeakerTaskEnvelope,
   type SpeakerUpdateInput,
 } from "./api";
 import {
@@ -379,140 +381,1087 @@ function ProfileFields({
 function SpeakerTaskStatusBadge({ status }: Readonly<{ status: string }>) {
   return <StatusBadge tone={taskStatusTone(status)}>{taskStatusLabel(status)}</StatusBadge>;
 }
+type SpeakerWorkspaceView = "roster" | "tasks" | "email";
+
+type RosterScopeState = {
+  activeView: SpeakerWorkspaceView;
+  roster: SpeakerRosterEnvelope | null;
+  progress: SpeakerProgressEnvelope | null;
+  loading: boolean;
+  error: string | null;
+  progressError: string | null;
+  notice: string | null;
+  selectedId: string | null;
+  selectedSpeakerIds: readonly string[];
+  reminderEligibility: SpeakerReminderEligibilityEnvelope | null;
+  secondarySectionsReady: boolean;
+  visibleProgressContext: string | null;
+  query: string;
+  statusFilter: string;
+  sessionFilter: string;
+  progressFilter: ProgressFilter;
+  attentionFilter: SpeakerAttentionFilter;
+  filtersOpen: boolean;
+  showAdd: boolean;
+  showCsv: boolean;
+};
+
+type RosterScopeAction =
+  | { type: "view-changed"; view: SpeakerWorkspaceView }
+  | { type: "roster-scope-reset" }
+  | { type: "api-error-set"; message: string }
+  | { type: "notice-set"; message: string | null }
+  | { type: "roster-load-started" }
+  | { type: "roster-loaded"; roster: SpeakerRosterEnvelope }
+  | {
+      type: "roster-authoritative-applied";
+      roster: SpeakerRosterEnvelope;
+      message: string | undefined;
+    }
+  | { type: "roster-load-failed"; message: string; clearRoster: boolean }
+  | { type: "loading-changed"; loading: boolean }
+  | { type: "progress-load-started" }
+  | { type: "progress-loaded"; progress: SpeakerProgressEnvelope }
+  | {
+      type: "progress-and-roster-loaded";
+      roster: SpeakerRosterEnvelope;
+      progress: SpeakerProgressEnvelope;
+    }
+  | { type: "progress-load-failed"; message: string }
+  | { type: "reminder-loaded"; eligibility: SpeakerReminderEligibilityEnvelope }
+  | {
+      type: "roster-details-refreshed";
+      participantId: string;
+      sessions: readonly SpeakerSession[];
+      assets: readonly SpeakerAsset[];
+      updatedAt: string;
+    }
+  | {
+      type: "tasks-assigned";
+      taskEnvelope: SpeakerTaskEnvelope;
+      fallbackRows: SpeakerProgressEnvelope["rows"];
+    }
+  | { type: "selected-id-changed"; participantId: string | null }
+  | { type: "selection-toggled"; participantId: string }
+  | { type: "visible-selection-toggled"; participantIds: readonly string[] }
+  | { type: "selection-set"; participantIds: readonly string[] }
+  | { type: "query-changed"; query: string }
+  | { type: "status-filter-changed"; status: string }
+  | { type: "session-filter-changed"; session: string }
+  | { type: "progress-filter-changed"; progress: ProgressFilter }
+  | { type: "attention-filter-changed"; attention: SpeakerAttentionFilter }
+  | { type: "filters-cleared" }
+  | { type: "filters-toggled" }
+  | { type: "add-dialog-changed"; open: boolean }
+  | { type: "csv-dialog-changed"; open: boolean }
+  | { type: "csv-dialog-toggled" }
+  | { type: "secondary-ready" }
+  | { type: "progress-context-changed"; context: string };
+
+const INITIAL_ROSTER_SCOPE_STATE: RosterScopeState = {
+  activeView: "roster",
+  roster: null,
+  progress: null,
+  loading: true,
+  error: null,
+  progressError: null,
+  notice: null,
+  selectedId: null,
+  selectedSpeakerIds: [],
+  reminderEligibility: null,
+  secondarySectionsReady: false,
+  visibleProgressContext: null,
+  query: "",
+  statusFilter: "all",
+  sessionFilter: "all",
+  progressFilter: "all",
+  attentionFilter: "all",
+  filtersOpen: false,
+  showAdd: false,
+  showCsv: false,
+};
+
+function rosterSelectionFor(
+  state: RosterScopeState,
+  roster: SpeakerRosterEnvelope,
+): Pick<RosterScopeState, "selectedId" | "selectedSpeakerIds"> {
+  const participantIds = new Set(roster.speakers.map((speaker) => speaker.participantId));
+  const selectedSpeakerIds = state.selectedSpeakerIds.filter((participantId) =>
+    participantIds.has(participantId),
+  );
+  const selectedId =
+    state.selectedId !== null && participantIds.has(state.selectedId)
+      ? state.selectedId
+      : (roster.speakers[0]?.participantId ?? null);
+  return { selectedId, selectedSpeakerIds };
+}
+
+function rosterScopeReducer(state: RosterScopeState, action: RosterScopeAction): RosterScopeState {
+  switch (action.type) {
+    case "view-changed":
+      return { ...state, activeView: action.view };
+    case "roster-scope-reset":
+      return {
+        ...state,
+        roster: null,
+        progress: null,
+        loading: true,
+        error: null,
+        progressError: null,
+        selectedId: null,
+        selectedSpeakerIds: [],
+      };
+    case "api-error-set":
+      return { ...state, error: action.message };
+    case "notice-set":
+      return { ...state, notice: action.message };
+    case "roster-load-started":
+      return { ...state, loading: true, error: null, progressError: null, progress: null };
+    case "roster-loaded":
+      return {
+        ...state,
+        roster: action.roster,
+        loading: false,
+        ...rosterSelectionFor(state, action.roster),
+      };
+    case "roster-authoritative-applied":
+      return {
+        ...state,
+        roster: action.roster,
+        loading: false,
+        error: null,
+        progressError: null,
+        progress: null,
+        ...rosterSelectionFor(state, action.roster),
+        notice: action.message ?? state.notice,
+      };
+    case "roster-load-failed":
+      return action.clearRoster
+        ? {
+            ...state,
+            roster: null,
+            progress: null,
+            selectedId: null,
+            selectedSpeakerIds: [],
+            error: action.message,
+          }
+        : { ...state, error: action.message };
+    case "loading-changed":
+      return { ...state, loading: action.loading };
+    case "progress-load-started":
+      return { ...state, progressError: null };
+    case "progress-loaded":
+      return {
+        ...state,
+        progress: action.progress,
+        roster:
+          state.roster === null ? null : mergeProgressSummaries(state.roster, action.progress),
+      };
+    case "progress-and-roster-loaded":
+      return {
+        ...state,
+        roster: action.roster,
+        progress: action.progress,
+        progressError: null,
+      };
+    case "progress-load-failed":
+      return { ...state, progress: null, progressError: action.message };
+    case "reminder-loaded":
+      return { ...state, reminderEligibility: action.eligibility };
+    case "roster-details-refreshed":
+      return {
+        ...state,
+        roster:
+          state.roster === null
+            ? null
+            : mergeSpeaker(state.roster, action.participantId, {
+                sessions: action.sessions,
+                assets: action.assets,
+                updatedAt: action.updatedAt,
+              }),
+      };
+    case "tasks-assigned": {
+      const tasks = action.taskEnvelope.tasks;
+      const roster =
+        state.roster === null
+          ? null
+          : {
+              ...state.roster,
+              speakers: state.roster.speakers.map((speaker) => {
+                const added = tasks.filter(
+                  (task) => task.participantId === speaker.participantId,
+                ).length;
+                return added === 0
+                  ? speaker
+                  : {
+                      ...speaker,
+                      taskSummary: {
+                        ...speaker.taskSummary,
+                        total: speaker.taskSummary.total + added,
+                      },
+                    };
+              }),
+            };
+      const rows =
+        state.progress?.rows ??
+        action.fallbackRows.map((row) => ({
+          participantId: row.participantId,
+          displayName: row.displayName,
+          tasks: row.tasks,
+        }));
+      const progress: SpeakerProgressEnvelope = {
+        organizationId: action.taskEnvelope.organizationId,
+        eventId: action.taskEnvelope.eventId,
+        rows: rows.map((row) => {
+          const assigned = tasks.filter((task) => task.participantId === row.participantId);
+          return assigned.length === 0 ? row : { ...row, tasks: [...row.tasks, ...assigned] };
+        }),
+      };
+      return { ...state, roster, progress };
+    }
+    case "selected-id-changed":
+      return { ...state, selectedId: action.participantId };
+    case "selection-toggled":
+      return {
+        ...state,
+        selectedSpeakerIds: state.selectedSpeakerIds.includes(action.participantId)
+          ? state.selectedSpeakerIds.filter((candidate) => candidate !== action.participantId)
+          : [...state.selectedSpeakerIds, action.participantId],
+      };
+    case "visible-selection-toggled": {
+      const visibleIdSet = new Set(action.participantIds);
+      const selectedSpeakerIdSet = new Set(state.selectedSpeakerIds);
+      const allVisibleSelected =
+        action.participantIds.length > 0 &&
+        action.participantIds.every((participantId) => selectedSpeakerIdSet.has(participantId));
+      return {
+        ...state,
+        selectedSpeakerIds: allVisibleSelected
+          ? state.selectedSpeakerIds.filter((participantId) => !visibleIdSet.has(participantId))
+          : [...new Set([...state.selectedSpeakerIds, ...action.participantIds])],
+      };
+    }
+    case "selection-set":
+      return { ...state, selectedSpeakerIds: action.participantIds };
+    case "query-changed":
+      return { ...state, query: action.query };
+    case "status-filter-changed":
+      return { ...state, statusFilter: action.status };
+    case "session-filter-changed":
+      return { ...state, sessionFilter: action.session };
+    case "progress-filter-changed":
+      return { ...state, progressFilter: action.progress };
+    case "attention-filter-changed":
+      return { ...state, attentionFilter: action.attention };
+    case "filters-cleared":
+      return {
+        ...state,
+        query: "",
+        statusFilter: "all",
+        sessionFilter: "all",
+        progressFilter: "all",
+        attentionFilter: "all",
+      };
+    case "filters-toggled":
+      return { ...state, filtersOpen: !state.filtersOpen };
+    case "add-dialog-changed":
+      return { ...state, showAdd: action.open };
+    case "csv-dialog-changed":
+      return { ...state, showCsv: action.open };
+    case "csv-dialog-toggled":
+      return { ...state, showCsv: !state.showCsv };
+    case "secondary-ready":
+      return { ...state, secondarySectionsReady: true };
+    case "progress-context-changed":
+      return { ...state, visibleProgressContext: action.context };
+  }
+}
+
+type EmailState = {
+  emailTemplates: readonly SpeakerEmailTemplate[];
+  emailTemplateId: string;
+  emailTemplateVersion: number | undefined;
+  emailTemplateName: string;
+  emailSubject: string;
+  emailHtml: string;
+  emailText: string;
+  emailPreview: SpeakerEmailPreview | null;
+  emailEditorMode: "visual" | "html" | "text";
+  emailConfirmOpen: boolean;
+  emailSends: readonly SpeakerEmailSend[];
+  emailSaveBusy: boolean;
+  emailPreviewBusy: boolean;
+  emailSendBusy: boolean;
+  emailHistoryBusy: boolean;
+  emailNotice: string | null;
+};
+
+type EmailAction =
+  | { type: "email-templates-loaded"; templates: readonly SpeakerEmailTemplate[] }
+  | {
+      type: "email-template-selected";
+      id: string;
+      version: number | undefined;
+      template: SpeakerEmailTemplate | null;
+    }
+  | { type: "email-template-created"; template: SpeakerEmailTemplate }
+  | { type: "email-template-saved"; template: SpeakerEmailTemplate }
+  | { type: "email-template-name-changed"; name: string }
+  | { type: "email-subject-changed"; subject: string }
+  | { type: "email-html-changed"; html: string }
+  | { type: "email-text-changed"; text: string }
+  | { type: "email-editor-mode-changed"; mode: "visual" | "html" | "text" }
+  | { type: "email-preview-invalidated" }
+  | { type: "email-preview-started" }
+  | { type: "email-preview-set"; preview: SpeakerEmailPreview }
+  | { type: "email-sends-loaded"; sends: readonly SpeakerEmailSend[] }
+  | { type: "email-send-recorded"; send: SpeakerEmailSend }
+  | { type: "email-save-busy-changed"; busy: boolean }
+  | { type: "email-preview-busy-changed"; busy: boolean }
+  | { type: "email-send-busy-changed"; busy: boolean }
+  | { type: "email-history-busy-changed"; busy: boolean }
+  | { type: "email-notice-set"; message: string | null }
+  | { type: "email-confirm-changed"; open: boolean };
+
+const INITIAL_EMAIL_STATE: EmailState = {
+  emailTemplates: [],
+  emailTemplateId: "",
+  emailTemplateVersion: undefined,
+  emailTemplateName: "New speaker message",
+  emailSubject: "",
+  emailHtml: "",
+  emailText: "",
+  emailPreview: null,
+  emailEditorMode: "visual",
+  emailConfirmOpen: false,
+  emailSends: [],
+  emailSaveBusy: false,
+  emailPreviewBusy: false,
+  emailSendBusy: false,
+  emailHistoryBusy: false,
+  emailNotice: null,
+};
+
+function emailReducer(state: EmailState, action: EmailAction): EmailState {
+  switch (action.type) {
+    case "email-templates-loaded": {
+      const templates = action.templates;
+      const latest = templates
+        .slice()
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+      return latest === undefined
+        ? { ...state, emailTemplates: templates }
+        : {
+            ...state,
+            emailTemplates: templates,
+            emailTemplateId: latest.id,
+            emailTemplateVersion: latest.version,
+            emailTemplateName: latest.name,
+            emailSubject: latest.subject,
+            emailHtml: latest.html,
+            emailText: latest.text,
+          };
+    }
+    case "email-template-selected":
+      return action.template === null
+        ? {
+            ...state,
+            emailTemplateId: action.id,
+            emailTemplateVersion: action.version,
+          }
+        : {
+            ...state,
+            emailTemplateId: action.id,
+            emailTemplateVersion: action.version,
+            emailTemplateName: action.template.name,
+            emailSubject: action.template.subject,
+            emailHtml: action.template.html,
+            emailText: action.template.text,
+          };
+    case "email-template-created":
+    case "email-template-saved":
+      return {
+        ...state,
+        emailTemplates: [
+          ...state.emailTemplates.filter(
+            (candidate) =>
+              !(
+                candidate.id === action.template.id && candidate.version === action.template.version
+              ),
+          ),
+          action.template,
+        ],
+        emailTemplateId: action.template.id,
+        emailTemplateVersion: action.template.version,
+        emailTemplateName: action.template.name,
+        emailSubject: action.template.subject,
+        emailHtml: action.template.html,
+        emailText: action.template.text,
+      };
+    case "email-template-name-changed":
+      return { ...state, emailTemplateName: action.name };
+    case "email-subject-changed":
+      return { ...state, emailSubject: action.subject };
+    case "email-html-changed":
+      return { ...state, emailHtml: action.html };
+    case "email-text-changed":
+      return { ...state, emailText: action.text };
+    case "email-editor-mode-changed":
+      return { ...state, emailEditorMode: action.mode };
+    case "email-preview-invalidated":
+      return { ...state, emailPreview: null, emailConfirmOpen: false, emailPreviewBusy: false };
+    case "email-preview-started":
+      return { ...state, emailPreviewBusy: true };
+    case "email-preview-set":
+      return { ...state, emailPreview: action.preview };
+    case "email-sends-loaded":
+      return { ...state, emailSends: action.sends };
+    case "email-send-recorded":
+      return {
+        ...state,
+        emailSends: [
+          action.send,
+          ...state.emailSends.filter((candidate) => candidate.id !== action.send.id),
+        ],
+      };
+    case "email-save-busy-changed":
+      return { ...state, emailSaveBusy: action.busy };
+    case "email-preview-busy-changed":
+      return { ...state, emailPreviewBusy: action.busy };
+    case "email-send-busy-changed":
+      return { ...state, emailSendBusy: action.busy };
+    case "email-history-busy-changed":
+      return { ...state, emailHistoryBusy: action.busy };
+    case "email-notice-set":
+      return { ...state, emailNotice: action.message };
+    case "email-confirm-changed":
+      return { ...state, emailConfirmOpen: action.open };
+  }
+}
+
+type ImportTaskInvitationState = {
+  importPreview: SpeakerImportPreview | null;
+  importFileName: string | null;
+  taskTitle: string;
+  taskDueAt: string;
+  taskAssignees: readonly string[];
+  invitationPreview: readonly SpeakerInvitationPreview[] | null;
+  invitationResult: SpeakerInvitationResult | null;
+  invitationResultParticipantId: string | null;
+  invitationError: string | null;
+  invitationHistory: readonly SpeakerInvitationHistoryEntry[];
+  invitationPreviewBusy: boolean;
+  invitationSendBusy: boolean;
+  importPreviewBusy: boolean;
+  importCommitBusy: boolean;
+  taskBusy: boolean;
+};
+
+type ImportTaskInvitationAction =
+  | { type: "invitation-cleared" }
+  | { type: "invitation-preview-started" }
+  | { type: "invitation-preview-loaded"; preview: readonly SpeakerInvitationPreview[] }
+  | { type: "invitation-preview-failed"; message: string }
+  | { type: "invitation-preview-busy-changed"; busy: boolean }
+  | { type: "invitation-send-started" }
+  | { type: "invitation-result-recorded"; participantId: string; result: SpeakerInvitationResult }
+  | {
+      type: "invitation-history-retained";
+      preview: readonly SpeakerInvitationPreview[];
+      result: SpeakerInvitationResult;
+    }
+  | { type: "invitation-send-busy-changed"; busy: boolean }
+  | { type: "invitation-error-set"; message: string | null }
+  | { type: "import-preview-started"; fileName: string }
+  | { type: "import-preview-loaded"; preview: SpeakerImportPreview }
+  | { type: "import-preview-cleared" }
+  | { type: "import-preview-busy-changed"; busy: boolean }
+  | { type: "import-committed" }
+  | { type: "import-commit-busy-changed"; busy: boolean }
+  | { type: "task-title-changed"; title: string }
+  | { type: "task-due-changed"; dueAt: string }
+  | { type: "task-assignee-toggled"; participantId: string }
+  | { type: "task-fields-cleared" }
+  | { type: "task-busy-changed"; busy: boolean };
+
+const INITIAL_IMPORT_TASK_INVITATION_STATE: ImportTaskInvitationState = {
+  importPreview: null,
+  importFileName: null,
+  taskTitle: "",
+  taskDueAt: "",
+  taskAssignees: [],
+  invitationPreview: null,
+  invitationResult: null,
+  invitationResultParticipantId: null,
+  invitationError: null,
+  invitationHistory: [],
+  invitationPreviewBusy: false,
+  invitationSendBusy: false,
+  importPreviewBusy: false,
+  importCommitBusy: false,
+  taskBusy: false,
+};
+
+function importTaskInvitationReducer(
+  state: ImportTaskInvitationState,
+  action: ImportTaskInvitationAction,
+): ImportTaskInvitationState {
+  switch (action.type) {
+    case "invitation-cleared":
+      return {
+        ...state,
+        invitationPreview: null,
+        invitationResult: null,
+        invitationResultParticipantId: null,
+        invitationError: null,
+      };
+    case "invitation-preview-started":
+      return {
+        ...state,
+        invitationPreview: null,
+        invitationResult: null,
+        invitationResultParticipantId: null,
+        invitationError: null,
+        invitationPreviewBusy: true,
+      };
+    case "invitation-preview-loaded":
+      return { ...state, invitationPreview: action.preview };
+    case "invitation-preview-failed":
+      return { ...state, invitationError: action.message };
+    case "invitation-preview-busy-changed":
+      return { ...state, invitationPreviewBusy: action.busy };
+    case "invitation-send-started":
+      return {
+        ...state,
+        invitationResult: null,
+        invitationResultParticipantId: null,
+        invitationError: null,
+        invitationSendBusy: true,
+      };
+    case "invitation-result-recorded":
+      return {
+        ...state,
+        invitationResult: action.result,
+        invitationResultParticipantId: action.participantId,
+      };
+    case "invitation-history-retained":
+      return {
+        ...state,
+        invitationHistory: retainInvitationHistory(
+          state.invitationHistory,
+          action.preview,
+          action.result,
+        ),
+      };
+    case "invitation-send-busy-changed":
+      return { ...state, invitationSendBusy: action.busy };
+    case "invitation-error-set":
+      return { ...state, invitationError: action.message };
+    case "import-preview-started":
+      return {
+        ...state,
+        importFileName: action.fileName,
+        importPreview: null,
+        importPreviewBusy: true,
+      };
+    case "import-preview-loaded":
+      return { ...state, importPreview: action.preview };
+    case "import-preview-cleared":
+      return { ...state, importPreview: null, importFileName: null };
+    case "import-preview-busy-changed":
+      return { ...state, importPreviewBusy: action.busy };
+    case "import-committed":
+      return { ...state, importPreview: null, importFileName: null };
+    case "import-commit-busy-changed":
+      return { ...state, importCommitBusy: action.busy };
+    case "task-title-changed":
+      return { ...state, taskTitle: action.title };
+    case "task-due-changed":
+      return { ...state, taskDueAt: action.dueAt };
+    case "task-assignee-toggled":
+      return {
+        ...state,
+        taskAssignees: state.taskAssignees.includes(action.participantId)
+          ? state.taskAssignees.filter((candidate) => candidate !== action.participantId)
+          : [...state.taskAssignees, action.participantId],
+      };
+    case "task-fields-cleared":
+      return { ...state, taskTitle: "", taskDueAt: "", taskAssignees: [] };
+    case "task-busy-changed":
+      return { ...state, taskBusy: action.busy };
+  }
+}
+
+type ProfileHeadshotDetailsState = {
+  createDraft: CreateDraft;
+  editDraft: EditDraft | null;
+  editError: string | null;
+  detailBusy: boolean;
+  detailNotice: string | null;
+  headshotUploadStatus: OrganizerHeadshotUploadStatus;
+  headshotUploadMessage: string | null;
+  headshotSubmissionId: string | null;
+  headshotPreviewUrl: string | null;
+  headshotPreviewError: string | null;
+  headshotPreviewLoading: boolean;
+  headshotPreviewRevision: number;
+  headshotPreviewRetry: number;
+  headshotAssetsByParticipant: Readonly<Record<string, SpeakerAsset>>;
+  downloadUrls: Readonly<Record<string, string>>;
+  downloadErrors: Readonly<Record<string, string>>;
+  downloadBusyAssetId: string | null;
+  saveBusy: boolean;
+  profileMutationStatus: SpeakerMutationStatus;
+  profileMutationMessage: string | null;
+  headshotMutationStatus: SpeakerMutationStatus;
+  headshotMutationMessage: string | null;
+};
+
+type ProfileHeadshotDetailsAction =
+  | { type: "profile-scope-reset" }
+  | { type: "create-draft-updated"; field: keyof CreateDraft; value: string | boolean }
+  | { type: "create-draft-reset" }
+  | { type: "edit-started"; draft: EditDraft }
+  | { type: "edit-draft-set"; draft: EditDraft }
+  | { type: "edit-draft-updated"; field: keyof CreateDraft; value: string | boolean }
+  | { type: "edit-error-set"; message: string | null }
+  | { type: "detail-busy-changed"; busy: boolean }
+  | { type: "detail-notice-set"; message: string | null }
+  | { type: "headshot-session-selected"; submissionId: string | null }
+  | {
+      type: "headshot-upload-state-changed";
+      status: OrganizerHeadshotUploadStatus;
+      message: string | null;
+    }
+  | {
+      type: "headshot-mutation-state-changed";
+      status: SpeakerMutationStatus;
+      message: string | null;
+    }
+  | {
+      type: "profile-mutation-state-changed";
+      status: SpeakerMutationStatus;
+      message: string | null;
+    }
+  | { type: "headshot-preview-cleared" }
+  | { type: "headshot-preview-started" }
+  | { type: "headshot-preview-ready"; url: string }
+  | { type: "headshot-preview-error"; message: string }
+  | { type: "headshot-preview-finished" }
+  | { type: "headshot-preview-retried" }
+  | { type: "headshot-preview-marked-failed" }
+  | { type: "headshot-asset-linked"; participantId: string; asset: SpeakerAsset }
+  | { type: "download-started"; assetId: string }
+  | { type: "download-succeeded"; assetId: string; url: string }
+  | { type: "download-failed"; assetId: string; message: string }
+  | { type: "download-finished"; assetId: string }
+  | { type: "save-busy-changed"; busy: boolean }
+  | { type: "profile-validation-failed"; message: string }
+  | { type: "profile-save-started" }
+  | { type: "profile-write-accepted" }
+  | { type: "profile-saved"; speaker: SpeakerRecord }
+  | { type: "profile-conflict" }
+  | { type: "profile-failed"; message: string }
+  | { type: "headshot-validation-failed"; message: string }
+  | { type: "headshot-unavailable"; message: string }
+  | { type: "headshot-session-required"; message: string }
+  | { type: "headshot-upload-started"; fileName: string }
+  | { type: "headshot-write-accepted" }
+  | { type: "headshot-upload-succeeded"; speaker: SpeakerRecord }
+  | { type: "headshot-conflict" }
+  | { type: "headshot-failed"; message: string };
+
+const INITIAL_PROFILE_HEADSHOT_DETAILS_STATE: ProfileHeadshotDetailsState = {
+  createDraft: emptyCreateDraft(),
+  editDraft: null,
+  editError: null,
+  detailBusy: false,
+  detailNotice: null,
+  headshotUploadStatus: "idle",
+  headshotUploadMessage: null,
+  headshotSubmissionId: null,
+  headshotPreviewUrl: null,
+  headshotPreviewError: null,
+  headshotPreviewLoading: false,
+  headshotPreviewRevision: 0,
+  headshotPreviewRetry: 0,
+  headshotAssetsByParticipant: {},
+  downloadUrls: {},
+  downloadErrors: {},
+  downloadBusyAssetId: null,
+  saveBusy: false,
+  profileMutationStatus: "idle",
+  profileMutationMessage: null,
+  headshotMutationStatus: "idle",
+  headshotMutationMessage: null,
+};
+
+function profileHeadshotDetailsReducer(
+  state: ProfileHeadshotDetailsState,
+  action: ProfileHeadshotDetailsAction,
+): ProfileHeadshotDetailsState {
+  switch (action.type) {
+    case "profile-scope-reset":
+      return {
+        ...state,
+        editDraft: null,
+        editError: null,
+        detailNotice: null,
+        headshotAssetsByParticipant: {},
+        downloadUrls: {},
+        downloadErrors: {},
+        profileMutationStatus: "idle",
+        profileMutationMessage: null,
+        headshotMutationStatus: "idle",
+        headshotMutationMessage: null,
+        headshotUploadStatus: "idle",
+        headshotUploadMessage: null,
+      };
+    case "create-draft-updated":
+      return {
+        ...state,
+        createDraft: { ...state.createDraft, [action.field]: action.value } as CreateDraft,
+      };
+    case "create-draft-reset":
+      return { ...state, createDraft: emptyCreateDraft() };
+    case "edit-started":
+      return {
+        ...state,
+        editDraft: action.draft,
+        editError: null,
+        profileMutationStatus: "idle",
+        profileMutationMessage: null,
+        detailNotice: null,
+      };
+    case "edit-draft-set":
+      return { ...state, editDraft: action.draft };
+    case "edit-draft-updated":
+      return {
+        ...state,
+        editDraft:
+          state.editDraft === null
+            ? null
+            : ({ ...state.editDraft, [action.field]: action.value } as EditDraft),
+      };
+    case "edit-error-set":
+      return { ...state, editError: action.message };
+    case "detail-busy-changed":
+      return { ...state, detailBusy: action.busy };
+    case "detail-notice-set":
+      return { ...state, detailNotice: action.message };
+    case "headshot-session-selected":
+      return {
+        ...state,
+        headshotSubmissionId: action.submissionId,
+        headshotUploadStatus: "idle",
+        headshotUploadMessage: null,
+      };
+    case "headshot-upload-state-changed":
+      return {
+        ...state,
+        headshotUploadStatus: action.status,
+        headshotUploadMessage: action.message,
+      };
+    case "headshot-mutation-state-changed":
+      return {
+        ...state,
+        headshotMutationStatus: action.status,
+        headshotMutationMessage: action.message,
+      };
+    case "profile-mutation-state-changed":
+      return {
+        ...state,
+        profileMutationStatus: action.status,
+        profileMutationMessage: action.message,
+      };
+    case "headshot-preview-cleared":
+      return {
+        ...state,
+        headshotPreviewUrl: null,
+        headshotPreviewError: null,
+        headshotPreviewLoading: false,
+      };
+    case "headshot-preview-started":
+      return {
+        ...state,
+        headshotPreviewUrl: null,
+        headshotPreviewError: null,
+        headshotPreviewLoading: true,
+      };
+    case "headshot-preview-ready":
+      return {
+        ...state,
+        headshotPreviewUrl: action.url,
+        headshotPreviewRevision: state.headshotPreviewRevision + 1,
+      };
+    case "headshot-preview-error":
+      return { ...state, headshotPreviewError: action.message };
+    case "headshot-preview-finished":
+      return { ...state, headshotPreviewLoading: false };
+    case "headshot-preview-retried":
+      return { ...state, headshotPreviewRetry: state.headshotPreviewRetry + 1 };
+    case "headshot-preview-marked-failed":
+      return {
+        ...state,
+        headshotPreviewUrl: null,
+        headshotPreviewLoading: false,
+        headshotPreviewError: "The secure headshot preview could not be rendered.",
+      };
+    case "headshot-asset-linked":
+      return {
+        ...state,
+        headshotAssetsByParticipant: {
+          ...state.headshotAssetsByParticipant,
+          [action.participantId]: action.asset,
+        },
+      };
+    case "download-started": {
+      const { [action.assetId]: _previousError, ...remaining } = state.downloadErrors;
+      return { ...state, downloadBusyAssetId: action.assetId, downloadErrors: remaining };
+    }
+    case "download-succeeded":
+      return {
+        ...state,
+        downloadUrls: { ...state.downloadUrls, [action.assetId]: action.url },
+      };
+    case "download-failed":
+      return {
+        ...state,
+        downloadErrors: { ...state.downloadErrors, [action.assetId]: action.message },
+      };
+    case "download-finished":
+      return {
+        ...state,
+        downloadBusyAssetId:
+          state.downloadBusyAssetId === action.assetId ? null : state.downloadBusyAssetId,
+      };
+    case "save-busy-changed":
+      return { ...state, saveBusy: action.busy };
+    case "profile-validation-failed":
+      return {
+        ...state,
+        editError: action.message,
+        profileMutationStatus: "failure",
+        profileMutationMessage: action.message,
+      };
+    case "profile-save-started":
+      return {
+        ...state,
+        saveBusy: true,
+        profileMutationStatus: "saving",
+        profileMutationMessage: "Saving speaker profile…",
+        editError: null,
+      };
+    case "profile-write-accepted":
+      return {
+        ...state,
+        profileMutationStatus: "pending",
+        profileMutationMessage: "Profile write accepted. Reloading authoritative speaker data…",
+      };
+    case "profile-saved":
+      return {
+        ...state,
+        editDraft: editDraftFor(action.speaker),
+        profileMutationStatus: "saved",
+        profileMutationMessage: `Saved at revision ${action.speaker.version}.`,
+      };
+    case "profile-conflict":
+      return {
+        ...state,
+        profileMutationStatus: "conflict",
+        profileMutationMessage: "Conflict detected. Authoritative speaker data was reloaded.",
+      };
+    case "profile-failed":
+      return {
+        ...state,
+        profileMutationStatus: "failure",
+        profileMutationMessage: action.message,
+        editError: action.message,
+      };
+    case "headshot-validation-failed":
+    case "headshot-unavailable":
+      return {
+        ...state,
+        headshotUploadStatus: "error",
+        headshotUploadMessage: action.message,
+        headshotMutationStatus: "failure",
+        headshotMutationMessage: action.message,
+      };
+    case "headshot-session-required":
+      return { ...state, headshotUploadStatus: "error", headshotUploadMessage: action.message };
+    case "headshot-upload-started":
+      return {
+        ...state,
+        headshotUploadStatus: "busy",
+        headshotMutationStatus: "saving",
+        headshotMutationMessage: `Uploading ${action.fileName}…`,
+        headshotUploadMessage: `Uploading ${action.fileName}…`,
+      };
+    case "headshot-write-accepted":
+      return {
+        ...state,
+        headshotMutationStatus: "pending",
+        headshotMutationMessage: "Headshot write accepted. Reloading authoritative speaker data…",
+        headshotUploadMessage: "Upload accepted. Reloading speaker data…",
+      };
+    case "headshot-upload-succeeded":
+      return {
+        ...state,
+        editDraft: editDraftFor(action.speaker),
+        headshotPreviewUrl: null,
+        headshotPreviewError: null,
+        headshotPreviewRevision: state.headshotPreviewRevision + 1,
+        headshotUploadStatus: "success",
+        headshotMutationStatus: "saved",
+        headshotMutationMessage: `Saved at revision ${action.speaker.version}.`,
+        headshotUploadMessage: `Headshot uploaded for ${action.speaker.displayName}.`,
+      };
+    case "headshot-conflict":
+      return {
+        ...state,
+        headshotMutationStatus: "conflict",
+        headshotMutationMessage: "Conflict detected. Authoritative speaker data was reloaded.",
+        headshotUploadStatus: "error",
+        headshotUploadMessage: "Headshot upload conflicted; review the reloaded speaker data.",
+      };
+    case "headshot-failed":
+      return {
+        ...state,
+        headshotMutationStatus: "failure",
+        headshotMutationMessage: action.message,
+        headshotUploadStatus: "error",
+        headshotUploadMessage: action.message,
+      };
+  }
+}
 
 export function SpeakerWorkspaceController({
   organizationId,
   eventId,
   api: providedApi,
 }: SpeakerWorkspaceProps) {
-  const [api, setApi] = useState<SpeakerApi | null>(providedApi ?? null);
-  const [activeView, setActiveView] = useState<"roster" | "tasks" | "email">("roster");
-  const [roster, setRoster] = useState<SpeakerRosterEnvelope | null>(null);
-  const [progress, setProgress] = useState<SpeakerProgressEnvelope | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [progressError, setProgressError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [selectedSpeakerIds, setSelectedSpeakerIds] = useState<readonly string[]>([]);
-  const [emailTemplates, setEmailTemplates] = useState<readonly SpeakerEmailTemplate[]>([]);
-  const [emailTemplateId, setEmailTemplateId] = useState("");
-  const [emailTemplateVersion, setEmailTemplateVersion] = useState<number | undefined>(undefined);
-  const [emailTemplateName, setEmailTemplateName] = useState("New speaker message");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailHtml, setEmailHtml] = useState("");
-  const [emailText, setEmailText] = useState("");
-  const [emailPreview, setEmailPreview] = useState<SpeakerEmailPreview | null>(null);
-  const [emailEditorMode, setEmailEditorMode] = useState<"visual" | "html" | "text">("visual");
-  const [emailConfirmOpen, setEmailConfirmOpen] = useState(false);
-  const [emailSends, setEmailSends] = useState<readonly SpeakerEmailSend[]>([]);
-  const [emailSaveBusy, setEmailSaveBusy] = useState(false);
-  const [emailPreviewBusy, setEmailPreviewBusy] = useState(false);
-  const [emailSendBusy, setEmailSendBusy] = useState(false);
-  const [emailHistoryBusy, setEmailHistoryBusy] = useState(false);
-  const [emailSendIdempotencyKey, setEmailSendIdempotencyKey] = useState<string | null>(null);
-  const [emailCreateTemplateId, setEmailCreateTemplateId] = useState<string | null>(null);
-  const [emailNotice, setEmailNotice] = useState<string | null>(null);
-  const [reminderEligibility, setReminderEligibility] =
-    useState<SpeakerReminderEligibilityEnvelope | null>(null);
-  const [visibleSecondaryContext, setVisibleSecondaryContext] = useState<string | null>(null);
-  const [visibleProgressContext, setVisibleProgressContext] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState("all");
-  const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
-  const [attentionFilter, setAttentionFilter] = useState<SpeakerAttentionFilter>("all");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showCsv, setShowCsv] = useState(false);
-  const [createDraft, setCreateDraft] = useState<CreateDraft>(emptyCreateDraft);
-  const [createIdempotencyKey, setCreateIdempotencyKey] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [importPreview, setImportPreview] = useState<SpeakerImportPreview | null>(null);
-  const [importIdempotencyKey, setImportIdempotencyKey] = useState<string | null>(null);
-  const [importFileName, setImportFileName] = useState<string | null>(null);
-  const [taskTitle, setTaskTitle] = useState("");
-  const [taskDueAt, setTaskDueAt] = useState("");
-  const [taskAssignees, setTaskAssignees] = useState<readonly string[]>([]);
-  const [invitationPreview, setInvitationPreview] = useState<
-    readonly SpeakerInvitationPreview[] | null
-  >(null);
-  const [invitationResult, setInvitationResult] = useState<SpeakerInvitationResult | null>(null);
-  const [invitationResultParticipantId, setInvitationResultParticipantId] = useState<string | null>(
-    null,
+  const apiResolution = useMemo(() => {
+    if (providedApi !== undefined) return { api: providedApi, error: null };
+    try {
+      return { api: createSpeakerApi("", organizationId, eventId), error: null };
+    } catch (reason: unknown) {
+      return { api: null, error: errorMessage(reason) };
+    }
+  }, [eventId, organizationId, providedApi]);
+  const api = apiResolution.api;
+  const [rosterState, dispatchRoster] = useReducer(rosterScopeReducer, INITIAL_ROSTER_SCOPE_STATE);
+  const {
+    activeView,
+    roster,
+    progress,
+    loading,
+    error,
+    progressError,
+    notice,
+    selectedId,
+    selectedSpeakerIds,
+    reminderEligibility,
+    secondarySectionsReady,
+    visibleProgressContext,
+    query,
+    statusFilter,
+    sessionFilter,
+    progressFilter,
+    attentionFilter,
+    filtersOpen,
+    showAdd,
+    showCsv,
+  } = rosterState;
+  const [emailState, dispatchEmail] = useReducer(emailReducer, INITIAL_EMAIL_STATE);
+  const {
+    emailTemplates,
+    emailTemplateId,
+    emailTemplateVersion,
+    emailTemplateName,
+    emailSubject,
+    emailHtml,
+    emailText,
+    emailPreview,
+    emailEditorMode,
+    emailConfirmOpen,
+    emailSends,
+    emailSaveBusy,
+    emailPreviewBusy,
+    emailSendBusy,
+    emailHistoryBusy,
+    emailNotice,
+  } = emailState;
+  const [importTaskInvitationState, dispatchImportTaskInvitation] = useReducer(
+    importTaskInvitationReducer,
+    INITIAL_IMPORT_TASK_INVITATION_STATE,
   );
-  const [invitationError, setInvitationError] = useState<string | null>(null);
-  const [invitationSendIdempotencyKey, setInvitationSendIdempotencyKey] = useState<string | null>(
-    null,
+  const {
+    importPreview,
+    importFileName,
+    taskTitle,
+    taskDueAt,
+    taskAssignees,
+    invitationPreview,
+    invitationResult,
+    invitationResultParticipantId,
+    invitationError,
+    invitationHistory,
+    invitationPreviewBusy,
+    invitationSendBusy,
+    importPreviewBusy,
+    importCommitBusy,
+    taskBusy,
+  } = importTaskInvitationState;
+  const [profileHeadshotDetailsState, dispatchProfileHeadshotDetails] = useReducer(
+    profileHeadshotDetailsReducer,
+    INITIAL_PROFILE_HEADSHOT_DETAILS_STATE,
   );
-  const [invitationHistory, setInvitationHistory] = useState<
-    readonly SpeakerInvitationHistoryEntry[]
-  >([]);
-  const [detailBusy, setDetailBusy] = useState(false);
-  const [detailNotice, setDetailNotice] = useState<string | null>(null);
-  const [headshotUploadStatus, setHeadshotUploadStatus] =
-    useState<OrganizerHeadshotUploadStatus>("idle");
-  const [headshotUploadMessage, setHeadshotUploadMessage] = useState<string | null>(null);
-  const [headshotSubmissionId, setHeadshotSubmissionId] = useState<string | null>(null);
-  const [headshotPreviewUrl, setHeadshotPreviewUrl] = useState<string | null>(null);
-  const [headshotPreviewError, setHeadshotPreviewError] = useState<string | null>(null);
-  const [headshotPreviewLoading, setHeadshotPreviewLoading] = useState(false);
-  const [headshotPreviewRevision, setHeadshotPreviewRevision] = useState(0);
-  const [headshotPreviewRetry, setHeadshotPreviewRetry] = useState(0);
-  const [headshotAssetsByParticipant, setHeadshotAssetsByParticipant] = useState<
-    Readonly<Record<string, SpeakerAsset>>
-  >({});
-  const [downloadUrls, setDownloadUrls] = useState<Readonly<Record<string, string>>>({});
-  const [downloadErrors, setDownloadErrors] = useState<Readonly<Record<string, string>>>({});
-  const [downloadBusyAssetId, setDownloadBusyAssetId] = useState<string | null>(null);
-  const [invitationPreviewBusy, setInvitationPreviewBusy] = useState(false);
-  const [invitationSendBusy, setInvitationSendBusy] = useState(false);
-  const [importPreviewBusy, setImportPreviewBusy] = useState(false);
-  const [importCommitBusy, setImportCommitBusy] = useState(false);
-  const [taskBusy, setTaskBusy] = useState(false);
-  const [saveBusy, setSaveBusy] = useState(false);
-  const [profileMutationStatus, setProfileMutationStatus] = useState<SpeakerMutationStatus>("idle");
-  const [profileMutationMessage, setProfileMutationMessage] = useState<string | null>(null);
-  const [headshotMutationStatus, setHeadshotMutationStatus] =
-    useState<SpeakerMutationStatus>("idle");
-  const [headshotMutationMessage, setHeadshotMutationMessage] = useState<string | null>(null);
+  const {
+    createDraft,
+    editDraft,
+    editError,
+    detailBusy,
+    detailNotice,
+    headshotUploadStatus,
+    headshotUploadMessage,
+    headshotSubmissionId,
+    headshotPreviewUrl,
+    headshotPreviewError,
+    headshotPreviewLoading,
+    headshotPreviewRevision,
+    headshotPreviewRetry,
+    headshotAssetsByParticipant,
+    downloadUrls,
+    downloadErrors,
+    downloadBusyAssetId,
+    saveBusy,
+    profileMutationStatus,
+    profileMutationMessage,
+    headshotMutationStatus,
+    headshotMutationMessage,
+  } = profileHeadshotDetailsState;
+  const emailSendIdempotencyKeyRef = useRef<string | null>(null);
+  const emailCreateTemplateIdRef = useRef<string | null>(null);
+  const createIdempotencyKeyRef = useRef<string | null>(null);
+  const importIdempotencyKeyRef = useRef<string | null>(null);
+  const invitationSendIdempotencyKeyRef = useRef<string | null>(null);
   const rosterRequestRef = useRef(0);
   const headshotRequestRef = useRef(0);
   const headshotPreviewKeyRef = useRef<string | null>(null);
+  const headshotPreviewApiRef = useRef<SpeakerApi | null>(null);
   const headshotPreviewRequestDataRef = useRef<{
     participantId: string | undefined;
     assetId: string | null | undefined;
     asset: SpeakerAsset | null;
   }>({ participantId: undefined, assetId: undefined, asset: null });
-  const headshotPreviewSourceRef = useRef<{ api: SpeakerApi | null; version: number }>({
-    api: null,
-    version: 0,
-  });
+  const secondarySectionsReadyKeyRef = useRef<string | null>(null);
   const importRequestRef = useRef(0);
   const emailSelectionSnapshotRef = useRef<string | null>(null);
   useEffect(() => {
     if (organizationId.length === 0 || eventId.length === 0) return;
     rosterRequestRef.current += 1;
-    setRoster(null);
-    setProgress(null);
-    setLoading(true);
-    setError(null);
-    setProgressError(null);
-    setSelectedId(null);
-    setSelectedSpeakerIds([]);
-    setEditDraft(null);
-    setEditError(null);
-    setDetailNotice(null);
-    setHeadshotAssetsByParticipant({});
-    setDownloadUrls({});
-    setDownloadErrors({});
-    setProfileMutationStatus("idle");
-    setProfileMutationMessage(null);
-    setHeadshotMutationStatus("idle");
-    setHeadshotMutationMessage(null);
-    setHeadshotUploadStatus("idle");
-    setHeadshotUploadMessage(null);
+    dispatchRoster({ type: "roster-scope-reset" });
+    dispatchProfileHeadshotDetails({ type: "profile-scope-reset" });
     secondaryLoadRef.current = null;
     progressLoadRef.current = null;
   }, [eventId, organizationId]);
@@ -523,20 +1472,13 @@ export function SpeakerWorkspaceController({
   const reminderSectionRef = useRef<HTMLDivElement | null>(null);
   const importBusy = importPreviewBusy || importCommitBusy;
   useEffect(() => {
-    if (providedApi !== undefined) {
-      setApi(providedApi);
-      return;
+    if (apiResolution.error !== null) {
+      dispatchRoster({ type: "api-error-set", message: apiResolution.error });
     }
-    try {
-      setApi(createSpeakerApi("", organizationId, eventId));
-    } catch (reason: unknown) {
-      setApi(null);
-      setError(errorMessage(reason));
-    }
-  }, [eventId, organizationId, providedApi]);
+  }, [apiResolution.error]);
   useEffect(() => {
     if (api === null) {
-      setLoading(false);
+      dispatchRoster({ type: "loading-changed", loading: false });
       return;
     }
     const requestId = rosterRequestRef.current + 1;
@@ -548,51 +1490,36 @@ export function SpeakerWorkspaceController({
       rosterTimedOut = true;
       controller.abort();
     }, ASYNC_ACTION_TIMEOUT_MS);
-    setLoading(true);
-    setError(null);
-    setProgressError(null);
-    setProgress(null);
-    setInvitationPreview(null);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
-    setInvitationSendIdempotencyKey(null);
+    dispatchRoster({ type: "roster-load-started" });
+    dispatchImportTaskInvitation({ type: "invitation-cleared" });
+    invitationSendIdempotencyKeyRef.current = null;
     void api
       .list(controller.signal)
       .then((nextRoster) => {
         const normalizedRoster = normalizeRoster(nextRoster, organizationId, eventId);
         if (!active || requestId !== rosterRequestRef.current) return;
-        setRoster(normalizedRoster);
-        setSelectedSpeakerIds((current) =>
-          current.filter((participantId) =>
-            normalizedRoster.speakers.some((speaker) => speaker.participantId === participantId),
-          ),
-        );
-        setSelectedId((current) =>
-          current !== null &&
-          normalizedRoster.speakers.some((speaker) => speaker.participantId === current)
-            ? current
-            : (normalizedRoster.speakers[0]?.participantId ?? null),
-        );
-        setLoading(false);
+        dispatchRoster({ type: "roster-loaded", roster: normalizedRoster });
       })
       .catch((reason: unknown) => {
         if (!active || requestId !== rosterRequestRef.current) return;
-        setRoster(null);
-        setProgress(null);
-        setSelectedId(null);
-        setSelectedSpeakerIds([]);
-        setError(
-          rosterTimedOut ? "Speaker roster refresh timed out. Try again." : errorMessage(reason),
-        );
+        dispatchRoster({
+          type: "roster-load-failed",
+          message: rosterTimedOut
+            ? "Speaker roster refresh timed out. Try again."
+            : errorMessage(reason),
+          clearRoster: true,
+        });
       })
       .finally(() => {
         clearTimeout(rosterTimeout);
-        if (active && requestId === rosterRequestRef.current) setLoading(false);
+        if (active && requestId === rosterRequestRef.current) {
+          dispatchRoster({ type: "loading-changed", loading: false });
+        }
       });
     return () => {
       active = false;
       controller.abort();
+      clearTimeout(rosterTimeout);
     };
   }, [api, eventId, organizationId]);
   const secondaryContextKey = `${organizationId}:${eventId}`;
@@ -628,21 +1555,20 @@ export function SpeakerWorkspaceController({
       timedOut = true;
       controller.abort();
     }, ASYNC_ACTION_TIMEOUT_MS);
-    setProgressError(null);
+    dispatchRoster({ type: "progress-load-started" });
     void speakerProgressFor(api, roster.speakers, organizationId, eventId, controller.signal)
       .then((nextProgress) => {
         if (!active || requestId !== rosterRequestRef.current) return;
-        setProgress(nextProgress);
-        setRoster((current) =>
-          current === null ? current : mergeProgressSummaries(current, nextProgress),
-        );
+        dispatchRoster({ type: "progress-loaded", progress: nextProgress });
       })
       .catch((reason: unknown) => {
         if (!active || requestId !== rosterRequestRef.current) return;
-        setProgress(null);
-        setProgressError(
-          timedOut ? "Speaker progress refresh timed out. Try again." : errorMessage(reason),
-        );
+        dispatchRoster({
+          type: "progress-load-failed",
+          message: timedOut
+            ? "Speaker progress refresh timed out. Try again."
+            : errorMessage(reason),
+        });
       })
       .finally(() => {
         settled = true;
@@ -658,7 +1584,7 @@ export function SpeakerWorkspaceController({
   const secondarySectionsVisible =
     activeView === "tasks" ||
     activeView === "email" ||
-    visibleSecondaryContext === secondaryContextKey;
+    (secondarySectionsReady && secondarySectionsReadyKeyRef.current === secondaryContextKey);
   useEffect(() => {
     if (secondarySectionsVisible) return;
     const sections = [emailSectionRef.current, reminderSectionRef.current].filter(
@@ -666,13 +1592,15 @@ export function SpeakerWorkspaceController({
     );
     if (sections.length === 0) return;
     if (typeof IntersectionObserver === "undefined") {
-      setVisibleSecondaryContext(secondaryContextKey);
+      secondarySectionsReadyKeyRef.current = secondaryContextKey;
+      dispatchRoster({ type: "secondary-ready" });
       return;
     }
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
-        setVisibleSecondaryContext(secondaryContextKey);
+        secondarySectionsReadyKeyRef.current = secondaryContextKey;
+        dispatchRoster({ type: "secondary-ready" });
         observer.disconnect();
       },
       { rootMargin: "240px" },
@@ -696,23 +1624,12 @@ export function SpeakerWorkspaceController({
     void withTimeout((signal) => api.listEmailTemplates(signal), "Email template load")
       .then((templates) => {
         if (!active) return;
-        setEmailTemplates(templates);
-        const latest = templates
-          .slice()
-          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
-        if (latest !== undefined) {
-          setEmailTemplateId(latest.id);
-          setEmailTemplateVersion(latest.version);
-          setEmailTemplateName(latest.name);
-          setEmailSubject(latest.subject);
-          setEmailHtml(latest.html);
-          setEmailText(latest.text);
-        }
+        dispatchEmail({ type: "email-templates-loaded", templates });
       })
       .catch(() => undefined);
     void withTimeout((signal) => api.listEmailHistory(signal), "Email history load")
       .then((history) => {
-        if (active) setEmailSends(history);
+        if (active) dispatchEmail({ type: "email-sends-loaded", sends: history });
       })
       .catch(() => undefined);
     void withTimeout(
@@ -720,7 +1637,7 @@ export function SpeakerWorkspaceController({
       "Reminder eligibility load",
     )
       .then((eligibility) => {
-        if (active) setReminderEligibility(eligibility);
+        if (active) dispatchRoster({ type: "reminder-loaded", eligibility });
       })
       .catch(() => undefined);
     return () => {
@@ -735,8 +1652,14 @@ export function SpeakerWorkspaceController({
     progress !== null && progress.organizationId === organizationId && progress.eventId === eventId
       ? progress
       : null;
-  const speakers = scopedRoster?.speakers ?? [];
+  const speakers = useMemo(() => scopedRoster?.speakers ?? [], [scopedRoster]);
   const rosterEmpty = !loading && scopedRoster !== null && speakers.length === 0;
+  const selectedSpeakerIdSet = useMemo(() => new Set(selectedSpeakerIds), [selectedSpeakerIds]);
+  const emailPreviewRecipientIdSet = useMemo(
+    () => new Set(emailPreview?.recipientIds ?? []),
+    [emailPreview?.recipientIds],
+  );
+  const taskAssigneeIdSet = useMemo(() => new Set(taskAssignees), [taskAssignees]);
   const selectedSpeaker = speakers.find((speaker) => speaker.participantId === selectedId) ?? null;
   const eligibleHeadshotSessions = useMemo(
     () => (selectedSpeaker === null ? [] : acceptedSpeakerSessions(selectedSpeaker.sessions)),
@@ -849,9 +1772,10 @@ export function SpeakerWorkspaceController({
     statusFilter !== "all" ||
     sessionFilter !== "all" ||
     progressFilter !== "all";
-  const selectedVisibleSpeakerIds = filteredSpeakers
-    .map((speaker) => speaker.participantId)
-    .filter((participantId) => selectedSpeakerIds.includes(participantId));
+  const selectedVisibleSpeakerIds = filteredSpeakers.reduce<string[]>((selected, speaker) => {
+    if (selectedSpeakerIdSet.has(speaker.participantId)) selected.push(speaker.participantId);
+    return selected;
+  }, []);
   const allVisibleSelected =
     filteredSpeakers.length > 0 && selectedVisibleSpeakerIds.length === filteredSpeakers.length;
   const emailPreviewCurrent =
@@ -861,13 +1785,10 @@ export function SpeakerWorkspaceController({
     emailPreview.templateId === emailTemplateId &&
     emailPreview.templateVersion === emailTemplateVersion &&
     emailPreview.recipientIds.length === selectedSpeakerIds.length &&
-    selectedSpeakerIds.every((participantId) => emailPreview.recipientIds.includes(participantId));
+    selectedSpeakerIds.every((participantId) => emailPreviewRecipientIdSet.has(participantId));
   const invalidateEmailPreview = useCallback(() => {
     emailPreviewRequestRef.current += 1;
-    setEmailPreview(null);
-    setEmailSendIdempotencyKey(null);
-    setEmailConfirmOpen(false);
-    setEmailPreviewBusy(false);
+    dispatchEmail({ type: "email-preview-invalidated" });
   }, []);
   useEffect(() => {
     const snapshot = [...selectedSpeakerIds].sort().join("\u0000");
@@ -875,24 +1796,25 @@ export function SpeakerWorkspaceController({
     if (previous !== null && previous !== snapshot) invalidateEmailPreview();
     emailSelectionSnapshotRef.current = snapshot;
   }, [invalidateEmailPreview, selectedSpeakerIds]);
-  if (headshotPreviewSourceRef.current.api !== api) {
-    headshotPreviewSourceRef.current = {
-      api,
-      version: headshotPreviewSourceRef.current.version + 1,
-    };
-  }
+  useEffect(() => {
+    if (headshotPreviewApiRef.current === api) return;
+    headshotPreviewApiRef.current = api;
+    headshotPreviewKeyRef.current = null;
+  }, [api]);
   const headshotPreviewRequestKey = organizerHeadshotPreviewRequestKey(
-    headshotPreviewSourceRef.current.version,
+    0,
     headshotPreviewRetry,
     selectedSpeaker?.participantId,
     selectedSpeaker?.headshotAssetId,
     selectedHeadshotAsset,
   );
-  headshotPreviewRequestDataRef.current = {
-    participantId: selectedSpeaker?.participantId,
-    assetId: selectedSpeaker?.headshotAssetId,
-    asset: selectedHeadshotAsset,
-  };
+  useLayoutEffect(() => {
+    headshotPreviewRequestDataRef.current = {
+      participantId: selectedSpeaker?.participantId,
+      assetId: selectedSpeaker?.headshotAssetId,
+      asset: selectedHeadshotAsset,
+    };
+  }, [selectedHeadshotAsset, selectedSpeaker?.headshotAssetId, selectedSpeaker?.participantId]);
   useEffect(() => {
     const {
       participantId,
@@ -905,9 +1827,7 @@ export function SpeakerWorkspaceController({
     let active = true;
     if (api === null || participantId === undefined || assetId === undefined || assetId === null) {
       headshotPreviewKeyRef.current = null;
-      setHeadshotPreviewUrl(null);
-      setHeadshotPreviewError(null);
-      setHeadshotPreviewLoading(false);
+      dispatchProfileHeadshotDetails({ type: "headshot-preview-cleared" });
       return () => {
         active = false;
       };
@@ -918,9 +1838,7 @@ export function SpeakerWorkspaceController({
       };
     }
     headshotPreviewKeyRef.current = requestKey;
-    setHeadshotPreviewUrl(null);
-    setHeadshotPreviewError(null);
-    setHeadshotPreviewLoading(true);
+    dispatchProfileHeadshotDetails({ type: "headshot-preview-started" });
     void (async () => {
       try {
         if (selectedHeadshotAsset === null) {
@@ -931,10 +1849,17 @@ export function SpeakerWorkspaceController({
           if (!active || requestId !== headshotRequestRef.current) return;
           const linked = assets.find((asset) => asset.assetId === assetId);
           if (linked === undefined) {
-            setHeadshotPreviewError("The linked headshot file is unavailable.");
+            dispatchProfileHeadshotDetails({
+              type: "headshot-preview-error",
+              message: "The linked headshot file is unavailable.",
+            });
             return;
           }
-          setHeadshotAssetsByParticipant((current) => ({ ...current, [participantId]: linked }));
+          dispatchProfileHeadshotDetails({
+            type: "headshot-asset-linked",
+            participantId,
+            asset: linked,
+          });
           return;
         }
         if (selectedHeadshotAsset.status !== "ready") {
@@ -957,15 +1882,17 @@ export function SpeakerWorkspaceController({
           throw new Error("The private headshot preview did not return a same-origin API path.");
         }
         if (!active || requestId !== headshotRequestRef.current) return;
-        setHeadshotPreviewUrl(previewPath);
-        setHeadshotPreviewRevision((current) => current + 1);
+        dispatchProfileHeadshotDetails({ type: "headshot-preview-ready", url: previewPath });
       } catch (reason: unknown) {
         if (active && requestId === headshotRequestRef.current) {
-          setHeadshotPreviewError(errorMessage(reason));
+          dispatchProfileHeadshotDetails({
+            type: "headshot-preview-error",
+            message: errorMessage(reason),
+          });
         }
       } finally {
         if (active && requestId === headshotRequestRef.current) {
-          setHeadshotPreviewLoading(false);
+          dispatchProfileHeadshotDetails({ type: "headshot-preview-finished" });
         }
       }
     })();
@@ -974,85 +1901,51 @@ export function SpeakerWorkspaceController({
     };
   }, [api, headshotPreviewRequestKey]);
   function clearRosterFilters(): void {
-    setQuery("");
-    setStatusFilter("all");
-    setSessionFilter("all");
-    setProgressFilter("all");
-    setAttentionFilter("all");
+    dispatchRoster({ type: "filters-cleared" });
   }
   function openSelectedEmail(): void {
-    setActiveView("email");
+    dispatchRoster({ type: "view-changed", view: "email" });
   }
   function toggleSpeakerSelection(participantId: string): void {
-    setSelectedSpeakerIds((current) =>
-      current.includes(participantId)
-        ? current.filter((candidate) => candidate !== participantId)
-        : [...current, participantId],
-    );
+    dispatchRoster({ type: "selection-toggled", participantId });
     invalidateEmailPreview();
-    setEmailNotice(null);
+    dispatchEmail({ type: "email-notice-set", message: null });
   }
   function toggleVisibleSpeakerSelection(): void {
     const visibleIds = filteredSpeakers.map((speaker) => speaker.participantId);
-    setSelectedSpeakerIds((current) =>
-      allVisibleSelected
-        ? current.filter((participantId) => !visibleIds.includes(participantId))
-        : [...new Set([...current, ...visibleIds])],
-    );
+    dispatchRoster({ type: "visible-selection-toggled", participantIds: visibleIds });
     invalidateEmailPreview();
-    setEmailNotice(null);
+    dispatchEmail({ type: "email-notice-set", message: null });
   }
   function clearSpeakerSelection(): void {
-    setSelectedSpeakerIds([]);
+    dispatchRoster({ type: "selection-set", participantIds: [] });
     invalidateEmailPreview();
-    setEmailNotice(null);
+    dispatchEmail({ type: "email-notice-set", message: null });
   }
   function updateCreate(field: keyof CreateDraft, value: string | boolean): void {
-    setCreateDraft((current) => ({ ...current, [field]: value }) as CreateDraft);
-    setCreateIdempotencyKey(null);
-    setNotice(null);
+    dispatchProfileHeadshotDetails({ type: "create-draft-updated", field, value });
+    createIdempotencyKeyRef.current = null;
+    dispatchRoster({ type: "notice-set", message: null });
   }
   function updateEdit(field: keyof CreateDraft, value: string | boolean): void {
-    setEditDraft((current) =>
-      current === null ? current : ({ ...current, [field]: value } as EditDraft),
-    );
-    setEditError(null);
-    setProfileMutationStatus("idle");
-    setProfileMutationMessage(null);
-    setNotice(null);
-    setInvitationPreview(null);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
-    setInvitationSendIdempotencyKey(null);
+    dispatchProfileHeadshotDetails({ type: "edit-draft-updated", field, value });
+    dispatchProfileHeadshotDetails({ type: "edit-error-set", message: null });
+    dispatchProfileHeadshotDetails({
+      type: "profile-mutation-state-changed",
+      status: "idle",
+      message: null,
+    });
+    dispatchRoster({ type: "notice-set", message: null });
+    dispatchImportTaskInvitation({ type: "invitation-cleared" });
+    invitationSendIdempotencyKeyRef.current = null;
   }
   function applyAuthoritativeRoster(nextRoster: SpeakerRosterEnvelope, message?: string): void {
     try {
       const normalizedRoster = normalizeRoster(nextRoster, organizationId, eventId);
       const requestId = rosterRequestRef.current + 1;
       rosterRequestRef.current = requestId;
-      setRoster(normalizedRoster);
-      setLoading(false);
-      setSelectedSpeakerIds((current) =>
-        current.filter((participantId) =>
-          normalizedRoster.speakers.some((speaker) => speaker.participantId === participantId),
-        ),
-      );
-      setSelectedId((current) =>
-        current !== null &&
-        normalizedRoster.speakers.some((speaker) => speaker.participantId === current)
-          ? current
-          : (normalizedRoster.speakers[0]?.participantId ?? null),
-      );
-      setError(null);
-      setProgressError(null);
-      setProgress(null);
-      setInvitationPreview(null);
-      setInvitationResult(null);
-      setInvitationResultParticipantId(null);
-      setInvitationError(null);
-      setInvitationSendIdempotencyKey(null);
-      if (message) setNotice(message);
+      dispatchRoster({ type: "roster-authoritative-applied", roster: normalizedRoster, message });
+      dispatchImportTaskInvitation({ type: "invitation-cleared" });
       if (api !== null) {
         const progressController = new AbortController();
         let progressTimedOut = false;
@@ -1069,34 +1962,32 @@ export function SpeakerWorkspaceController({
         )
           .then((nextProgress) => {
             if (requestId !== rosterRequestRef.current) return;
-            setProgress(nextProgress);
-            setRoster((current) =>
-              current === null ? current : mergeProgressSummaries(current, nextProgress),
-            );
+            dispatchRoster({ type: "progress-loaded", progress: nextProgress });
           })
           .catch((reason: unknown) => {
             if (requestId !== rosterRequestRef.current) return;
-            setProgressError(
-              progressTimedOut
+            dispatchRoster({
+              type: "progress-load-failed",
+              message: progressTimedOut
                 ? "Speaker progress refresh timed out. Try again."
                 : errorMessage(reason),
-            );
+            });
           })
           .finally(() => {
             clearTimeout(progressTimeout);
           });
       }
     } catch (reason: unknown) {
-      setRoster(null);
-      setProgress(null);
-      setSelectedId(null);
-      setSelectedSpeakerIds([]);
-      setError(errorMessage(reason));
+      dispatchRoster({
+        type: "roster-load-failed",
+        message: errorMessage(reason),
+        clearRoster: true,
+      });
     }
   }
   async function reload(message?: string): Promise<SpeakerRosterEnvelope | null> {
     if (api === null) {
-      setError("The speaker API is unavailable.");
+      dispatchRoster({ type: "api-error-set", message: "The speaker API is unavailable." });
       return null;
     }
     const requestId = rosterRequestRef.current + 1;
@@ -1107,15 +1998,9 @@ export function SpeakerWorkspaceController({
       rosterTimedOut = true;
       controller.abort();
     }, ASYNC_ACTION_TIMEOUT_MS);
-    setLoading(true);
-    setError(null);
-    setProgressError(null);
-    setProgress(null);
-    setInvitationPreview(null);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
-    setInvitationSendIdempotencyKey(null);
+    dispatchRoster({ type: "roster-load-started" });
+    dispatchImportTaskInvitation({ type: "invitation-cleared" });
+    invitationSendIdempotencyKeyRef.current = null;
     try {
       const nextRoster = normalizeRoster(
         await api.list(controller.signal),
@@ -1123,19 +2008,8 @@ export function SpeakerWorkspaceController({
         eventId,
       );
       if (requestId !== rosterRequestRef.current) return null;
-      setRoster(nextRoster);
-      setSelectedSpeakerIds((current) =>
-        current.filter((participantId) =>
-          nextRoster.speakers.some((speaker) => speaker.participantId === participantId),
-        ),
-      );
-      setSelectedId((current) =>
-        current !== null && nextRoster.speakers.some((speaker) => speaker.participantId === current)
-          ? current
-          : (nextRoster.speakers[0]?.participantId ?? null),
-      );
-      setLoading(false);
-      if (message) setNotice(message);
+      dispatchRoster({ type: "roster-loaded", roster: nextRoster });
+      if (message) dispatchRoster({ type: "notice-set", message });
       const progressController = new AbortController();
       let progressTimedOut = false;
       const progressTimeout = setTimeout(() => {
@@ -1151,19 +2025,16 @@ export function SpeakerWorkspaceController({
       )
         .then((nextProgress) => {
           if (requestId !== rosterRequestRef.current) return;
-          setProgress(nextProgress);
-          setRoster((current) =>
-            current === null ? current : mergeProgressSummaries(current, nextProgress),
-          );
-          setProgressError(null);
+          dispatchRoster({ type: "progress-loaded", progress: nextProgress });
         })
         .catch((reason: unknown) => {
           if (requestId !== rosterRequestRef.current) return;
-          setProgressError(
-            progressTimedOut
+          dispatchRoster({
+            type: "progress-load-failed",
+            message: progressTimedOut
               ? "Speaker progress refresh timed out. Try again."
               : errorMessage(reason),
-          );
+          });
         })
         .finally(() => {
           clearTimeout(progressTimeout);
@@ -1177,29 +2048,38 @@ export function SpeakerWorkspaceController({
             reason.message,
           )
         ) {
-          setRoster(null);
-          setProgress(null);
-          setSelectedId(null);
-          setSelectedSpeakerIds([]);
+          dispatchRoster({
+            type: "roster-load-failed",
+            message: rosterTimedOut
+              ? "Speaker roster refresh timed out. Try again."
+              : errorMessage(reason),
+            clearRoster:
+              reason instanceof Error &&
+              /different organization|different event|invalid|duplicate participant/iu.test(
+                reason.message,
+              ),
+          });
         }
-        setError(
-          rosterTimedOut ? "Speaker roster refresh timed out. Try again." : errorMessage(reason),
-        );
       }
       return null;
     } finally {
       clearTimeout(rosterTimeout);
-      if (requestId === rosterRequestRef.current) setLoading(false);
+      if (requestId === rosterRequestRef.current) {
+        dispatchRoster({ type: "loading-changed", loading: false });
+      }
     }
   }
   async function createSpeaker(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (api === null) {
-      setNotice("Speaker creation is unavailable until the organizer speaker API is configured.");
+      dispatchRoster({
+        type: "notice-set",
+        message: "Speaker creation is unavailable until the organizer speaker API is configured.",
+      });
       return;
     }
-    const idempotencyKey = createIdempotencyKey ?? crypto.randomUUID();
-    setCreateIdempotencyKey(idempotencyKey);
+    const idempotencyKey = createIdempotencyKeyRef.current ?? crypto.randomUUID();
+    createIdempotencyKeyRef.current = idempotencyKey;
     const input: SpeakerCreateInput = {
       idempotencyKey,
       displayName: createDraft.displayName.trim(),
@@ -1212,40 +2092,39 @@ export function SpeakerWorkspaceController({
       status: createDraft.status,
     };
     if (!input.displayName || !input.email) {
-      setNotice("Name and email are required.");
+      dispatchRoster({ type: "notice-set", message: "Name and email are required." });
       return;
     }
-    setSaveBusy(true);
-    setNotice(null);
+    dispatchProfileHeadshotDetails({ type: "save-busy-changed", busy: true });
+    dispatchRoster({ type: "notice-set", message: null });
     try {
       const created = await api.create(input);
-      setCreateDraft(emptyCreateDraft());
-      setCreateIdempotencyKey(null);
-      setShowAdd(false);
+      dispatchProfileHeadshotDetails({ type: "create-draft-reset" });
+      createIdempotencyKeyRef.current = null;
+      dispatchRoster({ type: "add-dialog-changed", open: false });
       applyAuthoritativeRoster(created, "Speaker added to the roster.");
     } catch (reason: unknown) {
-      setNotice(errorMessage(reason));
+      dispatchRoster({ type: "notice-set", message: errorMessage(reason) });
     } finally {
-      setSaveBusy(false);
+      dispatchProfileHeadshotDetails({ type: "save-busy-changed", busy: false });
     }
   }
   function beginEdit(speaker: SpeakerRecord): void {
-    setSelectedId(speaker.participantId);
-    setHeadshotSubmissionId(null);
-    setHeadshotUploadStatus("idle");
-    setHeadshotUploadMessage(null);
-    setHeadshotMutationStatus("idle");
-    setHeadshotMutationMessage(null);
-    setEditDraft(editDraftFor(speaker));
-    setProfileMutationStatus("idle");
-    setProfileMutationMessage(null);
-    setEditError(null);
-    setInvitationPreview(null);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
-    setInvitationSendIdempotencyKey(null);
-    setDetailNotice(null);
+    dispatchRoster({ type: "selected-id-changed", participantId: speaker.participantId });
+    dispatchProfileHeadshotDetails({ type: "headshot-session-selected", submissionId: null });
+    dispatchProfileHeadshotDetails({
+      type: "headshot-upload-state-changed",
+      status: "idle",
+      message: null,
+    });
+    dispatchProfileHeadshotDetails({
+      type: "headshot-mutation-state-changed",
+      status: "idle",
+      message: null,
+    });
+    dispatchProfileHeadshotDetails({ type: "edit-started", draft: editDraftFor(speaker) });
+    dispatchImportTaskInvitation({ type: "invitation-cleared" });
+    invitationSendIdempotencyKeyRef.current = null;
   }
   async function saveSpeaker(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -1264,20 +2143,15 @@ export function SpeakerWorkspaceController({
       status: editDraft.status,
     };
     if (!input.displayName || !input.email) {
-      setEditError("Name and email are required.");
-      setProfileMutationStatus("failure");
-      setProfileMutationMessage("Name and email are required.");
+      dispatchProfileHeadshotDetails({
+        type: "profile-validation-failed",
+        message: "Name and email are required.",
+      });
       return;
     }
-    setInvitationPreview(null);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
-    setInvitationSendIdempotencyKey(null);
-    setSaveBusy(true);
-    setProfileMutationStatus("saving");
-    setProfileMutationMessage("Saving speaker profile…");
-    setEditError(null);
+    dispatchImportTaskInvitation({ type: "invitation-cleared" });
+    invitationSendIdempotencyKeyRef.current = null;
+    dispatchProfileHeadshotDetails({ type: "profile-save-started" });
     try {
       const updatedRoster = assertSpeakerRosterScope(
         await api.update(participantId, input),
@@ -1291,8 +2165,7 @@ export function SpeakerWorkspaceController({
         throw new TypeError("The saved speaker is missing from the roster.");
       }
       assertAdvancedSpeakerRevision(updated, participantId, expectedVersion, eventId);
-      setProfileMutationStatus("pending");
-      setProfileMutationMessage("Profile write accepted. Reloading authoritative speaker data…");
+      dispatchProfileHeadshotDetails({ type: "profile-write-accepted" });
       const reloaded = await reload();
       const persisted = reloaded?.speakers.find(
         (speaker) => speaker.participantId === participantId,
@@ -1301,30 +2174,33 @@ export function SpeakerWorkspaceController({
         throw new TypeError("The reloaded speaker is missing from the roster.");
       }
       assertAdvancedSpeakerRevision(persisted, participantId, expectedVersion, eventId);
-      setEditDraft(editDraftFor(persisted));
-      setProfileMutationStatus("saved");
-      setProfileMutationMessage(`Saved at revision ${persisted.version}.`);
-      setNotice("Speaker profile saved and reloaded from the server.");
+      dispatchProfileHeadshotDetails({ type: "profile-saved", speaker: persisted });
+      dispatchRoster({
+        type: "notice-set",
+        message: "Speaker profile saved and reloaded from the server.",
+      });
     } catch (reason: unknown) {
       const conflict =
         reason instanceof SpeakerApiError &&
         (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
       if (conflict) {
-        setProfileMutationStatus("conflict");
-        setProfileMutationMessage("Conflict detected. Authoritative speaker data was reloaded.");
+        dispatchProfileHeadshotDetails({ type: "profile-conflict" });
         const reloaded = await reload();
         const current = reloaded?.speakers.find(
           (speaker) => speaker.participantId === participantId,
         );
-        if (current !== undefined) setEditDraft(editDraftFor(current));
-        setEditError("This speaker changed elsewhere. Review the reloaded values before saving.");
+        if (current !== undefined) {
+          dispatchProfileHeadshotDetails({ type: "edit-draft-set", draft: editDraftFor(current) });
+        }
+        dispatchProfileHeadshotDetails({
+          type: "edit-error-set",
+          message: "This speaker changed elsewhere. Review the reloaded values before saving.",
+        });
       } else {
-        setProfileMutationStatus("failure");
-        setProfileMutationMessage(errorMessage(reason));
-        setEditError(errorMessage(reason));
+        dispatchProfileHeadshotDetails({ type: "profile-failed", message: errorMessage(reason) });
       }
     } finally {
-      setSaveBusy(false);
+      dispatchProfileHeadshotDetails({ type: "save-busy-changed", busy: false });
     }
   }
   async function previewCsv(event: ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -1337,11 +2213,9 @@ export function SpeakerWorkspaceController({
     const requestId = importRequestRef.current + 1;
     importRequestRef.current = requestId;
     input.value = "";
-    setImportFileName(file.name);
-    setImportPreview(null);
-    setImportIdempotencyKey(null);
-    setImportPreviewBusy(true);
-    setNotice(null);
+    dispatchImportTaskInvitation({ type: "import-preview-started", fileName: file.name });
+    importIdempotencyKeyRef.current = null;
+    dispatchRoster({ type: "notice-set", message: null });
     try {
       if (api === null) {
         throw new Error("CSV import is unavailable until the organizer speaker API is configured.");
@@ -1351,60 +2225,64 @@ export function SpeakerWorkspaceController({
         "CSV validation",
       );
       if (requestId !== importRequestRef.current) return;
-      setImportPreview(preview);
-      setImportIdempotencyKey(crypto.randomUUID());
-      setNotice(
-        `CSV preview ready: ${preview.validRows.length} valid row${preview.validRows.length === 1 ? "" : "s"}.`,
-      );
+      dispatchImportTaskInvitation({ type: "import-preview-loaded", preview });
+      importIdempotencyKeyRef.current = crypto.randomUUID();
+      dispatchRoster({
+        type: "notice-set",
+        message: `CSV preview ready: ${preview.validRows.length} valid row${preview.validRows.length === 1 ? "" : "s"}.`,
+      });
     } catch (reason: unknown) {
-      if (requestId === importRequestRef.current) setNotice(errorMessage(reason));
+      if (requestId === importRequestRef.current) {
+        dispatchRoster({ type: "notice-set", message: errorMessage(reason) });
+      }
     } finally {
       if (requestId === importRequestRef.current) {
-        setImportPreviewBusy(false);
-        input.value = "";
+        dispatchImportTaskInvitation({ type: "import-preview-busy-changed", busy: false });
       }
+      if (requestId === importRequestRef.current) input.value = "";
     }
   }
   async function commitCsv(): Promise<void> {
     if (api === null || importPreview === null || importPreview.validRows.length === 0) return;
-    const idempotencyKey = importIdempotencyKey ?? crypto.randomUUID();
-    setImportIdempotencyKey(idempotencyKey);
-    setImportCommitBusy(true);
-    setNotice(null);
+    const idempotencyKey = importIdempotencyKeyRef.current ?? crypto.randomUUID();
+    importIdempotencyKeyRef.current = idempotencyKey;
+    dispatchImportTaskInvitation({ type: "import-commit-busy-changed", busy: true });
+    dispatchRoster({ type: "notice-set", message: null });
     try {
       const rowCount = importPreview.validRows.length;
       const imported = await withTimeout(
         (signal) => api.commitImport({ rows: importPreview.validRows, idempotencyKey }, signal),
         "CSV import",
       );
-      setImportPreview(null);
-      setImportFileName(null);
-      setImportIdempotencyKey(null);
+      dispatchImportTaskInvitation({ type: "import-committed" });
+      importIdempotencyKeyRef.current = null;
       applyAuthoritativeRoster(
         imported,
         `CSV import committed: ${rowCount} valid row${rowCount === 1 ? "" : "s"}.`,
       );
     } catch (reason: unknown) {
-      setNotice(errorMessage(reason));
+      dispatchRoster({ type: "notice-set", message: errorMessage(reason) });
     } finally {
-      setImportCommitBusy(false);
+      dispatchImportTaskInvitation({ type: "import-commit-busy-changed", busy: false });
     }
   }
   function toggleAssignee(participantId: string): void {
-    setTaskAssignees((current) =>
-      current.includes(participantId)
-        ? current.filter((candidate) => candidate !== participantId)
-        : [...current, participantId],
-    );
+    dispatchImportTaskInvitation({ type: "task-assignee-toggled", participantId });
   }
   async function assignTask(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (api === null) {
-      setNotice("Task assignment is unavailable until the organizer speaker API is configured.");
+      dispatchRoster({
+        type: "notice-set",
+        message: "Task assignment is unavailable until the organizer speaker API is configured.",
+      });
       return;
     }
     if (progress === null || progressError !== null) {
-      setNotice("Wait for API-backed onboarding progress to load before assigning another task.");
+      dispatchRoster({
+        type: "notice-set",
+        message: "Wait for API-backed onboarding progress to load before assigning another task.",
+      });
       return;
     }
     const draft = {
@@ -1414,12 +2292,12 @@ export function SpeakerWorkspaceController({
     } satisfies SpeakerOnboardingTaskDraft;
     const validationError = validateSpeakerTaskAssignment(draft, onboardingTaskDefinitions.length);
     if (validationError !== null) {
-      setNotice(validationError);
+      dispatchRoster({ type: "notice-set", message: validationError });
       return;
     }
     const input = createSpeakerTaskAssignment(draft);
-    setTaskBusy(true);
-    setNotice(null);
+    dispatchImportTaskInvitation({ type: "task-busy-changed", busy: true });
+    dispatchRoster({ type: "notice-set", message: null });
     try {
       const latest = await withTimeout(async (signal) => {
         const latestRoster = normalizeRoster(await api.list(signal), organizationId, eventId);
@@ -1432,19 +2310,19 @@ export function SpeakerWorkspaceController({
         );
         return { latestRoster, latestProgress };
       }, "Onboarding task preflight");
-      setProgress(latest.latestProgress);
-      setRoster(mergeProgressSummaries(latest.latestRoster, latest.latestProgress));
-      setInvitationPreview(null);
-      setInvitationResult(null);
-      setInvitationResultParticipantId(null);
-      setInvitationError(null);
-      setInvitationSendIdempotencyKey(null);
+      dispatchRoster({
+        type: "progress-and-roster-loaded",
+        roster: mergeProgressSummaries(latest.latestRoster, latest.latestProgress),
+        progress: latest.latestProgress,
+      });
+      dispatchImportTaskInvitation({ type: "invitation-cleared" });
+      invitationSendIdempotencyKeyRef.current = null;
       const latestValidationError = validateSpeakerTaskAssignment(
         draft,
         speakerOnboardingTaskDefinitions(latest.latestProgress.rows).length,
       );
       if (latestValidationError !== null) {
-        setNotice(latestValidationError);
+        dispatchRoster({ type: "notice-set", message: latestValidationError });
         return;
       }
       const taskEnvelope = await api.assignTasks(input);
@@ -1468,95 +2346,67 @@ export function SpeakerWorkspaceController({
       ) {
         throw new TypeError("The speaker task response does not match the selected assignees.");
       }
-      setRoster((current) =>
-        current === null
-          ? current
-          : {
-              ...current,
-              speakers: current.speakers.map((speaker) => {
-                const added = taskEnvelope.tasks.filter(
-                  (task) => task.participantId === speaker.participantId,
-                ).length;
-                return added === 0
-                  ? speaker
-                  : {
-                      ...speaker,
-                      taskSummary: {
-                        ...speaker.taskSummary,
-                        total: speaker.taskSummary.total + added,
-                      },
-                    };
-              }),
-            },
-      );
-      setProgress((current) => {
-        const rows =
-          current?.rows ??
-          speakers.map((speaker) => ({
-            participantId: speaker.participantId,
-            displayName: speaker.displayName,
-            tasks: [],
-          }));
-        return {
-          organizationId,
-          eventId,
-          rows: rows.map((row) => {
-            const assigned = taskEnvelope.tasks.filter(
-              (task) => task.participantId === row.participantId,
-            );
-            return assigned.length === 0 ? row : { ...row, tasks: [...row.tasks, ...assigned] };
-          }),
-        };
+      dispatchRoster({
+        type: "tasks-assigned",
+        taskEnvelope,
+        fallbackRows: latest.latestProgress.rows,
       });
-      setTaskTitle("");
-      setTaskDueAt("");
-      setTaskAssignees([]);
+      dispatchImportTaskInvitation({ type: "task-fields-cleared" });
       void api
         .getReminderEligibility()
-        .then(setReminderEligibility)
+        .then((eligibility) => dispatchRoster({ type: "reminder-loaded", eligibility }))
         .catch(() => undefined);
-      setNotice("General action task assigned to selected speakers.");
+      dispatchRoster({
+        type: "notice-set",
+        message: "General action task assigned to selected speakers.",
+      });
     } catch (reason: unknown) {
-      setNotice(errorMessage(reason));
+      dispatchRoster({ type: "notice-set", message: errorMessage(reason) });
     } finally {
-      setTaskBusy(false);
+      dispatchImportTaskInvitation({ type: "task-busy-changed", busy: false });
     }
   }
   async function refreshEmailHistory(): Promise<void> {
     if (api === null) {
-      setEmailNotice("Email history is unavailable until the organizer speaker API is configured.");
+      dispatchEmail({
+        type: "email-notice-set",
+        message: "Email history is unavailable until the organizer speaker API is configured.",
+      });
       return;
     }
-    setEmailHistoryBusy(true);
-    setEmailNotice(null);
+    dispatchEmail({ type: "email-history-busy-changed", busy: true });
+    dispatchEmail({ type: "email-notice-set", message: null });
     try {
       const history = await withTimeout(
         (signal) => api.listEmailHistory(signal),
         "Email history refresh",
       );
-      setEmailSends(history);
-      setEmailNotice(
-        `Email history refreshed: ${history.length} send${history.length === 1 ? "" : "s"}.`,
-      );
+      dispatchEmail({ type: "email-sends-loaded", sends: history });
+      dispatchEmail({
+        type: "email-notice-set",
+        message: `Email history refreshed: ${history.length} send${history.length === 1 ? "" : "s"}.`,
+      });
     } catch (reason: unknown) {
-      setEmailNotice(errorMessage(reason));
+      dispatchEmail({ type: "email-notice-set", message: errorMessage(reason) });
     } finally {
-      setEmailHistoryBusy(false);
+      dispatchEmail({ type: "email-history-busy-changed", busy: false });
     }
   }
   async function saveEmailTemplate(): Promise<SpeakerEmailTemplate | null> {
     if (api === null) {
-      setEmailNotice(
-        "Email templates are unavailable until the organizer speaker API is configured.",
-      );
+      dispatchEmail({
+        type: "email-notice-set",
+        message: "Email templates are unavailable until the organizer speaker API is configured.",
+      });
       return null;
     }
     invalidateEmailPreview();
-    setEmailSaveBusy(true);
-    setEmailNotice(null);
+    dispatchEmail({ type: "email-save-busy-changed", busy: true });
+    dispatchEmail({ type: "email-notice-set", message: null });
     try {
-      const newTemplateId = emailCreateTemplateId ?? `speaker-email-draft:${crypto.randomUUID()}`;
-      if (emailTemplateId.length === 0) setEmailCreateTemplateId(newTemplateId);
+      const newTemplateId =
+        emailCreateTemplateIdRef.current ?? `speaker-email-draft:${crypto.randomUUID()}`;
+      if (emailTemplateId.length === 0) emailCreateTemplateIdRef.current = newTemplateId;
       const template = emailTemplateId
         ? await withTimeout(
             (signal) =>
@@ -1585,49 +2435,46 @@ export function SpeakerWorkspaceController({
               ),
             "Email template save",
           );
-      setEmailTemplates((current) => [
-        ...current.filter(
-          (candidate) => !(candidate.id === template.id && candidate.version === template.version),
-        ),
-        template,
-      ]);
-      setEmailTemplateId(template.id);
-      setEmailCreateTemplateId(null);
-      setEmailTemplateVersion(template.version);
-      setEmailTemplateName(template.name);
-      setEmailSubject(template.subject);
-      setEmailHtml(template.html);
-      setEmailText(template.text);
-      setEmailNotice(`Template version ${template.version} saved.`);
-      setEmailPreview(null);
-      setEmailSendIdempotencyKey(null);
+      dispatchEmail({ type: "email-template-saved", template });
+      dispatchEmail({
+        type: "email-notice-set",
+        message: `Template version ${template.version} saved.`,
+      });
+      emailSendIdempotencyKeyRef.current = null;
       return template;
     } catch (reason: unknown) {
-      setEmailNotice(errorMessage(reason));
+      dispatchEmail({ type: "email-notice-set", message: errorMessage(reason) });
       return null;
     } finally {
-      setEmailSaveBusy(false);
+      dispatchEmail({ type: "email-save-busy-changed", busy: false });
     }
   }
   async function previewBulkEmail(): Promise<void> {
     if (api === null) {
-      setEmailNotice("Bulk email is unavailable until the organizer speaker API is configured.");
+      dispatchEmail({
+        type: "email-notice-set",
+        message: "Bulk email is unavailable until the organizer speaker API is configured.",
+      });
       return;
     }
     if (selectedSpeakerIds.length === 0) {
-      setEmailNotice("Select at least one speaker before previewing an email.");
+      dispatchEmail({
+        type: "email-notice-set",
+        message: "Select at least one speaker before previewing an email.",
+      });
       return;
     }
     invalidateEmailPreview();
     const requestId = emailPreviewRequestRef.current;
-    setEmailPreviewBusy(true);
-    setEmailNotice(null);
+    dispatchEmail({ type: "email-preview-started" });
+    dispatchEmail({ type: "email-notice-set", message: null });
     try {
       const recipientIds = [...selectedSpeakerIds];
       let templateId = emailTemplateId;
       let templateVersion = emailTemplateVersion;
-      const newTemplateId = emailCreateTemplateId ?? `speaker-email-draft:${crypto.randomUUID()}`;
-      if (templateId.length === 0) setEmailCreateTemplateId(newTemplateId);
+      const newTemplateId =
+        emailCreateTemplateIdRef.current ?? `speaker-email-draft:${crypto.randomUUID()}`;
+      if (templateId.length === 0) emailCreateTemplateIdRef.current = newTemplateId;
       if (templateId.length === 0) {
         const created = await withTimeout(
           (signal) =>
@@ -1646,18 +2493,7 @@ export function SpeakerWorkspaceController({
         if (requestId !== emailPreviewRequestRef.current) return;
         templateId = created.id;
         templateVersion = created.version;
-        setEmailTemplateId(created.id);
-        setEmailTemplateVersion(created.version);
-        setEmailTemplateName(created.name);
-        setEmailSubject(created.subject);
-        setEmailHtml(created.html);
-        setEmailText(created.text);
-        setEmailTemplates((current) => [
-          ...current.filter(
-            (candidate) => !(candidate.id === created.id && candidate.version === created.version),
-          ),
-          created,
-        ]);
+        dispatchEmail({ type: "email-template-created", template: created });
       }
       const preview = await withTimeout(
         (signal) =>
@@ -1675,63 +2511,71 @@ export function SpeakerWorkspaceController({
       if (preview.organizationId !== organizationId || preview.eventId !== eventId) {
         throw new Error("The email preview belongs to a different event. Create a new preview.");
       }
-      setEmailPreview(preview);
-      setEmailTemplateId(preview.templateId);
-      setEmailCreateTemplateId(null);
-      setEmailTemplateVersion(preview.templateVersion);
-      setEmailSendIdempotencyKey(null);
-      setEmailNotice(
-        `Merge preview ready for ${preview.recipientIds.length} selected speaker${preview.recipientIds.length === 1 ? "" : "s"}.`,
-      );
+      dispatchEmail({ type: "email-preview-set", preview });
+      dispatchEmail({
+        type: "email-template-selected",
+        id: preview.templateId,
+        version: preview.templateVersion,
+        template: null,
+      });
+      emailCreateTemplateIdRef.current = null;
+      emailSendIdempotencyKeyRef.current = null;
+      dispatchEmail({
+        type: "email-notice-set",
+        message: `Merge preview ready for ${preview.recipientIds.length} selected speaker${preview.recipientIds.length === 1 ? "" : "s"}.`,
+      });
     } catch (reason: unknown) {
-      if (requestId === emailPreviewRequestRef.current) setEmailNotice(errorMessage(reason));
+      if (requestId === emailPreviewRequestRef.current) {
+        dispatchEmail({ type: "email-notice-set", message: errorMessage(reason) });
+      }
     } finally {
-      if (requestId === emailPreviewRequestRef.current) setEmailPreviewBusy(false);
+      if (requestId === emailPreviewRequestRef.current) {
+        dispatchEmail({ type: "email-preview-busy-changed", busy: false });
+      }
     }
   }
   async function sendBulkEmail(): Promise<void> {
     if (api === null || !emailPreviewCurrent || emailPreview === null) {
-      setEmailNotice("Create a current merge preview before queueing the email.");
-      setEmailConfirmOpen(false);
+      dispatchEmail({
+        type: "email-notice-set",
+        message: "Create a current merge preview before queueing the email.",
+      });
+      dispatchEmail({ type: "email-confirm-changed", open: false });
       return;
     }
     const preview = emailPreview;
-    const idempotencyKey = emailSendIdempotencyKey ?? crypto.randomUUID();
-    setEmailSendIdempotencyKey(idempotencyKey);
-    setEmailSendBusy(true);
-    setEmailNotice(null);
+    const idempotencyKey = emailSendIdempotencyKeyRef.current ?? crypto.randomUUID();
+    emailSendIdempotencyKeyRef.current = idempotencyKey;
+    dispatchEmail({ type: "email-send-busy-changed", busy: true });
+    dispatchEmail({ type: "email-notice-set", message: null });
     try {
       const send = await withTimeout(
         (signal) => api.sendEmails({ previewId: preview.id, idempotencyKey }, signal),
         "Speaker email queue",
       );
-      setEmailSends((current) => [
-        send,
-        ...current.filter((candidate) => candidate.id !== send.id),
-      ]);
-      setEmailNotice(
-        `Speaker email ${send.status} for ${send.recipientIds.length} recipient${send.recipientIds.length === 1 ? "" : "s"}. Queue history is retained below.`,
-      );
+      dispatchEmail({ type: "email-send-recorded", send });
+      dispatchEmail({
+        type: "email-notice-set",
+        message: `Speaker email ${send.status} for ${send.recipientIds.length} recipient${send.recipientIds.length === 1 ? "" : "s"}. Queue history is retained below.`,
+      });
     } catch (reason: unknown) {
-      setEmailNotice(errorMessage(reason));
+      dispatchEmail({ type: "email-notice-set", message: errorMessage(reason) });
     } finally {
-      setEmailSendBusy(false);
+      dispatchEmail({ type: "email-send-busy-changed", busy: false });
     }
   }
   async function previewSelectedSpeakerInvitation(): Promise<void> {
     if (api === null || selectedSpeaker === null) {
-      setInvitationError(
-        "Portal invitations are unavailable until the organizer speaker API is configured.",
-      );
+      dispatchImportTaskInvitation({
+        type: "invitation-error-set",
+        message:
+          "Portal invitations are unavailable until the organizer speaker API is configured.",
+      });
       return;
     }
     const participantId = selectedSpeaker.participantId;
-    setInvitationPreviewBusy(true);
-    setInvitationPreview(null);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
-    setInvitationSendIdempotencyKey(null);
+    dispatchImportTaskInvitation({ type: "invitation-preview-started" });
+    invitationSendIdempotencyKeyRef.current = null;
     try {
       const preview = await withTimeout(
         () => api.previewInvitations({ participantIds: [participantId] }),
@@ -1740,26 +2584,29 @@ export function SpeakerWorkspaceController({
       if (preview.length !== 1 || preview[0]?.participantId !== participantId) {
         throw new TypeError("The invitation preview does not match the selected speaker.");
       }
-      setInvitationPreview(preview);
+      dispatchImportTaskInvitation({ type: "invitation-preview-loaded", preview });
     } catch (reason: unknown) {
-      setInvitationError(errorMessage(reason));
+      dispatchImportTaskInvitation({
+        type: "invitation-preview-failed",
+        message: errorMessage(reason),
+      });
     } finally {
-      setInvitationPreviewBusy(false);
+      dispatchImportTaskInvitation({ type: "invitation-preview-busy-changed", busy: false });
     }
   }
   async function sendSelectedSpeakerInvitation(): Promise<void> {
     if (api === null || selectedSpeaker === null || !invitationReady) {
-      setInvitationError("Preview an eligible portal invitation before sending it.");
+      dispatchImportTaskInvitation({
+        type: "invitation-error-set",
+        message: "Preview an eligible portal invitation before sending it.",
+      });
       return;
     }
     const participantId = selectedSpeaker.participantId;
     const preview = selectedInvitationPreview;
-    const idempotencyKey = invitationSendIdempotencyKey ?? crypto.randomUUID();
-    setInvitationSendIdempotencyKey(idempotencyKey);
-    setInvitationSendBusy(true);
-    setInvitationResult(null);
-    setInvitationResultParticipantId(null);
-    setInvitationError(null);
+    const idempotencyKey = invitationSendIdempotencyKeyRef.current ?? crypto.randomUUID();
+    invitationSendIdempotencyKeyRef.current = idempotencyKey;
+    dispatchImportTaskInvitation({ type: "invitation-send-started" });
     try {
       const result = await withTimeout(
         () =>
@@ -1776,54 +2623,56 @@ export function SpeakerWorkspaceController({
       if (selectedRecipient === undefined) {
         throw new TypeError("The invitation result does not include the selected speaker.");
       }
-      setInvitationResult(result);
-      setInvitationResultParticipantId(participantId);
-      setInvitationHistory((current) => retainInvitationHistory(current, preview, result));
-      setInvitationSendIdempotencyKey(null);
+      dispatchImportTaskInvitation({ type: "invitation-result-recorded", participantId, result });
+      dispatchImportTaskInvitation({
+        type: "invitation-history-retained",
+        preview,
+        result,
+      });
+      invitationSendIdempotencyKeyRef.current = null;
     } catch (reason: unknown) {
-      setInvitationError(errorMessage(reason));
+      dispatchImportTaskInvitation({ type: "invitation-error-set", message: errorMessage(reason) });
     } finally {
-      setInvitationSendBusy(false);
+      dispatchImportTaskInvitation({ type: "invitation-send-busy-changed", busy: false });
     }
   }
   async function refreshDetails(): Promise<void> {
     if (api === null || selectedSpeaker === null) {
-      setDetailNotice(
-        "Session and deliverable details are unavailable until the organizer speaker API is configured.",
-      );
+      dispatchProfileHeadshotDetails({
+        type: "detail-notice-set",
+        message:
+          "Session and deliverable details are unavailable until the organizer speaker API is configured.",
+      });
       return;
     }
-    setDetailBusy(true);
-    setDetailNotice(null);
+    dispatchProfileHeadshotDetails({ type: "detail-busy-changed", busy: true });
+    dispatchProfileHeadshotDetails({ type: "detail-notice-set", message: null });
     try {
       const [sessions, assets] = await Promise.all([
         api.getSessions(selectedSpeaker.participantId),
         api.getAssets(selectedSpeaker.participantId),
       ]);
-      setRoster((current) =>
-        current === null
-          ? current
-          : mergeSpeaker(current, selectedSpeaker.participantId, {
-              sessions,
-              assets,
-              updatedAt: new Date().toISOString(),
-            }),
-      );
-      setDetailNotice("Session assignments and deliverables refreshed.");
+      dispatchRoster({
+        type: "roster-details-refreshed",
+        participantId: selectedSpeaker.participantId,
+        sessions,
+        assets,
+        updatedAt: new Date().toISOString(),
+      });
+      dispatchProfileHeadshotDetails({
+        type: "detail-notice-set",
+        message: "Session assignments and deliverables refreshed.",
+      });
     } catch (reason: unknown) {
-      setDetailNotice(errorMessage(reason));
+      dispatchProfileHeadshotDetails({ type: "detail-notice-set", message: errorMessage(reason) });
     } finally {
-      setDetailBusy(false);
+      dispatchProfileHeadshotDetails({ type: "detail-busy-changed", busy: false });
     }
   }
   async function requestAssetDownload(asset: SpeakerAsset): Promise<void> {
     if (api === null || asset.status !== "ready" || downloadBusyAssetId !== null) return;
     const assetId = asset.assetId;
-    setDownloadBusyAssetId(assetId);
-    setDownloadErrors((current) => {
-      const { [assetId]: _previousError, ...remaining } = current;
-      return remaining;
-    });
+    dispatchProfileHeadshotDetails({ type: "download-started", assetId });
     try {
       const grant = await withTimeout(
         (signal) => api.getDownloadGrant(assetId, signal),
@@ -1832,20 +2681,22 @@ export function SpeakerWorkspaceController({
       if (grant.url.trim().length === 0) {
         throw new Error("The private download capability returned an empty URL.");
       }
-      setDownloadUrls((current) => ({ ...current, [assetId]: grant.url }));
+      dispatchProfileHeadshotDetails({ type: "download-succeeded", assetId, url: grant.url });
     } catch (reason: unknown) {
-      setDownloadErrors((current) => ({ ...current, [assetId]: errorMessage(reason) }));
+      dispatchProfileHeadshotDetails({
+        type: "download-failed",
+        assetId,
+        message: errorMessage(reason),
+      });
     } finally {
-      setDownloadBusyAssetId((current) => (current === assetId ? null : current));
+      dispatchProfileHeadshotDetails({ type: "download-finished", assetId });
     }
   }
   function retryHeadshotPreview(): void {
-    setHeadshotPreviewRetry((current) => current + 1);
+    dispatchProfileHeadshotDetails({ type: "headshot-preview-retried" });
   }
   function markHeadshotPreviewFailed(): void {
-    setHeadshotPreviewUrl(null);
-    setHeadshotPreviewLoading(false);
-    setHeadshotPreviewError("The secure headshot preview could not be rendered.");
+    dispatchProfileHeadshotDetails({ type: "headshot-preview-marked-failed" });
   }
   async function uploadOrganizerHeadshot(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     const input = event.currentTarget;
@@ -1854,37 +2705,32 @@ export function SpeakerWorkspaceController({
     if (file === undefined) return;
     const validationError = validateOrganizerHeadshotFile(file);
     if (validationError !== null) {
-      setHeadshotUploadStatus("error");
-      setHeadshotMutationStatus("failure");
-      setHeadshotUploadMessage(validationError);
-      setHeadshotMutationMessage(validationError);
+      dispatchProfileHeadshotDetails({
+        type: "headshot-validation-failed",
+        message: validationError,
+      });
       return;
     }
     if (api === null || selectedSpeaker === null || api.replaceHeadshot === undefined) {
       const message =
         "Organizer headshot upload is unavailable until the private upload API is provisioned.";
-      setHeadshotUploadStatus("error");
-      setHeadshotMutationStatus("failure");
-      setHeadshotUploadMessage(message);
-      setHeadshotMutationMessage(message);
+      dispatchProfileHeadshotDetails({ type: "headshot-unavailable", message });
       return;
     }
     if (selectedHeadshotSubmissionId === null) {
-      setHeadshotUploadStatus("error");
-      setHeadshotUploadMessage(
-        eligibleHeadshotSessions.length > 1
-          ? "Choose an accepted session before replacing this headshot."
-          : "Headshot replacement requires an accepted session owned by this speaker.",
-      );
+      dispatchProfileHeadshotDetails({
+        type: "headshot-session-required",
+        message:
+          eligibleHeadshotSessions.length > 1
+            ? "Choose an accepted session before replacing this headshot."
+            : "Headshot replacement requires an accepted session owned by this speaker.",
+      });
       return;
     }
     const participantId = selectedSpeaker.participantId;
     const expectedVersion = selectedSpeaker.version;
     const supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
-    setHeadshotUploadStatus("busy");
-    setHeadshotMutationStatus("saving");
-    setHeadshotMutationMessage(`Uploading ${file.name}…`);
-    setHeadshotUploadMessage(`Uploading ${file.name}…`);
+    dispatchProfileHeadshotDetails({ type: "headshot-upload-started", fileName: file.name });
     try {
       const replacement = assertSpeakerHeadshotReplacement(
         await api.replaceHeadshot({
@@ -1898,9 +2744,7 @@ export function SpeakerWorkspaceController({
         participantId,
         expectedVersion,
       );
-      setHeadshotMutationStatus("pending");
-      setHeadshotMutationMessage("Headshot write accepted. Reloading authoritative speaker data…");
-      setHeadshotUploadMessage("Upload accepted. Reloading speaker data…");
+      dispatchProfileHeadshotDetails({ type: "headshot-write-accepted" });
       const reloaded = await reload();
       const persisted = reloaded?.speakers.find(
         (speaker) => speaker.participantId === participantId,
@@ -1912,30 +2756,17 @@ export function SpeakerWorkspaceController({
       if (persisted.headshotAssetId !== replacement.asset.id) {
         throw new TypeError("The reloaded speaker does not point to the uploaded headshot.");
       }
-      setEditDraft((current) => (current === null ? current : editDraftFor(persisted)));
-      setHeadshotPreviewUrl(null);
-      setHeadshotPreviewError(null);
-      setHeadshotPreviewRevision((current) => current + 1);
-      setHeadshotUploadStatus("success");
-      setHeadshotMutationStatus("saved");
-      setHeadshotMutationMessage(`Saved at revision ${persisted.version}.`);
-      setHeadshotUploadMessage(`Headshot uploaded for ${persisted.displayName}.`);
+      dispatchProfileHeadshotDetails({ type: "headshot-upload-succeeded", speaker: persisted });
     } catch (reason: unknown) {
       const conflict =
         reason instanceof SpeakerApiError &&
         (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
       if (conflict) {
-        setHeadshotMutationStatus("conflict");
-        setHeadshotMutationMessage("Conflict detected. Authoritative speaker data was reloaded.");
-        setHeadshotUploadStatus("error");
-        setHeadshotUploadMessage("Headshot upload conflicted; review the reloaded speaker data.");
+        dispatchProfileHeadshotDetails({ type: "headshot-conflict" });
         await reload();
       } else {
         const message = errorMessage(reason);
-        setHeadshotMutationStatus("failure");
-        setHeadshotMutationMessage(message);
-        setHeadshotUploadStatus("error");
-        setHeadshotUploadMessage(message);
+        dispatchProfileHeadshotDetails({ type: "headshot-failed", message });
       }
     }
   }
@@ -1964,7 +2795,11 @@ export function SpeakerWorkspaceController({
               {loading ? "Refreshing…" : "Refresh roster"}
             </Button>
             {!rosterEmpty ? (
-              <Button variant="default" type="button" onClick={() => setShowAdd(true)}>
+              <Button
+                variant="default"
+                type="button"
+                onClick={() => dispatchRoster({ type: "add-dialog-changed", open: true })}
+              >
                 <UserPlus data-icon="inline-start" />
                 Add speaker
               </Button>
@@ -1974,7 +2809,10 @@ export function SpeakerWorkspaceController({
       />
       {error ? <FormMessage message={error} error /> : null}
       {notice ? <FormMessage message={notice} /> : null}
-      <Dialog open={showAdd} onOpenChange={setShowAdd}>
+      <Dialog
+        open={showAdd}
+        onOpenChange={(open) => dispatchRoster({ type: "add-dialog-changed", open })}
+      >
         <DialogContent className={styles.dialogContent}>
           <DialogHeader>
             <DialogTitle>Add speaker</DialogTitle>
@@ -2015,7 +2853,11 @@ export function SpeakerWorkspaceController({
             </p>
           </form>
           <DialogFooter>
-            <Button variant="outline" type="button" onClick={() => setShowAdd(false)}>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => dispatchRoster({ type: "add-dialog-changed", open: false })}
+            >
               Cancel
             </Button>
           </DialogFooter>
@@ -2023,7 +2865,9 @@ export function SpeakerWorkspaceController({
       </Dialog>
       <Tabs
         value={activeView}
-        onValueChange={(value) => setActiveView(value as "roster" | "tasks" | "email")}
+        onValueChange={(value) =>
+          dispatchRoster({ type: "view-changed", view: value as SpeakerWorkspaceView })
+        }
         className={styles.tabs}
       >
         <TabsList variant="line" aria-label="Speaker workspace views">
@@ -2068,14 +2912,18 @@ export function SpeakerWorkspaceController({
                     </EmptyDescription>
                   </EmptyHeader>
                   <div className={styles.actions}>
-                    <Button variant="default" type="button" onClick={() => setShowAdd(true)}>
+                    <Button
+                      variant="default"
+                      type="button"
+                      onClick={() => dispatchRoster({ type: "add-dialog-changed", open: true })}
+                    >
                       <UserPlus data-icon="inline-start" />
                       Add speaker
                     </Button>
                     <Button
                       variant="outline"
                       type="button"
-                      onClick={() => setShowCsv((current) => !current)}
+                      onClick={() => dispatchRoster({ type: "csv-dialog-toggled" })}
                       aria-expanded={showCsv}
                       aria-controls="speaker-csv-import"
                     >
@@ -2103,7 +2951,9 @@ export function SpeakerWorkspaceController({
                     className={styles.attentionFilter}
                     type="button"
                     aria-pressed={attentionFilter === value}
-                    onClick={() => setAttentionFilter(value)}
+                    onClick={() =>
+                      dispatchRoster({ type: "attention-filter-changed", attention: value })
+                    }
                   >
                     <span>{label}</span>
                     <strong>{attentionCounts[value]}</strong>
@@ -2136,7 +2986,9 @@ export function SpeakerWorkspaceController({
                           aria-label="Search speakers"
                           placeholder="Search speakers"
                           value={query}
-                          onChange={(event) => setQuery(event.target.value)}
+                          onChange={(event) =>
+                            dispatchRoster({ type: "query-changed", query: event.target.value })
+                          }
                         />
                       </div>
                     </Field>
@@ -2144,7 +2996,7 @@ export function SpeakerWorkspaceController({
                       variant="outline"
                       type="button"
                       aria-expanded={filtersOpen}
-                      onClick={() => setFiltersOpen((current) => !current)}
+                      onClick={() => dispatchRoster({ type: "filters-toggled" })}
                     >
                       Filters
                     </Button>
@@ -2160,7 +3012,12 @@ export function SpeakerWorkspaceController({
                         <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-status-filter">
                           Filter by status
                         </FieldLabel>
-                        <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <Select
+                          value={statusFilter}
+                          onValueChange={(value) =>
+                            dispatchRoster({ type: "status-filter-changed", status: value })
+                          }
+                        >
                           <SelectTrigger id="speaker-status-filter" aria-label="Filter by status">
                             <SelectValue placeholder="All statuses" />
                           </SelectTrigger>
@@ -2180,7 +3037,12 @@ export function SpeakerWorkspaceController({
                         <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-session-filter">
                           Filter by session
                         </FieldLabel>
-                        <Select value={sessionFilter} onValueChange={setSessionFilter}>
+                        <Select
+                          value={sessionFilter}
+                          onValueChange={(value) =>
+                            dispatchRoster({ type: "session-filter-changed", session: value })
+                          }
+                        >
                           <SelectTrigger id="speaker-session-filter" aria-label="Filter by session">
                             <SelectValue placeholder="All sessions" />
                           </SelectTrigger>
@@ -2205,7 +3067,12 @@ export function SpeakerWorkspaceController({
                         </FieldLabel>
                         <Select
                           value={progressFilter}
-                          onValueChange={(value) => setProgressFilter(value as ProgressFilter)}
+                          onValueChange={(value) =>
+                            dispatchRoster({
+                              type: "progress-filter-changed",
+                              progress: value as ProgressFilter,
+                            })
+                          }
                         >
                           <SelectTrigger
                             id="speaker-progress-filter"
@@ -2343,7 +3210,7 @@ export function SpeakerWorkspaceController({
                                       <Checkbox
                                         id={`roster-selection-${speaker.participantId}`}
                                         aria-label={`Select ${speaker.displayName}`}
-                                        checked={selectedSpeakerIds.includes(speaker.participantId)}
+                                        checked={selectedSpeakerIdSet.has(speaker.participantId)}
                                         onCheckedChange={() =>
                                           toggleSpeakerSelection(speaker.participantId)
                                         }
@@ -2533,9 +3400,10 @@ export function SpeakerWorkspaceController({
                                     <Select
                                       value={headshotSubmissionId ?? ""}
                                       onValueChange={(value) => {
-                                        setHeadshotSubmissionId(value);
-                                        setHeadshotUploadStatus("idle");
-                                        setHeadshotUploadMessage(null);
+                                        dispatchProfileHeadshotDetails({
+                                          type: "headshot-session-selected",
+                                          submissionId: value,
+                                        });
                                       }}
                                     >
                                       <SelectTrigger id="speaker-headshot-session">
@@ -2769,7 +3637,11 @@ export function SpeakerWorkspaceController({
               </Card>
             </>
           )}
-          <Collapsible open={showCsv} onOpenChange={setShowCsv} className={styles.importDetails}>
+          <Collapsible
+            open={showCsv}
+            onOpenChange={(open) => dispatchRoster({ type: "csv-dialog-changed", open })}
+            className={styles.importDetails}
+          >
             {!rosterEmpty ? (
               <CollapsibleTrigger asChild>
                 <Button variant="outline" type="button">
@@ -2888,8 +3760,8 @@ export function SpeakerWorkspaceController({
                       variant="default"
                       type="button"
                       onClick={() => {
-                        setActiveView("roster");
-                        setShowAdd(true);
+                        dispatchRoster({ type: "view-changed", view: "roster" });
+                        dispatchRoster({ type: "add-dialog-changed", open: true });
                       }}
                     >
                       <UserPlus data-icon="inline-start" />
@@ -2899,8 +3771,8 @@ export function SpeakerWorkspaceController({
                       variant="outline"
                       type="button"
                       onClick={() => {
-                        setActiveView("roster");
-                        setShowCsv(true);
+                        dispatchRoster({ type: "view-changed", view: "roster" });
+                        dispatchRoster({ type: "csv-dialog-changed", open: true });
                       }}
                     >
                       <FileText data-icon="inline-start" />
@@ -2914,7 +3786,12 @@ export function SpeakerWorkspaceController({
                     <Button
                       variant="outline"
                       type="button"
-                      onClick={() => setVisibleProgressContext(secondaryContextKey)}
+                      onClick={() =>
+                        dispatchRoster({
+                          type: "progress-context-changed",
+                          context: secondaryContextKey,
+                        })
+                      }
                       disabled={api === null || loading || roster === null}
                     >
                       <RefreshCw data-icon="inline-start" />
@@ -2933,7 +3810,12 @@ export function SpeakerWorkspaceController({
                         <Input
                           id="task-title"
                           value={taskTitle}
-                          onChange={(event) => setTaskTitle(event.target.value)}
+                          onChange={(event) =>
+                            dispatchImportTaskInvitation({
+                              type: "task-title-changed",
+                              title: event.target.value,
+                            })
+                          }
                           placeholder="Confirm participation"
                           required
                           disabled={taskBusy}
@@ -2945,7 +3827,12 @@ export function SpeakerWorkspaceController({
                           id="task-due-date"
                           type="date"
                           value={taskDueAt}
-                          onChange={(event) => setTaskDueAt(event.target.value)}
+                          onChange={(event) =>
+                            dispatchImportTaskInvitation({
+                              type: "task-due-changed",
+                              dueAt: event.target.value,
+                            })
+                          }
                           required
                           disabled={taskBusy}
                         />
@@ -2969,7 +3856,7 @@ export function SpeakerWorkspaceController({
                               <Checkbox
                                 id={`task-assignee-${speaker.participantId}`}
                                 aria-label={`Assign task to ${speaker.displayName}`}
-                                checked={taskAssignees.includes(speaker.participantId)}
+                                checked={taskAssigneeIdSet.has(speaker.participantId)}
                                 onCheckedChange={() => toggleAssignee(speaker.participantId)}
                                 disabled={taskBusy}
                               />
@@ -3059,7 +3946,12 @@ export function SpeakerWorkspaceController({
                     </FieldLabel>
                     <Select
                       value={progressFilter}
-                      onValueChange={(value) => setProgressFilter(value as ProgressFilter)}
+                      onValueChange={(value) =>
+                        dispatchRoster({
+                          type: "progress-filter-changed",
+                          progress: value as ProgressFilter,
+                        })
+                      }
                     >
                       <SelectTrigger id="task-progress-filter" aria-label="Filter task progress">
                         <SelectValue placeholder="All progress" />
@@ -3224,8 +4116,8 @@ export function SpeakerWorkspaceController({
                     variant="default"
                     type="button"
                     onClick={() => {
-                      setActiveView("roster");
-                      setShowAdd(true);
+                      dispatchRoster({ type: "view-changed", view: "roster" });
+                      dispatchRoster({ type: "add-dialog-changed", open: true });
                     }}
                   >
                     <UserPlus data-icon="inline-start" />
@@ -3235,8 +4127,8 @@ export function SpeakerWorkspaceController({
                     variant="outline"
                     type="button"
                     onClick={() => {
-                      setActiveView("roster");
-                      setShowCsv(true);
+                      dispatchRoster({ type: "view-changed", view: "roster" });
+                      dispatchRoster({ type: "csv-dialog-changed", open: true });
                     }}
                   >
                     <FileText data-icon="inline-start" />
@@ -3256,7 +4148,11 @@ export function SpeakerWorkspaceController({
                     announcements belong in Communications.
                   </EmptyDescription>
                 </EmptyHeader>
-                <Button variant="default" type="button" onClick={() => setActiveView("roster")}>
+                <Button
+                  variant="default"
+                  type="button"
+                  onClick={() => dispatchRoster({ type: "view-changed", view: "roster" })}
+                >
                   <Users data-icon="inline-start" />
                   Choose recipients
                 </Button>
@@ -3293,9 +4189,13 @@ export function SpeakerWorkspaceController({
                               onValueChange={(value) => {
                                 invalidateEmailPreview();
                                 if (value === "new") {
-                                  setEmailTemplateId("");
-                                  setEmailCreateTemplateId(null);
-                                  setEmailTemplateVersion(undefined);
+                                  dispatchEmail({
+                                    type: "email-template-selected",
+                                    id: "",
+                                    version: undefined,
+                                    template: null,
+                                  });
+                                  emailCreateTemplateIdRef.current = null;
                                   return;
                                 }
                                 const separator = value.lastIndexOf(":");
@@ -3306,17 +4206,13 @@ export function SpeakerWorkspaceController({
                                   (candidate) =>
                                     candidate.id === nextId && candidate.version === nextVersion,
                                 );
-                                setEmailTemplateId(nextId);
-                                setEmailCreateTemplateId(null);
-                                setEmailTemplateVersion(
-                                  Number.isFinite(nextVersion) ? nextVersion : undefined,
-                                );
-                                if (template !== undefined) {
-                                  setEmailTemplateName(template.name);
-                                  setEmailSubject(template.subject);
-                                  setEmailHtml(template.html);
-                                  setEmailText(template.text);
-                                }
+                                dispatchEmail({
+                                  type: "email-template-selected",
+                                  id: nextId,
+                                  version: Number.isFinite(nextVersion) ? nextVersion : undefined,
+                                  template: template ?? null,
+                                });
+                                emailCreateTemplateIdRef.current = null;
                               }}
                               disabled={emailSaveBusy}
                             >
@@ -3362,14 +4258,33 @@ export function SpeakerWorkspaceController({
                               size="sm"
                               disabled={emailSaveBusy}
                               onClick={() => {
-                                setEmailTemplateId("");
-                                setEmailCreateTemplateId(null);
-                                setEmailTemplateVersion(undefined);
-                                setEmailTemplateName(SPEAKER_WELCOME_EMAIL_STARTER.name);
-                                setEmailSubject(SPEAKER_WELCOME_EMAIL_STARTER.subject);
-                                setEmailHtml(SPEAKER_WELCOME_EMAIL_STARTER.html);
-                                setEmailText(SPEAKER_WELCOME_EMAIL_STARTER.text);
-                                setEmailEditorMode("visual");
+                                dispatchEmail({
+                                  type: "email-template-selected",
+                                  id: "",
+                                  version: undefined,
+                                  template: null,
+                                });
+                                emailCreateTemplateIdRef.current = null;
+                                dispatchEmail({
+                                  type: "email-template-name-changed",
+                                  name: SPEAKER_WELCOME_EMAIL_STARTER.name,
+                                });
+                                dispatchEmail({
+                                  type: "email-subject-changed",
+                                  subject: SPEAKER_WELCOME_EMAIL_STARTER.subject,
+                                });
+                                dispatchEmail({
+                                  type: "email-html-changed",
+                                  html: SPEAKER_WELCOME_EMAIL_STARTER.html,
+                                });
+                                dispatchEmail({
+                                  type: "email-text-changed",
+                                  text: SPEAKER_WELCOME_EMAIL_STARTER.text,
+                                });
+                                dispatchEmail({
+                                  type: "email-editor-mode-changed",
+                                  mode: "visual",
+                                });
                                 invalidateEmailPreview();
                               }}
                             >
@@ -3380,7 +4295,10 @@ export function SpeakerWorkspaceController({
                             id="email-template-name"
                             value={emailTemplateName}
                             onChange={(event) => {
-                              setEmailTemplateName(event.target.value);
+                              dispatchEmail({
+                                type: "email-template-name-changed",
+                                name: event.target.value,
+                              });
                               invalidateEmailPreview();
                             }}
                             maxLength={200}
@@ -3393,7 +4311,10 @@ export function SpeakerWorkspaceController({
                             id="email-subject"
                             value={emailSubject}
                             onChange={(event) => {
-                              setEmailSubject(event.target.value);
+                              dispatchEmail({
+                                type: "email-subject-changed",
+                                subject: event.target.value,
+                              });
                               invalidateEmailPreview();
                             }}
                             placeholder="Add a clear subject for {{first_name}}"
@@ -3404,7 +4325,10 @@ export function SpeakerWorkspaceController({
                         <Tabs
                           value={emailEditorMode}
                           onValueChange={(value) =>
-                            setEmailEditorMode(value as "visual" | "html" | "text")
+                            dispatchEmail({
+                              type: "email-editor-mode-changed",
+                              mode: value as "visual" | "html" | "text",
+                            })
                           }
                           className={styles.emailEditorTabs}
                         >
@@ -3442,7 +4366,10 @@ export function SpeakerWorkspaceController({
                                 id="email-html"
                                 value={emailHtml}
                                 onChange={(event) => {
-                                  setEmailHtml(event.target.value);
+                                  dispatchEmail({
+                                    type: "email-html-changed",
+                                    html: event.target.value,
+                                  });
                                   invalidateEmailPreview();
                                 }}
                                 placeholder="<p>Hello {{first_name}},</p><p>Add your message here.</p>"
@@ -3458,7 +4385,10 @@ export function SpeakerWorkspaceController({
                                 id="email-text"
                                 value={emailText}
                                 onChange={(event) => {
-                                  setEmailText(event.target.value);
+                                  dispatchEmail({
+                                    type: "email-text-changed",
+                                    text: event.target.value,
+                                  });
                                   invalidateEmailPreview();
                                 }}
                                 placeholder={"Hello {{first_name}},\n\nAdd your message here."}
@@ -3546,7 +4476,7 @@ export function SpeakerWorkspaceController({
                     <Button
                       variant="default"
                       type="button"
-                      onClick={() => setEmailConfirmOpen(true)}
+                      onClick={() => dispatchEmail({ type: "email-confirm-changed", open: true })}
                       disabled={emailSendBusy || api === null || !emailPreviewCurrent}
                     >
                       <Send data-icon="inline-start" />
@@ -3616,7 +4546,10 @@ export function SpeakerWorkspaceController({
                     </Card>
                   </CardContent>
                 </Card>
-                <AlertDialog open={emailConfirmOpen} onOpenChange={setEmailConfirmOpen}>
+                <AlertDialog
+                  open={emailConfirmOpen}
+                  onOpenChange={(open) => dispatchEmail({ type: "email-confirm-changed", open })}
+                >
                   <AlertDialogContent className={styles.dialogContent}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Confirm speaker email send</AlertDialogTitle>

@@ -1044,21 +1044,6 @@ export function ruleMatches(rule: CfpRule, answers: Record<string, string>): boo
   return rule.operator === "OR" ? results.some(Boolean) : results.every(Boolean);
 }
 
-export function listFromInput(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-export function updateList(
-  current: CfpConfiguration,
-  key: "tracks" | "tags" | "formats" | "levels",
-  value: string,
-): CfpConfiguration {
-  return { ...current, [key]: listFromInput(value) };
-}
-
 export function fieldTypeLabel(type: FieldType): string {
   switch (type) {
     case "email":
