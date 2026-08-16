@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { createNavigationDataCache } from "@/lib/navigation-data-cache";
 import {
   type CommunicationApi,
   CommunicationApiError,
@@ -14,6 +15,8 @@ import {
 } from "./api";
 import {
   CommunicationsWorkspaceView,
+  communicationNavigationCacheKey,
+  communicationNavigationCacheTags,
   communicationTemplateSelectionFromKey,
   communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,
@@ -289,6 +292,69 @@ const reminderFacts: ReminderFacts = {
 };
 
 describe("communications organizer workspace", () => {
+  it("uses canonical normalized organization/event cache identities and resource tags", () => {
+    expect(communicationNavigationCacheKey("templates", " org-1 ", " event-1 ")).toBe(
+      "organization:org-1:event:event-1:communications:templates",
+    );
+    expect(communicationNavigationCacheTags("reminder-truth", " org-1 ", " event-1 ")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "communications:event-1",
+      "communications:reminder-truth:event-1",
+    ]);
+  });
+
+  it("coalesces reminder truth reads and fences invalidated completions", async () => {
+    const cache = createNavigationDataCache();
+    const key = communicationNavigationCacheKey("reminder-truth", "org-1", "event-1");
+    const tags = communicationNavigationCacheTags("reminder-truth", "org-1", "event-1");
+    const first = deferred<string>();
+    const load = vi.fn(() => first.promise);
+    const firstRead = cache.read({ key, tags, load });
+    const secondRead = cache.read({ key, tags, load });
+
+    expect(load).toHaveBeenCalledOnce();
+    first.resolve("initial");
+    await expect(Promise.all([firstRead, secondRead])).resolves.toEqual(["initial", "initial"]);
+    expect(cache.peek(key)).toBe("initial");
+    const hitLoad = vi.fn(() => Promise.resolve("network"));
+    await expect(cache.read({ key, tags, load: hitLoad })).resolves.toBe("initial");
+    expect(hitLoad).not.toHaveBeenCalled();
+
+    const stale = deferred<string>();
+    const staleRead = cache.read({ key, tags, fresh: true, load: () => stale.promise });
+    cache.invalidate(tags);
+    stale.resolve("stale");
+    await expect(staleRead).resolves.toBe("stale");
+    expect(cache.peek(key)).toBeUndefined();
+
+    const current = deferred<string>();
+    const currentRead = cache.read({ key, tags, load: () => current.promise });
+    current.resolve("current");
+    await expect(currentRead).resolves.toBe("current");
+    expect(cache.peek(key)).toBe("current");
+  });
+  it("keeps event-scoped cache values isolated and makes explicit reads fresh", async () => {
+    const cache = createNavigationDataCache();
+    const firstKey = communicationNavigationCacheKey("templates", "org-1", "event-1");
+    const firstTags = communicationNavigationCacheTags("templates", "org-1", "event-1");
+    const secondKey = communicationNavigationCacheKey("templates", "org-1", "event-2");
+    const secondTags = communicationNavigationCacheTags("templates", "org-1", "event-2");
+    cache.write(firstKey, ["event-1"], firstTags);
+
+    expect(cache.peek(secondKey)).toBeUndefined();
+    const secondLoad = vi.fn(() => Promise.resolve(["event-2"]));
+    await expect(
+      cache.read({ key: secondKey, tags: secondTags, load: secondLoad }),
+    ).resolves.toEqual(["event-2"]);
+    expect(secondLoad).toHaveBeenCalledOnce();
+
+    const freshLoad = vi.fn(() => Promise.resolve(["fresh-event-1"]));
+    await expect(
+      cache.read({ key: firstKey, tags: firstTags, fresh: true, load: freshLoad }),
+    ).resolves.toEqual(["fresh-event-1"]);
+    expect(freshLoad).toHaveBeenCalledOnce();
+  });
   it("waits for a server-returned sender on new drafts", () => {
     const markup = renderToStaticMarkup(
       createElement(CommunicationsWorkspaceView, {

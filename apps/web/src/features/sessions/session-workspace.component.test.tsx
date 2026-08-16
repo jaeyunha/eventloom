@@ -1,10 +1,18 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
-import { SessionsWorkspaceView } from "./session-workspace";
+import { createNavigationDataCache } from "@/lib/navigation-data-cache";
+import type { SessionRecord, SessionsApi } from "./api";
+import {
+  loadSessionsWorkspaceBundle,
+  type SessionsWorkspaceCacheBundle,
+  SessionsWorkspaceView,
+  sessionsWorkspaceCacheKey,
+  sessionsWorkspaceCacheTags,
+} from "./session-workspace";
 
-const session = {
+const session: SessionRecord = {
   id: "session-1",
   eventId: "event-1",
   title: "Reliable worker pools",
@@ -19,6 +27,19 @@ const session = {
   updatedAt: "2026-08-09T12:01:00.000Z",
   updatedBy: "organizer-1",
 };
+const speakers = [{ id: "speaker-1", displayName: "Avery Kim" }] as const;
+
+function sessionsApi(): SessionsApi {
+  return {
+    list: vi.fn(async () => [session]),
+    get: vi.fn(async () => session),
+    updateContent: vi.fn(async () => session),
+    listSpeakers: vi.fn(async () => speakers),
+    updateSpeakers: vi.fn(async () => session),
+    listHistory: vi.fn(async () => []),
+    restoreVersion: vi.fn(async () => session),
+  };
+}
 
 describe("sessions workspace presentation", () => {
   it("renders one accessible empty workspace with the event name", () => {
@@ -160,5 +181,83 @@ describe("sessions workspace presentation", () => {
     expect(unavailableMarkup).toContain("Primary");
     expect(unavailableMarkup).toContain("Retry speaker roster");
     expect(unavailableMarkup).not.toContain("No speakers are available in this event roster.");
+  });
+});
+describe("sessions workspace navigation cache", () => {
+  it("isolates normalized organization and canonical event scopes", () => {
+    const firstKey = sessionsWorkspaceCacheKey(" org-1 ", " event-1 ");
+    const secondKey = sessionsWorkspaceCacheKey("org-2", "event-1");
+
+    expect(firstKey).toBe("sessions:workspace:org-1:event-1");
+    expect(secondKey).not.toBe(firstKey);
+    expect(sessionsWorkspaceCacheTags(" org-1 ", " event-1 ")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "sessions:event-1",
+    ]);
+  });
+
+  it("loads one initial bundle on a cache miss", async () => {
+    const api = sessionsApi();
+    const cache = createNavigationDataCache();
+    const key = sessionsWorkspaceCacheKey("org-1", "event-1");
+    const tags = sessionsWorkspaceCacheTags("org-1", "event-1");
+
+    await expect(loadSessionsWorkspaceBundle(api, cache, key, tags)).resolves.toEqual({
+      sessions: [session],
+      speakers,
+    });
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(api.listSpeakers).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates cache hits without loading or issuing duplicate initial reads", async () => {
+    const api = sessionsApi();
+    const cache = createNavigationDataCache();
+    const key = sessionsWorkspaceCacheKey("org-1", "event-1");
+    const tags = sessionsWorkspaceCacheTags("org-1", "event-1");
+
+    await loadSessionsWorkspaceBundle(api, cache, key, tags);
+    await expect(loadSessionsWorkspaceBundle(api, cache, key, tags)).resolves.toEqual({
+      sessions: [session],
+      speakers,
+    });
+
+    expect(cache.peek(key)).toEqual({ sessions: [session], speakers });
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(api.listSpeakers).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses the completed bundle on an explicit fresh reload", async () => {
+    const api = sessionsApi();
+    const cache = createNavigationDataCache();
+    const key = sessionsWorkspaceCacheKey("org-1", "event-1");
+    const tags = sessionsWorkspaceCacheTags("org-1", "event-1");
+
+    await loadSessionsWorkspaceBundle(api, cache, key, tags);
+    await loadSessionsWorkspaceBundle(api, cache, key, tags, undefined, true);
+
+    expect(api.list).toHaveBeenCalledTimes(2);
+    expect(api.listSpeakers).toHaveBeenCalledTimes(2);
+  });
+
+  it("fences pending reads when event and sessions mutations invalidate the scope", async () => {
+    const cache = createNavigationDataCache();
+    const key = sessionsWorkspaceCacheKey("org-1", "event-1");
+    const tags = sessionsWorkspaceCacheTags("org-1", "event-1");
+    let resolveLoad!: (value: SessionsWorkspaceCacheBundle) => void;
+    const pending = cache.read({
+      key,
+      tags,
+      load: () =>
+        new Promise<SessionsWorkspaceCacheBundle>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    });
+
+    cache.invalidate(["event:event-1", "sessions:event-1"]);
+    resolveLoad({ sessions: [session], speakers });
+    await expect(pending).resolves.toEqual({ sessions: [session], speakers });
+    expect(cache.peek(key)).toBeUndefined();
   });
 });

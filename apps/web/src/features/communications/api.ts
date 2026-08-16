@@ -574,6 +574,10 @@ export interface CommunicationApi {
   listReminderRuns(eventId: string, signal?: AbortSignal): Promise<readonly ReminderRun[]>;
   listReminderDispatches(
     eventId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly ReminderDispatch[]>;
+  listReminderDispatches(
+    eventId: string,
     runId?: string,
     signal?: AbortSignal,
   ): Promise<readonly ReminderDispatch[]>;
@@ -799,12 +803,18 @@ export function createCommunicationApi(
       }
       return runs;
     },
-    async listReminderDispatches(eventId, runId, signal) {
+    async listReminderDispatches(
+      eventId: string,
+      runIdOrSignal: string | AbortSignal | undefined = undefined,
+      signal?: AbortSignal,
+    ) {
+      const runId = typeof runIdOrSignal === "string" ? runIdOrSignal : undefined;
+      const requestSignal = typeof runIdOrSignal === "string" ? signal : runIdOrSignal;
       const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
       const raw = await request<unknown>(
         eventId,
         `/reminders/dispatches${query}`,
-        signal === undefined ? {} : { signal },
+        requestSignal === undefined ? {} : { signal: requestSignal },
       );
       const dispatches = Array.isArray(raw)
         ? raw
