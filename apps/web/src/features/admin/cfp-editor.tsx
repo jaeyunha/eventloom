@@ -23,6 +23,7 @@ import {
 } from "../cfp/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
+import { EventDatePicker, type EventDateSelectionValue } from "./event-date-picker";
 import { useOrganizerEventId } from "./organizer-event-workspace";
 
 const ORGANIZER_SCROLL_CONTAINER_ID = "admin-content";
@@ -253,6 +254,20 @@ function validCfpTimeZone(value: string): boolean {
   } catch {
     return false;
   }
+}
+export function cfpMinimumDate(now = new Date(), timeZone = "UTC"): string {
+  if (!Number.isFinite(now.getTime())) return "";
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: validCfpTimeZone(timeZone) ? timeZone : "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(now);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : "";
 }
 
 function localCfpDateToIso(value: string, timeZone: string): string | null {
@@ -1131,16 +1146,14 @@ export function CfpEditor({
   const resolvedOrganizationId = organizationId.trim();
   const requestedFormId = formId?.trim() || undefined;
   const resolvedFormId = requestedFormId ?? configuration.id;
+  const cfpNow = new Date();
+  const minimumCfpDate = cfpMinimumDate(cfpNow, configuration.timezone);
   const dateValidationError = validateCfpDateRange(
     configuration.opensAt,
     configuration.closesAt,
     configuration.timezone,
   );
-  const closeDatePast = isCfpCloseDatePast(
-    configuration.closesAt,
-    new Date(),
-    configuration.timezone,
-  );
+  const closeDatePast = isCfpCloseDatePast(configuration.closesAt, cfpNow, configuration.timezone);
   const effectiveClosed = configuration.status === "closed" || closeDatePast;
 
   useEffect(() => {
@@ -1203,6 +1216,16 @@ export function CfpEditor({
     setSaveState("idle");
     setSaveError(null);
     if (key === "closesAt") setPastCloseAcknowledged(false);
+  }
+  function updateCfpDateRange(selection: EventDateSelectionValue): void {
+    setConfiguration((current) => ({
+      ...current,
+      opensAt: selection.startsAt.slice(0, 10),
+      closesAt: selection.endsAt.slice(0, 10),
+    }));
+    setSaveState("idle");
+    setSaveError(null);
+    setPastCloseAcknowledged(false);
   }
 
   function updateField(fieldId: string, patch: Partial<CfpFormField>): void {
@@ -1406,13 +1429,19 @@ export function CfpEditor({
         "input, select, textarea",
       ) ?? [],
     ).find((control) => !control.disabled && !control.checkValidity());
+    const currentDateError = activeSection === "event-details" ? dateValidationError : null;
     const nextIndex = resolveCfpEditorStepIndex({
       currentIndex,
       requestedIndex,
-      currentStepValid: invalidControl === undefined,
+      currentStepValid: invalidControl === undefined && currentDateError === null,
     });
     if (nextIndex === currentIndex && requestedIndex > currentIndex) {
-      invalidControl?.reportValidity();
+      if (invalidControl !== undefined) {
+        invalidControl.reportValidity();
+      } else if (currentDateError !== null) {
+        setSaveState("error");
+        setSaveError(currentDateError);
+      }
       return;
     }
     setActiveSection(SECTION_LINKS[nextIndex]?.id ?? "event-details");
@@ -1736,32 +1765,30 @@ export function CfpEditor({
                 </select>
                 <p className={styles.fieldHint}>Dates shown to applicants use this timezone.</p>
               </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="open-date">Open date</label>
-                <input
-                  id="open-date"
-                  name="opensAt"
-                  type="date"
-                  required
-                  value={configuration.opensAt}
-                  onChange={(event) => updateConfiguration("opensAt", event.target.value)}
+              <div className={styles.dateRangeGroup}>
+                <EventDatePicker
+                  mode="range"
+                  startsAt={configuration.opensAt}
+                  endsAt={configuration.closesAt}
+                  scheduleDates={[]}
+                  minimumDateTime={minimumCfpDate ? `${minimumCfpDate}T00:00` : undefined}
+                  minimumEndDate={configuration.opensAt}
+                  dateOnly
+                  showModeToggle={false}
+                  showTimeControls={false}
+                  eyebrow="CFP schedule"
+                  title="When is the CFP open?"
+                  description="Choose when applicants can submit proposals."
+                  startLabel="Open"
+                  endLabel="Close"
+                  onChange={updateCfpDateRange}
                 />
               </div>
-              <div className={styles.fieldGroup}>
-                <label htmlFor="close-date">Close date</label>
-                <input
-                  id="close-date"
-                  name="closesAt"
-                  type="date"
-                  required
-                  value={configuration.closesAt}
-                  aria-invalid={dateValidationError !== null}
-                  aria-describedby="close-date-help"
-                  onChange={(event) => updateConfiguration("closesAt", event.target.value)}
-                />
-                <p id="close-date-help" className={styles.fieldHint}>
-                  The close date must be after the open date. A past close is allowed when
-                  explicitly confirmed by an organizer.
+              <div className={`${styles.fieldGroup} ${styles.dateRangeGroup}`}>
+                <p className={styles.fieldHint}>
+                  The close date must be after the open date. Past dates cannot be selected;
+                  historical closed dates remain visible and require organizer confirmation before
+                  saving.
                 </p>
                 {dateValidationError !== null ? (
                   <p className={styles.fieldHint} role="alert">

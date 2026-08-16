@@ -44,6 +44,28 @@ test.beforeEach(async ({ context }) => {
     },
   ]);
 });
+test("CFP editor uses one constrained date-range calendar", async ({ page }, testInfo) => {
+  await page.clock.setFixedTime(new Date("2026-08-16T18:00:00.000Z"));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${eventBase}/cfp`);
+
+  const schedule = page.getByRole("region", { name: "When is the CFP open?" });
+  await expect(schedule).toBeVisible({ timeout: 30_000 });
+  await expect(schedule.getByText("Individual days")).toHaveCount(0);
+  await expect(schedule.locator('input[type="date"], input[type="time"]')).toHaveCount(0);
+
+  await expect(schedule.getByRole("button", { name: "Sat, Aug 15, 2026" })).toBeDisabled();
+  const openDate = schedule.getByRole("button", { name: "Thu, Aug 20, 2026" });
+  await openDate.click();
+  await expect(openDate).toBeDisabled();
+  await expect(schedule.getByRole("button", { name: "Fri, Aug 21, 2026" })).toBeEnabled();
+  await expectNoPageOverflow(page);
+
+  await page.screenshot({
+    path: testInfo.outputPath("cfp-date-range-calendar.png"),
+    fullPage: true,
+  });
+});
 
 test("People tab strip owns only intentional horizontal scrolling", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });

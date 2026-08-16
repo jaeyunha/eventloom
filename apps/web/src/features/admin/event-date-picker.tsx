@@ -6,6 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "./event-date-picker.module.css";
+import {
+  datePart,
+  eventDatesBetween,
+  isEventDateDisabled,
+  localDateKey,
+  parseDateOnly,
+  sortedUniqueDates,
+  toggleEventDate,
+} from "./event-date-picker-model";
 
 export type EventDateMode = "range" | "individual";
 
@@ -16,8 +25,17 @@ export interface EventDateSelectionValue {
   readonly scheduleDates: readonly string[];
 }
 
-interface EventDatePickerProps extends EventDateSelectionValue {
+export interface EventDatePickerProps extends EventDateSelectionValue {
   readonly minimumDateTime?: string | undefined;
+  readonly minimumEndDate?: string | undefined;
+  readonly dateOnly?: boolean;
+  readonly showModeToggle?: boolean;
+  readonly showTimeControls?: boolean;
+  readonly eyebrow?: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly startLabel?: string;
+  readonly endLabel?: string;
   readonly onChange: (value: EventDateSelectionValue) => void;
 }
 
@@ -28,25 +46,6 @@ interface MonthCell {
 }
 
 const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
-
-function localDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function parseDateOnly(value: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]) - 1;
-  const day = Number(match[3]);
-  const parsed = new Date(year, month, day, 12);
-  return parsed.getFullYear() === year && parsed.getMonth() === month && parsed.getDate() === day
-    ? parsed
-    : null;
-}
 
 function monthCells(month: Date): readonly MonthCell[] {
   const monthStart = new Date(month.getFullYear(), month.getMonth(), 1, 12);
@@ -73,10 +72,6 @@ function monthCells(month: Date): readonly MonthCell[] {
   });
 }
 
-function datePart(value: string): string {
-  return value.slice(0, 10);
-}
-
 function timePart(value: string, fallback: string): string {
   const valueTime = value.slice(11, 16);
   return /^\d{2}:\d{2}$/u.test(valueTime) ? valueTime : fallback;
@@ -85,30 +80,8 @@ function timePart(value: string, fallback: string): string {
 function localDateTime(date: string, time: string): string {
   return date ? `${date}T${time}` : "";
 }
-
-function sortedUniqueDates(values: readonly string[]): readonly string[] {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
-}
-
-export function eventDatesBetween(startsAt: string, endsAt: string): readonly string[] {
-  const start = parseDateOnly(datePart(startsAt));
-  const end = parseDateOnly(datePart(endsAt));
-  if (start === null || end === null || start > end) return [];
-  const dates: string[] = [];
-  for (
-    let date = start;
-    date <= end && dates.length < 366;
-    date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 12)
-  ) {
-    dates.push(localDateKey(date));
-  }
-  return dates;
-}
-
-export function toggleEventDate(selectedDates: readonly string[], date: string): readonly string[] {
-  return selectedDates.includes(date)
-    ? selectedDates.filter((selectedDate) => selectedDate !== date)
-    : sortedUniqueDates([...selectedDates, date]);
+function selectionDateTime(date: string, time: string, dateOnly: boolean): string {
+  return dateOnly ? date : localDateTime(date, time);
 }
 
 function conciseDate(value: string): string {
@@ -138,11 +111,21 @@ export function EventDatePicker({
   endsAt,
   scheduleDates,
   minimumDateTime,
+  minimumEndDate,
+  dateOnly = false,
+  showModeToggle = true,
+  showTimeControls = true,
+  eyebrow = "Event schedule",
+  title = "When does this event happen?",
+  description = "Use a continuous span or choose only the days that belong to the event.",
+  startLabel = "Starts",
+  endLabel = "Ends",
   onChange,
 }: EventDatePickerProps) {
   const startDate = datePart(startsAt);
   const endDate = datePart(endsAt);
   const minimumDate = minimumDateTime?.slice(0, 10) ?? "";
+  const minimumEndDateValue = minimumEndDate?.slice(0, 10) ?? "";
   const initialMonth = parseDateOnly(scheduleDates[0] || startDate || minimumDate) ?? new Date();
   const [visibleMonth, setVisibleMonth] = useState(
     () => new Date(initialMonth.getFullYear(), initialMonth.getMonth(), 1, 12),
@@ -150,6 +133,8 @@ export function EventDatePicker({
   const [activeBoundary, setActiveBoundary] = useState<"start" | "end">("start");
   const cells = useMemo(() => monthCells(visibleMonth), [visibleMonth]);
   const selectedDates = mode === "individual" ? scheduleDates : [];
+  const showSelectedDates = mode === "individual" && selectedDates.length > 0;
+  const showDetails = showTimeControls || showSelectedDates;
 
   function changeMode(nextMode: EventDateMode) {
     if (nextMode === mode) return;
@@ -167,8 +152,8 @@ export function EventDatePicker({
     const lastDate = normalizedDates.at(-1) ?? endDate;
     onChange({
       mode: nextMode,
-      startsAt: localDateTime(firstDate, timePart(startsAt, "09:00")),
-      endsAt: localDateTime(lastDate, timePart(endsAt, "17:00")),
+      startsAt: selectionDateTime(firstDate, timePart(startsAt, "09:00"), dateOnly),
+      endsAt: selectionDateTime(lastDate, timePart(endsAt, "17:00"), dateOnly),
       scheduleDates: [],
     });
   }
@@ -178,8 +163,8 @@ export function EventDatePicker({
       const nextEndDate = endDate && date <= endDate ? endDate : date;
       onChange({
         mode,
-        startsAt: localDateTime(date, timePart(startsAt, "09:00")),
-        endsAt: localDateTime(nextEndDate, timePart(endsAt, "17:00")),
+        startsAt: selectionDateTime(date, timePart(startsAt, "09:00"), dateOnly),
+        endsAt: selectionDateTime(nextEndDate, timePart(endsAt, "17:00"), dateOnly),
         scheduleDates: [],
       });
       setActiveBoundary("end");
@@ -188,8 +173,8 @@ export function EventDatePicker({
     const nextStartDate = startDate && date >= startDate ? startDate : date;
     onChange({
       mode,
-      startsAt: localDateTime(nextStartDate, timePart(startsAt, "09:00")),
-      endsAt: localDateTime(date, timePart(endsAt, "17:00")),
+      startsAt: selectionDateTime(nextStartDate, timePart(startsAt, "09:00"), dateOnly),
+      endsAt: selectionDateTime(date, timePart(endsAt, "17:00"), dateOnly),
       scheduleDates: [],
     });
     setActiveBoundary("start");
@@ -201,8 +186,8 @@ export function EventDatePicker({
     const lastDate = nextDates.at(-1) ?? "";
     onChange({
       mode,
-      startsAt: localDateTime(firstDate, timePart(startsAt, "09:00")),
-      endsAt: localDateTime(lastDate, timePart(endsAt, "17:00")),
+      startsAt: selectionDateTime(firstDate, timePart(startsAt, "09:00"), dateOnly),
+      endsAt: selectionDateTime(lastDate, timePart(endsAt, "17:00"), dateOnly),
       scheduleDates: nextDates,
     });
   }
@@ -237,27 +222,29 @@ export function EventDatePicker({
     <section className={styles.root} aria-labelledby="event-date-schedule-title">
       <div className={styles.heading}>
         <div>
-          <span className={styles.eyebrow}>Event schedule</span>
-          <h3 id="event-date-schedule-title">When does this event happen?</h3>
-          <p>Use a continuous span or choose only the days that belong to the event.</p>
+          <span className={styles.eyebrow}>{eyebrow}</span>
+          <h3 id="event-date-schedule-title">{title}</h3>
+          <p>{description}</p>
         </div>
-        <ToggleGroup
-          aria-label="Event date selection mode"
-          className={styles.modeToggle}
-          type="single"
-          value={mode}
-          variant="outline"
-          onValueChange={(value) => {
-            if (value === "range" || value === "individual") changeMode(value);
-          }}
-        >
-          <ToggleGroupItem type="button" value="range">
-            Date range
-          </ToggleGroupItem>
-          <ToggleGroupItem type="button" value="individual">
-            Individual days
-          </ToggleGroupItem>
-        </ToggleGroup>
+        {showModeToggle ? (
+          <ToggleGroup
+            aria-label="Event date selection mode"
+            className={styles.modeToggle}
+            type="single"
+            value={mode}
+            variant="outline"
+            onValueChange={(value) => {
+              if (value === "range" || value === "individual") changeMode(value);
+            }}
+          >
+            <ToggleGroupItem type="button" value="range">
+              Date range
+            </ToggleGroupItem>
+            <ToggleGroupItem type="button" value="individual">
+              Individual days
+            </ToggleGroupItem>
+          </ToggleGroup>
+        ) : null}
       </div>
 
       <div className={styles.summary}>
@@ -270,7 +257,7 @@ export function EventDatePicker({
               type="button"
               onClick={() => setActiveBoundary("start")}
             >
-              <span>Starts</span>
+              <span>{startLabel}</span>
               <strong>{conciseDate(startDate)}</strong>
             </button>
             <span className={styles.rangeArrow}>to</span>
@@ -280,7 +267,7 @@ export function EventDatePicker({
               type="button"
               onClick={() => setActiveBoundary("end")}
             >
-              <span>Ends</span>
+              <span>{endLabel}</span>
               <strong>{conciseDate(endDate)}</strong>
             </button>
           </div>
@@ -296,7 +283,7 @@ export function EventDatePicker({
         )}
       </div>
 
-      <div className={styles.pickerLayout}>
+      <div className={styles.pickerLayout} data-details-hidden={!showDetails}>
         <div className={styles.calendar}>
           <div className={styles.calendarHeader}>
             <strong>
@@ -341,7 +328,12 @@ export function EventDatePicker({
           </div>
           <div className={styles.days}>
             {cells.map((cell) => {
-              const disabled = minimumDate !== "" && cell.dateKey < minimumDate;
+              const disabled = isEventDateDisabled(
+                cell.dateKey,
+                minimumDate,
+                mode === "range" ? minimumEndDateValue : "",
+                activeBoundary,
+              );
               const individuallySelected = selectedDates.includes(cell.dateKey);
               const inRange =
                 mode === "range" &&
@@ -371,61 +363,67 @@ export function EventDatePicker({
           </div>
         </div>
 
-        <div className={styles.details}>
-          {mode === "individual" && selectedDates.length > 0 ? (
-            <div className={styles.selectedDates}>
-              <span className={styles.detailLabel}>Selected days</span>
-              <div className={styles.dateChips}>
-                {selectedDates.map((date) => (
-                  <button
-                    aria-label={`Remove ${longDate(date)}`}
-                    className={styles.dateChip}
-                    key={date}
-                    type="button"
-                    onClick={() => selectIndividualDate(date)}
-                  >
-                    {conciseDate(date)}
-                    <X aria-hidden="true" />
-                  </button>
-                ))}
+        {showDetails ? (
+          <div className={styles.details}>
+            {showSelectedDates ? (
+              <div className={styles.selectedDates}>
+                <span className={styles.detailLabel}>Selected days</span>
+                <div className={styles.dateChips}>
+                  {selectedDates.map((date) => (
+                    <button
+                      aria-label={`Remove ${longDate(date)}`}
+                      className={styles.dateChip}
+                      key={date}
+                      type="button"
+                      onClick={() => selectIndividualDate(date)}
+                    >
+                      {conciseDate(date)}
+                      <X aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : null}
-          <div className={styles.timeGrid}>
-            <label htmlFor="organizer-event-start-time">
-              <span className={styles.detailLabel}>
-                <Clock3 aria-hidden="true" />
-                Start time
-              </span>
-              <Input
-                aria-label="Event start time"
-                disabled={startDate === ""}
-                id="organizer-event-start-time"
-                type="time"
-                value={startDate === "" ? "" : timePart(startsAt, "09:00")}
-                onChange={(event) => updateTime("start", event.target.value)}
-              />
-            </label>
-            <label htmlFor="organizer-event-end-time">
-              <span className={styles.detailLabel}>
-                <Clock3 aria-hidden="true" />
-                End time
-              </span>
-              <Input
-                aria-label="Event end time"
-                disabled={endDate === ""}
-                id="organizer-event-end-time"
-                type="time"
-                value={endDate === "" ? "" : timePart(endsAt, "17:00")}
-                onChange={(event) => updateTime("end", event.target.value)}
-              />
-            </label>
+            ) : null}
+            {showTimeControls ? (
+              <>
+                <div className={styles.timeGrid}>
+                  <label htmlFor="organizer-event-start-time">
+                    <span className={styles.detailLabel}>
+                      <Clock3 aria-hidden="true" />
+                      Start time
+                    </span>
+                    <Input
+                      aria-label="Event start time"
+                      disabled={startDate === ""}
+                      id="organizer-event-start-time"
+                      type="time"
+                      value={startDate === "" ? "" : timePart(startsAt, "09:00")}
+                      onChange={(event) => updateTime("start", event.target.value)}
+                    />
+                  </label>
+                  <label htmlFor="organizer-event-end-time">
+                    <span className={styles.detailLabel}>
+                      <Clock3 aria-hidden="true" />
+                      End time
+                    </span>
+                    <Input
+                      aria-label="Event end time"
+                      disabled={endDate === ""}
+                      id="organizer-event-end-time"
+                      type="time"
+                      value={endDate === "" ? "" : timePart(endsAt, "17:00")}
+                      onChange={(event) => updateTime("end", event.target.value)}
+                    />
+                  </label>
+                </div>
+                <p className={styles.timeHint}>
+                  Times use the event time zone. For individual days, these are the opening time on
+                  the first day and closing time on the last day.
+                </p>
+              </>
+            ) : null}
           </div>
-          <p className={styles.timeHint}>
-            Times use the event time zone. For individual days, these are the opening time on the
-            first day and closing time on the last day.
-          </p>
-        </div>
+        ) : null}
       </div>
     </section>
   );
