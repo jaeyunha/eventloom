@@ -19,8 +19,14 @@ export function PortalAuthGuard({ children }: Readonly<{ children: ReactNode }>)
       signal: controller.signal,
     })
       .then(async (response) => {
+        if (controller.signal.aborted) return;
+        if (!response.ok) {
+          redirectToLogin();
+          return;
+        }
         const session = await response.json().catch(() => null);
-        if (!response.ok || !sessionHasAuthenticatedUser(session)) {
+        if (controller.signal.aborted) return;
+        if (!sessionHasAuthenticatedUser(session)) {
           redirectToLogin();
           return;
         }

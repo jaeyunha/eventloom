@@ -1,5 +1,14 @@
 import { createMemberApi, type OrganizationMember } from "../members/api";
 
+const SUBMISSION_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+
 export type SubmissionStatus =
   | "draft"
   | "submitted"
@@ -9,6 +18,23 @@ export type SubmissionStatus =
   | "waitlisted"
   | "declined"
   | "withdrawn";
+export const submissionStatusLabels: Record<SubmissionStatus, string> = {
+  draft: "Draft",
+  submitted: "Submitted",
+  reopened: "Reopened",
+  under_review: "Under review",
+  accepted: "Accepted",
+  waitlisted: "Waitlisted",
+  declined: "Declined",
+  withdrawn: "Withdrawn",
+};
+
+export type SubmissionSortKey = "title" | "status" | "updatedAt";
+export type SubmissionSortDirection = "asc" | "desc";
+
+export function submissionListHref(eventId: string, organizationId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
+}
 
 export interface SubmissionParticipant {
   id: string;
@@ -346,9 +372,13 @@ function optionValue(value: unknown): string | null {
 
 function fieldAnswer(value: unknown, definition: SubmissionFieldDefinition | undefined): string {
   if (Array.isArray(value)) {
-    const values = value
-      .map((candidate) => fieldAnswer(candidate, definition))
-      .filter((candidate) => candidate !== "—");
+    const values: string[] = [];
+    const itemCount = value.length;
+    for (let index = 0; index < itemCount; index += 1) {
+      if (!(index in value)) continue;
+      const candidate = fieldAnswer(value[index], definition);
+      if (candidate !== "—") values.push(candidate);
+    }
     return values.length === 0 ? "—" : values.join(", ");
   }
   const raw = answerText(value);
@@ -646,11 +676,16 @@ export function mergeCanonicalSubmissionEvaluation(
   const assignments = index.assignmentsBySubmissionId.get(submission.id) ?? [];
   const decision = index.decisions[submission.id] ?? null;
   const aggregate = index.aggregateBySubmissionId.get(submission.id) ?? null;
-  const submittedReviewByAssignment = new Map(
-    submittedReviewResult.reviews
-      .filter((review) => review.submissionId === submission.id)
-      .map((review) => [review.assignmentId, review] as const),
-  );
+  const submittedReviewByAssignment = new Map<string, SubmittedReview>();
+  const reviewCount = submittedReviewResult.reviews.length;
+  for (let index = 0; index < reviewCount; index += 1) {
+    if (!(index in submittedReviewResult.reviews)) continue;
+    const review = submittedReviewResult.reviews[index];
+    if (review === undefined) continue;
+    if (review.submissionId === submission.id) {
+      submittedReviewByAssignment.set(review.assignmentId, review);
+    }
+  }
   const reviewerDisplayLabel = (reviewerId: string): string => {
     const member = reviewerMembers.find((candidate) => candidate.userId === reviewerId);
     return member?.name?.trim() || member?.email || "Assigned reviewer";
@@ -819,14 +854,7 @@ export async function loadOrganizerEventIdentity(
 }
 
 export function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "UTC",
-  }).format(new Date(value));
+  return SUBMISSION_DATE_TIME_FORMATTER.format(new Date(value));
 }
 
 export type SubmissionListState =

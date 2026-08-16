@@ -1,27 +1,8 @@
 "use client";
 
-import { uploadMimeTypeLabels } from "@eventloom/contracts";
-import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  type ChangeEvent,
-  type FormEvent,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { ThemeToggle } from "../../components/product-shell/theme-toggle";
+import { RedirectType, redirect, useRouter } from "next/navigation";
+import { type FormEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Button } from "../../components/ui/button";
-import { Card } from "../../components/ui/card";
-import { RichTextArea } from "../../components/ui/rich-text";
-import { SearchableSelect } from "../../components/ui/searchable-select";
-import { Separator } from "../../components/ui/separator";
-import { ToggleGroup, ToggleGroupItem } from "../../components/ui/toggle-group";
-import { WorkspaceBrandMark } from "../../components/workspace/workspace-brand-mark";
-import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,
   CfpApiError,
@@ -37,24 +18,24 @@ import {
   type PublishedCfp,
 } from "./api";
 import { shouldConfirmCfpApplicantContext } from "./cfp-account-context";
-import { CharacterCount, Field, Input } from "./cfp-field";
-import { CFP_STEP_LABELS, CfpProgress } from "./cfp-progress";
 import { useCfpStartupStore } from "./cfp-startup-provider";
-import { CfpSubmissionWindow } from "./cfp-submission-window";
+import { CfpWizardSections, PublicCfpShell } from "./cfp-wizard-sections";
+
+type CfpStartupStore = ReturnType<typeof useCfpStartupStore>;
+
 import styles from "./cfp-wizard.module.css";
 import {
-  canSaveCfpDraftAtStep,
+  canResumeCfpSubmission,
   cfpConfirmationEmailMessage,
   cfpHttpUrlIsValid,
-  cfpPublishedFieldIsVisible,
-  cfpReviewSubmissionDetails,
   cfpSubmissionErrorKey,
   cfpSubmissionFieldValue,
   cfpSubmissionPayload,
+  getCfpCompletionHandoffStorageKey,
+  getCfpPortalHandoffHref,
+  rotateCfpCompletionIdentity,
   shouldAuthenticateCfpAccount,
 } from "./cfp-wizard-model";
-
-export { cfpHttpUrlIsValid, cfpPublishedFieldIsVisible };
 
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import {
@@ -66,18 +47,11 @@ import {
 import {
   type CfpDraft,
   type CfpParticipant,
-  type CfpSecondaryContact,
   type CfpStep,
   createEmptyDraft,
-  createEmptyParticipant,
   syncPrimaryParticipant,
 } from "./types";
-import {
-  getFirstInvalidStep,
-  getPasswordChecks,
-  type ValidationErrors,
-  validateStep,
-} from "./validation";
+import { getFirstInvalidStep, type ValidationErrors, validateStep } from "./validation";
 import {
   clearCfpVerificationContinuation,
   createCfpVerificationCallbackUrl,
@@ -85,51 +59,6 @@ import {
   writeCfpVerificationContinuation,
 } from "./verification-continuation";
 
-const LOCAL_MAIL_INBOX_URL =
-  process.env.NODE_ENV === "development" ? "http://127.0.0.1:8025/" : null;
-
-const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
-
-export function getCfpCompletionHandoffStorageKey(
-  organizationId: string,
-  eventId: string,
-  formId: string,
-): string {
-  return `${CFP_COMPLETION_HANDOFF_PREFIX}:${encodeURIComponent(
-    organizationId,
-  )}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
-}
-export function getCfpPortalHandoffHref(
-  path: "/portal" | "/portal/submissions",
-  eventId?: string,
-): string {
-  const normalizedEventId = eventId?.trim();
-  return normalizedEventId ? `${path}?event=${encodeURIComponent(normalizedEventId)}` : path;
-}
-
-export function canResumeCfpSubmission(
-  status: CfpServerSubmission["status"],
-  step: CfpStep,
-): boolean {
-  return (
-    status === "draft" || status === "reopened" || (status === "submitted" && step === "submission")
-  );
-}
-
-export function rotateCfpCompletionIdentity(
-  identity: { organizationId: string; eventId: string; formId: string },
-  submissionId: string,
-  localStorage: Pick<Storage, "removeItem">,
-  sessionStorage: Pick<Storage, "setItem">,
-): void {
-  localStorage.removeItem(
-    getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, identity.formId),
-  );
-  sessionStorage.setItem(
-    getCfpCompletionHandoffStorageKey(identity.organizationId, identity.eventId, identity.formId),
-    submissionId.trim(),
-  );
-}
 type FormFieldOption =
   | string
   | {
@@ -190,13 +119,6 @@ function fieldOptions(field: CfpFormField): Array<ReturnType<typeof optionDetail
   });
 }
 
-function fieldConfig(field: CfpFormField, key: string): unknown {
-  if (isRecord(field.fileRequest) && key in field.fileRequest) return field.fileRequest[key];
-  if (isRecord(field.config) && key in field.config) return field.config[key];
-  const rawField = field as unknown as Record<string, unknown>;
-  return key in rawField ? rawField[key] : undefined;
-}
-
 function isFileField(field: CfpFormField): boolean {
   return ["file", "file_request", "upload"].includes(field.kind.toLowerCase().replaceAll("-", "_"));
 }
@@ -216,7 +138,8 @@ function valuesEqual(left: unknown, right: unknown): boolean {
   const leftValues = scalarValues(left);
   const rightValues = scalarValues(right);
   if (leftValues.length === 0 || rightValues.length === 0) return Object.is(left, right);
-  return leftValues.some((value) => rightValues.includes(value));
+  const rightValueSet = new Set(rightValues);
+  return leftValues.some((value) => rightValueSet.has(value));
 }
 
 function evaluateCondition(condition: unknown, answers: DynamicAnswers): boolean {
@@ -334,153 +257,12 @@ function clearCfpVerificationContinuationFromBrowser(
   clearCfpVerificationContinuation(identity, window.localStorage);
 }
 
-function readPersistedFileNames(
-  form: CfpPublishedForm | undefined,
-  answers: DynamicAnswers,
-  storage: Pick<Storage, "getItem">,
-): Record<string, string> {
-  const fileNames: Record<string, string> = {};
-  for (const field of form?.submissionFields ?? []) {
-    if (field.kind !== "file_request") continue;
-    const answer = answers[field.key];
-    const persistedAssetId =
-      typeof answer === "object" &&
-      answer !== null &&
-      "assetId" in answer &&
-      typeof answer.assetId === "string"
-        ? answer.assetId
-        : undefined;
-    if (persistedAssetId === undefined) continue;
-    const persistedFileName = storage.getItem(fileNameStorageKey(persistedAssetId));
-    if (persistedFileName !== null) fileNames[persistedAssetId] = persistedFileName;
-  }
-  return fileNames;
-}
-
 interface CfpWizardProps {
   eventSlug: string;
   step: CfpStep;
   organizationId?: string;
   formId?: string;
   api?: CfpApi;
-}
-
-function PublicCfpShell({
-  children,
-  organization,
-  event,
-  eventName,
-  form,
-  formName,
-  step,
-  className,
-}: {
-  children: ReactNode;
-  organization?: PublishedCfp["organization"] | undefined;
-  event?: PublishedCfp["event"] | undefined;
-  eventName?: string | undefined;
-  form?: CfpPublishedForm | undefined;
-  formName?: string | undefined;
-  step?: CfpStep | undefined;
-  className?: string | undefined;
-}) {
-  const resolvedOrganizationName = organization?.name ?? "Eventloom";
-  const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
-  const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
-  const resolvedStepName = step === undefined ? "Submission complete" : CFP_STEP_LABELS[step];
-  const now = Date.now();
-  const opensAt = event ? Date.parse(event.opensAt) : Number.NaN;
-  const closesAt = event ? Date.parse(event.closesAt) : Number.NaN;
-  const windowStatus =
-    Number.isFinite(closesAt) && closesAt <= now
-      ? "closed"
-      : Number.isFinite(opensAt) && opensAt > now
-        ? "upcoming"
-        : "open";
-
-  return (
-    <WorkspaceShell
-      className={styles.publicWorkspace ?? ""}
-      contentBodyClassName={styles.publicContentBody ?? ""}
-      contextBar={
-        <WorkspaceContextBar
-          actions={
-            <div className={styles.publicThemeAction}>
-              <ThemeToggle />
-            </div>
-          }
-          className={styles.publicContextBar ?? ""}
-          event={resolvedEventName}
-          metadata={resolvedStepName}
-          organization={resolvedOrganizationName}
-        />
-      }
-      mainClassName={styles.publicMain ?? ""}
-      mainId="cfp-main"
-      navigation={
-        <div className={styles.contextRail} data-cfp-context-rail>
-          <div className={styles.publicBrand}>
-            <WorkspaceBrandMark />
-            <span className={styles.publicBrandCopy}>
-              <strong>{resolvedOrganizationName}</strong>
-              <span>Applicant workspace</span>
-            </span>
-          </div>
-          <Separator className={styles.railSeparator} />
-          <div className={styles.railIntro}>
-            <p className={styles.railKicker}>Call for proposals</p>
-            <p className={styles.railEventName}>{resolvedEventName}</p>
-            <p className={styles.railFormName}>{resolvedFormName}</p>
-          </div>
-          {step ? <CfpProgress step={step} /> : <CfpProgress complete />}
-        </div>
-      }
-    >
-      <div className={styles.viewport}>
-        <Card className={`${styles.card} ${className ?? ""}`}>
-          <div className={styles.formColumn} data-cfp-main-flow>
-            {event ? (
-              <div className={styles.submissionWindow}>
-                <CfpSubmissionWindow
-                  opensAt={event.opensAt}
-                  closesAt={event.closesAt}
-                  {...(form ? { limit: formSubmissionLimit(form) } : {})}
-                  status={windowStatus}
-                  timeZone={event.timezone}
-                />
-              </div>
-            ) : null}
-            {step ? <CfpProgress mobile step={step} /> : <CfpProgress complete mobile />}
-            {children}
-          </div>
-        </Card>
-      </div>
-    </WorkspaceShell>
-  );
-}
-
-function ErrorSummary({ errors }: { errors: ValidationErrors }) {
-  const messages = [...new Set(Object.values(errors))];
-  if (messages.length === 0) return null;
-
-  return (
-    <div className={styles.errorSummary} role="alert" tabIndex={-1}>
-      <strong>Check the highlighted fields.</strong>
-      <ul>
-        {messages.map((message) => (
-          <li key={message}>{message}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function newId(prefix: string): string {
-  const suffix =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}-${suffix}`;
 }
 
 interface CfpMutationOperation {
@@ -508,6 +290,242 @@ type CfpVerificationState =
       readonly status: "resuming";
       readonly email: string;
     };
+type CfpStateUpdate<T> = T | ((current: T) => T);
+
+function resolveCfpStateUpdate<T>(current: T, update: CfpStateUpdate<T>): T {
+  return typeof update === "function" ? (update as (current: T) => T)(current) : update;
+}
+
+type CfpDraftState = {
+  readonly draft: CfpDraft;
+  readonly dynamicAnswers: DynamicAnswers;
+  readonly participantAnswers: ParticipantAnswers;
+  readonly fileUploadStates: FileUploadStates;
+};
+
+type CfpDraftAction =
+  | { readonly type: "set-draft"; readonly value: CfpStateUpdate<CfpDraft> }
+  | { readonly type: "set-dynamic-answers"; readonly value: CfpStateUpdate<DynamicAnswers> }
+  | {
+      readonly type: "set-participant-answers";
+      readonly value: CfpStateUpdate<ParticipantAnswers>;
+    }
+  | {
+      readonly type: "set-file-upload-states";
+      readonly value: CfpStateUpdate<FileUploadStates>;
+    }
+  | {
+      readonly type: "set-file-upload-state";
+      readonly key: string;
+      readonly state: FileUploadState;
+    }
+  | {
+      readonly type: "hydrate-submission";
+      readonly draft: CfpDraft;
+      readonly dynamicAnswers: DynamicAnswers;
+      readonly participantAnswers: ParticipantAnswers;
+    }
+  | { readonly type: "reset"; readonly draft: CfpDraft };
+
+function cfpDraftReducer(state: CfpDraftState, action: CfpDraftAction): CfpDraftState {
+  switch (action.type) {
+    case "set-draft":
+      return { ...state, draft: resolveCfpStateUpdate(state.draft, action.value) };
+    case "set-dynamic-answers":
+      return {
+        ...state,
+        dynamicAnswers: resolveCfpStateUpdate(state.dynamicAnswers, action.value),
+      };
+    case "set-participant-answers":
+      return {
+        ...state,
+        participantAnswers: resolveCfpStateUpdate(state.participantAnswers, action.value),
+      };
+    case "set-file-upload-states":
+      return {
+        ...state,
+        fileUploadStates: resolveCfpStateUpdate(state.fileUploadStates, action.value),
+      };
+    case "set-file-upload-state":
+      return {
+        ...state,
+        fileUploadStates: { ...state.fileUploadStates, [action.key]: action.state },
+      };
+    case "hydrate-submission":
+      return {
+        ...state,
+        draft: action.draft,
+        dynamicAnswers: action.dynamicAnswers,
+        participantAnswers: action.participantAnswers,
+      };
+    case "reset":
+      return {
+        draft: action.draft,
+        dynamicAnswers: {},
+        participantAnswers: {},
+        fileUploadStates: {},
+      };
+  }
+}
+
+type CfpSessionState = {
+  readonly published: PublishedCfp | null;
+  readonly authenticatedSession: CfpAuthenticatedSession | null;
+  readonly verificationState: CfpVerificationState | null;
+  readonly confirmedApplicantContext: boolean;
+  readonly password: string;
+  readonly accountMode: CfpAccountMode;
+};
+
+type CfpSessionAction =
+  | { readonly type: "set-published"; readonly value: CfpStateUpdate<PublishedCfp | null> }
+  | {
+      readonly type: "set-authenticated-session";
+      readonly value: CfpStateUpdate<CfpAuthenticatedSession | null>;
+    }
+  | {
+      readonly type: "set-verification-state";
+      readonly value: CfpStateUpdate<CfpVerificationState | null>;
+    }
+  | {
+      readonly type: "set-confirmed-applicant-context";
+      readonly value: CfpStateUpdate<boolean>;
+    }
+  | { readonly type: "set-password"; readonly value: CfpStateUpdate<string> }
+  | { readonly type: "set-account-mode"; readonly value: CfpStateUpdate<CfpAccountMode> }
+  | {
+      readonly type: "startup-loaded";
+      readonly published: PublishedCfp;
+      readonly authenticatedSession: CfpAuthenticatedSession | null;
+    }
+  | { readonly type: "reset-authentication" };
+
+function cfpSessionReducer(state: CfpSessionState, action: CfpSessionAction): CfpSessionState {
+  switch (action.type) {
+    case "set-published":
+      return { ...state, published: resolveCfpStateUpdate(state.published, action.value) };
+    case "set-authenticated-session":
+      return {
+        ...state,
+        authenticatedSession: resolveCfpStateUpdate(state.authenticatedSession, action.value),
+      };
+    case "set-verification-state":
+      return {
+        ...state,
+        verificationState: resolveCfpStateUpdate(state.verificationState, action.value),
+      };
+    case "set-confirmed-applicant-context":
+      return {
+        ...state,
+        confirmedApplicantContext: resolveCfpStateUpdate(
+          state.confirmedApplicantContext,
+          action.value,
+        ),
+      };
+    case "set-password":
+      return { ...state, password: resolveCfpStateUpdate(state.password, action.value) };
+    case "set-account-mode":
+      return { ...state, accountMode: resolveCfpStateUpdate(state.accountMode, action.value) };
+    case "startup-loaded":
+      return {
+        ...state,
+        published: action.published,
+        authenticatedSession: action.authenticatedSession,
+      };
+    case "reset-authentication":
+      return { ...state, authenticatedSession: null, verificationState: null };
+  }
+}
+
+type CfpStaleFormConflict = {
+  readonly submissionId: string | null;
+  readonly pinnedDraftUnavailable: boolean;
+};
+
+type CfpPersistenceState = {
+  readonly errors: ValidationErrors;
+  readonly hydrated: boolean;
+  readonly startupRevision: number;
+  readonly saveState: "idle" | "saving" | "saved" | "error";
+  readonly mutationPending: boolean;
+  readonly saveError: string | null;
+  readonly staleFormConflict: CfpStaleFormConflict | null;
+};
+
+type CfpPersistenceAction =
+  | { readonly type: "set-errors"; readonly value: CfpStateUpdate<ValidationErrors> }
+  | { readonly type: "set-hydrated"; readonly value: CfpStateUpdate<boolean> }
+  | { readonly type: "set-startup-revision"; readonly value: CfpStateUpdate<number> }
+  | {
+      readonly type: "set-save-state";
+      readonly value: CfpStateUpdate<CfpPersistenceState["saveState"]>;
+    }
+  | { readonly type: "set-mutation-pending"; readonly value: CfpStateUpdate<boolean> }
+  | { readonly type: "set-save-error"; readonly value: CfpStateUpdate<string | null> }
+  | {
+      readonly type: "set-stale-form-conflict";
+      readonly value: CfpStateUpdate<CfpStaleFormConflict | null>;
+    }
+  | {
+      readonly type: "startup-error";
+      readonly conflict: CfpStaleFormConflict | null | undefined;
+      readonly error: string;
+    }
+  | { readonly type: "local-change"; readonly resetSaveState: boolean }
+  | { readonly type: "refresh-start" };
+
+function cfpPersistenceReducer(
+  state: CfpPersistenceState,
+  action: CfpPersistenceAction,
+): CfpPersistenceState {
+  switch (action.type) {
+    case "set-errors":
+      return { ...state, errors: resolveCfpStateUpdate(state.errors, action.value) };
+    case "set-hydrated":
+      return { ...state, hydrated: resolveCfpStateUpdate(state.hydrated, action.value) };
+    case "set-startup-revision":
+      return {
+        ...state,
+        startupRevision: resolveCfpStateUpdate(state.startupRevision, action.value),
+      };
+    case "set-save-state":
+      return { ...state, saveState: resolveCfpStateUpdate(state.saveState, action.value) };
+    case "set-mutation-pending":
+      return {
+        ...state,
+        mutationPending: resolveCfpStateUpdate(state.mutationPending, action.value),
+      };
+    case "set-save-error":
+      return { ...state, saveError: resolveCfpStateUpdate(state.saveError, action.value) };
+    case "set-stale-form-conflict":
+      return {
+        ...state,
+        staleFormConflict: resolveCfpStateUpdate(state.staleFormConflict, action.value),
+      };
+    case "startup-error":
+      return {
+        ...state,
+        staleFormConflict:
+          action.conflict === undefined ? state.staleFormConflict : action.conflict,
+        saveState: "error",
+        saveError: action.error,
+        hydrated: true,
+      };
+    case "local-change":
+      return {
+        ...state,
+        errors: {},
+        saveError: null,
+        ...(action.resetSaveState ? { saveState: "idle" as const } : {}),
+      };
+    case "refresh-start":
+      return {
+        ...state,
+        hydrated: false,
+        startupRevision: state.startupRevision + 1,
+      };
+  }
+}
 
 function mutationIdempotencyKey(prefix: string): string {
   const suffix =
@@ -531,32 +549,6 @@ function mutationErrorMessage(error: unknown, fallback: string): string {
   }
   if (error instanceof Error && error.message.trim()) return error.message;
   return fallback;
-}
-
-function mergeParticipant(
-  draft: CfpDraft,
-  index: number,
-  patch: Partial<CfpParticipant>,
-): CfpDraft {
-  return {
-    ...draft,
-    participants: draft.participants.map((participant, participantIndex) =>
-      participantIndex === index ? { ...participant, ...patch } : participant,
-    ),
-  };
-}
-
-function mergeSecondaryContact(
-  draft: CfpDraft,
-  index: number,
-  patch: Partial<CfpSecondaryContact>,
-): CfpDraft {
-  return {
-    ...draft,
-    secondaryContacts: draft.secondaryContacts.map((contact, contactIndex) =>
-      contactIndex === index ? { ...contact, ...patch } : contact,
-    ),
-  };
 }
 
 type CfpAccountMode = "sign_in" | "sign_up";
@@ -867,28 +859,86 @@ function firstInvalidPublishedStep(
   if (Object.keys(participantErrors).length > 0) return "participants";
   return null;
 }
-function formSubmissionLimit(form?: CfpPublishedForm): number {
-  const value = form?.settings.maxSubmissionsPerAccount;
-  return typeof value === "number" && Number.isFinite(value) ? value : 3;
-}
 function cfpIsClosed(event: PublishedCfp["event"] | undefined): boolean {
   return event !== undefined && Date.parse(event.closesAt) <= Date.now();
 }
-function formatCfpWindowDate(value: string, timeZone: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value;
+function focusFirstError(nextErrors: ValidationErrors): void {
+  const firstKey = Object.keys(nextErrors)[0];
+  if (!firstKey) return;
+  window.setTimeout(() => {
+    document.getElementById(firstKey)?.focus();
+  });
+}
+
+type CfpStartupData = {
+  readonly publishedCfp: PublishedCfp;
+  readonly session: CfpAuthenticatedSession | null;
+  readonly canonicalIdentity: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly formId: string;
+  };
+};
+
+type CfpPinnedDraftResult =
+  | { readonly status: "resume"; readonly saved: CfpServerSubmission }
+  | { readonly status: "reset" }
+  | { readonly status: "stale"; readonly submissionId: string };
+
+function throwIfCfpStartupAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+}
+
+async function loadCfpStartup(
+  api: CfpApi,
+  startupStore: CfpStartupStore,
+  routeIdentity: { organizationId: string; eventId: string; formId?: string },
+  signal: AbortSignal,
+): Promise<CfpStartupData> {
+  const startup = startupStore.load(api, routeIdentity);
+  const [publishedCfp, session] = await Promise.all([startup.published, startup.session]);
+  throwIfCfpStartupAborted(signal);
+  return {
+    publishedCfp,
+    session,
+    canonicalIdentity: {
+      organizationId: routeIdentity.organizationId,
+      eventId: publishedCfp.event.id,
+      formId: publishedCfp.form.id,
+    },
+  };
+}
+
+async function loadCfpPinnedDraft(
+  api: CfpApi,
+  identity: CfpStartupData["canonicalIdentity"],
+  pointer: string,
+  step: CfpStep,
+  signal: AbortSignal,
+): Promise<CfpPinnedDraftResult> {
   try {
-    return new Intl.DateTimeFormat("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone,
-    }).format(new Date(timestamp));
-  } catch {
-    return value;
+    const saved = await api.loadDraft({
+      organizationId: identity.organizationId,
+      eventId: identity.eventId,
+      submissionId: pointer,
+      signal,
+    });
+    throwIfCfpStartupAborted(signal);
+    return canResumeCfpSubmission(saved.status, step)
+      ? { status: "resume", saved }
+      : { status: "reset" };
+  } catch (error) {
+    if (isCfpSchemaVersionConflict(error)) {
+      return { status: "stale", submissionId: pointer };
+    }
+    if (!(error instanceof CfpApiError) || (error.status !== 401 && error.status !== 404)) {
+      throw error;
+    }
+    return { status: "reset" };
   }
 }
 
-export function CfpWizard({
+function useCfpWizardController({
   eventSlug,
   step,
   organizationId,
@@ -906,11 +956,29 @@ export function CfpWizard({
   }, [eventSlug, organizationId, formId]);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const startupStore = useCfpStartupStore();
-  const [draft, setDraft] = useState<CfpDraft>(initialDraft);
-  const [dynamicAnswers, setDynamicAnswers] = useState<DynamicAnswers>({});
-  const [participantAnswers, setParticipantAnswers] = useState<ParticipantAnswers>({});
-  const [fileUploadStates, setFileUploadStates] = useState<FileUploadStates>({});
-  const [published, setPublished] = useState<PublishedCfp | null>(null);
+  const [draftState, dispatchDraft] = useReducer(cfpDraftReducer, {
+    draft: initialDraft,
+    dynamicAnswers: {},
+    participantAnswers: {},
+    fileUploadStates: {},
+  });
+  const { draft, dynamicAnswers, participantAnswers, fileUploadStates } = draftState;
+  const [sessionState, dispatchSession] = useReducer(cfpSessionReducer, {
+    published: null,
+    authenticatedSession: null,
+    verificationState: null,
+    confirmedApplicantContext: false,
+    password: "",
+    accountMode: "sign_in" as CfpAccountMode,
+  });
+  const {
+    published,
+    authenticatedSession,
+    verificationState,
+    confirmedApplicantContext,
+    password,
+    accountMode,
+  } = sessionState;
   const identity = useMemo(() => {
     if (routeIdentity === null || published === null) return null;
     return {
@@ -919,22 +987,56 @@ export function CfpWizard({
       formId: published.form.id,
     };
   }, [published, routeIdentity]);
-  const [authenticatedSession, setAuthenticatedSession] = useState<CfpAuthenticatedSession | null>(
-    null,
-  );
-  const [verificationState, setVerificationState] = useState<CfpVerificationState | null>(null);
-  const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
   const requiresApplicantContextConfirmation =
     authenticatedSession !== null &&
     identity !== null &&
     shouldConfirmCfpApplicantContext(authenticatedSession, identity.organizationId);
-  const [password, setPassword] = useState("");
-  const [accountMode, setAccountMode] = useState<CfpAccountMode>("sign_in");
-  const [errors, setErrors] = useState<ValidationErrors>({});
-  const [hydrated, setHydrated] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [mutationPending, setMutationPending] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [persistenceState, dispatchPersistence] = useReducer(cfpPersistenceReducer, {
+    errors: {},
+    hydrated: false,
+    startupRevision: 0,
+    saveState: "idle",
+    mutationPending: false,
+    saveError: null,
+    staleFormConflict: null,
+  });
+  const {
+    errors,
+    hydrated,
+    startupRevision,
+    saveState,
+    mutationPending,
+    saveError,
+    staleFormConflict,
+  } = persistenceState;
+  const setDraft = (value: CfpStateUpdate<CfpDraft>): void =>
+    dispatchDraft({ type: "set-draft", value });
+  const setDynamicAnswers = (value: CfpStateUpdate<DynamicAnswers>): void =>
+    dispatchDraft({ type: "set-dynamic-answers", value });
+  const setParticipantAnswers = (value: CfpStateUpdate<ParticipantAnswers>): void =>
+    dispatchDraft({ type: "set-participant-answers", value });
+  const setFileUploadStates = (value: CfpStateUpdate<FileUploadStates>): void =>
+    dispatchDraft({ type: "set-file-upload-states", value });
+  const setAuthenticatedSession = (value: CfpStateUpdate<CfpAuthenticatedSession | null>): void =>
+    dispatchSession({ type: "set-authenticated-session", value });
+  const setVerificationState = (value: CfpStateUpdate<CfpVerificationState | null>): void =>
+    dispatchSession({ type: "set-verification-state", value });
+  const setConfirmedApplicantContext = (value: CfpStateUpdate<boolean>): void =>
+    dispatchSession({ type: "set-confirmed-applicant-context", value });
+  const setPassword = (value: CfpStateUpdate<string>): void =>
+    dispatchSession({ type: "set-password", value });
+  const setAccountMode = (value: CfpStateUpdate<CfpAccountMode>): void =>
+    dispatchSession({ type: "set-account-mode", value });
+  const setErrors = (value: CfpStateUpdate<ValidationErrors>): void =>
+    dispatchPersistence({ type: "set-errors", value });
+  const setSaveState = (value: CfpStateUpdate<CfpPersistenceState["saveState"]>): void =>
+    dispatchPersistence({ type: "set-save-state", value });
+  const setMutationPending = (value: CfpStateUpdate<boolean>): void =>
+    dispatchPersistence({ type: "set-mutation-pending", value });
+  const setSaveError = (value: CfpStateUpdate<string | null>): void =>
+    dispatchPersistence({ type: "set-save-error", value });
+  const setStaleFormConflict = (value: CfpStateUpdate<CfpStaleFormConflict | null>): void =>
+    dispatchPersistence({ type: "set-stale-form-conflict", value });
   const submissionIdRef = useRef<string | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const verificationResumeRequestedRef = useRef(false);
@@ -945,19 +1047,14 @@ export function CfpWizard({
   const mutationGateRef = useRef<CfpMutationGate | null>(null);
   const mutationOperationRef = useRef<CfpMutationOperation | null>(null);
   if (mutationGateRef.current === null) mutationGateRef.current = new CfpMutationGate();
-  const [staleFormConflict, setStaleFormConflict] = useState<{
-    submissionId: string | null;
-    pinnedDraftUnavailable: boolean;
-  } | null>(null);
   const submissionsClosed = cfpIsClosed(published?.event);
   function noteLocalChange(): void {
     draftRevisionRef.current += 1;
-    if (!mutationGateRef.current?.isActive()) {
+    const resetSaveState = !mutationGateRef.current?.isActive();
+    if (resetSaveState) {
       mutationOperationRef.current = null;
-      setSaveState("idle");
     }
-    setSaveError(null);
-    setErrors({});
+    dispatchPersistence({ type: "local-change", resetSaveState });
   }
 
   function beginMutation(): CfpMutationOperation | null {
@@ -997,20 +1094,22 @@ export function CfpWizard({
     versionRef.current = saved.version;
     formVersionRef.current = saved.formVersion;
     if (draftRevisionRef.current !== localRevision) return;
-    setDynamicAnswers(submissionAnswersFromServer(saved));
-    setParticipantAnswers(participantAnswersFromServer(saved));
     const mappedDraft = draftFromSubmission(eventSlug, saved);
-    setDraft(
-      completedStep === "participant"
-        ? mappedDraft
-        : {
-            ...mappedDraft,
-            account: nextDraft.account,
-            submission: nextDraft.submission,
-            participants: nextDraft.participants,
-            secondaryContacts: nextDraft.secondaryContacts,
-          },
-    );
+    dispatchDraft({
+      type: "hydrate-submission",
+      dynamicAnswers: submissionAnswersFromServer(saved),
+      participantAnswers: participantAnswersFromServer(saved),
+      draft:
+        completedStep === "participant"
+          ? mappedDraft
+          : {
+              ...mappedDraft,
+              account: nextDraft.account,
+              submission: nextDraft.submission,
+              participants: nextDraft.participants,
+              secondaryContacts: nextDraft.secondaryContacts,
+            },
+    });
   }
 
   async function reconcileAuthoritativeVersion(): Promise<void> {
@@ -1027,186 +1126,224 @@ export function CfpWizard({
   }
 
   useEffect(() => {
-    setAuthenticatedSession(null);
-    setVerificationState(null);
+    dispatchSession({ type: "reset-authentication" });
     verificationResumeRequestedRef.current = false;
-    let active = true;
     const controller = new AbortController();
+    const scope = { active: true, revision: startupRevision };
+    const ownsScope = () =>
+      scope.active && scope.revision === startupRevision && !controller.signal.aborted;
+    const handleStartupError = (error: unknown): void => {
+      if (!ownsScope()) return;
+      const schemaConflict = isCfpSchemaVersionConflict(error);
+      if (schemaConflict) formVersionRef.current = null;
+      dispatchPersistence({
+        type: "startup-error",
+        conflict: schemaConflict
+          ? {
+              submissionId: submissionIdRef.current,
+              pinnedDraftUnavailable: submissionIdRef.current === null,
+            }
+          : undefined,
+        error: mutationErrorMessage(
+          error,
+          "The published CFP could not be loaded. Refresh to try again.",
+        ),
+      });
+    };
+    const applyVerificationContinuation = (
+      canonicalIdentity: CfpStartupData["canonicalIdentity"],
+      session: CfpAuthenticatedSession | null,
+      verificationContinuation: Awaited<ReturnType<typeof readCfpVerificationContinuation>> | null,
+    ): void => {
+      if (verificationContinuation === null) return;
+      const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
+      if (session === null) {
+        dispatchDraft({
+          type: "set-draft",
+          value: (current) => ({
+            ...current,
+            account: verificationContinuation.account,
+          }),
+        });
+        dispatchSession({
+          type: "set-verification-state",
+          value: {
+            status: "waiting",
+            email: verificationContinuation.account.email,
+          },
+        });
+      } else if (session.email === continuationEmail) {
+        dispatchDraft({
+          type: "set-draft",
+          value: (current) =>
+            syncPrimaryParticipant(
+              draftWithAuthenticatedSession(
+                {
+                  ...current,
+                  account: verificationContinuation.account,
+                },
+                session,
+              ),
+            ),
+        });
+        dispatchSession({
+          type: "set-verification-state",
+          value: { status: "resuming", email: session.email },
+        });
+      } else {
+        clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
+      }
+    };
+    const applyReset = (
+      publishedCfp: PublishedCfp,
+      session: CfpAuthenticatedSession | null,
+      initialDraftForScope: CfpDraft,
+      pointerKey: string,
+      clearPointer: boolean,
+    ): void => {
+      if (clearPointer) window.localStorage.removeItem(pointerKey);
+      submissionIdRef.current = null;
+      versionRef.current = 1;
+      formVersionRef.current = publishedCfp.form.version;
+      dispatchPersistence({
+        type: "set-stale-form-conflict",
+        value: null,
+      });
+      dispatchDraft({
+        type: "reset",
+        draft: session
+          ? draftWithAuthenticatedSession(initialDraftForScope, session)
+          : initialDraftForScope,
+      });
+      dispatchPersistence({ type: "set-errors", value: {} });
+      dispatchSession({ type: "set-password", value: "" });
+      dispatchPersistence({ type: "set-save-state", value: "idle" });
+      dispatchPersistence({ type: "set-save-error", value: null });
+    };
     if (!routeIdentity) {
-      setSaveState("error");
-      setHydrated(true);
+      dispatchPersistence({ type: "set-save-state", value: "error" });
+      dispatchPersistence({ type: "set-hydrated", value: true });
       return () => {
-        active = false;
+        scope.active = false;
         fileDraftCreationRef.current = null;
         controller.abort();
         mutationGateRef.current?.invalidate();
       };
     }
 
-    void (async () => {
-      try {
-        const startup = startupStore.load(api, routeIdentity);
-        const [publishedCfp, session] = await Promise.all([startup.published, startup.session]);
-        if (!active) return;
-        setAuthenticatedSession(session);
-        setPublished(publishedCfp);
-        const canonicalIdentity = {
-          organizationId: routeIdentity.organizationId,
-          eventId: publishedCfp.event.id,
-          formId: publishedCfp.form.id,
-        };
-        const verificationContinuation =
-          step === "account"
-            ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
-            : null;
-        const activeFormId = canonicalIdentity.formId;
-        const pointerKey = getCfpSubmissionPointerStorageKey(
-          canonicalIdentity.organizationId,
-          canonicalIdentity.eventId,
-          activeFormId,
-        );
-        if (step === "welcome" || step === "account") {
-          window.sessionStorage.removeItem(
-            getCfpCompletionHandoffStorageKey(
-              canonicalIdentity.organizationId,
-              canonicalIdentity.eventId,
-              activeFormId,
-            ),
+    void loadCfpStartup(api, startupStore, routeIdentity, controller.signal).then(
+      ({ publishedCfp, session, canonicalIdentity }) => {
+        if (!ownsScope()) return;
+        try {
+          dispatchSession({
+            type: "startup-loaded",
+            published: publishedCfp,
+            authenticatedSession: session,
+          });
+          const verificationContinuation =
+            step === "account"
+              ? readCfpVerificationContinuation(canonicalIdentity, window.localStorage)
+              : null;
+          const pointerKey = getCfpSubmissionPointerStorageKey(
+            canonicalIdentity.organizationId,
+            canonicalIdentity.eventId,
+            canonicalIdentity.formId,
           );
-        }
-        const pointer = window.localStorage.getItem(pointerKey);
-        if (pointer) {
-          try {
-            const saved = await api.loadDraft({
-              organizationId: canonicalIdentity.organizationId,
-              eventId: canonicalIdentity.eventId,
-              submissionId: pointer,
-              signal: controller.signal,
-            });
-            if (!active) return;
-            if (canResumeCfpSubmission(saved.status, step)) {
-              submissionIdRef.current = saved.id;
-              versionRef.current = saved.version;
-              formVersionRef.current = saved.formVersion;
-              setStaleFormConflict(null);
-              setDynamicAnswers(submissionAnswersFromServer(saved));
-              setParticipantAnswers(participantAnswersFromServer(saved));
-              setDraft(
-                session
-                  ? draftWithAuthenticatedSession(draftFromSubmission(eventSlug, saved), session)
-                  : draftFromSubmission(eventSlug, saved),
-              );
-            } else {
-              window.localStorage.removeItem(pointerKey);
-              submissionIdRef.current = null;
-              versionRef.current = 1;
-              formVersionRef.current = publishedCfp.form.version;
-              setStaleFormConflict(null);
-              setDynamicAnswers({});
-              setParticipantAnswers({});
-              setFileUploadStates({});
-              setErrors({});
-              setPassword("");
-              setSaveState("idle");
-              setSaveError(null);
-              setDraft(
-                session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft,
-              );
-            }
-          } catch (error) {
-            if (isCfpSchemaVersionConflict(error)) {
-              formVersionRef.current = null;
-              setStaleFormConflict({ submissionId: pointer, pinnedDraftUnavailable: true });
-              setHydrated(true);
-              return;
-            }
-            if (!(error instanceof CfpApiError) || (error.status !== 401 && error.status !== 404)) {
-              throw error;
-            }
-            window.localStorage.removeItem(pointerKey);
-            submissionIdRef.current = null;
-            versionRef.current = 1;
-            formVersionRef.current = publishedCfp.form.version;
-            setStaleFormConflict(null);
-            setDynamicAnswers({});
-            setParticipantAnswers({});
-            setFileUploadStates({});
-            setErrors({});
-            setPassword("");
-            setSaveState("idle");
-            setSaveError(null);
-            setDraft(session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft);
+          if (step === "welcome" || step === "account") {
+            window.sessionStorage.removeItem(
+              getCfpCompletionHandoffStorageKey(
+                canonicalIdentity.organizationId,
+                canonicalIdentity.eventId,
+                canonicalIdentity.formId,
+              ),
+            );
           }
-        } else {
+          const pointer = window.localStorage.getItem(pointerKey);
+          if (pointer) {
+            void loadCfpPinnedDraft(api, canonicalIdentity, pointer, step, controller.signal).then(
+              (pinnedDraft) => {
+                if (!ownsScope()) return;
+                try {
+                  if (pinnedDraft.status === "stale") {
+                    formVersionRef.current = null;
+                    dispatchPersistence({
+                      type: "set-stale-form-conflict",
+                      value: {
+                        submissionId: pinnedDraft.submissionId,
+                        pinnedDraftUnavailable: true,
+                      },
+                    });
+                    dispatchPersistence({ type: "set-hydrated", value: true });
+                    return;
+                  }
+                  if (pinnedDraft.status === "resume") {
+                    const saved = pinnedDraft.saved;
+                    submissionIdRef.current = saved.id;
+                    versionRef.current = saved.version;
+                    formVersionRef.current = saved.formVersion;
+                    dispatchPersistence({
+                      type: "set-stale-form-conflict",
+                      value: null,
+                    });
+                    dispatchDraft({
+                      type: "hydrate-submission",
+                      dynamicAnswers: submissionAnswersFromServer(saved),
+                      participantAnswers: participantAnswersFromServer(saved),
+                      draft: session
+                        ? draftWithAuthenticatedSession(
+                            draftFromSubmission(eventSlug, saved),
+                            session,
+                          )
+                        : draftFromSubmission(eventSlug, saved),
+                    });
+                  } else {
+                    applyReset(publishedCfp, session, initialDraft, pointerKey, true);
+                  }
+                  applyVerificationContinuation(
+                    canonicalIdentity,
+                    session,
+                    verificationContinuation,
+                  );
+                  dispatchPersistence({ type: "set-hydrated", value: true });
+                } catch (error) {
+                  handleStartupError(error);
+                }
+              },
+              handleStartupError,
+            );
+            return;
+          }
           formVersionRef.current = publishedCfp.form.version;
           submissionIdRef.current = null;
           versionRef.current = 1;
-          setStaleFormConflict(null);
-          setDraft(session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft);
-          setDynamicAnswers({});
-          setParticipantAnswers({});
-          setFileUploadStates({});
-          setErrors({});
-          setPassword("");
-          setSaveState("idle");
-          setSaveError(null);
-        }
-        if (verificationContinuation !== null) {
-          const continuationEmail = verificationContinuation.account.email.trim().toLowerCase();
-          if (session === null) {
-            setDraft((current) => ({
-              ...current,
-              account: verificationContinuation.account,
-            }));
-            setVerificationState({
-              status: "waiting",
-              email: verificationContinuation.account.email,
-            });
-          } else if (session.email === continuationEmail) {
-            setDraft((current) =>
-              syncPrimaryParticipant(
-                draftWithAuthenticatedSession(
-                  {
-                    ...current,
-                    account: verificationContinuation.account,
-                  },
-                  session,
-                ),
-              ),
-            );
-            setVerificationState({ status: "resuming", email: session.email });
-          } else {
-            clearCfpVerificationContinuation(canonicalIdentity, window.localStorage);
-          }
-        }
-        setHydrated(true);
-      } catch (error) {
-        if (!active) return;
-        if (isCfpSchemaVersionConflict(error)) {
-          formVersionRef.current = null;
-          setStaleFormConflict({
-            submissionId: submissionIdRef.current,
-            pinnedDraftUnavailable: submissionIdRef.current === null,
+          dispatchPersistence({
+            type: "set-stale-form-conflict",
+            value: null,
           });
+          dispatchDraft({
+            type: "reset",
+            draft: session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft,
+          });
+          dispatchPersistence({ type: "set-errors", value: {} });
+          dispatchSession({ type: "set-password", value: "" });
+          dispatchPersistence({ type: "set-save-state", value: "idle" });
+          dispatchPersistence({ type: "set-save-error", value: null });
+          applyVerificationContinuation(canonicalIdentity, session, verificationContinuation);
+          dispatchPersistence({ type: "set-hydrated", value: true });
+        } catch (error) {
+          handleStartupError(error);
         }
-        setSaveState("error");
-        setSaveError(
-          mutationErrorMessage(
-            error,
-            "The published CFP could not be loaded. Refresh to try again.",
-          ),
-        );
-        setHydrated(true);
-      }
-    })();
+      },
+      handleStartupError,
+    );
 
     return () => {
-      active = false;
+      scope.active = false;
       fileDraftCreationRef.current = null;
       controller.abort();
       mutationGateRef.current?.invalidate();
     };
-  }, [api, eventSlug, initialDraft, routeIdentity, startupStore, step]);
+  }, [api, eventSlug, initialDraft, routeIdentity, startupRevision, startupStore, step]);
 
   function updateDraft(update: (current: CfpDraft) => CfpDraft): void {
     setDraft((current) => ({ ...update(current), updatedAt: new Date().toISOString() }));
@@ -1477,14 +1614,17 @@ export function CfpWizard({
         );
         versionRef.current = result.submission.version;
         if (draftRevisionRef.current === submitRevision) {
-          setDynamicAnswers(submissionAnswersFromServer(result.submission));
-          setParticipantAnswers(participantAnswersFromServer(result.submission));
           const submittedDraft = draftFromSubmission(eventSlug, result.submission);
-          setDraft({
-            ...submittedDraft,
-            receipt: {
-              id: result.receipt.id,
-              submittedAt: result.receipt.submittedAt,
+          dispatchDraft({
+            type: "hydrate-submission",
+            dynamicAnswers: submissionAnswersFromServer(result.submission),
+            participantAnswers: participantAnswersFromServer(result.submission),
+            draft: {
+              ...submittedDraft,
+              receipt: {
+                id: result.receipt.id,
+                submittedAt: result.receipt.submittedAt,
+              },
             },
           });
         }
@@ -1546,14 +1686,6 @@ export function CfpWizard({
     } finally {
       finishMutation(operation, keepForRetry);
     }
-  }
-
-  function focusFirstError(nextErrors: ValidationErrors): void {
-    const firstKey = Object.keys(nextErrors)[0];
-    if (!firstKey) return;
-    window.setTimeout(() => {
-      document.getElementById(firstKey)?.focus();
-    });
   }
 
   async function continueFlow(event: FormEvent): Promise<void> {
@@ -1719,9 +1851,9 @@ export function CfpWizard({
       );
     }
   }
-
-  function reloadPinnedDraft(): void {
-    window.location.reload();
+  function refreshPinnedDraft(): void {
+    dispatchPersistence({ type: "refresh-start" });
+    router.refresh();
   }
 
   function discardStaleDraftAndStartNew(): void {
@@ -1737,7 +1869,7 @@ export function CfpWizard({
     setStaleFormConflict(null);
     setSaveError(null);
     setSaveState("idle");
-    window.location.reload();
+    refreshPinnedDraft();
   }
 
   function useDifferentVerificationEmail(): void {
@@ -1779,21 +1911,65 @@ export function CfpWizard({
     formRef.current?.requestSubmit();
   }, [authenticatedSession, hydrated, step, verificationState]);
 
-  useEffect(() => {
-    if (
-      hydrated &&
-      cfpStepRequiresAuthentication(step) &&
-      authenticatedSession === null &&
-      routeIdentity !== null
-    ) {
-      router.replace(getCfpStepRoute(routeIdentity.organizationId, eventSlug, "account"));
-    }
-  }, [authenticatedSession, eventSlug, hydrated, routeIdentity, router, step]);
+  if (
+    hydrated &&
+    cfpStepRequiresAuthentication(step) &&
+    authenticatedSession === null &&
+    routeIdentity !== null
+  ) {
+    redirect(
+      getCfpStepRoute(routeIdentity.organizationId, eventSlug, "account"),
+      RedirectType.replace,
+    );
+  }
 
+  return {
+    eventSlug,
+    step,
+    routeIdentity,
+    hydrated,
+    published,
+    identity,
+    errors,
+    staleFormConflict,
+    submissionsClosed,
+    saveError,
+    saveState,
+    mutationPending,
+    formRef,
+    draft,
+    dynamicAnswers,
+    participantAnswers,
+    fileUploadStates,
+    accountMode,
+    authenticatedSession,
+    confirmedApplicantContext,
+    password,
+    requiresApplicantContextConfirmation,
+    verificationState,
+    setAccountMode,
+    setPassword,
+    updateDraft,
+    setConfirmedApplicantContext,
+    useDifferentVerificationEmail,
+    setSubmissionAnswer,
+    setParticipantAnswer,
+    handleFileUpload,
+    setFileUploadState,
+    continueFlow,
+    goBack,
+    saveNow,
+    refreshPinnedDraft,
+    discardStaleDraftAndStartNew,
+  };
+}
+
+export function CfpWizard(props: CfpWizardProps) {
+  const controller = useCfpWizardController(props);
+  const { eventSlug, step, hydrated, authenticatedSession, published, saveError } = controller;
   if (cfpStepRequiresAuthentication(step) && (!hydrated || authenticatedSession === null)) {
     return <span aria-hidden="true" data-cfp-route-state="checking-session" hidden />;
   }
-
   if (!hydrated) {
     return (
       <PublicCfpShell step={step}>
@@ -1813,1687 +1989,44 @@ export function CfpWizard({
       </PublicCfpShell>
     );
   }
-
   return (
-    <PublicCfpShell
-      organization={published.organization}
-      event={published.event}
-      form={published.form}
+    <CfpWizardSections
+      eventSlug={eventSlug}
       step={step}
-    >
-      <ErrorSummary errors={errors} />
-      {staleFormConflict ? (
-        <section className={styles.errorSummary} role="alert">
-          <h2>This form has changed</h2>
-          <p>
-            The organizer updated this submission form. Reload the latest form before continuing;
-            your existing server draft will not be silently migrated.
-          </p>
-          {staleFormConflict.pinnedDraftUnavailable ? (
-            <p>
-              The pinned server draft cannot be loaded with this form version. Discard it only when
-              you are ready to start a new submission.
-            </p>
-          ) : null}
-          <div className={styles.forwardActions}>
-            <Button
-              disabled={
-                staleFormConflict.pinnedDraftUnavailable || staleFormConflict.submissionId === null
-              }
-              onClick={reloadPinnedDraft}
-              type="button"
-              variant="secondary"
-            >
-              Reload pinned draft
-            </Button>
-            <Button onClick={discardStaleDraftAndStartNew} type="button" variant="destructive">
-              Discard stale draft and start new
-            </Button>
-          </div>
-        </section>
-      ) : null}
-      {submissionsClosed ? (
-        <p className={styles.fieldError} role="status">
-          CFP closed at{" "}
-          {published?.event
-            ? formatCfpWindowDate(published.event.closesAt, published.event.timezone)
-            : "the server-recorded close instant"}{" "}
-          ({published?.event?.timezone ?? "event timezone"}). New draft creation and proposal edits
-          are locked after close; the server enforces this saved status.
-        </p>
-      ) : null}
-      {!published && saveState === "error" ? (
-        <p className={styles.fieldError} role="alert">
-          {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
-        </p>
-      ) : null}
-      <form
-        className={step === "account" ? styles.accountForm : undefined}
-        data-cfp-account-form={step === "account" ? "true" : undefined}
-        ref={formRef}
-        noValidate
-        onSubmit={(event) => void continueFlow(event)}
-      >
-        {step === "welcome" ? (
-          <WelcomeStep
-            {...(published === null ? {} : { event: published.event, form: published.form })}
-            closed={submissionsClosed}
-          />
-        ) : null}
-        {step === "account" ? (
-          <AccountStep
-            accountMode={accountMode}
-            authenticatedSession={authenticatedSession}
-            confirmedApplicantContext={confirmedApplicantContext}
-            draft={draft}
-            errors={errors}
-            onAccountModeChange={changeAccountMode}
-            onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
-            password={password}
-            pending={mutationPending}
-            requiresApplicantContextConfirmation={requiresApplicantContextConfirmation}
-            setPassword={setPassword}
-            updateDraft={updateDraft}
-            verificationState={verificationState}
-            onUseDifferentEmail={useDifferentVerificationEmail}
-          />
-        ) : null}
-        {step === "submission" ? (
-          <SubmissionStep
-            draft={draft}
-            errors={errors}
-            form={published.form}
-            answers={dynamicAnswers}
-            fileUploadStates={fileUploadStates}
-            onAnswerChange={setSubmissionAnswer}
-            onFileUploadStateChange={setFileUploadState}
-            onFileUpload={(field, file) => handleFileUpload(field, undefined, file)}
-            updateDraft={updateDraft}
-          />
-        ) : null}
-        {step === "participants" ? (
-          <ParticipantsStep
-            draft={draft}
-            errors={errors}
-            {...(published === null ? {} : { form: published.form })}
-            answers={participantAnswers}
-            fileUploadStates={fileUploadStates}
-            onAnswerChange={setParticipantAnswer}
-            onFileUpload={(field, participantId, file) =>
-              handleFileUpload(field, participantId, file)
-            }
-            onFileUploadStateChange={setFileUploadState}
-            updateDraft={updateDraft}
-          />
-        ) : null}
-        {step === "review" ? (
-          <ReviewStep
-            draft={draft}
-            eventSlug={eventSlug}
-            fileUploadStates={fileUploadStates}
-            organizationId={identity?.organizationId ?? ""}
-            {...(published === null ? {} : { form: published.form })}
-            answers={dynamicAnswers}
-          />
-        ) : null}
-
-        <div
-          className={`${styles.actions} ${
-            step === "account" ? `${styles.actionsSingleSecondary} ${styles.accountActions}` : ""
-          }`}
-          data-cfp-actions="true"
-        >
-          {step !== "welcome" ? (
-            <Button
-              className={styles.backButton}
-              disabled={mutationPending}
-              onClick={goBack}
-              type="button"
-              variant="outline"
-            >
-              ← Back
-            </Button>
-          ) : (
-            <span />
-          )}
-          <div className={styles.forwardActions}>
-            {canSaveCfpDraftAtStep(step) ? (
-              <Button
-                className={styles.draftButton}
-                onClick={() => void saveNow()}
-                type="button"
-                variant="secondary"
-                disabled={mutationPending || submissionsClosed}
-              >
-                Save as draft
-              </Button>
-            ) : null}
-            {!submissionsClosed && verificationState === null ? (
-              <Button
-                className={styles.primaryButton}
-                disabled={
-                  mutationPending ||
-                  (step === "account" &&
-                    requiresApplicantContextConfirmation &&
-                    !confirmedApplicantContext)
-                }
-                type="submit"
-              >
-                {step === "welcome" ? "Continue →" : null}
-                {step === "account"
-                  ? authenticatedSession
-                    ? mutationPending
-                      ? "Continuing…"
-                      : "Continue to proposal"
-                    : accountMode === "sign_in"
-                      ? mutationPending
-                        ? "Signing in…"
-                        : "Sign in and continue"
-                      : mutationPending
-                        ? "Creating account…"
-                        : "Create account and continue"
-                  : null}
-                {step === "submission" ? "Next step →" : null}
-                {step === "participants" ? "Continue to review →" : null}
-                {step === "review" ? "Submit" : null}
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </form>
-      {step !== "welcome" && step !== "account" ? (
-        <div className={styles.sessionFooter} data-cfp-session-footer="true">
-          {verificationState?.status === "waiting"
-            ? `Verification email sent to ${verificationState.email}.`
-            : verificationState?.status === "resuming"
-              ? `Email verified for ${verificationState.email}. Continuing to your proposal…`
-              : authenticatedSession
-                ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
-                : null}
-        </div>
-      ) : null}
-      <p
-        aria-live="polite"
-        className={saveState === "error" ? styles.saveError : styles.saveStatus}
-      >
-        {saveState === "saving" ? "Saving draft…" : null}
-        {saveState === "saved" ? "Draft saved" : null}
-        {saveState === "error" && staleFormConflict === null
-          ? (saveError ?? "Draft could not be saved. Check your connection and try again.")
-          : null}
-      </p>
-    </PublicCfpShell>
-  );
-}
-
-function WelcomeStep({
-  event,
-  form,
-  closed = false,
-}: {
-  event?: PublishedCfp["event"];
-  form?: CfpPublishedForm;
-  closed?: boolean;
-}) {
-  const content =
-    form?.welcomeContent || "Our event welcomes leaders, practitioners, and change-makers.";
-  return (
-    <div className={styles.welcomeContent}>
-      <p className={styles.welcomeEyebrow}>{form?.name ?? "Call for Speakers"}</p>
-      <h1>{event?.name ?? "Welcome to our event!"}</h1>
-      <p className={styles.welcomePurpose}>{content}</p>
-      <p className={styles.welcomeNote}>
-        Your speaker portal will show the status of your submission and any tasks assigned after
-        acceptance.
-      </p>
-      <section aria-labelledby="resources-title" className={styles.welcomeResources}>
-        <h2 id="resources-title">Resources</h2>
-        <ul>
-          <li>
-            <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
-          </li>
-          <li>
-            <a href="#application-faq">FAQs for the Speaker Application Process</a>
-          </li>
-          <li>
-            <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
-          </li>
-        </ul>
-      </section>
-      {closed ? (
-        <p className={styles.closedNotice} role="status">
-          Submissions are closed. Existing submissions remain available in your speaker portal.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-interface StepFormProps {
-  draft: CfpDraft;
-  errors: ValidationErrors;
-  updateDraft: (update: (current: CfpDraft) => CfpDraft) => void;
-}
-
-function AccountStep({
-  accountMode,
-  draft,
-  errors,
-  confirmedApplicantContext,
-  onAccountModeChange,
-  onConfirmApplicantContext,
-  password,
-  pending,
-  requiresApplicantContextConfirmation,
-  setPassword,
-  updateDraft,
-  authenticatedSession,
-  verificationState,
-  onUseDifferentEmail,
-}: StepFormProps & {
-  accountMode: CfpAccountMode;
-  confirmedApplicantContext: boolean;
-  onAccountModeChange: (mode: CfpAccountMode) => void;
-  onConfirmApplicantContext: () => void;
-  password: string;
-  pending: boolean;
-  requiresApplicantContextConfirmation: boolean;
-  setPassword: (value: string) => void;
-  authenticatedSession: CfpAuthenticatedSession | null;
-  verificationState: CfpVerificationState | null;
-  onUseDifferentEmail: () => void;
-}) {
-  if (verificationState !== null) {
-    const resuming = verificationState.status === "resuming";
-    return (
-      <section aria-live="polite" className={styles.verificationPending} role="status">
-        <span aria-hidden="true" className={styles.verificationIcon}>
-          <MailCheck />
-        </span>
-        <p className={styles.verificationEyebrow}>Email verification</p>
-        <h1>{resuming ? "Email verified" : "Check your inbox"}</h1>
-        {resuming ? (
-          <p>Verification is complete. We’re taking you to your proposal now.</p>
-        ) : (
-          <>
-            <p>We sent a verification link to:</p>
-            <strong className={styles.verificationRecipient}>{verificationState.email}</strong>
-            <p>After verification, you’ll return here and continue automatically.</p>
-            <p className={styles.verificationHint}>
-              {LOCAL_MAIL_INBOX_URL
-                ? "Local development captures this message in Mailpit instead of sending it to Gmail."
-                : "Open the link in this browser. If it is not in your inbox, check spam or promotions."}
-            </p>
-            <div className={styles.verificationActions}>
-              {LOCAL_MAIL_INBOX_URL ? (
-                <Button asChild className={styles.verificationAction} variant="secondary">
-                  <a data-local-mail-inbox href={LOCAL_MAIL_INBOX_URL}>
-                    Open local inbox
-                  </a>
-                </Button>
-              ) : null}
-              <Button
-                className={styles.verificationAction}
-                onClick={onUseDifferentEmail}
-                type="button"
-                variant="outline"
-              >
-                Use a different email
-              </Button>
-            </div>
-          </>
-        )}
-      </section>
-    );
-  }
-  const checks = getPasswordChecks(password);
-  return (
-    <div>
-      <h1>
-        {authenticatedSession
-          ? `Continue as ${authenticatedSession.name}`
-          : accountMode === "sign_in"
-            ? "Sign in to continue"
-            : "Create your account"}
-      </h1>
-      {authenticatedSession !== null &&
-      requiresApplicantContextConfirmation &&
-      !confirmedApplicantContext ? (
-        <div className={styles.identityBoundary} data-cfp-applicant-context-boundary role="note">
-          <strong>You are entering the applicant portal</strong>
-          <p>
-            This proposal will belong to {authenticatedSession.email}. Organizer and reviewer
-            permissions are not used here.
-          </p>
-          <div className={styles.identityBoundaryActions}>
-            <Button
-              data-cfp-applicant-context-confirm
-              onClick={onConfirmApplicantContext}
-              type="button"
-            >
-              Continue as applicant
-            </Button>
-            <Button asChild type="button" variant="outline">
-              <Link href="/admin">Return to organizer workspace</Link>
-            </Button>
-            <Button asChild type="button" variant="ghost">
-              <a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>
-            </Button>
-          </div>
-        </div>
-      ) : null}
-      {!authenticatedSession ? (
-        <p>
-          {accountMode === "sign_in"
-            ? "Use your existing Eventloom account to continue to your proposal."
-            : "Create an Eventloom account to save this proposal and receive updates."}
-        </p>
-      ) : null}
-      {!authenticatedSession ? (
-        <fieldset className={styles.accountModeFieldset} data-cfp-account-access="true">
-          <legend className="sr-only">Account access</legend>
-          <ToggleGroup
-            className={styles.accountModeSwitch}
-            disabled={pending}
-            onValueChange={(value) => {
-              if (value === "sign_in" || value === "sign_up") onAccountModeChange(value);
-            }}
-            orientation="horizontal"
-            spacing={0}
-            type="single"
-            value={accountMode}
-            variant="outline"
-          >
-            <ToggleGroupItem
-              aria-label="Existing account"
-              data-cfp-account-mode="sign_in"
-              value="sign_in"
-            >
-              Existing account
-            </ToggleGroupItem>
-            <ToggleGroupItem
-              aria-label="Create account"
-              data-cfp-account-mode="sign_up"
-              value="sign_up"
-            >
-              Create account
-            </ToggleGroupItem>
-          </ToggleGroup>
-        </fieldset>
-      ) : null}
-      <div className={styles.sectionPanel}>
-        <Field error={errors["account.email"]} label="Email address" name="account.email" required>
-          {(controlProps) => (
-            <Input
-              {...controlProps}
-              autoComplete="email"
-              disabled={pending}
-              readOnly={authenticatedSession !== null}
-              onChange={(event) =>
-                updateDraft((current) => ({
-                  ...current,
-                  account: { ...current.account, email: event.target.value },
-                }))
-              }
-              type="email"
-              value={draft.account.email}
-            />
-          )}
-        </Field>
-        {authenticatedSession ? (
-          <p role="status">Signed in as {authenticatedSession.email}.</p>
-        ) : (
-          <>
-            <Field
-              error={errors["account.password"]}
-              label="Password"
-              name="account.password"
-              required
-            >
-              {(controlProps) => (
-                <Input
-                  {...controlProps}
-                  autoComplete={accountMode === "sign_up" ? "new-password" : "current-password"}
-                  disabled={pending}
-                  onChange={(event) => setPassword(event.target.value)}
-                  type="password"
-                  value={password}
-                />
-              )}
-            </Field>
-            {accountMode === "sign_up" ? (
-              <ul className={styles.passwordChecks}>
-                <PasswordCheck passed={checks.minimumLength}>
-                  Password includes at least 8 characters
-                </PasswordCheck>
-                <PasswordCheck passed={checks.specialCharacter}>
-                  Password includes at least 1 special character
-                </PasswordCheck>
-                <PasswordCheck passed={checks.number}>
-                  Password includes at least 1 number
-                </PasswordCheck>
-                <PasswordCheck passed={checks.capitalLetter}>
-                  Password includes at least 1 capital letter
-                </PasswordCheck>
-              </ul>
-            ) : null}
-          </>
-        )}
-        {authenticatedSession || accountMode === "sign_up" ? (
-          <>
-            <div className={styles.twoColumns}>
-              <Field
-                error={errors["account.firstName"]}
-                label="First name"
-                name="account.firstName"
-                required
-              >
-                {(controlProps) => (
-                  <>
-                    <Input
-                      {...controlProps}
-                      disabled={pending}
-                      maxLength={255}
-                      onChange={(event) =>
-                        updateDraft((current) => ({
-                          ...current,
-                          account: { ...current.account, firstName: event.target.value },
-                        }))
-                      }
-                      value={draft.account.firstName}
-                    />
-                    <CharacterCount current={draft.account.firstName.length} maximum={255} />
-                  </>
-                )}
-              </Field>
-              <Field
-                error={errors["account.lastName"]}
-                label="Last name"
-                name="account.lastName"
-                required
-              >
-                {(controlProps) => (
-                  <>
-                    <Input
-                      {...controlProps}
-                      disabled={pending}
-                      maxLength={255}
-                      onChange={(event) =>
-                        updateDraft((current) => ({
-                          ...current,
-                          account: { ...current.account, lastName: event.target.value },
-                        }))
-                      }
-                      value={draft.account.lastName}
-                    />
-                    <CharacterCount current={draft.account.lastName.length} maximum={255} />
-                  </>
-                )}
-              </Field>
-            </div>
-            <label className={styles.consent} data-error-key="account.acceptedTerms">
-              <input
-                aria-invalid={Boolean(errors["account.acceptedTerms"])}
-                checked={draft.account.acceptedTerms}
-                disabled={pending}
-                id="account.acceptedTerms"
-                onChange={(event) =>
-                  updateDraft((current) => ({
-                    ...current,
-                    account: { ...current.account, acceptedTerms: event.target.checked },
-                  }))
-                }
-                type="checkbox"
-              />
-              <span>
-                I agree to the <a href="#terms">Terms of Service</a> and{" "}
-                <a href="#privacy">Privacy Policy</a>.{" "}
-                <span aria-hidden="true" className={styles.required}>
-                  *
-                </span>
-              </span>
-            </label>
-            {errors["account.acceptedTerms"] ? (
-              <span className={styles.fieldError} role="alert">
-                {errors["account.acceptedTerms"]}
-              </span>
-            ) : null}
-          </>
-        ) : null}
-        {errors["account.auth"] ? (
-          <p id="account.auth" className={styles.fieldError} role="alert">
-            {errors["account.auth"]}
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function PasswordCheck({ children, passed }: { children: ReactNode; passed: boolean }) {
-  return (
-    <li className={passed ? styles.checkPassed : styles.checkPending}>
-      <span aria-hidden="true">{passed ? "✓" : "×"}</span> {children}
-    </li>
-  );
-}
-
-function SubmissionStep({
-  draft,
-  errors,
-  form,
-  answers,
-  fileUploadStates,
-  onAnswerChange,
-  onFileUpload,
-  onFileUploadStateChange,
-}: StepFormProps & {
-  form: CfpPublishedForm;
-  answers: DynamicAnswers;
-  fileUploadStates: FileUploadStates;
-  onAnswerChange: (key: string, value: unknown) => void;
-  onFileUpload: (field: CfpFormField, file: File) => Promise<CfpFileUploadResult>;
-  onFileUploadStateChange: (key: string, state: FileUploadState) => void;
-}) {
-  if (form.submissionFields.length === 0) {
-    return (
-      <section className={styles.errorSummary} role="alert">
-        <h2>Submission form unavailable</h2>
-        <p>The published form does not contain any proposal fields.</p>
-      </section>
-    );
-  }
-  return (
-    <DynamicSubmissionFields
-      answers={answers}
-      draft={draft}
-      errors={errors}
-      fileUploadStates={fileUploadStates}
-      form={form}
-      onAnswerChange={onAnswerChange}
-      onFileUpload={onFileUpload}
-      onFileUploadStateChange={onFileUploadStateChange}
+      published={published}
+      identity={controller.identity}
+      errors={controller.errors}
+      staleFormConflict={controller.staleFormConflict}
+      submissionsClosed={controller.submissionsClosed}
+      saveError={controller.saveError}
+      saveState={controller.saveState}
+      mutationPending={controller.mutationPending}
+      formRef={controller.formRef}
+      draft={controller.draft}
+      dynamicAnswers={controller.dynamicAnswers}
+      participantAnswers={controller.participantAnswers}
+      fileUploadStates={controller.fileUploadStates}
+      accountMode={controller.accountMode}
+      authenticatedSession={controller.authenticatedSession}
+      confirmedApplicantContext={controller.confirmedApplicantContext}
+      password={controller.password}
+      requiresApplicantContextConfirmation={controller.requiresApplicantContextConfirmation}
+      verificationState={controller.verificationState}
+      onConfirmApplicantContext={() => controller.setConfirmedApplicantContext(true)}
+      setAccountMode={controller.setAccountMode}
+      setPassword={controller.setPassword}
+      updateDraft={controller.updateDraft}
+      onUseDifferentEmail={controller.useDifferentVerificationEmail}
+      onSubmissionAnswer={controller.setSubmissionAnswer}
+      onParticipantAnswer={controller.setParticipantAnswer}
+      onFileUpload={controller.handleFileUpload}
+      onFileUploadStateChange={controller.setFileUploadState}
+      onSubmit={(event) => void controller.continueFlow(event)}
+      onBack={controller.goBack}
+      onSaveNow={() => void controller.saveNow()}
+      onRefreshPinnedDraft={controller.refreshPinnedDraft}
+      onDiscardStaleDraft={controller.discardStaleDraftAndStartNew}
     />
-  );
-}
-
-function FileRequestControl({
-  field,
-  state,
-  value,
-  id,
-  onChange,
-  onUpload,
-  onStateChange,
-}: {
-  field: CfpFormField;
-  state: FileUploadState | undefined;
-  value: unknown;
-  id: string;
-  onChange: (value: unknown) => void;
-  onUpload: (file: File) => Promise<CfpFileUploadResult>;
-  onStateChange: (state: FileUploadState) => void;
-}) {
-  const configuredMimeTypes =
-    fieldConfig(field, "allowedMimeTypes") ?? fieldConfig(field, "mimeTypes");
-  const maxBytes = fieldConfig(field, "maxBytes");
-  const acceptedTypes = Array.isArray(configuredMimeTypes)
-    ? configuredMimeTypes.filter((type): type is string => typeof type === "string")
-    : [];
-  const maxSize = typeof maxBytes === "number" && Number.isFinite(maxBytes) ? maxBytes : undefined;
-  const persistedAssetId =
-    isRecord(value) && typeof value.assetId === "string" && value.assetId.trim()
-      ? value.assetId
-      : undefined;
-  const displayState =
-    state ??
-    (persistedAssetId === undefined
-      ? undefined
-      : { status: "ready" as const, assetId: persistedAssetId });
-  const uploadSequenceRef = useRef(0);
-  const acceptedTypeLabels = uploadMimeTypeLabels(acceptedTypes);
-  const maxSizeLabel =
-    maxSize === undefined
-      ? undefined
-      : maxSize >= 1024 * 1024
-        ? `${maxSize / (1024 * 1024)} MB`
-        : `${Math.ceil(maxSize / 1024)} KB`;
-  const requirementParts = [
-    ...(acceptedTypeLabels.length > 0 ? [`Accepted: ${acceptedTypeLabels.join(", ")}`] : []),
-    ...(maxSizeLabel ? [`Max ${maxSizeLabel}`] : []),
-  ];
-  const helpId = `${field.key}-file-help`;
-  const errorId = `${field.key}-file-error`;
-  const statusId = `${field.key}-file-status`;
-  const hasUploadedFile = displayState?.status === "ready";
-  const uploadButtonLabel =
-    displayState?.status === "pending"
-      ? "Uploading…"
-      : hasUploadedFile
-        ? "Replace file"
-        : acceptedTypeLabels.length === 1 && acceptedTypeLabels[0] === "PDF"
-          ? "Choose PDF"
-          : "Choose file";
-
-  function mimeTypeAllowed(contentType: string): boolean {
-    const normalized = contentType.trim().toLowerCase();
-    return acceptedTypes.some((allowed) => {
-      const normalizedAllowed = allowed.trim().toLowerCase();
-      if (normalizedAllowed === "*/*" || normalizedAllowed === "*") return true;
-      if (normalizedAllowed.endsWith("/*"))
-        return normalized.startsWith(normalizedAllowed.slice(0, -1));
-      return normalizedAllowed === normalized;
-    });
-  }
-
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
-    const file = event.currentTarget.files?.[0];
-    const sequence = ++uploadSequenceRef.current;
-    event.currentTarget.value = "";
-    if (!file) {
-      onChange(undefined);
-      onStateChange({ status: "idle" });
-      return;
-    }
-    onChange(undefined);
-    if (acceptedTypes.length > 0 && !mimeTypeAllowed(file.type)) {
-      onStateChange({
-        status: "error",
-        name: file.name,
-        message: `Choose a file of an allowed type (${acceptedTypes.join(", ")}).`,
-      });
-      return;
-    }
-    if (maxSize !== undefined && file.size > maxSize) {
-      onStateChange({
-        status: "error",
-        name: file.name,
-        message: `The selected file must be ${maxSize} bytes or smaller.`,
-      });
-      return;
-    }
-    onStateChange({ status: "pending", name: file.name });
-    void onUpload(file)
-      .then((result) => {
-        if (sequence !== uploadSequenceRef.current) return;
-        if (result.state !== "ready" || result.assetId.trim().length === 0) {
-          throw new CfpApiError(
-            "CFP_FILE_UPLOAD_REJECTED",
-            "The uploaded file was rejected during finalization.",
-            409,
-          );
-        }
-        onChange({ assetId: result.assetId });
-        onStateChange({ status: "ready", name: result.fileName, assetId: result.assetId });
-      })
-      .catch((error) => {
-        if (sequence !== uploadSequenceRef.current) return;
-        onStateChange({
-          status: "error",
-          name: file.name,
-          message: mutationErrorMessage(error, "The file could not be uploaded."),
-        });
-      });
-  }
-
-  return (
-    <div className={styles.fileRequestControl}>
-      {requirementParts.length > 0 ? (
-        <p className={styles.fieldHint} id={helpId}>
-          {requirementParts.join(" · ")}
-        </p>
-      ) : null}
-      <div className={styles.filePicker}>
-        <input
-          id={id}
-          accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
-          aria-describedby={[
-            ...(requirementParts.length > 0 ? [helpId] : []),
-            ...(displayState?.status === "error" ? [errorId] : []),
-            ...(displayState?.status === "pending" || displayState?.status === "ready"
-              ? [statusId]
-              : []),
-          ].join(" ")}
-          className={styles.fileInput}
-          disabled={displayState?.status === "pending"}
-          onChange={handleFileChange}
-          type="file"
-        />
-        <label
-          aria-disabled={displayState?.status === "pending"}
-          className={styles.fileButton}
-          htmlFor={id}
-        >
-          <Upload aria-hidden="true" size={18} />
-          {uploadButtonLabel}
-        </label>
-        <span className={styles.filePickerHint}>
-          {hasUploadedFile
-            ? "Choose a new file to replace this upload."
-            : "Select a file from your device."}
-        </span>
-      </div>
-      {displayState?.status === "pending" ? (
-        <div aria-live="polite" className={styles.fileStatus} id={statusId}>
-          <FileText aria-hidden="true" size={20} />
-          <div>
-            <strong>{displayState.name}</strong>
-            <span>Uploading securely…</span>
-          </div>
-        </div>
-      ) : null}
-      {displayState?.status === "ready" ? (
-        <div
-          aria-live="polite"
-          className={`${styles.fileStatus} ${styles.fileStatusReady}`}
-          id={statusId}
-        >
-          <CheckCircle2 aria-hidden="true" size={20} />
-          <div>
-            <strong>{displayState.name ?? "Uploaded file"}</strong>
-            <span>Uploaded and ready</span>
-          </div>
-        </div>
-      ) : null}
-      {displayState?.status === "error" ? (
-        <p className={styles.fieldError} id={errorId} role="alert">
-          {displayState.message}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function SearchableMultiField({
-  field,
-  value,
-  id,
-  describedBy,
-  onChange,
-}: {
-  field: CfpFormField;
-  value: string[];
-  id: string;
-  describedBy: string | undefined;
-  onChange: (value: string[]) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const options = fieldOptions(field).filter((option) =>
-    `${option.label} ${option.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
-  );
-  return (
-    <div>
-      <label className={styles.srOnly} htmlFor={id}>
-        Search {field.label} options
-      </label>
-      <Input
-        aria-describedby={describedBy}
-        id={id}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search options…"
-        type="search"
-        value={query}
-      />
-      <div className={styles.tagOptions}>
-        {options.map((option) => (
-          <label key={option.value}>
-            <input
-              checked={value.includes(option.value)}
-              disabled={option.disabled}
-              onChange={() =>
-                onChange(
-                  value.includes(option.value)
-                    ? value.filter((item) => item !== option.value)
-                    : [...value, option.value],
-                )
-              }
-              type="checkbox"
-            />{" "}
-            {option.label}
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PublishedFieldControl({
-  field,
-  value,
-  error,
-  onChange,
-  onFileUpload,
-  fileState,
-  onFileStateChange,
-  errorKey,
-}: {
-  field: CfpFormField;
-  value: unknown;
-  error: string | undefined;
-  onFileUpload: (file: File) => Promise<CfpFileUploadResult>;
-  onChange: (value: unknown) => void;
-  fileState: FileUploadState | undefined;
-  onFileStateChange: (state: FileUploadState) => void;
-  errorKey: string;
-}) {
-  const kind = field.kind.toLowerCase().replaceAll("-", "_");
-  const valueString = typeof value === "string" ? value : "";
-  const options = fieldOptions(field);
-  const maxLength = fieldConfig(field, "maxLength");
-  const description = fieldConfig(field, "description");
-  const configuredPlaceholder = fieldConfig(field, "placeholder");
-  const placeholder =
-    field.placeholder ?? (typeof configuredPlaceholder === "string" ? configuredPlaceholder : "");
-  const hint = typeof description === "string" ? description : undefined;
-  return (
-    <Field error={error} hint={hint} label={field.label} name={errorKey} required={field.required}>
-      {(controlProps) => {
-        if (isFileField(field)) {
-          return (
-            <FileRequestControl
-              field={field}
-              value={value}
-              id={controlProps.id}
-              onChange={onChange}
-              onUpload={(file) => onFileUpload(file)}
-              onStateChange={onFileStateChange}
-              state={fileState}
-            />
-          );
-        }
-        if (kind === "rich_text") {
-          return (
-            <RichTextArea
-              {...controlProps}
-              maxLength={typeof maxLength === "number" ? maxLength : 10000}
-              onValueChange={onChange}
-              placeholder={placeholder}
-              rows={field.key === "abstract" ? 6 : 4}
-              value={valueString}
-            />
-          );
-        }
-        if (kind === "select") {
-          return (
-            <SearchableSelect
-              {...(controlProps["aria-describedby"]
-                ? { describedBy: controlProps["aria-describedby"] }
-                : {})}
-              id={controlProps.id}
-              invalid={Boolean(controlProps["aria-invalid"])}
-              onValueChange={onChange as (value: string) => void}
-              options={options}
-              placeholder={placeholder || "Search or select…"}
-              required={field.required}
-              value={valueString}
-            />
-          );
-        }
-        if (kind === "multi_select") {
-          return (
-            <SearchableMultiField
-              field={field}
-              id={controlProps.id}
-              describedBy={controlProps["aria-describedby"]}
-              onChange={onChange as (value: string[]) => void}
-              value={
-                Array.isArray(value)
-                  ? value.filter((item): item is string => typeof item === "string")
-                  : []
-              }
-            />
-          );
-        }
-        if (kind === "boolean") {
-          return (
-            <label>
-              <input
-                {...controlProps}
-                checked={value === true}
-                onChange={(event) => onChange(event.currentTarget.checked)}
-                type="checkbox"
-              />{" "}
-              {field.label}
-            </label>
-          );
-        }
-        if (kind === "number") {
-          return (
-            <Input
-              {...controlProps}
-              onChange={(event) =>
-                onChange(event.currentTarget.value === "" ? "" : Number(event.currentTarget.value))
-              }
-              placeholder={placeholder}
-              type="number"
-              value={typeof value === "number" ? value : valueString}
-            />
-          );
-        }
-        if (kind === "email" || kind === "url" || kind === "text") {
-          return (
-            <Input
-              {...controlProps}
-              onChange={(event) => onChange(event.currentTarget.value)}
-              placeholder={placeholder}
-              type={kind}
-              value={valueString}
-            />
-          );
-        }
-        return (
-          <Input
-            {...controlProps}
-            onChange={(event) => onChange(event.currentTarget.value)}
-            placeholder={placeholder}
-            value={valueString}
-          />
-        );
-      }}
-    </Field>
-  );
-}
-
-function DynamicSubmissionFields({
-  form,
-  draft,
-  answers,
-  errors,
-  fileUploadStates,
-  onAnswerChange,
-  onFileUpload,
-  onFileUploadStateChange,
-}: {
-  form: CfpPublishedForm;
-  draft: CfpDraft;
-  answers: DynamicAnswers;
-  errors: ValidationErrors;
-  fileUploadStates: FileUploadStates;
-  onFileUpload: (field: CfpFormField, file: File) => Promise<CfpFileUploadResult>;
-  onAnswerChange: (key: string, value: unknown) => void;
-  onFileUploadStateChange: (key: string, state: FileUploadState) => void;
-}) {
-  const evaluated = evaluatePublishedFields(form, {
-    ...answers,
-    accountEmail: draft.account.email,
-    accountFirstName: draft.account.firstName,
-    accountLastName: draft.account.lastName,
-  });
-  const sections =
-    form.sections.length > 0
-      ? form.sections
-      : [{ id: "submission", title: "Submission", description: "" }];
-  return (
-    <div>
-      <h1>Tell us about your submission</h1>
-      <p>What do you want to present? Fill out the following information to tell us more.</p>
-      {sections.map((section) => {
-        if (evaluated.sections.get(section.id) === false) return null;
-        const fields = form.submissionFields.filter((field) => field.sectionId === section.id);
-        if (fields.length === 0) return null;
-        return (
-          <section
-            aria-labelledby={`cfp-section-${section.id}`}
-            className={styles.sectionPanel}
-            key={section.id}
-          >
-            <h2 id={`cfp-section-${section.id}`}>{section.title}</h2>
-            {section.description ? <p>{section.description}</p> : null}
-            {fields.map((field) => {
-              const fieldState = evaluated.fields.get(field.key) ?? {
-                visible: true,
-                required: fieldRequired(field),
-              };
-              if (!fieldState.visible) return null;
-              const configuredField =
-                fieldState.required === field.required
-                  ? field
-                  : { ...field, required: fieldState.required };
-              const errorKey = cfpSubmissionErrorKey(field.key);
-              return (
-                <PublishedFieldControl
-                  key={field.id}
-                  error={errors[errorKey]}
-                  errorKey={errorKey}
-                  field={configuredField}
-                  fileState={fileUploadStates[fileStateKey(field.key)]}
-                  onChange={(value) => onAnswerChange(field.key, value)}
-                  onFileUpload={(file) => onFileUpload(field, file)}
-                  onFileStateChange={(state) =>
-                    onFileUploadStateChange(fileStateKey(field.key), state)
-                  }
-                  value={cfpSubmissionFieldValue(draft, answers, field.key)}
-                />
-              );
-            })}
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
-function ParticipantsStep({
-  draft,
-  errors,
-  form,
-  answers,
-  fileUploadStates,
-  onAnswerChange,
-  onFileUpload,
-  onFileUploadStateChange,
-  updateDraft,
-}: StepFormProps & {
-  form?: CfpPublishedForm;
-  answers: ParticipantAnswers;
-  fileUploadStates: FileUploadStates;
-  onAnswerChange: (participantId: string, key: string, value: unknown) => void;
-  onFileUpload: (
-    field: CfpFormField,
-    participantId: string,
-    file: File,
-  ) => Promise<CfpFileUploadResult>;
-  onFileUploadStateChange: (key: string, state: FileUploadState) => void;
-}) {
-  if (form && form.participantFields.length > 0) {
-    return (
-      <DynamicParticipantsFields
-        answers={answers}
-        draft={draft}
-        errors={errors}
-        fileUploadStates={fileUploadStates}
-        form={form}
-        onAnswerChange={onAnswerChange}
-        onFileUpload={onFileUpload}
-        onFileUploadStateChange={onFileUploadStateChange}
-        updateDraft={updateDraft}
-      />
-    );
-  }
-  function addParticipant(): void {
-    if (draft.participants.length >= 15) return;
-    updateDraft((current) => ({
-      ...current,
-      participants: [
-        ...current.participants,
-        createEmptyParticipant(newId("participant"), "Co-speaker"),
-      ],
-    }));
-  }
-
-  return (
-    <div>
-      <div className={styles.participantHeading}>
-        <div>
-          <h1>Tell us about you</h1>
-          <p>
-            Give us information about yourself and your credentials for presenting at our event.
-          </p>
-        </div>
-        <Button
-          className={styles.addButton}
-          disabled={draft.participants.length >= 15}
-          onClick={addParticipant}
-          size="sm"
-          type="button"
-          variant="secondary"
-        >
-          ＋ Add participant
-        </Button>
-      </div>
-      {errors.participants ? (
-        <p className={styles.fieldError} id="participants" role="alert" tabIndex={-1}>
-          {errors.participants}
-        </p>
-      ) : null}
-      {draft.participants.map((participant, index) => (
-        <section className={styles.participantCard} key={participant.id}>
-          <div className={styles.participantCardHeading}>
-            <h2>{index === 0 ? "Primary speaker" : `Additional speaker ${index}`}</h2>
-            {index > 0 ? (
-              <Button
-                className={styles.removeButton}
-                onClick={() =>
-                  updateDraft((current) => ({
-                    ...current,
-                    participants: current.participants.filter(
-                      (_, itemIndex) => itemIndex !== index,
-                    ),
-                  }))
-                }
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                Remove
-              </Button>
-            ) : null}
-          </div>
-          <div className={styles.participantRole}>
-            <span>{index === 0 ? "Primary speaker" : "Co-speaker"}</span>
-            <p>
-              {index === 0
-                ? "This person is the main contact and presenter for the proposal."
-                : "This person will be listed as an additional presenter."}
-            </p>
-          </div>
-          <div className={styles.twoColumns}>
-            <Field
-              error={errors[`participants.${index}.firstName`]}
-              label="First Name"
-              name={`participants.${index}.firstName`}
-              required
-            >
-              {(controlProps) => (
-                <Input
-                  {...controlProps}
-                  maxLength={255}
-                  onChange={(event) =>
-                    updateDraft((current) =>
-                      mergeParticipant(current, index, { firstName: event.target.value }),
-                    )
-                  }
-                  value={participant.firstName}
-                />
-              )}
-            </Field>
-            <Field
-              error={errors[`participants.${index}.lastName`]}
-              label="Last Name"
-              name={`participants.${index}.lastName`}
-              required
-            >
-              {(controlProps) => (
-                <Input
-                  {...controlProps}
-                  maxLength={255}
-                  onChange={(event) =>
-                    updateDraft((current) =>
-                      mergeParticipant(current, index, { lastName: event.target.value }),
-                    )
-                  }
-                  value={participant.lastName}
-                />
-              )}
-            </Field>
-          </div>
-          <Field
-            error={errors[`participants.${index}.email`]}
-            label="Email"
-            name={`participants.${index}.email`}
-            required
-          >
-            {(controlProps) => (
-              <Input
-                {...controlProps}
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeParticipant(current, index, { email: event.target.value }),
-                  )
-                }
-                type="email"
-                value={participant.email}
-              />
-            )}
-          </Field>
-          <Field
-            error={errors[`participants.${index}.biography`]}
-            label="Biography"
-            name={`participants.${index}.biography`}
-          >
-            {(controlProps) => (
-              <RichTextArea
-                {...controlProps}
-                maxLength={5000}
-                onValueChange={(value) =>
-                  updateDraft((current) => mergeParticipant(current, index, { biography: value }))
-                }
-                placeholder="Tell us a bit about yourself"
-                rows={6}
-                value={participant.biography}
-              />
-            )}
-          </Field>
-        </section>
-      ))}
-      <SecondaryContacts draft={draft} errors={errors} updateDraft={updateDraft} />
-    </div>
-  );
-}
-
-function DynamicParticipantsFields({
-  form,
-  draft,
-  errors,
-  answers,
-  fileUploadStates,
-  onAnswerChange,
-  onFileUpload,
-  onFileUploadStateChange,
-  updateDraft,
-}: StepFormProps & {
-  form: CfpPublishedForm;
-  answers: ParticipantAnswers;
-  fileUploadStates: FileUploadStates;
-  onFileUpload: (
-    field: CfpFormField,
-    participantId: string,
-    file: File,
-  ) => Promise<CfpFileUploadResult>;
-  onAnswerChange: (participantId: string, key: string, value: unknown) => void;
-  onFileUploadStateChange: (key: string, state: FileUploadState) => void;
-}) {
-  const configuredIdentityKeys = new Set(form.participantFields.map((field) => field.key));
-  const identityFields: CfpFormField[] = [
-    {
-      id: "participant-first-name",
-      sectionId: "participants",
-      key: "firstName",
-      label: "First Name",
-      kind: "text",
-      required: true,
-      options: [],
-    },
-    {
-      id: "participant-last-name",
-      sectionId: "participants",
-      key: "lastName",
-      label: "Last Name",
-      kind: "text",
-      required: true,
-      options: [],
-    },
-    {
-      id: "participant-email",
-      sectionId: "participants",
-      key: "email",
-      label: "Email",
-      kind: "email",
-      required: true,
-      options: [],
-    },
-  ];
-  const fields = [
-    ...identityFields.filter((field) => !configuredIdentityKeys.has(field.key)),
-    ...form.participantFields,
-  ];
-
-  function updateParticipantField(index: number, key: string, value: unknown): void {
-    const patch: Partial<CfpParticipant> = {};
-    if (key === "firstName") patch.firstName = String(value ?? "");
-    if (key === "lastName") patch.lastName = String(value ?? "");
-    if (key === "email") patch.email = String(value ?? "");
-    if (key === "biography") patch.biography = String(value ?? "");
-    if (key === "mobilePhone") patch.mobilePhone = String(value ?? "");
-    if (Object.keys(patch).length > 0) {
-      updateDraft((current) => mergeParticipant(current, index, patch));
-    } else {
-      const participant = draft.participants[index];
-      if (participant) onAnswerChange(participant.id, key, value);
-    }
-  }
-
-  function addParticipant(): void {
-    if (draft.participants.length >= 15) return;
-    const participant = createEmptyParticipant(newId("participant"), "Co-speaker");
-    updateDraft((current) => ({
-      ...current,
-      participants: [...current.participants, participant],
-    }));
-  }
-
-  return (
-    <div>
-      <div className={styles.participantHeading}>
-        <div>
-          <h1>Tell us about you</h1>
-          <p>
-            Give us information about yourself and your credentials for presenting at our event.
-          </p>
-        </div>
-        <Button
-          className={styles.addButton}
-          disabled={draft.participants.length >= 15}
-          onClick={addParticipant}
-          size="sm"
-          type="button"
-          variant="secondary"
-        >
-          ＋ Add participant
-        </Button>
-      </div>
-      {errors.participants ? (
-        <p className={styles.fieldError} id="participants" role="alert" tabIndex={-1}>
-          {errors.participants}
-        </p>
-      ) : null}
-      {draft.participants.map((participant, index) => {
-        const participantCustomAnswers = answers[participant.id] ?? {};
-        const evaluated = evaluatePublishedFields(form, {
-          ...participantCustomAnswers,
-          firstName: participant.firstName,
-          lastName: participant.lastName,
-          email: participant.email,
-          biography: participant.biography,
-          mobilePhone: participant.mobilePhone,
-        });
-        return (
-          <section
-            aria-labelledby={`participant-${participant.id}-heading`}
-            className={styles.participantCard}
-            key={participant.id}
-          >
-            <div className={styles.participantCardHeading}>
-              <h2 id={`participant-${participant.id}-heading`}>
-                {index === 0 ? "Primary speaker" : `Additional speaker ${index}`}
-              </h2>
-              {index > 0 ? (
-                <Button
-                  className={styles.removeButton}
-                  onClick={() =>
-                    updateDraft((current) => ({
-                      ...current,
-                      participants: current.participants.filter(
-                        (_, itemIndex) => itemIndex !== index,
-                      ),
-                    }))
-                  }
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  Remove
-                </Button>
-              ) : null}
-            </div>
-            <div className={styles.participantRole}>
-              <span>{index === 0 ? "Primary speaker" : "Co-speaker"}</span>
-              <p>
-                {index === 0
-                  ? "This person is the main contact and presenter for the proposal."
-                  : "This person will be listed as an additional presenter."}
-              </p>
-            </div>
-            {fields.map((field) => {
-              const state = evaluated.fields.get(field.key) ?? {
-                visible: true,
-                required: fieldRequired(field),
-              };
-              if (!state.visible) return null;
-              const configuredField =
-                state.required === field.required ? field : { ...field, required: state.required };
-              const errorKey = `participants.${index}.${field.key}`;
-              return (
-                <PublishedFieldControl
-                  key={field.id}
-                  error={errors[errorKey]}
-                  errorKey={errorKey}
-                  field={configuredField}
-                  fileState={fileUploadStates[fileStateKey(field.key, index)]}
-                  onChange={(value) => updateParticipantField(index, field.key, value)}
-                  onFileUpload={(file) => onFileUpload(field, participant.id, file)}
-                  onFileStateChange={(state) =>
-                    onFileUploadStateChange(fileStateKey(field.key, index), state)
-                  }
-                  value={participantValue(participant, participantCustomAnswers, field.key)}
-                />
-              );
-            })}
-            {!configuredIdentityKeys.has("biography") ? (
-              <Field
-                error={errors[`participants.${index}.biography`]}
-                label="Biography"
-                name={`participants.${index}.biography`}
-              >
-                {(controlProps) => (
-                  <RichTextArea
-                    {...controlProps}
-                    maxLength={5000}
-                    onValueChange={(value) => updateParticipantField(index, "biography", value)}
-                    rows={6}
-                    value={participant.biography}
-                  />
-                )}
-              </Field>
-            ) : null}
-          </section>
-        );
-      })}
-      <SecondaryContacts draft={draft} errors={errors} updateDraft={updateDraft} />
-    </div>
-  );
-}
-function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
-  function addContact(): void {
-    const contact: CfpSecondaryContact = {
-      id: newId("contact"),
-      firstName: "",
-      lastName: "",
-      email: "",
-    };
-    updateDraft((current) => ({
-      ...current,
-      secondaryContacts: [...current.secondaryContacts, contact],
-    }));
-  }
-
-  return (
-    <section className={styles.secondaryContacts}>
-      <Button
-        className={styles.textButton}
-        onClick={addContact}
-        size="sm"
-        type="button"
-        variant="ghost"
-      >
-        ＋ Add Secondary Contact
-      </Button>
-      <p>Secondary contacts can assist with tasks and communication.</p>
-      {draft.secondaryContacts.map((contact, index) => (
-        <div className={styles.contactCard} key={contact.id}>
-          <div className={styles.participantCardHeading}>
-            <h2>Secondary contact {index + 1}</h2>
-            <Button
-              className={styles.removeButton}
-              onClick={() =>
-                updateDraft((current) => ({
-                  ...current,
-                  secondaryContacts: current.secondaryContacts.filter(
-                    (_, itemIndex) => itemIndex !== index,
-                  ),
-                }))
-              }
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              Remove
-            </Button>
-          </div>
-          <div className={styles.twoColumns}>
-            <Field
-              error={errors[`secondaryContacts.${index}.firstName`]}
-              label="First Name"
-              name={`secondaryContacts.${index}.firstName`}
-              required
-            >
-              {(controlProps) => (
-                <Input
-                  {...controlProps}
-                  onChange={(event) =>
-                    updateDraft((current) =>
-                      mergeSecondaryContact(current, index, { firstName: event.target.value }),
-                    )
-                  }
-                  value={contact.firstName}
-                />
-              )}
-            </Field>
-            <Field
-              error={errors[`secondaryContacts.${index}.lastName`]}
-              label="Last Name"
-              name={`secondaryContacts.${index}.lastName`}
-              required
-            >
-              {(controlProps) => (
-                <Input
-                  {...controlProps}
-                  onChange={(event) =>
-                    updateDraft((current) =>
-                      mergeSecondaryContact(current, index, { lastName: event.target.value }),
-                    )
-                  }
-                  value={contact.lastName}
-                />
-              )}
-            </Field>
-          </div>
-          <Field
-            error={errors[`secondaryContacts.${index}.email`]}
-            label="Email"
-            name={`secondaryContacts.${index}.email`}
-            required
-          >
-            {(controlProps) => (
-              <Input
-                {...controlProps}
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeSecondaryContact(current, index, { email: event.target.value }),
-                  )
-                }
-                type="email"
-                value={contact.email}
-              />
-            )}
-          </Field>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function ReviewStep({
-  draft,
-  eventSlug,
-  fileUploadStates,
-  organizationId,
-  form,
-  answers,
-}: {
-  draft: CfpDraft;
-  eventSlug: string;
-  fileUploadStates: FileUploadStates;
-  organizationId: string;
-  form?: CfpPublishedForm;
-  answers: DynamicAnswers;
-}) {
-  const router = useRouter();
-  const submissionDetails = cfpReviewSubmissionDetails(form, draft, answers);
-  const [persistedFileNames, setPersistedFileNames] = useState<Record<string, string>>({});
-  useEffect(() => {
-    setPersistedFileNames(readPersistedFileNames(form, answers, window.sessionStorage));
-  }, [answers, form]);
-  const uploadedFiles =
-    form?.submissionFields.flatMap((field) => {
-      if (field.kind !== "file_request") return [];
-      const uploadState = fileUploadStates[fileStateKey(field.key)];
-      const answer = answers[field.key];
-      const persistedAssetId =
-        typeof answer === "object" &&
-        answer !== null &&
-        "assetId" in answer &&
-        typeof answer.assetId === "string"
-          ? answer.assetId
-          : undefined;
-      if (uploadState?.status !== "ready" && persistedAssetId === undefined) return [];
-      const persistedFileName =
-        persistedAssetId === undefined ? undefined : persistedFileNames[persistedAssetId];
-      return [
-        {
-          key: field.key,
-          label: field.label,
-          name:
-            uploadState?.status === "ready" && uploadState.name
-              ? uploadState.name
-              : (persistedFileName ?? "Uploaded file"),
-        },
-      ];
-    }) ?? [];
-  return (
-    <div>
-      <h1>Review your submission</h1>
-      <p>Check that everything looks correct. You can go back to make changes before submitting.</p>
-      <section className={styles.reviewCard}>
-        <div className={styles.reviewHeading}>
-          <h2>Tell us about your submission</h2>
-          <Button
-            className={styles.textButton}
-            onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "submission"))}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            ✎ Edit session
-          </Button>
-        </div>
-        {submissionDetails.map((detail) => (
-          <ReviewValue key={detail.key} label={detail.label} value={detail.value} />
-        ))}
-        {uploadedFiles.length > 0 ? (
-          <div className={styles.reviewFiles}>
-            <p className={styles.reviewFilesLabel}>Uploaded files</p>
-            {uploadedFiles.map((file) => (
-              <div className={styles.reviewFile} key={file.key}>
-                <FileText aria-hidden="true" size={20} />
-                <div>
-                  <span>{file.label}</span>
-                  <strong>{file.name}</strong>
-                </div>
-                <span className={styles.reviewFileStatus}>
-                  <CheckCircle2 aria-hidden="true" size={16} />
-                  Ready
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </section>
-      <section className={styles.reviewCard}>
-        <div className={styles.reviewHeading}>
-          <h2>Tell us about you</h2>
-          <Button
-            className={styles.textButton}
-            onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "participants"))}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            ✎ Edit participants
-          </Button>
-        </div>
-        {draft.participants.map((participant) => (
-          <div className={styles.reviewParticipant} key={participant.id}>
-            <h3>
-              {participant.firstName} {participant.lastName} <span>{participant.role}</span>
-            </h3>
-            <ReviewValue label="Email" value={participant.email} />
-            <ReviewValue label="Biography" value={participant.biography || "Not provided"} />
-          </div>
-        ))}
-      </section>
-    </div>
-  );
-}
-
-function ReviewValue({ label, value }: { label: string; value: string }) {
-  if (value.trim().length === 0) return null;
-  return (
-    <dl className={styles.reviewValue}>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </dl>
   );
 }
 
@@ -3527,55 +2060,67 @@ export function CfpComplete({
   const [publishedCfp, setPublishedCfp] = useState<PublishedCfp | null>(null);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const startupStore = useCfpStartupStore();
+  const routeIdentity = useMemo(() => {
+    try {
+      return configuredCfpIdentity(eventSlug, organizationId, formId);
+    } catch {
+      return null;
+    }
+  }, [eventSlug, formId, organizationId]);
+  const scopedOrganizationId = organizationId?.trim() ?? "";
+  const routeScopeKey =
+    routeIdentity === null
+      ? null
+      : `${routeIdentity.organizationId}\u0000${routeIdentity.eventId}\u0000${routeIdentity.formId ?? ""}`;
+  const [redirectToReviewScope, requestReviewRedirect] = useReducer(
+    (current: string | null, scopeKey: string | null) =>
+      scopeKey === null || current === scopeKey ? current : scopeKey,
+    null,
+  );
+  const reviewRedirectHref =
+    (routeIdentity === null && scopedOrganizationId.length > 0) ||
+    (routeScopeKey !== null && redirectToReviewScope === routeScopeKey)
+      ? getCfpStepRoute(routeIdentity?.organizationId ?? scopedOrganizationId, eventSlug, "review")
+      : null;
 
   useEffect(() => {
+    if (routeIdentity === null) return;
     let active = true;
-    let identity: { organizationId: string; eventId: string; formId?: string };
-    try {
-      identity = configuredCfpIdentity(eventSlug, organizationId, formId);
-    } catch {
-      const scopedOrganizationId = organizationId?.trim() ?? "";
-      if (scopedOrganizationId.length > 0) {
-        router.replace(getCfpStepRoute(scopedOrganizationId, eventSlug, "review"));
-      }
-      return () => {
-        active = false;
-      };
-    }
+    const ownsScope = (): boolean => active;
     void (async () => {
       try {
-        const published = await startupStore.load(api, identity).published;
-        if (!active) return;
+        const published = await startupStore.load(api, routeIdentity).published;
+        if (!ownsScope()) return;
         setPublishedCfp(published);
         const canonicalEventId = published.event.id;
         const activeFormId = published.form.id;
         const handoff = window.sessionStorage.getItem(
           getCfpCompletionHandoffStorageKey(
-            identity.organizationId,
+            routeIdentity.organizationId,
             canonicalEventId,
             activeFormId,
           ),
         );
         const submissionId = handoff?.trim() ?? "";
         if (!submissionId) {
-          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
+          if (ownsScope()) requestReviewRedirect(routeScopeKey);
           return;
         }
         const receipt = await api.getReceipt({
-          organizationId: identity.organizationId,
+          organizationId: routeIdentity.organizationId,
           eventId: canonicalEventId,
           submissionId,
         });
-        if (!active) return;
+        if (!ownsScope()) return;
         if (!receipt.submissionId || !receipt.submittedAt) {
-          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
+          requestReviewRedirect(routeScopeKey);
           return;
         }
         let submissionTitle = "";
         let recipient = "";
         try {
           const submission = await api.loadDraft({
-            organizationId: identity.organizationId,
+            organizationId: routeIdentity.organizationId,
             eventId: canonicalEventId,
             submissionId,
           });
@@ -3592,9 +2137,9 @@ export function CfpComplete({
         } catch {
           // The receipt remains sufficient to confirm submission when the draft view is unavailable.
         }
-        if (!active) return;
+        if (!ownsScope()) return;
         setCompletionIdentity({
-          organizationId: identity.organizationId,
+          organizationId: routeIdentity.organizationId,
           eventId: canonicalEventId,
           formId: activeFormId,
           submissionId,
@@ -3611,14 +2156,17 @@ export function CfpComplete({
         });
         setConfirmed(true);
       } catch {
-        router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
+        if (ownsScope()) requestReviewRedirect(routeScopeKey);
       }
     })();
 
     return () => {
       active = false;
     };
-  }, [api, eventSlug, formId, organizationId, router, startupStore]);
+  }, [api, routeIdentity, routeScopeKey, startupStore]);
+  if (reviewRedirectHref !== null) {
+    redirect(reviewRedirectHref, RedirectType.replace);
+  }
   function editSubmission(): void {
     if (completionIdentity === null || !completionIdentity.canEdit) return;
     window.localStorage.setItem(

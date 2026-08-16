@@ -1,4 +1,4 @@
-import { resolveLoginLandingRoute } from "./login-form-model";
+import { safeLoginLandingRoute } from "./login-form-model";
 import { sessionHasAuthenticatedUser } from "./session";
 
 export type LoginSessionFetcher = (
@@ -25,5 +25,5 @@ export async function loadAuthenticatedLoginDestination({
 
   const payload: unknown = await response.json();
   if (!sessionHasAuthenticatedUser(payload)) return null;
-  return resolveLoginLandingRoute(payload, returnTo);
+  return safeLoginLandingRoute(payload, returnTo);
 }

@@ -8,13 +8,13 @@ import {
   type RemixContentRevision,
   type RemixFetcher,
 } from "./api";
+import { RemixWorkspace } from "./remix-workspace";
 import {
   allowedContentForApply,
   candidateIsStale,
-  RemixWorkspace,
   remixNavigationCacheKey,
   remixNavigationCacheTags,
-} from "./remix-workspace";
+} from "./workspace/remix-workspace-model";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

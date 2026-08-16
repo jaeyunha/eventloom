@@ -1,6 +1,6 @@
 "use client";
 
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { publishedProjectionsMatch } from "./api";
 import styles from "./embed.module.css";
@@ -8,11 +8,17 @@ import type { EmbedDisplayField, EmbedLayout } from "./model";
 import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
-  formatPublishedSessionSchedule,
+  literalSearchPattern,
   publicAgendaDays,
   publishedEntryPresenters,
+  publishedSpeakerSearchTermsBySessionId,
   uniqueSorted,
 } from "./model";
+import {
+  PublicAgendaDayList,
+  PublicAgendaFilters,
+  PublicAgendaHeader,
+} from "./public-agenda-sections";
 import type {
   PublishedAgenda,
   PublishedAgendaEntry,
@@ -25,6 +31,14 @@ function uniqueValues(values: readonly string[]): readonly string[] {
     left.localeCompare(right),
   );
 }
+function trackNameLabels(trackNames: readonly string[]): readonly ReactNode[] {
+  const labels: ReactNode[] = [];
+  for (const trackName of trackNames) {
+    if (trackName.trim().length === 0) continue;
+    labels.push(<span key={trackName}>Track: {trackName}</span>);
+  }
+  return labels;
+}
 
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
@@ -34,14 +48,13 @@ function speakerRole(speaker: PublishedSpeaker): string {
 
 function entrySearchText(
   entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
+  searchTermsBySessionId: ReadonlyMap<string, readonly string[]>,
 ): string {
-  const presenters = publishedEntryPresenters(entry, speakers);
-  const speakerDetails = presenters.flatMap((presenter) => {
-    const speaker = presenter.speaker;
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
-  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
+  return [
+    entry.title,
+    ...entry.speakerNames,
+    ...(searchTermsBySessionId.get(entry.sessionId) ?? []),
+  ]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase();
@@ -60,95 +73,130 @@ export function PublicAgendaSessionDetail({
   backButtonRef?: RefObject<HTMLButtonElement | null>;
   speakers?: readonly PublishedSpeaker[];
 }>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    backButtonRef?.current?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [backButtonRef]);
+
+  const closeDialog = () => {
+    const dialog = dialogRef.current;
+    if (dialog?.open) dialog.close();
+    onBack();
+  };
+
   const presenters = publishedEntryPresenters(entry, speakers);
   const hasDescription = entry.summary.trim().length > 0;
   const hasLongDescription = entry.summary.length > 320;
   return (
-    <section aria-labelledby="agenda-detail-heading" aria-modal="true" role="dialog">
-      <div className={styles.viewHeading}>
-        <div>
-          <p className={styles.eyebrow}>Agenda session detail</p>
-          <h2 id="agenda-detail-heading">{entry.title}</h2>
-          <p>Published session information from the current agenda revision.</p>
-        </div>
-        <button ref={backButtonRef} className={styles.clearButton} type="button" onClick={onBack}>
-          Back to agenda
-        </button>
-      </div>
-
-      <article className={styles.publicSessionCard}>
-        <div className={styles.publicSessionTime}>
-          <span>Time</span>
-          <time dateTime={entry.startsAt}>
-            {formatPublishedDateTimeRange(entry.startsAt, entry.endsAt, displayTimeZone)}
-          </time>
-        </div>
-        <div className={styles.publicSessionCopy}>
-          <div className={styles.publicSessionMeta}>
-            {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-            {entry.trackNames
-              .filter((trackName) => trackName.trim().length > 0)
-              .map((trackName) => (
-                <span key={trackName}>Track: {trackName}</span>
-              ))}
+    <dialog
+      ref={dialogRef}
+      className={styles.detailDialog}
+      aria-labelledby="agenda-detail-heading"
+      onCancel={(event) => {
+        event.preventDefault();
+        closeDialog();
+      }}
+    >
+      <button
+        type="button"
+        className={styles.dialogDismissLayer}
+        aria-label="Close agenda session details"
+        onClick={closeDialog}
+      />
+      <div className={styles.detailDialogSurface}>
+        <div className={styles.viewHeading}>
+          <div>
+            <p className={styles.eyebrow}>Agenda session detail</p>
+            <h2 id="agenda-detail-heading">{entry.title}</h2>
+            <p>Published session information from the current agenda revision.</p>
           </div>
-          <h3>Session details</h3>
-          {hasDescription ? (
-            <p
-              id={`agenda-summary-${entry.id}`}
-              className={descriptionExpanded ? undefined : styles.biography}
-            >
-              {entry.summary}
-            </p>
-          ) : (
-            <p>No description was published.</p>
-          )}
-          {hasLongDescription ? (
-            <button
-              className={styles.clearButton}
-              type="button"
-              aria-expanded={descriptionExpanded}
-              aria-controls={`agenda-summary-${entry.id}`}
-              onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-            >
-              {descriptionExpanded ? "Show less" : "Show more"}
-            </button>
-          ) : null}
-          {presenters.length > 0 ? (
-            <div className={styles.publicSpeakers}>
-              <strong>Speakers</strong>
-              <ul>
-                {presenters.map((presenter) => (
-                  <li key={presenter.key}>
-                    {presenter.speaker ? (
-                      <>
-                        <span>{presenter.displayName}</span>{" "}
-                        <span>({speakerRole(presenter.speaker)})</span>
-                      </>
-                    ) : (
-                      presenter.displayName
-                    )}
-                  </li>
-                ))}
-              </ul>
+          <button
+            ref={backButtonRef}
+            className={styles.clearButton}
+            type="button"
+            onClick={closeDialog}
+          >
+            Back to agenda
+          </button>
+        </div>
+
+        <article className={styles.publicSessionCard}>
+          <div className={styles.publicSessionTime}>
+            <span>Time</span>
+            <time dateTime={entry.startsAt}>
+              {formatPublishedDateTimeRange(entry.startsAt, entry.endsAt, displayTimeZone)}
+            </time>
+          </div>
+          <div className={styles.publicSessionCopy}>
+            <div className={styles.publicSessionMeta}>
+              {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
+              {trackNameLabels(entry.trackNames)}
             </div>
-          ) : null}
-          <p>
-            <strong>Format:</strong> {entry.format || "Format not published"}
-          </p>
-          <p>
-            <strong>Track:</strong>{" "}
-            {entry.trackNames.filter((trackName) => trackName.trim().length > 0).join(", ") ||
-              "Track not published"}
-          </p>
-        </div>
-        <div className={styles.publicRoom}>
-          <span>Room</span>
-          <strong>{entry.roomName || "Room not published"}</strong>
-        </div>
-      </article>
-    </section>
+            <h3>Session details</h3>
+            {hasDescription ? (
+              <p
+                id={`agenda-summary-${entry.id}`}
+                className={descriptionExpanded ? undefined : styles.biography}
+              >
+                {entry.summary}
+              </p>
+            ) : (
+              <p>No description was published.</p>
+            )}
+            {hasLongDescription ? (
+              <button
+                className={styles.clearButton}
+                type="button"
+                aria-expanded={descriptionExpanded}
+                aria-controls={`agenda-summary-${entry.id}`}
+                onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+              >
+                {descriptionExpanded ? "Show less" : "Show more"}
+              </button>
+            ) : null}
+            {presenters.length > 0 ? (
+              <div className={styles.publicSpeakers}>
+                <strong>Speakers</strong>
+                <ul>
+                  {presenters.map((presenter) => (
+                    <li key={presenter.key}>
+                      {presenter.speaker ? (
+                        <>
+                          <span>{presenter.displayName}</span>{" "}
+                          <span>({speakerRole(presenter.speaker)})</span>
+                        </>
+                      ) : (
+                        presenter.displayName
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <p>
+              <strong>Format:</strong> {entry.format || "Format not published"}
+            </p>
+            <p>
+              <strong>Track:</strong>{" "}
+              {entry.trackNames.filter((trackName) => trackName.trim().length > 0).join(", ") ||
+                "Track not published"}
+            </p>
+          </div>
+          <div className={styles.publicRoom}>
+            <span>Room</span>
+            <strong>{entry.roomName || "Room not published"}</strong>
+          </div>
+        </article>
+      </div>
+    </dialog>
   );
 }
 type PublishedAgendaFeedFlags = {
@@ -172,6 +220,8 @@ export interface PublicAgendaViewProps {
   readonly tracks?: readonly string[];
   readonly displayFields?: readonly EmbedDisplayField[] | null;
 }
+const EMPTY_TRACK_LIST: readonly string[] = [];
+const EMPTY_SPEAKER_LIST: readonly PublishedSpeaker[] = [];
 
 const DEFAULT_AGENDA_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "title",
@@ -182,6 +232,29 @@ const DEFAULT_AGENDA_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
   "track",
   "summary",
 ];
+interface PublicAgendaInteraction {
+  readonly ownerKey: string;
+  readonly day: string;
+  readonly query: string;
+  readonly track: string;
+  readonly format: string;
+  readonly room: string;
+  readonly viewerLocal: boolean;
+  readonly selectedEntryId: string | null;
+}
+
+function initialPublicAgendaInteraction(ownerKey: string): PublicAgendaInteraction {
+  return {
+    ownerKey,
+    day: "",
+    query: "",
+    track: "",
+    format: "",
+    room: "",
+    viewerLocal: false,
+    selectedEntryId: null,
+  };
+}
 
 function agendaIncludeField(
   displayFields: readonly EmbedDisplayField[],
@@ -193,25 +266,46 @@ function agendaIncludeField(
 export function PublicAgendaView({
   program,
   layout = null,
-  tracks: trackList = [],
+  tracks: trackList = EMPTY_TRACK_LIST,
   displayFields = null,
 }: Readonly<PublicAgendaViewProps>) {
   const { agenda } = program;
   const speakers = publishedProjectionsMatch(program.agenda, program.speakers)
     ? program.speakers.speakers
-    : [];
+    : EMPTY_SPEAKER_LIST;
   const displayFieldList = displayFields ?? DEFAULT_AGENDA_DISPLAY_FIELDS;
   const showField = (field: EmbedDisplayField): boolean =>
     agendaIncludeField(displayFieldList, field);
-  const [day, setDay] = useState("");
-  const [query, setQuery] = useState("");
-  const [track, setTrack] = useState("");
-  const [format, setFormat] = useState("");
-  const [room, setRoom] = useState("");
-  const [viewerLocal, setViewerLocal] = useState(false);
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const agendaOwnerKey = agenda.event.slug.trim();
+  const [interactionOverride, setInteractionOverride] = useState<PublicAgendaInteraction | null>(
+    null,
+  );
+  const ownedInteraction =
+    interactionOverride?.ownerKey === agendaOwnerKey ? interactionOverride : undefined;
+  const day = ownedInteraction?.day ?? "";
+  const query = ownedInteraction?.query ?? "";
+  const track = ownedInteraction?.track ?? "";
+  const format = ownedInteraction?.format ?? "";
+  const room = ownedInteraction?.room ?? "";
+  const viewerLocal = ownedInteraction?.viewerLocal ?? false;
+  const selectedEntryId = ownedInteraction?.selectedEntryId ?? null;
+  const updateInteraction = (
+    update: (current: PublicAgendaInteraction) => PublicAgendaInteraction,
+  ): void => {
+    setInteractionOverride((current) => {
+      const base =
+        current?.ownerKey === agendaOwnerKey
+          ? current
+          : initialPublicAgendaInteraction(agendaOwnerKey);
+      return update(base);
+    });
+  };
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const speakerSearchTermsBySessionId = useMemo(
+    () => publishedSpeakerSearchTermsBySessionId(speakers),
+    [speakers],
+  );
   const eventDays = useMemo(
     () => publicAgendaDays(agenda.entries, agenda.event.timeZone, agenda.event),
     [agenda.entries, agenda.event],
@@ -231,34 +325,42 @@ export function PublicAgendaView({
     () => uniqueValues(agenda.entries.map((entry) => entry.roomName)),
     [agenda.entries],
   );
+  const validDay = day === "" || eventDays.some((eventDay) => eventDay.date === day) ? day : "";
+  const validTrack = track === "" || tracks.includes(track) ? track : "";
+  const validFormat = format === "" || formats.includes(format) ? format : "";
+  const validRoom = room === "" || rooms.includes(room) ? room : "";
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleEntries = useMemo(
-    () =>
-      filterAgendaEntries(agenda.entries, day, track, agenda.event.timeZone).filter(
-        (entry) =>
-          (!format || entry.format === format) &&
-          (!room || entry.roomName === room) &&
-          (trackList.length === 0 ||
-            trackList.some((trackName) => entry.trackNames.includes(trackName))) &&
-          (!normalizedQuery || entrySearchText(entry, speakers).includes(normalizedQuery)),
-      ),
-    [
-      agenda.entries,
-      agenda.event.timeZone,
-      day,
-      format,
-      normalizedQuery,
-      speakers,
-      room,
-      track,
-      trackList,
-    ],
+  const normalizedQueryPattern = useMemo(
+    () => literalSearchPattern(normalizedQuery),
+    [normalizedQuery],
   );
-  const hasFacetFilters = Boolean(normalizedQuery || track || format || room);
+  const visibleEntries = useMemo(() => {
+    const configuredTrackNames = new Set(trackList);
+    return filterAgendaEntries(agenda.entries, validDay, validTrack, agenda.event.timeZone).filter(
+      (entry) =>
+        (!validFormat || entry.format === validFormat) &&
+        (!validRoom || entry.roomName === validRoom) &&
+        (trackList.length === 0 ||
+          entry.trackNames.some((trackName) => configuredTrackNames.has(trackName))) &&
+        (normalizedQueryPattern === null ||
+          normalizedQueryPattern.test(entrySearchText(entry, speakerSearchTermsBySessionId))),
+    );
+  }, [
+    agenda.entries,
+    agenda.event.timeZone,
+    normalizedQueryPattern,
+    speakerSearchTermsBySessionId,
+    trackList,
+    validDay,
+    validFormat,
+    validRoom,
+    validTrack,
+  ]);
+  const hasFacetFilters = Boolean(normalizedQuery || validTrack || validFormat || validRoom);
   const visibleDays = useMemo(() => {
     const days = publicAgendaDays(visibleEntries, agenda.event.timeZone, agenda.event);
-    return day ? days.filter((eventDay) => eventDay.date === day) : days;
-  }, [agenda.event, day, visibleEntries]);
+    return validDay ? days.filter((eventDay) => eventDay.date === validDay) : days;
+  }, [agenda.event, validDay, visibleEntries]);
   const viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const displayTimeZone = viewerLocal ? viewerTimeZone : agenda.event.timeZone;
   const publicBase = `/api/public/events/${encodeURIComponent(agenda.event.slug)}`;
@@ -281,30 +383,16 @@ export function PublicAgendaView({
     }
     returnFocusRef.current = null;
   }, [selectedEntry, selectedEntryId]);
-  useEffect(() => {
-    if (day !== "" && !eventDays.some((eventDay) => eventDay.date === day)) {
-      setDay("");
-    }
-    if (track !== "" && !tracks.includes(track)) {
-      setTrack("");
-    }
-    if (format !== "" && !formats.includes(format)) {
-      setFormat("");
-    }
-    if (room !== "" && !rooms.includes(room)) {
-      setRoom("");
-    }
-  }, [day, eventDays, format, formats, room, rooms, track, tracks]);
-
   const openEntry = (entryId: string, target: HTMLElement) => {
     returnFocusRef.current = target;
-    setSelectedEntryId(entryId);
+    updateInteraction((current) => ({ ...current, selectedEntryId: entryId }));
   };
-  const closeEntry = () => setSelectedEntryId(null);
+  const closeEntry = () => updateInteraction((current) => ({ ...current, selectedEntryId: null }));
 
   if (selectedEntry) {
     return (
       <PublicAgendaSessionDetail
+        key={selectedEntry.id}
         entry={selectedEntry}
         displayTimeZone={displayTimeZone}
         onBack={closeEntry}
@@ -316,100 +404,45 @@ export function PublicAgendaView({
 
   return (
     <section aria-labelledby="agenda-heading" data-layout={layout ?? undefined}>
-      <div className={styles.viewHeading}>
-        <div>
-          <p className={styles.eyebrow}>Plan your itinerary</p>
-          <h2 id="agenda-heading">Agenda</h2>
-          <p>
-            Browse revision {agenda.revision.number}, published for attendees and event partners.
-          </p>
-        </div>
-        {jsonFeedAvailable || icsFeedAvailable ? (
-          <nav className={styles.feedLinks} aria-label="Agenda downloads">
-            {jsonFeedAvailable ? <a href={`${publicBase}/agenda.json`}>JSON feed</a> : null}
-            {icsFeedAvailable ? <a href={`${publicBase}/agenda.ics`}>Add to calendar</a> : null}
-          </nav>
-        ) : null}
-      </div>
+      <PublicAgendaHeader
+        revision={agenda.revision.number}
+        publicBase={publicBase}
+        jsonFeedAvailable={jsonFeedAvailable}
+        icsFeedAvailable={icsFeedAvailable}
+      />
 
-      <form className={styles.agendaFilters} onSubmit={(event) => event.preventDefault()}>
-        <label>
-          <span>Search sessions or speakers</span>
-          <input
-            type="search"
-            value={query}
-            placeholder="Search by title or speaker"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Day</span>
-          <select value={day} onChange={(event) => setDay(event.target.value)}>
-            <option value="">All days</option>
-            {eventDays.map((eventDay) => (
-              <option key={eventDay.date} value={eventDay.date}>
-                {eventDay.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Track</span>
-          <select value={track} onChange={(event) => setTrack(event.target.value)}>
-            <option value="">All tracks</option>
-            {tracks.map((trackName) => (
-              <option key={trackName} value={trackName}>
-                {trackName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Format</span>
-          <select value={format} onChange={(event) => setFormat(event.target.value)}>
-            <option value="">All formats</option>
-            {formats.map((formatName) => (
-              <option key={formatName} value={formatName}>
-                {formatName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Location</span>
-          <select value={room} onChange={(event) => setRoom(event.target.value)}>
-            <option value="">All locations</option>
-            {rooms.map((roomName) => (
-              <option key={roomName} value={roomName}>
-                {roomName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.localTimeToggle}>
-          <input
-            type="checkbox"
-            checked={viewerLocal}
-            onChange={(event) => setViewerLocal(event.target.checked)}
-          />
-          <span>Show in my local time</span>
-        </label>
-        {query || day || track || format || room ? (
-          <button
-            className={styles.clearButton}
-            type="button"
-            onClick={() => {
-              setQuery("");
-              setDay("");
-              setTrack("");
-              setFormat("");
-              setRoom("");
-            }}
-          >
-            Clear filters
-          </button>
-        ) : null}
-      </form>
+      <PublicAgendaFilters
+        key={agendaOwnerKey}
+        formKey={agendaOwnerKey}
+        query={query}
+        validDay={validDay}
+        validTrack={validTrack}
+        validFormat={validFormat}
+        validRoom={validRoom}
+        viewerLocal={viewerLocal}
+        eventDays={eventDays}
+        tracks={tracks}
+        formats={formats}
+        rooms={rooms}
+        onQueryChange={(value) => updateInteraction((current) => ({ ...current, query: value }))}
+        onDayChange={(value) => updateInteraction((current) => ({ ...current, day: value }))}
+        onTrackChange={(value) => updateInteraction((current) => ({ ...current, track: value }))}
+        onFormatChange={(value) => updateInteraction((current) => ({ ...current, format: value }))}
+        onRoomChange={(value) => updateInteraction((current) => ({ ...current, room: value }))}
+        onViewerLocalChange={(value) =>
+          updateInteraction((current) => ({ ...current, viewerLocal: value }))
+        }
+        onClear={() =>
+          updateInteraction((current) => ({
+            ...current,
+            query: "",
+            day: "",
+            track: "",
+            format: "",
+            room: "",
+          }))
+        }
+      />
 
       <div className={styles.resultBar} role="status" aria-live="polite">
         <span>
@@ -418,120 +451,17 @@ export function PublicAgendaView({
         <span>Times shown in {displayTimeZone}</span>
       </div>
 
-      {visibleDays.length === 0 ? (
-        <div className={styles.emptyResult} role="status">
-          <h3>No sessions match these filters</h3>
-          <p>
-            Choose a different day, search term, track, format, or location to continue planning.
-          </p>
-        </div>
-      ) : (
-        <div className={styles.publicDays}>
-          {visibleDays.map((agendaDay) => {
-            const publishedDay = eventDays.find((eventDay) => eventDay.date === agendaDay.date);
-            const hasPublishedSessions = (publishedDay?.entries.length ?? 0) > 0;
-            return (
-              <section key={agendaDay.date} aria-labelledby={`agenda-day-${agendaDay.date}`}>
-                <header className={styles.publicDayHeading}>
-                  <h3 id={`agenda-day-${agendaDay.date}`}>{agendaDay.label}</h3>
-                </header>
-                {agendaDay.entries.length === 0 ? (
-                  <div
-                    className={styles.emptyResult}
-                    role="status"
-                    aria-labelledby={`agenda-empty-${agendaDay.date}`}
-                  >
-                    <h4 id={`agenda-empty-${agendaDay.date}`}>
-                      {hasPublishedSessions && hasFacetFilters
-                        ? "No sessions match these filters"
-                        : "No sessions published for this day"}
-                    </h4>
-                    <p>
-                      {hasPublishedSessions && hasFacetFilters
-                        ? "Choose a different search term, track, format, or location to continue planning."
-                        : "No published sessions are scheduled for this day."}
-                    </p>
-                  </div>
-                ) : (
-                  <ol className={styles.publicSessionList}>
-                    {agendaDay.entries.map((entry) => {
-                      const presenters = publishedEntryPresenters(entry, speakers);
-                      const schedule = formatPublishedSessionSchedule(
-                        entry.startsAt,
-                        entry.endsAt,
-                        displayTimeZone,
-                      );
-                      return (
-                        <li key={entry.id}>
-                          <button
-                            className={styles.publicSessionCard}
-                            type="button"
-                            aria-labelledby={`agenda-entry-${entry.id}`}
-                            aria-haspopup="dialog"
-                            onClick={(event) => openEntry(entry.id, event.currentTarget)}
-                          >
-                            {showField("date-time") ? (
-                              <div className={styles.publicSessionTime}>
-                                <time dateTime={entry.startsAt} className={styles.sessionDate}>
-                                  {schedule.dateLabel}
-                                </time>
-                                <time dateTime={entry.endsAt} className={styles.sessionClock}>
-                                  <span>{schedule.startTimeLabel}</span>
-                                  <span aria-hidden="true">–</span>
-                                  <span>{schedule.endTimeLabel}</span>
-                                </time>
-                              </div>
-                            ) : null}
-                            <div className={styles.publicSessionCopy}>
-                              <div className={styles.publicSessionMeta}>
-                                {showField("format") && entry.format.trim() ? (
-                                  <span>Format: {entry.format}</span>
-                                ) : null}
-                                {showField("track")
-                                  ? entry.trackNames
-                                      .filter((trackName) => trackName.trim().length > 0)
-                                      .map((trackName) => (
-                                        <span key={trackName}>Track: {trackName}</span>
-                                      ))
-                                  : null}
-                              </div>
-                              <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
-                              {showField("speakers") && presenters.length > 0 ? (
-                                <p className={styles.publicSpeakers}>
-                                  Presented by{" "}
-                                  {presenters.map((presenter, index) => (
-                                    <span key={presenter.key}>
-                                      {index > 0 ? ", " : null}
-                                      {presenter.speaker
-                                        ? `${presenter.displayName} (${speakerRole(
-                                            presenter.speaker,
-                                          )})`
-                                        : presenter.displayName}
-                                    </span>
-                                  ))}
-                                </p>
-                              ) : null}
-                              {showField("summary") ? (
-                                <p>{entry.summary || "No description was published."}</p>
-                              ) : null}
-                            </div>
-                            {showField("room") ? (
-                              <div className={styles.publicRoom}>
-                                <span>Room</span>
-                                <strong>{entry.roomName || "Room not published"}</strong>
-                              </div>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      )}
+      <PublicAgendaDayList
+        visibleDays={visibleDays}
+        eventDays={eventDays}
+        displayTimeZone={displayTimeZone}
+        speakers={speakers}
+        hasFacetFilters={hasFacetFilters}
+        showField={showField}
+        renderTrackLabels={trackNameLabels}
+        renderSpeakerRole={speakerRole}
+        onOpenEntry={openEntry}
+      />
     </section>
   );
 }

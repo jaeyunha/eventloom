@@ -537,3 +537,400 @@ export async function refreshCrmDuplicatesAfterContactSave(
   }
   return null;
 }
+
+export function displayName(contact: Pick<CrmContact, "displayName" | "email" | "id">): string {
+  return contact.displayName.trim() || contact.email?.trim() || contact.id;
+}
+function outreachNameParts(contact: Pick<CrmContact, "firstName" | "lastName" | "displayName">): {
+  readonly firstName: string;
+  readonly lastName: string;
+} {
+  const displayParts = contact.displayName.trim().split(/\s+/u).filter(Boolean);
+  const fallbackFirstName = displayParts[0] ?? "";
+  const fallbackLastName = displayParts.slice(1).join(" ");
+  return {
+    firstName: contact.firstName?.trim() || fallbackFirstName,
+    lastName: contact.lastName?.trim() || fallbackLastName,
+  };
+}
+
+export function focusAndScroll(target: HTMLElement | null): void {
+  if (target === null) return;
+  if (typeof target.scrollIntoView === "function") {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  target.focus({ preventScroll: true });
+}
+
+export function humanErrorSummary(error: string): string {
+  const summary =
+    error
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.replace(/\s*\(trace(?:\s+id)?\s*[:#]?\s*[^)]+\)/gi, "")
+      .replace(/\s+trace(?:\s+id)?\s*[:#]?\s*[a-z0-9-]+/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() ?? "";
+  return summary || "The CRM request could not be completed.";
+}
+
+export function customFieldText(
+  contact: CrmContact | undefined,
+  aliases: readonly string[],
+): string {
+  if (contact === undefined) return "";
+  const aliasSet = new Set(aliases.map((alias) => alias.toLowerCase()));
+  for (const [key, value] of Object.entries(contact.customFields)) {
+    if (!aliasSet.has(key.toLowerCase())) continue;
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+  return "";
+}
+
+export function contactBio(contact: CrmContact | undefined): string {
+  const direct = contact?.bio?.trim();
+  return direct || customFieldText(contact, ["bio", "biography", "profileBio"]);
+}
+
+export function contactHeadshotUrl(contact: CrmContact | undefined): string {
+  const direct = contact?.headshotUrl?.trim();
+  return (
+    direct ||
+    customFieldText(contact, ["headshotUrl", "headshot", "headshotAssetId", "profileImage"])
+  );
+}
+export const CRM_MERGE_SCALAR_FIELDS: readonly {
+  readonly key: CrmMergeScalarField;
+  readonly label: string;
+}[] = [
+  { key: "email", label: "Email" },
+  { key: "phone", label: "Phone" },
+  { key: "name", label: "Name" },
+  { key: "company", label: "Company" },
+  { key: "title", label: "Title" },
+  { key: "bio", label: "Bio" },
+  { key: "headshot", label: "Headshot" },
+];
+
+const CRM_PROFILE_CUSTOM_FIELD_KEYS = new Set([
+  "bio",
+  "biography",
+  "profilebio",
+  "headshoturl",
+  "headshot",
+  "headshotassetid",
+  "profileimage",
+]);
+
+export function mergeFieldValue(contact: CrmContact, field: CrmMergeScalarField): string {
+  switch (field) {
+    case "email":
+      return contact.email?.trim() ?? "";
+    case "phone":
+      return contact.phone?.trim() ?? "";
+    case "name": {
+      const display = contact.displayName.trim();
+      const fullName = [contact.firstName ?? "", contact.lastName ?? ""]
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .join(" ");
+      return display && fullName && display !== fullName
+        ? `${display} (${fullName})`
+        : display || fullName;
+    }
+    case "company":
+      return contact.company?.trim() ?? "";
+    case "title":
+      return contact.title?.trim() ?? "";
+    case "bio":
+      return contactBio(contact);
+    case "headshot":
+      return contactHeadshotUrl(contact);
+  }
+}
+
+export function mergeValueText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function mergeValuePresent(value: unknown): boolean {
+  return mergeValueText(value).length > 0;
+}
+
+export function mergeCustomFieldKeys(contacts: readonly CrmContact[]): readonly string[] {
+  const keys = new Set<string>();
+  for (const contact of contacts) {
+    for (const key of Object.keys(contact.customFields)) {
+      if (!CRM_PROFILE_CUSTOM_FIELD_KEYS.has(key.toLowerCase())) keys.add(key);
+    }
+  }
+  return [...keys].sort((left, right) => left.localeCompare(right));
+}
+
+export function mergeFieldHasConflict(
+  contacts: readonly CrmContact[],
+  field: CrmMergeScalarField,
+): boolean {
+  const values = contacts.reduce<Set<string>>((values, contact) => {
+    const value = mergeFieldValue(contact, field);
+    if (mergeValuePresent(value)) {
+      values.add(value);
+    }
+    return values;
+  }, new Set<string>());
+  return values.size > 1;
+}
+
+export function mergeCustomFieldHasConflict(contacts: readonly CrmContact[], key: string): boolean {
+  const values = contacts.reduce<Set<string>>((values, contact) => {
+    const value = Object.hasOwn(contact.customFields, key)
+      ? mergeValueText(contact.customFields[key])
+      : "";
+    if (mergeValuePresent(value)) {
+      values.add(value);
+    }
+    return values;
+  }, new Set<string>());
+  return values.size > 1;
+}
+
+function profileCustomFields(draft: ContactDraft): Record<string, unknown> {
+  const fields = parseCustomFields(draft.customFields);
+  if (draft.bio.trim()) fields.bio = draft.bio.trim();
+  else delete fields.bio;
+  if (draft.headshotUrl.trim()) fields.headshotUrl = draft.headshotUrl.trim();
+  else delete fields.headshotUrl;
+  return fields;
+}
+export function contactDraft(contact: CrmContact | undefined): ContactDraft {
+  return {
+    firstName: contact?.firstName ?? "",
+    lastName: contact?.lastName ?? "",
+    displayName: contact?.displayName ?? "",
+    email: contact?.email ?? "",
+    phone: contact?.phone ?? "",
+    company: contact?.company ?? "",
+    title: contact?.title ?? "",
+    website: contact?.website ?? "",
+    linkedinUrl: contact?.linkedinUrl ?? "",
+    bio: contactBio(contact),
+    headshotUrl: contactHeadshotUrl(contact),
+    tags: contact?.tags.join(", ") ?? "",
+    customFields: Object.entries(contact?.customFields ?? {})
+      .reduce<string[]>((lines, [key, value]) => {
+        if (
+          [
+            "bio",
+            "biography",
+            "profileBio",
+            "headshotUrl",
+            "headshot",
+            "headshotAssetId",
+            "profileImage",
+          ].includes(key)
+        ) {
+          return lines;
+        }
+        lines.push(`${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+        return lines;
+      }, [])
+      .join("\n"),
+    notes: contact?.notes ?? "",
+  };
+}
+
+function optionalValue(value: string): string | null | undefined {
+  const normalized = value.trim();
+  return normalized.length === 0 ? null : normalized;
+}
+
+function parseCustomFields(value: string): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const line of value.split("\n")) {
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    const raw = line.slice(separator + 1).trim();
+    if (!key) continue;
+    try {
+      fields[key] = raw.length === 0 ? null : JSON.parse(raw);
+    } catch {
+      fields[key] = raw;
+    }
+  }
+  return fields;
+}
+
+export function draftInput(draft: ContactDraft): Record<string, unknown> {
+  return {
+    firstName: optionalValue(draft.firstName),
+    lastName: optionalValue(draft.lastName),
+    displayName: optionalValue(draft.displayName),
+    email: optionalValue(draft.email),
+    phone: optionalValue(draft.phone),
+    company: optionalValue(draft.company),
+    title: optionalValue(draft.title),
+    website: optionalValue(draft.website),
+    linkedinUrl: optionalValue(draft.linkedinUrl),
+    tags: draft.tags
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+    customFields: profileCustomFields(draft),
+    notes: optionalValue(draft.notes),
+  };
+}
+
+function contactMergeTagValues(contact: CrmContact): Readonly<Record<string, string>> {
+  const displayName = contact.displayName.trim();
+  const firstName = contact.firstName?.trim() || displayName.split(/\s+/u)[0] || displayName;
+  const lastName = contact.lastName?.trim() ?? "";
+  return {
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+    display_name: displayName,
+    displayName,
+    email: contact.email?.trim() ?? "",
+    company: contact.company?.trim() ?? "",
+    title: contact.title?.trim() ?? "",
+  };
+}
+
+export function renderVariablePreview(
+  content: string,
+  contact: CrmContact,
+): { readonly value: string; readonly unknownTags: readonly string[] } {
+  const { firstName, lastName } = outreachNameParts(contact);
+  const values: Readonly<Record<string, string>> = {
+    ...contactMergeTagValues(contact),
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+  };
+  const unknown = new Set<string>();
+  const value = content.replace(
+    /\{\{\s*([A-Za-z][A-Za-z0-9_.-]{0,99})\s*\}\}/gu,
+    (token, key: string) => {
+      if (!Object.hasOwn(values, key)) {
+        unknown.add(key);
+        return token;
+      }
+      return values[key] ?? "";
+    },
+  );
+  return { value, unknownTags: [...unknown].sort() };
+}
+
+export function parseCsvPreview(csv: string): {
+  readonly headers: readonly string[];
+  readonly rows: readonly (readonly string[])[];
+  readonly mapping: readonly {
+    readonly sourceColumn: string;
+    readonly targetField: string;
+    readonly custom: boolean;
+  }[];
+  readonly issues: readonly string[];
+} {
+  const records: string[][] = [];
+  let record: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < csv.length; index += 1) {
+    const character = csv[index];
+    if (quoted) {
+      if (character === '"' && csv[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+    } else if (character === '"' && cell.length === 0) {
+      quoted = true;
+    } else if (character === ",") {
+      record.push(cell);
+      cell = "";
+    } else if (character === "\n") {
+      record.push(cell.replace(/\r$/u, ""));
+      records.push(record);
+      record = [];
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  if (quoted)
+    return {
+      headers: [],
+      rows: [],
+      mapping: [],
+      issues: ["CSV contains an unterminated quoted field."],
+    };
+  if (cell.length > 0 || record.length > 0) {
+    record.push(cell.replace(/\r$/u, ""));
+    records.push(record);
+  }
+  const headers = (records[0] ?? []).map((header) => header.trim());
+  const normalizedHeaders = headers.map((header) => header.toLowerCase());
+  const hasEmailColumn = normalizedHeaders.includes("email");
+  const importTargets: Readonly<Record<string, string>> = {
+    firstname: "firstName",
+    "first name": "firstName",
+    lastname: "lastName",
+    "last name": "lastName",
+    name: "displayName",
+    displayname: "displayName",
+    "display name": "displayName",
+    email: "email",
+    phone: "phone",
+    company: "company",
+    title: "title",
+    jobtitle: "title",
+    "job title": "title",
+    website: "website",
+    linkedin: "linkedinUrl",
+    linkedinurl: "linkedinUrl",
+    notes: "notes",
+    tags: "tags",
+    source: "source",
+    pipelinestage: "pipelineStage",
+    stage: "pipelineStage",
+  };
+  const issues: string[] = [];
+  if (headers.length === 0) issues.push("Add a header row before importing.");
+  if (!hasEmailColumn) issues.push("No Email column was detected.");
+  if (new Set(normalizedHeaders).size !== normalizedHeaders.length) {
+    issues.push("CSV column names must be unique.");
+  }
+  const mapping = headers.map((sourceColumn, index) => {
+    const target = importTargets[normalizedHeaders[index] ?? ""];
+    return {
+      sourceColumn,
+      targetField: target ?? `custom.${sourceColumn}`,
+      custom: target === undefined,
+    };
+  });
+  return {
+    headers,
+    rows: records
+      .slice(1)
+      .filter((values) => values.some((value) => value.trim()))
+      .slice(0, 5),
+    mapping,
+    issues,
+  };
+}
+export type CsvPreview = ReturnType<typeof parseCsvPreview>;

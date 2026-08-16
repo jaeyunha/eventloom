@@ -21,6 +21,25 @@ export interface PublicEventDirectoryResponse {
   readonly data: readonly PublicOrganizationDirectoryEntry[];
 }
 
+const PUBLIC_EVENT_MONTH_DAY_OPTIONS = {
+  month: "long",
+  day: "numeric",
+} as const;
+const PUBLIC_EVENT_START_WITH_YEAR_FORMATTER = new Intl.DateTimeFormat("en", {
+  ...PUBLIC_EVENT_MONTH_DAY_OPTIONS,
+  year: "numeric",
+  timeZone: "UTC",
+});
+const PUBLIC_EVENT_START_WITHOUT_YEAR_FORMATTER = new Intl.DateTimeFormat("en", {
+  ...PUBLIC_EVENT_MONTH_DAY_OPTIONS,
+  timeZone: "UTC",
+});
+const PUBLIC_EVENT_END_FORMATTER = new Intl.DateTimeFormat("en", {
+  ...PUBLIC_EVENT_MONTH_DAY_OPTIONS,
+  year: "numeric",
+  timeZone: "UTC",
+});
+
 interface PublicEventsDirectoryProps {
   readonly organizations: readonly PublicOrganizationDirectoryEntry[];
 }
@@ -97,21 +116,13 @@ function formatEventDateRange(startsOn: string, endsOn: string, timeZone: string
   const sameDay = startsOn === endsOn;
   const sharedYear = start.getUTCFullYear() === end.getUTCFullYear();
   const sharedMonth = sharedYear && start.getUTCMonth() === end.getUTCMonth();
-  const startLabel = new Intl.DateTimeFormat("en", {
-    month: "long",
-    day: "numeric",
-    ...(!sharedYear || sameDay ? { year: "numeric" } : {}),
-    timeZone: "UTC",
-  }).format(start);
+  const startLabel = (
+    !sharedYear || sameDay
+      ? PUBLIC_EVENT_START_WITH_YEAR_FORMATTER
+      : PUBLIC_EVENT_START_WITHOUT_YEAR_FORMATTER
+  ).format(start);
   const endLabel =
-    sameDay || sharedMonth
-      ? String(end.getUTCDate())
-      : new Intl.DateTimeFormat("en", {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-          timeZone: "UTC",
-        }).format(end);
+    sameDay || sharedMonth ? String(end.getUTCDate()) : PUBLIC_EVENT_END_FORMATTER.format(end);
   const dateLabel = sameDay
     ? startLabel
     : `${startLabel}–${endLabel}${sharedMonth ? `, ${end.getUTCFullYear()}` : ""}`;

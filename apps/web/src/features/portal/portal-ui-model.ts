@@ -10,6 +10,11 @@ export const portalNavigation = [
   { href: "/portal?workspace=files", label: "Files", icon: "▱" },
   { href: "/portal?workspace=resources", label: "Event guide", icon: "◇" },
 ] as const;
+const PORTAL_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
 
 export function portalNavigationItemActive(
   href: string,
@@ -46,9 +51,7 @@ export function formatPortalDate(value: string | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return null;
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(
-    date,
-  );
+  return PORTAL_DATE_FORMATTER.format(date);
 }
 
 export function formatPortalFileSize(sizeBytes: number): string {

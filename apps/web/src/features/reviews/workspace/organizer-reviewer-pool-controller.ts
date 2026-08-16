@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createMemberApi,
   type MemberApi,
@@ -63,21 +63,25 @@ export function useOrganizerReviewerPool({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const loadSequenceRef = useRef(0);
+  const saveSequenceRef = useRef(0);
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (memberApi === null || !eventId.trim() || !roundId.trim()) {
+      const sequence = loadSequenceRef.current + 1;
+      loadSequenceRef.current = sequence;
+      setLoading(true);
+      try {
+        if (memberApi === null || !eventId.trim() || !roundId.trim()) {
+          setPool(null);
+          setDraft({});
+          setError("The organization review-team service is not configured.");
+          return;
+        }
+        setError(null);
+        setMessage(null);
         setPool(null);
         setDraft({});
-        setError("The organization review-team service is not configured.");
-        return;
-      }
-      setLoading(true);
-      setError(null);
-      setMessage(null);
-      setPool(null);
-      setDraft({});
-      try {
         const nextPool = await memberApi.getReviewerPool(eventId, roundId, signal);
         if (signal?.aborted) return;
         setPool(nextPool);
@@ -85,7 +89,7 @@ export function useOrganizerReviewerPool({
       } catch (reason: unknown) {
         if (!signal?.aborted) setError(reviewerPoolError(reason));
       } finally {
-        if (!signal?.aborted) setLoading(false);
+        setLoading((current) => (loadSequenceRef.current === sequence ? false : current));
       }
     },
     [eventId, memberApi, roundId],
@@ -126,6 +130,8 @@ export function useOrganizerReviewerPool({
       setError("The organization review-team service is not configured.");
       return;
     }
+    const sequence = saveSequenceRef.current + 1;
+    saveSequenceRef.current = sequence;
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -142,7 +148,7 @@ export function useOrganizerReviewerPool({
     } catch (reason: unknown) {
       setError(reviewerPoolError(reason));
     } finally {
-      setSaving(false);
+      setSaving((current) => (saveSequenceRef.current === sequence ? false : current));
     }
   }
 

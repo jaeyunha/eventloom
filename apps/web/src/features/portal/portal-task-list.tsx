@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertCircle, CheckCircle2, Clock3, FileUp, ListChecks } from "lucide-react";
-import { StatusBadge, type StatusTone } from "../../components/workspace";
+import { StatusBadge, type StatusTone } from "../../components/workspace/workspace-ui";
 import {
   deadlineAfterEventWarning,
   type SpeakerEventTemporalContext,

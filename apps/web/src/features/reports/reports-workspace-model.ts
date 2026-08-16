@@ -1,4 +1,28 @@
-import type { ReportDefinitionInput, ReportRelationship } from "./api";
+import type { ReportDefinition, ReportDefinitionInput, ReportRelationship, ReportRun } from "./api";
+
+export interface ReportsNavigationCacheSnapshot {
+  readonly definitions: readonly ReportDefinition[];
+  readonly runs: readonly ReportRun[];
+}
+
+export function normalizeReportsScopeId(value: string): string {
+  return value.trim();
+}
+
+export function reportsNavigationCacheKey(organizationId: string, eventId: string): string {
+  const organization = normalizeReportsScopeId(organizationId);
+  const event = normalizeReportsScopeId(eventId);
+  return `organization:${organization}:event:${event}:reports:workspace`;
+}
+
+export function reportsNavigationCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeReportsScopeId(organizationId);
+  const event = normalizeReportsScopeId(eventId);
+  return [`organization:${organization}`, `event:${event}`, `reports:${event}`];
+}
 
 export interface FieldOption {
   readonly key: string;
@@ -169,8 +193,9 @@ export function draftFromReportTemplate(template: ReportTemplate): ReportDefinit
 export function fieldsForRelationships(
   relationships: readonly ReportRelationship[],
 ): readonly FieldOption[] {
+  const relationshipSet = new Set(relationships);
   return SOURCE_ORDER.flatMap((relationship) =>
-    relationships.includes(relationship) ? REPORT_FIELD_ALLOWLIST[relationship] : [],
+    relationshipSet.has(relationship) ? REPORT_FIELD_ALLOWLIST[relationship] : [],
   );
 }
 function sourceFieldKeys(relationships: readonly ReportRelationship[]): readonly string[] {
@@ -185,12 +210,14 @@ export function normalizeDraft(next: ReportDefinitionInput): ReportDefinitionInp
   const relationships = arrayValue(next.relationships);
   const available = new Set(sourceFieldKeys(relationships));
   const fields = arrayValue(next.fields).filter((field) => available.has(field));
-  const order = arrayValue(next.order).filter((field) => fields.includes(field));
+  const fieldSet = new Set(fields);
+  const order = arrayValue(next.order).filter((field) => fieldSet.has(field));
+  const orderSet = new Set(order);
   return {
     ...next,
     relationships,
     fields,
-    order: [...order, ...fields.filter((field) => !order.includes(field))],
+    order: [...order, ...fields.filter((field) => !orderSet.has(field))],
     filters: arrayValue(next.filters).filter(
       (filter) => filter !== null && typeof filter === "object" && available.has(filter.field),
     ),

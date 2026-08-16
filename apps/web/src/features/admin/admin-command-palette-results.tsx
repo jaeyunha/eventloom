@@ -5,6 +5,14 @@ import styles from "./admin-command-palette.module.css";
 import type { AdminCommandEvent, AdminCommandResult } from "./admin-command-palette-model";
 import { AdminNavigationIcon } from "./admin-navigation-icon";
 
+const ADMIN_COMMAND_EVENT_MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+});
+const ADMIN_COMMAND_EVENT_YEAR_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+});
+
 export type AdminCommandEventState =
   | { readonly status: "idle" | "loading" }
   | { readonly events: readonly AdminCommandEvent[]; readonly status: "loaded" }
@@ -13,8 +21,8 @@ export type AdminCommandEventState =
 function eventDates(result: Extract<AdminCommandResult, { kind: "event" }>): string {
   const start = new Date(result.startsAt);
   const end = new Date(result.endsAt);
-  const monthDay = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
-  const year = new Intl.DateTimeFormat(undefined, { year: "numeric" });
+  const monthDay = ADMIN_COMMAND_EVENT_MONTH_DAY_FORMATTER;
+  const year = ADMIN_COMMAND_EVENT_YEAR_FORMATTER;
   if (start.toDateString() === end.toDateString()) {
     return `${monthDay.format(start)}, ${year.format(start)}`;
   }

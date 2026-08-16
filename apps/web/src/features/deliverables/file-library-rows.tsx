@@ -40,6 +40,7 @@ export function FileLibraryRows({
   if (rows.length === 0) {
     return <p className={styles.muted}>No files match these filters.</p>;
   }
+  const selectedFamilyIdSet = new Set(selectedFamilyIds);
 
   return (
     <div className={styles.tableFrame}>
@@ -60,7 +61,7 @@ export function FileLibraryRows({
           {rows.map((row) => {
             const { family, asset } = row;
             const selectable = family.exportAssetId !== undefined;
-            const checked = selectedFamilyIds.includes(family.familyId);
+            const checked = selectedFamilyIdSet.has(family.familyId);
             const inspectAssetId = family.currentVersion?.id ?? family.latestVersion.id;
             const checkboxId = `file-family-${encodeURIComponent(family.familyId)}`;
 

@@ -27,11 +27,23 @@ export interface SpeakerOnboardingTaskDraft {
 export function createSpeakerTaskAssignment(
   draft: SpeakerOnboardingTaskDraft,
 ): SpeakerTaskAssignmentInput {
+  const title = draft.title.trim();
+  const dueAt = draft.dueAt.trim();
+  const participantIds = new Set<string>();
+  const source = draft.participantIds;
+  const length = source.length;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in source)) continue;
+    const participantId = source[index];
+    if (participantId === undefined) continue;
+    const trimmed = participantId.trim();
+    if (trimmed) participantIds.add(trimmed);
+  }
   return {
-    title: draft.title.trim(),
+    title,
     description: ORGANIZER_ONBOARDING_TASK_DESCRIPTION,
-    dueAt: draft.dueAt.trim(),
-    participantIds: [...new Set(draft.participantIds.map((id) => id.trim()).filter(Boolean))],
+    dueAt,
+    participantIds: [...participantIds],
   };
 }
 

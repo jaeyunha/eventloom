@@ -114,32 +114,27 @@ export function useReviewerQueueController({
       inboxItems.map(({ assignment }) => [assignment.organizationId, assignment.organizationName]),
     ),
   ].sort((left, right) => left[1].localeCompare(right[1]));
-  const eventOptions = [
-    ...new Map(
-      inboxItems
-        .filter(
-          ({ assignment }) =>
-            filters.organizationId === "all" ||
-            assignment.organizationId === filters.organizationId,
-        )
-        .map(({ assignment }) => [assignment.eventId, assignment.eventName]),
-    ),
-  ].sort((left, right) => left[1].localeCompare(right[1]));
-  const roundOptions = [
-    ...new Map(
-      inboxItems
-        .filter(
-          ({ assignment }) =>
-            (filters.organizationId === "all" ||
-              assignment.organizationId === filters.organizationId) &&
-            (filters.eventId === "all" || assignment.eventId === filters.eventId),
-        )
-        .map(({ assignment, roundKey }) => [
-          roundKey,
-          `${assignment.eventName} · ${assignment.roundName}`,
-        ]),
-    ),
-  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const eventOptionsById = new Map<string, string>();
+  for (const { assignment } of inboxItems) {
+    if (filters.organizationId !== "all" && assignment.organizationId !== filters.organizationId) {
+      continue;
+    }
+    eventOptionsById.set(assignment.eventId, assignment.eventName);
+  }
+  const eventOptions = [...eventOptionsById].sort((left, right) => left[1].localeCompare(right[1]));
+  const roundOptionsByKey = new Map<string, string>();
+  for (const { assignment, roundKey } of inboxItems) {
+    if (
+      (filters.organizationId !== "all" && assignment.organizationId !== filters.organizationId) ||
+      (filters.eventId !== "all" && assignment.eventId !== filters.eventId)
+    ) {
+      continue;
+    }
+    roundOptionsByKey.set(roundKey, `${assignment.eventName} · ${assignment.roundName}`);
+  }
+  const roundOptions = [...roundOptionsByKey].sort((left, right) =>
+    left[1].localeCompare(right[1]),
+  );
   const trackOptions = [
     ...new Set(
       inboxItems.flatMap(({ assignment }) => (assignment.track === null ? [] : [assignment.track])),

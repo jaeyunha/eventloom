@@ -1,4 +1,4 @@
-import { useRouter, useSearchParams } from "next/navigation";
+import { RedirectType, redirect, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { OrganizerEventContext } from "./admin-navigation";
 import { fetchOrganizerEventWorkspace } from "./admin-shell-event";
@@ -26,7 +26,6 @@ export function useOrganizerEvent(
   pathname: string,
   eventContext: OrganizerEventContext | null,
 ): OrganizerEventState {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const organizationId = eventContext?.organizationId ?? null;
   const eventId = eventContext?.eventId ?? null;
@@ -34,6 +33,16 @@ export function useOrganizerEvent(
   const currentEventResolution = resolution?.eventReference === eventId ? resolution : null;
   const currentEvent =
     currentEventResolution?.status === "resolved" ? currentEventResolution.event : null;
+  const canonicalHref =
+    eventContext === null || currentEvent === null
+      ? null
+      : canonicalOrganizerEventHref(
+          pathname,
+          searchParams.toString(),
+          eventContext.organizationId,
+          eventContext.eventId,
+          currentEvent,
+        );
 
   useEffect(() => {
     if (organizationId === null || eventId === null) {
@@ -61,19 +70,9 @@ export function useOrganizerEvent(
       });
     return () => controller.abort();
   }, [eventId, organizationId]);
-
-  useEffect(() => {
-    if (eventContext === null || currentEvent === null) return;
-    const canonicalHref = canonicalOrganizerEventHref(
-      pathname,
-      searchParams.toString(),
-      eventContext.organizationId,
-      eventContext.eventId,
-      currentEvent,
-    );
-    if (!canonicalHref) return;
-    router.replace(canonicalHref, { scroll: false });
-  }, [currentEvent, eventContext, pathname, router, searchParams]);
+  if (canonicalHref !== null) {
+    redirect(canonicalHref, RedirectType.replace);
+  }
 
   return {
     currentEvent,

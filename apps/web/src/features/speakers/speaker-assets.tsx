@@ -21,36 +21,19 @@ export function SpeakerStatusBadge({ status }: Readonly<{ status: string }>) {
 }
 export interface SpeakerAssetDownloadProps {
   readonly asset: SpeakerAsset;
-  readonly downloadUrl: string | null;
   readonly busy: boolean;
   readonly disabled: boolean;
   readonly error: string | null;
-  readonly onRequest: (asset: SpeakerAsset) => void;
+  readonly onRequest: (asset: SpeakerAsset) => Promise<string | null>;
 }
 
 export function SpeakerAssetDownload({
   asset,
-  downloadUrl,
   busy,
   disabled,
   error,
   onRequest,
 }: SpeakerAssetDownloadProps) {
-  if (asset.status === "ready" && downloadUrl !== null) {
-    return (
-      <Button variant="outline" size="sm" asChild>
-        <a
-          href={downloadUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`Download ${asset.fileName}`}
-        >
-          <Eye data-icon="inline-start" />
-          Download / view
-        </a>
-      </Button>
-    );
-  }
   if (asset.status !== "ready") {
     return <span className={styles.muted}>Download is not available for this asset.</span>;
   }
@@ -60,7 +43,12 @@ export function SpeakerAssetDownload({
         variant="outline"
         size="sm"
         type="button"
-        onClick={() => onRequest(asset)}
+        onClick={async () => {
+          const downloadUrl = await onRequest(asset);
+          if (downloadUrl !== null && typeof window !== "undefined") {
+            window.location.assign(downloadUrl);
+          }
+        }}
         disabled={disabled}
         aria-busy={busy}
         aria-label={`Download ${asset.fileName}`}
