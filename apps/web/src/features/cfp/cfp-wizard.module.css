@@ -395,7 +395,8 @@
 }
 
 .formColumn > * {
-  max-width: 48rem;
+  width: min(100%, 48rem);
+  margin-inline: auto;
 }
 
 .mobileProgress {
