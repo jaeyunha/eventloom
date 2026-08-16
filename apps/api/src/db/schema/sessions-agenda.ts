@@ -257,6 +257,8 @@ export const agendaStates = sqliteTable(
     stateVersion: integer("state_version").notNull(),
     timeZone: text("time_zone").notNull(),
     minimumTravelMinutes: integer("minimum_travel_minutes").notNull(),
+    validatedDraftVersion: integer("validated_draft_version"),
+    validatedAt: text("validated_at"),
     currentPublishedRevisionId: text("current_published_revision_id"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

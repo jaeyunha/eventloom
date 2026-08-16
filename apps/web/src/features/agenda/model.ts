@@ -40,6 +40,14 @@ export function eventDates(startsOn: string, endsOn: string): readonly string[] 
   return dates;
 }
 
+export function eventScheduleDates(
+  event: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn" | "scheduleDates">,
+): readonly string[] {
+  return event.scheduleDates?.length
+    ? [...event.scheduleDates]
+    : eventDates(event.startsOn, event.endsOn);
+}
+
 export function resolveAgendaPlacementDate(selectedDay: string, eventStart: string): string {
   return selectedDay === "" ? eventStart : selectedDay;
 }

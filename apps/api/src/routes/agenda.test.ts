@@ -708,6 +708,17 @@ describe("canonical agenda draft routes", () => {
       diff: { added: 1, changed: 0, removed: 0 },
       validatedAt: expect.any(String),
     });
+    const validatedWorkspace = await app.request(root);
+    expect(validatedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(validatedWorkspace),
+    ).toMatchObject({
+      draft: { version: 2 },
+      validation: { draftVersion: 2, validatedAt: expect.any(String) },
+    });
     const previewAlias = await app.request(`${root}/preview`, { method: "POST" });
     expect(previewAlias.status).toBe(404);
 
@@ -721,6 +732,17 @@ describe("canonical agenda draft routes", () => {
       version: 3,
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
+    const invalidatedWorkspace = await app.request(root);
+    expect(invalidatedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(invalidatedWorkspace),
+    ).toMatchObject({
+      draft: { version: 3 },
+      validation: { draftVersion: 2, validatedAt: expect.any(String) },
+    });
     const unchanged = await app.request(`${root}/draft`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -732,6 +754,8 @@ describe("canonical agenda draft routes", () => {
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
 
+    const revalidated = await app.request(`${root}/preview`);
+    expect(revalidated.status).toBe(200);
     const published = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -745,6 +769,17 @@ describe("canonical agenda draft routes", () => {
       "event-a",
       expect.objectContaining({ eventId: "event-a", revisionNumber: 1 }),
     );
+    const publishedWorkspace = await app.request(root);
+    expect(publishedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(publishedWorkspace),
+    ).toMatchObject({
+      draft: { version: 3 },
+      validation: { draftVersion: 3, validatedAt: expect.any(String) },
+    });
 
     const removed = await app.request(`${root}/draft`, {
       method: "PUT",
@@ -1061,9 +1096,28 @@ describe("canonical agenda draft routes", () => {
       },
     );
     expect(response.status).toBe(409);
-    expect(await responseError(response)).toMatchObject({
-      code: "CONFLICT",
-      details: [{ message: expect.stringContaining("overlap") }],
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: [{ message: expect.stringContaining("overlap") }],
+      },
+      data: {
+        candidateDiagnostics: {
+          evaluated: true,
+          report: {
+            conflicts: [
+              expect.objectContaining({
+                kind: "room",
+                entryIds: ["entry-1", "entry-2"],
+              }),
+            ],
+          },
+        },
+        authoritativeSavedPreview: {
+          draftVersion: 1,
+          conflicts: [],
+        },
+      },
     });
     expect((await engine.getDraft("event-a")).version).toBe(1);
   });

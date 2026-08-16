@@ -313,9 +313,15 @@ export class DeterministicAgendaSuggestionProvider implements AgendaSuggestionPr
     const sessions = [...request.sessions].sort((left, right) => left.id.localeCompare(right.id));
     const rooms = request.criteria.rooms;
     const windows = request.criteria.dayWindows;
+    const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     const existingSessionIds = new Set(request.existingEntries.map((entry) => entry.sessionId));
     const placements: AgendaSuggestionPlacement[] = [];
-    let slot = 0;
+    const occupied = request.existingEntries.map((entry) => ({
+      sessionId: entry.sessionId,
+      roomId: entry.roomId,
+      startsAtLocal: entry.startsAtLocal,
+      endsAtLocal: entry.endsAtLocal,
+    }));
 
     for (const session of sessions) {
       if (
@@ -325,25 +331,50 @@ export class DeterministicAgendaSuggestionProvider implements AgendaSuggestionPr
       ) {
         continue;
       }
-      const window = windows[slot % windows.length];
-      const room = rooms[slot % rooms.length];
-      if (window === undefined || room === undefined) continue;
       const duration = Math.max(1, Math.min(session.durationMinutes ?? 60, 240));
-      const startMinutes =
-        toMinutes(window.startLocal) + Math.floor(slot / rooms.length) * duration;
-      const endMinutes = startMinutes + duration;
-      if (endMinutes > toMinutes(window.endLocal)) {
-        slot += 1;
-        continue;
+      let placement: AgendaSuggestionPlacement | null = null;
+
+      for (const window of windows) {
+        const windowEnd = toMinutes(window.endLocal);
+        for (let startMinutes = toMinutes(window.startLocal); startMinutes + duration <= windowEnd; ) {
+          const endMinutes = startMinutes + duration;
+          const startsAtLocal = `${window.date}T${formatMinutes(startMinutes)}`;
+          const endsAtLocal = `${window.date}T${formatMinutes(endMinutes)}`;
+          for (const room of rooms) {
+            const overlaps = occupied.some((entry) => {
+              if (entry.startsAtLocal.slice(0, 10) !== window.date) {
+                return false;
+              }
+              const entryStartMinutes = toMinutes(entry.startsAtLocal.slice(11, 16));
+              const entryEndMinutes = toMinutes(entry.endsAtLocal.slice(11, 16));
+              if (startMinutes >= entryEndMinutes || endMinutes <= entryStartMinutes) return false;
+              if (!request.criteria.ignoreExistingRooms && entry.roomId === room.id) return true;
+              const existingSession = sessionsById.get(entry.sessionId);
+              if (existingSession === undefined) return false;
+              return (
+                session.participantIds.some((id) => existingSession.participantIds.includes(id)) ||
+                session.resourceIds.some((id) => existingSession.resourceIds.includes(id))
+              );
+            });
+            if (!overlaps) {
+              placement = {
+                sessionId: session.id,
+                roomId: room.id,
+                trackIds: [],
+                startsAtLocal,
+                endsAtLocal,
+              };
+              break;
+            }
+          }
+          if (placement !== null) break;
+          startMinutes += 30;
+        }
+        if (placement !== null) break;
       }
-      placements.push({
-        sessionId: session.id,
-        roomId: room.id,
-        trackIds: [],
-        startsAtLocal: `${window.date}T${formatMinutes(startMinutes)}`,
-        endsAtLocal: `${window.date}T${formatMinutes(endMinutes)}`,
-      });
-      slot += 1;
+      if (placement === null) continue;
+      placements.push(placement);
+      occupied.push(placement);
     }
     return { placements };
   }
@@ -739,7 +770,39 @@ export class AgendaEngine {
     return this.validationReport(state, materialized);
   }
 
-  async preview(eventId: string): Promise<AgendaPreview> {
+  async preview(
+    eventId: string,
+    actorId?: string,
+  ): Promise<AgendaPreview & { validatedAt: string }> {
+    return this.mutate(eventId, async (state) => {
+      const previousValidatedAt =
+        state.validatedDraftVersion === state.draft.version ? state.validatedAt : undefined;
+      const validatedAt = previousValidatedAt ?? this.now();
+      const result = { ...this.previewState(state), validatedAt };
+      if (previousValidatedAt !== undefined) return { state, result, changed: false };
+      return {
+        state: {
+          ...state,
+          stateVersion: state.stateVersion + 1,
+          validatedDraftVersion: state.draft.version,
+          validatedAt,
+          audit:
+            actorId === undefined
+              ? state.audit
+              : [
+                  ...state.audit,
+                  this.audit(eventId, actorId, "draft.validated", validatedAt, {
+                    draftVersion: state.draft.version,
+                  }),
+                ],
+        },
+        result,
+        changed: true,
+      };
+    });
+  }
+
+  async inspectPreview(eventId: string): Promise<AgendaPreview> {
     const state = await this.requireState(eventId);
     return this.previewState(state);
   }

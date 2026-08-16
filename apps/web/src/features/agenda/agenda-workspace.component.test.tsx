@@ -9,6 +9,7 @@ import {
   type AgendaBusyOperation,
   AgendaSuggestionPanel,
   type AgendaSuggestionRunView,
+  previewFromPlacementFailure,
 } from "./agenda-workspace";
 import {
   AGENDA_VIEW_MODES,
@@ -25,7 +26,7 @@ import {
   loadCanonicalAgendaWorkspaceWithCache,
   serializeAgendaSuggestionOptions,
 } from "./agenda-workspace-model";
-import { createAgendaApi } from "./api";
+import { AgendaApiError, createAgendaApi } from "./api";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const workspaceStyles = readFileSync(
@@ -71,6 +72,7 @@ const data: AgendaWorkspaceData = {
       },
     ],
   },
+  validation: null,
   rooms: [{ id: "room_main", name: "Main hall", capacity: 500 }],
   tracks: [{ id: "track_main", name: "Main stage", color: "#4f5ee8" }],
   acceptedSessionIds: ["session_keynote", "session_workshop"],
@@ -366,6 +368,66 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain("Main hall already has a session at this time.");
     expect(markup).toContain("Hard conflict:");
   });
+
+  it("retains exact-revision validation when the workspace reloads without a preview", () => {
+    const validatedData = {
+      ...data,
+      validation: {
+        draftVersion: data.draft.version,
+        validatedAt: "2026-08-08T18:00:00.000Z",
+      },
+    } as AgendaWorkspaceData;
+    const markup = renderToStaticMarkup(
+      createElement(AgendaBoard, {
+        ...actions,
+        organizationId: "organization-1",
+        data: validatedData,
+        preview: null,
+        busy: false,
+        statusMessage: null,
+        error: null,
+      }),
+    );
+
+    expect(markup).toContain(">Validated<");
+    expect(markup).not.toContain(">Needs validation<");
+  });
+
+  it("keeps rejected room and speaker conflicts visible without replacing saved draft data", () => {
+    const participantConflict = {
+      id: "conflict_participant",
+      kind: "participant" as const,
+      entryIds: ["entry_keynote", "entry_workshop"],
+      message: 'Speaker "Morgan Lee" is scheduled in overlapping sessions.',
+    };
+    const authoritativeSavedPreview: AgendaPreview = {
+      ...preview,
+      conflicts: [],
+      diff: { added: 0, changed: 0, removed: 0 },
+    };
+    const error = new AgendaApiError(
+      "CONFLICT",
+      "The agenda contains unresolved scheduling conflicts.",
+      409,
+      "trace-conflict",
+      undefined,
+      {
+        evaluated: true,
+        report: {
+          conflicts: [...preview.conflicts, participantConflict],
+          warnings: [],
+        },
+        authoritativeSavedPreview,
+      },
+    );
+
+    expect(previewFromPlacementFailure(error)).toEqual({
+      ...authoritativeSavedPreview,
+      conflicts: [...preview.conflicts, participantConflict],
+      warnings: [],
+    });
+  });
+
   it("links the agenda back to the organization-scoped event overview", () => {
     const markup = renderBoard();
 

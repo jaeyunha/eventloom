@@ -286,6 +286,7 @@ export type AgendaAuditAction =
   | "agenda.suggestion.applied"
   | "catalog.updated"
   | "draft.updated"
+  | "draft.validated"
   | "warning.overridden";
 
 export interface AgendaAuditEntry {
@@ -300,6 +301,8 @@ export interface AgendaAuditEntry {
 export interface AgendaState {
   eventId: string;
   stateVersion: number;
+  validatedDraftVersion?: number;
+  validatedAt?: string;
   timeZone: string;
   minimumTravelMinutes: number;
   sessions: readonly AgendaSession[];

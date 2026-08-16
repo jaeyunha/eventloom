@@ -410,6 +410,43 @@ describe("agenda concurrency and revisions", () => {
     expect((await engine.getDraft("event-1")).version).toBe(2);
   });
 
+  it("records validation for the exact draft revision and preserves it through publish", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+
+    await engine.preview("event-1");
+    expect(await engine.repository.load("event-1")).toMatchObject({
+      validatedDraftVersion: 1,
+      validatedAt: "2026-08-08T18:00:00.000Z",
+      draft: { version: 1 },
+    });
+
+    const updated = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-2", "session-2", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    expect(await engine.repository.load("event-1")).toMatchObject({
+      validatedDraftVersion: 1,
+      draft: { version: 2 },
+    });
+
+    await engine.preview("event-1");
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: updated.version,
+      actorId: "organizer-1",
+    });
+    expect(await engine.repository.load("event-1")).toMatchObject({
+      validatedDraftVersion: 2,
+      validatedAt: "2026-08-08T18:00:00.000Z",
+      draft: { version: 2 },
+    });
+  });
+
   it("publishes immutable revisions and rolls back through a corrective revision", async () => {
     const engine = createEngine();
     await initialize(engine);
@@ -590,6 +627,30 @@ describe("advisory agenda suggestions", () => {
     expect(run.criteria.orderedRules).toEqual(["avoid hard conflicts", "prefer larger rooms"]);
     expect(run.diff.summary).toContain("proposed agenda change");
   });
+
+  it("places one eligible unscheduled session after existing room occupancy", async () => {
+    const engine = createEngine(new DeterministicAgendaSuggestionProvider());
+    await initialize(engine);
+    const draft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+
+    const run = await engine.generateSuggestion(suggestionInput(draft.version));
+    expect(run.candidateDiagnostics.conflicts).toEqual([]);
+    expect(run.proposedEntries).toContainEqual(
+      expect.objectContaining({
+        sessionId: "session-2",
+        roomId: "room-large",
+        startsAtLocal: "2026-08-10T10:00:00",
+      }),
+    );
+  });
+
   it("returns candidate diagnostics without polluting the authoritative saved preview", async () => {
     const provider: AgendaSuggestionProvider = {
       suggest: () => ({

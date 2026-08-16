@@ -1862,6 +1862,11 @@ function ScopedEventSettingsWorkspace({
         error instanceof EventSettingsApiError && error.code === "VERSION_CONFLICT"
           ? "This event settings record changed in another organizer session. Reload before saving again."
           : messageFrom(error);
+      try {
+        await refresh();
+      } catch {
+        // Keep the loaded state and original mutation error when the recovery read is unavailable.
+      }
       if (mountedRef.current) setNotice(`Unable to complete this change. ${message}`);
       throw error;
     } finally {

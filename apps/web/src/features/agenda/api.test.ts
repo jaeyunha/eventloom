@@ -16,6 +16,7 @@ const workspace = {
     updatedBy: "Avery",
     entries: [],
   },
+  validation: null,
   rooms: [],
   tracks: [],
   acceptedSessionIds: [],

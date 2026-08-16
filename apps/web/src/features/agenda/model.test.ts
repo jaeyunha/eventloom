@@ -3,6 +3,7 @@ import {
   acceptedSessionCount,
   agendaDays,
   eventDates,
+  eventScheduleDates,
   publicationReadiness,
   resolveAgendaPlacementDate,
 } from "./model";
@@ -49,6 +50,7 @@ const data: AgendaWorkspaceData = {
       },
     ],
   },
+  validation: null,
   rooms: [],
   tracks: [],
   acceptedSessionIds: ["session_early", "session_later"],
@@ -112,6 +114,22 @@ describe("agenda workspace model", () => {
     });
 
     expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-20"]);
+  });
+
+  it("uses authoritative sparse dates for assisted placement criteria", () => {
+    expect(
+      eventScheduleDates({
+        startsOn: "2026-09-18",
+        endsOn: "2026-09-20",
+        scheduleDates: ["2026-09-18", "2026-09-20"],
+      }),
+    ).toEqual(["2026-09-18", "2026-09-20"]);
+    expect(
+      eventScheduleDates({
+        startsOn: "2026-09-18",
+        endsOn: "2026-09-20",
+      }),
+    ).toEqual(["2026-09-18", "2026-09-19", "2026-09-20"]);
   });
 
   it("uses the authoritative event range for empty days and excludes out-of-range draft dates", () => {

@@ -212,7 +212,7 @@ export class D1AgendaRepository implements AgendaRepository {
       this.db
         .prepare(`SELECT s.*, COALESCE((SELECT json_group_array(speaker_id) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') participant_ids_json,
         COALESCE((SELECT json_group_array(resource_id) FROM session_resources x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') resource_ids_json,
-        COALESCE((SELECT json_group_array(display_name) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id AND display_name IS NOT NULL),'[]') speaker_names_json,
+        COALESCE((SELECT json_group_array(COALESCE(display_name,speaker_id)) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') speaker_names_json,
         COALESCE((SELECT json_group_array(track_id) FROM session_tracks x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id ORDER BY ordinal),'[]') track_ids_json
         FROM sessions s WHERE organization_id=? AND event_id=? AND deleted_at IS NULL ORDER BY id`)
         .bind(this.organizationId, eventId)
@@ -339,6 +339,10 @@ export class D1AgendaRepository implements AgendaRepository {
     return {
       eventId,
       stateVersion: number(root.state_version),
+      ...(root.validated_draft_version == null
+        ? {}
+        : { validatedDraftVersion: number(root.validated_draft_version) }),
+      ...(root.validated_at == null ? {} : { validatedAt: text(root.validated_at) }),
       timeZone: text(root.time_zone),
       minimumTravelMinutes: number(root.minimum_travel_minutes),
       sessions: (sessionRows.results ?? []).map((row) => ({
@@ -451,14 +455,16 @@ export class D1AgendaRepository implements AgendaRepository {
       statements.push(
         statement(
           this.db,
-          `INSERT INTO agenda_states (organization_id,event_id,state_version,time_zone,minimum_travel_minutes,current_published_revision_id,created_at,updated_at)
-        SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=?)`,
+          `INSERT INTO agenda_states (organization_id,event_id,state_version,time_zone,minimum_travel_minutes,validated_draft_version,validated_at,current_published_revision_id,created_at,updated_at)
+        SELECT ?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=?)`,
           [
             this.organizationId,
             eventId,
             next.stateVersion,
             next.timeZone,
             next.minimumTravelMinutes,
+            next.validatedDraftVersion ?? null,
+            next.validatedAt ?? null,
             next.currentPublishedRevisionId,
             token,
             token,
@@ -490,11 +496,13 @@ export class D1AgendaRepository implements AgendaRepository {
       statements.push(
         statement(
           this.db,
-          `UPDATE agenda_states SET state_version=?,time_zone=?,minimum_travel_minutes=?,current_published_revision_id=?,updated_at=? WHERE organization_id=? AND event_id=? AND state_version=?`,
+          `UPDATE agenda_states SET state_version=?,time_zone=?,minimum_travel_minutes=?,validated_draft_version=?,validated_at=?,current_published_revision_id=?,updated_at=? WHERE organization_id=? AND event_id=? AND state_version=?`,
           [
             next.stateVersion,
             next.timeZone,
             next.minimumTravelMinutes,
+            next.validatedDraftVersion ?? null,
+            next.validatedAt ?? null,
             next.currentPublishedRevisionId,
             token,
             this.organizationId,

@@ -5,7 +5,11 @@ import {
 } from "@eventloom/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaCatalogSynchronizer } from "../features/agenda/catalog-sync";
-import { AgendaEngine, AgendaError } from "../features/agenda/engine";
+import {
+  AgendaEngine,
+  AgendaError,
+  DeterministicAgendaSuggestionProvider,
+} from "../features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
@@ -2638,7 +2642,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
-  const agendaEngine = localAgendaEngine(eventRepository, aiProviders?.agenda);
+  const agendaEngine = localAgendaEngine(
+    eventRepository,
+    aiProviders?.agenda ?? new DeterministicAgendaSuggestionProvider(),
+  );
   let sessionService!: SessionService;
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
     engine: agendaEngine,

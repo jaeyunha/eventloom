@@ -74,6 +74,7 @@ import {
   agendaDays,
   conflictsForEntry,
   eventDates,
+  eventScheduleDates,
   formatLocalTime,
   formatRevisionTimestamp,
   publicationReadiness,
@@ -97,6 +98,17 @@ function messageFrom(error: unknown): string {
   }
   return "The agenda request could not be completed.";
 }
+
+export function previewFromPlacementFailure(error: AgendaApiError): AgendaPreview | null {
+  const failure = error.candidateDiagnostics;
+  if (failure?.evaluated !== true || failure.report === null) return null;
+  return {
+    ...failure.authoritativeSavedPreview,
+    conflicts: failure.report.conflicts,
+    warnings: failure.report.warnings,
+  };
+}
+
 export type AgendaCandidateDiagnostics = AgendaValidationReport;
 export interface AgendaSuggestionChangeView {
   id: string;
@@ -546,6 +558,7 @@ export function AgendaBoard({
   const toPlaceCount = data.unscheduledSessions.length;
   const hasScheduleInventory = acceptedCount > 0 || scheduledCount > 0;
   const placementComplete = acceptedCount > 0 && toPlaceCount === 0;
+  const validationIsCurrent = data.validation?.draftVersion === data.draft.version;
   const hardConflictCount =
     preview === null ? null : preview.conflicts.length + preview.releaseConflicts.length;
 
@@ -902,12 +915,10 @@ export function AgendaBoard({
                 </div>
                 <span
                   className={
-                    preview?.draftVersion === data.draft.version
-                      ? styles.validatedBadge
-                      : styles.draftBadge
+                    validationIsCurrent ? styles.validatedBadge : styles.draftBadge
                   }
                 >
-                  {preview?.draftVersion === data.draft.version ? "Validated" : "Needs validation"}
+                  {validationIsCurrent ? "Validated" : "Needs validation"}
                 </span>
               </div>
               <p>Check conflicts and release rules for draft v{data.draft.version}.</p>
@@ -1904,9 +1915,13 @@ function ScopedAgendaWorkspace({
         if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
           throw new Error("The agenda response belongs to another event.");
         }
+        const loadedPreview =
+          loaded.data.validation?.draftVersion === loaded.data.draft.version
+            ? await loaded.api.preview(eventId)
+            : null;
         if (!loadIsCurrent()) return;
         setSnapshot({ scopeKey, api: loaded.api, data: loaded.data });
-        setPreview(null);
+        setPreview(loadedPreview);
         setSuggestionRun(null);
         setStatusMessage(null);
       } catch (loadError) {
@@ -1991,14 +2006,17 @@ function ScopedAgendaWorkspace({
               }
             : current,
         );
-        const recovered = await Promise.all([
-          currentSnapshot.api.getWorkspace(eventId),
-          currentSnapshot.api.preview(eventId),
-        ]);
-        if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recovered[0], eventId)) {
-          setSnapshot({ ...currentSnapshot, data: recovered[0] });
-          setPreview(recovered[1]);
-          cache?.write(workspaceCacheKey, recovered[0], workspaceCacheTags);
+        const recoveredData = await currentSnapshot.api.getWorkspace(eventId);
+        const candidatePreview = previewFromPlacementFailure(mutationError);
+        const recoveredPreview =
+          candidatePreview ??
+          (recoveredData.validation?.draftVersion === recoveredData.draft.version
+            ? await currentSnapshot.api.preview(eventId)
+            : null);
+        if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recoveredData, eventId)) {
+          setSnapshot({ ...currentSnapshot, data: recoveredData });
+          setPreview(recoveredPreview);
+          cache?.write(workspaceCacheKey, recoveredData, workspaceCacheTags);
         }
       }
       return false;
@@ -2023,10 +2041,7 @@ function ScopedAgendaWorkspace({
       if (!currentSuggestionApi) {
         throw new Error("Private suggestion generation is unavailable for this agenda.");
       }
-      const dates = eventDates(
-        currentSnapshot.data.event.startsOn,
-        currentSnapshot.data.event.endsOn,
-      );
+      const dates = eventScheduleDates(currentSnapshot.data.event);
       const run = await currentSuggestionApi.generateSuggestion({
         eventId,
         baseDraftVersion: currentSnapshot.data.draft.version,
@@ -2180,6 +2195,15 @@ function ScopedAgendaWorkspace({
     try {
       const result = await currentSnapshot.api.preview(eventId);
       if (!operationIsCurrent(token)) return;
+      const nextData: AgendaWorkspaceData = {
+        ...currentSnapshot.data,
+        validation: {
+          draftVersion: result.draftVersion,
+          validatedAt: result.validatedAt,
+        },
+      };
+      setSnapshot({ ...currentSnapshot, data: nextData });
+      cache?.write(workspaceCacheKey, nextData, workspaceCacheTags);
       setPreview(result);
       setStatusMessage(
         result.conflicts.length === 0
@@ -2248,7 +2272,7 @@ function ScopedAgendaWorkspace({
               entry,
             }),
           "Session saved to the private agenda draft.",
-          true,
+          false,
           "save",
         )
       }
@@ -2261,7 +2285,7 @@ function ScopedAgendaWorkspace({
               expectedVersion: current.draft.version,
             }),
           "Session removed from the private agenda draft.",
-          true,
+          false,
           "remove",
         )
       }
@@ -2285,7 +2309,7 @@ function ScopedAgendaWorkspace({
           (activeApi, current) =>
             activeApi.publish({ eventId, expectedVersion: current.draft.version }),
           "Agenda revision published. Public projections are being refreshed.",
-          false,
+          true,
           "publish",
         )
       }

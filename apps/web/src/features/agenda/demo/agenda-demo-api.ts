@@ -365,6 +365,8 @@ function buildSuggestion(
 
 export function createAgendaDemoApi(eventId: string): AgendaApi {
   let version = 3;
+  let validatedDraftVersion: number | null = null;
+  let validatedAt: string | null = null;
   let rooms: AgendaRoom[] = initialRooms.map((room) => ({ ...room }));
   let tracks: AgendaTrack[] = initialTracks.map((track) => ({ ...track }));
   let calendarDelivery: AgendaCalendarDeliveryState = {
@@ -439,6 +441,10 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         updatedBy: "Demo organizer",
         entries,
       },
+      validation:
+        validatedDraftVersion === null || validatedAt === null
+          ? null
+          : { draftVersion: validatedDraftVersion, validatedAt },
       rooms,
       tracks,
       acceptedSessionIds: sessions.map((session) => session.id),
@@ -449,13 +455,17 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
   }
 
   function preview(): AgendaPreview {
+    if (validatedDraftVersion !== version || validatedAt === null) {
+      validatedDraftVersion = version;
+      validatedAt = timestamp();
+    }
     return clone({
       draftVersion: version,
       conflicts: conflictsFor(entries),
       releaseConflicts: [],
       warnings: warningsFor(entries, overrides, rooms),
       diff: diffFrom(entries, publishedEntries),
-      validatedAt: timestamp(),
+      validatedAt,
     });
   }
 
