@@ -1,10 +1,10 @@
 .workspace {
   display: grid;
+  gap: 1.25rem;
   width: 100%;
-  max-width: 100%;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
-  min-width: 0;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 1.5rem clamp(1rem, 3vw, 2rem) 3rem;
   color: var(--foreground);
 }
 
@@ -591,6 +591,17 @@
 
 .empty {
   min-height: 8rem;
+}
+
+.firstRunCard {
+  border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+  background: color-mix(in srgb, var(--primary) 3%, var(--card));
+}
+
+.firstRunCard [data-slot="empty"] {
+  min-height: 14rem;
+  border: 0;
+  background: transparent;
 }
 
 .code {
