@@ -1215,7 +1215,7 @@ describe("review workspace", () => {
     expect(markup).toContain("Only your assigned submission is available");
     expect(markup).toContain("Blind review is on");
     expect(markup).toContain("Author identity is hidden from reviewers");
-    expect(markup).toContain("Redacted for blind review");
+    expect(markup).toContain('aria-labelledby="assigned-submission-heading"');
     expect(markup).not.toContain("Riley");
     expect(markup).not.toContain("review plan status");
     expect(markup).not.toContain("Create evaluation plan");
@@ -1390,12 +1390,13 @@ describe("review workspace", () => {
     );
 
     expect(evaluatorMarkup).toContain("<h1>Designing resilient public services</h1>");
-    expect(evaluatorMarkup).toContain("Speaker / participants");
-    expect(evaluatorMarkup).toContain("Participant identities are hidden for this blind review.");
+    expect(evaluatorMarkup).not.toContain("Speaker / participants");
+    expect(evaluatorMarkup).not.toContain("Priya Raman");
+    expect(evaluatorMarkup).not.toContain("Marcus Okafor");
     expect(evaluatorMarkup).toContain("Public services");
     expect(evaluatorMarkup).toContain("Rubric progress");
     expect(queueMarkup).not.toContain("Queue position");
-    expect(queueMarkup).toContain("Drafts stay saved");
+    expect(queueMarkup).toContain('data-reviewer-collection="true"');
     expect(evaluatorMarkup).not.toContain(">Previous<");
     expect(evaluatorMarkup).not.toContain(">Next<");
     expect(evaluatorMarkup).not.toContain("Evaluation actions");
@@ -1735,7 +1736,7 @@ describe("review workspace", () => {
       expect(requests).toEqual(["/api/admin/evaluations/reviewer/workspace?eventId=summit-2026"]);
       expect(requests.some((request) => request.includes("/assignments/"))).toBe(false);
       expect(markup).toContain("Canonical submission title");
-      expect(markup).toContain("Canonical review plan");
+      expect(markup).toContain('data-reviewer-collection="true"');
       expect(markup).toContain("Submitted");
       expect(markup).toContain('data-assignment-status="submitted"');
     } finally {
@@ -1752,7 +1753,7 @@ describe("review workspace", () => {
     const pageMarkup = renderToStaticMarkup(await ReviewerPage());
 
     expect(markup).toContain("Reviewer queue");
-    expect(markup).toContain("Submissions to review");
+    expect(markup).toContain('aria-label="Assigned reviews"');
     expect(markup).toContain("Designing resilient public services");
     expect(markup).toContain("Start review");
     expect(markup).not.toContain("Create evaluation plan");
