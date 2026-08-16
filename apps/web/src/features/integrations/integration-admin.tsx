@@ -1,29 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SettingsShell } from "@/components/workspace/settings-ui";
-import {
-  WorkspaceBreadcrumb,
-  WorkspaceHeader,
-  WorkspaceMetaItem,
-} from "@/components/workspace/workspace-ui";
-import { workspaceClassNames } from "@/components/workspace/workspace-ui-model";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
-import { Button } from "../../components/ui";
 import {
   createIntegrationAdminApi,
   type IntegrationAdminApi,
   IntegrationAdminApiError,
 } from "./api";
-import {
-  ApiKeysSection,
-  DeliverySection,
-  OneTimeSecretPanel,
-  OverviewSection,
-  WebhooksSection,
-} from "./integration-sections";
-import styles from "./integrations.module.css";
+import { IntegrationAdminSections } from "./integration-admin-sections";
 import type { IntegrationAdminSnapshot, OneTimeSecret } from "./types";
 
 export type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
@@ -281,101 +265,25 @@ export function IntegrationAdmin({
   const copy = sectionCopy[section];
 
   return (
-    <main className={`${workspaceClassNames.page} ${styles.integrationPage}`}>
-      <WorkspaceHeader
-        breadcrumb={
-          <WorkspaceBreadcrumb>
-            <Link href={eventBase}>{snapshot?.event.name ?? "Event"}</Link>
-            <span aria-hidden="true">/</span>
-            <span>Integrations</span>
-          </WorkspaceBreadcrumb>
-        }
-        description={copy.description}
-        metadata={
-          <>
-            <WorkspaceMetaItem>Event {eventId}</WorkspaceMetaItem>
-            <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
-          </>
-        }
-        title={copy.title}
-      />
-
-      <SettingsShell
-        wide
-        navigation={
-          <nav className={styles.settingsNavigation} aria-label="Integration settings">
-            {tabs.map((tab) => (
-              <Link
-                key={tab.section}
-                href={tab.href}
-                aria-current={tab.section === section ? "page" : undefined}
-              >
-                {tab.label}
-              </Link>
-            ))}
-          </nav>
-        }
-      >
-        <div className={styles.integrationContent}>
-          {notice ? (
-            <div className={styles.successPanel} role="status" aria-live="polite">
-              <p>{notice}</p>
-            </div>
-          ) : null}
-          {mutationError ? (
-            <div className={styles.errorPanel} role="alert">
-              <div>
-                <h2>Could not save the change</h2>
-                <p>{mutationError}</p>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setMutationError(null)}
-              >
-                Dismiss
-              </Button>
-            </div>
-          ) : null}
-          {oneTimeSecret ? (
-            <OneTimeSecretPanel
-              secret={oneTimeSecret.value}
-              label={oneTimeSecret.label}
-              onDismiss={() => setOneTimeSecret(null)}
-            />
-          ) : null}
-
-          {loading && !snapshot ? (
-            <div className={styles.statePanel} role="status" aria-live="polite">
-              <span className={styles.spinner} aria-hidden="true" />
-              <h2>Loading integration settings</h2>
-              <p>Retrieving tenant-scoped connection and delivery status.</p>
-            </div>
-          ) : null}
-          {loadError && !snapshot ? (
-            <div className={styles.statePanel} role="alert">
-              <h2>Integration settings are unavailable</h2>
-              <p>{loadError}</p>
-              <Button type="button" onClick={() => void loadSnapshot()}>
-                Try again
-              </Button>
-            </div>
-          ) : null}
-
-          {snapshot ? (
-            section === "overview" ? (
-              <OverviewSection basePath={base} snapshot={snapshot} />
-            ) : section === "api-keys" ? (
-              <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
-            ) : section === "webhooks" ? (
-              <WebhooksSection webhooks={snapshot.webhooks} actions={actions} />
-            ) : (
-              <DeliverySection snapshot={snapshot} actions={actions} />
-            )
-          ) : null}
-        </div>
-      </SettingsShell>
-    </main>
+    <IntegrationAdminSections
+      eventName={snapshot?.event.name ?? "Event"}
+      eventId={eventId}
+      organizationId={organizationId}
+      title={copy.title}
+      description={copy.description}
+      tabs={tabs}
+      section={section}
+      basePath={base}
+      snapshot={snapshot}
+      loading={loading}
+      loadError={loadError}
+      notice={notice}
+      mutationError={mutationError}
+      oneTimeSecret={oneTimeSecret}
+      actions={actions}
+      onRetry={() => void loadSnapshot()}
+      onDismissError={() => setMutationError(null)}
+      onDismissSecret={() => setOneTimeSecret(null)}
+    />
   );
 }

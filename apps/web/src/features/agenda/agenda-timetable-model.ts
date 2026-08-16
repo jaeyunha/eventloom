@@ -101,11 +101,6 @@ export function layoutTimetableEntries(
     });
 }
 
-export function snapTimetableMinute(minute: number, window: TimetableWindow): number {
-  const snapped = Math.round(minute / TIMETABLE_SNAP_MINUTES) * TIMETABLE_SNAP_MINUTES;
-  return Math.min(window.endMinute - TIMETABLE_SNAP_MINUTES, Math.max(window.startMinute, snapped));
-}
-
 export function localDateTimeForMinute(date: string, minute: number): string {
   const hour = Math.floor(minute / 60)
     .toString()

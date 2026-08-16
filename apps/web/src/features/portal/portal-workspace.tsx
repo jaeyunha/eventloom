@@ -59,6 +59,7 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
     () => (view?.submissions ?? []).filter((submission) => submission.status === "accepted"),
     [view],
   );
+  const firstAcceptedSessionId = acceptedSessions[0]?.id ?? null;
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const surface = surfaceFor(section);
 
@@ -67,8 +68,8 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
   }, [context, portal.loadWorkspace, view]);
 
   useEffect(() => {
-    setSelectedSessionId(acceptedSessions[0]?.id ?? null);
-  }, [acceptedSessions[0]?.id]);
+    setSelectedSessionId(firstAcceptedSessionId);
+  }, [firstAcceptedSessionId]);
 
   if (loading && !view) {
     return (

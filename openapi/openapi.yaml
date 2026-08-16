@@ -3019,8 +3019,8 @@ paths:
       tags: [Portal]
       operationId: consumeUploadCapability
       summary: Consume a single-use upload capability
-      security:
-        - capabilityToken: []
+      description: The bearer capability identifier and token are supplied by the path. No account session is required.
+      security: []
       requestBody:
         required: true
         content:
@@ -3034,32 +3034,33 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UploadReceiptResponse" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "400": { $ref: "#/components/responses/ValidationError" }
         "404": { $ref: "#/components/responses/NotFoundError" }
         "409": { $ref: "#/components/responses/ConflictError" }
+        "410": { $ref: "#/components/responses/GoneError" }
 
-  /api/speaker/assets/capabilities/download/{assetId}/{token}:
+  /api/speaker/assets/capabilities/download/{capabilityId}/{token}:
     parameters:
-      - $ref: "#/components/parameters/AssetId"
+      - $ref: "#/components/parameters/CapabilityId"
       - $ref: "#/components/parameters/CapabilityToken"
     get:
       tags: [Portal]
       operationId: consumeDownloadCapability
       summary: Consume a single-use download capability
-      security:
-        - capabilityToken: []
+      description: The bearer capability identifier and token are supplied by the path. No account session is required.
+      security: []
       responses:
         "200":
-          description: Private asset bytes after capability authorization.
+          description: Private asset bytes after capability authorization, using the asset's immutable content type.
           headers:
             X-Request-ID: { $ref: "#/components/headers/RequestId" }
             Content-Disposition: { $ref: "#/components/headers/ContentDisposition" }
           content:
-            application/octet-stream: { schema: { type: string, format: binary } }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
+            "*/*": { schema: { type: string, format: binary } }
+        "400": { $ref: "#/components/responses/ValidationError" }
         "404": { $ref: "#/components/responses/NotFoundError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+        "410": { $ref: "#/components/responses/GoneError" }
 
   /api/public/events/{eventId}/agenda:
     parameters:
@@ -3266,11 +3267,6 @@ components:
       scheme: bearer
       bearerFormat: Eventloom scoped API key
       description: Organization-scoped API key for mounted public-v1 webhook administration.
-    capabilityToken:
-      type: apiKey
-      in: header
-      name: X-Capability-Token
-      description: Single-use capability bound to the asset and transfer request; it is not an account credential.
   parameters:
     OrganizationId:
       name: organizationId
@@ -3441,6 +3437,11 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1, maxLength: 200 }
+    CapabilityId:
+      name: capabilityId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 200 }
     SubmissionId:
       name: submissionId
       in: path
@@ -3460,6 +3461,7 @@ components:
       name: token
       in: path
       required: true
+      description: Opaque single-use bearer token bound to the transfer capability identifier.
       schema: { type: string, minLength: 32, maxLength: 512 }
     SubscriptionId:
       name: subscriptionId
@@ -4936,6 +4938,14 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     ConflictError:
       description: State, idempotency, or integration conflict.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestId" }
+        Cache-Control: { $ref: "#/components/headers/PrivateCache" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    GoneError:
+      description: The single-use capability has expired.
       headers:
         X-Request-ID: { $ref: "#/components/headers/RequestId" }
         Cache-Control: { $ref: "#/components/headers/PrivateCache" }

@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Button, Textarea } from "../../components/ui";
+import { Button } from "../../components/ui/button";
+import { Textarea } from "../../components/ui/textarea";
 import {
-  StatusBadge,
-  type StatusTone,
   WorkspaceActionBar,
   WorkspaceFormSection,
   WorkspaceState,
-} from "../../components/workspace";
+} from "../../components/workspace/workspace-state";
+import { StatusBadge, type StatusTone } from "../../components/workspace/workspace-ui";
 import { deadlineAfterEventWarning } from "../speakers/speaker-temporal-policy";
 import { isTaskBlocked, taskStatusPresentation } from "./model";
 import { usePortal } from "./portal-provider";

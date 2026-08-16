@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   StatusBadge,
   WorkspaceHeader,
@@ -45,12 +45,7 @@ export function EventGuideWorkspaceView({
     ],
     [resources, wiki],
   );
-  const [selectedId, setSelectedId] = useState<string | null>(items[0]?.item.id ?? null);
-
-  useEffect(() => {
-    if (!items.some(({ item }) => item.id === selectedId)) setSelectedId(items[0]?.item.id ?? null);
-  }, [items, selectedId]);
-
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = items.find(({ item }) => item.id === selectedId) ?? items[0] ?? null;
 
   return (

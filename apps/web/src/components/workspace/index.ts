@@ -19,9 +19,7 @@ export {
   DesktopNavigation,
   MobileBottomNavigation,
   type MobileBottomNavigationProps,
-  WorkspaceNavigation,
   type WorkspaceNavigationItem,
-  type WorkspaceNavigationLinkProps,
   type WorkspaceNavigationProps,
 } from "./workspace-navigation";
 export {

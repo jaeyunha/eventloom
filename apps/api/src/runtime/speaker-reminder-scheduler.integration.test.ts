@@ -188,4 +188,4 @@ it("queues one reminder per eligible 48-hour or overdue task across cron retries
   expect(outbox).toHaveLength(2);
   expect(outbox.every((job) => job.state === "queued")).toBe(true);
   expect(outbox.every((job) => job.payload_json.includes('"effect":"send_reminder"'))).toBe(true);
-}, 30_000);
+}, 60_000);

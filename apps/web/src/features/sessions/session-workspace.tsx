@@ -1,7 +1,15 @@
 "use client";
 
 import { CalendarDays } from "lucide-react";
-import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,7 +36,6 @@ import {
   useOrganizerEventId,
   useOrganizerEventWorkspace,
 } from "@/features/admin/organizer-event-workspace";
-import type { NavigationDataCache } from "@/lib/navigation-data-cache";
 import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createSessionsApi,
@@ -40,6 +47,12 @@ import {
   type SessionsApi,
 } from "./api";
 import styles from "./session-workspace.module.css";
+import {
+  loadSessionsWorkspaceBundle,
+  type SessionsWorkspaceCacheBundle,
+  sessionsWorkspaceCacheKey,
+  sessionsWorkspaceCacheTags,
+} from "./session-workspace-model";
 
 export interface SessionsWorkspaceProps {
   readonly eventId: string;
@@ -86,28 +99,6 @@ export interface SessionsWorkspaceViewProps {
   readonly onRetry?: () => void;
   readonly onRetrySpeakers?: () => void;
 }
-export interface SessionsWorkspaceCacheBundle {
-  readonly sessions: readonly SessionRecord[];
-  readonly speakers: readonly SessionSpeakerCandidate[];
-}
-
-export function sessionsWorkspaceCacheKey(organizationId: string, eventId: string): string {
-  return `sessions:workspace:${organizationId.trim()}:${eventId.trim()}`;
-}
-
-export function sessionsWorkspaceCacheTags(
-  organizationId: string,
-  eventId: string,
-): readonly string[] {
-  const normalizedOrganizationId = organizationId.trim();
-  const normalizedEventId = eventId.trim();
-  return [
-    `organization:${normalizedOrganizationId}`,
-    `event:${normalizedEventId}`,
-    `sessions:${normalizedEventId}`,
-  ];
-}
-
 function sessionsHistoryCacheKey(
   organizationId: string,
   eventId: string,
@@ -116,32 +107,12 @@ function sessionsHistoryCacheKey(
 ): string {
   return `sessions:history:${organizationId.trim()}:${eventId.trim()}:${sessionId.trim()}:v${version}`;
 }
-
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
 function abortedError(): DOMException {
   return new DOMException("The session request was aborted.", "AbortError");
-}
-
-export async function loadSessionsWorkspaceBundle(
-  api: SessionsApi,
-  cache: NavigationDataCache | null,
-  key: string,
-  tags: readonly string[],
-  signal?: AbortSignal,
-  fresh = false,
-): Promise<SessionsWorkspaceCacheBundle> {
-  const load = async (): Promise<SessionsWorkspaceCacheBundle> => {
-    const sessionsRequest = cache === null ? api.list(signal) : api.list();
-    const speakersRequest = cache === null ? api.listSpeakers(signal) : api.listSpeakers();
-    const [sessions, speakers] = await Promise.all([sessionsRequest, speakersRequest]);
-    if (cache === null && signal?.aborted) throw abortedError();
-    return { sessions, speakers };
-  };
-  if (cache === null) return load();
-  return cache.read({ key, tags, load, fresh });
 }
 
 function messageFrom(error: unknown): string {
@@ -160,9 +131,21 @@ function formatAction(action: SessionHistoryEntry["action"]): string {
   return action.replace(/_/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
-function formatTimestamp(value: string): string {
+function subscribeToSessionTimestamp(): () => void {
+  return () => undefined;
+}
+
+function browserSessionTimestamp(value: string): string {
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) ? timestamp.toLocaleString() : value;
+}
+
+function SessionHistoryTimestamp({ value }: Readonly<{ value: string }>) {
+  return useSyncExternalStore(
+    subscribeToSessionTimestamp,
+    () => browserSessionTimestamp(value),
+    () => value,
+  );
 }
 
 function formatSpeakerRole(role: string | undefined): string {
@@ -176,19 +159,35 @@ function assignmentReferences(session: SessionRecord): readonly SessionSpeakerRe
   return session.speakerIds.map((id) => references.get(id) ?? { id });
 }
 
+interface SessionEditorDraft {
+  readonly ownerKey: string;
+  readonly title?: string;
+  readonly description?: string;
+}
+
+interface SpeakerAssignmentsDraft {
+  readonly ownerKey: string;
+  readonly speakerIds: readonly string[];
+}
+
 function SessionEditor({
+  eventId,
   session,
   busy,
   onSave,
   onSetContentStatus,
 }: Readonly<{
+  eventId: string;
   session: SessionRecord;
   busy: boolean;
   onSave?: SessionsWorkspaceViewProps["onSave"];
   onSetContentStatus?: SessionsWorkspaceViewProps["onSetContentStatus"];
 }>) {
-  const [title, setTitle] = useState(session.title);
-  const [description, setDescription] = useState(session.description);
+  const ownerKey = `${eventId}\u0000${session.id}`;
+  const [draft, setDraft] = useState<SessionEditorDraft | null>(null);
+  const ownedDraft = draft?.ownerKey === ownerKey ? draft : null;
+  const title = ownedDraft?.title ?? session.title;
+  const description = ownedDraft?.description ?? session.description;
   const changed = title !== session.title || description !== session.description;
   const currentStatus = displayStatus(session.contentStatus);
 
@@ -220,7 +219,13 @@ function SessionEditor({
               id={`session-title-${session.id}`}
               required
               value={title}
-              onChange={(event) => setTitle(event.currentTarget.value)}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setDraft((current) => {
+                  const base = current?.ownerKey === ownerKey ? current : { ownerKey };
+                  return { ...base, title: value };
+                });
+              }}
             />
           </label>
           <label className={styles.field} htmlFor={`session-description-${session.id}`}>
@@ -230,7 +235,13 @@ function SessionEditor({
               id={`session-description-${session.id}`}
               rows={8}
               value={description}
-              onChange={(event) => setDescription(event.currentTarget.value)}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setDraft((current) => {
+                  const base = current?.ownerKey === ownerKey ? current : { ownerKey };
+                  return { ...base, description: value };
+                });
+              }}
             />
           </label>
           <Button disabled={busy || !changed || title.trim().length === 0 || !onSave} type="submit">
@@ -270,6 +281,7 @@ function SessionEditor({
 }
 
 function SpeakerAssignments({
+  eventId,
   session,
   speakers,
   loading,
@@ -278,6 +290,7 @@ function SpeakerAssignments({
   onSave,
   onRetry,
 }: Readonly<{
+  eventId: string;
   session: SessionRecord;
   speakers: readonly SessionSpeakerCandidate[] | null;
   loading: boolean;
@@ -286,7 +299,9 @@ function SpeakerAssignments({
   onSave?: SessionsWorkspaceViewProps["onSaveSpeakers"];
   onRetry?: SessionsWorkspaceViewProps["onRetrySpeakers"];
 }>) {
+  const ownerKey = `${eventId}\u0000${session.id}`;
   const currentReferences = assignmentReferences(session);
+  const sessionSpeakerIds = new Set(session.speakerIds);
   const candidatesById = new Map((speakers ?? []).map((speaker) => [speaker.id, speaker]));
   const options = [
     ...currentReferences.map((reference) => ({
@@ -300,22 +315,26 @@ function SpeakerAssignments({
         ? {}
         : { company: candidatesById.get(reference.id)?.company }),
     })),
-    ...(speakers ?? []).filter((speaker) => !session.speakerIds.includes(speaker.id)),
+    ...(speakers ?? []).filter((speaker) => !sessionSpeakerIds.has(speaker.id)),
   ];
-  const [selectedIds, setSelectedIds] = useState<readonly string[]>(session.speakerIds);
+  const [draft, setDraft] = useState<SpeakerAssignmentsDraft | null>(null);
+  const selectedIds = draft?.ownerKey === ownerKey ? draft.speakerIds : session.speakerIds;
   const selected = new Set(selectedIds);
   const changed =
     selectedIds.length !== session.speakerIds.length ||
-    selectedIds.some((id) => !session.speakerIds.includes(id));
+    selectedIds.some((id) => !sessionSpeakerIds.has(id));
 
   function toggle(speakerId: string, checked: boolean) {
-    setSelectedIds((current) =>
-      checked
-        ? current.includes(speakerId)
-          ? current
-          : [...current, speakerId]
-        : current.filter((id) => id !== speakerId),
-    );
+    setDraft((current) => {
+      const base =
+        current?.ownerKey === ownerKey ? current : { ownerKey, speakerIds: session.speakerIds };
+      const speakerIds = checked
+        ? base.speakerIds.includes(speakerId)
+          ? base.speakerIds
+          : [...base.speakerIds, speakerId]
+        : base.speakerIds.filter((id) => id !== speakerId);
+      return { ...base, speakerIds };
+    });
   }
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
@@ -457,7 +476,8 @@ function SessionHistory({
                     Version {entry.version} - {formatAction(entry.action)}
                   </strong>
                   <span className={styles.muted}>
-                    {entry.actorLabel ?? entry.actorId} - {formatTimestamp(entry.occurredAt)}
+                    {entry.actorLabel ?? entry.actorId} -{" "}
+                    <SessionHistoryTimestamp value={entry.occurredAt} />
                   </span>
                 </div>
                 {current ? <StatusBadge tone="info">Current</StatusBadge> : null}
@@ -634,16 +654,18 @@ export function SessionsWorkspaceView({
               ) : (
                 <>
                   <SessionEditor
+                    eventId={eventId}
                     busy={busy}
-                    key={`${selected.id}:${selected.version}`}
+                    key={`${eventId}\u0000${selected.id}`}
                     session={selected}
                     onSave={onSave}
                     onSetContentStatus={onSetContentStatus}
                   />
                   <SpeakerAssignments
+                    eventId={eventId}
                     busy={busy}
                     error={speakerError}
-                    key={selected.id}
+                    key={`${eventId}\u0000${selected.id}`}
                     loading={loadingSpeakers}
                     session={selected}
                     speakers={speakers}
@@ -767,10 +789,12 @@ function ScopedSessionsWorkspace({
           setSpeakerError(message);
         }
       } finally {
-        if (isCurrent()) {
-          setLoading(false);
-          setLoadingSpeakers(false);
-        }
+        setLoading((current) =>
+          generation === loadGeneration.current && !signal?.aborted ? false : current,
+        );
+        setLoadingSpeakers((current) =>
+          generation === loadGeneration.current && !signal?.aborted ? false : current,
+        );
       }
     },
     [api, cache, workspaceCacheKey, workspaceCacheTags],
@@ -806,7 +830,6 @@ function ScopedSessionsWorkspace({
           if (cached !== undefined) {
             if (isCurrent()) {
               setHistory(cached);
-              setLoadingHistory(false);
             }
             return;
           }
@@ -827,7 +850,9 @@ function ScopedSessionsWorkspace({
           setHistoryError(messageFrom(loadError));
         }
       } finally {
-        if (isCurrent()) setLoadingHistory(false);
+        setLoadingHistory((current) =>
+          generation === historyGeneration.current ? false : current,
+        );
       }
     },
     [api, cache, normalizedEventId, normalizedOrganizationId, workspaceCacheTags],
@@ -844,10 +869,16 @@ function ScopedSessionsWorkspace({
 
   useEffect(() => {
     if (selectedSession === null) {
-      historyGeneration.current += 1;
-      setHistory([]);
-      setHistoryError(null);
-      setLoadingHistory(false);
+      const generation = historyGeneration.current + 1;
+      historyGeneration.current = generation;
+      try {
+        setHistory([]);
+        setHistoryError(null);
+      } finally {
+        setLoadingHistory((current) =>
+          historyGeneration.current === generation ? false : current,
+        );
+      }
       return;
     }
     const controller = new AbortController();
@@ -922,7 +953,7 @@ function ScopedSessionsWorkspace({
         mutate(input.sessionId, () => api.updateSpeakers(input), "Speaker assignments saved.")
       }
       onSelectSession={(sessionId) => {
-        historyGeneration.current += 1;
+        if (sessionId !== selectedSessionId) historyGeneration.current += 1;
         setSelectedSessionId(sessionId);
       }}
       onSetContentStatus={(session, contentStatus) =>

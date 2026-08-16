@@ -82,14 +82,15 @@ export function EvaluatorSuggestionToolbar({
           </details>
         ) : null}
       </div>
-      {suggestions
-        .filter((suggestion) => suggestion.status === "stale")
-        .map((suggestion) => (
+      {suggestions.flatMap((suggestion) => {
+        if (suggestion.status !== "stale") return [];
+        return [
           <p className={styles.formError} role="alert" key={suggestion.id}>
             AI suggestion is stale for rubric revision {suggestion.rubricRevision} and submission
             revision {suggestion.submissionRevision}; generate a new suggestion.
-          </p>
-        ))}
+          </p>,
+        ];
+      })}
     </>
   );
 }

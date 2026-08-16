@@ -24,6 +24,7 @@ export function RemixWritingDirection({
   guidance,
   onGuidanceChange,
 }: RemixWritingDirectionProps) {
+  const fieldSet = new Set(fields);
   return (
     <section className={styles.composerSection} aria-labelledby="remix-direction-heading">
       <header className={styles.sectionHeading}>
@@ -39,7 +40,7 @@ export function RemixWritingDirection({
             <FieldLabel className={styles.fieldOption} htmlFor={`remix-field-${field}`} key={field}>
               <Checkbox
                 id={`remix-field-${field}`}
-                checked={fields.includes(field)}
+                checked={fieldSet.has(field)}
                 onCheckedChange={(checked) => {
                   if (checked === true || checked === false) onToggleField(field);
                 }}

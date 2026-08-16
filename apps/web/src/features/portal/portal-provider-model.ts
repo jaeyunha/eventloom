@@ -139,13 +139,18 @@ export async function loadPortalStartup(
   }
 
   const normalizedConfiguredEventId = configuredEventId?.trim() || undefined;
-  const authorizedContexts = (await invokePortalRequest(() => listPortalContexts(signal)))
-    .map((candidate) => scopePortalContextToAuthorizedParticipants(candidate))
-    .filter(
-      (candidate) =>
-        candidate.eventId.length > 0 &&
-        (candidate.submissionIds.length > 0 || candidate.participantIds.length > 0),
-    );
+  const authorizedContexts = (await invokePortalRequest(() => listPortalContexts(signal))).reduce<
+    PortalContext[]
+  >((scopedContexts, candidate) => {
+    const scopedCandidate = scopePortalContextToAuthorizedParticipants(candidate);
+    if (
+      scopedCandidate.eventId.length > 0 &&
+      (scopedCandidate.submissionIds.length > 0 || scopedCandidate.participantIds.length > 0)
+    ) {
+      scopedContexts.push(scopedCandidate);
+    }
+    return scopedContexts;
+  }, []);
   if (signal?.aborted) {
     return { authorizedContexts, preferredContext: null };
   }

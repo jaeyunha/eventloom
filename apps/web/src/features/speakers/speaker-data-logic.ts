@@ -81,9 +81,13 @@ export function duplicateEmailConflicts(
       entries.push(speaker);
     }
   }
-  return [...speakersByEmail.entries()]
-    .filter(([, entries]) => entries.length > 1)
-    .map(([email, entries]) => ({ email, speakers: entries }));
+  const conflicts: DuplicateEmailConflict[] = [];
+  for (const [email, entries] of speakersByEmail) {
+    if (entries.length > 1) {
+      conflicts.push({ email, speakers: entries });
+    }
+  }
+  return conflicts;
 }
 export async function speakerProgressFor(
   api: Pick<SpeakerApi, "listTasks">,

@@ -6,18 +6,18 @@ export function reviewerIdsForAssignmentTarget(
   submissionId: string,
   excludedReviewerId?: string,
 ): readonly string[] {
-  return [
-    ...new Set(
-      assignments
-        .filter(
-          (assignment) =>
-            assignment.roundId === roundId &&
-            assignment.submissionId === submissionId &&
-            assignment.status !== "abstained" &&
-            assignment.status !== "superseded" &&
-            assignment.reviewerId !== excludedReviewerId,
-        )
-        .map((assignment) => assignment.reviewerId),
-    ),
-  ].sort((left, right) => left.localeCompare(right));
+  const reviewerIds = new Set<string>();
+  for (const assignment of assignments) {
+    if (
+      assignment.roundId !== roundId ||
+      assignment.submissionId !== submissionId ||
+      assignment.status === "abstained" ||
+      assignment.status === "superseded" ||
+      assignment.reviewerId === excludedReviewerId
+    ) {
+      continue;
+    }
+    reviewerIds.add(assignment.reviewerId);
+  }
+  return [...reviewerIds].sort((left, right) => left.localeCompare(right));
 }

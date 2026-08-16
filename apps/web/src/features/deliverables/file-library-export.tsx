@@ -63,24 +63,25 @@ export function FileLibraryExport({
     () => exportAssetIdsForFamilies(families, selectedFamilyIds),
     [families, selectedFamilyIds],
   );
-  const sessions = useMemo(
-    () =>
-      [
-        ...new Map(
-          rows
-            .filter((row) => row.sessionId.length > 0 && row.family.exportAssetId !== undefined)
-            .map((row) => [row.sessionId, row.sessionLabel]),
-        ).entries(),
-      ].sort((left, right) => left[1].localeCompare(right[1])),
-    [rows],
-  );
+  const sessions = useMemo(() => {
+    const sessionLabels = new Map<string, string>();
+    for (const row of rows) {
+      if (row.sessionId.length > 0 && row.family.exportAssetId !== undefined) {
+        sessionLabels.set(row.sessionId, row.sessionLabel);
+      }
+    }
+    return [...sessionLabels.entries()].sort((left, right) => left[1].localeCompare(right[1]));
+  }, [rows]);
   const inFlight = state === "queued" || state === "preparing" || state === "generating";
 
   function selectSession(): void {
     if (sessionId === "all") return;
-    const additions = rows
-      .filter((row) => row.sessionId === sessionId && row.family.exportAssetId !== undefined)
-      .map((row) => row.family.familyId);
+    const additions: string[] = [];
+    for (const row of rows) {
+      if (row.sessionId === sessionId && row.family.exportAssetId !== undefined) {
+        additions.push(row.family.familyId);
+      }
+    }
     onSelectionChange([...new Set([...selectedFamilyIds, ...additions])]);
   }
 
