@@ -21,6 +21,11 @@ async function tokenDigest(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 const {
   organizationId,
   eventId,
@@ -554,24 +559,99 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
           status: "ready",
         }),
       ]);
-      const grant = await service.issueOrganizerDownloadGrant({
+      const [uploadRow] = fixture.database.query<{
+        object_key: string;
+        content_type: string;
+        byte_size: number;
+      }>(
+        `SELECT object_key, content_type, byte_size
+           FROM private_uploads
+          WHERE id = ${sqlString(headshotAssetId)}`,
+      );
+      if (uploadRow === undefined) throw new Error("Expected the persisted headshot upload row.");
+      const legacyToken = "legacy-download-capability-token-0001";
+      fixture.database.executeScript(
+        `UPDATE private_uploads
+            SET state = 'uploaded',
+                scan_result_code = ${sqlString(
+                  JSON.stringify({
+                    kind: "download",
+                    capabilityHash: await tokenDigest(legacyToken),
+                    tenantId: organizationId,
+                    eventId,
+                    participantId: priyaParticipantId,
+                    objectKey: uploadRow.object_key,
+                    contentType: uploadRow.content_type,
+                    sizeBytes: uploadRow.byte_size,
+                    fileName: "priya.png",
+                    expiresAt: "2099-08-15T04:02:00.000Z",
+                  }),
+                )}
+          WHERE id = ${sqlString(headshotAssetId)};`,
+      );
+      const legacyDownload = await service.consumeDownloadCapability(headshotAssetId, legacyToken);
+      expect(new Uint8Array(await new Response(legacyDownload.body).arrayBuffer())).toEqual(
+        headshotBytes,
+      );
+
+      const firstGrant = await service.issueOrganizerDownloadGrant({
         eventId,
         accountId: organizerAccountId,
         assetId: headshotAssetId,
       });
-      const downloadCapability = privateCapabilityParts(grant.url);
-      const downloaded = await service.consumeDownloadCapability(
-        downloadCapability.capabilityId,
-        downloadCapability.token,
+      const secondGrant = await service.issueOrganizerDownloadGrant({
+        eventId,
+        accountId: organizerAccountId,
+        assetId: headshotAssetId,
+      });
+      expect(firstGrant.url).not.toBe(secondGrant.url);
+
+      const firstDownloadCapability = privateCapabilityParts(firstGrant.url);
+      const firstDownload = await service.consumeDownloadCapability(
+        firstDownloadCapability.capabilityId,
+        firstDownloadCapability.token,
       );
-      expect(downloaded).toMatchObject({
+      expect(firstDownload).toMatchObject({
         contentType: "image/png",
         sizeBytes: headshotBytes.byteLength,
         fileName: "priya.png",
       });
-      expect(new Uint8Array(await new Response(downloaded.body).arrayBuffer())).toEqual(
+      expect(new Uint8Array(await new Response(firstDownload.body).arrayBuffer())).toEqual(
         headshotBytes,
       );
+
+      const secondDownloadCapability = privateCapabilityParts(secondGrant.url);
+      const secondDownload = await service.consumeDownloadCapability(
+        secondDownloadCapability.capabilityId,
+        secondDownloadCapability.token,
+      );
+      expect(secondDownload).toMatchObject({
+        contentType: "image/png",
+        sizeBytes: headshotBytes.byteLength,
+        fileName: "priya.png",
+      });
+      expect(new Uint8Array(await new Response(secondDownload.body).arrayBuffer())).toEqual(
+        headshotBytes,
+      );
+
+      const racedGrant = await service.issueOrganizerDownloadGrant({
+        eventId,
+        accountId: organizerAccountId,
+        assetId: headshotAssetId,
+      });
+      const racedCapability = privateCapabilityParts(racedGrant.url);
+      const racedResults = await Promise.allSettled([
+        service.consumeDownloadCapability(racedCapability.capabilityId, racedCapability.token),
+        service.consumeDownloadCapability(racedCapability.capabilityId, racedCapability.token),
+      ]);
+      const fulfilledRaces = racedResults.filter((result) => result.status === "fulfilled");
+      const rejectedRaces = racedResults.filter((result) => result.status === "rejected");
+      expect(fulfilledRaces).toHaveLength(1);
+      expect(rejectedRaces).toHaveLength(1);
+      expect(
+        new Uint8Array(await new Response(fulfilledRaces[0]?.value.body).arrayBuffer()),
+      ).toEqual(headshotBytes);
+
       await expect(
         service.issueOrganizerDownloadGrant({
           eventId,

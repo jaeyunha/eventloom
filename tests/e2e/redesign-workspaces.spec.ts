@@ -86,7 +86,17 @@ const speakerRosterFixture = {
         },
       ],
       taskSummary: { total: 1, completed: 0, overdue: 0 },
-      assets: [],
+      assets: [
+        {
+          assetId: "speaker-e2e-slides",
+          fileName: "reliable-community-systems.pdf",
+          contentType: "application/pdf",
+          byteSize: 3,
+          status: "ready",
+          uploadedAt: "2026-08-08T12:00:00.000Z",
+          downloadUrl: null,
+        },
+      ],
       version: 1,
       updatedAt: "2026-08-08T12:00:00.000Z",
     },
@@ -518,6 +528,60 @@ test("speaker workspace presents the roster as a compact master-detail table", a
       path: testInfo.outputPath(`speakers-master-detail-${viewport.name}.png`),
     });
   }
+});
+
+test("speaker asset download requests a fresh capability and starts from one click", async ({
+  page,
+}, testInfo) => {
+  const downloadPath =
+    "/api/speaker/assets/capabilities/download/speaker-download-e2e/opaque-download-token";
+  let grantRequests = 0;
+  await installSpeakerWorkspaceFixture(page);
+  await page.route(
+    `**/api/speaker/events/${EVENT_ID}/organizer/assets/speaker-e2e-slides/download`,
+    async (route) => {
+      expect(route.request().method()).toBe("POST");
+      grantRequests += 1;
+      await route.fulfill({
+        json: {
+          data: {
+            method: "GET",
+            url: downloadPath,
+            expiresAt: "2026-08-08T12:02:00.000Z",
+          },
+        },
+      });
+    },
+  );
+  await page.route(`**${downloadPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: "pdf",
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": 'attachment; filename="reliable-community-systems.pdf"',
+      },
+    });
+  });
+
+  await page.goto(speakersUrl);
+  const downloadButton = page.getByRole("button", {
+    name: "Download reliable-community-systems.pdf",
+  });
+  await expect(downloadButton).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await downloadButton.click();
+  const download = await downloadPromise;
+
+  expect(grantRequests).toBe(1);
+  expect(download.suggestedFilename()).toBe("reliable-community-systems.pdf");
+  await expect(page.locator(`a[href="${downloadPath}"]`)).toHaveCount(0);
+  await expect(downloadButton).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("speaker-asset-download.png"),
+    fullPage: true,
+  });
 });
 
 test("speaker workspace replaces empty controls with guided next steps", async ({
