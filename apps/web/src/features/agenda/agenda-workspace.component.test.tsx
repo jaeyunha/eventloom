@@ -595,8 +595,8 @@ describe("agenda organizer workspace", () => {
 
     const firstDayMarkup = renderBoard(emptyDayData);
     expect(firstDayMarkup).toContain('aria-label="Event day navigation"');
-    expect(firstDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Previous day<\/button>/u);
-    expect(firstDayMarkup).toMatch(/<button[^>]*>Next day<\/button>/u);
+    expect(firstDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Previous day"/u);
+    expect(firstDayMarkup).toContain('aria-label="Next day, Saturday, September 19"');
     expect(firstDayMarkup).toContain("No sessions scheduled on this day.");
 
     const lastDayMarkup = renderBoard({
@@ -607,8 +607,8 @@ describe("agenda organizer workspace", () => {
         endsOn: "2026-09-20",
       },
     });
-    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Previous day<\/button>/u);
-    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*>Next day<\/button>/u);
+    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Previous day"/u);
+    expect(lastDayMarkup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Next day"/u);
   });
   it("keeps advisory suggestions private and blocks applying hard-conflicting candidates", () => {
     const markup = renderToStaticMarkup(
@@ -682,12 +682,47 @@ describe("agenda organizer workspace", () => {
     const markup = renderBoard(multiDayData, "day");
 
     expect(markup).toContain('aria-label="Choose an event day"');
+    const selectorIndex = markup.indexOf('data-agenda-day-selector="true"');
+    const queueIndex = markup.indexOf('data-agenda-drop-target="placement-queue"');
+    expect(selectorIndex).toBeGreaterThan(-1);
+    expect(queueIndex).toBeGreaterThan(selectorIndex);
     expect(markup).toContain("Day 1");
     expect(markup).toContain("Fri, Sep 18");
     expect(markup).toContain("2 sessions");
     expect(markup).toContain("Day 2");
     expect(markup).toContain("Sat, Sep 19");
     expect(markup).toContain("1 session");
+  });
+
+  it("does not expose raw audit actor identifiers in organizer-facing markup", () => {
+    const rawActorId = "0610353b-d9fc-444c-ae55-a8996a896315";
+    const rawTimestampToken = "d49ad11a-a82c-4907-9915-fc6b4987abba";
+    const markup = renderBoard({
+      ...data,
+      draft: {
+        ...data.draft,
+        updatedAt: rawTimestampToken,
+        updatedBy: rawActorId,
+      },
+    });
+
+    expect(markup).not.toContain(rawActorId);
+    expect(markup).not.toContain(rawTimestampToken);
+  });
+
+  it("treats zero accepted sessions as an empty collection rather than completion", () => {
+    const markup = renderBoard({
+      ...data,
+      acceptedSessionIds: [],
+      draft: {
+        ...data.draft,
+        entries: [],
+      },
+      unscheduledSessions: [],
+    });
+
+    expect(markup).toContain('data-agenda-empty-state="no-accepted-sessions"');
+    expect(markup).not.toContain('data-placement-complete="true"');
   });
 
   it("keeps conflict and edit controls available in every rendered mode without mutating the draft", () => {
@@ -734,7 +769,8 @@ describe("agenda organizer workspace", () => {
     expect(markup).not.toContain("Schedule complete");
     expect(markup).not.toContain("All accepted sessions placed");
     expect(markup).not.toContain("All accepted sessions are placed");
-    expect(markup).toContain("No accepted sessions yet");
+    expect(markup).toContain('data-agenda-empty-state="no-accepted-sessions"');
+    expect(markup).toContain("Open sessions");
   });
 
   it("keeps the completion state once at least one accepted session exists and all are placed", () => {
@@ -744,9 +780,8 @@ describe("agenda organizer workspace", () => {
       null,
     );
 
-    expect(markup).toContain("Schedule complete");
-    expect(markup).toContain("All accepted sessions placed");
-    expect(markup).toContain("All accepted sessions are placed");
-    expect(markup).not.toContain("No accepted sessions yet");
+    expect(markup).toContain('data-placement-complete="true"');
+    expect(markup).toContain("Queue clear");
+    expect(markup).not.toContain('data-agenda-empty-state="no-accepted-sessions"');
   });
 });

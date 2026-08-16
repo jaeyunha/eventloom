@@ -582,7 +582,7 @@ function settingsUrl(eventId: string): string {
 
 async function expectAgendaWorkspace(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Build the event day" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Build the agenda" })).toBeVisible();
   await expect(page.getByLabel("Agenda release center")).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Schedule view" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview and validate" })).toBeVisible();
@@ -1069,24 +1069,37 @@ test("agenda day navigation supports direct multi-day jumps at responsive widths
     await page.goto(agendaUrl(PRIMARY_EVENT_ID));
     await expectAgendaWorkspace(page);
 
-    const dayChooser = page.getByRole("navigation", { name: "Choose an event day" });
+    const dayChooser = page.getByRole("radiogroup", { name: "Choose an event day" });
     await expect(dayChooser).toBeVisible();
-    await expect(dayChooser.getByRole("button")).toHaveCount(7);
-    await expect(
-      dayChooser.getByRole("button", { name: /Day 1.*Fri, Sep 18.*1 session/u }),
-    ).toHaveAttribute("aria-current", "date");
+    await expect(dayChooser.getByRole("radio")).toHaveCount(7);
+    const dayOne = dayChooser.getByRole("radio", {
+      name: /Day 1.*Friday, September 18.*1 session/u,
+    });
+    const daySeven = dayChooser.getByRole("radio", {
+      name: /Day 7.*Thursday, September 24.*0 sessions/u,
+    });
+    await expect(dayOne).toHaveAttribute("aria-current", "date");
 
-    await dayChooser.getByRole("button", { name: /Day 7.*Thu, Sep 24.*0 sessions/u }).click();
+    await daySeven.click();
+    await expect(daySeven).toHaveAttribute("aria-current", "date");
+    await daySeven.press("Home");
+    await expect(dayOne).toBeChecked();
+    await dayOne.press("End");
+    await expect(daySeven).toBeChecked();
+    const dayNavigation = page.getByRole("region", { name: "Event day navigation" });
     await expect(
-      dayChooser.getByRole("button", { name: /Day 7.*Thu, Sep 24.*0 sessions/u }),
-    ).toHaveAttribute("aria-current", "date");
-    const dayNavigation = page.getByRole("navigation", { name: "Event day navigation" });
-    await expect(
-      dayNavigation.getByText("Thursday, September 24 · Day 7 of 7", { exact: true }),
+      dayNavigation.getByText("Thursday, September 24 · Day 7 of 7 · 0 sessions", {
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(
       page.getByText("No sessions scheduled on this day.", { exact: true }),
     ).toBeVisible();
+
+    await page.getByRole("button", { name: "Schedule session" }).click();
+    await expect(page.getByLabel("Starts")).toHaveValue(/^2026-09-24T/u);
+    await expect(page.getByLabel("Ends")).toHaveValue(/^2026-09-24T/u);
+    await page.keyboard.press("Escape");
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
