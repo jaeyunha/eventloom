@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { signOutReviewerSession } from "../../features/reviews/reviewer-shell";
+import { signOutAccount } from "@/features/account/account-actions";
 import ReviewerLayout from "./layout";
 import ReviewerPage from "./page";
 
@@ -32,7 +32,7 @@ describe("ReviewerPage", () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 200 }));
     const navigate = vi.fn();
 
-    await signOutReviewerSession({ fetcher, navigate });
+    await signOutAccount({ fetcher, navigate });
 
     expect(fetcher).toHaveBeenCalledWith(
       "/api/auth/sign-out",

@@ -1,18 +1,18 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { CrmWorkspaceView } from "./crm-workspace";
+import { createCrmApi } from "./crm-workspace-api";
 import {
+  createCrmWorkspaceReadCoordinator,
+  refreshCrmAnalyticsAfterContactSave,
+  refreshCrmDuplicatesAfterContactSave,
   type CrmAnalytics,
   type CrmApi,
   type CrmContact,
   type CrmEvent,
   type CrmSegment,
-  CrmWorkspaceView,
-  createCrmApi,
-  createCrmWorkspaceReadCoordinator,
-  refreshCrmAnalyticsAfterContactSave,
-  refreshCrmDuplicatesAfterContactSave,
-} from "./crm-workspace";
+} from "./crm-workspace-model";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 

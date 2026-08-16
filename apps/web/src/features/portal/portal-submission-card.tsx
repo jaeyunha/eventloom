@@ -7,7 +7,8 @@ import {
   canonicalPortalSubmissionId,
   portalSubmissionDisplayTitle,
 } from "./portal-submission-model";
-import { formatPortalDate, SubmissionStatusBadge } from "./portal-ui";
+import { SubmissionStatusBadge } from "./portal-ui";
+import { formatPortalDate } from "./portal-ui-model";
 import type { PortalContext, PortalSubmission } from "./types";
 
 export function PortalSubmissionCard({

@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { loadWorkHubModel, WorkHubView } from "./work-hub";
+import { WorkHubView } from "./work-hub";
+import { loadWorkHubModel } from "./work-hub-loader";
 import type { WorkHubModel } from "./work-hub-model";
 
 const fullModel: WorkHubModel = {

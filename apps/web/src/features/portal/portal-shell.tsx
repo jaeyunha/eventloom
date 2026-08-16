@@ -30,7 +30,8 @@ import {
   createParticipantNavigation,
   type ParticipantNavigationId,
 } from "./participant-navigation";
-import { portalContextLabel, usePortal } from "./portal-provider";
+import { portalContextLabel } from "./portal-provider-model";
+import { usePortal } from "./portal-provider";
 import styles from "./portal-shell.module.css";
 import { portalContentMode, portalRouteAuthorized, signOutAndRedirect } from "./portal-shell-model";
 

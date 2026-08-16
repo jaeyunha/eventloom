@@ -44,7 +44,6 @@ describe("CFP flow", () => {
     expect(cfpHttpUrlIsValid("not a URL")).toBe(false);
     expect(cfpHttpUrlIsValid("javascript:alert(1)")).toBe(false);
   });
-
   it("mounts the public application flow inside the shared workspace shell", () => {
     expect(cfpWizardSource).toContain(
       'import { ThemeToggle } from "../../components/product-shell/theme-toggle";',

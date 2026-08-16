@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { OrganizationMember, ReviewerPool } from "../../members/api";
-import { buildReviewerPoolInput, OrganizerReviewerPoolView } from "./organizer-reviewer-pool-panel";
+import { OrganizerReviewerPoolView } from "./organizer-reviewer-pool-panel";
+import { buildReviewerPoolInput } from "./organizer-reviewer-pool-model";
 
 const reviewers: readonly OrganizationMember[] = [
   {

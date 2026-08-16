@@ -4,7 +4,7 @@ import { AlertCircle, CheckCircle2, Clock3, FileUp, ListChecks } from "lucide-re
 import { StatusBadge, type StatusTone } from "../../components/workspace";
 import { taskSubjectPresentation } from "./portal-task-model";
 import styles from "./portal-tasks.module.css";
-import { formatPortalDate } from "./portal-ui";
+import { formatPortalDate } from "./portal-ui-model";
 import type { PortalProfile, PortalSubmission, PortalTask } from "./types";
 
 export type TaskFilter = "all" | "attention" | "finished";

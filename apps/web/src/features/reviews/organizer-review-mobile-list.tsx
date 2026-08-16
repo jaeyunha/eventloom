@@ -5,9 +5,9 @@ import {
   Attention,
   ReviewAction,
   ReviewerSummary,
-  reviewStatus,
   SubmissionIdentity,
 } from "./organizer-review-row-parts";
+import { reviewStatus } from "./organizer-review-status";
 export function OrganizerReviewMobileList({
   controller,
 }: Readonly<{ controller: OrganizerReviewOverviewController }>) {

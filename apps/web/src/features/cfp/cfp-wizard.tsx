@@ -18,6 +18,7 @@ import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Separator } from "../../components/ui/separator";
+
 import { WorkspaceContextBar, WorkspaceShell } from "../../components/workspace/workspace-shell";
 import {
   type CfpApi,

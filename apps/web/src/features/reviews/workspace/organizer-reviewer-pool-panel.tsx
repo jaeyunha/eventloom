@@ -22,23 +22,9 @@ import {
 } from "../../../components/ui/empty";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
-import type { OrganizationMember, ReviewerPool, SetReviewerPoolInput } from "../../members/api";
+import type { OrganizationMember, ReviewerPool } from "../../members/api";
+import type { ReviewerPoolDraft } from "./organizer-reviewer-pool-model";
 import styles from "../review-workspace.module.css";
-
-export type ReviewerPoolDraft = Readonly<Record<string, number>>;
-
-export function buildReviewerPoolInput(
-  draft: ReviewerPoolDraft,
-  expectedVersion?: number,
-): SetReviewerPoolInput {
-  const reviewers = Object.entries(draft)
-    .map(([reviewerId, maxAssignments]) => ({ reviewerId, maxAssignments }))
-    .sort((left, right) => left.reviewerId.localeCompare(right.reviewerId));
-  return {
-    reviewers,
-    ...(expectedVersion === undefined ? {} : { expectedVersion }),
-  };
-}
 
 interface OrganizerReviewerPoolViewProps {
   readonly roundName: string;

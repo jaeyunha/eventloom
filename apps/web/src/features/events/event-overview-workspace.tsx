@@ -11,11 +11,7 @@ import {
 } from "@/components/workspace/workspace-ui";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
 import { EventOverviewContent } from "./event-overview-content";
-import {
-  type EventOverviewData,
-  loadEventOverviewData,
-  loadEventOverviewName,
-} from "./event-overview-data";
+import { type EventOverviewData, loadEventOverviewData } from "./event-overview-data";
 import styles from "./event-overview-workspace.module.css";
 
 interface EventOverviewWorkspaceProps {
@@ -28,7 +24,6 @@ type LoadState =
   | { readonly status: "ready"; readonly data: EventOverviewData }
   | { readonly status: "error"; readonly message: string };
 
-export { loadEventOverviewData, loadEventOverviewName };
 
 export function EventOverviewWorkspace({
   organizationId,

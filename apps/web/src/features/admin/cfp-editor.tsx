@@ -1281,6 +1281,7 @@ export function CfpEditor({
     if (key === "closesAt") setPastCloseAcknowledged(false);
   }
   function updateCfpDateRange(selection: EventDateSelectionValue): void {
+
     setConfiguration((current) => ({
       ...current,
       opensAt: selection.startsAt.slice(0, 10),

@@ -6,8 +6,8 @@ import {
   WorkspaceBreadcrumb,
   WorkspaceHeader,
   WorkspaceMetaItem,
-  workspaceClassNames,
 } from "@/components/workspace/workspace-ui";
+import { workspaceClassNames } from "@/components/workspace/workspace-ui-model";
 import { AirtableIntegration } from "./airtable";
 import { OrganizationApiKeys } from "./organization-api-keys";
 import styles from "./organization-integrations-workspace.module.css";

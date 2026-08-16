@@ -14,9 +14,7 @@ import { sortTasksByUrgency } from "./portal-task-model";
 import styles from "./portal-tasks.module.css";
 import { InlineMutationError, PageHeading, PortalContentState } from "./portal-ui";
 
-export * from "./portal-task-assets";
 export type { TaskFilter } from "./portal-task-list";
-export * from "./portal-task-model";
 
 export function PortalTasks() {
   return (

@@ -7,7 +7,7 @@ import { WorkspaceActionBar, WorkspaceFormSection } from "../../components/works
 import { usePortal } from "./portal-provider";
 import styles from "./portal-task-detail.module.css";
 import { getTaskUploadPolicy, validateTaskUpload } from "./portal-task-model";
-import { formatPortalFileSize } from "./portal-ui";
+import { formatPortalFileSize } from "./portal-ui-model";
 import type { PortalTask } from "./types";
 
 type UploadPhase = "idle" | "processing" | "complete" | "failure";

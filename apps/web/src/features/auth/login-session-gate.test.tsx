@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { LoginSessionGate, loadAuthenticatedLoginDestination } from "./login-session-gate";
+import { LoginSessionGate } from "./login-session-gate";
+import { loadAuthenticatedLoginDestination } from "./login-session-loader";
 
 describe("LoginSessionGate", () => {
   it("resolves an existing reviewer session away from the login route", async () => {

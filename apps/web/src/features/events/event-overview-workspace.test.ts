@@ -1,11 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import {
-  EventOverviewWorkspace,
-  loadEventOverviewData,
-  loadEventOverviewName,
-} from "./event-overview-workspace";
+import { EventOverviewWorkspace } from "./event-overview-workspace";
+import { loadEventOverviewData, loadEventOverviewName } from "./event-overview-data";
 
 describe("EventOverviewWorkspace", () => {
   it("does not render fabricated operational metrics before data loads", () => {

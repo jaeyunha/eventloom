@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountAccess } from "./account-access";
-import { AccountHubView, loadAccountAccess } from "./account-hub";
+import { AccountHubView } from "./account-hub";
+import { loadAccountAccess } from "./account-hub-loader";
 
 const access = (capabilities: AccountAccess["capabilities"]): AccountAccess => ({
   identity: { id: "user-1", email: "user@example.com", name: "User One" },

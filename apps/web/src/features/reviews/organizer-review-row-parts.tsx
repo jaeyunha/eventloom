@@ -7,11 +7,6 @@ import type {
   OrganizerReviewAttentionKind,
   OrganizerReviewRow,
 } from "./organizer-review-overview-types";
-export function reviewStatus(row: OrganizerReviewRow) {
-  if (row.expectedReviewCount > 0 && row.completedReviewCount >= row.expectedReviewCount)
-    return "complete";
-  return row.completedReviewCount > 0 ? "in-progress" : "not-started";
-}
 function AttentionIcon({ kind }: Readonly<{ kind: OrganizerReviewAttentionKind }>) {
   if (kind === "none") return <CheckCircle2 aria-hidden="true" />;
   if (kind === "conflict") return <AlertTriangle aria-hidden="true" />;

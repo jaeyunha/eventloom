@@ -1311,7 +1311,6 @@
   .mobileSubmissionWindow > * {
     margin-top: 0;
   }
-
   .mobileContextCard div {
     display: grid;
     min-width: 0;

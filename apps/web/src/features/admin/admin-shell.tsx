@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { shouldRenderAdminShell } from "./admin-shell-auth";
 import { useAdminShellController } from "./admin-shell-controller";
-import type { OrganizerAuthentication } from "./admin-shell-session";
 import { AdminShellView } from "./admin-shell-view";
 
 export {
@@ -29,13 +29,6 @@ export {
   fetchOrganizerEventName,
   fetchOrganizerEventWorkspace,
 } from "./admin-shell-event";
-
-export function shouldRenderAdminShell(
-  authentication: OrganizerAuthentication,
-  publicMemberSetup: boolean,
-): boolean {
-  return publicMemberSetup || authentication === "authenticated";
-}
 
 export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const controller = useAdminShellController();

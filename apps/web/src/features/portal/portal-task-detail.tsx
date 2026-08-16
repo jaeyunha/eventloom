@@ -17,7 +17,7 @@ import styles from "./portal-task-detail.module.css";
 import { actionTaskPresentation, taskSubjectPresentation } from "./portal-task-model";
 import { PortalTaskResponseEditor } from "./portal-task-response";
 import { PortalTaskUpload } from "./portal-task-upload";
-import { formatPortalDate } from "./portal-ui";
+import { formatPortalDate } from "./portal-ui-model";
 import type { PortalTask } from "./types";
 
 function tone(task: PortalTask): StatusTone {

@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { assetPointerLabels, resolveAssetPointers } from "./portal-assets";
 import {
-  actionTaskPresentation,
   commentsForAsset,
+  resolveTaskAsset,
+} from "./portal-task-assets";
+import {
+  actionTaskPresentation,
   getTaskUploadPolicy,
   portalTaskGroup,
-  resolveTaskAsset,
   resolveTaskSubject,
   sortTasksByUrgency,
   taskSubjectPresentation,
   validateTaskUpload,
-} from "./portal-tasks";
+} from "./portal-task-model";
 import type { PortalAsset, PortalTask } from "./types";
 
 function task(overrides: Record<string, unknown> = {}): PortalTask {

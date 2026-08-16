@@ -3,7 +3,6 @@ import styles from "../../styles/design-system.module.css";
 import { cx } from "./class-names";
 import { getStepState } from "./stepper-logic";
 
-export { getStepState, type StepState } from "./stepper-logic";
 
 export interface StepperStep {
   id: string;

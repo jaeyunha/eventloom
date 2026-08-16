@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button, Card, CardContent, CardHeader, CardTitle } from "../../components/ui";
 import styles from "./portal-profile.module.css";
-import { formatPortalDate, formatPortalFileSize, portalAssetStateLabel } from "./portal-ui";
+import { formatPortalDate, formatPortalFileSize, portalAssetStateLabel } from "./portal-ui-model";
 import type { PortalAsset, PortalDownloadGrant, PortalProfile } from "./types";
 
 interface ProfileHeadshotCardProps {

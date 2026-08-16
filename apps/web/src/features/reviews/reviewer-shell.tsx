@@ -9,8 +9,6 @@ import { RoleWorkspaceShell } from "@/components/workspace/role-workspace-shell"
 import { signOutAccount } from "@/features/account/account-actions";
 import styles from "./reviewer-shell.module.css";
 
-export const signOutReviewerSession = signOutAccount;
-
 export interface ReviewerShellProps {
   readonly children: ReactNode;
   readonly event?: ReactNode;
@@ -41,7 +39,7 @@ export function ReviewerShell({
             size="sm"
             type="button"
             variant="ghost"
-            onClick={() => void signOutReviewerSession()}
+            onClick={() => void signOutAccount()}
           >
             <LogOut data-icon="inline-start" aria-hidden="true" />
             <span>Sign out</span>
