@@ -308,6 +308,14 @@ function evaluatePublishedFields(
   return { fields, sections };
 }
 
+export function cfpPublishedFieldIsVisible(
+  form: CfpPublishedForm,
+  answers: Record<string, unknown>,
+  fieldKey: string,
+): boolean {
+  return evaluatePublishedFields(form, answers).fields.get(fieldKey)?.visible ?? false;
+}
+
 function fileStateKey(fieldKey: string, participantIndex?: number): string {
   return participantIndex === undefined ? fieldKey : `participants.${participantIndex}.${fieldKey}`;
 }
@@ -891,6 +899,15 @@ function fieldValueForValidation(field: CfpFormField, value: unknown): unknown {
   return value;
 }
 
+export function cfpHttpUrlIsValid(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function dynamicFormErrors(
   form: CfpPublishedForm,
   draft: CfpDraft,
@@ -934,6 +951,11 @@ function dynamicFormErrors(
       if (field.kind === "email" && typeof value === "string" && value.trim()) {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
           errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
+        }
+      }
+      if (field.kind === "url" && typeof value === "string" && value.trim()) {
+        if (!cfpHttpUrlIsValid(value)) {
+          errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
         }
       }
       if (["select", "multi_select"].includes(field.kind) && field.options.length > 0) {
@@ -982,6 +1004,11 @@ function dynamicFormErrors(
         if (field.kind === "email" && typeof value === "string" && value.trim()) {
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
             errors[key] = `Enter a valid ${field.label.toLowerCase()}.`;
+          }
+        }
+        if (field.kind === "url" && typeof value === "string" && value.trim()) {
+          if (!cfpHttpUrlIsValid(value)) {
+            errors[key] = `Enter a valid ${field.label.toLowerCase()} URL.`;
           }
         }
       }
