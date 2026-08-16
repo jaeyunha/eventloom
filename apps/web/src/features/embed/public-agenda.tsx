@@ -9,8 +9,10 @@ import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
   formatPublishedSessionSchedule,
+  literalSearchPattern,
   publicAgendaDays,
   publishedEntryPresenters,
+  publishedSpeakerSearchTermsBySessionId,
   uniqueSorted,
 } from "./model";
 import type {
@@ -42,14 +44,13 @@ function speakerRole(speaker: PublishedSpeaker): string {
 
 function entrySearchText(
   entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
+  searchTermsBySessionId: ReadonlyMap<string, readonly string[]>,
 ): string {
-  const presenters = publishedEntryPresenters(entry, speakers);
-  const speakerDetails = presenters.flatMap((presenter) => {
-    const speaker = presenter.speaker;
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
-  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
+  return [
+    entry.title,
+    ...entry.speakerNames,
+    ...(searchTermsBySessionId.get(entry.sessionId) ?? []),
+  ]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase();
@@ -257,6 +258,10 @@ export function PublicAgendaView({
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const speakerSearchTermsBySessionId = useMemo(
+    () => publishedSpeakerSearchTermsBySessionId(speakers),
+    [speakers],
+  );
   const eventDays = useMemo(
     () => publicAgendaDays(agenda.entries, agenda.event.timeZone, agenda.event),
     [agenda.entries, agenda.event],
@@ -277,28 +282,32 @@ export function PublicAgendaView({
     [agenda.entries],
   );
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleEntries = useMemo(
-    () =>
-      filterAgendaEntries(agenda.entries, day, track, agenda.event.timeZone).filter(
-        (entry) =>
-          (!format || entry.format === format) &&
-          (!room || entry.roomName === room) &&
-          (trackList.length === 0 ||
-            trackList.some((trackName) => entry.trackNames.includes(trackName))) &&
-          (!normalizedQuery || entrySearchText(entry, speakers).includes(normalizedQuery)),
-      ),
-    [
-      agenda.entries,
-      agenda.event.timeZone,
-      day,
-      format,
-      normalizedQuery,
-      speakers,
-      room,
-      track,
-      trackList,
-    ],
+  const normalizedQueryPattern = useMemo(
+    () => literalSearchPattern(normalizedQuery),
+    [normalizedQuery],
   );
+  const visibleEntries = useMemo(() => {
+    const configuredTrackNames = new Set(trackList);
+    return filterAgendaEntries(agenda.entries, day, track, agenda.event.timeZone).filter(
+      (entry) =>
+        (!format || entry.format === format) &&
+        (!room || entry.roomName === room) &&
+        (trackList.length === 0 ||
+          entry.trackNames.some((trackName) => configuredTrackNames.has(trackName))) &&
+        (normalizedQueryPattern === null ||
+          normalizedQueryPattern.test(entrySearchText(entry, speakerSearchTermsBySessionId))),
+    );
+  }, [
+    agenda.entries,
+    agenda.event.timeZone,
+    day,
+    format,
+    normalizedQueryPattern,
+    speakerSearchTermsBySessionId,
+    room,
+    track,
+    trackList,
+  ]);
   const hasFacetFilters = Boolean(normalizedQuery || track || format || room);
   const visibleDays = useMemo(() => {
     const days = publicAgendaDays(visibleEntries, agenda.event.timeZone, agenda.event);

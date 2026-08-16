@@ -276,6 +276,8 @@ export function RemixWorkspace({
         recordMatches(record, search, tagValues, trackValues),
     );
   }, [eventId, records, search, sourceType, tagFilter, trackFilter]);
+  const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
+  const selectedFieldSet = useMemo(() => new Set(fields), [fields]);
   const visibleCandidates = useMemo(
     () =>
       candidates.filter(

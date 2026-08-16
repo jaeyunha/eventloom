@@ -341,6 +341,7 @@ export function scopePortalViewToAuthorizedParticipants(
   const eventId = scopedContext.eventId;
   const selectedParticipant = scopedContext.selectedParticipantId ?? null;
   const authorizedIds = scopedContext.submissionIds;
+  const participantIds = new Set(scopedContext.participantIds);
   const submissionMatches = (submissionId: string): boolean =>
     authorizedIds.some((authorizedId) => portalSubmissionIdsMatch(authorizedId, submissionId));
   const submissions = view.submissions.reduce<PortalSubmission[]>((filtered, submission) => {
@@ -350,7 +351,7 @@ export function scopePortalViewToAuthorizedParticipants(
     filtered.push({
       ...submission,
       participantIds: submission.participantIds.filter((participantId) =>
-        scopedContext.participantIds.includes(participantId),
+        participantIds.has(participantId),
       ),
     });
     return filtered;
@@ -578,11 +579,12 @@ export function portalSubmissionEditTarget(
     submission.eventId !== context.eventId ||
     !context.submissionIds.some((authorizedId) =>
       portalSubmissionIdsMatch(authorizedId, submission.id),
-    ) ||
-    !submission.participantIds.some((participantId) =>
-      context.participantIds.includes(participantId),
     )
   ) {
+    return null;
+  }
+  const participantIds = new Set(context.participantIds);
+  if (!submission.participantIds.some((participantId) => participantIds.has(participantId))) {
     return null;
   }
   const eventSlug = context.slug?.trim() || context.eventId;

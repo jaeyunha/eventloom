@@ -1,4 +1,8 @@
 import type { EmbedTheme, PublishedAgendaEntry, PublishedEvent, PublishedSpeaker } from "./types";
+export function literalSearchPattern(value: string): RegExp | null {
+  if (value.length === 0) return null;
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u");
+}
 
 export interface PublishedSpeakerSession {
   id: string;
@@ -38,16 +42,38 @@ export function publishedEntrySpeakers(
 ): readonly PublishedSpeaker[] {
   return speakers.filter((speaker) => speaker.sessionIds.includes(entry.sessionId));
 }
+export function publishedSpeakerSearchTermsBySessionId(
+  speakers: readonly PublishedSpeaker[],
+): ReadonlyMap<string, readonly string[]> {
+  const searchTermsBySessionId = new Map<string, string[]>();
+  for (const speaker of speakers) {
+    const searchTerms = [
+      speaker.displayName,
+      speaker.jobTitle,
+      speaker.organization,
+      speaker.biography,
+    ].filter((value): value is string => Boolean(value));
+    for (const sessionId of new Set(speaker.sessionIds)) {
+      const existing = searchTermsBySessionId.get(sessionId);
+      if (existing === undefined) {
+        searchTermsBySessionId.set(sessionId, [...searchTerms]);
+      } else {
+        existing.push(...searchTerms);
+      }
+    }
+  }
+  return searchTermsBySessionId;
+}
 
 function speakerMatchesTrackId(
   speaker: PublishedSpeaker,
-  entries: readonly PublishedAgendaEntry[],
+  trackIdsBySessionId: ReadonlyMap<string, ReadonlySet<string>>,
   trackId: string,
 ): boolean {
-  const sessionIds = new Set(speaker.sessionIds);
-  return entries.some(
-    (entry) => sessionIds.has(entry.sessionId) && (entry.trackIds ?? []).includes(trackId),
-  );
+  for (const sessionId of speaker.sessionIds) {
+    if (trackIdsBySessionId.get(sessionId)?.has(trackId)) return true;
+  }
+  return false;
 }
 
 /**
@@ -61,8 +87,20 @@ export function filterSpeakersByTrackIds(
 ): readonly PublishedSpeaker[] {
   const configuredTrackIds = trackIds.filter((trackId) => trackId.trim().length > 0);
   if (configuredTrackIds.length === 0) return speakers;
+
+  const trackIdsBySessionId = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const entryTrackIds = trackIdsBySessionId.get(entry.sessionId) ?? new Set<string>();
+    for (const trackId of entry.trackIds ?? []) {
+      entryTrackIds.add(trackId);
+    }
+    trackIdsBySessionId.set(entry.sessionId, entryTrackIds);
+  }
+
   return speakers.filter((speaker) =>
-    configuredTrackIds.some((trackId) => speakerMatchesTrackId(speaker, entries, trackId)),
+    configuredTrackIds.some((trackId) =>
+      speakerMatchesTrackId(speaker, trackIdsBySessionId, trackId),
+    ),
   );
 }
 
@@ -588,8 +626,9 @@ export function filterAgendaEntriesByTrackIds(
 ): readonly PublishedAgendaEntry[] {
   const configuredTrackIds = trackIds.filter((trackId) => trackId.trim().length > 0);
   if (configuredTrackIds.length === 0) return entries;
+  const configuredTrackIdSet = new Set(configuredTrackIds);
   return entries.filter((entry) =>
-    configuredTrackIds.some((trackId) => (entry.trackIds ?? []).includes(trackId)),
+    (entry.trackIds ?? []).some((trackId) => configuredTrackIdSet.has(trackId)),
   );
 }
 

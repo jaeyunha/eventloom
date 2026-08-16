@@ -169,8 +169,9 @@ export function draftFromReportTemplate(template: ReportTemplate): ReportDefinit
 export function fieldsForRelationships(
   relationships: readonly ReportRelationship[],
 ): readonly FieldOption[] {
+  const relationshipSet = new Set(relationships);
   return SOURCE_ORDER.flatMap((relationship) =>
-    relationships.includes(relationship) ? REPORT_FIELD_ALLOWLIST[relationship] : [],
+    relationshipSet.has(relationship) ? REPORT_FIELD_ALLOWLIST[relationship] : [],
   );
 }
 function sourceFieldKeys(relationships: readonly ReportRelationship[]): readonly string[] {
@@ -185,12 +186,14 @@ export function normalizeDraft(next: ReportDefinitionInput): ReportDefinitionInp
   const relationships = arrayValue(next.relationships);
   const available = new Set(sourceFieldKeys(relationships));
   const fields = arrayValue(next.fields).filter((field) => available.has(field));
-  const order = arrayValue(next.order).filter((field) => fields.includes(field));
+  const fieldSet = new Set(fields);
+  const order = arrayValue(next.order).filter((field) => fieldSet.has(field));
+  const orderSet = new Set(order);
   return {
     ...next,
     relationships,
     fields,
-    order: [...order, ...fields.filter((field) => !order.includes(field))],
+    order: [...order, ...fields.filter((field) => !orderSet.has(field))],
     filters: arrayValue(next.filters).filter(
       (filter) => filter !== null && typeof filter === "object" && available.has(filter.field),
     ),

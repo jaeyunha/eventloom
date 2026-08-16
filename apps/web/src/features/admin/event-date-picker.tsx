@@ -46,6 +46,7 @@ interface MonthCell {
 }
 
 const weekDays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
+const EMPTY_SELECTED_DATES: readonly string[] = [];
 const CONCISE_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -154,7 +155,8 @@ export function EventDatePicker({
   );
   const [activeBoundary, setActiveBoundary] = useState<"start" | "end">("start");
   const cells = useMemo(() => monthCells(visibleMonth), [visibleMonth]);
-  const selectedDates = mode === "individual" ? scheduleDates : [];
+  const selectedDates = mode === "individual" ? scheduleDates : EMPTY_SELECTED_DATES;
+  const selectedDateSet = useMemo(() => new Set(selectedDates), [selectedDates]);
   const showSelectedDates = mode === "individual" && selectedDates.length > 0;
   const showDetails = showTimeControls || showSelectedDates;
 
@@ -351,7 +353,7 @@ export function EventDatePicker({
                 mode === "range" ? minimumEndDateValue : "",
                 activeBoundary,
               );
-              const individuallySelected = selectedDates.includes(cell.dateKey);
+              const individuallySelected = selectedDateSet.has(cell.dateKey);
               const inRange =
                 mode === "range" &&
                 startDate !== "" &&

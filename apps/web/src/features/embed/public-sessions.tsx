@@ -4,7 +4,12 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
 import type { EmbedDisplayField, EmbedLayout } from "./model";
-import { formatPublishedSessionSchedule, publishedEntryPresenters } from "./model";
+import {
+  formatPublishedSessionSchedule,
+  literalSearchPattern,
+  publishedEntryPresenters,
+  publishedSpeakerSearchTermsBySessionId,
+} from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -41,14 +46,13 @@ function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry):
 
 function entrySearchText(
   entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
+  searchTermsBySessionId: ReadonlyMap<string, readonly string[]>,
 ): string {
-  const presenters = publishedEntryPresenters(entry, speakers);
-  const speakerDetails = presenters.flatMap((presenter) => {
-    const speaker = presenter.speaker;
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
-  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
+  return [
+    entry.title,
+    ...entry.speakerNames,
+    ...(searchTermsBySessionId.get(entry.sessionId) ?? []),
+  ]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase();
@@ -114,26 +118,42 @@ export function PublicSessionsView({
     () => uniqueValues(agenda.entries.map((entry) => entry.roomName)),
     [agenda.entries],
   );
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const entries = useMemo(
-    () =>
-      [...agenda.entries]
-        .filter((entry) => {
-          if (track && !entry.trackNames.includes(track)) return false;
-          if (
-            trackList.length > 0 &&
-            !trackList.some((trackName) => entry.trackNames.includes(trackName))
-          )
-            return false;
-          if (format && entry.format !== format) return false;
-          if (room && entry.roomName !== room) return false;
-          return (
-            !normalizedQuery || entrySearchText(entry, speakers.speakers).includes(normalizedQuery)
-          );
-        })
-        .sort(compareStarts),
-    [agenda.entries, format, normalizedQuery, room, speakers.speakers, track, trackList],
+  const speakerSearchTermsBySessionId = useMemo(
+    () => publishedSpeakerSearchTermsBySessionId(speakers.speakers),
+    [speakers.speakers],
   );
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const normalizedQueryPattern = useMemo(
+    () => literalSearchPattern(normalizedQuery),
+    [normalizedQuery],
+  );
+  const entries = useMemo(() => {
+    const selectedTrackSet = new Set(trackList);
+    return [...agenda.entries]
+      .filter((entry) => {
+        if (track && !entry.trackNames.some((trackName) => trackName === track)) return false;
+        if (
+          trackList.length > 0 &&
+          !entry.trackNames.some((trackName) => selectedTrackSet.has(trackName))
+        )
+          return false;
+        if (format && entry.format !== format) return false;
+        if (room && entry.roomName !== room) return false;
+        return (
+          normalizedQueryPattern === null ||
+          normalizedQueryPattern.test(entrySearchText(entry, speakerSearchTermsBySessionId))
+        );
+      })
+      .sort(compareStarts);
+  }, [
+    agenda.entries,
+    format,
+    normalizedQueryPattern,
+    room,
+    speakerSearchTermsBySessionId,
+    track,
+    trackList,
+  ]);
 
   const hasFilters = Boolean(query || track || format || room);
   const clearFilters = () => {

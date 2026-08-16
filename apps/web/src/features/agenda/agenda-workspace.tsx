@@ -210,6 +210,7 @@ function EntryForm({
   const [trackIds, setTrackIds] = useState<readonly string[]>(
     entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
   );
+  const trackIdSet = useMemo(() => new Set(trackIds), [trackIds]);
   const [startsAtLocal, setStartsAtLocal] = useState(
     entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
   );
@@ -363,7 +364,7 @@ function EntryForm({
           <label key={track.id}>
             <input
               type="checkbox"
-              checked={trackIds.includes(track.id)}
+              checked={trackIdSet.has(track.id)}
               onChange={() => toggleTrack(track.id)}
             />
             <span style={{ "--track-color": track.color } as React.CSSProperties}>
@@ -564,6 +565,7 @@ export function AgendaBoard({
     const entryConflicts = conflictsForEntry(entry.id, preview?.conflicts ?? []);
     const entryReleaseConflicts = conflictsForEntry(entry.id, preview?.releaseConflicts ?? []);
     const entryWarnings = warningsForEntry(entry.id, preview?.warnings ?? []);
+    const entryTrackIds = new Set(entry.trackIds);
     const hasIssues =
       entryConflicts.length + entryReleaseConflicts.length + entryWarnings.length > 0;
     return (
@@ -573,7 +575,7 @@ export function AgendaBoard({
           style={
             {
               "--session-accent":
-                data.tracks.find((track) => entry.trackIds.includes(track.id))?.color ??
+                data.tracks.find((track) => entryTrackIds.has(track.id))?.color ??
                 "var(--color-border-strong)",
             } as React.CSSProperties
           }
@@ -1420,9 +1422,10 @@ export function AgendaSuggestionPanel({
 }: AgendaSuggestionPanelProps) {
   const blockers = run?.candidateDiagnostics?.conflicts ?? [];
   const stale = run !== null && run.baseDraftVersion !== currentDraftVersion;
+  const selectedChangeIdSet = useMemo(() => new Set(selectedChangeIds), [selectedChangeIds]);
   const selectedAvailableChangeIds =
     run?.diff.changes.reduce<string[]>((availableIds, change) => {
-      if (selectedChangeIds.includes(change.id)) {
+      if (selectedChangeIdSet.has(change.id)) {
         availableIds.push(change.id);
       }
       return availableIds;
@@ -1602,7 +1605,7 @@ export function AgendaSuggestionPanel({
                     <label key={change.id}>
                       <input
                         type="checkbox"
-                        checked={selectedChangeIds.includes(change.id)}
+                        checked={selectedChangeIdSet.has(change.id)}
                         onChange={() => toggleChange(change.id)}
                       />
                       <span>

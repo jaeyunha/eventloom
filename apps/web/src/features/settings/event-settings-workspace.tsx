@@ -331,10 +331,11 @@ function StatusSettingsForm({
   );
   const [statuses, setStatuses] = useState<StatusRow[]>(() => createStatusRows(settings.statuses));
   const [eligible, setEligible] = useState<string[]>([...settings.agendaEligibleStatuses]);
+  const eligibleSet = new Set(eligible);
   const [newStatus, setNewStatus] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const cleanedStatuses = statuses.map(({ value }) => value.trim());
-  const normalizedEligible = cleanedStatuses.filter((status) => eligible.includes(status));
+  const normalizedEligible = cleanedStatuses.filter((status) => eligibleSet.has(status));
   const normalizedEligibleSet = new Set(normalizedEligible);
   const dirty =
     cleanedStatuses.join("\u0000") !== settings.statuses.join("\u0000") ||
@@ -461,7 +462,7 @@ function StatusSettingsForm({
                   <Label className={styles.checkboxLabel} htmlFor={checkboxId}>
                     <Checkbox
                       id={checkboxId}
-                      checked={eligible.includes(status.value)}
+                      checked={eligibleSet.has(status.value)}
                       disabled={disabled}
                       aria-label={`Can ${statusLabel} appear on the private agenda`}
                       onCheckedChange={(checked) =>
@@ -720,7 +721,14 @@ function RoomsSection({
   const [showForm, setShowForm] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<EventRoom | null>(null);
-  const editingRoom = rooms.find((room) => room.id === editingRoomId);
+  const roomsById = useMemo(() => {
+    const index = new Map<string, EventRoom>();
+    for (const room of rooms) {
+      if (!index.has(room.id)) index.set(room.id, room);
+    }
+    return index;
+  }, [rooms]);
+  const editingRoom = editingRoomId === null ? undefined : roomsById.get(editingRoomId);
   const canCreate = Boolean(actions.createRoom);
   const canUpdate = Boolean(actions.updateRoom);
   const canDelete = Boolean(actions.deleteRoom);
@@ -877,7 +885,7 @@ function RoomsSection({
         busy={busy}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          const currentTarget = rooms.find((room) => room.id === deleteTarget.id);
+          const currentTarget = roomsById.get(deleteTarget.id);
           if (!currentTarget) {
             setDeleteTarget(null);
             return;
@@ -976,7 +984,14 @@ function TaxonomySection({
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<EventTaxonomyResource | null>(null);
-  const editing = resources.find((resource) => resource.id === editingId);
+  const resourcesById = useMemo(() => {
+    const index = new Map<string, EventTaxonomyResource>();
+    for (const resource of resources) {
+      if (!index.has(resource.id)) index.set(resource.id, resource);
+    }
+    return index;
+  }, [resources]);
+  const editing = editingId === null ? undefined : resourcesById.get(editingId);
   const canCreate = Boolean(actions.createResource);
   const canUpdate = Boolean(actions.updateResource);
   const canDelete = Boolean(actions.deleteResource);
@@ -1167,7 +1182,7 @@ function TaxonomySection({
         busy={busy}
         onConfirm={async () => {
           if (!deleteTarget) return;
-          const currentTarget = resources.find((resource) => resource.id === deleteTarget.id);
+          const currentTarget = resourcesById.get(deleteTarget.id);
           if (!currentTarget) {
             setDeleteTarget(null);
             return;

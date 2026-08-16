@@ -814,6 +814,7 @@ function TaskComposer({
   const [formError, setFormError] = useState<string | null>(null);
   const assignmentCount = assigneeIds.length;
   const selectedFilePolicy = requestFilePolicyFor(acceptedAssetKind);
+  const assigneeIdSet = useMemo(() => new Set(assigneeIds), [assigneeIds]);
 
   function toggleAssignee(id: string): void {
     setAssigneeIds((current) =>
@@ -1085,7 +1086,7 @@ function TaskComposer({
                 ) : (
                   <div className={styles.assigneeList}>
                     {participants.map((participant) => {
-                      const selected = assigneeIds.includes(participant.id);
+                      const selected = assigneeIdSet.has(participant.id);
                       return (
                         <div key={participant.id} className={styles.assigneeRow}>
                           <div className={styles.optionRow}>
@@ -1202,6 +1203,7 @@ function DeliverablesTable({
   onFiltersChange: (filters: ContentRequestFilters) => void;
   busy: boolean;
 }>) {
+  const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
   const speakers = [
     ...new Map(rows.map((row) => [row.task.participantId, row.speakerLabel])).entries(),
   ].sort((left, right) => left[1].localeCompare(right[1]));
@@ -1222,15 +1224,14 @@ function DeliverablesTable({
   for (const row of rows) {
     if (isOutstanding(row.status)) allOutstandingIds.push(row.task.id);
   }
+  const allOutstandingIdSet = new Set(allOutstandingIds);
   const selectedOutstandingIds = selectedTaskIds.filter((taskId) =>
-    allOutstandingIds.includes(taskId),
+    allOutstandingIdSet.has(taskId),
   );
   const allVisibleSelected =
     visibleOutstandingIds.length > 0 &&
-    visibleOutstandingIds.every((taskId) => selectedTaskIds.includes(taskId));
-  const someVisibleSelected = visibleOutstandingIds.some((taskId) =>
-    selectedTaskIds.includes(taskId),
-  );
+    visibleOutstandingIds.every((taskId) => selectedTaskIdSet.has(taskId));
+  const someVisibleSelected = visibleOutstandingIds.some((taskId) => selectedTaskIdSet.has(taskId));
   const hasActiveFilters =
     filters.query.length > 0 ||
     filters.speakerId !== "all" ||
@@ -1434,7 +1435,7 @@ function DeliverablesTable({
                       <TableCell>
                         <Checkbox
                           id={`content-request-reminder-${row.task.id}`}
-                          checked={selectedTaskIds.includes(row.task.id)}
+                          checked={selectedTaskIdSet.has(row.task.id)}
                           disabled={!outstanding}
                           onCheckedChange={() => onToggleTask(row.task.id)}
                         />
@@ -2277,10 +2278,11 @@ export function DeliverablesWorkspaceView({
     selectedAssignmentId === null
       ? undefined
       : rows.find((row) => row.task.id === selectedAssignmentId);
+  const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
   const reminderPreviewRows = rows.filter(
     (row) =>
       isOutstanding(row.status) &&
-      (reminderPreviewMode === "all" || selectedTaskIds.includes(row.task.id)),
+      (reminderPreviewMode === "all" || selectedTaskIdSet.has(row.task.id)),
   );
 
   const selectedAsset =

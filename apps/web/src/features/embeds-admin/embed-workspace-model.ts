@@ -716,9 +716,13 @@ function isEmbedFieldId(value: unknown): value is EmbedFieldId {
 function normalizeStringList(value: unknown): readonly string[] | null {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return null;
   const unique: string[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
     const normalized = item.trim();
-    if (normalized && !unique.includes(normalized)) unique.push(normalized);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      unique.push(normalized);
+    }
   }
   return unique;
 }
@@ -727,7 +731,8 @@ function normalizeDisplayFields(value: unknown): readonly EmbedFieldId[] | null 
   if (!Array.isArray(value) || !value.every(isEmbedFieldId)) return null;
   const unique = [...new Set(value)];
   const required = EMBED_DISPLAY_FIELDS.filter((field) => field.required).map((field) => field.id);
-  return [...required, ...unique.filter((field) => !required.includes(field))];
+  const requiredIds = new Set(required);
+  return [...required, ...unique.filter((field) => !requiredIds.has(field))];
 }
 
 function normalizeHexColor(value: unknown): string | null {

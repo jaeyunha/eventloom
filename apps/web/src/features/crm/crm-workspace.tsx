@@ -619,6 +619,7 @@ function DirectoryTable({
   onToggleSelection: (contactId: string) => void;
   onToggleAll: (checked: boolean) => void;
 }>) {
+  const selectedContactIdSet = useMemo(() => new Set(selectedContactIds), [selectedContactIds]);
   if (loading) {
     return (
       <div
@@ -648,7 +649,7 @@ function DirectoryTable({
                 aria-label="Select all visible contacts"
                 checked={
                   contacts.length > 0 &&
-                  contacts.every((contact) => selectedContactIds.includes(contact.id))
+                  contacts.every((contact) => selectedContactIdSet.has(contact.id))
                 }
                 onChange={(event) => onToggleAll(event.currentTarget.checked)}
                 disabled={loading}
@@ -673,7 +674,7 @@ function DirectoryTable({
                 <input
                   type="checkbox"
                   aria-label={`Select ${displayName(contact)}`}
-                  checked={selectedContactIds.includes(contact.id)}
+                  checked={selectedContactIdSet.has(contact.id)}
                   onChange={() => onToggleSelection(contact.id)}
                   disabled={loading}
                 />
@@ -1421,8 +1422,9 @@ export function CrmWorkspaceView({
             match.contact.status === "active",
         )
       : [];
+  const mergeSelectionSet = useMemo(() => new Set(mergeSelection), [mergeSelection]);
   const selectedMergeContacts = mergeCandidates.filter((match) =>
-    mergeSelection.includes(match.contact.id),
+    mergeSelectionSet.has(match.contact.id),
   );
   const mergeReviewContacts = selectedContact
     ? [selectedContact, ...selectedMergeContacts.map((match) => match.contact)]
@@ -2243,7 +2245,7 @@ export function CrmWorkspaceView({
                     <label className={styles.checkRow} key={match.contact.id}>
                       <input
                         type="checkbox"
-                        checked={mergeSelection.includes(match.contact.id)}
+                        checked={mergeSelectionSet.has(match.contact.id)}
                         aria-label={`Select ${displayName(match.contact)}`}
                         onChange={(event) => {
                           const checked = event.currentTarget.checked;

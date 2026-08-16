@@ -677,6 +677,8 @@ export function ReportDefinitionEditor({
   onSave,
   onDelete,
 }: ReportDefinitionEditorProps) {
+  const relationshipSet = useMemo(() => new Set(draft.relationships), [draft.relationships]);
+  const fieldSet = useMemo(() => new Set(draft.fields), [draft.fields]);
   return (
     <section
       className={styles.section}
@@ -745,7 +747,7 @@ export function ReportDefinitionEditor({
             {SOURCE_ORDER.map((relationship) => (
               <Label className={styles.checkItem} key={relationship}>
                 <Checkbox
-                  checked={draft.relationships.includes(relationship)}
+                  checked={relationshipSet.has(relationship)}
                   onCheckedChange={(checked) =>
                     onToggleRelationship(relationship, checked === true)
                   }
@@ -768,7 +770,7 @@ export function ReportDefinitionEditor({
               {availableFields.map((field) => (
                 <Label className={styles.checkItem} key={field.key}>
                   <Checkbox
-                    checked={draft.fields.includes(field.key)}
+                    checked={fieldSet.has(field.key)}
                     onCheckedChange={(checked) => onToggleField(field.key, checked === true)}
                   />
                   <span>{field.label}</span>

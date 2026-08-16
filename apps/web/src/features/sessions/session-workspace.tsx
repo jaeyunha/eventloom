@@ -338,6 +338,7 @@ function SpeakerAssignments({
 }>) {
   const ownerKey = `${eventId}\u0000${session.id}`;
   const currentReferences = assignmentReferences(session);
+  const sessionSpeakerIds = new Set(session.speakerIds);
   const candidatesById = new Map((speakers ?? []).map((speaker) => [speaker.id, speaker]));
   const options = [
     ...currentReferences.map((reference) => ({
@@ -351,14 +352,14 @@ function SpeakerAssignments({
         ? {}
         : { company: candidatesById.get(reference.id)?.company }),
     })),
-    ...(speakers ?? []).filter((speaker) => !session.speakerIds.includes(speaker.id)),
+    ...(speakers ?? []).filter((speaker) => !sessionSpeakerIds.has(speaker.id)),
   ];
   const [draft, setDraft] = useState<SpeakerAssignmentsDraft | null>(null);
   const selectedIds = draft?.ownerKey === ownerKey ? draft.speakerIds : session.speakerIds;
   const selected = new Set(selectedIds);
   const changed =
     selectedIds.length !== session.speakerIds.length ||
-    selectedIds.some((id) => !session.speakerIds.includes(id));
+    selectedIds.some((id) => !sessionSpeakerIds.has(id));
 
   function toggle(speakerId: string, checked: boolean) {
     setDraft((current) => {

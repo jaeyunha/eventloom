@@ -160,6 +160,7 @@ function sessionFrom(value: unknown, eventId: string): SessionRecord {
 
   const contentStatus = contentStatusFrom(value.contentStatus);
   const speakerIds = stringArrayFrom(value.speakerIds, "speaker IDs");
+  const speakerIdSet = new Set(speakerIds);
   if (!Array.isArray(value.speakerRoster)) {
     throw new TypeError("The session response contains an invalid speaker roster.");
   }
@@ -167,7 +168,7 @@ function sessionFrom(value: unknown, eventId: string): SessionRecord {
   if (new Set(speakerRoster.map((reference) => reference.id)).size !== speakerRoster.length) {
     throw new TypeError("The session response contains duplicate speaker roster entries.");
   }
-  if (speakerRoster.some((reference) => !speakerIds.includes(reference.id))) {
+  if (speakerRoster.some((reference) => !speakerIdSet.has(reference.id))) {
     throw new TypeError("The session response contains a speaker roster outside its speaker IDs.");
   }
   return {

@@ -246,7 +246,8 @@ function valuesEqual(left: unknown, right: unknown): boolean {
   const leftValues = scalarValues(left);
   const rightValues = scalarValues(right);
   if (leftValues.length === 0 || rightValues.length === 0) return Object.is(left, right);
-  return leftValues.some((value) => rightValues.includes(value));
+  const rightValueSet = new Set(rightValues);
+  return leftValues.some((value) => rightValueSet.has(value));
 }
 
 function evaluateCondition(condition: unknown, answers: DynamicAnswers): boolean {
@@ -2690,6 +2691,7 @@ function SearchableMultiField({
 }) {
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
+  const selectedValueSet = useMemo(() => new Set(value), [value]);
   const options = fieldOptions(field).filter((option) =>
     `${option.label} ${option.description ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
   );
@@ -2710,11 +2712,11 @@ function SearchableMultiField({
         {options.map((option) => (
           <label key={option.value}>
             <input
-              checked={value.includes(option.value)}
+              checked={selectedValueSet.has(option.value)}
               disabled={option.disabled}
               onChange={() =>
                 onChange(
-                  value.includes(option.value)
+                  selectedValueSet.has(option.value)
                     ? value.filter((item) => item !== option.value)
                     : [...value, option.value],
                 )
