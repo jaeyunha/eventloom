@@ -7,6 +7,7 @@ import { EvaluatorConflictDialog } from "./evaluator-conflict-dialog";
 import type { EvaluatorController } from "./evaluator-controller";
 import { EvaluatorPrivacyNotice } from "./evaluator-privacy-notice";
 import { ReviewNavigation } from "./evaluator-queue-review-navigation";
+import { EvaluatorRoundAvailabilityNotice } from "./evaluator-round-availability-notice";
 import { EvaluatorScorecardView } from "./evaluator-scorecard-view";
 import { EvaluatorSubmissionPanel } from "./evaluator-submission-panel";
 import { AuthorityNotice } from "./workspace-authority-notice";
@@ -60,6 +61,7 @@ export function EvaluatorWorkspaceView({
       <div id={embedded ? undefined : "review-content"} tabIndex={embedded ? undefined : -1}>
         <AuthorityNotice />
         <EvaluatorPrivacyNotice controller={controller} />
+        <EvaluatorRoundAvailabilityNotice round={assignment.round} />
         <EvaluatorSubmissionPanel controller={controller} />
         <EvaluatorScorecardView controller={controller} />
         <EvaluatorActionBar controller={controller} />

@@ -31,7 +31,9 @@ export function mapEvaluatorAssignment(
             ? "scheduled"
             : "open",
     opensAt: dateLabel(context.round.opensAt ?? plan.createdAt),
+    opensAtIso: context.round.opensAt ?? undefined,
     closesAt: dateLabel(context.round.closesAt ?? plan.closesAt),
+    closesAtIso: context.round.closesAt ?? plan.closesAt ?? undefined,
     completionPercent: 0,
     roundRevision: context.round.revision,
     rubricRevision: context.round.rubricRevision ?? context.rubricRevision,

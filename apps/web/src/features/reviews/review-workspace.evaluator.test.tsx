@@ -84,6 +84,31 @@ describe("evaluator workspace composition", () => {
     expect(markup).toContain("Submit review");
   });
 
+  it("marks a scheduled round lock with its exact opening instant", () => {
+    const scheduledAssignment: EvaluatorAssignment = {
+      ...assignment(),
+      round: {
+        ...assignment().round,
+        status: "scheduled",
+        opensAt: "Aug 17, 2026, 8:24 AM UTC",
+        opensAtIso: "2026-08-17T08:24:00.000Z",
+      },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "event-1",
+        mode: "evaluator",
+        initialState: { assignment: scheduledAssignment },
+      }),
+    );
+
+    expect(markup).toContain('data-round-availability="scheduled"');
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('id="round-availability-notice"');
+    expect(markup).toContain('datetime="2026-08-17T08:24:00.000Z"');
+    expect(markup).toContain('aria-describedby="round-availability-notice"');
+  });
+
   it("keeps the evaluator refinement block on semantic design tokens", () => {
     const css = readFileSync(
       fileURLToPath(new URL("./review-workspace.module.css", import.meta.url)),
