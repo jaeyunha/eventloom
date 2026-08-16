@@ -442,11 +442,10 @@ function PublicCfpShell({
               <div className={styles.submissionWindow}>
                 <CfpSubmissionWindow
                   opensAt={event.opensAt}
-                  opensLabel={formatCfpWindowDate(event.opensAt, event.timezone)}
                   closesAt={event.closesAt}
-                  closesLabel={formatCfpWindowDate(event.closesAt, event.timezone)}
                   {...(form ? { limit: formSubmissionLimit(form) } : {})}
                   status={windowStatus}
+                  timeZone={event.timezone}
                 />
               </div>
             ) : null}
