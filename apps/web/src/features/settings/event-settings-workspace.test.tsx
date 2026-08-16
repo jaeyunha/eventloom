@@ -518,6 +518,7 @@ describe("event settings view", () => {
     expect(output).toContain("Change history");
     expect(output).toContain("Session statuses");
     expect(output).toContain("Updated");
+    expect(output).toContain('data-change-kind="updated"');
     expect(output).toContain("Summit 2026");
     expect(output).toContain("Organization org_a · Public slug summit-2026");
     expect(output).not.toContain("Organization org_a · Event event-a");

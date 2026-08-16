@@ -1,7 +1,6 @@
 .workspace {
   --admin-settings-navigation-width: 12.5rem;
   --admin-settings-content-width: 48rem;
-  --admin-settings-wide-width: 62rem;
   display: grid;
   min-width: 0;
   gap: var(--admin-space-4);
@@ -526,10 +525,11 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 1rem;
   align-items: center;
-  padding: 0.78rem;
+  padding: 0.82rem;
   border: 0;
   background: transparent;
   color: inherit;
+  cursor: pointer;
   font: inherit;
   text-align: left;
 }
@@ -544,7 +544,6 @@
   box-shadow: inset 0 0 0 2px var(--admin-brand-strong);
 }
 
-.auditEntryMain,
 .auditEntryMeta {
   display: flex;
   min-width: 0;
@@ -552,42 +551,102 @@
 }
 
 .auditEntryMain {
-  gap: 0.55rem;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 1.8rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
 }
 
-.auditEntryMain strong {
+.auditChangeMarker {
+  display: grid;
+  width: 1.8rem;
+  height: 1.8rem;
+  place-items: center;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-brand-soft);
+  color: var(--admin-brand-strong);
+  font-size: 0.82rem;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.auditEntry[data-change-kind="created"] .auditChangeMarker,
+.revisionSummary[data-change-kind="created"] .auditChangeMarker {
+  border-color: color-mix(in srgb, var(--admin-accent) 28%, var(--admin-border));
+  background: var(--admin-accent-soft);
+  color: var(--admin-accent);
+}
+
+.auditEntry[data-change-kind="deleted"] .auditChangeMarker,
+.revisionSummary[data-change-kind="deleted"] .auditChangeMarker {
+  border-color: color-mix(in srgb, var(--admin-danger) 28%, var(--admin-border));
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger);
+}
+
+.auditEntryCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.auditEntryHeading {
+  display: flex;
+  min-width: 0;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.auditEntryHeading strong {
   overflow: hidden;
   color: var(--admin-ink);
-  font-size: 0.8rem;
+  font-size: var(--admin-text-body);
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.auditEntryMain > span:last-child {
+.auditEntrySummary {
   overflow: hidden;
   color: var(--admin-muted);
-  font-size: 0.72rem;
+  font-size: var(--admin-text-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .auditDomain {
   flex: 0 0 auto;
-  padding: 0.14rem 0.42rem;
-  border: 1px solid var(--admin-border);
-  border-radius: 999px;
-  background: var(--admin-canvas);
-  color: var(--admin-muted);
-  font-size: 0.63rem;
-  font-weight: 680;
+  color: var(--admin-subtle);
+  font-size: var(--admin-text-caption);
+  font-weight: 620;
 }
 
 .auditEntryMeta {
   gap: 0.5rem;
+  justify-content: flex-end;
   color: var(--admin-subtle);
-  font-size: 0.68rem;
+  font-size: var(--admin-text-caption);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.auditEntryActor {
+  overflow: hidden;
+  max-width: 11rem;
+  text-overflow: ellipsis;
+}
+
+.auditEntryTime {
+  color: var(--admin-muted);
+}
+
+.auditEntryVersion {
+  color: var(--admin-ink);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.65rem;
+  font-weight: 650;
 }
 
 .auditEntryMeta svg {
@@ -596,6 +655,20 @@
 }
 
 .revisionSheet {
+  --admin-surface: var(--card);
+  --admin-canvas: color-mix(in srgb, var(--muted) 52%, var(--card));
+  --admin-ink: var(--foreground);
+  --admin-muted: var(--muted-foreground);
+  --admin-subtle: color-mix(in srgb, var(--muted-foreground) 78%, transparent);
+  --admin-border: var(--border);
+  --admin-brand-soft: var(--accent);
+  --admin-brand-strong: var(--accent-foreground);
+  --admin-accent: var(--success);
+  --admin-accent-soft: var(--success-surface);
+  --admin-danger: var(--failure);
+  --admin-danger-soft: var(--failure-surface);
+  --admin-radius-sm: calc(var(--radius) - 0.2rem);
+  --admin-text-caption: 0.6875rem;
   width: min(34rem, 100vw);
   max-width: 34rem;
   overflow-y: auto;
@@ -606,12 +679,19 @@
   gap: 1rem;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem;
+  padding: 0.8rem;
   border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius-sm);
   background: var(--admin-canvas);
   color: var(--admin-muted);
   font-size: 0.76rem;
+}
+
+.revisionSummaryStatus {
+  display: flex;
+  min-width: 0;
+  gap: 0.65rem;
+  align-items: center;
 }
 
 .revisionSummary,
@@ -674,21 +754,42 @@
 
 .revisionBefore,
 .revisionAfter {
-  padding: 0.42rem 0.5rem;
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.52rem 0.58rem;
+  border: 1px solid transparent;
   border-radius: var(--admin-radius-sm);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.7rem;
   overflow-wrap: anywhere;
 }
 
 .revisionBefore {
+  border-color: color-mix(in srgb, var(--admin-danger) 24%, var(--admin-border));
   background: var(--admin-danger-soft);
   color: var(--admin-danger);
 }
 
 .revisionAfter {
-  background: var(--admin-brand-soft);
-  color: var(--admin-brand-strong);
+  border-color: color-mix(in srgb, var(--admin-accent) 24%, var(--admin-border));
+  background: var(--admin-accent-soft);
+  color: var(--admin-accent);
+}
+
+.revisionValueLabel {
+  display: flex;
+  gap: 0.28rem;
+  align-items: center;
+  font-size: var(--admin-text-caption);
+  font-weight: 720;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.revisionValueText {
+  color: var(--admin-ink);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 
 .revisionTechnical {
@@ -809,20 +910,27 @@
     gap: 0.55rem;
   }
 
-  .auditEntryMain,
-  .auditEntryMeta {
-    flex-wrap: wrap;
+  .auditEntryHeading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.08rem;
   }
 
-  .auditEntryMain > span:last-child {
-    flex-basis: 100%;
+  .auditEntrySummary {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
   }
 
   .auditEntryMeta {
-    justify-content: space-between;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    padding-left: 2.45rem;
+    white-space: normal;
+  }
+
+  .auditEntryActor {
+    max-width: min(12rem, 100%);
   }
 
   .revisionSheet {

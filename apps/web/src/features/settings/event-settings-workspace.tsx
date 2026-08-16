@@ -72,6 +72,7 @@ import {
   type TaxonomyInput,
 } from "./api";
 import {
+  type EventSettingsAuditPresentation,
   eventSettingsAuditDiff,
   eventSettingsAuditPresentation,
   settingsOnlyAuditEntries,
@@ -1344,6 +1345,22 @@ function auditTimestamp(value: string): string {
   }).format(new Date(value));
 }
 
+function auditChangeLabel(
+  changeKind: EventSettingsAuditPresentation["changeKind"],
+): "Created" | "Updated" | "Deleted" {
+  if (changeKind === "created") return "Created";
+  if (changeKind === "deleted") return "Deleted";
+  return "Updated";
+}
+
+function auditChangeSymbol(
+  changeKind: EventSettingsAuditPresentation["changeKind"],
+): "+" | "−" | "•" {
+  if (changeKind === "created") return "+";
+  if (changeKind === "deleted") return "−";
+  return "•";
+}
+
 function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEntry[] }>) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState("all");
@@ -1372,6 +1389,11 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
       aria-labelledby="history-heading"
       title="Change history"
       description="Review audited configuration changes without mixing in ordinary session activity."
+      metadata={
+        entries.length === filteredEntries.length
+          ? `${entries.length} changes`
+          : `${filteredEntries.length} of ${entries.length} changes`
+      }
     >
       <div className={styles.historyToolbar}>
         <Label className={styles.historySearch} htmlFor="settings-history-search">
@@ -1410,17 +1432,36 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
           {filteredEntries.map((entry) => {
             const presentation = eventSettingsAuditPresentation(entry);
             return (
-              <li key={entry.id} className={styles.auditEntry}>
-                <button type="button" onClick={() => setSelectedId(entry.id)}>
+              <li
+                key={entry.id}
+                className={styles.auditEntry}
+                data-change-kind={presentation.changeKind}
+              >
+                <button
+                  type="button"
+                  aria-label={`View ${presentation.entityLabel} ${auditChangeLabel(
+                    presentation.changeKind,
+                  ).toLowerCase()} revision`}
+                  onClick={() => setSelectedId(entry.id)}
+                >
                   <span className={styles.auditEntryMain}>
-                    <span className={styles.auditDomain}>{presentation.domain}</span>
-                    <strong>{presentation.entityLabel}</strong>
-                    <span>{presentation.summary}</span>
+                    <span className={styles.auditChangeMarker} aria-hidden>
+                      {auditChangeSymbol(presentation.changeKind)}
+                    </span>
+                    <span className={styles.auditEntryCopy}>
+                      <span className={styles.auditEntryHeading}>
+                        <strong>{presentation.entityLabel}</strong>
+                        <span className={styles.auditDomain}>{presentation.domain}</span>
+                      </span>
+                      <span className={styles.auditEntrySummary}>{presentation.summary}</span>
+                    </span>
                   </span>
                   <span className={styles.auditEntryMeta}>
-                    <span>{actorLabel(entry.actorId)}</span>
-                    <time dateTime={entry.occurredAt}>{auditTimestamp(entry.occurredAt)}</time>
-                    <span>{presentation.versionLabel}</span>
+                    <span className={styles.auditEntryActor}>{actorLabel(entry.actorId)}</span>
+                    <time className={styles.auditEntryTime} dateTime={entry.occurredAt}>
+                      {auditTimestamp(entry.occurredAt)}
+                    </time>
+                    <span className={styles.auditEntryVersion}>{presentation.versionLabel}</span>
                     <ChevronRight aria-hidden />
                   </span>
                 </button>
@@ -1439,14 +1480,25 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
           {selectedEntry && selectedPresentation ? (
             <>
               <SheetHeader>
-                <SheetTitle>{selectedPresentation.entityLabel} updated</SheetTitle>
+                <SheetTitle>
+                  {selectedPresentation.entityLabel}{" "}
+                  {auditChangeLabel(selectedPresentation.changeKind).toLowerCase()}
+                </SheetTitle>
                 <SheetDescription>
                   {selectedPresentation.domain} · {actorLabel(selectedEntry.actorId)} ·{" "}
                   {auditTimestamp(selectedEntry.occurredAt)}
                 </SheetDescription>
               </SheetHeader>
-              <div className={styles.revisionSummary}>
-                <span>{selectedPresentation.summary}</span>
+              <div
+                className={styles.revisionSummary}
+                data-change-kind={selectedPresentation.changeKind}
+              >
+                <span className={styles.revisionSummaryStatus}>
+                  <span className={styles.auditChangeMarker} aria-hidden>
+                    {auditChangeSymbol(selectedPresentation.changeKind)}
+                  </span>
+                  <span>{selectedPresentation.summary}</span>
+                </span>
                 <strong>{selectedPresentation.versionLabel}</strong>
               </div>
               <div className={styles.revisionDiff}>
@@ -1459,8 +1511,20 @@ function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEn
                       <div key={change.field}>
                         <dt>{change.field}</dt>
                         <dd>
-                          <span className={styles.revisionBefore}>− {change.before}</span>
-                          <span className={styles.revisionAfter}>+ {change.after}</span>
+                          <span className={styles.revisionBefore}>
+                            <span className={styles.revisionValueLabel}>
+                              <span aria-hidden>−</span>
+                              Before
+                            </span>
+                            <span className={styles.revisionValueText}>{change.before}</span>
+                          </span>
+                          <span className={styles.revisionAfter}>
+                            <span className={styles.revisionValueLabel}>
+                              <span aria-hidden>+</span>
+                              After
+                            </span>
+                            <span className={styles.revisionValueText}>{change.after}</span>
+                          </span>
                         </dd>
                       </div>
                     ))}
@@ -1571,7 +1635,6 @@ export function EventSettingsWorkspaceView({
               section={section}
             />
           }
-          wide={section === "history"}
         >
           {header}
           <div className="sr-only" role="status" aria-live="polite">
