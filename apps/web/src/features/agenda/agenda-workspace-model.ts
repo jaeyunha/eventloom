@@ -1,3 +1,4 @@
+import type { NavigationDataCache } from "@/lib/navigation-data-cache";
 import { type AgendaApi, createAgendaApi } from "./api";
 import { agendaDays, eventDates, formatLocalDate } from "./model";
 import type { AgendaEntry, AgendaWorkspaceData } from "./types";
@@ -184,6 +185,54 @@ export async function loadCanonicalAgendaWorkspace(
   signal?: AbortSignal,
 ): Promise<AgendaWorkspaceLoadResult> {
   return { api, data: await api.getWorkspace(eventId, signal) };
+}
+
+export function agendaWorkspaceCacheKey(organizationId: string, eventId: string): string {
+  return `agenda:workspace:${organizationId.trim()}:${eventId.trim()}`;
+}
+
+export function agendaWorkspaceCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `agenda:${normalizedEventId}`,
+  ];
+}
+
+function agendaWorkspaceAbortedError(): DOMException {
+  return new DOMException("The agenda request was aborted.", "AbortError");
+}
+
+export async function loadCanonicalAgendaWorkspaceWithCache(
+  api: AgendaApi,
+  eventId: string,
+  cache: NavigationDataCache | null,
+  key: string,
+  tags: readonly string[],
+  signal?: AbortSignal,
+  fresh = false,
+): Promise<AgendaWorkspaceLoadResult> {
+  const load = async (requestSignal?: AbortSignal): Promise<AgendaWorkspaceData> => {
+    const loaded = await loadCanonicalAgendaWorkspace(api, eventId, requestSignal);
+    if (requestSignal?.aborted) throw agendaWorkspaceAbortedError();
+    if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
+      throw new Error("The agenda response belongs to another event.");
+    }
+    return loaded.data;
+  };
+  const data =
+    cache === null
+      ? await load(signal)
+      : await cache.read({ key, tags, load: () => load(), fresh });
+  if (!agendaWorkspaceDataMatchesEvent(data, eventId)) {
+    throw new Error("The agenda response belongs to another event.");
+  }
+  return { api, data };
 }
 
 export interface AgendaAsyncScopeToken {

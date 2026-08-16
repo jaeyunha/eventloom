@@ -8,7 +8,13 @@ import {
   type RemixContentRevision,
   type RemixFetcher,
 } from "./api";
-import { allowedContentForApply, candidateIsStale, RemixWorkspace } from "./remix-workspace";
+import {
+  allowedContentForApply,
+  candidateIsStale,
+  RemixWorkspace,
+  remixNavigationCacheKey,
+  remixNavigationCacheTags,
+} from "./remix-workspace";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -225,6 +231,19 @@ describe("remix workspace", () => {
     expect(markup).toContain('data-state="remix-unavailable"');
     expect(markup).not.toContain('data-workflow="remix-composer"');
     expect(markup).not.toContain("candidate-local");
+  });
+  it("normalizes remix cache scope keys and isolates resource tags", () => {
+    expect(remixNavigationCacheKey(" org-1 ", " event-1 ", "session")).toBe(
+      "organization:org-1:event:event-1:remix:workspace:session",
+    );
+    expect(remixNavigationCacheKey("org-1", "event-2", "session")).not.toBe(
+      remixNavigationCacheKey("org-1", "event-1", "session"),
+    );
+    expect(remixNavigationCacheTags(" org-1 ", " event-1 ")).toEqual([
+      "organization:org-1",
+      "event:event-1",
+      "remix:event-1",
+    ]);
   });
 
   it("keeps an injected API workspace available without using local demo state", () => {

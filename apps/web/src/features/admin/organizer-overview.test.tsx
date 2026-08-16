@@ -14,7 +14,12 @@ import {
   qualifiedEventContext,
   sessionHasOrganizerMembership,
 } from "./admin-shell";
-import { OrganizerEventsView, OrganizerOverviewView } from "./organizer-overview";
+import {
+  OrganizerEventsView,
+  OrganizerOverviewView,
+  organizerOverviewCacheKey,
+  organizerOverviewCacheTags,
+} from "./organizer-overview";
 import {
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
@@ -123,6 +128,16 @@ function markup(state: Parameters<typeof OrganizerOverviewView>[0]["state"]): st
 }
 
 describe("organizer overview", () => {
+  it("scopes cached overview reads to the normalized organization", () => {
+    expect(organizerOverviewCacheKey(" org-1 ", "core")).toBe("organizer-overview:org-1:core");
+    expect(organizerOverviewCacheKey("org-2", "core")).not.toBe(
+      organizerOverviewCacheKey("org-1", "core"),
+    );
+    expect(organizerOverviewCacheTags(" org-1 ")).toEqual([
+      "organization:org-1",
+      "organizer-overview:org-1",
+    ]);
+  });
   it("renders the dashboard hierarchy, live metrics, prioritized actions, and event destinations", () => {
     const output = markup({
       status: "loaded",

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,8 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "@/features/admin/admin-shell.module.css";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import type { NavigationDataCache } from "@/lib/navigation-data-cache";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import workspaceStyles from "./embed-workspace.module.css";
 import type {
   EmbedAccent,
@@ -35,7 +38,6 @@ import type {
   EmbedExpectedPublishedRevision,
   EmbedFieldId,
   EmbedLayout,
-  EmbedLoadState,
   EmbedOutputFormat,
   EmbedPublicationMetadata,
   EmbedSnippetSettings,
@@ -84,8 +86,11 @@ export interface EmbedWorkspaceViewProps {
   readonly initialConfigurations?: readonly EmbedConfiguration[];
   readonly api?: Pick<EmbedWorkspaceApi, "updateEvent">;
   readonly publication?: EmbedPublicationMetadata;
+  readonly publicationFresh?: boolean;
   readonly loading?: boolean;
   readonly errorMessage?: string | null;
+  readonly onRetry?: () => void;
+  readonly onEmbedMutation?: () => void;
 }
 
 function CopyButton({ label, value }: Readonly<{ label: string; value: string }>) {
@@ -860,6 +865,118 @@ function CodePanel({
   );
 }
 
+export type EmbedWorkspaceEventSnapshot = Pick<
+  EmbedEventRecord,
+  "id" | "organizationId" | "slug" | "name" | "version" | "embedConfigurations"
+>;
+
+export interface EmbedWorkspaceCacheSnapshot {
+  readonly event: EmbedWorkspaceEventSnapshot;
+  readonly publication?: EmbedPublicationMetadata;
+}
+
+type EmbedWorkspaceLoadState =
+  | { readonly status: "loading"; readonly scopeKey: string }
+  | {
+      readonly status: "loaded";
+      readonly scopeKey: string;
+      readonly event: EmbedWorkspaceEventSnapshot;
+      readonly eventSlug: string;
+      readonly eventName: string;
+    }
+  | { readonly status: "error"; readonly scopeKey: string; readonly message: string };
+type EmbedWorkspaceLoadedState = Extract<EmbedWorkspaceLoadState, { readonly status: "loaded" }>;
+
+interface EmbedWorkspaceCacheScope {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly key: string;
+  readonly tags: readonly string[];
+  readonly invalidationTags: readonly string[];
+}
+
+export function embedWorkspaceCacheKey(organizationId: string, eventId: string): string {
+  return `embeds:workspace:${organizationId.trim()}:${eventId.trim()}`;
+}
+
+export function embedWorkspaceCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `embeds:${normalizedEventId}`,
+  ];
+}
+
+function embedWorkspaceCacheScope(
+  organizationId: string,
+  eventId: string,
+): EmbedWorkspaceCacheScope | null {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  if (!normalizedOrganizationId || !normalizedEventId) return null;
+  const tags = embedWorkspaceCacheTags(normalizedOrganizationId, normalizedEventId);
+  return {
+    organizationId: normalizedOrganizationId,
+    eventId: normalizedEventId,
+    key: embedWorkspaceCacheKey(normalizedOrganizationId, normalizedEventId),
+    tags,
+    invalidationTags: tags.slice(1),
+  };
+}
+
+function embedWorkspaceEventSnapshot(event: EmbedEventRecord): EmbedWorkspaceEventSnapshot {
+  return {
+    id: event.id,
+    organizationId: event.organizationId,
+    slug: event.slug,
+    name: event.name,
+    version: event.version,
+    embedConfigurations: eventEmbedConfigurations(event.embedConfigurations),
+  };
+}
+
+function embedWorkspaceLoadedState(
+  scopeKey: string,
+  snapshot: EmbedWorkspaceCacheSnapshot,
+): EmbedWorkspaceLoadedState | null {
+  const eventSlug = normalizeEmbedSlug(snapshot.event.slug);
+  if (
+    snapshot.event.id.trim().length === 0 ||
+    snapshot.event.organizationId.trim().length === 0 ||
+    eventSlug === null
+  ) {
+    return null;
+  }
+  return {
+    status: "loaded",
+    scopeKey,
+    event: snapshot.event,
+    eventSlug,
+    eventName: snapshot.event.name,
+  };
+}
+
+function cachedEmbedWorkspaceSnapshot(
+  cache: NavigationDataCache | null,
+  scope: EmbedWorkspaceCacheScope | null,
+): EmbedWorkspaceCacheSnapshot | undefined {
+  if (cache === null || scope === null) return undefined;
+  const snapshot = cache.peek<EmbedWorkspaceCacheSnapshot>(scope.key);
+  if (
+    snapshot === undefined ||
+    snapshot.event.id.trim() !== scope.eventId ||
+    snapshot.event.organizationId.trim() !== scope.organizationId ||
+    embedWorkspaceLoadedState(scope.key, snapshot) === null
+  ) {
+    return undefined;
+  }
+  return snapshot;
+}
 function agendaValidationHref(organizationId: string, eventId: string): string {
   return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`;
 }
@@ -925,7 +1042,9 @@ function MissingPublicProjection({
       <EmptyContent>
         {!checking && !needsConfiguration ? (
           <Button asChild size="sm">
-            <a href={agendaValidationHref(organizationId, eventId)}>Review and publish agenda</a>
+            <Link href={agendaValidationHref(organizationId, eventId)}>
+              Review and publish agenda
+            </Link>
           </Button>
         ) : null}
         <p className={workspaceStyles.muted}>
@@ -947,10 +1066,18 @@ export function EmbedWorkspaceView({
   initialConfigurations,
   api,
   publication,
+  publicationFresh = true,
   loading = false,
   errorMessage = null,
+  onRetry,
+  onEmbedMutation,
 }: EmbedWorkspaceViewProps) {
   const scopeKey = workspaceScopeKey(organizationId, eventId);
+  const navigationCache = useNavigationDataCache();
+  const cacheScope = useMemo(
+    () => embedWorkspaceCacheScope(organizationId, eventId),
+    [eventId, organizationId],
+  );
   const serverConfigurationList = useMemo(
     () => eventEmbedConfigurations(initialConfigurations),
     [initialConfigurations],
@@ -1103,6 +1230,8 @@ export function EmbedWorkspaceView({
         setConfigurationStatusMessage("Event configuration transport is unavailable.");
         return false;
       }
+      navigationCache?.invalidate(cacheScope?.invalidationTags ?? []);
+      onEmbedMutation?.();
 
       setPersistenceBusy(true);
       setConfigurationStatusMessage("Saving event configuration…");
@@ -1125,6 +1254,13 @@ export function EmbedWorkspaceView({
         installedConfigurationScopeRef.current = requestScopeKey;
         setConfigurations(authoritativeConfigurations);
         setEventVersionState(updatedEvent.version);
+        if (navigationCache !== null && cacheScope !== null) {
+          navigationCache.write(
+            cacheScope.key,
+            { event: embedWorkspaceEventSnapshot(updatedEvent) },
+            cacheScope.tags,
+          );
+        }
         setSnapshotScopeKey(requestScopeKey);
         return true;
       } catch (error) {
@@ -1138,11 +1274,14 @@ export function EmbedWorkspaceView({
     },
     [
       api,
+      cacheScope,
       errorMessage,
       eventId,
       eventVersionState,
       loading,
       organizationId,
+      navigationCache,
+      onEmbedMutation,
       scopeKey,
       snapshotScopeKey,
     ],
@@ -1291,18 +1430,21 @@ export function EmbedWorkspaceView({
     trackIds,
     widget,
   ]);
+  const publicationIsChecking = loading || !publicationFresh;
   const authoritativePublication =
-    snapshotScopeKey === scopeKey && !loading && !errorMessage ? publication : undefined;
+    snapshotScopeKey === scopeKey && !loading && !errorMessage && publicationFresh
+      ? publication
+      : undefined;
   const publicationState: EmbedPublicationMetadata = authoritativePublication ?? {
     state: null,
-    status: loading ? "loading" : "none",
+    status: publicationIsChecking ? "loading" : "none",
     servedRevision: null,
     pendingRevision: null,
     failedReason: null,
     agendaDraftVersion: null,
     publicRevision: null,
-    previewAvailability: loading ? "checking" : "unavailable",
-    message: loading
+    previewAvailability: publicationIsChecking ? "checking" : "unavailable",
+    message: publicationIsChecking
       ? "Loading the current organizer publication state."
       : "No publication has been confirmed for this event.",
   };
@@ -1374,6 +1516,11 @@ export function EmbedWorkspaceView({
         <Alert variant="destructive">
           <AlertTitle>Embed workspace unavailable</AlertTitle>
           <AlertDescription>{errorMessage}</AlertDescription>
+          {onRetry !== undefined ? (
+            <Button type="button" variant="outline" onClick={onRetry}>
+              Retry loading event
+            </Button>
+          ) : null}
         </Alert>
       ) : null}
       {!loading && !errorMessage && !normalizedSlug ? (
@@ -1526,71 +1673,155 @@ export function EmbedWorkspace({
   publicOrigin,
 }: EmbedWorkspaceProps) {
   const eventId = useOrganizerEventId(fallbackEventId);
-  const scopeKey = workspaceScopeKey(organizationId, eventId);
-  const [state, setState] = useState<EmbedLoadState>({ status: "loading", scopeKey });
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  const scopeKey = workspaceScopeKey(normalizedOrganizationId, normalizedEventId);
+  const navigationCache = useNavigationDataCache();
+  const cacheScope = useMemo(
+    () => embedWorkspaceCacheScope(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const cachedSnapshot = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
+  const [state, setState] = useState<EmbedWorkspaceLoadState>(() => {
+    const cachedState =
+      cachedSnapshot === undefined ? null : embedWorkspaceLoadedState(scopeKey, cachedSnapshot);
+    return cachedState ?? { status: "loading", scopeKey };
+  });
   const [loadedApi, setLoadedApi] = useState<Pick<
     EmbedWorkspaceApi,
     "getEvent" | "updateEvent" | "getPublication"
   > | null>(providedApi ?? null);
-  const [publication, setPublication] = useState<EmbedPublicationMetadata | undefined>();
+  const [publication, setPublication] = useState<EmbedPublicationMetadata | undefined>(
+    () => cachedSnapshot?.publication,
+  );
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [publicationFresh, setPublicationFresh] = useState(false);
+  const [publicationRefreshNonce, setPublicationRefreshNonce] = useState(0);
+  const publicationCacheGenerationRef = useRef(0);
+  const currentScopeRef = useRef(scopeKey);
+  useLayoutEffect(() => {
+    currentScopeRef.current = scopeKey;
+  }, [scopeKey]);
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!organizationId.trim() || !eventId.trim()) {
+    async (signal?: AbortSignal, fresh = false) => {
+      const requestScopeKey = scopeKey;
+      if (!normalizedOrganizationId || !normalizedEventId) {
         setState({
           status: "error",
-          scopeKey,
+          scopeKey: requestScopeKey,
           message: "An organization and event context are required.",
         });
         return;
       }
+
       let api = providedApi;
       if (!api) {
         try {
-          api = createEmbedWorkspaceApi(organizationId);
+          api = createEmbedWorkspaceApi(normalizedOrganizationId);
         } catch (error) {
-          setState({ status: "error", scopeKey, message: messageFrom(error) });
+          if (!signal?.aborted && currentScopeRef.current === requestScopeKey) {
+            setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
+          }
           return;
         }
       }
       setLoadedApi(api);
-      setState({ status: "loading", scopeKey });
-      try {
-        const event = await api.getEvent(eventId, signal);
-        if (signal?.aborted) return;
-        if (event.organizationId !== organizationId || event.id !== eventId) {
+
+      const cachedAtStart = cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope);
+      if (fresh && navigationCache !== null && cacheScope !== null) {
+        navigationCache.invalidate(cacheScope.invalidationTags);
+      }
+      if (fresh) {
+        setPublicationFresh(false);
+        setPublication(
+          publicationMetadataFromState(
+            null,
+            "loading",
+            "Loading the current organizer publication state.",
+          ),
+        );
+      }
+      if (fresh || cachedAtStart === undefined) {
+        setState({ status: "loading", scopeKey: requestScopeKey });
+      }
+
+      const loadEvent = async (
+        requestSignal?: AbortSignal,
+      ): Promise<EmbedWorkspaceCacheSnapshot> => {
+        const event = await api.getEvent(normalizedEventId, requestSignal);
+        if (requestSignal?.aborted) {
+          throw new DOMException("The request was aborted.", "AbortError");
+        }
+        if (event.organizationId !== normalizedOrganizationId || event.id !== normalizedEventId) {
           throw new Error(
             "The organizer event response does not match this organization and event context.",
           );
         }
-        const resolvedSlug = normalizeEmbedSlug(event.slug);
-        if (!resolvedSlug) throw new Error("The organizer event has no public slug.");
-        setState({
-          status: "loaded",
-          scopeKey,
-          event,
-          eventSlug: resolvedSlug,
-          eventName: event.name,
-        });
+        const eventSnapshot = embedWorkspaceEventSnapshot(event);
+        const cachedPublication = fresh ? undefined : cachedAtStart?.publication;
+        return cachedPublication === undefined
+          ? { event: eventSnapshot }
+          : { event: eventSnapshot, publication: cachedPublication };
+      };
+
+      try {
+        const snapshot =
+          navigationCache !== null && cacheScope !== null
+            ? await navigationCache.read<EmbedWorkspaceCacheSnapshot>({
+                key: cacheScope.key,
+                tags: cacheScope.tags,
+                load: () => loadEvent(),
+                ...(fresh ? { fresh: true } : {}),
+              })
+            : await loadEvent(signal);
+        if (signal?.aborted || currentScopeRef.current !== requestScopeKey) return;
+        if (
+          snapshot.event.organizationId !== normalizedOrganizationId ||
+          snapshot.event.id !== normalizedEventId
+        ) {
+          throw new Error("The cached organizer event response does not match this context.");
+        }
+        const loadedState = embedWorkspaceLoadedState(requestScopeKey, snapshot);
+        if (loadedState === null) {
+          throw new Error("The organizer event has no public slug.");
+        }
+        setState(loadedState);
+        if (snapshot.publication !== undefined) setPublication(snapshot.publication);
       } catch (error) {
-        if (signal?.aborted) return;
-        setState({ status: "error", scopeKey, message: messageFrom(error) });
+        if (signal?.aborted || currentScopeRef.current !== requestScopeKey) return;
+        setState({ status: "error", scopeKey: requestScopeKey, message: messageFrom(error) });
       }
     },
-    [eventId, organizationId, providedApi, scopeKey],
+    [
+      cacheScope,
+      navigationCache,
+      normalizedEventId,
+      normalizedOrganizationId,
+      providedApi,
+      scopeKey,
+    ],
   );
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
+    void load(controller.signal, reloadNonce > 0);
     return () => controller.abort();
-  }, [load]);
+  }, [load, reloadNonce]);
+
+  const retry = useCallback(() => {
+    setReloadNonce((value) => value + 1);
+  }, []);
+
   useEffect(() => {
+    void publicationRefreshNonce;
     if (state.scopeKey !== scopeKey) {
+      setPublicationFresh(false);
       setPublication(undefined);
       return;
     }
     if (state.status !== "loaded") {
+      setPublicationFresh(false);
       if (state.status === "loading") {
         setPublication(
           publicationMetadataFromState(
@@ -1606,6 +1837,8 @@ export function EmbedWorkspace({
     }
 
     const controller = new AbortController();
+    const cacheGeneration = publicationCacheGenerationRef.current;
+    setPublicationFresh(false);
     setPublication(
       publicationMetadataFromState(
         null,
@@ -1614,12 +1847,40 @@ export function EmbedWorkspace({
       ),
     );
     if (loadedApi === null) return () => controller.abort();
-    void loadEmbedPublication(loadedApi, eventId, controller.signal).then(
+    void loadEmbedPublication(loadedApi, normalizedEventId, controller.signal).then(
       (nextPublication) => {
-        if (!controller.signal.aborted) setPublication(nextPublication);
+        if (
+          controller.signal.aborted ||
+          currentScopeRef.current !== scopeKey ||
+          publicationCacheGenerationRef.current !== cacheGeneration
+        ) {
+          return;
+        }
+        setPublication(nextPublication);
+        setPublicationFresh(true);
+        if (
+          navigationCache !== null &&
+          cacheScope !== null &&
+          nextPublication.status !== "unavailable"
+        ) {
+          navigationCache.write(
+            cacheScope.key,
+            {
+              event:
+                cachedEmbedWorkspaceSnapshot(navigationCache, cacheScope)?.event ?? state.event,
+              publication: nextPublication,
+            },
+            cacheScope.tags,
+          );
+        }
       },
       () => {
-        if (!controller.signal.aborted) {
+        if (
+          !controller.signal.aborted &&
+          currentScopeRef.current === scopeKey &&
+          publicationCacheGenerationRef.current === cacheGeneration
+        ) {
+          setPublicationFresh(true);
           setPublication(
             publicationMetadataFromState(
               null,
@@ -1631,18 +1892,41 @@ export function EmbedWorkspace({
       },
     );
     return () => controller.abort();
-  }, [eventId, loadedApi, scopeKey, state]);
+  }, [
+    cacheScope,
+    loadedApi,
+    navigationCache,
+    normalizedEventId,
+    publicationRefreshNonce,
+    scopeKey,
+    state,
+  ]);
 
-  const eventLoaded = state.scopeKey === scopeKey && state.status === "loaded" ? state : null;
-  const isLoading = state.scopeKey !== scopeKey || state.status === "loading";
+  const eventLoaded =
+    state.scopeKey === scopeKey && state.status === "loaded"
+      ? state
+      : cachedSnapshot === undefined
+        ? null
+        : embedWorkspaceLoadedState(scopeKey, cachedSnapshot);
+  const scopedPublication = state.scopeKey === scopeKey ? publication : cachedSnapshot?.publication;
+  const isLoading =
+    eventLoaded === null && state.scopeKey === scopeKey
+      ? true
+      : state.scopeKey !== scopeKey
+        ? cachedSnapshot === undefined
+        : state.status === "loading";
   const errorMessage =
     state.scopeKey === scopeKey && state.status === "error" ? state.message : null;
+  const onEmbedMutation = useCallback(() => {
+    publicationCacheGenerationRef.current += 1;
+    setPublicationRefreshNonce((value) => value + 1);
+  }, []);
 
   return (
     <EmbedWorkspaceView
       key={scopeKey}
-      organizationId={organizationId}
-      eventId={eventId}
+      organizationId={normalizedOrganizationId}
+      eventId={normalizedEventId}
       eventSlug={eventLoaded?.eventSlug ?? null}
       eventName={eventLoaded?.eventName ?? ""}
       eventVersion={eventLoaded?.event.version ?? null}
@@ -1651,11 +1935,14 @@ export function EmbedWorkspace({
             initialConfigurations: eventLoaded.event.embedConfigurations,
           }
         : {})}
-      {...(state.scopeKey === scopeKey && publication !== undefined ? { publication } : {})}
+      publicationFresh={publicationFresh}
+      {...(scopedPublication !== undefined ? { publication: scopedPublication } : {})}
       {...(loadedApi === null ? {} : { api: loadedApi })}
       {...(publicOrigin === undefined ? {} : { publicOrigin })}
       loading={isLoading}
       errorMessage={errorMessage}
+      onRetry={retry}
+      onEmbedMutation={onEmbedMutation}
     />
   );
 }

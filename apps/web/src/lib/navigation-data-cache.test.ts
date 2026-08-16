@@ -82,7 +82,6 @@ describe("navigation data cache", () => {
     const second = cache.read({ key: "overview", tags: ["event:event-1"], load });
 
     expect(second).toBe(first);
-    await Promise.resolve();
     expect(starts).toBe(1);
     result.resolve("loaded");
     await expect(first).resolves.toBe("loaded");
@@ -115,10 +114,14 @@ describe("navigation data cache", () => {
       return revision;
     };
 
-    await expect(cache.read({ key: "overview", tags: ["event:event-1"], load })).resolves.toBe(1);
-    await expect(cache.read({ key: "overview", tags: ["event:event-1"], load })).resolves.toBe(1);
     await expect(
-      cache.read({ key: "overview", tags: ["event:event-1"], load, fresh: true }),
+      cache.read<number>({ key: "overview", tags: ["event:event-1"], load }),
+    ).resolves.toBe(1);
+    await expect(
+      cache.read<number>({ key: "overview", tags: ["event:event-1"], load }),
+    ).resolves.toBe(1);
+    await expect(
+      cache.read<number>({ key: "overview", tags: ["event:event-1"], load, fresh: true }),
     ).resolves.toBe(2);
     expect(cache.peek<number>("overview")).toBe(2);
   });
@@ -168,6 +171,21 @@ describe("navigation data cache", () => {
     await expect(newRead).resolves.toBe("new");
     expect(cache.peek("event")).toBe("new");
     expect(starts).toBe(2);
+  });
+
+  it("keeps authoritative writes ahead of older pending reads", async () => {
+    const cache = createNavigationDataCache();
+    const pendingResult = deferred<string>();
+    const pendingRead = cache.read<string>({
+      key: "event",
+      tags: ["event:event-1"],
+      load: () => pendingResult.promise,
+    });
+
+    cache.write("event", "authoritative", ["event:event-1"]);
+    pendingResult.resolve("stale");
+    await expect(pendingRead).resolves.toBe("stale");
+    expect(cache.peek("event")).toBe("authoritative");
   });
 
   it("clears completed and pending data", async () => {

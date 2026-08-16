@@ -1,7 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { OrganizerEventWorkspaceProvider } from "@/features/admin/organizer-event-workspace";
 import { EventOverviewContent } from "./event-overview-content";
 import {
   type EventOverviewData,
@@ -201,22 +200,11 @@ describe("EventOverviewWorkspace", () => {
     const eventSlug = "public-event-slug";
     const base = `/admin/organizations/organization-1/events/${eventId}`;
     const markup = renderToStaticMarkup(
-      createElement(
-        OrganizerEventWorkspaceProvider,
-        {
-          event: {
-            id: eventId,
-            name: overviewData.event.name,
-            slug: eventSlug,
-          },
-          organizationId: "organization-1",
-        },
-        createElement(EventOverviewContent, {
-          data: overviewData,
-          eventId,
-          organizationId: "organization-1",
-        }),
-      ),
+      createElement(EventOverviewContent, {
+        data: overviewData,
+        eventId,
+        organizationId: "organization-1",
+      }),
     );
 
     expect(markup).toContain(`href="${base}/submissions"`);

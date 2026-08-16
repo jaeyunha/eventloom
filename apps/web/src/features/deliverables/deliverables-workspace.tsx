@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createDeliverablesApi,
   type DeliverableAsset,
@@ -87,15 +88,10 @@ import {
   type DeliverableTaskMatrix,
   deliverableAssetKinds,
 } from "./api";
-import {
-  type ContentCollectionNavigationCacheScope,
-  createContentCollectionNavigationCache,
-} from "./content-collection-cache";
 import styles from "./deliverables-workspace.module.css";
 import {
   type ContentRequestFilters,
   type ContentRequestStatusFilter,
-  commitDeliverablesWorkspaceScope,
   contentRequestMetrics,
   type DeliverableRow,
   type DeliverablesSessionHistoryCache,
@@ -137,6 +133,48 @@ const dangerClass = styles.danger;
 const tableWrapClass = styles.tableWrap;
 const statusClass = styles.status;
 
+export type { DeliverablesWorkspaceMode } from "./deliverables-workspace-model";
+export {
+  type DeliverablesExportUiStatus,
+  deliverablesExportActionLabels,
+  deliverablesExportStatusLabels,
+} from "./deliverables-workspace-model";
+
+export function deliverablesCoreCacheKey(
+  organizationId: string,
+  eventId: string,
+  mode: DeliverablesWorkspaceMode,
+): string {
+  return `organization:${organizationId.trim()}:event:${eventId.trim()}:deliverables:${mode}:core`;
+}
+
+export function deliverablesCoreCacheTags(
+  organizationId: string,
+  eventId: string,
+  mode: DeliverablesWorkspaceMode,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}:${mode}`,
+  ];
+}
+
+export function deliverablesCoreCacheInvalidationTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
+  return [
+    `organization:${normalizedOrganizationId}`,
+    `event:${normalizedEventId}`,
+    `deliverables:${normalizedEventId}`,
+  ];
+}
 export type DeliverablesOperationKey =
   | "task-create"
   | "asset-comment"
@@ -173,8 +211,9 @@ export interface DeliverablesSnapshot {
   readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
 }
 
-const contentCollectionNavigationCache =
-  createContentCollectionNavigationCache<DeliverablesSnapshot>();
+type ModeScopedDeliverablesWorkspaceScope = DeliverablesWorkspaceScope & {
+  readonly mode: DeliverablesWorkspaceMode;
+};
 
 export interface DeliverablesWorkspaceProps {
   readonly eventId: string;
@@ -2520,6 +2559,62 @@ export function DeliverablesWorkspaceView({
     </div>
   );
 }
+type DeliverablesCoreSettledResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: unknown };
+
+function requiredDeliverablesCoreValue<T>(
+  result: DeliverablesCoreSettledResult<T> | undefined,
+  resource: string,
+): T {
+  if (result?.ok === true) return result.value;
+  throw result === undefined
+    ? new Error(`The ${resource} core projection was not provisioned.`)
+    : result.reason;
+}
+
+export async function loadDeliverablesCoreSnapshot(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+  signal?: AbortSignal,
+): Promise<DeliverablesSnapshot> {
+  const requests = startDeliverablesCoreRequests(api, mode, signal);
+  const listTasks = api.listTasks;
+  const taskRequest =
+    requests.tasks ??
+    (requests.matrix === undefined && listTasks !== undefined
+      ? startDeliverablesRequest(() => listTasks(signal))
+      : undefined);
+  const listProfiles = api.listProfiles;
+  const profileRequest =
+    requests.profiles ??
+    (listProfiles === undefined ? undefined : startDeliverablesRequest(() => listProfiles(signal)));
+  const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
+    await Promise.all([
+      settleDeliverablesRequest(requests.sessions),
+      settleDeliverablesRequest(requests.matrix),
+      settleDeliverablesRequest(taskRequest),
+      settleDeliverablesRequest(requests.assets),
+      settleDeliverablesRequest(profileRequest),
+    ]);
+
+  const sessions = requiredDeliverablesCoreValue(sessionsResult, "sessions");
+  const matrix =
+    requests.matrix === undefined
+      ? undefined
+      : requiredDeliverablesCoreValue(matrixResult, "deliverables matrix");
+  const tasks =
+    matrix === undefined
+      ? requiredDeliverablesCoreValue(tasksResult, "tasks")
+      : matrix.items.map((item) => item.task);
+  const assets =
+    matrix === undefined || mode === "files"
+      ? requiredDeliverablesCoreValue(assetsResult, "assets")
+      : matrixAssets(matrix);
+  const profiles = requiredDeliverablesCoreValue(profilesResult, "speaker profiles");
+
+  return { sessions, tasks, assets, profiles, ...(matrix === undefined ? {} : { matrix }) };
+}
 
 function matrixAssetsFromItems(
   items: readonly DeliverableMatrixItem[],
@@ -2535,6 +2630,54 @@ function matrixAssetsFromItems(
 function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
   return matrixAssetsFromItems(matrixValue.items);
 }
+function deliverablesCapabilityMessages(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+): readonly string[] {
+  const messages: string[] = [];
+  if (mode === "deliverables") {
+    if (api.replaceHeadshot === undefined)
+      messages.push(
+        "Organizer headshot replacement is unavailable until the private staged-upload endpoint is provisioned.",
+      );
+    if (api.createTask === undefined)
+      messages.push(
+        "Create file-request task is unavailable until an organizer task-management endpoint is provisioned.",
+      );
+    if (api.listSpeakerContentHistory === undefined)
+      messages.push(
+        "Speaker content history is unavailable until the organizer content history endpoint is provisioned.",
+      );
+    if (api.sendBulkReminder === undefined)
+      messages.push(
+        "Bulk reminder sending is unavailable until a transactional reminder endpoint is provisioned.",
+      );
+    if (api.restoreSessionVersion === undefined)
+      messages.push(
+        "Session content restore is unavailable until the version restore endpoint is provisioned.",
+      );
+  }
+  if (api.reviewAsset === undefined)
+    messages.push(
+      "Asset approval and needs-changes decisions are unavailable until organizer asset review is provisioned.",
+    );
+  if (api.exportDeliverables === undefined)
+    messages.push(
+      `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
+    );
+  return messages;
+}
+
+function canLoadDeliverablesCoreSnapshot(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+): boolean {
+  if (api.listProfiles === undefined) return false;
+  if (api.listDeliverableMatrix !== undefined) {
+    return mode !== "files" || api.listAssets !== undefined;
+  }
+  return api.listTasks !== undefined && api.listAssets !== undefined;
+}
 
 export function DeliverablesWorkspace({
   eventId: fallbackEventId,
@@ -2548,57 +2691,77 @@ export function DeliverablesWorkspace({
     () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
     [eventId, organizationId, providedApi],
   );
-  const currentScope = useMemo<DeliverablesWorkspaceScope>(
-    () => ({
+  const navigationDataCache = useNavigationDataCache();
+  const coreCacheKey = useMemo(
+    () => deliverablesCoreCacheKey(organizationId, eventId, mode),
+    [eventId, mode, organizationId],
+  );
+  const coreCacheTags = useMemo(
+    () => deliverablesCoreCacheTags(organizationId, eventId, mode),
+    [eventId, mode, organizationId],
+  );
+  const cachedCoreDataAtRender =
+    initialData === undefined
+      ? navigationDataCache?.peek<DeliverablesSnapshot>(coreCacheKey)
+      : undefined;
+  const cachedCoreDataRef = useRef<{
+    readonly key: string;
+    readonly data: DeliverablesSnapshot | undefined;
+  }>({ key: coreCacheKey, data: cachedCoreDataAtRender });
+  if (cachedCoreDataRef.current.key !== coreCacheKey) {
+    cachedCoreDataRef.current = { key: coreCacheKey, data: cachedCoreDataAtRender };
+  }
+  const cachedCoreData = cachedCoreDataRef.current.data;
+  const seededCoreData = initialData ?? cachedCoreData;
+  const scopeRef = useRef<ModeScopedDeliverablesWorkspaceScope>({
+    api,
+    eventId,
+    organizationId,
+    mode,
+    epoch: 0,
+  });
+  if (
+    scopeRef.current.api !== api ||
+    scopeRef.current.eventId !== eventId ||
+    scopeRef.current.organizationId !== organizationId ||
+    scopeRef.current.mode !== mode
+  ) {
+    scopeRef.current = {
       api,
       eventId,
       organizationId,
-      epoch: 0,
-    }),
-    [api, eventId, organizationId],
-  );
-  const scopeRef = useRef<DeliverablesWorkspaceScope>(currentScope);
-  useLayoutEffect(() => {
-    commitDeliverablesWorkspaceScope(currentScope);
-    scopeRef.current = currentScope;
-  }, [currentScope]);
-  const navigationCacheScope = useMemo<ContentCollectionNavigationCacheScope>(
-    () => ({ organizationId, eventId, view: mode }),
-    [eventId, mode, organizationId],
-  );
-  const effectiveInitialData = useMemo(
-    () => initialData ?? contentCollectionNavigationCache.get(navigationCacheScope),
-    [initialData, navigationCacheScope],
-  );
+      mode,
+      epoch: scopeRef.current.epoch + 1,
+    };
+  }
+  const currentScope = scopeRef.current;
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
-    effectiveInitialData?.sessions ?? [],
+    seededCoreData?.sessions ?? [],
   );
-  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(effectiveInitialData?.tasks ?? []);
-  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(
-    effectiveInitialData?.assets ?? [],
-  );
+  const [tasks, setTasks] = useState<readonly DeliverableTask[]>(seededCoreData?.tasks ?? []);
+  const [assets, setAssets] = useState<readonly DeliverableAsset[]>(seededCoreData?.assets ?? []);
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
-    effectiveInitialData?.profiles ?? [],
+    seededCoreData?.profiles ?? [],
   );
   const [speakerContentHistory, setSpeakerContentHistory] = useState<
     Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
   >(() =>
     speakerContentHistoryStatesForProfiles(
-      effectiveInitialData?.profiles ?? [],
-      effectiveInitialData?.speakerContentHistory,
+      seededCoreData?.profiles ?? [],
+      initialData?.speakerContentHistory,
     ),
   );
-  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(
-    effectiveInitialData?.matrix,
-  );
-  const [loading, setLoading] = useState(effectiveInitialData === undefined);
+  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(seededCoreData?.matrix);
+  const [loading, setLoading] = useState(seededCoreData === undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
+  const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>(
+    cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
+  );
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-    effectiveInitialData?.sessions[0]?.id ?? null,
+    seededCoreData?.sessions[0]?.id ?? null,
   );
   const [sessionHistory, setSessionHistory] = useState<
     readonly DeliverableContentHistoryEntry[] | undefined
@@ -2624,20 +2787,22 @@ export function DeliverablesWorkspace({
   useEffect(() => {
     if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
     stateScopeRef.current = currentScope;
-    setSessions(effectiveInitialData?.sessions ?? []);
-    setTasks(effectiveInitialData?.tasks ?? []);
-    setAssets(effectiveInitialData?.assets ?? []);
-    setProfiles(effectiveInitialData?.profiles ?? []);
+    setSessions(seededCoreData?.sessions ?? []);
+    setTasks(seededCoreData?.tasks ?? []);
+    setAssets(seededCoreData?.assets ?? []);
+    setProfiles(seededCoreData?.profiles ?? []);
     setSpeakerContentHistory(
       speakerContentHistoryStatesForProfiles(
-        effectiveInitialData?.profiles ?? [],
-        effectiveInitialData?.speakerContentHistory,
+        seededCoreData?.profiles ?? [],
+        initialData?.speakerContentHistory,
       ),
     );
-    setMatrix(effectiveInitialData?.matrix);
-    setLoading(effectiveInitialData === undefined);
+    setMatrix(seededCoreData?.matrix);
+    setLoading(seededCoreData === undefined);
     setError(null);
-    setCapabilityMessages([]);
+    setCapabilityMessages(
+      cachedCoreData === undefined ? [] : deliverablesCapabilityMessages(api, mode),
+    );
     sessionHistoryCacheRef.current.clear();
     setSelectedSessionId(null);
     setSessionHistory(undefined);
@@ -2653,7 +2818,7 @@ export function DeliverablesWorkspace({
     setBusy(false);
     setStatusMessage(null);
     setOperationStates({});
-  }, [currentScope, effectiveInitialData]);
+  }, [api, cachedCoreData, currentScope, initialData, mode, seededCoreData]);
 
   function recordOperation(
     key: DeliverablesOperationKey,
@@ -2722,17 +2887,29 @@ export function DeliverablesWorkspace({
       return false;
     }
   }
+  function invalidateDeliverablesCoreCache(scope: DeliverablesWorkspaceScope = currentScope): void {
+    navigationDataCache?.invalidate(
+      deliverablesCoreCacheInvalidationTags(scope.organizationId, scope.eventId),
+    );
+    loadGenerationRef.current += 1;
+  }
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
-      const scope: DeliverablesWorkspaceScope = currentScope;
+    async (signal?: AbortSignal, fresh = false) => {
+      const scope: ModeScopedDeliverablesWorkspaceScope = {
+        api,
+        eventId,
+        organizationId,
+        mode,
+        epoch: scopeRef.current.epoch,
+      };
       const generation = loadGenerationRef.current + 1;
       loadGenerationRef.current = generation;
       const isCurrent = (): boolean =>
         !signal?.aborted &&
         loadGenerationRef.current === generation &&
         isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
-      if (effectiveInitialData !== undefined) {
+      if (initialData !== undefined && !fresh) {
         if (isCurrent()) setLoading(false);
         return;
       }
@@ -2741,6 +2918,42 @@ export function DeliverablesWorkspace({
       setError(null);
       setLoadingSessionHistories(false);
       const messages: string[] = [];
+      if (navigationDataCache !== null && canLoadDeliverablesCoreSnapshot(api, mode)) {
+        try {
+          const snapshot = await navigationDataCache.read<DeliverablesSnapshot>({
+            key: coreCacheKey,
+            tags: coreCacheTags,
+            fresh,
+            load: () => loadDeliverablesCoreSnapshot(api, mode),
+          });
+          if (!isCurrent()) return;
+          setSessions(snapshot.sessions);
+          setTasks(snapshot.tasks);
+          setAssets(snapshot.assets);
+          setProfiles(snapshot.profiles);
+          setMatrix(snapshot.matrix);
+          if (mode === "deliverables") {
+            setSpeakerContentHistory(
+              speakerContentHistoryStatesForProfiles(
+                snapshot.profiles,
+                Object.fromEntries(
+                  snapshot.profiles.map((profile) => [
+                    profile.participantId,
+                    speakerContentHistoryLoading(),
+                  ]),
+                ),
+              ),
+            );
+          } else {
+            setSpeakerContentHistory({});
+          }
+          setCapabilityMessages([...deliverablesCapabilityMessages(api, mode)]);
+          setLoading(false);
+          return;
+        } catch {
+          // The uncached path preserves partial projections and capability errors.
+        }
+      }
       try {
         const requests = startDeliverablesCoreRequests(api, mode, signal);
         const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
@@ -2908,37 +3121,46 @@ export function DeliverablesWorkspace({
         if (isCurrent()) setLoading(false);
       }
     },
-    [api, currentScope, effectiveInitialData, mode, refreshSpeakerContentHistory],
+    [
+      api,
+      coreCacheKey,
+      coreCacheTags,
+      eventId,
+      initialData,
+      mode,
+      navigationDataCache,
+      organizationId,
+      refreshSpeakerContentHistory,
+    ],
   );
 
   useEffect(() => {
-    if (effectiveInitialData !== undefined) return;
+    if (initialData !== undefined || cachedCoreData !== undefined) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [effectiveInitialData, load]);
-
+  }, [cachedCoreData, initialData, load]);
   useEffect(() => {
-    if (loading || error !== null) return;
-    contentCollectionNavigationCache.set(navigationCacheScope, {
-      sessions,
-      tasks,
-      assets,
-      profiles,
-      ...(matrix === undefined ? {} : { matrix }),
-      speakerContentHistory,
-    });
-  }, [
-    assets,
-    error,
-    loading,
-    matrix,
-    navigationCacheScope,
-    profiles,
-    sessions,
-    speakerContentHistory,
-    tasks,
-  ]);
+    if (initialData !== undefined || cachedCoreData === undefined || mode === "files") return;
+    const controller = new AbortController();
+    setSpeakerContentHistory(
+      speakerContentHistoryStatesForProfiles(
+        cachedCoreData.profiles,
+        Object.fromEntries(
+          cachedCoreData.profiles.map((profile) => [
+            profile.participantId,
+            speakerContentHistoryLoading(),
+          ]),
+        ),
+      ),
+    );
+    void Promise.all(
+      cachedCoreData.profiles.map((profile) =>
+        refreshSpeakerContentHistory(profile.participantId, controller.signal),
+      ),
+    );
+    return () => controller.abort();
+  }, [cachedCoreData, initialData, mode, refreshSpeakerContentHistory]);
 
   const effectiveSelectedSessionId =
     selectedSessionId ?? sessions.find((session) => session.eventId === eventId)?.id ?? null;
@@ -3087,6 +3309,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.createTask(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setTasks((current) => [...current, next]);
       await refreshMatrix(scope);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
@@ -3128,6 +3351,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.addAssetComment(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       if (selectedAssetIdRef.current === input.assetId) {
         setComments((current) => [...current, next]);
       }
@@ -3285,6 +3509,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.updateSession(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content saved at version ${next.version}.`);
     } catch (reason) {
@@ -3310,6 +3535,7 @@ export function DeliverablesWorkspace({
         contentStatus,
       });
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setSessions((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
@@ -3346,6 +3572,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.updateBiography(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setProfiles((current) =>
         current.map((profile) => (profile.participantId === next.participantId ? next : profile)),
       );
@@ -3410,6 +3637,7 @@ export function DeliverablesWorkspace({
         expectedVersion: currentProfile.version,
       });
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setProfiles((current) =>
         current.map((profile) =>
           profile.participantId === next.profile.participantId ? next.profile : profile,
@@ -3462,6 +3690,7 @@ export function DeliverablesWorkspace({
     try {
       const result = await api.sendBulkReminder(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setStatusMessage(
         `Reminder send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
       );
@@ -3497,6 +3726,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.restoreSessionVersion(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content restored to version ${input.version}.`);
     } catch (reason) {
@@ -3531,6 +3761,7 @@ export function DeliverablesWorkspace({
     try {
       const next = await api.restoreSpeakerContentVersion(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      invalidateDeliverablesCoreCache(scope);
       setProfiles((current) =>
         current.map((profile) =>
           profile.participantId === input.participantId
@@ -3573,6 +3804,7 @@ export function DeliverablesWorkspace({
           try {
             const next = await reviewAsset(input);
             if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+            invalidateDeliverablesCoreCache(scope);
             setAssets((current) => current.map((asset) => (asset.id === next.id ? next : asset)));
             await refreshMatrix(scope);
             if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
@@ -3596,21 +3828,17 @@ export function DeliverablesWorkspace({
     stateScopeRef.current,
     currentScope,
   );
-  const renderedSessions = renderedStateIsCurrent
-    ? sessions
-    : (effectiveInitialData?.sessions ?? []);
-  const renderedTasks = renderedStateIsCurrent ? tasks : (effectiveInitialData?.tasks ?? []);
-  const renderedAssets = renderedStateIsCurrent ? assets : (effectiveInitialData?.assets ?? []);
-  const renderedProfiles = renderedStateIsCurrent
-    ? profiles
-    : (effectiveInitialData?.profiles ?? []);
+  const renderedSessions = renderedStateIsCurrent ? sessions : (seededCoreData?.sessions ?? []);
+  const renderedTasks = renderedStateIsCurrent ? tasks : (seededCoreData?.tasks ?? []);
+  const renderedAssets = renderedStateIsCurrent ? assets : (seededCoreData?.assets ?? []);
+  const renderedProfiles = renderedStateIsCurrent ? profiles : (seededCoreData?.profiles ?? []);
   const renderedSpeakerContentHistory = renderedStateIsCurrent
     ? speakerContentHistory
     : speakerContentHistoryStatesForProfiles(
-        effectiveInitialData?.profiles ?? [],
-        effectiveInitialData?.speakerContentHistory,
+        seededCoreData?.profiles ?? [],
+        initialData?.speakerContentHistory,
       );
-  const renderedMatrix = renderedStateIsCurrent ? matrix : effectiveInitialData?.matrix;
+  const renderedMatrix = renderedStateIsCurrent ? matrix : seededCoreData?.matrix;
   const selectedSessionForHistory =
     renderedSessions.find(
       (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
@@ -3640,7 +3868,7 @@ export function DeliverablesWorkspace({
       assets={renderedAssets}
       profiles={renderedProfiles}
       {...(renderedMatrix === undefined ? {} : { matrixItems: renderedMatrix.items })}
-      loading={renderedStateIsCurrent ? loading : effectiveInitialData === undefined}
+      loading={renderedStateIsCurrent ? loading : seededCoreData === undefined}
       loadingSessionHistories={renderedStateIsCurrent && loadingSessionHistories}
       busy={renderedStateIsCurrent && busy}
       error={renderedStateIsCurrent ? error : null}
@@ -3668,6 +3896,7 @@ export function DeliverablesWorkspace({
         ? {}
         : { sessionHistoryError: visibleSessionHistoryError })}
       onSelectSession={setSelectedSessionId}
+      onRetry={() => void load(undefined, true)}
       selectedAssetId={renderedStateIsCurrent ? selectedAssetId : null}
       onCloseAsset={() => setSelectedAssetId(null)}
       assetHistory={renderedStateIsCurrent ? assetHistory : []}

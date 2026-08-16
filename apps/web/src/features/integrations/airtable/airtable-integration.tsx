@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../../../components/layout";
 import {
@@ -307,11 +308,11 @@ export function AirtableIntegration({
         Skip to Airtable settings
       </a>
       <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-        <a href="/admin">Organizations</a>
+        <Link href="/admin">Organizations</Link>
         <span aria-hidden="true">/</span>
-        <a href={`/admin/organizations/${encodeURIComponent(organizationId)}`}>
+        <Link href={`/admin/organizations/${encodeURIComponent(organizationId)}`}>
           {organizationName ?? "Organization"}
-        </a>
+        </Link>
         <span aria-hidden="true">/</span>
         <span>Airtable</span>
       </nav>

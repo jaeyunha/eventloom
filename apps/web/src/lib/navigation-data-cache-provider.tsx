@@ -22,10 +22,6 @@ export function NavigationDataCacheProvider({ children }: Readonly<{ children: R
   );
 }
 
-export function useNavigationDataCache(): NavigationDataCache {
-  const cache = useContext(NavigationDataCacheContext);
-  if (cache === null) {
-    throw new Error("useNavigationDataCache must be used inside NavigationDataCacheProvider.");
-  }
-  return cache;
+export function useNavigationDataCache(): NavigationDataCache | null {
+  return useContext(NavigationDataCacheContext);
 }

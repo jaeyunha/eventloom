@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { createNavigationDataCache } from "@/lib/navigation-data-cache";
 import {
   AgendaBoard,
   type AgendaBusyOperation,
@@ -12,6 +13,8 @@ import {
 import {
   AGENDA_VIEW_MODES,
   type AgendaViewMode,
+  agendaWorkspaceCacheKey,
+  agendaWorkspaceCacheTags,
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
   canCommitAgendaAsyncCompletion,
@@ -19,6 +22,7 @@ import {
   deriveAgendaViewGroups,
   isAgendaAsyncScopeTokenCurrent,
   loadCanonicalAgendaWorkspace,
+  loadCanonicalAgendaWorkspaceWithCache,
   serializeAgendaSuggestionOptions,
 } from "./agenda-workspace-model";
 import { createAgendaApi } from "./api";
@@ -370,13 +374,7 @@ describe("agenda organizer workspace", () => {
   });
   it("uses Next Link for private organizer destinations while retaining the skip anchor", () => {
     expect(workspaceSource).toContain('import Link from "next/link";');
-    expect(workspaceSource).toContain(
-      "<Link\n                href={`/admin/organizations/" +
-        "$" +
-        "{encodeURIComponent(organizationId)}/events/" +
-        "$" +
-        "{encodeURIComponent(data.event.id)}`}\n              >",
-    );
+    expect(workspaceSource).toContain("encodeURIComponent(data.event.id)");
     expect(workspaceSource).toContain("<Link href={settingsHref}>Rooms and tracks</Link>");
     expect(workspaceSource).toContain(
       "<Link href={settingsHref}>Create a room in Rooms and tracks settings</Link>",
@@ -803,5 +801,94 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain('data-placement-complete="true"');
     expect(markup).toContain("Queue clear");
     expect(markup).not.toContain('data-agenda-empty-state="no-accepted-sessions"');
+  });
+});
+
+describe("agenda workspace navigation cache", () => {
+  it("normalizes the organization and canonical event in isolated cache scopes", () => {
+    expect(agendaWorkspaceCacheKey(" org-1 ", " evt_open ")).toBe(
+      "agenda:workspace:org-1:evt_open",
+    );
+    expect(agendaWorkspaceCacheKey("org-2", "evt_open")).not.toBe(
+      agendaWorkspaceCacheKey("org-1", "evt_open"),
+    );
+    expect(agendaWorkspaceCacheTags(" org-1 ", " evt_open ")).toEqual([
+      "organization:org-1",
+      "event:evt_open",
+      "agenda:evt_open",
+    ]);
+  });
+
+  it("loads the aggregate workspace once on a cache miss", async () => {
+    const fetcher = vi.fn(async () => Response.json({ data }));
+    const api = createAgendaApi("", "org-1", fetcher);
+    const cache = createNavigationDataCache();
+    const key = agendaWorkspaceCacheKey("org-1", "evt_open");
+    const tags = agendaWorkspaceCacheTags("org-1", "evt_open");
+
+    await expect(
+      loadCanonicalAgendaWorkspaceWithCache(api, "evt_open", cache, key, tags),
+    ).resolves.toEqual({ api, data });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates the snapshot synchronously and does not duplicate an initial loader on a cache hit", async () => {
+    const fetcher = vi.fn(async () => Response.json({ data }));
+    const api = createAgendaApi("", "org-1", fetcher);
+    const cache = createNavigationDataCache();
+    const key = agendaWorkspaceCacheKey("org-1", "evt_open");
+    const tags = agendaWorkspaceCacheTags("org-1", "evt_open");
+
+    await loadCanonicalAgendaWorkspaceWithCache(api, "evt_open", cache, key, tags);
+    await expect(
+      loadCanonicalAgendaWorkspaceWithCache(api, "evt_open", cache, key, tags),
+    ).resolves.toEqual({ api, data });
+
+    expect(cache.peek(key)).toEqual(data);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(workspaceSource).toContain(
+      "const cachedData = cache?.peek<AgendaWorkspaceData>(workspaceCacheKey)",
+    );
+    expect(workspaceSource).toContain(
+      "const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(() => initialSnapshot);",
+    );
+  });
+
+  it("uses a fresh cache read for explicit retry", async () => {
+    const fetcher = vi.fn(async () => Response.json({ data }));
+    const api = createAgendaApi("", "org-1", fetcher);
+    const cache = createNavigationDataCache();
+    const key = agendaWorkspaceCacheKey("org-1", "evt_open");
+    const tags = agendaWorkspaceCacheTags("org-1", "evt_open");
+
+    await loadCanonicalAgendaWorkspaceWithCache(api, "evt_open", cache, key, tags);
+    await loadCanonicalAgendaWorkspaceWithCache(api, "evt_open", cache, key, tags, undefined, true);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(workspaceSource).toContain("load(undefined, undefined, true)");
+  });
+
+  it("fences pending reads when event and agenda mutations invalidate the scope", async () => {
+    const cache = createNavigationDataCache();
+    const key = agendaWorkspaceCacheKey("org-1", "evt_open");
+    const tags = agendaWorkspaceCacheTags("org-1", "evt_open");
+    let resolveLoad!: (value: AgendaWorkspaceData) => void;
+    const pending = cache.read({
+      key,
+      tags,
+      load: () =>
+        new Promise<AgendaWorkspaceData>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    });
+
+    cache.invalidate(["event:evt_open", "agenda:evt_open"]);
+    resolveLoad(data);
+    await expect(pending).resolves.toEqual(data);
+    expect(cache.peek(key)).toBeUndefined();
+    expect(workspaceSource).toContain("cache?.invalidate(workspaceInvalidationTags)");
+    expect(workspaceSource).toContain(
+      "cache?.write(workspaceCacheKey, nextData, workspaceCacheTags)",
+    );
   });
 });

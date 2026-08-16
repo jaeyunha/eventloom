@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createReportsApi,
   type ReportDefinition,
@@ -79,6 +80,30 @@ export interface ReportsWorkspaceProps {
   readonly organizationId: string;
   readonly eventId: string;
   readonly baseUrl?: string;
+}
+
+export interface ReportsNavigationCacheSnapshot {
+  readonly definitions: readonly ReportDefinition[];
+  readonly runs: readonly ReportRun[];
+}
+
+function normalizeReportsScopeId(value: string): string {
+  return value.trim();
+}
+
+export function reportsNavigationCacheKey(organizationId: string, eventId: string): string {
+  const organization = normalizeReportsScopeId(organizationId);
+  const event = normalizeReportsScopeId(eventId);
+  return `organization:${organization}:event:${event}:reports:workspace`;
+}
+
+export function reportsNavigationCacheTags(
+  organizationId: string,
+  eventId: string,
+): readonly string[] {
+  const organization = normalizeReportsScopeId(organizationId);
+  const event = normalizeReportsScopeId(eventId);
+  return [`organization:${organization}`, `event:${event}`, `reports:${event}`];
 }
 
 const RELATIONSHIP_LABELS: Readonly<Record<ReportRelationship, string>> = {
@@ -1285,25 +1310,45 @@ export function ReportsWorkspace({
   eventId: fallbackEventId,
   baseUrl: explicitBaseUrl,
 }: ReportsWorkspaceProps) {
-  const eventId = useOrganizerEventId(fallbackEventId);
+  const eventId = normalizeReportsScopeId(useOrganizerEventId(fallbackEventId));
+  const normalizedOrganizationId = normalizeReportsScopeId(organizationId);
   const baseUrl = apiBaseUrl(explicitBaseUrl);
   const testMode = process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test";
+  const navigationCache = useNavigationDataCache();
+  const reportsCacheKey = useMemo(
+    () => reportsNavigationCacheKey(normalizedOrganizationId, eventId),
+    [eventId, normalizedOrganizationId],
+  );
+  const reportsCacheTags = useMemo(
+    () => reportsNavigationCacheTags(normalizedOrganizationId, eventId),
+    [eventId, normalizedOrganizationId],
+  );
+  const cachedSnapshot = navigationCache?.peek<ReportsNavigationCacheSnapshot>(reportsCacheKey);
   const initialDefinition = seededDefinition(eventId);
-  const [definitions, setDefinitions] = useState<readonly ReportDefinition[]>(() =>
-    testMode ? [initialDefinition] : [],
-  );
-  const [runs, setRuns] = useState<readonly ReportRun[]>(() =>
-    testMode ? [seededRun(eventId, initialDefinition)] : [],
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(() =>
-    testMode ? initialDefinition.id : null,
-  );
+  const initialDefinitions =
+    cachedSnapshot?.definitions.filter((definition) => definition.eventId === eventId) ??
+    (testMode ? [initialDefinition] : []);
+  const initialRuns =
+    cachedSnapshot?.runs.filter((run) => run.eventId === eventId) ??
+    (testMode ? [seededRun(eventId, initialDefinition)] : []);
+  const hasImmediateSnapshot = cachedSnapshot !== undefined;
+  const api = useMemo<ReportsApi | null>(() => {
+    if (testMode || normalizedOrganizationId.length === 0 || eventId.length === 0) return null;
+    try {
+      return createReportsApi(baseUrl, normalizedOrganizationId, eventId);
+    } catch {
+      return null;
+    }
+  }, [baseUrl, eventId, normalizedOrganizationId, testMode]);
+  const [definitions, setDefinitions] = useState<readonly ReportDefinition[]>(initialDefinitions);
+  const [runs, setRuns] = useState<readonly ReportRun[]>(initialRuns);
+  const [selectedId, setSelectedId] = useState<string | null>(initialDefinitions[0]?.id ?? null);
   const [draft, setDraft] = useState<ReportDefinitionInput>(() =>
-    testMode ? draftFromDefinition(initialDefinition) : newDraft(),
+    initialDefinitions[0] === undefined ? newDraft() : draftFromDefinition(initialDefinitions[0]),
   );
-  const [loading, setLoading] = useState(!testMode);
+  const [loading, setLoading] = useState(!testMode && !hasImmediateSnapshot);
   const [loadState, setLoadState] = useState<"ready" | "empty" | "unavailable">(
-    testMode ? "ready" : "ready",
+    initialDefinitions.length === 0 && hasImmediateSnapshot ? "empty" : "ready",
   );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1318,8 +1363,9 @@ export function ReportsWorkspace({
   const deleteRestoreRef = useRef<HTMLElement | null>(null);
   const selectionRestoreRef = useRef<HTMLElement | null>(null);
   const deleteInFlightRef = useRef(false);
-  const [api, setApi] = useState<ReportsApi | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const retrySeenRef = useRef(0);
+  const loadGenerationRef = useRef(0);
   const [selectionRequest, setSelectionRequest] = useState<SelectionRequest | null>(null);
   const filterKeyState = useRef<RowKeyState<ReportFilter>>({
     map: new WeakMap(),
@@ -1366,45 +1412,94 @@ export function ReportsWorkspace({
     if (trigger?.isConnected) trigger.focus();
   }
 
+  const applySnapshot = useCallback(
+    (snapshot: ReportsNavigationCacheSnapshot): void => {
+      const nextDefinitions = snapshot.definitions.filter(
+        (definition) => definition.eventId === eventId,
+      );
+      const nextRuns = snapshot.runs.filter((run) => run.eventId === eventId);
+      setDefinitions(nextDefinitions);
+      setRuns(nextRuns);
+      setLoadState(nextDefinitions.length === 0 ? "empty" : "ready");
+      const first = nextDefinitions[0];
+      setSelectedId(first?.id ?? null);
+      setDraft(first === undefined ? newDraft() : draftFromDefinition(first));
+    },
+    [eventId],
+  );
+
+  function invalidateReportsCache(): void {
+    loadGenerationRef.current += 1;
+    navigationCache?.invalidate(reportsCacheTags);
+  }
+
   useEffect(() => {
-    setApi(null);
-    if (testMode) return;
-    const reportsApi = createReportsApi(baseUrl, organizationId, eventId);
-    setApi(reportsApi);
+    if (testMode || api === null) {
+      setLoading(false);
+      return;
+    }
     let active = true;
-    setLoading(true);
-    setLoadState("ready");
+    const generation = ++loadGenerationRef.current;
+    const immediateSnapshot =
+      navigationCache?.peek<ReportsNavigationCacheSnapshot>(reportsCacheKey);
+    if (immediateSnapshot !== undefined) applySnapshot(immediateSnapshot);
+    setLoading(immediateSnapshot === undefined);
+    if (immediateSnapshot === undefined) setLoadState("ready");
     setLoadError(null);
     if (retryToken > 0) setRequestError(null);
-    void Promise.all([reportsApi.listDefinitions(), reportsApi.listRuns()])
-      .then(([nextDefinitions, nextRuns]) => {
-        if (!active) return;
-        setDefinitions(nextDefinitions);
-        setRuns(nextRuns);
-        setLoadState(nextDefinitions.length === 0 ? "empty" : "ready");
-        const first = nextDefinitions[0];
-        if (first === undefined) {
-          setSelectedId(null);
-          setDraft(newDraft());
-        } else {
-          setSelectedId(first.id);
-          setDraft(draftFromDefinition(first));
-        }
+    const controller = new AbortController();
+    const retryFresh = retryToken !== retrySeenRef.current;
+    retrySeenRef.current = retryToken;
+    const load = async (): Promise<ReportsNavigationCacheSnapshot> => {
+      const [definitions, runs] = await Promise.all([
+        api.listDefinitions(navigationCache === null ? controller.signal : undefined),
+        api.listRuns(),
+      ]);
+      return {
+        definitions: definitions.filter((definition) => definition.eventId === eventId),
+        runs: runs.filter((run) => run.eventId === eventId),
+      };
+    };
+    const isCurrent = (): boolean =>
+      active && generation === loadGenerationRef.current && !controller.signal.aborted;
+    const read = navigationCache
+      ? navigationCache.read<ReportsNavigationCacheSnapshot>({
+          key: reportsCacheKey,
+          tags: reportsCacheTags,
+          fresh: retryFresh,
+          load,
+        })
+      : load();
+    void read
+      .then((snapshot) => {
+        if (!isCurrent()) return;
+        applySnapshot(snapshot);
       })
       .catch((reason: unknown) => {
-        if (!active) return;
+        if (!isCurrent() || (reason instanceof DOMException && reason.name === "AbortError"))
+          return;
         const unavailable = isUnavailableError(reason);
         setLoadError(errorMessage(reason));
         setLoadState(unavailable ? "unavailable" : "ready");
         setRequestError(unavailable ? null : errorMessage(reason));
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (isCurrent()) setLoading(false);
       });
     return () => {
       active = false;
+      controller.abort();
     };
-  }, [baseUrl, eventId, organizationId, retryToken, testMode]);
+  }, [
+    api,
+    applySnapshot,
+    eventId,
+    navigationCache,
+    reportsCacheKey,
+    reportsCacheTags,
+    retryToken,
+    testMode,
+  ]);
 
   function applySelection(request: SelectionRequest): void {
     if (request.kind === "new") {
@@ -1593,9 +1688,11 @@ export function ReportsWorkspace({
           setDraft(draftFromDefinition(created));
           setLoadState("ready");
           setMessage("Report saved at version 1.");
+          invalidateReportsCache();
           return;
         }
         const created = await api.createDefinition(draft);
+        invalidateReportsCache();
         setDefinitions((current) => [...current, created]);
         setSelectedId(created.id);
         setDraft(draftFromDefinition(created));
@@ -1614,12 +1711,14 @@ export function ReportsWorkspace({
           );
           setDraft(draftFromDefinition(updated));
           setMessage(`Report saved at version ${updated.version}.`);
+          invalidateReportsCache();
           return;
         }
         const updated = await api.updateDefinition(selectedDefinition.id, {
           ...draft,
           expectedVersion: selectedDefinition.version,
         });
+        invalidateReportsCache();
         setDefinitions((current) =>
           current.map((item) => (item.id === updated.id ? updated : item)),
         );
@@ -1647,6 +1746,7 @@ export function ReportsWorkspace({
     setRequestError(null);
     try {
       if (api !== null) await api.deleteDefinition(candidate.id, candidate.version);
+      invalidateReportsCache();
       setDefinitions((current) => current.filter((definition) => definition.id !== candidate.id));
       if (selectedId === candidate.id) applySelection({ kind: "new" });
       setDeleteCandidate(null);
@@ -1695,6 +1795,7 @@ export function ReportsWorkspace({
                 ? {}
                 : { evaluationPlanVersion: numericPlanVersion }),
             });
+      invalidateReportsCache();
       setRuns((current) => [run, ...current.filter((candidate) => candidate.id !== run.id)]);
       setPreviewRun(run);
       setMessage(

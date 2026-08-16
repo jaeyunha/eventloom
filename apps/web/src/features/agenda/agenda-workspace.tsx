@@ -30,6 +30,7 @@ import {
   WorkspaceMetaItem,
 } from "@/components/workspace/workspace-ui";
 import { useOrganizerEventId } from "@/features/admin/organizer-event-workspace";
+import { useNavigationDataCache } from "@/lib/navigation-data-cache-provider";
 import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
@@ -51,6 +52,8 @@ import {
   type AgendaViewMode,
   type AgendaWorkspaceLoadResult,
   agendaViewLabels,
+  agendaWorkspaceCacheKey,
+  agendaWorkspaceCacheTags,
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
   canCommitAgendaAsyncCompletion,
@@ -58,7 +61,7 @@ import {
   deriveAgendaViewGroups,
   type ExistingSessionTimesSelection,
   formatScheduleDate,
-  loadCanonicalAgendaWorkspace,
+  loadCanonicalAgendaWorkspaceWithCache,
   safeScheduleId,
   scheduleDate,
   serializeAgendaSuggestionOptions,
@@ -1719,9 +1722,18 @@ interface ScopedAgendaWorkspaceProps extends AgendaWorkspaceProps {
 }
 
 export function AgendaWorkspace(props: Readonly<AgendaWorkspaceProps>) {
-  const eventId = useOrganizerEventId(props.eventId);
-  const scopeKey = agendaWorkspaceScopeKey(props.organizationId, eventId);
-  return <ScopedAgendaWorkspace key={scopeKey} {...props} eventId={eventId} scopeKey={scopeKey} />;
+  const eventId = useOrganizerEventId(props.eventId).trim();
+  const organizationId = props.organizationId.trim();
+  const scopeKey = agendaWorkspaceScopeKey(organizationId, eventId);
+  return (
+    <ScopedAgendaWorkspace
+      key={scopeKey}
+      {...props}
+      eventId={eventId}
+      organizationId={organizationId}
+      scopeKey={scopeKey}
+    />
+  );
 }
 
 function ScopedAgendaWorkspace({
@@ -1730,14 +1742,36 @@ function ScopedAgendaWorkspace({
   scopeKey,
   api: providedApi,
 }: Readonly<ScopedAgendaWorkspaceProps>) {
+  const cache = useNavigationDataCache();
+  const normalizedOrganizationId = organizationId.trim();
+  const normalizedEventId = eventId.trim();
   const agendaApi = useMemo(
-    () => createCanonicalAgendaWorkspaceApi(organizationId, providedApi),
-    [organizationId, providedApi],
+    () => createCanonicalAgendaWorkspaceApi(normalizedOrganizationId, providedApi),
+    [normalizedOrganizationId, providedApi],
   );
+  const workspaceCacheKey = useMemo(
+    () => agendaWorkspaceCacheKey(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const workspaceCacheTags = useMemo(
+    () => agendaWorkspaceCacheTags(normalizedOrganizationId, normalizedEventId),
+    [normalizedEventId, normalizedOrganizationId],
+  );
+  const workspaceInvalidationTags = useMemo(
+    () => [`event:${normalizedEventId}`, `agenda:${normalizedEventId}`],
+    [normalizedEventId],
+  );
+  const cachedData = cache?.peek<AgendaWorkspaceData>(workspaceCacheKey);
+  const initialCachedData =
+    cachedData !== undefined && agendaWorkspaceDataMatchesEvent(cachedData, normalizedEventId)
+      ? cachedData
+      : undefined;
+  const initialSnapshot: ScopedAgendaSnapshot | null =
+    initialCachedData === undefined ? null : { scopeKey, api: agendaApi, data: initialCachedData };
   const initialReadKey = useMemo(() => ({ api: agendaApi, scopeKey }), [agendaApi, scopeKey]);
-  const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(() => initialSnapshot);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialSnapshot === null);
   const [busyOperation, setBusyOperation] = useState<AgendaBusyOperation | null>(null);
   const busyOperationRef = useRef<AgendaBusyOperation | null>(null);
   const loadGenerationRef = useRef(0);
@@ -1794,9 +1828,26 @@ function ScopedAgendaWorkspace({
       busyOperationRef.current = null;
     };
   }, []);
+  const readWorkspace = useCallback(
+    (signal?: AbortSignal, fresh = false) =>
+      loadCanonicalAgendaWorkspaceWithCache(
+        agendaApi,
+        normalizedEventId,
+        cache,
+        workspaceCacheKey,
+        workspaceCacheTags,
+        signal,
+        fresh,
+      ),
+    [agendaApi, cache, normalizedEventId, workspaceCacheKey, workspaceCacheTags],
+  );
 
   const load = useCallback(
-    async (signal?: AbortSignal, initialRead?: Promise<AgendaWorkspaceLoadResult>) => {
+    async (
+      signal?: AbortSignal,
+      initialRead?: Promise<AgendaWorkspaceLoadResult>,
+      fresh = false,
+    ) => {
       const token = { scopeKey, generation: loadGenerationRef.current + 1 };
       loadGenerationRef.current = token.generation;
       const loadIsCurrent = () =>
@@ -1814,8 +1865,7 @@ function ScopedAgendaWorkspace({
         setStatusMessage(null);
       }
       try {
-        const loaded = await (initialRead ??
-          loadCanonicalAgendaWorkspace(agendaApi, eventId, signal));
+        const loaded = await (initialRead ?? readWorkspace(signal, fresh));
         if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
           throw new Error("The agenda response belongs to another event.");
         }
@@ -1837,16 +1887,24 @@ function ScopedAgendaWorkspace({
         }
       }
     },
-    [agendaApi, eventId, scopeKey],
+    [eventId, readWorkspace, scopeKey],
   );
 
   useEffect(() => {
-    const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
-      loadCanonicalAgendaWorkspace(agendaApi, eventId, signal),
-    );
+    const cached = cache?.peek<AgendaWorkspaceData>(workspaceCacheKey);
+    if (cached !== undefined && agendaWorkspaceDataMatchesEvent(cached, normalizedEventId)) return;
+    const lease = initialReadCoordinator.acquire(initialReadKey, (signal) => readWorkspace(signal));
     void load(lease.signal, lease.promise);
     return () => lease.release();
-  }, [eventId, initialReadCoordinator, initialReadKey, load, agendaApi]);
+  }, [
+    cache,
+    initialReadCoordinator,
+    initialReadKey,
+    load,
+    normalizedEventId,
+    readWorkspace,
+    workspaceCacheKey,
+  ]);
 
   async function mutate(
     operation: (activeApi: AgendaApi, current: AgendaWorkspaceData) => Promise<AgendaWorkspaceData>,
@@ -1864,6 +1922,8 @@ function ScopedAgendaWorkspace({
     }
     const token = beginOperation(busyKind);
     if (token === null) return false;
+    loadGenerationRef.current += 1;
+    cache?.invalidate(workspaceInvalidationTags);
     try {
       const nextData = await operation(currentSnapshot.api, currentSnapshot.data);
       if (!agendaWorkspaceDataMatchesEvent(nextData, eventId)) {
@@ -1871,6 +1931,7 @@ function ScopedAgendaWorkspace({
       }
       if (!operationIsCurrent(token)) return false;
       setSnapshot({ ...currentSnapshot, data: nextData });
+      cache?.write(workspaceCacheKey, nextData, workspaceCacheTags);
       if (refreshPreview) {
         const nextPreview = await currentSnapshot.api.preview(eventId);
         if (!operationIsCurrent(token)) return false;
@@ -1902,6 +1963,7 @@ function ScopedAgendaWorkspace({
         if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recovered[0], eventId)) {
           setSnapshot({ ...currentSnapshot, data: recovered[0] });
           setPreview(recovered[1]);
+          cache?.write(workspaceCacheKey, recovered[0], workspaceCacheTags);
         }
       }
       return false;
@@ -2035,6 +2097,8 @@ function ScopedAgendaWorkspace({
     }
     const token = beginOperation("apply-suggestion");
     if (token === null) return;
+    loadGenerationRef.current += 1;
+    cache?.invalidate(workspaceInvalidationTags);
     try {
       const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
       if (!currentSuggestionApi) {
@@ -2050,6 +2114,7 @@ function ScopedAgendaWorkspace({
       }
       if (!operationIsCurrent(token)) return;
       setSnapshot({ ...currentSnapshot, data: nextData });
+      cache?.write(workspaceCacheKey, nextData, workspaceCacheTags);
       setPreview(null);
       setSuggestionRun({
         ...currentRun,
@@ -2109,7 +2174,11 @@ function ScopedAgendaWorkspace({
       <div className={styles.loadingState}>
         <h1>Agenda workspace unavailable</h1>
         <p role="alert">{error ?? "The agenda could not be loaded."}</p>
-        <button className={styles.primaryButton} type="button" onClick={() => void load()}>
+        <button
+          className={styles.primaryButton}
+          type="button"
+          onClick={() => void load(undefined, undefined, true)}
+        >
           Try again
         </button>
       </div>
