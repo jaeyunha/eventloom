@@ -660,10 +660,6 @@ function DeleteConfirmationDialog({
 }>) {
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) setError(null);
-  }, [open]);
-
   async function confirm() {
     setError(null);
     try {
@@ -859,6 +855,7 @@ function RoomsSection({
         </DialogContent>
       </Dialog>
       <DeleteConfirmationDialog
+        key={`room-delete-${deleteTarget?.id ?? "closed"}-${deleteTarget !== null && canDelete ? "open" : "closed"}`}
         open={deleteTarget !== null && canDelete}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
@@ -899,12 +896,6 @@ function TaxonomyForm({
   const [name, setName] = useState(resource?.name ?? "");
   const [description, setDescription] = useState(resource?.description ?? "");
   const [formError, setFormError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setName(resource?.name ?? "");
-    setDescription(resource?.description ?? "");
-    setFormError(null);
-  }, [resource]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1111,6 +1102,7 @@ function TaxonomySection({
             <DialogDescription>{resourceDescription(kind)}</DialogDescription>
           </DialogHeader>
           <TaxonomyForm
+            key={`${kind}-new-${showForm ? "open" : "closed"}`}
             busy={busy}
             onCancel={() => setShowForm(false)}
             onSave={async (input) => {
@@ -1135,6 +1127,7 @@ function TaxonomySection({
           </DialogHeader>
           {editing ? (
             <TaxonomyForm
+              key={`${kind}-${editing.id}`}
               resource={editing}
               busy={busy}
               onCancel={() => setEditingId(null)}
@@ -1152,6 +1145,7 @@ function TaxonomySection({
         </DialogContent>
       </Dialog>
       <DeleteConfirmationDialog
+        key={`${kind}-delete-${deleteTarget?.id ?? "closed"}-${deleteTarget !== null && canDelete ? "open" : "closed"}`}
         open={deleteTarget !== null && canDelete}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
