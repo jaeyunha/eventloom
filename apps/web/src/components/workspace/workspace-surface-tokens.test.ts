@@ -233,7 +233,7 @@ describe("workspace semantic surfaces", () => {
     expect(speakers).toMatch(
       /\.actionsStack\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su,
     );
-    expect(speakers).toMatch(/\.workspace\s*\{[^}]*width:\s*100%[^}]*max-width:\s*76rem/su);
+    expect(speakers).toMatch(/\.workspace\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/su);
     expect(speakers).toMatch(/\.workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su);
     expect(speakers).toMatch(
       /\.tabs,\s*\.view\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su,
@@ -257,10 +257,10 @@ describe("workspace semantic surfaces", () => {
       /\.detailGrid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*12rem\),\s*1fr\)\)/su,
     );
     expect(speakers).toMatch(
-      /@media\s*\(max-width:\s*42rem\)\s*\{[\s\S]*?\.tabs\s*>\s*\[data-slot="tabs-list"\]\s*\{[^}]*flex-wrap:\s*wrap/su,
+      /@media\s*\(max-width:\s*64rem\)\s*\{[\s\S]*?\.tabs\s*>\s*\[data-slot="tabs-list"\]\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/su,
     );
     expect(speakers).toMatch(
-      /@media\s*\(max-width:\s*42rem\)\s*\{[\s\S]*?\.tabs\s*>\s*\[data-slot="tabs-list"\]\s*>\s*\[data-slot="tabs-trigger"\]\s*\{[^}]*white-space:\s*normal/su,
+      /@media\s*\(max-width:\s*64rem\)\s*\{[\s\S]*?\.tabs\s*>\s*\[data-slot="tabs-list"\]\s*>\s*\[data-slot="tabs-trigger"\]\s*\{[^}]*white-space:\s*normal/su,
     );
   });
 

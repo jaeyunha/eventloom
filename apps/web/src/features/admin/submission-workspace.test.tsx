@@ -18,6 +18,7 @@ import {
   loadOrganizerEventName,
   mapCanonicalSubmission,
   mergeCanonicalSubmissionEvaluation,
+  type OrganizerEvaluationWorkspace,
   submissionListState,
   submissionLoadErrorMessage,
   submissionLoadFailure,
@@ -592,6 +593,64 @@ describe("organizer submission workspace", () => {
     } finally {
       fetchMock.mockRestore();
     }
+  });
+
+  it("does not expose internal reviewer or organizer identifiers in merged presentation data", () => {
+    const internalReviewerId = "reviewer-internal-123";
+    const internalOrganizerId = "organizer-internal-456";
+    const workspace: OrganizerEvaluationWorkspace = {
+      plan: { id: "plan-1", rounds: [{ id: "round-1", sequence: 1 }] },
+      assignments: [
+        {
+          id: "assignment-1",
+          reviewerId: internalReviewerId,
+          submissionId: canonicalEnvelope.submission.id,
+          roundId: "round-1",
+          status: "assigned",
+        },
+      ],
+      aggregates: [
+        {
+          roundId: "round-1",
+          submissionId: canonicalEnvelope.submission.id,
+          submittedReviewCount: 0,
+          expectedReviewCount: 1,
+          averageWeightedTotal: null,
+          possibleWeightedTotal: 5,
+        },
+      ],
+      decisions: {
+        [canonicalEnvelope.submission.id]: {
+          id: "decision-1",
+          tenantId: canonicalEnvelope.submission.tenantId,
+          eventId: canonicalEnvelope.submission.eventId,
+          planId: "plan-1",
+          submissionId: canonicalEnvelope.submission.id,
+          status: "accepted",
+          version: 2,
+          history: [
+            {
+              from: null,
+              to: "accepted",
+              reason: "Ready for the program.",
+              decidedBy: internalOrganizerId,
+              decidedAt: "2027-01-03T12:00:00.000Z",
+              idempotencyKey: "decision-accepted",
+            },
+          ],
+          updatedAt: "2027-01-03T12:00:00.000Z",
+        },
+      },
+    };
+
+    const row = mergeCanonicalSubmissionEvaluation(
+      canonicalEnvelope,
+      indexOrganizerEvaluationWorkspace(workspace),
+    );
+
+    expect(row.reviewAssignments[0]?.reviewer).toBeTruthy();
+    expect(row.reviewAssignments[0]?.reviewer).not.toContain(internalReviewerId);
+    expect(row.timeline.some((entry) => entry.detail.includes(internalOrganizerId))).toBe(false);
   });
 
   it("distinguishes submitted-review failures from an authoritative zero result", async () => {

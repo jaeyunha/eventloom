@@ -553,6 +553,22 @@
   min-width: 68rem;
 }
 
+.assignmentTable tbody th,
+.assignmentTable tbody td {
+  vertical-align: middle;
+}
+
+.assignmentTable :is(th, td):nth-child(4) {
+  width: 12rem;
+  max-width: 12rem;
+  white-space: normal;
+}
+
+.assignmentTable :is(th, td):last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
 .assignmentTable tr[data-selected="true"] {
   background: color-mix(in srgb, var(--primary) 7%, var(--card));
 }

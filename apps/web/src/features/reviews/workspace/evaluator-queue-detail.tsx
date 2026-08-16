@@ -1,12 +1,13 @@
 "use client";
 
+import { ChevronLeft, ChevronRight, Maximize2, X } from "lucide-react";
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useRef } from "react";
 import { EvaluatorWorkspace } from "./evaluator-evaluator-workspace";
 import type { ReviewerQueueController } from "./evaluator-queue-controller";
 import { reviewerSelectionBlocked } from "./evaluator-queue-reviewer-selection-blocked";
+import { reviewAssignmentPageHref } from "./evaluator-review-route-state";
 import { compactSubmissionReference } from "./model-compact-submission-reference";
 import styles from "./reviewer-queue.module.css";
 
@@ -41,6 +42,11 @@ export function ReviewerQueueDetail({
   const nextBlocked =
     nextAssignment === undefined ||
     reviewerSelectionBlocked(pendingAutosaveAssignmentId, selectedId, nextAssignment.id);
+  const fullPageHref = reviewAssignmentPageHref({
+    assignmentId: selected.id,
+    organizationId: selected.organizationId,
+    eventId: selected.eventId,
+  });
 
   function closeSheet(): void {
     if (closeBlocked) return;
@@ -92,6 +98,30 @@ export function ReviewerQueueDetail({
             {compactSubmissionReference(selected.reference)}
           </span>
           <div className={styles.sheetNavigation}>
+            {closeBlocked ? (
+              <Button
+                aria-label="Open review as full page"
+                disabled
+                size="sm"
+                title="Open as full page"
+                type="button"
+                variant="ghost"
+              >
+                <Maximize2 data-icon="inline-start" aria-hidden="true" />
+                Full page
+              </Button>
+            ) : (
+              <Button asChild size="sm" variant="ghost">
+                <a
+                  aria-label="Open review as full page"
+                  href={fullPageHref}
+                  title="Open as full page"
+                >
+                  <Maximize2 data-icon="inline-start" aria-hidden="true" />
+                  Full page
+                </a>
+              </Button>
+            )}
             <Button
               aria-label="Previous submission"
               size="sm"

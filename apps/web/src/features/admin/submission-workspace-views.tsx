@@ -1,9 +1,11 @@
 "use client";
 
+import { ListFilter, Search, X } from "lucide-react";
 import Link from "next/link";
+import { Popover } from "radix-ui";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,6 +30,7 @@ import {
   WorkspaceMetaItem,
   StatusBadge as WorkspaceStatusBadge,
 } from "@/components/workspace/workspace-ui";
+import { SubmissionDetailDrawer } from "./submission-detail-drawer";
 import styles from "./submission-workspace.module.css";
 import {
   answerText,
@@ -173,7 +176,7 @@ export function ReviewDataNotice({
   );
 }
 
-type SubmissionListViewProps = {
+type SubmissionListViewProps = Readonly<{
   eventId: string;
   organizationId: string;
   selectedSubmissionId: string | undefined;
@@ -206,7 +209,7 @@ type SubmissionListViewProps = {
   onToggleAllVisible: () => void;
   onRetry: () => void;
   detailPanel: ReactNode;
-};
+}>;
 
 export function SubmissionListView({
   eventId,
@@ -242,80 +245,46 @@ export function SubmissionListView({
   onRetry,
   detailPanel,
 }: SubmissionListViewProps) {
-  const cfpConfigurationHref = `/admin/organizations/${encodeURIComponent(
-    organizationId,
-  )}/events/${encodeURIComponent(eventId)}/cfp`;
+  const selectedSubmission =
+    selectedSubmissionId === undefined
+      ? undefined
+      : submissions.find((submission) => submission.id === selectedSubmissionId);
+  const acceptedSubmissionCount = submissions.filter(
+    (submission) => submission.status === "accepted",
+  ).length;
+  const awaitingDecisionCount = submissions.filter(
+    (submission) => submission.status === "submitted" || submission.status === "under_review",
+  ).length;
+
   return (
     <div className={styles.workspaceRoot}>
       <a className={styles.skipLink} href="#submission-list-content">
         Skip to submissions
       </a>
-      <WorkspaceHeader
-        breadcrumb={
-          <WorkspaceBreadcrumb>
-            <span>{eventName}</span>
-            <span>/</span>
-            <strong>Submissions</strong>
-          </WorkspaceBreadcrumb>
-        }
-        title="Submissions"
-        status={<WorkspaceStatusBadge>{submissions.length} total</WorkspaceStatusBadge>}
-        description="Move proposals from intake through review and a final organizer decision."
-        metadata={
-          <>
-            <WorkspaceMetaItem>{filteredSubmissions.length} in this view</WorkspaceMetaItem>
-            <WorkspaceMetaItem>
-              {submissions.filter((submission) => submission.status === "accepted").length} accepted
-            </WorkspaceMetaItem>
-            <WorkspaceMetaItem>
-              {
-                submissions.filter(
-                  (submission) =>
-                    submission.status === "submitted" || submission.status === "under_review",
-                ).length
-              }{" "}
-              awaiting decision
-            </WorkspaceMetaItem>
-          </>
-        }
-        actions={
-          <>
-            <Button asChild size="sm" variant="outline">
-              <Link href="/admin/events">Back to events</Link>
-            </Button>
-            {listState === "unconfigured" ? (
-              <Button asChild size="sm">
-                <Link href={cfpConfigurationHref}>Configure CFP</Link>
-              </Button>
-            ) : eventSlug !== null ? (
-              <Button asChild size="sm">
-                <Link
-                  href={`/cfp/organizations/${encodeURIComponent(organizationId ?? "local-organization")}/events/${encodeURIComponent(eventSlug)}`}
-                >
-                  Open CFP
-                </Link>
-              </Button>
-            ) : null}
-          </>
-        }
+      <SubmissionWorkspaceHeader
+        eventId={eventId}
+        organizationId={organizationId}
+        eventName={eventName}
+        eventSlug={eventSlug}
+        listState={listState}
+        submissionCount={submissions.length}
+        acceptedSubmissionCount={acceptedSubmissionCount}
+        awaitingDecisionCount={awaitingDecisionCount}
+        visibleCount={filteredSubmissions.length}
       />
-
       <div
         id="submission-list-content"
         className={styles.workspaceMain}
         data-layout="submission-review-desk"
         tabIndex={-1}
       >
-        <div
-          className={styles.reviewDesk}
-          data-detail-open={selectedSubmissionId === undefined ? "false" : "true"}
-        >
-          <SubmissionListCard
+        <div className={styles.reviewDesk}>
+          <SubmissionQueue
+            eventId={eventId}
+            organizationId={organizationId}
+            selectedSubmissionId={selectedSubmissionId}
             eventName={eventName}
             eventSlug={eventSlug}
-            organizationId={organizationId}
-            eventId={eventId}
-            selectedSubmissionId={selectedSubmissionId}
             submissions={submissions}
             filteredSubmissions={filteredSubmissions}
             loadFailure={loadFailure}
@@ -343,23 +312,95 @@ export function SubmissionListView({
             onToggleAllVisible={onToggleAllVisible}
             onRetry={onRetry}
           />
-          {detailPanel}
+          <SubmissionDetailOverlay
+            eventId={eventId}
+            organizationId={organizationId}
+            selectedSubmissionId={selectedSubmissionId}
+            selectedSubmission={selectedSubmission}
+            detailPanel={detailPanel}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-type SubmissionListCardProps = Omit<SubmissionListViewProps, "detailPanel"> & {
-  eventName: string;
-};
+type SubmissionQueueProps = Omit<SubmissionListViewProps, "detailPanel">;
 
-function SubmissionListCard({
+function SubmissionWorkspaceHeader({
+  eventId,
+  organizationId,
   eventName,
   eventSlug,
-  organizationId,
+  listState,
+  submissionCount,
+  acceptedSubmissionCount,
+  awaitingDecisionCount,
+  visibleCount,
+}: Readonly<{
+  eventId: string;
+  organizationId: string;
+  eventName: string;
+  eventSlug: string | null;
+  listState: SubmissionListState;
+  submissionCount: number;
+  acceptedSubmissionCount: number;
+  awaitingDecisionCount: number;
+  visibleCount: number;
+}>) {
+  const cfpConfigurationHref = `/admin/organizations/${encodeURIComponent(
+    organizationId,
+  )}/events/${encodeURIComponent(eventId)}/cfp`;
+
+  return (
+    <WorkspaceHeader
+      breadcrumb={
+        <WorkspaceBreadcrumb>
+          <span>{eventName}</span>
+          <span>/</span>
+          <strong>Submissions</strong>
+        </WorkspaceBreadcrumb>
+      }
+      title="Submissions"
+      status={<WorkspaceStatusBadge>{submissionCount} total</WorkspaceStatusBadge>}
+      description="Move proposals from intake through review and a final organizer decision."
+      metadata={
+        <>
+          <WorkspaceMetaItem>{visibleCount} in this view</WorkspaceMetaItem>
+          <WorkspaceMetaItem>{acceptedSubmissionCount} accepted</WorkspaceMetaItem>
+          <WorkspaceMetaItem>{awaitingDecisionCount} awaiting decision</WorkspaceMetaItem>
+        </>
+      }
+      actions={
+        <>
+          <Button asChild size="sm" variant="outline">
+            <Link href="/admin/events">Back to events</Link>
+          </Button>
+          {listState === "unconfigured" ? (
+            <Button asChild size="sm">
+              <Link href={cfpConfigurationHref}>Configure CFP</Link>
+            </Button>
+          ) : eventSlug !== null ? (
+            <Button asChild size="sm">
+              <Link
+                href={`/cfp/organizations/${encodeURIComponent(organizationId ?? "local-organization")}/events/${encodeURIComponent(eventSlug)}`}
+              >
+                Open CFP
+              </Link>
+            </Button>
+          ) : null}
+        </>
+      }
+    />
+  );
+}
+
+function SubmissionQueue({
   eventId,
+  organizationId,
   selectedSubmissionId,
+  eventName,
+  eventSlug,
   submissions,
   filteredSubmissions,
   loadFailure,
@@ -386,99 +427,71 @@ function SubmissionListCard({
   onToggleSelected,
   onToggleAllVisible,
   onRetry,
-}: SubmissionListCardProps) {
-  return (
-    <div className={styles.submissionMaster}>
-      <Card
-        id="submission-list-card"
-        className={styles.listPanel}
-        aria-labelledby="submission-table-heading"
-      >
-        <CardHeader className={styles.panelHeader}>
-          <CardTitle id="submission-table-heading">
-            {submissions.length === 0 ? "Submission inbox" : "Submission queue"}
-          </CardTitle>
-          {listState !== "empty" ? (
-            <p className={styles.mutedText}>
-              {filteredSubmissions.length} of {submissions.length}
-              {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
-            </p>
-          ) : null}
-        </CardHeader>
+}: SubmissionQueueProps) {
+  const queueContent =
+    submissions.length > 0 ? (
+      <SubmissionQueueLoaded
+        eventId={eventId}
+        organizationId={organizationId}
+        selectedSubmissionId={selectedSubmissionId}
+        eventName={eventName}
+        eventSlug={eventSlug}
+        submissions={submissions}
+        filteredSubmissions={filteredSubmissions}
+        loadFailure={loadFailure}
+        evaluationLoadState={evaluationLoadState}
+        listState={listState}
+        search={search}
+        status={status}
+        track={track}
+        format={format}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        tracks={tracks}
+        formats={formats}
+        selected={selected}
+        selectedVisibleCount={selectedVisibleCount}
+        filtersActive={filtersActive}
+        allVisibleSelected={allVisibleSelected}
+        onSearchChange={onSearchChange}
+        onStatusChange={onStatusChange}
+        onTrackChange={onTrackChange}
+        onFormatChange={onFormatChange}
+        onClearFilters={onClearFilters}
+        onSort={onSort}
+        onToggleSelected={onToggleSelected}
+        onToggleAllVisible={onToggleAllVisible}
+        onRetry={onRetry}
+      />
+    ) : (
+      <SubmissionQueueEmpty
+        eventName={eventName}
+        listState={listState}
+        loadFailure={loadFailure}
+        onRetry={onRetry}
+      />
+    );
 
-        {submissions.length > 0 ? (
-          <CardContent className={styles.listContent}>
-            <ReviewDataNotice
-              state={evaluationLoadState}
-              onRetry={onRetry}
-              {...(eventSlug === null
-                ? {}
-                : {
-                    setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
-                  })}
-            />
-            <SubmissionListToolbar
-              search={search}
-              status={status}
-              track={track}
-              format={format}
-              tracks={tracks}
-              formats={formats}
-              filtersActive={filtersActive}
-              onSearchChange={onSearchChange}
-              onStatusChange={onStatusChange}
-              onTrackChange={onTrackChange}
-              onFormatChange={onFormatChange}
-              onClearFilters={onClearFilters}
-            />
-            <SubmissionListBody
-              eventName={eventName}
-              eventId={eventId}
-              organizationId={organizationId}
-              selectedSubmissionId={selectedSubmissionId}
-              filteredSubmissions={filteredSubmissions}
-              listState={listState}
-              loadFailure={loadFailure}
-              sortKey={sortKey}
-              sortDirection={sortDirection}
-              selected={selected}
-              allVisibleSelected={allVisibleSelected}
-              onSort={onSort}
-              onToggleSelected={onToggleSelected}
-              onToggleAllVisible={onToggleAllVisible}
-              onClearFilters={onClearFilters}
-              onRetry={onRetry}
-            />
-          </CardContent>
-        ) : (
-          <SubmissionListEmptyCard
-            eventName={eventName}
-            listState={listState}
-            loadFailure={loadFailure}
-            onRetry={onRetry}
-          />
-        )}
-      </Card>
-    </div>
+  return (
+    <section
+      id="submission-list-card"
+      className={styles.listPanel}
+      aria-labelledby="submission-table-heading"
+      data-submission-collection="true"
+    >
+      <h2 id="submission-table-heading" className={styles.srOnly}>
+        {submissions.length === 0 ? "Submission inbox" : "Submission queue"}
+      </h2>
+      {queueContent}
+    </section>
   );
 }
 
-type SubmissionListToolbarProps = Readonly<{
-  search: string;
-  status: SubmissionStatus | "all";
-  track: string;
-  format: string;
-  tracks: string[];
-  formats: string[];
-  filtersActive: boolean;
-  onSearchChange: (search: string) => void;
-  onStatusChange: (status: SubmissionStatus | "all") => void;
-  onTrackChange: (track: string) => void;
-  onFormatChange: (format: string) => void;
-  onClearFilters: () => void;
-}>;
-
-function SubmissionListToolbar({
+function SubmissionQueueLoaded({
+  submissions,
+  evaluationLoadState,
+  eventSlug,
+  organizationId,
   search,
   status,
   track,
@@ -486,118 +499,18 @@ function SubmissionListToolbar({
   tracks,
   formats,
   filtersActive,
+  selectedVisibleCount,
   onSearchChange,
   onStatusChange,
   onTrackChange,
   onFormatChange,
   onClearFilters,
-}: SubmissionListToolbarProps) {
-  return (
-    <fieldset className={styles.toolbar} aria-label="Submission filters">
-      <legend className={styles.srOnly}>Filter submissions</legend>
-      <label className={styles.toolbarSearch} htmlFor="submission-search">
-        <span className={styles.srOnly}>Search</span>
-        <Input
-          id="submission-search"
-          type="search"
-          value={search}
-          placeholder="Search submissions"
-          onChange={(event) => onSearchChange(event.currentTarget.value)}
-        />
-      </label>
-      <div className={styles.toolbarField}>
-        <span className={styles.srOnly}>Status</span>
-        <Select
-          value={status}
-          onValueChange={(value) => onStatusChange(value as SubmissionStatus | "all")}
-        >
-          <SelectTrigger id="submission-status" aria-label="Filter by status">
-            <SelectValue placeholder="All statuses" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {Object.entries(submissionStatusLabels).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className={styles.toolbarField}>
-        <span className={styles.srOnly}>Track</span>
-        <Select value={track} onValueChange={onTrackChange}>
-          <SelectTrigger id="submission-track" aria-label="Filter by track">
-            <SelectValue placeholder="All tracks" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All tracks</SelectItem>
-            {tracks.map((value) => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className={styles.toolbarField}>
-        <span className={styles.srOnly}>Format</span>
-        <Select value={format} onValueChange={onFormatChange}>
-          <SelectTrigger id="submission-format" aria-label="Filter by format">
-            <SelectValue placeholder="All formats" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All formats</SelectItem>
-            {formats.map((value) => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      {filtersActive ? (
-        <Button
-          className={styles.clearButton}
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onClearFilters}
-        >
-          Clear
-        </Button>
-      ) : null}
-    </fieldset>
-  );
-}
-
-type SubmissionListBodyProps = Readonly<{
-  eventName: string;
-  eventId: string;
-  organizationId: string;
-  selectedSubmissionId: string | undefined;
-  filteredSubmissions: SubmissionRecord[];
-  listState: SubmissionListState;
-  loadFailure: SubmissionLoadFailure | null;
-  sortKey: SubmissionSortKey;
-  sortDirection: SubmissionSortDirection;
-  selected: ReadonlySet<string>;
-  allVisibleSelected: boolean;
-  onSort: (sortKey: SubmissionSortKey) => void;
-  onToggleSelected: (id: string) => void;
-  onToggleAllVisible: () => void;
-  onClearFilters: () => void;
-  onRetry: () => void;
-}>;
-
-function SubmissionListBody({
-  eventName,
-  eventId,
-  organizationId,
-  selectedSubmissionId,
-  filteredSubmissions,
   listState,
   loadFailure,
+  eventName,
+  eventId,
+  selectedSubmissionId,
+  filteredSubmissions,
   sortKey,
   sortDirection,
   selected,
@@ -605,12 +518,373 @@ function SubmissionListBody({
   onSort,
   onToggleSelected,
   onToggleAllVisible,
+  onRetry,
+}: SubmissionQueueProps) {
+  return (
+    <div className={styles.listContent}>
+      <ReviewDataNotice
+        state={evaluationLoadState}
+        onRetry={onRetry}
+        {...(eventSlug === null
+          ? {}
+          : {
+              setupHref: `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}/reviews`,
+            })}
+      />
+      <SubmissionQueueToolbar
+        search={search}
+        status={status}
+        track={track}
+        format={format}
+        tracks={tracks}
+        formats={formats}
+        filtersActive={filtersActive}
+        selectedVisibleCount={selectedVisibleCount}
+        visibleCount={filteredSubmissions.length}
+        submissionCount={submissions.length}
+        onSearchChange={onSearchChange}
+        onStatusChange={onStatusChange}
+        onTrackChange={onTrackChange}
+        onFormatChange={onFormatChange}
+        onClearFilters={onClearFilters}
+      />
+      <SubmissionQueueState
+        listState={listState}
+        loadFailure={loadFailure}
+        eventName={eventName}
+        eventId={eventId}
+        organizationId={organizationId}
+        selectedSubmissionId={selectedSubmissionId}
+        filteredSubmissions={filteredSubmissions}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        selected={selected}
+        selectedVisibleCount={selectedVisibleCount}
+        allVisibleSelected={allVisibleSelected}
+        onSort={onSort}
+        onToggleSelected={onToggleSelected}
+        onToggleAllVisible={onToggleAllVisible}
+        onClearFilters={onClearFilters}
+        onRetry={onRetry}
+      />
+    </div>
+  );
+}
+
+function SubmissionQueueToolbar({
+  search,
+  status,
+  track,
+  format,
+  tracks,
+  formats,
+  filtersActive,
+  selectedVisibleCount,
+  visibleCount,
+  submissionCount,
+  onSearchChange,
+  onStatusChange,
+  onTrackChange,
+  onFormatChange,
+  onClearFilters,
+}: Readonly<{
+  search: string;
+  status: SubmissionStatus | "all";
+  track: string;
+  format: string;
+  tracks: string[];
+  formats: string[];
+  filtersActive: boolean;
+  selectedVisibleCount: number;
+  visibleCount: number;
+  submissionCount: number;
+  onSearchChange: (search: string) => void;
+  onStatusChange: (status: SubmissionStatus | "all") => void;
+  onTrackChange: (track: string) => void;
+  onFormatChange: (format: string) => void;
+  onClearFilters: () => void;
+}>) {
+  return (
+    <div className={styles.toolbar}>
+      <p className={styles.collectionCount} aria-live="polite">
+        <span>
+          {visibleCount} of {submissionCount}
+        </span>
+        {selectedVisibleCount > 0 ? <strong>{selectedVisibleCount} selected</strong> : null}
+      </p>
+      <div className={styles.toolbarControls}>
+        <SubmissionSearchField search={search} onSearchChange={onSearchChange} />
+        <SubmissionFilterPopover
+          status={status}
+          track={track}
+          format={format}
+          tracks={tracks}
+          formats={formats}
+          filtersActive={filtersActive}
+          onStatusChange={onStatusChange}
+          onTrackChange={onTrackChange}
+          onFormatChange={onFormatChange}
+          onClearFilters={onClearFilters}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SubmissionSearchField({
+  search,
+  onSearchChange,
+}: Readonly<{
+  search: string;
+  onSearchChange: (search: string) => void;
+}>) {
+  return (
+    <div className={styles.toolbarSearch}>
+      <Search aria-hidden="true" />
+      <label className={styles.srOnly} htmlFor="submission-search">
+        Search submissions
+      </label>
+      <Input
+        id="submission-search"
+        type="search"
+        value={search}
+        placeholder="Search submissions"
+        onChange={(event) => onSearchChange(event.currentTarget.value)}
+      />
+      {search.length > 0 ? (
+        <Button
+          className={styles.clearSearch}
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Clear submission search"
+          onClick={() => onSearchChange("")}
+        >
+          <X aria-hidden="true" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function SubmissionFilterPopover({
+  status,
+  track,
+  format,
+  tracks,
+  formats,
+  filtersActive,
+  onStatusChange,
+  onTrackChange,
+  onFormatChange,
+  onClearFilters,
+}: Readonly<{
+  status: SubmissionStatus | "all";
+  track: string;
+  format: string;
+  tracks: string[];
+  formats: string[];
+  filtersActive: boolean;
+  onStatusChange: (status: SubmissionStatus | "all") => void;
+  onTrackChange: (track: string) => void;
+  onFormatChange: (format: string) => void;
+  onClearFilters: () => void;
+}>) {
+  const activeFilterCount =
+    (status === "all" ? 0 : 1) + (track === "all" ? 0 : 1) + (format === "all" ? 0 : 1);
+
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button
+          className={styles.filterTrigger}
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label={
+            activeFilterCount > 0
+              ? `Filter submissions, ${activeFilterCount} active`
+              : "Filter submissions"
+          }
+          title={
+            activeFilterCount > 0
+              ? `Filter submissions, ${activeFilterCount} active`
+              : "Filter submissions"
+          }
+        >
+          <ListFilter aria-hidden="true" />
+          {activeFilterCount > 0 ? (
+            <span className={styles.filterActiveCount} aria-hidden="true">
+              {activeFilterCount}
+            </span>
+          ) : null}
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="end"
+          aria-label="Submission filters"
+          className={styles.filterPopover}
+          sideOffset={8}
+        >
+          <div className={styles.filterPopoverHeader}>
+            <strong>Filters</strong>
+            {filtersActive ? (
+              <Button type="button" variant="ghost" size="xs" onClick={onClearFilters}>
+                Clear
+              </Button>
+            ) : null}
+          </div>
+          <SubmissionFilterFields
+            status={status}
+            track={track}
+            format={format}
+            tracks={tracks}
+            formats={formats}
+            onStatusChange={onStatusChange}
+            onTrackChange={onTrackChange}
+            onFormatChange={onFormatChange}
+          />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function SubmissionFilterFields({
+  status,
+  track,
+  format,
+  tracks,
+  formats,
+  onStatusChange,
+  onTrackChange,
+  onFormatChange,
+}: Readonly<{
+  status: SubmissionStatus | "all";
+  track: string;
+  format: string;
+  tracks: string[];
+  formats: string[];
+  onStatusChange: (status: SubmissionStatus | "all") => void;
+  onTrackChange: (track: string) => void;
+  onFormatChange: (format: string) => void;
+}>) {
+  return (
+    <fieldset className={styles.filterMenu}>
+      <legend className={styles.srOnly}>Filter submissions</legend>
+      <SubmissionFilterField
+        id="submission-status"
+        label="Status"
+        value={status}
+        placeholder="All statuses"
+        options={[
+          { value: "all", label: "All statuses" },
+          ...Object.entries(submissionStatusLabels).map(([value, label]) => ({ value, label })),
+        ]}
+        onValueChange={(value) => onStatusChange(value as SubmissionStatus | "all")}
+      />
+      <SubmissionFilterField
+        id="submission-track"
+        label="Track"
+        value={track}
+        placeholder="All tracks"
+        options={[
+          { value: "all", label: "All tracks" },
+          ...tracks.map((value) => ({ value, label: value })),
+        ]}
+        onValueChange={onTrackChange}
+      />
+      <SubmissionFilterField
+        id="submission-format"
+        label="Format"
+        value={format}
+        placeholder="All formats"
+        options={[
+          { value: "all", label: "All formats" },
+          ...formats.map((value) => ({ value, label: value })),
+        ]}
+        onValueChange={onFormatChange}
+      />
+    </fieldset>
+  );
+}
+
+function SubmissionFilterField({
+  id,
+  label,
+  value,
+  placeholder,
+  options,
+  onValueChange,
+}: Readonly<{
+  id: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  options: readonly { value: string; label: string }[];
+  onValueChange: (value: string) => void;
+}>) {
+  return (
+    <div className={styles.filterRow}>
+      <label htmlFor={id}>{label}</label>
+      <Select value={value} onValueChange={onValueChange}>
+        <SelectTrigger id={id} className={styles.filterSelectTrigger}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+type SubmissionQueueStateProps = Pick<
+  SubmissionQueueProps,
+  | "eventName"
+  | "eventId"
+  | "organizationId"
+  | "selectedSubmissionId"
+  | "filteredSubmissions"
+  | "listState"
+  | "loadFailure"
+  | "sortKey"
+  | "sortDirection"
+  | "selected"
+  | "allVisibleSelected"
+  | "selectedVisibleCount"
+  | "onSort"
+  | "onToggleSelected"
+  | "onToggleAllVisible"
+  | "onClearFilters"
+  | "onRetry"
+>;
+
+function SubmissionQueueState({
+  listState,
+  loadFailure,
+  eventName,
+  eventId,
+  organizationId,
+  selectedSubmissionId,
+  filteredSubmissions,
+  sortKey,
+  sortDirection,
+  selected,
+  selectedVisibleCount,
+  allVisibleSelected,
+  onSort,
+  onToggleSelected,
+  onToggleAllVisible,
   onClearFilters,
   onRetry,
-}: SubmissionListBodyProps) {
-  if (listState === "loading") {
-    return <SubmissionLoadingState />;
-  }
+}: SubmissionQueueStateProps) {
+  if (listState === "loading") return <SubmissionLoadingState />;
   if (listState === "failure" || listState === "unconfigured") {
     return (
       <SubmissionFailureState listState={listState} loadFailure={loadFailure} onRetry={onRetry} />
@@ -620,7 +894,7 @@ function SubmissionListBody({
     return <SubmissionFilteredEmptyState onClearFilters={onClearFilters} />;
   }
   return (
-    <SubmissionTable
+    <SubmissionQueueTable
       eventName={eventName}
       eventId={eventId}
       organizationId={organizationId}
@@ -630,10 +904,45 @@ function SubmissionListBody({
       sortDirection={sortDirection}
       selected={selected}
       allVisibleSelected={allVisibleSelected}
+      selectedVisibleCount={selectedVisibleCount}
       onSort={onSort}
       onToggleSelected={onToggleSelected}
       onToggleAllVisible={onToggleAllVisible}
     />
+  );
+}
+
+function SubmissionQueueEmpty({
+  eventName,
+  listState,
+  loadFailure,
+  onRetry,
+}: Readonly<Pick<SubmissionQueueProps, "eventName" | "listState" | "loadFailure" | "onRetry">>) {
+  if (listState === "loading") {
+    return (
+      <div className={styles.listContent}>
+        <SubmissionLoadingState />
+      </div>
+    );
+  }
+  if (listState === "failure" || listState === "unconfigured") {
+    return (
+      <div className={styles.listContent}>
+        <SubmissionFailureState listState={listState} loadFailure={loadFailure} onRetry={onRetry} />
+      </div>
+    );
+  }
+  return (
+    <div className={styles.emptyCardContent}>
+      <Empty className={styles.emptyState} role="status">
+        <EmptyHeader>
+          <EmptyTitle>No submissions yet</EmptyTitle>
+          <EmptyDescription>
+            Share the public call for proposals to start collecting sessions for {eventName}.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    </div>
   );
 }
 
@@ -684,61 +993,24 @@ function SubmissionFilteredEmptyState({
   );
 }
 
-function SubmissionListEmptyCard({
-  eventName,
-  listState,
-  loadFailure,
-  onRetry,
-}: Readonly<{
-  eventName: string;
-  listState: SubmissionListState;
-  loadFailure: SubmissionLoadFailure | null;
-  onRetry: () => void;
-}>) {
-  if (listState === "loading") {
-    return (
-      <CardContent>
-        <SubmissionLoadingState />
-      </CardContent>
-    );
-  }
-  if (listState === "failure" || listState === "unconfigured") {
-    return (
-      <CardContent>
-        <SubmissionFailureState listState={listState} loadFailure={loadFailure} onRetry={onRetry} />
-      </CardContent>
-    );
-  }
-  return (
-    <CardContent className={styles.emptyCardContent}>
-      <Empty className={styles.emptyState} role="status">
-        <EmptyHeader>
-          <EmptyTitle>No submissions yet</EmptyTitle>
-          <EmptyDescription>
-            Share the public call for proposals to start collecting sessions for {eventName}.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    </CardContent>
-  );
-}
+type SubmissionQueueTableProps = Pick<
+  SubmissionQueueProps,
+  | "eventName"
+  | "eventId"
+  | "organizationId"
+  | "selectedSubmissionId"
+  | "filteredSubmissions"
+  | "sortKey"
+  | "sortDirection"
+  | "selected"
+  | "allVisibleSelected"
+  | "selectedVisibleCount"
+  | "onSort"
+  | "onToggleSelected"
+  | "onToggleAllVisible"
+>;
 
-type SubmissionTableProps = Readonly<{
-  eventName: string;
-  eventId: string;
-  organizationId: string;
-  selectedSubmissionId: string | undefined;
-  filteredSubmissions: SubmissionRecord[];
-  sortKey: SubmissionSortKey;
-  sortDirection: SubmissionSortDirection;
-  selected: ReadonlySet<string>;
-  allVisibleSelected: boolean;
-  onSort: (sortKey: SubmissionSortKey) => void;
-  onToggleSelected: (id: string) => void;
-  onToggleAllVisible: () => void;
-}>;
-
-function SubmissionTable({
+function SubmissionQueueTable({
   eventName,
   eventId,
   organizationId,
@@ -747,122 +1019,214 @@ function SubmissionTable({
   sortKey,
   sortDirection,
   selected,
+  selectedVisibleCount,
   allVisibleSelected,
   onSort,
   onToggleSelected,
   onToggleAllVisible,
-}: SubmissionTableProps) {
+}: SubmissionQueueTableProps) {
   return (
     <div className={styles.tableWrap} data-scroll-region="submission-queue">
       <Table className={styles.submissionTable}>
         <TableCaption className={styles.srOnly}>Submissions for {eventName}</TableCaption>
-        <TableHeader>
-          <TableRow>
-            <TableHead className={styles.checkboxColumn} scope="col">
-              <label className={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  onChange={onToggleAllVisible}
-                  aria-label="Select all visible submissions"
-                />
-                <span className={styles.srOnly}>Select all visible submissions</span>
-              </label>
-            </TableHead>
-            <SortableHeader
-              sortKey="title"
-              activeKey={sortKey}
-              direction={sortDirection}
-              onSort={onSort}
-            >
-              Submission
-            </SortableHeader>
-            <SortableHeader
-              sortKey="status"
-              activeKey={sortKey}
-              direction={sortDirection}
-              onSort={onSort}
-            >
-              Status
-            </SortableHeader>
-            <TableHead scope="col">Participants</TableHead>
-            <TableHead scope="col">Review progress</TableHead>
-            <TableHead scope="col">Track / format</TableHead>
-            <SortableHeader
-              sortKey="updatedAt"
-              activeKey={sortKey}
-              direction={sortDirection}
-              onSort={onSort}
-            >
-              Updated
-            </SortableHeader>
-          </TableRow>
-        </TableHeader>
+        <SubmissionTableHeader
+          sortKey={sortKey}
+          sortDirection={sortDirection}
+          allVisibleSelected={allVisibleSelected}
+          onSort={onSort}
+          onToggleAllVisible={onToggleAllVisible}
+          selectedVisible={selectedVisibleCount > 0}
+        />
         <TableBody>
           {filteredSubmissions.map((submission) => (
-            <TableRow
+            <SubmissionQueueRow
               key={submission.id}
-              aria-current={submission.id === selectedSubmissionId ? "page" : undefined}
-              data-state={submission.id === selectedSubmissionId ? "selected" : undefined}
-            >
-              <TableCell className={styles.checkboxColumn}>
-                <label className={styles.checkboxLabel}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(submission.id)}
-                    onChange={() => onToggleSelected(submission.id)}
-                    aria-label={`Select ${submission.title}`}
-                  />
-                  <span className={styles.srOnly}>Select {submission.title}</span>
-                </label>
-              </TableCell>
-              <TableHead scope="row" className={styles.titleCell}>
-                <a
-                  className={styles.submissionLink}
-                  href={submissionHref(eventId, submission.id, organizationId)}
-                  title={submission.title}
-                >
-                  {submission.title}
-                </a>
-                <span className={styles.submissionMeta}>
-                  {submission.id} · v{submission.version}
-                </span>
-              </TableHead>
-              <TableCell>
-                <StatusBadge status={submission.status} />
-              </TableCell>
-              <TableCell>
-                <ProgressMeter
-                  completed={submission.participantProgress.completed}
-                  total={submission.participantProgress.total}
-                  label={`${submission.title} participant profile progress`}
-                />
-              </TableCell>
-              <TableCell>
-                {reviewDataIsReady(submission) ? (
-                  <ProgressMeter
-                    completed={submission.reviewSummary.completed}
-                    total={submission.reviewSummary.total}
-                    label={`${submission.title} review progress`}
-                  />
-                ) : (
-                  <span className={styles.mutedText}>
-                    {reviewDataMessage(submission.reviewData)}
-                  </span>
-                )}
-              </TableCell>
-              <TableCell>
-                <span className={styles.trackValue}>{submission.track}</span>
-                <span className={styles.submissionMeta}>{submission.format}</span>
-              </TableCell>
-              <TableCell>
-                <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
-              </TableCell>
-            </TableRow>
+              eventId={eventId}
+              organizationId={organizationId}
+              selectedSubmissionId={selectedSubmissionId}
+              submission={submission}
+              selected={selected}
+              onToggleSelected={onToggleSelected}
+            />
           ))}
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+function SubmissionTableHeader({
+  sortKey,
+  sortDirection,
+  allVisibleSelected,
+  onSort,
+  onToggleAllVisible,
+  selectedVisible,
+}: Readonly<{
+  sortKey: SubmissionSortKey;
+  sortDirection: SubmissionSortDirection;
+  allVisibleSelected: boolean;
+  onSort: (sortKey: SubmissionSortKey) => void;
+  onToggleAllVisible: () => void;
+  selectedVisible: boolean;
+}>) {
+  return (
+    <TableHeader>
+      <TableRow>
+        <TableHead className={styles.checkboxColumn} scope="col">
+          <Checkbox
+            checked={allVisibleSelected ? true : selectedVisible ? "indeterminate" : false}
+            onCheckedChange={onToggleAllVisible}
+            aria-label="Select all visible submissions"
+          />
+        </TableHead>
+        <SortableHeader
+          className={styles.titleColumn}
+          sortKey="title"
+          activeKey={sortKey}
+          direction={sortDirection}
+          onSort={onSort}
+        >
+          Title
+        </SortableHeader>
+        <SortableHeader
+          className={styles.statusColumn}
+          sortKey="status"
+          activeKey={sortKey}
+          direction={sortDirection}
+          onSort={onSort}
+        >
+          Status
+        </SortableHeader>
+        <TableHead className={styles.speakersColumn} scope="col">
+          Speakers
+        </TableHead>
+        <TableHead className={styles.reviewColumn} scope="col">
+          Reviews
+        </TableHead>
+        <TableHead className={styles.taxonomyColumn} scope="col">
+          Track / format
+        </TableHead>
+        <SortableHeader
+          className={styles.updatedColumn}
+          sortKey="updatedAt"
+          activeKey={sortKey}
+          direction={sortDirection}
+          onSort={onSort}
+        >
+          Updated
+        </SortableHeader>
+      </TableRow>
+    </TableHeader>
+  );
+}
+
+function SubmissionQueueRow({
+  eventId,
+  organizationId,
+  selectedSubmissionId,
+  submission,
+  selected,
+  onToggleSelected,
+}: Readonly<{
+  eventId: string;
+  organizationId: string;
+  selectedSubmissionId: string | undefined;
+  submission: SubmissionRecord;
+  selected: ReadonlySet<string>;
+  onToggleSelected: (id: string) => void;
+}>) {
+  return (
+    <TableRow
+      aria-current={submission.id === selectedSubmissionId ? "page" : undefined}
+      data-state={submission.id === selectedSubmissionId ? "selected" : undefined}
+      data-bulk-selected={selected.has(submission.id) ? "true" : "false"}
+      aria-selected={selected.has(submission.id)}
+      data-submission-row-layout="summary"
+    >
+      <TableCell className={styles.checkboxColumn}>
+        <Checkbox
+          checked={selected.has(submission.id)}
+          onCheckedChange={() => onToggleSelected(submission.id)}
+          aria-label={`Select ${submission.title}`}
+        />
+      </TableCell>
+      <TableHead scope="row" className={styles.titleCell}>
+        <a
+          className={styles.submissionLink}
+          href={submissionHref(eventId, submission.id, organizationId)}
+          title={submission.title}
+        >
+          {submission.title}
+        </a>
+      </TableHead>
+      <TableCell className={styles.statusCell}>
+        <span className={styles.mobileLabel}>Status</span>
+        <StatusBadge status={submission.status} />
+      </TableCell>
+      <TableCell className={styles.speakersCell}>
+        <span className={styles.mobileLabel}>Speakers</span>
+        <span
+          className={styles.speakerNames}
+          title={submission.participants.map((participant) => participant.name).join(", ")}
+        >
+          {submission.participants.length === 0
+            ? "No speaker"
+            : submission.participants.map((participant) => participant.name).join(", ")}
+        </span>
+      </TableCell>
+      <TableCell className={styles.reviewCell}>
+        <span className={styles.mobileLabel}>Reviews</span>
+        <SubmissionReviewProgress submission={submission} />
+      </TableCell>
+      <TableCell className={styles.taxonomyCell}>
+        <span className={styles.mobileLabel}>Track / format</span>
+        <span className={styles.trackValue}>{submission.track}</span>
+        <span className={styles.submissionMeta}>{submission.format}</span>
+      </TableCell>
+      <TableCell className={styles.updatedCell}>
+        <span className={styles.mobileLabel}>Updated</span>
+        <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function SubmissionReviewProgress({ submission }: Readonly<{ submission: SubmissionRecord }>) {
+  if (reviewDataIsReady(submission)) {
+    return (
+      <ProgressMeter
+        completed={submission.reviewSummary.completed}
+        total={submission.reviewSummary.total}
+        label={`${submission.title} review progress`}
+      />
+    );
+  }
+  return <span className={styles.mutedText}>{reviewDataMessage(submission.reviewData)}</span>;
+}
+
+function SubmissionDetailOverlay({
+  eventId,
+  organizationId,
+  selectedSubmissionId,
+  selectedSubmission,
+  detailPanel,
+}: Readonly<{
+  eventId: string;
+  organizationId: string;
+  selectedSubmissionId: string | undefined;
+  selectedSubmission: SubmissionRecord | undefined;
+  detailPanel: ReactNode;
+}>) {
+  if (selectedSubmissionId === undefined) return null;
+
+  return (
+    <SubmissionDetailDrawer
+      closeHref={submissionListHref(eventId, organizationId)}
+      title={selectedSubmission?.title ?? "Submission details"}
+    >
+      {detailPanel}
+    </SubmissionDetailDrawer>
   );
 }
 
@@ -872,16 +1236,19 @@ function SortableHeader({
   direction,
   onSort,
   children,
+  className = "",
 }: Readonly<{
   sortKey: SubmissionSortKey;
   activeKey: SubmissionSortKey;
   direction: SubmissionSortDirection;
   onSort: (sortKey: SubmissionSortKey) => void;
   children: string;
+  className?: string | undefined;
 }>) {
   const active = activeKey === sortKey;
   return (
     <TableHead
+      className={className}
       scope="col"
       aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
     >
@@ -933,26 +1300,26 @@ export function SubmissionDetailView({
           eventName={eventName}
           submission={submission}
         />
-      ) : (
-        <div className={styles.reviewPanelBar}>
-          <div>
-            <span className={styles.submissionCode}>{submission.id}</span>
-            <StatusBadge status={submission.status} />
-          </div>
-          <Button asChild size="sm" variant="ghost">
-            <Link href={submissionListHref(eventId, organizationId)}>Close</Link>
-          </Button>
-        </div>
-      )}
+      ) : null}
 
       <div
         id="submission-detail-content"
         className={displayMode === "panel" ? styles.reviewPanelBody : styles.workspaceMain}
-        data-scroll-region={displayMode === "panel" ? "submission-detail" : undefined}
         tabIndex={-1}
       >
+        {displayMode === "panel" ? (
+          <div className={styles.drawerIntro}>
+            <strong>Organizer review.</strong>
+            <span>
+              Review the submission content, participant context, committee activity, and final
+              decision.
+            </span>
+          </div>
+        ) : null}
         <div className={styles.detailGrid}>
           <SubmissionDetailPrimary
+            eventName={eventName}
+            displayMode={displayMode}
             submission={submission}
             baseUrl={baseUrl}
             onDecisionSaved={onDecisionSaved}
@@ -992,7 +1359,7 @@ function SubmissionDetailHeader({
             <span>/</span>
             <Link href={submissionListHref(eventId, organizationId)}>Submissions</Link>
             <span>/</span>
-            <strong>{submission.id}</strong>
+            <strong>Submission details</strong>
           </WorkspaceBreadcrumb>
         }
         title={submission.title}
@@ -1004,7 +1371,6 @@ function SubmissionDetailHeader({
         description={`${submission.format} · ${submission.track}`}
         metadata={
           <>
-            <WorkspaceMetaItem>Version {submission.version}</WorkspaceMetaItem>
             <WorkspaceMetaItem>
               Updated{" "}
               <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
@@ -1023,39 +1389,92 @@ function SubmissionDetailHeader({
 }
 
 function SubmissionDetailPrimary({
+  eventName,
+  displayMode,
   submission,
   baseUrl,
   onDecisionSaved,
 }: Readonly<{
+  eventName: string;
+  displayMode: "page" | "panel";
   submission: SubmissionRecord;
   baseUrl: string;
   onDecisionSaved: (decision: EvaluationDecisionRecord) => void;
 }>) {
   return (
     <div className={styles.detailPrimary}>
-      <section className={styles.detailPanel} aria-labelledby="abstract-heading">
-        <div className={styles.panelHeading}>
-          <div>
-            <p className={styles.eyebrow}>Submission content</p>
-            <h2 id="abstract-heading">Abstract</h2>
-          </div>
-          <span className={styles.versionBadge}>Version {submission.version}</span>
-        </div>
-        <p className={styles.abstract}>{submission.abstract}</p>
-      </section>
-
-      <section className={styles.detailPanel} aria-labelledby="answers-heading">
-        <p className={styles.eyebrow}>Form responses</p>
-        <h2 id="answers-heading">Structured answers</h2>
-        <dl className={styles.answerList}>
-          {submission.answers.map((answer) => (
-            <div key={answer.question}>
-              <dt>{answer.question}</dt>
-              <dd>{answer.answer}</dd>
+      {displayMode === "panel" ? (
+        <section
+          className={`${styles.detailPanel} ${styles.submissionOverviewPanel}`}
+          aria-labelledby="submission-overview-heading"
+        >
+          <div className={styles.submissionOverviewHeader}>
+            <div>
+              <p className={styles.eyebrow}>{eventName} · Submission</p>
+              <h1 id="submission-overview-heading">{submission.title}</h1>
             </div>
-          ))}
-        </dl>
-      </section>
+            <StatusBadge status={submission.status} />
+          </div>
+          <dl className={styles.submissionOverviewMeta}>
+            <div>
+              <dt>Status</dt>
+              <dd>{submissionStatusLabels[submission.status]}</dd>
+            </div>
+            <div>
+              <dt>Track / format</dt>
+              <dd>
+                {submission.track} · {submission.format}
+              </dd>
+            </div>
+            <div>
+              <dt>Updated</dt>
+              <dd>{formatDateTime(submission.updatedAt)}</dd>
+            </div>
+          </dl>
+          <div className={styles.submissionOverviewCopy}>
+            <h2>Submission overview</h2>
+            <p>{submission.abstract}</p>
+          </div>
+          <div className={styles.submissionOverviewAnswers}>
+            <p className={styles.eyebrow}>Form responses</p>
+            <h2>Structured answers</h2>
+            <dl className={styles.answerList}>
+              {submission.answers.map((answer) => (
+                <div key={answer.question}>
+                  <dt>{answer.question}</dt>
+                  <dd>{answer.answer}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+      ) : (
+        <>
+          <section className={styles.detailPanel} aria-labelledby="abstract-heading">
+            <div className={styles.panelHeading}>
+              <div>
+                <p className={styles.eyebrow}>Submission content</p>
+                <h2 id="abstract-heading">Abstract</h2>
+              </div>
+              <span className={styles.versionBadge}>Version {submission.version}</span>
+            </div>
+            <p className={styles.abstract}>{submission.abstract}</p>
+          </section>
+
+          <section className={styles.detailPanel} aria-labelledby="answers-heading">
+            <p className={styles.eyebrow}>Form responses</p>
+            <h2 id="answers-heading">Structured answers</h2>
+            <dl className={styles.answerList}>
+              {submission.answers.map((answer) => (
+                <div key={answer.question}>
+                  <dt>{answer.question}</dt>
+                  <dd>{answer.answer}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </>
+      )}
 
       <section className={styles.detailPanel} aria-labelledby="timeline-heading">
         <p className={styles.eyebrow}>Audit history</p>

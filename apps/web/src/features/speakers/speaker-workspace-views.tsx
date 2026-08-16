@@ -17,6 +17,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "../../components/ui/empty";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../../components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type {
   SpeakerAsset,
@@ -77,6 +84,8 @@ function SpeakerRosterView({
   selectedSpeakerIds,
   allVisibleSelected,
   selectedSpeaker,
+  detailTriggerRef,
+  onCloseDetail,
   detailProps,
   showCsv,
   importProps,
@@ -117,6 +126,8 @@ function SpeakerRosterView({
   selectedSpeakerIds: readonly string[];
   allVisibleSelected: boolean;
   selectedSpeaker: SpeakerRecord | null;
+  detailTriggerRef: RefObject<HTMLButtonElement | null>;
+  onCloseDetail: () => void;
   detailProps: Readonly<{
     organizationId: string;
     eventId: string;
@@ -196,18 +207,31 @@ function SpeakerRosterView({
   onImportCsv: () => void;
 }>) {
   const detail = selectedSpeaker ? (
-    <SpeakerDetailSection selectedSpeaker={selectedSpeaker} {...detailProps} />
-  ) : (
-    <Empty className={styles.empty}>
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <Users />
-        </EmptyMedia>
-        <EmptyTitle>Select a speaker</EmptyTitle>
-        <EmptyDescription>Select a speaker to see profile and delivery details.</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
-  );
+    <Sheet
+      open
+      onOpenChange={(open) => {
+        if (!open) onCloseDetail();
+      }}
+    >
+      <SheetContent
+        side="right"
+        className={styles.detailSheet}
+        overlayClassName="bg-foreground/10 backdrop-blur-none supports-[backdrop-filter]:backdrop-blur-none"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          detailTriggerRef.current?.focus();
+        }}
+      >
+        <SheetHeader className="sr-only">
+          <SheetTitle>{selectedSpeaker.displayName}</SheetTitle>
+          <SheetDescription>
+            Edit this speaker&apos;s profile, logistics, assignments, tasks, invitations, and files.
+          </SheetDescription>
+        </SheetHeader>
+        <SpeakerDetailSection selectedSpeaker={selectedSpeaker} {...detailProps} />
+      </SheetContent>
+    </Sheet>
+  ) : null;
 
   return (
     <>
@@ -252,65 +276,42 @@ function SpeakerRosterView({
           </CardContent>
         </Card>
       ) : (
-        <>
-          <section className={styles.attentionStrip} aria-label="Speaker attention filters">
-            {(["all", "overdue", "awaiting-invite", "duplicate-email", "inactive"] as const).map(
-              (value) => {
-                const labels = {
-                  all: "All speakers",
-                  overdue: "Overdue tasks",
-                  "awaiting-invite": "Awaiting invite",
-                  "duplicate-email": "Duplicate emails",
-                  inactive: "Inactive",
-                } as const;
-                return (
-                  <button
-                    key={value}
-                    className={styles.attentionFilter}
-                    type="button"
-                    aria-pressed={attentionFilter === value}
-                    onClick={() => onAttentionFilterChange(value)}
-                  >
-                    <span>{labels[value]}</span>
-                    <strong>{attentionCounts[value]}</strong>
-                  </button>
-                );
-              },
-            )}
-          </section>
-          <SpeakerRosterSection
-            scopedRoster={scopedRoster}
-            loading={loading}
-            speakers={speakers}
-            filteredSpeakers={filteredSpeakers}
-            selectedId={selectedId}
-            selectedSpeakerIdSet={selectedSpeakerIdSet}
-            duplicateEmailWarnings={duplicateEmailWarnings}
-            statusOptions={statusOptions}
-            sessionOptions={sessionOptions}
-            query={query}
-            filtersOpen={filtersOpen}
-            statusFilter={statusFilter}
-            sessionFilter={sessionFilter}
-            progressFilter={progressFilter}
-            hasActiveRosterFilters={hasActiveRosterFilters}
-            hasAnyFilters={hasAnyFilters}
-            selectedSpeakerIds={selectedSpeakerIds}
-            allVisibleSelected={allVisibleSelected}
-            detail={detail}
-            onQueryChange={onQueryChange}
-            onToggleFilters={onToggleFilters}
-            onStatusFilterChange={onStatusFilterChange}
-            onSessionFilterChange={onSessionFilterChange}
-            onProgressFilterChange={onProgressFilterChange}
-            onClearFilters={onClearFilters}
-            onOpenSelectedEmail={onOpenSelectedEmail}
-            onToggleVisibleSelection={onToggleVisibleSelection}
-            onClearSelection={onClearSelection}
-            onToggleSelection={onToggleSelection}
-            onBeginEdit={onBeginEdit}
-          />
-        </>
+        <SpeakerRosterSection
+          scopedRoster={scopedRoster}
+          loading={loading}
+          speakers={speakers}
+          filteredSpeakers={filteredSpeakers}
+          selectedId={selectedId}
+          selectedSpeakerIdSet={selectedSpeakerIdSet}
+          duplicateEmailWarnings={duplicateEmailWarnings}
+          statusOptions={statusOptions}
+          sessionOptions={sessionOptions}
+          query={query}
+          filtersOpen={filtersOpen}
+          statusFilter={statusFilter}
+          sessionFilter={sessionFilter}
+          progressFilter={progressFilter}
+          attentionFilter={attentionFilter}
+          attentionCounts={attentionCounts}
+          hasActiveRosterFilters={hasActiveRosterFilters}
+          hasAnyFilters={hasAnyFilters}
+          selectedSpeakerIds={selectedSpeakerIds}
+          allVisibleSelected={allVisibleSelected}
+          detail={detail}
+          onQueryChange={onQueryChange}
+          onToggleFilters={onToggleFilters}
+          onStatusFilterChange={onStatusFilterChange}
+          onSessionFilterChange={onSessionFilterChange}
+          onProgressFilterChange={onProgressFilterChange}
+          onAttentionFilterChange={onAttentionFilterChange}
+          onClearFilters={onClearFilters}
+          onOpenSelectedEmail={onOpenSelectedEmail}
+          onToggleVisibleSelection={onToggleVisibleSelection}
+          onClearSelection={onClearSelection}
+          onToggleSelection={onToggleSelection}
+          onBeginEdit={onBeginEdit}
+          detailTriggerRef={detailTriggerRef}
+        />
       )}
       <SpeakerImportSection open={showCsv} showTrigger={!rosterEmpty} {...importProps} />
     </>

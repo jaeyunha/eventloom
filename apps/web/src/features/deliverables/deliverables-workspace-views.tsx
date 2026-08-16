@@ -48,7 +48,6 @@ import {
   triggerDeliverablesDownload,
 } from "./deliverables-workspace-model";
 import {
-  AssetDetail,
   ContentRequestInspector,
   DeliverablesSummary,
   DeliverablesTable,
@@ -609,226 +608,47 @@ interface FilesSectionProps {
   readonly eventId: string;
   readonly families: readonly FileFamilyProjection[];
   readonly activeFamily: FileFamilyProjection | undefined;
-  readonly selectedAsset: DeliverableAsset | undefined;
   readonly sessions: readonly DeliverableSession[];
   readonly tasks: readonly DeliverableTask[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
-  readonly assetHistory: readonly DeliverableAssetHistoryEntry[];
-  readonly comments: readonly DeliverableComment[];
-  readonly selectedAssetId: string | null;
-  readonly loadingAssetDetails: boolean;
   readonly busy: boolean;
   readonly loadFailed: boolean;
-  readonly assetHistoryError: string | null;
-  readonly commentsError: string | null;
-  readonly reviewAvailable: boolean;
   readonly onRetry?: () => void;
   readonly onInspectAsset?: (assetId: string) => void;
-  readonly onCloseAsset?: () => void;
-  readonly onDownloadVersion?: (assetId: string) => Promise<void>;
   readonly onExportFiles?: (
     input: DeliverableExportInput,
   ) => Promise<DeliverableExportDownload | undefined>;
-  readonly onAddComment?: (input: {
-    readonly assetId: string;
-    readonly body: string;
-    readonly expectedVersion: number;
-  }) => Promise<void>;
-  readonly onReviewAsset?: (input: DeliverableReviewInput) => Promise<void>;
 }
 function FilesSection({
   organizationId,
   eventId,
   families,
   activeFamily,
-  selectedAsset,
   sessions,
   tasks,
   profiles,
-  assetHistory,
-  comments,
-  selectedAssetId,
-  loadingAssetDetails,
   busy,
   loadFailed,
-  assetHistoryError,
-  commentsError,
-  reviewAvailable,
   onRetry,
   onInspectAsset,
-  onCloseAsset,
-  onDownloadVersion,
   onExportFiles,
-  onAddComment,
-  onReviewAsset,
 }: Readonly<FilesSectionProps>) {
   return (
-    <>
-      <FileLibrary
-        organizationId={organizationId}
-        eventId={eventId}
-        families={families}
-        sessions={sessions}
-        tasks={tasks}
-        profiles={profiles}
-        busy={busy}
-        loadFailed={loadFailed}
-        onStartDownload={triggerDeliverablesDownload}
-        {...(activeFamily === undefined ? {} : { activeFamilyId: activeFamily.familyId })}
-        {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
-        {...(onExportFiles === undefined ? {} : { onExport: onExportFiles })}
-        {...(onRetry === undefined ? {} : { onRetry })}
-      />
-      <FileReviewDrawer
-        open={selectedAssetId !== null}
-        family={activeFamily}
-        asset={selectedAsset}
-        sessions={sessions}
-        tasks={tasks}
-        profiles={profiles}
-        history={assetHistory}
-        comments={comments}
-        loading={loadingAssetDetails}
-        busy={busy}
-        assetHistoryError={assetHistoryError}
-        commentsError={commentsError}
-        reviewAvailable={reviewAvailable}
-        onOpenChange={(open) => {
-          if (!open) onCloseAsset?.();
-        }}
-        {...(onInspectAsset === undefined ? {} : { onSelectVersion: onInspectAsset })}
-        {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
-        {...(onAddComment === undefined || selectedAsset === undefined
-          ? {}
-          : {
-              onAddComment: (body: string, expectedVersion: number) =>
-                onAddComment({ assetId: selectedAsset.id, body, expectedVersion }),
-            })}
-        {...(onReviewAsset === undefined || selectedAsset === undefined
-          ? {}
-          : {
-              onReview: (
-                state: DeliverableReviewState,
-                note: string | undefined,
-                release: boolean,
-              ) =>
-                onReviewAsset({
-                  assetId: selectedAsset.id,
-                  state,
-                  expectedVersion: selectedAsset.reviewVersion ?? 0,
-                  release,
-                  ...(note === undefined ? {} : { note }),
-                }),
-            })}
-      />
-    </>
-  );
-}
-
-interface AssetSheetProps {
-  readonly selectedAssetId: string | null;
-  readonly selectedAsset: DeliverableAsset | undefined;
-  readonly assets: readonly DeliverableAsset[];
-  readonly history: readonly DeliverableAssetHistoryEntry[];
-  readonly comments: readonly DeliverableComment[];
-  readonly loading: boolean;
-  readonly busy: boolean;
-  readonly assetHistoryError: string | null;
-  readonly commentsError: string | null;
-  readonly matrixAuthoritative: boolean;
-  readonly authoritativeCurrentAsset?: DeliverableAsset;
-  readonly reviewAvailable: boolean;
-  readonly onClose?: () => void;
-  readonly onDownload?: (assetId: string) => Promise<void>;
-  readonly onAddComment?: (input: {
-    readonly assetId: string;
-    readonly body: string;
-    readonly expectedVersion: number;
-  }) => Promise<void>;
-  readonly onReview?: (input: DeliverableReviewInput) => Promise<void>;
-}
-function AssetSheet({
-  selectedAssetId,
-  selectedAsset,
-  assets,
-  history,
-  comments,
-  loading,
-  busy,
-  assetHistoryError,
-  commentsError,
-  matrixAuthoritative,
-  authoritativeCurrentAsset,
-  reviewAvailable,
-  onClose,
-  onDownload,
-  onAddComment,
-  onReview,
-}: Readonly<AssetSheetProps>) {
-  return (
-    <Sheet
-      open={selectedAssetId !== null}
-      onOpenChange={(open) => {
-        if (!open) onClose?.();
-      }}
-    >
-      <SheetContent className={styles.assetSheet}>
-        <SheetHeader>
-          <SheetTitle>Asset detail</SheetTitle>
-          <SheetDescription>
-            Authorized immutable history, comments, review, and version downloads.
-          </SheetDescription>
-        </SheetHeader>
-        <ScrollArea className={styles.assetScroll}>
-          {selectedAsset === undefined ? (
-            <Alert variant="destructive" role="alert">
-              <AlertDescription>
-                The selected private asset is no longer present in this event projection.
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <AssetDetail
-              asset={selectedAsset}
-              allAssets={assets}
-              history={history}
-              assetHistoryError={assetHistoryError}
-              commentsError={commentsError}
-              comments={comments}
-              matrixAuthoritative={matrixAuthoritative}
-              {...(authoritativeCurrentAsset === undefined
-                ? {}
-                : { authoritativeCurrentAssetId: authoritativeCurrentAsset.id })}
-              loading={loading}
-              busy={busy}
-              reviewAvailable={reviewAvailable}
-              {...(onDownload === undefined ? {} : { onDownload })}
-              {...(onAddComment === undefined
-                ? {}
-                : {
-                    onAddComment: (body: string, expectedVersion: number) =>
-                      onAddComment({ assetId: selectedAsset.id, body, expectedVersion }),
-                  })}
-              {...(onReview === undefined
-                ? {}
-                : {
-                    onReview: (
-                      state: DeliverableReviewState,
-                      note: string | undefined,
-                      release: boolean,
-                    ) =>
-                      onReview({
-                        assetId: selectedAsset.id,
-                        state,
-                        expectedVersion: selectedAsset.reviewVersion ?? 0,
-                        release,
-                        ...(note === undefined ? {} : { note }),
-                      }),
-                  })}
-            />
-          )}
-        </ScrollArea>
-      </SheetContent>
-    </Sheet>
+    <FileLibrary
+      organizationId={organizationId}
+      eventId={eventId}
+      families={families}
+      sessions={sessions}
+      tasks={tasks}
+      profiles={profiles}
+      busy={busy}
+      loadFailed={loadFailed}
+      onStartDownload={triggerDeliverablesDownload}
+      {...(activeFamily === undefined ? {} : { activeFamilyId: activeFamily.familyId })}
+      {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
+      {...(onExportFiles === undefined ? {} : { onExport: onExportFiles })}
+      {...(onRetry === undefined ? {} : { onRetry })}
+    />
   );
 }
 
@@ -988,7 +808,6 @@ interface WorkspaceCanvasProps {
   readonly tasks: readonly DeliverableTask[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
   readonly participants: readonly DeliverableSubjectParticipant[];
-  readonly matrixItems?: readonly DeliverableMatrixItem[];
   readonly matrixAssetsForView: readonly DeliverableAsset[];
   readonly fileFamilies: readonly FileFamilyProjection[];
   readonly activeFileFamily?: FileFamilyProjection;
@@ -996,7 +815,6 @@ interface WorkspaceCanvasProps {
   readonly selectedAssetId: string | null;
   readonly selectedAssetVersions: readonly DeliverableAsset[];
   readonly selectedAssetCurrentLabel: string | null;
-  readonly authoritativeCurrentAsset?: DeliverableAsset;
   readonly filters: ContentRequestFilters;
   readonly selectedTaskIds: readonly string[];
   readonly selectedAssignmentId: string | null;
@@ -1057,7 +875,6 @@ function WorkspaceCanvas({
   tasks,
   profiles,
   participants,
-  matrixItems,
   matrixAssetsForView,
   fileFamilies,
   activeFileFamily,
@@ -1065,7 +882,6 @@ function WorkspaceCanvas({
   selectedAssetId,
   selectedAssetVersions,
   selectedAssetCurrentLabel,
-  authoritativeCurrentAsset,
   filters,
   selectedTaskIds,
   selectedAssignmentId,
@@ -1172,48 +988,64 @@ function WorkspaceCanvas({
               eventId={eventId}
               families={fileFamilies}
               activeFamily={activeFileFamily}
-              selectedAsset={selectedAsset}
               sessions={sessions}
               tasks={tasks}
               profiles={profiles}
-              assetHistory={assetHistory}
-              comments={comments}
-              selectedAssetId={selectedAssetId}
-              loadingAssetDetails={loadingAssetDetails}
               busy={busy}
               loadFailed={error !== null}
-              assetHistoryError={assetHistoryError}
-              commentsError={commentsError}
-              reviewAvailable={onReviewAsset !== undefined}
               {...(onRetry === undefined ? {} : { onRetry })}
               {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
-              {...(onCloseAsset === undefined ? {} : { onCloseAsset })}
-              {...(onDownloadVersion === undefined ? {} : { onDownloadVersion })}
               {...(onExportFiles === undefined ? {} : { onExportFiles })}
-              {...(onAddComment === undefined ? {} : { onAddComment })}
-              {...(onReviewAsset === undefined ? {} : { onReviewAsset })}
             />
           )}
+          <FileReviewDrawer
+            open={selectedAssetId !== null}
+            family={activeFileFamily}
+            asset={selectedAsset}
+            sessions={sessions}
+            tasks={tasks}
+            profiles={profiles}
+            history={assetHistory}
+            comments={comments}
+            loading={loadingAssetDetails}
+            busy={busy}
+            assetHistoryError={assetHistoryError}
+            commentsError={commentsError}
+            reviewAvailable={onReviewAsset !== undefined}
+            onOpenChange={(open) => {
+              if (!open) onCloseAsset?.();
+            }}
+            {...(onInspectAsset === undefined ? {} : { onSelectVersion: onInspectAsset })}
+            {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
+            {...(onAddComment === undefined || selectedAsset === undefined
+              ? {}
+              : {
+                  onAddComment: (body: string, expectedVersion: number) =>
+                    onAddComment({
+                      assetId: selectedAsset.id,
+                      body,
+                      expectedVersion,
+                    }),
+                })}
+            {...(onReviewAsset === undefined || selectedAsset === undefined
+              ? {}
+              : {
+                  onReview: (
+                    state: DeliverableReviewState,
+                    note: string | undefined,
+                    release: boolean,
+                  ) =>
+                    onReviewAsset({
+                      assetId: selectedAsset.id,
+                      state,
+                      expectedVersion: selectedAsset.reviewVersion ?? 0,
+                      release,
+                      ...(note === undefined ? {} : { note }),
+                    }),
+                })}
+          />
           {!filesMode ? (
             <>
-              <AssetSheet
-                selectedAssetId={selectedAssetId}
-                selectedAsset={selectedAsset}
-                assets={matrixAssetsForView}
-                history={assetHistory}
-                comments={comments}
-                loading={loadingAssetDetails}
-                busy={busy}
-                assetHistoryError={assetHistoryError}
-                commentsError={commentsError}
-                matrixAuthoritative={matrixItems !== undefined}
-                {...(authoritativeCurrentAsset === undefined ? {} : { authoritativeCurrentAsset })}
-                reviewAvailable={onReviewAsset !== undefined}
-                {...(onCloseAsset === undefined ? {} : { onClose: onCloseAsset })}
-                {...(onDownloadVersion === undefined ? {} : { onDownload: onDownloadVersion })}
-                {...(onAddComment === undefined ? {} : { onAddComment })}
-                {...(onReviewAsset === undefined ? {} : { onReview: onReviewAsset })}
-              />
               <SelectedAssetEvidence
                 selectedAssetId={selectedAssetId}
                 selectedAsset={selectedAsset}
@@ -1416,7 +1248,6 @@ export function DeliverablesWorkspaceView({
       tasks={tasks}
       profiles={profiles}
       participants={participants}
-      {...(matrixItems === undefined ? {} : { matrixItems })}
       matrixAssetsForView={matrixAssetsForView}
       fileFamilies={fileFamilies}
       {...(activeFileFamily === undefined ? {} : { activeFileFamily })}
@@ -1424,7 +1255,6 @@ export function DeliverablesWorkspaceView({
       selectedAssetId={selectedAssetId}
       selectedAssetVersions={selectedAssetVersions}
       selectedAssetCurrentLabel={selectedAssetCurrentLabel}
-      {...(authoritativeCurrentAsset === undefined ? {} : { authoritativeCurrentAsset })}
       filters={validFilters}
       selectedTaskIds={validSelectedTaskIds}
       selectedAssignmentId={validSelectedAssignmentId}

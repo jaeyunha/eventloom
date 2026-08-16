@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Eye,
   FileText,
+  ListFilter,
   ListTodo,
   Mail,
   RefreshCw,
@@ -14,7 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import type { ChangeEvent, FormEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, ReactNode, RefObject } from "react";
 import { StatusBadge, WorkspaceListDetail } from "@/components/workspace";
 import {
   Accordion,
@@ -116,7 +117,13 @@ import {
   MutationStatusMessage,
   SpeakerInvitationControls,
 } from "./speaker-invitations";
-import { dateLabel, dateTimeLabel, statusLabel, taskComplete } from "./speaker-roster-logic";
+import {
+  dateLabel,
+  dateTimeLabel,
+  type SpeakerAttentionFilter,
+  statusLabel,
+  taskComplete,
+} from "./speaker-roster-logic";
 import { taskStatusLabel, taskStatusTone } from "./speaker-task-model";
 import {
   deadlineAfterEventWarning,
@@ -674,7 +681,7 @@ function SpeakerDetailSection({
           <p className={styles.eyebrow}>Speaker record</p>
           <CardTitle id="speaker-detail-heading">{selectedSpeaker.displayName}</CardTitle>
           <CardDescription>
-            {selectedSpeaker.email} · <SpeakerStatusBadge status={selectedSpeaker.status} />
+            {selectedSpeaker.email} <SpeakerStatusBadge status={selectedSpeaker.status} />
           </CardDescription>
         </div>
         <div className={styles.actions}>
@@ -755,7 +762,6 @@ function SpeakerDetailSection({
                     ? "Saving…"
                     : "Save profile changes"}
               </Button>
-              <Badge variant="outline">Version {editDraft.expectedVersion}</Badge>
             </div>
           </form>
         ) : (
@@ -856,6 +862,7 @@ function SpeakerRosterList({
   selectedSpeakerIdSet,
   onToggleSelection,
   onBeginEdit,
+  detailTriggerRef,
 }: Readonly<{
   scopedRoster: SpeakerRosterEnvelope | null;
   loading: boolean;
@@ -865,6 +872,7 @@ function SpeakerRosterList({
   selectedSpeakerIdSet: ReadonlySet<string>;
   onToggleSelection: (participantId: string) => void;
   onBeginEdit: (speaker: SpeakerRecord) => void;
+  detailTriggerRef: RefObject<HTMLButtonElement | null>;
 }>) {
   return (
     <div className={styles.rosterList}>
@@ -928,7 +936,10 @@ function SpeakerRosterList({
                         size="sm"
                         className={styles.speakerName}
                         type="button"
-                        onClick={() => onBeginEdit(speaker)}
+                        onClick={(event) => {
+                          detailTriggerRef.current = event.currentTarget;
+                          onBeginEdit(speaker);
+                        }}
                       >
                         {speaker.displayName}
                       </Button>
@@ -958,7 +969,10 @@ function SpeakerRosterList({
                       variant="ghost"
                       size="sm"
                       type="button"
-                      onClick={() => onBeginEdit(speaker)}
+                      onClick={(event) => {
+                        detailTriggerRef.current = event.currentTarget;
+                        onBeginEdit(speaker);
+                      }}
                     >
                       Open
                     </Button>
@@ -987,6 +1001,8 @@ function SpeakerRosterSection({
   statusFilter,
   sessionFilter,
   progressFilter,
+  attentionFilter,
+  attentionCounts,
   hasActiveRosterFilters,
   hasAnyFilters,
   selectedSpeakerIds,
@@ -997,12 +1013,14 @@ function SpeakerRosterSection({
   onStatusFilterChange,
   onSessionFilterChange,
   onProgressFilterChange,
+  onAttentionFilterChange,
   onClearFilters,
   onOpenSelectedEmail,
   onToggleVisibleSelection,
   onClearSelection,
   onToggleSelection,
   onBeginEdit,
+  detailTriggerRef,
 }: Readonly<{
   scopedRoster: SpeakerRosterEnvelope | null;
   loading: boolean;
@@ -1018,6 +1036,8 @@ function SpeakerRosterSection({
   statusFilter: string;
   sessionFilter: string;
   progressFilter: ProgressFilter;
+  attentionFilter: SpeakerAttentionFilter;
+  attentionCounts: Readonly<Record<SpeakerAttentionFilter, number>>;
   hasActiveRosterFilters: boolean;
   hasAnyFilters: boolean;
   selectedSpeakerIds: readonly string[];
@@ -1028,12 +1048,14 @@ function SpeakerRosterSection({
   onStatusFilterChange: (status: string) => void;
   onSessionFilterChange: (session: string) => void;
   onProgressFilterChange: (progress: ProgressFilter) => void;
+  onAttentionFilterChange: (attention: SpeakerAttentionFilter) => void;
   onClearFilters: () => void;
   onOpenSelectedEmail: () => void;
   onToggleVisibleSelection: () => void;
   onClearSelection: () => void;
   onToggleSelection: (participantId: string) => void;
   onBeginEdit: (speaker: SpeakerRecord) => void;
+  detailTriggerRef: RefObject<HTMLButtonElement | null>;
 }>) {
   return (
     <Card className={styles.panel} aria-busy={loading}>
@@ -1045,9 +1067,6 @@ function SpeakerRosterSection({
             details.
           </CardDescription>
         </div>
-        <Badge variant="outline">
-          {scopedRoster ? `${filteredSpeakers.length} of ${speakers.length}` : "Loading"}
-        </Badge>
       </CardHeader>
       <CardContent className={styles.actionsStack}>
         <div className={styles.rosterToolbar}>
@@ -1067,12 +1086,33 @@ function SpeakerRosterSection({
             </div>
           </Field>
           <Button
+            className={styles.filterTrigger}
             variant="outline"
             type="button"
+            aria-label="Filter speakers"
+            aria-controls="speaker-roster-filters"
             aria-expanded={filtersOpen}
             onClick={onToggleFilters}
           >
-            Filters
+            <ListFilter />
+            <span className={styles.filterLabel}>Filters</span>
+            {[
+              attentionFilter !== "all",
+              statusFilter !== "all",
+              sessionFilter !== "all",
+              progressFilter !== "all",
+            ].filter(Boolean).length > 0 ? (
+              <Badge variant="secondary">
+                {
+                  [
+                    attentionFilter !== "all",
+                    statusFilter !== "all",
+                    sessionFilter !== "all",
+                    progressFilter !== "all",
+                  ].filter(Boolean).length
+                }
+              </Badge>
+            ) : null}
           </Button>
           {hasAnyFilters ? (
             <Button variant="ghost" type="button" onClick={onClearFilters}>
@@ -1081,7 +1121,32 @@ function SpeakerRosterSection({
           ) : null}
         </div>
         {filtersOpen ? (
-          <div className={styles.filterPanel}>
+          <div id="speaker-roster-filters" className={styles.filterPanel}>
+            <section className={styles.attentionStrip} aria-label="Speaker attention filters">
+              {(["all", "overdue", "awaiting-invite", "duplicate-email", "inactive"] as const).map(
+                (value) => {
+                  const labels = {
+                    all: "All speakers",
+                    overdue: "Overdue tasks",
+                    "awaiting-invite": "Awaiting invite",
+                    "duplicate-email": "Duplicate emails",
+                    inactive: "Inactive",
+                  } as const;
+                  return (
+                    <button
+                      key={value}
+                      className={styles.attentionFilter}
+                      type="button"
+                      aria-pressed={attentionFilter === value}
+                      onClick={() => onAttentionFilterChange(value)}
+                    >
+                      <span>{labels[value]}</span>
+                      <strong>{attentionCounts[value]}</strong>
+                    </button>
+                  );
+                },
+              )}
+            </section>
             <Field>
               <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-status-filter">
                 Filter by status
@@ -1186,6 +1251,7 @@ function SpeakerRosterSection({
           />
         ) : null}
         <WorkspaceListDetail
+          data-speaker-collection="true"
           className={styles.rosterGrid}
           listLabel="Speaker roster"
           detailLabel="Selected speaker record"
@@ -1199,6 +1265,7 @@ function SpeakerRosterSection({
               selectedSpeakerIdSet={selectedSpeakerIdSet}
               onToggleSelection={onToggleSelection}
               onBeginEdit={onBeginEdit}
+              detailTriggerRef={detailTriggerRef}
             />
           }
           detail={detail}

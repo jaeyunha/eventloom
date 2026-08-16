@@ -10,7 +10,7 @@ import {
   useReducer,
   useRef,
 } from "react";
-import { StatusBadge, WorkspaceHeader, WorkspaceMetaItem } from "@/components/workspace";
+import { StatusBadge, WorkspaceHeader } from "@/components/workspace";
 import { Button } from "../../components/ui/button";
 import {
   assertAdvancedSpeakerRevision,
@@ -197,9 +197,7 @@ function rosterSelectionFor(
     participantIds.has(participantId),
   );
   const selectedId =
-    state.selectedId !== null && participantIds.has(state.selectedId)
-      ? state.selectedId
-      : (roster.speakers[0]?.participantId ?? null);
+    state.selectedId !== null && participantIds.has(state.selectedId) ? state.selectedId : null;
   return { selectedId, selectedSpeakerIds };
 }
 
@@ -1152,6 +1150,7 @@ function useSpeakerWorkspaceController({
   const createIdempotencyKeyRef = useRef<string | null>(null);
   const importIdempotencyKeyRef = useRef<string | null>(null);
   const invitationSendIdempotencyKeyRef = useRef<string | null>(null);
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
   const rosterRequestRef = useRef(0);
   const headshotRequestRef = useRef(0);
   const headshotPreviewKeyRef = useRef<string | null>(null);
@@ -2497,12 +2496,10 @@ function useSpeakerWorkspaceController({
         eyebrow="Event operations / Speakers"
         title="Speaker operations"
         description="Manage people and profiles in Roster, assign onboarding action items for speakers to complete in their portal, and use Email for speaker-only outreach; broader announcements belong in Communications."
-        status={<StatusBadge tone="neutral">{speakers.length} speakers</StatusBadge>}
-        metadata={
-          <>
-            <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
-            <WorkspaceMetaItem>Event {eventId}</WorkspaceMetaItem>
-          </>
+        status={
+          <StatusBadge tone="neutral">
+            {speakers.length} {speakers.length === 1 ? "speaker" : "speakers"}
+          </StatusBadge>
         }
         actions={
           <>
@@ -2569,6 +2566,8 @@ function useSpeakerWorkspaceController({
           selectedSpeakerIds,
           allVisibleSelected,
           selectedSpeaker,
+          detailTriggerRef,
+          onCloseDetail: () => dispatchRoster({ type: "selected-id-changed", participantId: null }),
           detailProps: {
             organizationId,
             eventId,
