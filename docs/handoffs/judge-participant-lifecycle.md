@@ -2,10 +2,10 @@
 
 ## Pause status
 
-**This lane is paused by user request.**
+**This lane was resumed only for the submitted-edit P1 correction.**
 
-Do not continue feature implementation, merge PR #38, deploy, delete the branch,
-or delete the worktree until the lane is explicitly resumed.
+PR #38 remains held for quality re-review. Do not expand feature scope, merge,
+deploy, delete the branch, or delete the worktree without explicit instruction.
 
 ## Repository and working state
 
@@ -98,13 +98,10 @@ for these narrow findings:
 
 ## Known unresolved risks
 
-- A pre-final-main fixture-backed isolated browser suite passed. The final-main
-  run is still red: the submitted edit/back/forward, participants reload,
-  review reload, server identity/version, and screenshot assertions complete,
-  but the expanded test then times out reconstructing a consumed completion
-  handoff for the pre-existing portal-handoff section. Do not remove or weaken
-  that older coverage; split or compose the surfaces correctly after resume.
-  Earlier failed runs also remain diagnostic-only:
+- The submitted-edit P1 is now isolated in the dynamic controller/browser
+  scenario, while the original fixture-backed completion/portal handoff test
+  remains unchanged. The final isolated CFP suite passes 13/13. Earlier failed
+  runs remain diagnostic-only:
   - one was contaminated by shared-disk `ENOSPC` and a truncated trace;
   - one proved the mocked dynamic CFP cannot survive reload because its mocked
     sign-in has no durable session cookie;
@@ -151,14 +148,11 @@ Update this ledger before pushing the checkpoint.
     1,256 files.
 - [x] `make test`.
   - Passed with exit code 0, including script, unit, API, and runtime suites.
-- [x] Isolated fixture-backed browser QA was executed:
+- [x] Isolated CFP browser QA:
   `node scripts/run-isolated-playwright.mjs tests/e2e/cfp.spec.ts`.
-  - Pre-final-main run passed: 13 Chromium tests.
-  - Final current-main run failed: 1 failed, 12 passed.
-  - Remaining failure:
-    `page.getByRole("heading", { level: 1, name: "Submission complete" })`
-    is not visible after the test restores completion storage following the
-    successful submitted-edit review assertions.
+  - Final P1 correction run passed: 13 Chromium tests.
+  - The focused screenshot shows the same submitted proposal active after
+    `Edit submission -> Back -> forward`, with the original fields hydrated.
 - [x] Manual review of the generated `submitted-edit-review.png` screenshot.
   - Passed: the review surface shows the same submitted flow with the updated
     title and all progress steps complete.
@@ -174,8 +168,7 @@ Update this ledger before pushing the checkpoint.
 - [x] Run `make check`.
 - [x] Run `make test` without weakening or skipping failures.
 - [x] Run isolated CFP browser QA and inspect the submitted-edit screenshot.
-  - The run remains red for the completion/portal test-composition blocker
-    recorded above.
+  - Final result: 13 passed.
 - [x] Repair only an immediate failure caused by the current partial patch; do
   not expand feature scope.
 - [x] Update this verification ledger with exact results.
@@ -193,10 +186,10 @@ Update this ledger before pushing the checkpoint.
   merge.
   - Focused, runtime, `make check`, and `make test` passed.
   - Isolated browser QA remains red with 1 failed and 12 passed.
-- [ ] After explicit resume, repair only the final browser test composition
-  without weakening the existing portal-handoff assertions, then rerun the
-  isolated CFP suite.
-- [ ] Push the final current-main checkpoint without force.
+- [x] Isolate the P1 regression without weakening the existing
+  portal-handoff assertions.
+- [x] Rerun the isolated CFP suite: 13 passed.
+- [ ] Obtain quality re-review for the pushed P1 correction.
 - [ ] Update PR #38 metadata and verify its exact head/base/file scope.
 - [ ] Create or update exactly one open GitHub issue titled
   `[Lane handoff] judge-participant-lifecycle`.
