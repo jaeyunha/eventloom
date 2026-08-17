@@ -487,13 +487,59 @@ describe("D1EvaluationRepository compound CAS", () => {
     });
 
     expect(db.batches).toHaveLength(1);
+    const guard = db.batches[0]?.[0];
+    expect(guard?.sql).toContain("D1_CAS_CONFLICT");
     expect(batchSql(db)).toContain("status IN ('assigned', 'in_progress')");
     expect(batchSql(db)).toContain("FROM evaluation_conflicts");
     expect(batchSql(db)).toContain("FROM submissions");
     expect(batchSql(db)).toContain("status = 'submitted'");
+    expect(batchSql(db)).toContain("FROM submission_versions");
+    expect(batchSql(db)).toContain("FROM review_plans");
+    expect(batchSql(db)).toContain("FROM review_rounds");
     expect(batchSql(db)).toContain("FROM evaluation_decisions");
     expect(batchSql(db)).toContain("INSERT INTO evaluation_reviews");
     expect(batchSql(db)).toContain("UPDATE review_assignments");
+    expect(guard?.values).toEqual([
+      "org-1",
+      "event-1",
+      "plan-1",
+      "round-1",
+      "submission-1",
+      "assignment-1",
+      "reviewer-1",
+      2,
+      "org-1",
+      "event-1",
+      "assignment-1",
+      "org-1",
+      "event-1",
+      "submission-1",
+      "org-1",
+      "event-1",
+      "submission-1",
+      "org-1",
+      "event-1",
+      "submission-1",
+      5,
+      "org-1",
+      "event-1",
+      "plan-1",
+      2,
+      2,
+      timestamp,
+      "org-1",
+      "event-1",
+      "plan-1",
+      "round-1",
+      3,
+      4,
+      timestamp,
+      timestamp,
+      "org-1",
+      "event-1",
+      "plan-1",
+      "submission-1",
+    ]);
   });
 
   it("uses one tenant-scoped guard for assignment abstention and conflict insertion", async () => {
@@ -622,6 +668,25 @@ const migratedSuggestion: EvaluationSuggestion = {
   updatedAt: timestamp,
 };
 
+const migratedReview: EvaluationReview = {
+  ...review,
+  id: "review-migrated-1",
+  tenantId: speakerLifecycleIds.organizationId,
+  eventId: speakerLifecycleIds.eventId,
+  planId: "plan-migrated-1",
+  roundId: "round-migrated-1",
+  assignmentId: "assignment-migrated-1",
+  submissionId: speakerLifecycleIds.acceptedSubmissionId,
+  reviewerId: "reviewer-migrated-1",
+  planRevision: 1,
+  roundRevision: 1,
+  rubricRevision: 1,
+  submissionRevision: 1,
+  version: 1,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
 function seedMigratedEvaluationAssignment(
   database: ReturnType<typeof createSpeakerLifecycleFixture>["database"],
 ): void {
@@ -696,6 +761,57 @@ describe("D1EvaluationRepository migrated lifecycle CAS", () => {
       await expect(repository.putSuggestion(migratedSuggestion, null, 1)).rejects.toThrow();
       await expect(
         repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
+      ).resolves.toBeNull();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("persists no review when withdrawal commits immediately before the D1 batch", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      fixture.database.beforeNextBatch(() => {
+        fixture.database.run(
+          `UPDATE submissions
+           SET status = 'withdrawn', version = version + 1, updated_at = '${timestamp}'
+           WHERE organization_id = '${migratedReview.tenantId}'
+             AND event_id = '${migratedReview.eventId}'
+             AND id = '${migratedReview.submissionId}'`,
+        );
+      });
+
+      await expect(
+        repository.writeReview({
+          authority: {
+            tenantId: migratedReview.tenantId,
+            eventId: migratedReview.eventId,
+            planId: migratedReview.planId,
+            roundId: migratedReview.roundId,
+            assignmentId: migratedReview.assignmentId,
+            submissionId: migratedReview.submissionId,
+            reviewerId: migratedReview.reviewerId,
+            expectedAssignmentVersion: 1,
+          },
+          review: migratedReview,
+          expectedReviewVersion: null,
+          assignmentUpdate: {
+            ...assignment,
+            id: migratedReview.assignmentId,
+            tenantId: migratedReview.tenantId,
+            eventId: migratedReview.eventId,
+            planId: migratedReview.planId,
+            roundId: migratedReview.roundId,
+            submissionId: migratedReview.submissionId,
+            reviewerId: migratedReview.reviewerId,
+            status: "in_progress",
+            version: 2,
+          },
+        }),
+      ).rejects.toThrow();
+      await expect(
+        repository.getReview(migratedReview.tenantId, migratedReview.assignmentId),
       ).resolves.toBeNull();
     } finally {
       fixture.dispose();

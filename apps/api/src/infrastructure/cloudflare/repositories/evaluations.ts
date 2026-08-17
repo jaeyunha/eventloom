@@ -141,8 +141,7 @@ function reviewWriteAuthorityGuard(
   const planRevision = input.review.planRevision ?? input.review.planVersion ?? 1;
   const roundRevision = input.review.roundRevision ?? input.review.rubricRevision ?? 1;
   const rubricRevision = input.review.rubricRevision ?? input.review.rubricVersion ?? 1;
-  const submissionRevision =
-    input.review.submissionRevision ?? input.review.submissionVersion ?? 1;
+  const submissionRevision = input.review.submissionRevision ?? input.review.submissionVersion ?? 1;
   const reviewTimestamp = input.review.updatedAt;
   return guard(
     database,
@@ -200,6 +199,9 @@ function reviewWriteAuthorityGuard(
       authority.tenantId,
       authority.eventId,
       authority.assignmentId,
+      authority.tenantId,
+      authority.eventId,
+      authority.submissionId,
       authority.tenantId,
       authority.eventId,
       authority.submissionId,

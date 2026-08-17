@@ -73,6 +73,16 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
   }
 }
 
+class AbstainedAssignmentRepository extends InMemoryEvaluationRepository {
+  override async getAssignment(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationAssignment | null> {
+    const assignment = await super.getAssignment(tenantId, assignmentId);
+    return assignment === null ? null : { ...assignment, status: "abstained" };
+  }
+}
+
 class GatedSuggestionRepository extends InMemoryEvaluationRepository {
   listGate: Promise<void> | null = null;
   listEntered: (() => void) | null = null;
@@ -1960,7 +1970,10 @@ describe("review drafts, AI assistance, and aggregates", () => {
     });
   });
   it("does not count an AI suggestion until the assigned human confirms it", async () => {
-    const { service } = await fixture({ reviewsPerSubmission: 1 });
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({ candidates: validAiCandidates() }),
+    });
     const assignment = await assignOne(service);
     const actor = reviewer("reviewer-1");
     const suggestion = await service.generateAiSuggestions(actor, assignment.id);
@@ -1972,6 +1985,10 @@ describe("review drafts, AI assistance, and aggregates", () => {
     expect(await service.getAggregate(organizer, "plan-1", round.id, submission.id)).toMatchObject({
       submittedReviewCount: 0,
       averageWeightedTotal: null,
+    });
+    await service.saveReview(actor, assignment.id, {
+      scores: [],
+      comment: "Promising proposal.",
     });
 
     const resolved = await service.resolveAiSuggestion(actor, suggestion.id, {
@@ -3375,17 +3392,16 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
 
   it("rejects an abstained assignment before invoking the provider", async () => {
     let providerCalls = 0;
-    const { repository, service } = await fixture({
+    const abstainedRepository = new AbstainedAssignmentRepository();
+    const { service } = await fixture({
       reviewsPerSubmission: 1,
+      repository: abstainedRepository,
       aiSuggestionProducer: async () => {
         providerCalls += 1;
         return { candidates: validAiCandidates() };
       },
     });
     const assignment = await assignOne(service);
-    await repository.putAssignmentsForTesting([
-      { ...assignment, status: "abstained", version: assignment.version + 1 },
-    ]);
 
     await expectEvaluationError(
       service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),

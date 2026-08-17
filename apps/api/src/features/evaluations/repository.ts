@@ -594,7 +594,11 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     ) {
       throw conflict("A conflict declaration removes access to this submission.");
     }
-    if (this.#decisions.has(decisionKey(suggestion.tenantId, suggestion.planId, suggestion.submissionId))) {
+    if (
+      this.#decisions.has(
+        decisionKey(suggestion.tenantId, suggestion.planId, suggestion.submissionId),
+      )
+    ) {
       throw conflict("A decision already exists for this submission.");
     }
     if (this.submissionSource !== undefined) {
