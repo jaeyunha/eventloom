@@ -4113,7 +4113,259 @@ describe("speaker routes", () => {
     expect(JSON.stringify(payload)).not.toContain("secret-route-private-asset");
   });
 });
+describe("organizer task reminder offsets", () => {
+  it("replaces reminder offsets in canonical order on an incomplete upload task", async () => {
+    const { repository, service } = createOrganizerFixture();
+    const current = task({
+      id: "reminder-task",
+      participantId: "participant-1",
+      dueAt: "2027-04-01",
+      reminderOffsetsMinutes: [60],
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
+      version: 3,
+    });
+    repository.tasks.push(current);
+
+    const updated = await service.updateOrganizerTaskReminderOffsets({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      taskId: current.id,
+      expectedVersion: current.version,
+      reminderOffsetsMinutes: [10_080, 0, 1_440],
+    });
+
+    expect(updated).toEqual({
+      organizationId: "org-1",
+      eventId: "event-1",
+      taskId: current.id,
+      reminderOffsetsMinutes: [0, 1_440, 10_080],
+      version: 4,
+      updatedAt: now,
+    });
+    expect(repository.tasks.find((candidate) => candidate.id === current.id)).toMatchObject({
+      reminderOffsetsMinutes: [0, 1_440, 10_080],
+      version: 4,
+    });
+  });
+
+  it("allows an empty reminder offset set and rejects duplicate or unsafe offsets", async () => {
+    const { repository, service } = createOrganizerFixture();
+    const current = task({
+      id: "reminder-validation-task",
+      participantId: "participant-1",
+      dueAt: "2027-04-01",
+      reminderOffsetsMinutes: [60],
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
+      version: 2,
+    });
+    repository.tasks.push(current);
+
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: current.version,
+        reminderOffsetsMinutes: [60, 60],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: current.version,
+        reminderOffsetsMinutes: [Number.MAX_SAFE_INTEGER + 1],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    expect(repository.tasks.find((candidate) => candidate.id === current.id)?.version).toBe(2);
+
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: current.version,
+        reminderOffsetsMinutes: [],
+      }),
+    ).resolves.toMatchObject({ reminderOffsetsMinutes: [], version: 3 });
+  });
+
+  it("preserves optimistic concurrency for reminder schedule updates", async () => {
+    const { repository, service } = createOrganizerFixture();
+    const current = task({
+      id: "stale-reminder-task",
+      participantId: "participant-1",
+      dueAt: "2027-04-01",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
+      reminderOffsetsMinutes: [60],
+      version: 4,
+    });
+    repository.tasks.push(current);
+
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: 3,
+        reminderOffsetsMinutes: [1_440],
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT", status: 409 });
+    expect(repository.tasks.find((candidate) => candidate.id === current.id)).toMatchObject({
+      reminderOffsetsMinutes: [60],
+      version: 4,
+    });
+  });
+
+  it.each(["completed", "submitted", "waived"] as const)(
+    "rejects reminder changes for %s tasks",
+    async (status) => {
+      const { repository, service } = createOrganizerFixture();
+      const current = task({
+        id: `reminder-${status}`,
+        participantId: "participant-1",
+        dueAt: "2027-04-01",
+        status,
+        version: 2,
+      });
+      repository.tasks.push(current);
+
+      await expect(
+        service.updateOrganizerTaskReminderOffsets({
+          organizationId: "org-1",
+          eventId: "event-1",
+          accountId: "account-1",
+          taskId: current.id,
+          expectedVersion: current.version,
+          reminderOffsetsMinutes: [1_440],
+        }),
+      ).rejects.toMatchObject({ code: "TASK_REMINDERS_NOT_EDITABLE", status: 409 });
+      expect(repository.tasks.find((candidate) => candidate.id === current.id)?.version).toBe(2);
+    },
+  );
+
+  it.each([
+    { label: "form task", changes: { type: "form" as const } },
+    { label: "action task", changes: { type: "action" as const } },
+    { label: "organizer-owned task", changes: { owner: "organizer" as const } },
+  ])("rejects an unsupported $label", async ({ changes }) => {
+    const { repository, service } = createOrganizerFixture();
+    const current = task({
+      id: `unsupported-${changes.type ?? changes.owner ?? "due-date"}`,
+      participantId: "participant-1",
+      dueAt: "2027-04-01",
+      version: 2,
+      ...changes,
+    });
+    repository.tasks.push(current);
+
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: current.version,
+        reminderOffsetsMinutes: [1_440],
+      }),
+    ).rejects.toMatchObject({ code: "TASK_REMINDERS_NOT_EDITABLE", status: 409 });
+  });
+
+  it("rejects a task without a due date", async () => {
+    const { repository, service } = createOrganizerFixture();
+    const current = task({
+      id: "unsupported-due-date",
+      participantId: "participant-1",
+      version: 2,
+    });
+    repository.tasks.push(current);
+
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: current.id,
+        expectedVersion: current.version,
+        reminderOffsetsMinutes: [1_440],
+      }),
+    ).rejects.toMatchObject({ code: "TASK_REMINDERS_NOT_EDITABLE", status: 409 });
+  });
+});
+
 describe("canonical speaker admin routes", () => {
+  it("accepts only the strict reminder-offset command wire shape", async () => {
+    const { service } = createOrganizerFixture();
+    const update = vi.spyOn(service, "updateOrganizerTaskReminderOffsets").mockResolvedValue({
+      organizationId: "org-1",
+      eventId: "event-1",
+      taskId: "task-1",
+      reminderOffsetsMinutes: [0, 1_440],
+      version: 3,
+      updatedAt: now,
+    });
+    const app = new Hono();
+    app.route(
+      "/api/admin/organizations/:organizationId/events/:eventId/speaker-tasks",
+      createSpeakerTaskAdminRoutes({
+        service,
+        authenticate: async () => ({ accountId: "account-1" }),
+      }),
+    );
+    const endpoint =
+      "/api/admin/organizations/org-1/events/event-1/speaker-tasks/task-1/reminder-offsets";
+    const headers = { "content-type": "application/json" };
+
+    const response = await app.request(endpoint, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ expectedVersion: 2, reminderOffsetsMinutes: [1_440, 0] }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: {
+        organizationId: "org-1",
+        eventId: "event-1",
+        taskId: "task-1",
+        reminderOffsetsMinutes: [0, 1_440],
+        version: 3,
+        updatedAt: now,
+      },
+    });
+    expect(update).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      taskId: "task-1",
+      expectedVersion: 2,
+      reminderOffsetsMinutes: [1_440, 0],
+    });
+
+    for (const body of [
+      { reminderOffsetsMinutes: [60] },
+      { expectedVersion: 2, reminderOffsetsMinutes: [60, 60] },
+      { expectedVersion: 2, reminderOffsetsMinutes: [-1] },
+      { expectedVersion: 2, reminderOffsetsMinutes: [60], title: "Not allowed" },
+    ]) {
+      const invalid = await app.request(endpoint, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+    }
+    expect(update).toHaveBeenCalledTimes(1);
+  });
   it.each(["2027-02-30", "2027-04-01T12:00:00", "2027-04-01T12:00:00.000Z"])(
     "rejects non-calendar task deadlines before calling the service: %s",
     async (dueAt) => {

@@ -133,6 +133,15 @@ export interface SpeakerReminderEligibilityEnvelope {
   readonly eligibleRecipientIds: readonly string[];
 }
 
+export interface SpeakerTaskReminderOffsetsResult {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly taskId: string;
+  readonly reminderOffsetsMinutes: readonly number[];
+  readonly version: number;
+  readonly updatedAt: string;
+}
+
 export interface SpeakerTaskSummary {
   readonly total: number;
   readonly completed: number;
@@ -172,6 +181,7 @@ export interface SpeakerTask {
   readonly completedAt: string | null;
   readonly sessionId: string | null;
   readonly latestAssetId: string | null;
+  readonly version: number;
 }
 
 export interface SpeakerRecord {
@@ -598,6 +608,11 @@ export interface SpeakerApi {
   ): Promise<SpeakerRosterEnvelope>;
   listTasks(signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
   assignTasks(input: SpeakerTaskAssignmentInput): Promise<SpeakerTaskEnvelope>;
+  updateTaskReminderOffsets(input: {
+    taskId: string;
+    expectedVersion: number;
+    reminderOffsetsMinutes: readonly number[];
+  }): Promise<SpeakerTaskReminderOffsetsResult>;
   previewInvitations(
     input: SpeakerInvitationPreviewInput,
   ): Promise<readonly SpeakerInvitationPreview[]>;
@@ -728,7 +743,7 @@ export function createSpeakerApi(
 
   function jsonRequest<T>(
     path: string,
-    method: "POST" | "PATCH",
+    method: "POST" | "PUT" | "PATCH",
     value: unknown,
     signal?: AbortSignal,
   ): Promise<T> {
@@ -740,7 +755,11 @@ export function createSpeakerApi(
     });
   }
 
-  function eventJsonRequest<T>(path: string, method: "POST" | "PATCH", value: unknown): Promise<T> {
+  function eventJsonRequest<T>(
+    path: string,
+    method: "POST" | "PUT" | "PATCH",
+    value: unknown,
+  ): Promise<T> {
     return eventRequest<T>(path, {
       method,
       headers: { "content-type": "application/json" },
@@ -873,6 +892,37 @@ export function createSpeakerApi(
           participantId,
           submissionId: null,
         })),
+      });
+    },
+    updateTaskReminderOffsets(input) {
+      return eventJsonRequest<SpeakerTaskReminderOffsetsResult>(
+        `/speaker-tasks/${pathSegment(input.taskId)}/reminder-offsets`,
+        "PUT",
+        {
+          expectedVersion: input.expectedVersion,
+          reminderOffsetsMinutes: input.reminderOffsetsMinutes,
+        },
+      ).then((result) => {
+        if (
+          result.organizationId !== normalizedOrganizationId ||
+          result.eventId !== normalizedEventId ||
+          result.taskId !== input.taskId ||
+          !Array.isArray(result.reminderOffsetsMinutes) ||
+          result.reminderOffsetsMinutes.some(
+            (offset, index) =>
+              !Number.isSafeInteger(offset) ||
+              offset < 0 ||
+              (index > 0 && (result.reminderOffsetsMinutes[index - 1] ?? offset) >= offset),
+          ) ||
+          !Number.isSafeInteger(result.version) ||
+          result.version !== input.expectedVersion + 1 ||
+          typeof result.updatedAt !== "string"
+        ) {
+          throw new SpeakerAuthoritativeDataError(
+            "The reminder schedule response did not match the requested task revision.",
+          );
+        }
+        return result;
       });
     },
     previewInvitations(input) {

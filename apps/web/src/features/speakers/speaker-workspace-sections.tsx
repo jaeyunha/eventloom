@@ -15,7 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import type { ChangeEvent, FormEvent, ReactNode, RefObject } from "react";
+import { type ChangeEvent, type FormEvent, type ReactNode, type RefObject, useState } from "react";
 import { StatusBadge, WorkspaceListDetail } from "@/components/workspace";
 import {
   Accordion,
@@ -104,6 +104,7 @@ import {
   type SpeakerRosterEnvelope,
   type SpeakerSession,
   type SpeakerTask,
+  type SpeakerTaskReminderOffsetsResult,
 } from "./api";
 import {
   SpeakerAssetDownload,
@@ -1714,15 +1715,143 @@ function SpeakerProgressSection({
   );
 }
 
+export function parseReminderOffsetDraft(
+  value: string,
+): { ok: true; offsets: number[] } | { ok: false; message: string } {
+  if (value.trim().length === 0) return { ok: true, offsets: [] };
+  const parts = value.split(",").map((part) => part.trim());
+  if (parts.some((part) => !/^\d+$/u.test(part))) {
+    return { ok: false, message: "Enter whole minutes separated by commas." };
+  }
+  const offsets = parts.map(Number);
+  if (offsets.some((offset) => !Number.isSafeInteger(offset) || offset < 0)) {
+    return { ok: false, message: "Each reminder offset must be a non-negative whole minute." };
+  }
+  if (new Set(offsets).size !== offsets.length) {
+    return { ok: false, message: "Remove duplicate reminder offsets before saving." };
+  }
+  return { ok: true, offsets: offsets.sort((left, right) => left - right) };
+}
+
+function reminderReasonLabel(reason: string): string {
+  switch (reason) {
+    case "complete":
+      return "This task is already complete.";
+    case "no_due_date":
+      return "Add a due date before scheduling reminders.";
+    case "no_reminder_offset":
+      return "Scheduled reminders are disabled.";
+    case "outside_window":
+      return "The next delivery window has not opened yet.";
+    default:
+      return "This reminder is not currently ready for delivery.";
+  }
+}
+
+export function SpeakerReminderOffsetEditor({
+  task,
+  item,
+  onSave,
+}: Readonly<{
+  task: SpeakerTask;
+  item: SpeakerReminderEligibilityEnvelope["items"][number];
+  onSave: (
+    taskId: string,
+    expectedVersion: number,
+    reminderOffsetsMinutes: readonly number[],
+  ) => Promise<SpeakerTaskReminderOffsetsResult>;
+}>) {
+  const [draft, setDraft] = useState(item.reminderOffsetsMinutes.join(", "));
+  const [version, setVersion] = useState(task.version);
+  const [status, setStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+  const editable =
+    task.type === "file_request" &&
+    task.dueAt !== null &&
+    !["completed", "submitted", "waived"].includes(task.status);
+
+  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const parsed = parseReminderOffsetDraft(draft);
+    if (!parsed.ok) {
+      setStatus("error");
+      setMessage(parsed.message);
+      return;
+    }
+    setStatus("pending");
+    setMessage("Saving reminder schedule…");
+    try {
+      const result = await onSave(task.taskId, version, parsed.offsets);
+      setVersion(result.version);
+      setDraft(result.reminderOffsetsMinutes.join(", "));
+      setStatus("success");
+      setMessage(
+        result.reminderOffsetsMinutes.length === 0
+          ? "Scheduled reminders disabled."
+          : "Reminder schedule saved.",
+      );
+    } catch {
+      setStatus("error");
+      setMessage("The reminder schedule could not be saved. Reload tasks and try again.");
+    }
+  }
+
+  if (!editable) return null;
+  return (
+    <form className={styles.reminderEditor} onSubmit={(event) => void submit(event)}>
+      <Field>
+        <FieldLabel>Reminder offsets in minutes</FieldLabel>
+        <Input
+          aria-label={`Reminder offsets in minutes for ${item.title}`}
+          inputMode="numeric"
+          value={draft}
+          disabled={status === "pending"}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (status !== "idle") {
+              setStatus("idle");
+              setMessage(null);
+            }
+          }}
+          placeholder="10080, 1440"
+        />
+        <p className={styles.muted}>Clear the field to disable scheduled reminders.</p>
+      </Field>
+      <div className={styles.actions}>
+        <Button type="submit" size="sm" disabled={status === "pending"}>
+          {status === "pending" ? "Saving…" : "Save reminder schedule"}
+        </Button>
+        {message === null ? null : (
+          <span
+            role={status === "error" ? "alert" : "status"}
+            aria-live={status === "error" ? "assertive" : "polite"}
+          >
+            {message}
+          </span>
+        )}
+      </div>
+    </form>
+  );
+}
+
 function SpeakerReminderSection({
   reminderEligibility,
   eligibleItems,
   ineligibleItems,
+  tasks,
+  onSaveOffsets,
 }: Readonly<{
   reminderEligibility: SpeakerReminderEligibilityEnvelope | null;
   eligibleItems: readonly SpeakerReminderEligibilityEnvelope["items"][number][];
   ineligibleItems: readonly SpeakerReminderEligibilityEnvelope["items"][number][];
+  tasks: readonly SpeakerTask[];
+  onSaveOffsets: (
+    taskId: string,
+    expectedVersion: number,
+    reminderOffsetsMinutes: readonly number[],
+  ) => Promise<SpeakerTaskReminderOffsetsResult>;
 }>) {
+  const taskById = new Map(tasks.map((task) => [task.taskId, task]));
   return (
     <Card className={styles.panel}>
       <CardHeader className={styles.panelHeader}>
@@ -1753,6 +1882,13 @@ function SpeakerReminderSection({
                 <strong>{item.title}</strong>
                 <span>{dateLabel(item.dueAt)}</span>
                 <Badge variant="secondary">Ready to send</Badge>
+                {taskById.get(item.taskId) === undefined ? null : (
+                  <SpeakerReminderOffsetEditor
+                    task={taskById.get(item.taskId) as SpeakerTask}
+                    item={item}
+                    onSave={onSaveOffsets}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -1768,8 +1904,17 @@ function SpeakerReminderSection({
                 </p>
                 <ul className={styles.list}>
                   {ineligibleItems.map((item) => (
-                    <li key={item.taskId}>
-                      <strong>{item.title}</strong> · {item.reason}
+                    <li className={styles.reminderDiagnostic} key={item.taskId}>
+                      <span>
+                        <strong>{item.title}</strong> · {reminderReasonLabel(item.reason)}
+                      </span>
+                      {taskById.get(item.taskId) === undefined ? null : (
+                        <SpeakerReminderOffsetEditor
+                          task={taskById.get(item.taskId) as SpeakerTask}
+                          item={item}
+                          onSave={onSaveOffsets}
+                        />
+                      )}
                     </li>
                   ))}
                 </ul>
