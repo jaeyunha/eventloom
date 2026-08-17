@@ -469,7 +469,7 @@ describe("embed workspace view", () => {
     expect(markup).toContain('aria-label="Widget preview studio"');
     expect(markup).toContain('aria-label="Publication status"');
     expect(markup).toContain("<iframe");
-    expect(markup).toContain("Draft event");
+    expect(markup).toContain("Event record");
     expect(markup).toContain("Served program revision");
     expect(markup).toContain("Publication state");
     expect(markup).not.toContain("browser-local");

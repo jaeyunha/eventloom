@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
-import { validateMigrationSql } from "./validate-config.mjs";
+import { validateMigrationOrdinals, validateMigrationSql } from "./validate-config.mjs";
 
 const migrationsDirectory = new URL("../../apps/api/migrations/", import.meta.url);
 const migration0020 = readFileSync(
@@ -50,10 +50,18 @@ test("accepts every checked-in ordered D1 migration", () => {
     .sort();
 
   assert.notEqual(migrations.length, 0);
+  assert.doesNotThrow(() => validateMigrationOrdinals(migrations));
   for (const migration of migrations) {
     const sql = readFileSync(new URL(migration, migrationsDirectory), "utf8");
     assert.doesNotThrow(() => validateMigrationSql(migration, sql), migration);
   }
+});
+
+test("rejects duplicate migration ordinals", () => {
+  assert.throws(
+    () => validateMigrationOrdinals(["0036_evaluation_export_jobs.sql", "0036_other.sql"]),
+    /Migration ordinal 0036 is duplicated/,
+  );
 });
 
 test("accepts a migration-scoped snapshot rebuild in dependency-safe phase order", () => {

@@ -89,6 +89,7 @@ export interface AgendaApi {
     name: string;
   }): Promise<{ resource: AgendaTrack; workspace: AgendaWorkspaceData }>;
   preview(eventId: string): Promise<AgendaPreview>;
+  validate(input: { eventId: string; expectedVersion: number }): Promise<AgendaPreview>;
   overrideWarning(input: {
     eventId: string;
     expectedVersion: number;
@@ -424,6 +425,13 @@ export function createAgendaApi(
     createTrack,
     preview(eventId) {
       return request<AgendaPreview>(`/${segment(eventId)}/agenda/preview`, { method: "GET" });
+    },
+    validate(input) {
+      return request<AgendaPreview>(`/${segment(input.eventId)}/agenda/validate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedVersion: input.expectedVersion }),
+      });
     },
     overrideWarning(input) {
       return request<unknown>(

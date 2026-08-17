@@ -102,7 +102,7 @@ export interface AgendaPreview {
     changed: number;
     removed: number;
   };
-  validatedAt: string;
+  validatedAt: string | null;
 }
 export interface AgendaPlacementFailureData extends AgendaCandidateDiagnostics {
   authoritativeSavedPreview: AgendaPreview;
@@ -125,6 +125,10 @@ export interface AgendaWorkspaceData {
     updatedBy: string;
     entries: readonly AgendaEntry[];
   };
+  validation: {
+    draftVersion: number;
+    validatedAt: string;
+  } | null;
   rooms: readonly AgendaRoom[];
   tracks: readonly AgendaTrack[];
   acceptedSessionIds: readonly string[];
