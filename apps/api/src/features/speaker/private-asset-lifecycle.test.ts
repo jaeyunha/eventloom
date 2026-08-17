@@ -276,6 +276,27 @@ class LifecycleRepository implements SpeakerRepository {
     if ((asset.reviewVersion ?? 0) !== command.expectedVersion) {
       return Promise.resolve({ ok: false, reason: "version_conflict" });
     }
+    const returnTask =
+      command.returnTask === undefined
+        ? undefined
+        : this.tasks.find((candidate) => candidate.id === command.returnTask?.taskId);
+    if (command.returnTask !== undefined) {
+      if (returnTask === undefined) return Promise.resolve({ ok: false, reason: "not_found" });
+      if (
+        command.returnTask.eventId !== command.eventId ||
+        command.returnTask.transition.eventId !== command.eventId ||
+        command.returnTask.transition.taskId !== command.returnTask.taskId ||
+        command.returnTask.transition.participantId !== returnTask.participantId
+      ) {
+        return Promise.resolve({ ok: false, reason: "invalid_state" });
+      }
+      if (
+        returnTask.version !== command.returnTask.expectedVersion ||
+        returnTask.status !== command.returnTask.fromStatus
+      ) {
+        return Promise.resolve({ ok: false, reason: "version_conflict" });
+      }
+    }
     asset.reviewState = command.state;
     if (command.note === undefined) delete asset.reviewNote;
     else asset.reviewNote = command.note;
@@ -284,6 +305,11 @@ class LifecycleRepository implements SpeakerRepository {
     asset.reviewVersion = command.expectedVersion + 1;
     if (command.state === "approved") asset.approvedVersionId = asset.id;
     if (command.release) asset.releasedVersionId = asset.id;
+    if (command.returnTask !== undefined && returnTask !== undefined) {
+      returnTask.status = command.returnTask.toStatus;
+      returnTask.version = command.returnTask.expectedVersion + 1;
+      returnTask.updatedAt = command.returnTask.transition.occurredAt;
+    }
     return Promise.resolve({ ok: true, value: asset });
   }
   appendAssetAudit(_entry: SpeakerAssetAuditEntry): Promise<void> {
@@ -932,6 +958,141 @@ describe("private speaker asset lifecycle", () => {
         expectedVersion: 1,
       }),
     ).resolves.toMatchObject({ task: { status: "submitted", version: 2 } });
+  });
+
+  it("returns a reviewed upload task for speaker changes", async () => {
+    const repository = new LifecycleRepository();
+    repository.organizerScopes.set("event-1:organizer", {
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      role: "owner",
+    });
+    const uploadTask = repository.tasks.find((task) => task.id === "upload-task");
+    if (uploadTask === undefined) throw new Error("Expected the upload task fixture.");
+    uploadTask.status = "not_started";
+    const gateway = new CapabilityGateway();
+    const ids = ["review-upload", "submit-transition", "review-audit", "changes-transition"];
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+      speakerSender,
+      now: () => new Date(now),
+      generateId: () => ids.shift() ?? "generated-id",
+    });
+    const authorization = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: uploadTask.id,
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    gateway.uploaded.add(authorization.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: authorization.asset.id,
+      state: "ready",
+    });
+    await service.transitionTask({
+      eventId: "event-1",
+      accountId: "account-1",
+      taskId: uploadTask.id,
+      toStatus: "submitted",
+      expectedVersion: 1,
+    });
+
+    await service.reviewAsset({
+      eventId: "event-1",
+      accountId: "organizer",
+      assetId: authorization.asset.id,
+      state: "needs_changes",
+      note: "Please replace the session deck.",
+    });
+
+    await expect(service.listTasks("event-1", "account-1")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: uploadTask.id,
+          status: "needs_changes",
+          version: 3,
+        }),
+      ]),
+    );
+  });
+
+  it("does not persist a needs-changes review when the linked task CAS conflicts", async () => {
+    class ConflictingLifecycleRepository extends LifecycleRepository {
+      override reviewAsset(
+        command: SpeakerAssetReviewCommand,
+      ): Promise<RepositoryResult<SpeakerAsset>> {
+        if (command.returnTask !== undefined) {
+          const task = this.tasks.find(({ id }) => id === command.returnTask?.taskId);
+          if (task !== undefined) task.version += 1;
+        }
+        return super.reviewAsset(command);
+      }
+    }
+
+    const repository = new ConflictingLifecycleRepository();
+    repository.organizerScopes.set("event-1:organizer", {
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      role: "owner",
+    });
+    const uploadTask = repository.tasks.find((task) => task.id === "upload-task");
+    if (uploadTask === undefined) throw new Error("Expected the upload task fixture.");
+    uploadTask.status = "submitted";
+    uploadTask.version = 2;
+    const readyAsset: SpeakerAsset = {
+      id: "asset-review-conflict",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      taskId: uploadTask.id,
+      kind: "slides",
+      objectKey: "opaque/review-conflict",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      state: "ready",
+      createdAt: now,
+      version: 1,
+      versionFamilyId: "asset-family:review-conflict",
+      latestVersionId: "asset-review-conflict",
+      currentVersionId: "asset-review-conflict",
+    };
+    repository.assets.push(readyAsset);
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+        generateId: () => "review-conflict-id",
+      },
+    );
+
+    await expect(
+      service.reviewAsset({
+        eventId: "event-1",
+        accountId: "organizer",
+        assetId: readyAsset.id,
+        state: "needs_changes",
+        note: "Please replace the deck.",
+      }),
+    ).rejects.toMatchObject({
+      code: "VERSION_CONFLICT",
+      status: 409,
+    });
+    expect(readyAsset).not.toHaveProperty("reviewState");
+    expect(readyAsset).not.toHaveProperty("reviewVersion");
+    expect(uploadTask).toMatchObject({ status: "submitted", version: 3 });
   });
 
   it("derives immutable task re-uploads and keeps the submitted status authoritative", async () => {

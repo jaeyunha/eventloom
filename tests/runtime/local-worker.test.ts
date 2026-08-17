@@ -927,7 +927,7 @@ describe.sequential("composed local Worker", () => {
       jsonRequest("POST", uploadPayload, speakerHeaders),
     );
     const upload = await jsonData<{
-      asset: { id: string; state: string; version: number };
+      asset: { id: string; state: string; version: number; versionFamilyId: string };
       grant: {
         method: "PUT";
         url: string;
@@ -1047,6 +1047,117 @@ describe.sequential("composed local Worker", () => {
           id: upload.asset.id,
           state: "ready",
           version: 1,
+        }),
+      }),
+    );
+
+    const needsChangesResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/review`,
+      jsonRequest(
+        "POST",
+        {
+          state: "needs_changes",
+          release: false,
+          note: "Replace the session deck with v2.",
+          expectedVersion: 0,
+        },
+        organizerHeaders,
+      ),
+    );
+    expect(needsChangesResponse.status).toBe(200);
+    expect(
+      await jsonData<{ reviewState: string; reviewNote?: string }>(needsChangesResponse),
+    ).toMatchObject({
+      reviewState: "needs_changes",
+      reviewNote: "Replace the session deck with v2.",
+    });
+
+    const returnedTaskResponse = await runtimeRequest(`/api/speaker/events/${eventId}/tasks`, {
+      headers: speakerHeaders,
+    });
+    const returnedTasks =
+      await jsonData<Array<{ id: string; status: string; version: number }>>(returnedTaskResponse);
+    expect(returnedTaskResponse.status).toBe(200);
+    expect(returnedTasks).toContainEqual(
+      expect.objectContaining({ id: uploadTask.id, status: "needs_changes", version: 4 }),
+    );
+
+    const replacementBody = "deterministic replacement speaker bytes";
+    const replacementAuthorizeResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/uploads`,
+      jsonRequest(
+        "POST",
+        {
+          participantId: uploadTask.participantId,
+          taskId: uploadTask.id,
+          kind: "slides",
+          fileName: "deck-v2.pdf",
+          contentType: "application/pdf",
+          sizeBytes: new TextEncoder().encode(replacementBody).byteLength,
+        },
+        speakerHeaders,
+      ),
+    );
+    expect(
+      replacementAuthorizeResponse.status,
+      await replacementAuthorizeResponse.clone().text(),
+    ).toBe(201);
+    const replacement = await jsonData<{
+      asset: {
+        id: string;
+        version: number;
+        versionFamilyId: string;
+        supersedesAssetId?: string;
+      };
+      grant: { method: string; url: string; headers: Record<string, string> };
+    }>(replacementAuthorizeResponse);
+    expect(replacement.asset).toMatchObject({
+      version: 2,
+      versionFamilyId: upload.asset.versionFamilyId,
+      supersedesAssetId: upload.asset.id,
+    });
+    const replacementUploadResponse = await runtimeRequest(replacement.grant.url, {
+      method: replacement.grant.method,
+      headers: { ...replacement.grant.headers, ...speakerHeaders },
+      body: replacementBody,
+    });
+    expect(replacementUploadResponse.status).toBe(201);
+    const replacementFinalizeResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/assets/${replacement.asset.id}/finalize`,
+      jsonRequest("POST", { state: "ready" }, speakerHeaders),
+    );
+    expect(replacementFinalizeResponse.status).toBe(200);
+    const replacementSubmitResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/tasks/${uploadTask.id}/transitions`,
+      jsonRequest(
+        "POST",
+        {
+          toStatus: "submitted",
+          expectedVersion: 4,
+        },
+        speakerHeaders,
+      ),
+    );
+    expect(replacementSubmitResponse.status).toBe(200);
+
+    const updatedDeliverablesResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/deliverables`,
+      { headers: organizerHeaders },
+    );
+    const updatedDeliverables = await jsonData<{
+      items: Array<{
+        task: { id: string };
+        currentAsset?: { id: string; version: number; versionFamilyId: string };
+      }>;
+    }>(updatedDeliverablesResponse);
+    expect(updatedDeliverablesResponse.status).toBe(200);
+    expect(updatedDeliverables.items).toContainEqual(
+      expect.objectContaining({
+        task: expect.objectContaining({ id: uploadTask.id }),
+        currentAsset: expect.objectContaining({
+          id: replacement.asset.id,
+          version: 2,
+          versionFamilyId: upload.asset.versionFamilyId,
         }),
       }),
     );

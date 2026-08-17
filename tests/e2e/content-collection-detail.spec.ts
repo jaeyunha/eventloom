@@ -9,7 +9,7 @@ test("content collection file review stays aligned in light and dark themes", as
   context,
   page,
 }, testInfo) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   await context.addCookies([
     {
       name: "better-auth.session_token",
@@ -23,15 +23,84 @@ test("content collection file review stays aligned in light and dark themes", as
   await page.addInitScript(() => window.localStorage.setItem("theme", "light"));
   await page.setViewportSize({ width: 1440, height: 1000 });
 
+  const portalContextsResponse = await context.request.get(
+    `${webOrigin}/api/speaker/portal/contexts`,
+  );
+  expect(portalContextsResponse.ok()).toBe(true);
+  expect(await portalContextsResponse.json()).toMatchObject({
+    data: [
+      {
+        id: "portal:local-organization:demo-event:local-participant",
+        eventId: "demo-event",
+        primaryParticipantId: "local-participant",
+      },
+    ],
+  });
+  const currentPortalContextResponse = await context.request.get(
+    `${webOrigin}/api/speaker/events/demo-event/portal/context`,
+  );
+  expect(currentPortalContextResponse.ok()).toBe(true);
+  expect(await currentPortalContextResponse.json()).toMatchObject({
+    data: {
+      id: "portal:local-organization:demo-event:local-participant",
+      eventId: "demo-event",
+      primaryParticipantId: "local-participant",
+    },
+  });
+  const portalFixtureResponse = await context.request.get(
+    `${webOrigin}/api/speaker/events/demo-event/portal`,
+  );
+  expect(portalFixtureResponse.ok()).toBe(true);
+  expect(await portalFixtureResponse.json()).toMatchObject({
+    data: {
+      context: {
+        id: "portal:local-organization:demo-event:local-participant",
+        eventId: "demo-event",
+        primaryParticipantId: "local-participant",
+      },
+      tasks: [
+        expect.objectContaining({
+          title: "Upload your presentation slides",
+          status: "not_started",
+        }),
+      ],
+    },
+  });
+  const initialPortalResponse = page.waitForResponse((response) => {
+    const pathname = new URL(response.url()).pathname;
+    return (
+      response.request().method() === "GET" && pathname === "/api/speaker/events/demo-event/portal"
+    );
+  });
   await page.goto("/portal/tasks?event=demo-event");
+  await expect((await initialPortalResponse).ok()).toBe(true);
   const request = page.getByRole("article", { name: "Upload your presentation slides" });
-  await expect(request).toBeVisible();
+  await expect(request).toBeVisible({ timeout: 15_000 });
   await request.getByLabel("Choose slides").setInputFiles({
     name: "session-slides.pdf",
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-1.4\nEventloom visual QA\n"),
   });
+  const initialDocumentSentinel = "content-files-v1-document";
+  await page.evaluate(
+    (sentinel) => Reflect.set(window, "__eventloomContentFilesSentinel", sentinel),
+    initialDocumentSentinel,
+  );
+  const initialSubmissionResponse = page.waitForResponse((response) => {
+    const pathname = new URL(response.url()).pathname;
+    return (
+      response.request().method() === "POST" &&
+      pathname.startsWith("/api/speaker/events/demo-event/tasks/") &&
+      pathname.endsWith("/transitions")
+    );
+  });
   await request.getByRole("button", { name: "Upload and submit" }).click();
+  const initialSubmission = await initialSubmissionResponse;
+  expect(initialSubmission.ok()).toBe(true);
+  expect(initialSubmission.request().postDataJSON()).toMatchObject({ toStatus: "submitted" });
+  expect(await page.evaluate(() => Reflect.get(window, "__eventloomContentFilesSentinel"))).toBe(
+    initialDocumentSentinel,
+  );
   await expect(
     page.getByRole("button", { name: /Upload your presentation slides Submitted/u }),
   ).toBeVisible();
@@ -52,7 +121,7 @@ test("content collection file review stays aligned in light and dark themes", as
   const assignmentTable = page.getByRole("table", {
     name: "Per-speaker content request assignments and due dates",
   });
-  await expect(assignmentTable).toBeVisible();
+  await expect(assignmentTable).toBeVisible({ timeout: 15_000 });
   const verticalAlignments = await assignmentTable
     .locator("tbody th, tbody td")
     .evaluateAll((cells) => cells.map((cell) => window.getComputedStyle(cell).verticalAlign));
@@ -93,6 +162,8 @@ test("content collection file review stays aligned in light and dark themes", as
   await expect(fileReviewDialog.getByRole("tab", { name: "Overview" })).toBeVisible();
   await expect(fileReviewDialog.getByRole("tab", { name: /Comments/u })).toBeVisible();
   await expect(fileReviewDialog.getByRole("tab", { name: /Versions/u })).toBeVisible();
+  await expect(fileReviewDialog.getByText("Uploader", { exact: true })).toBeVisible();
+  await expect(fileReviewDialog.getByText("Alex Rivera", { exact: true })).toHaveCount(2);
   await expect(fileReviewDialog.getByText("Authoritative pointers", { exact: true })).toHaveCount(
     0,
   );
@@ -169,6 +240,184 @@ test("content collection file review stays aligned in light and dark themes", as
   await overviewTab.click();
   await expect(overviewTab).toHaveAttribute("data-state", "active");
 
+  await darkFileReviewDialog
+    .getByLabel("Review note (optional)")
+    .fill("Replace the session deck with v2.");
+  const needsChangesResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.includes("/organizer/assets/") &&
+      new URL(response.url()).pathname.endsWith("/review"),
+  );
+  await darkFileReviewDialog.getByRole("button", { name: "Needs changes" }).click();
+  const returnedForChanges = await needsChangesResponse;
+  expect(
+    returnedForChanges.ok(),
+    `${returnedForChanges.status()} ${await returnedForChanges.text()}`,
+  ).toBe(true);
+  expect(returnedForChanges.request().postDataJSON()).toMatchObject({
+    state: "needs_changes",
+    release: false,
+  });
+
+  await context.addCookies([
+    {
+      name: "better-auth.session_token",
+      value: "local-speaker-session",
+      url: webOrigin,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: false,
+    },
+  ]);
+  const participantCommentsResponse = page.waitForResponse((response) => {
+    const pathname = new URL(response.url()).pathname;
+    return (
+      response.request().method() === "GET" &&
+      pathname.startsWith("/api/speaker/events/demo-event/assets/") &&
+      !pathname.includes("/organizer/") &&
+      pathname.endsWith("/comments")
+    );
+  });
+  await page.goto("/portal/tasks?event=demo-event");
+  await expect((await participantCommentsResponse).ok()).toBe(true);
+  const returnedTask = page.getByRole("article", { name: "Upload your presentation slides" });
+  await expect(returnedTask.getByText("Needs changes", { exact: true })).toBeVisible();
+  await expect(returnedTask.getByText("Replace the session deck with v2.")).toBeVisible();
+  const replacementInput = returnedTask.getByLabel("Choose slides");
+  const replacementSubmit = returnedTask.getByRole("button", { name: "Upload and submit" });
+  await expect(replacementInput).toBeEnabled();
+  await expect(replacementSubmit).toBeDisabled();
+  await page.screenshot({
+    path: testInfo.outputPath("returned-task-needs-changes.png"),
+    fullPage: true,
+  });
+  await replacementInput.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("returned-task-reupload-controls.png"),
+    fullPage: true,
+  });
+
+  await replacementInput.setInputFiles({
+    name: "session-slides-v2.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\nEventloom immutable v2\n"),
+  });
+  await expect(replacementSubmit).toBeEnabled();
+  const replacementDocumentSentinel = "content-files-v2-document";
+  await page.evaluate(
+    (sentinel) => Reflect.set(window, "__eventloomContentFilesSentinel", sentinel),
+    replacementDocumentSentinel,
+  );
+  const replacementSubmissionResponse = page.waitForResponse((response) => {
+    const pathname = new URL(response.url()).pathname;
+    return (
+      response.request().method() === "POST" &&
+      pathname.startsWith("/api/speaker/events/demo-event/tasks/") &&
+      pathname.endsWith("/transitions")
+    );
+  });
+  await replacementSubmit.click();
+  const replacementSubmission = await replacementSubmissionResponse;
+  expect(replacementSubmission.ok()).toBe(true);
+  expect(replacementSubmission.request().postDataJSON()).toMatchObject({
+    toStatus: "submitted",
+  });
+  expect(await page.evaluate(() => Reflect.get(window, "__eventloomContentFilesSentinel"))).toBe(
+    replacementDocumentSentinel,
+  );
+  await expect(
+    page.getByRole("button", { name: /Upload your presentation slides Submitted/u }),
+  ).toBeVisible();
+
+  const failedWorkspaceResponses: string[] = [];
+  const captureWorkspaceFailure = (response: {
+    ok(): boolean;
+    request(): { method(): string };
+    status(): number;
+    url(): string;
+  }): void => {
+    if (response.status() < 400) return;
+    failedWorkspaceResponses.push(
+      `${response.request().method()} ${new URL(response.url()).pathname} ${response.status()}`,
+    );
+  };
+  page.on("response", captureWorkspaceFailure);
+  const rosterWorkspaceResponse = page.waitForResponse((response) => {
+    const pathname = new URL(response.url()).pathname;
+    return (
+      response.request().method() === "GET" &&
+      pathname === "/api/speaker/events/demo-event/submissions/submission_local_1/roster"
+    );
+  });
+  await page.goto("/portal?workspace=files&event=demo-event");
+  const rosterResponse = await rosterWorkspaceResponse;
+  expect(rosterResponse.ok()).toBe(true);
+  expect(await rosterResponse.json()).toMatchObject({
+    data: {
+      organizationId: "local-organization",
+      eventId: "demo-event",
+      submissionId: "submission_local_1",
+    },
+  });
+  await expect(page.getByRole("heading", { level: 1, name: "Files" })).toBeVisible({
+    timeout: 15_000,
+  });
+  const uploadedFamily = page.getByRole("button", { name: /session-slides-v2\.pdf/u });
+  await expect(uploadedFamily).toHaveCount(1);
+  await uploadedFamily.click();
+  const participantVersion2 = page.getByText("Version 2 · session-slides-v2.pdf", { exact: true });
+  const participantVersion1 = page.getByText("Version 1 · session-slides.pdf", { exact: true });
+  await expect(participantVersion2).toBeVisible();
+  await expect(participantVersion1).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download version 1" })).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({
+      has: page.getByRole("button", { name: "Retry" }),
+    }),
+  ).toHaveCount(0);
+  if (failedWorkspaceResponses.length > 0) {
+    throw new Error(`Workspace API failures:\n${failedWorkspaceResponses.join("\n")}`);
+  }
+  page.off("response", captureWorkspaceFailure);
+  await page.screenshot({
+    path: testInfo.outputPath("participant-files-family.png"),
+    fullPage: true,
+  });
+  await participantVersion1.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("participant-files-v1-v2.png"),
+    fullPage: true,
+  });
+
+  await context.addCookies([
+    {
+      name: "better-auth.session_token",
+      value: "local-session",
+      url: webOrigin,
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: false,
+    },
+  ]);
+  await page.goto(`${eventPath}/deliverables`);
+  const updatedAssignments = page.getByRole("table", {
+    name: "Per-speaker content request assignments and due dates",
+  });
+  await updatedAssignments.getByRole("button", { name: "Open request" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Inspect file versions" }).click();
+  const updatedReview = page.getByRole("dialog");
+  await updatedReview.getByRole("tab", { name: /Versions/u }).click();
+  await expect(
+    updatedReview.getByText("v2 · session-slides-v2.pdf", { exact: true }),
+  ).toBeVisible();
+  await expect(updatedReview.getByText("v1 · session-slides.pdf", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("immutable-v1-v2-history.png"),
+    fullPage: true,
+  });
+  await updatedReview.getByRole("tab", { name: "Overview" }).click();
+
   const reviewRequests: Array<{ readonly state: string; readonly release: boolean }> = [];
   page.on("request", (request) => {
     if (
@@ -180,7 +429,7 @@ test("content collection file review stays aligned in light and dark themes", as
     }
   });
 
-  await darkFileReviewDialog.getByRole("button", { name: "Approve", exact: true }).click();
+  await updatedReview.getByRole("button", { name: "Approve", exact: true }).click();
   const approvalDialog = page.getByRole("alertdialog");
   await expect(
     approvalDialog.getByRole("heading", { name: "Confirm file approval" }),
@@ -189,7 +438,7 @@ test("content collection file review stays aligned in light and dark themes", as
   await expect(approvalDialog).not.toBeVisible();
   expect(reviewRequests).toHaveLength(0);
 
-  await darkFileReviewDialog.getByRole("button", { name: "Approve and release" }).click();
+  await updatedReview.getByRole("button", { name: "Approve and release" }).click();
   const releaseDialog = page.getByRole("alertdialog");
   await expect(releaseDialog.getByRole("heading", { name: "Confirm file release" })).toBeVisible();
   const releaseRequest = page.waitForRequest(

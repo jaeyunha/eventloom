@@ -25,6 +25,7 @@ import type {
   SpeakerAssetAuditEntry,
   SpeakerAssetComment,
   SpeakerAssetKind,
+  SpeakerAssetReviewCommand,
   SpeakerAssetReviewInput,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
@@ -3621,7 +3622,48 @@ export class SpeakerService {
       occurredAt: reviewedAt,
       version: expectedVersion + 1,
     };
-    const command = {
+    let returnTask: SpeakerAssetReviewCommand["returnTask"];
+    let returnTaskExpectation: { readonly id: string; readonly version: number } | undefined;
+    if (input.state === "needs_changes" && asset.taskId !== undefined) {
+      const task = await this.repository.getTask(input.eventId, asset.taskId);
+      const subject = task === null ? undefined : speakerTaskSubject(task);
+      const subjectMatchesAsset =
+        subject?.type === "participant"
+          ? asset.submissionId === undefined
+          : subject?.type === "session" &&
+            asset.submissionId !== undefined &&
+            sameSpeakerSubmission(subject.submissionId, asset.submissionId);
+      if (
+        task !== null &&
+        subject !== undefined &&
+        task.type === "upload" &&
+        task.owner === "speaker" &&
+        task.participantId === asset.participantId &&
+        subjectMatchesAsset &&
+        task.status === "submitted"
+      ) {
+        returnTaskExpectation = { id: task.id, version: task.version + 1 };
+        returnTask = {
+          eventId: input.eventId,
+          taskId: task.id,
+          expectedVersion: task.version,
+          fromStatus: task.status,
+          toStatus: "needs_changes",
+          transition: {
+            id: this.generateId(),
+            eventId: input.eventId,
+            taskId: task.id,
+            participantId: task.participantId,
+            actorAccountId: input.accountId,
+            fromStatus: task.status,
+            toStatus: "needs_changes",
+            ...(note === undefined ? {} : { note }),
+            occurredAt: reviewedAt,
+          },
+        };
+      }
+    }
+    const command: SpeakerAssetReviewCommand = {
       eventId: input.eventId,
       assetId: input.assetId,
       state: input.state,
@@ -3631,8 +3673,11 @@ export class SpeakerService {
       reviewedBy: input.accountId,
       release: input.release === true,
       audit,
+      ...(returnTask === undefined ? {} : { returnTask }),
     };
-    const reviewAsset = this.repository.reviewAsset ?? this.repository.updateAssetReview;
+    const reviewAsset =
+      this.repository.reviewAsset ??
+      (returnTask === undefined ? this.repository.updateAssetReview : undefined);
     if (reviewAsset === undefined) throw notFound();
     const result = await reviewAsset.call(this.repository, command);
     if (!result.ok) {
@@ -3666,6 +3711,20 @@ export class SpeakerService {
         409,
         "The asset review could not be verified after saving.",
       );
+    }
+    if (returnTaskExpectation !== undefined) {
+      const returnedTask = await this.repository.getTask(input.eventId, returnTaskExpectation.id);
+      if (
+        returnedTask === null ||
+        returnedTask.status !== "needs_changes" ||
+        returnedTask.version !== returnTaskExpectation.version
+      ) {
+        throw new SpeakerServiceError(
+          "VERSION_CONFLICT",
+          409,
+          "The speaker task could not be verified after returning the file for updates.",
+        );
+      }
     }
     return persisted;
   }

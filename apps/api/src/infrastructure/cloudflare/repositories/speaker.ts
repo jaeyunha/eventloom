@@ -1898,6 +1898,24 @@ export class D1SpeakerRepository
       return { ok: false, reason: "version_conflict" };
     const scope = await this.#eventScope(command.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
+    if (command.returnTask !== undefined) {
+      const task = await this.getTask(command.eventId, command.returnTask.taskId);
+      if (task === null) return { ok: false, reason: "not_found" };
+      if (
+        command.returnTask.eventId !== command.eventId ||
+        command.returnTask.transition.eventId !== command.eventId ||
+        command.returnTask.transition.taskId !== command.returnTask.taskId ||
+        command.returnTask.transition.participantId !== task.participantId
+      ) {
+        return { ok: false, reason: "invalid_state" };
+      }
+      if (
+        task.version !== command.returnTask.expectedVersion ||
+        task.status !== command.returnTask.fromStatus
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+    }
     const statements: D1PreparedStatement[] = [
       updateGuard(
         this.#db,
@@ -1966,6 +1984,51 @@ export class D1SpeakerRepository
           command.reviewedBy,
         ),
     ];
+    if (command.returnTask !== undefined) {
+      statements.push(
+        updateGuard(
+          this.#db,
+          "speaker_tasks",
+          "organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          [
+            scope.organizationId,
+            command.eventId,
+            command.returnTask.taskId,
+            command.returnTask.expectedVersion,
+            command.returnTask.fromStatus,
+          ],
+        ),
+        this.#db
+          .prepare(
+            "UPDATE speaker_tasks SET status = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          )
+          .bind(
+            command.returnTask.toStatus,
+            command.returnTask.transition.occurredAt,
+            scope.organizationId,
+            command.eventId,
+            command.returnTask.taskId,
+            command.returnTask.expectedVersion,
+            command.returnTask.fromStatus,
+          ),
+        this.#db
+          .prepare(
+            "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .bind(
+            command.returnTask.transition.id,
+            scope.organizationId,
+            command.eventId,
+            command.returnTask.taskId,
+            command.returnTask.transition.participantId,
+            command.returnTask.transition.actorAccountId,
+            command.returnTask.fromStatus,
+            command.returnTask.toStatus,
+            command.returnTask.transition.note ?? null,
+            command.returnTask.transition.occurredAt,
+          ),
+      );
+    }
     if (command.audit !== undefined) statements.push(this.#auditStatement(command.audit));
     try {
       await this.#db.batch(statements);
@@ -1991,6 +2054,16 @@ export class D1SpeakerRepository
       value.releasedVersionId !== expectedReleasedVersionId
     ) {
       return { ok: false, reason: "version_conflict" };
+    }
+    if (command.returnTask !== undefined) {
+      const task = await this.getTask(command.eventId, command.returnTask.taskId);
+      if (
+        task === null ||
+        task.status !== command.returnTask.toStatus ||
+        task.version !== command.returnTask.expectedVersion + 1
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
     }
     return { ok: true, value };
   }

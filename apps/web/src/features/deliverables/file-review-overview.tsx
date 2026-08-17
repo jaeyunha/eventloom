@@ -57,6 +57,7 @@ export function FileReviewOverview({
 
   const fields = [
     ["Speaker", context.speakerLabel],
+    ["Uploader", context.speakerLabel],
     ["Session", context.sessionLabel],
     ["Request", context.taskLabel],
     ["Uploaded", formatFileTime(asset.createdAt)],

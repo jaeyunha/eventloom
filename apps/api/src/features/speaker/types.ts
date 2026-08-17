@@ -653,6 +653,8 @@ export interface SpeakerAssetReviewCommand {
   release: boolean;
   /** Persisted atomically with the review by repositories that support transactional audit. */
   audit?: SpeakerAssetAuditEntry;
+  /** Optional task return persisted atomically with the exact-version review. */
+  returnTask?: TransitionSpeakerTaskCommand;
 }
 
 export interface SpeakerAssetAuditEntry {

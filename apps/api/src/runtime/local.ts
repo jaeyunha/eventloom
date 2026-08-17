@@ -110,15 +110,20 @@ import type {
   SpeakerAccessScope,
   SpeakerAccountWorkloadRepository,
   SpeakerAsset,
+  SpeakerAssetComment,
+  SpeakerAssetReviewCommand,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
+  SpeakerEventResource,
   SpeakerOrganizerLifecycleRepository,
   SpeakerOrganizerReadModel,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerProfile,
+  SpeakerRosterEntry,
   SpeakerSubmission,
   SpeakerTask,
+  SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
   UpdateSpeakerContentCommand,
@@ -527,6 +532,7 @@ class LocalSpeakerRepository
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
+  readonly #assetComments = new Map<string, SpeakerAssetComment[]>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
   readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
@@ -564,6 +570,7 @@ class LocalSpeakerRepository
     if (!this.#profiles.has(eventId)) this.#profiles.set(eventId, []);
     if (!this.#tasks.has(eventId)) this.#tasks.set(eventId, []);
     if (!this.#assets.has(eventId)) this.#assets.set(eventId, []);
+    if (!this.#assetComments.has(eventId)) this.#assetComments.set(eventId, []);
   }
 
   listStoredSubmissions(eventId: string): SpeakerSubmission[] {
@@ -648,7 +655,7 @@ class LocalSpeakerRepository
       }
     }
     this.#cfpPortalContexts.set(submission.ownerAccountId, {
-      id: `portal:${submission.eventId}:${primary.id}`,
+      id: `portal:${LOCAL_ORGANIZATION_ID}:${submission.eventId}:${primary.id}`,
       eventId: submission.eventId,
       name: eventName,
       slug: submission.eventId,
@@ -1054,7 +1061,7 @@ class LocalSpeakerRepository
     );
     if (submission === undefined) return;
     this.#cfpPortalContexts.set(accountId, {
-      id: `portal:${eventId}:${participantId}`,
+      id: `portal:${LOCAL_ORGANIZATION_ID}:${eventId}:${participantId}`,
       eventId,
       name: eventId,
       slug: eventId,
@@ -1245,6 +1252,133 @@ class LocalSpeakerRepository
     };
     assets[index] = finalized;
     return { ok: true, value: clone(finalized) };
+  }
+
+  async reviewAsset(command: SpeakerAssetReviewCommand): Promise<RepositoryResult<SpeakerAsset>> {
+    this.#ensureEvent(command.eventId);
+    const assets = this.#assets.get(command.eventId) ?? [];
+    const index = assets.findIndex(({ id }) => id === command.assetId);
+    const asset = assets[index];
+    if (asset === undefined) return { ok: false, reason: "not_found" };
+    if (
+      asset.state !== "ready" ||
+      (asset.reviewVersion ?? 0) !== command.expectedVersion ||
+      asset.currentVersionId !== asset.id
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const tasks = this.#tasks.get(command.eventId) ?? [];
+    const returnTaskIndex =
+      command.returnTask === undefined
+        ? -1
+        : tasks.findIndex(({ id }) => id === command.returnTask?.taskId);
+    const returnTask = returnTaskIndex < 0 ? undefined : tasks[returnTaskIndex];
+    if (command.returnTask !== undefined) {
+      if (returnTask === undefined) return { ok: false, reason: "not_found" };
+      if (
+        command.returnTask.eventId !== command.eventId ||
+        command.returnTask.transition.eventId !== command.eventId ||
+        command.returnTask.transition.taskId !== command.returnTask.taskId ||
+        command.returnTask.transition.participantId !== returnTask.participantId
+      ) {
+        return { ok: false, reason: "invalid_state" };
+      }
+      if (
+        returnTask.version !== command.returnTask.expectedVersion ||
+        returnTask.status !== command.returnTask.fromStatus
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+    }
+    const versionFamilyId = asset.versionFamilyId ?? asset.id;
+    const approvedVersionId =
+      command.state === "approved"
+        ? command.assetId
+        : asset.approvedVersionId === command.assetId
+          ? undefined
+          : asset.approvedVersionId;
+    const releasedVersionId = command.release ? command.assetId : asset.releasedVersionId;
+    for (const [candidateIndex, candidate] of assets.entries()) {
+      if ((candidate.versionFamilyId ?? candidate.id) !== versionFamilyId) continue;
+      const updated = {
+        ...candidate,
+        ...(approvedVersionId === undefined ? {} : { approvedVersionId }),
+        ...(releasedVersionId === undefined ? {} : { releasedVersionId }),
+      };
+      if (approvedVersionId === undefined) delete updated.approvedVersionId;
+      if (releasedVersionId === undefined) delete updated.releasedVersionId;
+      assets[candidateIndex] = updated;
+    }
+    const reviewed: SpeakerAsset = {
+      ...asset,
+      ...(approvedVersionId === undefined ? {} : { approvedVersionId }),
+      ...(releasedVersionId === undefined ? {} : { releasedVersionId }),
+      reviewState: command.state,
+      ...(command.note === undefined ? {} : { reviewNote: command.note }),
+      reviewedAt: command.reviewedAt,
+      reviewedBy: command.reviewedBy,
+      reviewVersion: command.expectedVersion + 1,
+    };
+    if (approvedVersionId === undefined) delete reviewed.approvedVersionId;
+    if (releasedVersionId === undefined) delete reviewed.releasedVersionId;
+    if (command.note === undefined) delete reviewed.reviewNote;
+    assets[index] = reviewed;
+    if (command.returnTask !== undefined && returnTask !== undefined) {
+      tasks[returnTaskIndex] = {
+        ...returnTask,
+        status: command.returnTask.toStatus,
+        version: command.returnTask.expectedVersion + 1,
+        updatedAt: command.returnTask.transition.occurredAt,
+      };
+    }
+    return { ok: true, value: clone(reviewed) };
+  }
+
+  async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {
+    this.#ensureEvent(eventId);
+    return clone(
+      (this.#assetComments.get(eventId) ?? [])
+        .filter((comment) => comment.assetId === assetId && comment.versionId === assetId)
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            (left.version ?? 0) - (right.version ?? 0) ||
+            left.id.localeCompare(right.id),
+        ),
+    );
+  }
+
+  async createAssetComment(comment: SpeakerAssetComment): Promise<SpeakerAssetComment> {
+    this.#ensureEvent(comment.eventId);
+    const asset = (this.#assets.get(comment.eventId) ?? []).find(
+      ({ id }) => id === comment.assetId,
+    );
+    if (asset === undefined || comment.versionId !== comment.assetId) {
+      throw new Error("The version-specific speaker asset does not exist.");
+    }
+    const comments = this.#assetComments.get(comment.eventId) ?? [];
+    if (comments.some(({ id }) => id === comment.id)) {
+      throw new Error("The version-specific speaker asset comment already exists.");
+    }
+    const created = clone(comment);
+    comments.push(created);
+    this.#assetComments.set(comment.eventId, comments);
+    return clone(created);
+  }
+
+  async listRoster(eventId: string, _submissionId: string): Promise<SpeakerRosterEntry[]> {
+    this.#ensureEvent(eventId);
+    return [];
+  }
+
+  async listEventResources(eventId: string): Promise<SpeakerEventResource[]> {
+    this.#ensureEvent(eventId);
+    return [];
+  }
+
+  async listWikiPages(eventId: string): Promise<SpeakerWikiPage[]> {
+    this.#ensureEvent(eventId);
+    return [];
   }
 
   async getContent(eventId: string, entityType: "session" | "speaker", entityId: string) {
