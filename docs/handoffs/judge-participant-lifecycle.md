@@ -1,11 +1,12 @@
 # Lane handoff: judge-participant-lifecycle
 
-## Pause status
+## Retained-lane status
 
-**This lane was resumed only for the submitted-edit P1 correction.**
+**This is an active retained lane. Do not pause or exit it while the narrowed
+CFP edit-state objective remains under review.**
 
-PR #38 remains held for quality re-review. Do not expand feature scope, merge,
-deploy, delete the branch, or delete the worktree without explicit instruction.
+PR #38 remains unmerged and undeployed while the retained-lane review finishes.
+Do not expand feature scope, delete the branch, or delete the worktree.
 
 ## Repository and working state
 
@@ -20,10 +21,10 @@ deploy, delete the branch, or delete the worktree without explicit instruction.
   re-review
 - Current GitHub main/base:
   `a9d0019eac57aa90503a6623011e570e22620fcf`
-- Local pre-checkpoint HEAD:
-  `d0eaafde195ba94650249e4c723fb836bab0885f`
-- Pushed PR head before this checkpoint:
-  `1eca0fb840c8bb43c077752d7d898b2926f70dd2`
+- Exact verified source head before this retained-lane handoff checkpoint:
+  `82bebed3d8aa5f8f9a9024cafc13eab991b1b542`
+- Pushed PR head before the retained-lane handoff update:
+  `82bebed3d8aa5f8f9a9024cafc13eab991b1b542`
 - Final checkpoint commit: use `git rev-parse HEAD` after fetching this branch;
   the GitHub handoff issue links the exact pushed commit.
 
@@ -76,8 +77,11 @@ at:
 - Added reserved-character route coverage and encoded both route segments with
   `encodeURIComponent`; the component regression exercises space, `#`, `%`,
   and `/` in both organization and event IDs.
-- Added a fixture-backed browser regression for completion -> Edit submission
-  -> Back -> forward -> participants reload -> review reload.
+- Preserved the fixture-backed completion -> participation-portal handoff test
+  unchanged.
+- Added an isolated controller/browser regression for completion -> Edit
+  submission -> Back -> forward that retains the same submitted ID/version,
+  creates no replacement draft, and leaves proposal fields hydrated.
 - Repaired the partial browser test callback so `testInfo.outputPath(...)` is
   syntactically and type-wise available.
 - Removed lane-generated `test-results`, `apps/web/.next`, and
@@ -114,10 +118,10 @@ for these narrow findings:
   unrelated DOM cleanup helper: `Property 'remove' does not exist on type
   'Node'`. All other changed-file diagnostics are clean, and project typecheck
   passes.
-- Main advanced after the initial checkpoint push and introduced substantial
-  agenda/publication changes. The final focused/full/browser gates must be
-  rerun on the merge containing
-  `a9d0019eac57aa90503a6623011e570e22620fcf` before the final push.
+- `tests/runtime/local-worker.test.ts` has an unrelated existing language-server
+  deprecation hint for `describe.sequential`; project typecheck passes.
+- PRs #31, #32, and #33 remain open. Their deferred canonical participant
+  lifecycle work must not be pulled into this narrow PR.
 
 ## Verification ledger
 
@@ -129,7 +133,7 @@ Update this ledger before pushing the checkpoint.
     route encoding.
 - [x] Focused unit regressions after correction:
   `bun run test:unit -- apps/api/src/features/cfp/service.test.ts apps/web/src/features/cfp/api.test.ts apps/web/src/features/cfp/flow.test.ts apps/web/src/features/sessions/session-workspace.component.test.tsx`
-  - Passed: 89 tests.
+  - Retained-lane run passed: 4 files, 76 tests.
 - [x] Real composed-Worker participant lifecycle:
   `bunx vitest run --config tests/runtime/vitest.config.ts tests/runtime/local-worker.test.ts --maxWorkers=1`
   - Passed: 10 tests, including submitted PATCH/PUT, participants and review
@@ -140,7 +144,7 @@ Update this ledger before pushing the checkpoint.
   - Passed after formatting corrections.
 - [x] Changed-file diagnostics after the final callback repair.
   - Clean for all changed files except the unrelated pre-existing
-    `tests/e2e/cfp.spec.ts:825` `Node.remove` diagnostic.
+    `tests/e2e/cfp.spec.ts:742` `Node.remove` diagnostic.
 - [x] `git diff --check`.
   - Passed with no output.
 - [x] Focused CFP/session regressions after the final callback repair.
@@ -148,18 +152,36 @@ Update this ledger before pushing the checkpoint.
   - After the final main merge: 4 files, 76 tests.
   - Composed runtime command passed: 1 file, 10 tests.
 - [x] `make check` after the final callback repair.
-  - Final current-main run passed typecheck, lint, and format checks across
+  - Retained-lane run passed typecheck, lint, and format checks across
     1,256 files.
 - [x] `make test`.
-  - Passed with exit code 0, including script, unit, API, and runtime suites.
+  - Passed with exit code 0 on the retained-lane head.
+  - Unit/integration: 248 files passed, 2,114 tests passed, 3 skipped.
+  - Script tests: 123 passed.
+  - API tests: 22 passed.
+  - Composed runtime: 10 passed.
 - [x] Isolated CFP browser QA:
   `node scripts/run-isolated-playwright.mjs tests/e2e/cfp.spec.ts`.
-  - Final P1 correction run passed: 13 Chromium tests.
+  - Retained-lane run passed: 13 Chromium tests.
   - The focused screenshot shows the same submitted proposal active after
     `Edit submission -> Back -> forward`, with the original fields hydrated.
-- [x] Manual review of the generated `submitted-edit-review.png` screenshot.
-  - Passed: the review surface shows the same submitted flow with the updated
-    title and all progress steps complete.
+- [x] Manual review of the generated `submitted-edit-back-forward.png`
+  screenshot.
+  - Passed: Proposal is active after Back/forward and the original title and
+    abstract remain hydrated.
+- [x] Five independent retained-lane reviews.
+  - Goal/constraint: PASS, confidence 0.92, no blockers.
+  - Code quality: PASS, confidence 0.92, no blockers.
+  - Security: PASS, no blockers.
+  - Hands-on QA: PASS; 76 focused tests, 10 composed-runtime tests, and
+    13 isolated Chromium tests passed, and the screenshot was inspected.
+  - Context/history: PASS; the narrow scope matches architecture, specification,
+    PR/issue history, and the dependency ordering.
+  - All five terminal verdicts are PASS.
+  - Nonblocking observations were accepted without source churn: the `_step`
+    parameter preserves the existing helper signature, skipped persistence
+    still reports the stable saved state, and machine-local private handoff
+    paths are intentional.
 
 ## Remaining tasks
 
@@ -189,16 +211,21 @@ Update this ledger before pushing the checkpoint.
 - [x] Rerun focused, full, and isolated browser gates after that final main
   merge.
   - Focused, runtime, `make check`, and `make test` passed.
-  - Isolated browser QA remains red with 1 failed and 12 passed.
+  - The first post-merge browser composition run was red with 1 failed and
+    12 passed; the subsequent isolated P1 correction restored 13/13.
 - [x] Isolate the P1 regression without weakening the existing
   portal-handoff assertions.
 - [x] Rerun the isolated CFP suite: 13 passed.
-- [ ] Obtain quality re-review for the pushed P1 correction.
-- [ ] Update PR #38 metadata and verify its exact head/base/file scope.
-- [ ] Create or update exactly one open GitHub issue titled
-  `[Lane handoff] judge-participant-lifecycle`.
+- [x] Complete all five retained-lane reviews and resolve every blocking
+  finding.
+  - No reviewer reported a blocking finding.
+- [ ] Commit and push this active retained-lane handoff without rewriting
+  history.
+- [ ] Update PR #38 and the single exact-title issue with the final head,
+  review verdicts, and verification evidence.
+- [ ] Verify PR #38 head/base/file scope and the active worktree after push.
 
-### Work after explicit resume
+### Deferred canonical lifecycle work
 
 - [ ] Obtain quality re-review of the pushed narrow PR.
 - [ ] Address only newly proven CFP/session findings in PR #38.
@@ -215,7 +242,7 @@ Update this ledger before pushing the checkpoint.
 ## Dependencies and merge order
 
 1. Finish and re-review the narrow PR #38 checkpoint.
-2. Do not merge or deploy from this paused lane without explicit instruction.
+2. Do not merge or deploy from this retained lane without explicit instruction.
 3. PRs #31, #32, and #33 must merge before starting the separate canonical
    accepted-participant lifecycle branch.
 4. Start that future work from then-current `github/main`, not from this
@@ -261,6 +288,7 @@ git diff --name-status github/main...HEAD
 git diff --check github/main...HEAD
 ```
 
-When resuming the deferred canonical lifecycle, do not reuse this worktree or
-branch. Follow the private handoff and create a fresh worktree after the
-dependency PRs merge.
+Continue the narrowed CFP objective from this active worktree until the five
+reviews and final checkpoint are complete. When starting the deferred canonical
+lifecycle later, do not reuse this worktree or branch; follow the private
+handoff and create a fresh worktree after the dependency PRs merge.
