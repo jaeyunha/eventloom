@@ -95,6 +95,7 @@ function suggestionAssignmentGuard(
   database: D1Database,
   suggestion: EvaluationSuggestion,
   expectedAssignmentVersion: number,
+  expectedSubmissionRevision: number = suggestion.submissionRevision,
 ): D1PreparedStatement {
   return guard(
     database,
@@ -111,6 +112,15 @@ function suggestionAssignmentGuard(
       SELECT 1 FROM submissions
       WHERE organization_id = ? AND event_id = ? AND id = ?
         AND status = 'submitted'
+    )
+    AND EXISTS (
+      SELECT 1 FROM submission_versions
+      WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+        AND version = (
+          SELECT MAX(version) FROM submission_versions
+          WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+        )
+        AND version = ?
     )
     AND NOT EXISTS (
       SELECT 1 FROM evaluation_decisions
@@ -130,6 +140,10 @@ function suggestionAssignmentGuard(
       suggestion.tenantId,
       suggestion.eventId,
       suggestion.submissionId,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.submissionId,
+      expectedSubmissionRevision,
       suggestion.tenantId,
       suggestion.eventId,
       suggestion.planId,
@@ -1478,8 +1492,17 @@ export class D1EvaluationRepository implements EvaluationRepository {
   ) {
     const expectedAssignmentVersion =
       typeof admission === "number" ? admission : (admission?.expectedAssignmentVersion ?? 0);
+    const expectedSubmissionRevision =
+      typeof admission === "object"
+        ? (admission?.expectedSubmissionRevision ?? suggestion.submissionRevision)
+        : suggestion.submissionRevision;
     const commands = [
-      suggestionAssignmentGuard(this.database, suggestion, expectedAssignmentVersion),
+      suggestionAssignmentGuard(
+        this.database,
+        suggestion,
+        expectedAssignmentVersion,
+        expectedSubmissionRevision,
+      ),
       ...this.suggestionStatements(suggestion, expectedVersion),
     ];
     if (typeof admission === "object") {
@@ -1511,7 +1534,12 @@ export class D1EvaluationRepository implements EvaluationRepository {
       writeConflict("Suggestion resolution targeted another assignment.");
     }
     const commands = [
-      suggestionAssignmentGuard(this.database, suggestion, expectedAssignmentVersion),
+      suggestionAssignmentGuard(
+        this.database,
+        suggestion,
+        expectedAssignmentVersion,
+        admission.expectedSubmissionRevision ?? suggestion.submissionRevision,
+      ),
       ...this.suggestionStatements(suggestion, expectedSuggestionVersion),
     ];
     commands.unshift(

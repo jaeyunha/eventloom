@@ -89,6 +89,7 @@ export interface EvaluationReviewWriteAdmission {
   readonly expectedAssignmentVersion: number;
   readonly authorizedAt: string;
   readonly expectedPlanVersion?: number | undefined;
+  readonly expectedSubmissionRevision?: number | undefined;
 }
 
 export interface EvaluationProjectionReader {
@@ -1142,6 +1143,13 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       );
       if (submission?.status !== "submitted") {
         throw conflict("This submission is no longer available for review.");
+      }
+      const submissionRevision = submission.version ?? submission.revision;
+      if (
+        submissionRevision !== undefined &&
+        submissionRevision !== suggestion.submissionRevision
+      ) {
+        throw conflict("The AI evaluation suggestion is stale.");
       }
     }
   }

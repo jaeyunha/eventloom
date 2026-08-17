@@ -2899,6 +2899,7 @@ export class EvaluationService {
       assignment,
       expectedAssignmentVersion: assignment.version,
       authorizedAt: now,
+      expectedSubmissionRevision: submissionRevision,
     });
     return suggestion;
   }
@@ -3193,6 +3194,7 @@ export class EvaluationService {
         assignment,
         expectedAssignmentVersion: assignment.version,
         authorizedAt: now,
+        expectedSubmissionRevision: submissionRevision,
       },
     );
     return {
