@@ -231,6 +231,8 @@ interface PortalScenarioState {
 
 export interface PortalApiOptions {
   expiredDownloadAssetId?: string;
+  unavailableResource?: "resources" | "wiki";
+  unavailableResourceMessage?: string;
 }
 
 export interface PortalApiHarness {
@@ -718,10 +720,16 @@ export async function installPortalApi(
     else view.roster = next.roster;
     if (next.assets === undefined) delete view.assets;
     else view.assets = next.assets;
-    if (next.resources === undefined) delete view.resources;
-    else view.resources = next.resources;
-    if (next.wiki === undefined) delete view.wiki;
-    else view.wiki = next.wiki;
+    if (next.resources === undefined || options.unavailableResource === "resources") {
+      delete view.resources;
+    } else {
+      view.resources = next.resources;
+    }
+    if (next.wiki === undefined || options.unavailableResource === "wiki") {
+      delete view.wiki;
+    } else {
+      view.wiki = next.wiki;
+    }
   };
 
   await page.route("**/api/**", async (route) => {
@@ -824,7 +832,7 @@ export async function installPortalApi(
       }
       activeScenario = state;
       syncView(state);
-      await send(route, publicView(state));
+      await send(route, structuredClone(view));
       return;
     }
 
@@ -1091,6 +1099,13 @@ export async function installPortalApi(
         await notFound(route, "Resources are not authorized for this event.");
         return;
       }
+      if (options.unavailableResource === "resources") {
+        await notFound(
+          route,
+          options.unavailableResourceMessage ?? "The requested speaker resource was not found.",
+        );
+        return;
+      }
       await send(
         route,
         structuredClone(state.resources).sort((left, right) => left.order - right.order),
@@ -1101,6 +1116,13 @@ export async function installPortalApi(
     if (request.method() === "GET" && pathname.endsWith("/wiki")) {
       if (!state.context.capabilities.includes("resource-read")) {
         await notFound(route, "Wiki pages are not authorized for this event.");
+        return;
+      }
+      if (options.unavailableResource === "wiki") {
+        await notFound(
+          route,
+          options.unavailableResourceMessage ?? "The requested speaker resource was not found.",
+        );
         return;
       }
       await send(

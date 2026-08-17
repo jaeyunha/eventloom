@@ -52,6 +52,7 @@ const migrationNames = [
   "0033_private_download_capabilities.sql",
   "0034_program_publication_reservations.sql",
   "0035_event_retirement_compatibility.sql",
+  "0036_evaluation_export_jobs.sql",
   "0037_immutable_speaker_projection_snapshots.sql",
 ] as const;
 

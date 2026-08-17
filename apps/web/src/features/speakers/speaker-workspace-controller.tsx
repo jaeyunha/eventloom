@@ -35,6 +35,7 @@ import {
   type SpeakerRosterEnvelope,
   type SpeakerSession,
   type SpeakerTaskEnvelope,
+  type SpeakerTaskReminderOffsetsResult,
   type SpeakerUpdateInput,
 } from "./api";
 import {
@@ -136,6 +137,7 @@ type RosterScopeAction =
     }
   | { type: "progress-load-failed"; message: string }
   | { type: "reminder-loaded"; eligibility: SpeakerReminderEligibilityEnvelope }
+  | { type: "task-reminder-version-updated"; taskId: string; version: number }
   | {
       type: "roster-details-refreshed";
       participantId: string;
@@ -273,6 +275,22 @@ function rosterScopeReducer(state: RosterScopeState, action: RosterScopeAction):
       return { ...state, progress: null, progressError: action.message };
     case "reminder-loaded":
       return { ...state, reminderEligibility: action.eligibility };
+    case "task-reminder-version-updated":
+      return {
+        ...state,
+        progress:
+          state.progress === null
+            ? null
+            : {
+                ...state.progress,
+                rows: state.progress.rows.map((row) => ({
+                  ...row,
+                  tasks: row.tasks.map((task) =>
+                    task.taskId === action.taskId ? { ...task, version: action.version } : task,
+                  ),
+                })),
+              },
+      };
     case "roster-details-refreshed":
       return {
         ...state,
@@ -1443,6 +1461,10 @@ function useSpeakerWorkspaceController({
     () => reminderEligibility?.items.filter((item) => !item.eligible) ?? [],
     [reminderEligibility],
   );
+  const reminderTasks = useMemo(
+    () => scopedProgress?.rows.flatMap((row) => row.tasks) ?? [],
+    [scopedProgress?.rows],
+  );
   const selectedInvitationPreview =
     selectedSpeaker === null
       ? []
@@ -2070,6 +2092,29 @@ function useSpeakerWorkspaceController({
       dispatchImportTaskInvitation({ type: "task-busy-changed", busy: false });
     }
   }
+  async function updateTaskReminderOffsets(
+    taskId: string,
+    expectedVersion: number,
+    reminderOffsetsMinutes: readonly number[],
+  ): Promise<SpeakerTaskReminderOffsetsResult> {
+    if (api === null) throw new Error("The organizer speaker API is unavailable.");
+    const result = await api.updateTaskReminderOffsets({
+      taskId,
+      expectedVersion,
+      reminderOffsetsMinutes,
+    });
+    dispatchRoster({
+      type: "task-reminder-version-updated",
+      taskId: result.taskId,
+      version: result.version,
+    });
+    void api
+      .getReminderEligibility()
+      .then((eligibility) => dispatchRoster({ type: "reminder-loaded", eligibility }))
+      .catch(() => undefined);
+    return result;
+  }
+
   async function refreshEmailHistory(): Promise<void> {
     if (api === null) {
       dispatchEmail({
@@ -2695,6 +2740,8 @@ function useSpeakerWorkspaceController({
             reminderEligibility,
             eligibleItems: eligibleReminderItems,
             ineligibleItems: ineligibleReminderItems,
+            tasks: reminderTasks,
+            onSaveOffsets: updateTaskReminderOffsets,
           },
         }}
         email={{

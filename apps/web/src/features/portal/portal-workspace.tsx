@@ -46,6 +46,7 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
     context,
     view,
     workspace,
+    workspaceGuideErrors,
     loading,
     error,
     workspaceLoading,
@@ -251,7 +252,9 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
           eventName={portalContextLabel(context)}
           available={portal.can("resource-read")}
           resources={workspace.resources}
+          resourceError={workspaceGuideErrors.resources}
           wiki={workspace.wiki}
+          wikiError={workspaceGuideErrors.wiki}
         />
       ) : null}
     </div>
