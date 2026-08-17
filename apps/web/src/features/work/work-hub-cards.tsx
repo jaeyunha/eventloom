@@ -7,6 +7,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import styles from "./work-hub.module.css";
 import type { WorkHubModel } from "./work-hub-model";
 
+export type WorkHubOrganizationRequest = {
+  readonly contactUrl: string | null;
+};
+
 function ContextNames({ names }: Readonly<{ names: readonly string[] }>) {
   if (names.length === 0) return null;
   return <p className={styles.contextNames}>{names.slice(0, 3).join(" · ")}</p>;
@@ -139,10 +143,19 @@ function ParticipantCard({ model }: Readonly<{ model: NonNullable<WorkHubModel["
 export function WorkHubCards({
   model,
   hasEventInvitations = false,
-}: Readonly<{ model: WorkHubModel; hasEventInvitations?: boolean }>) {
+  organizationRequest = null,
+}: Readonly<{
+  model: WorkHubModel;
+  hasEventInvitations?: boolean;
+  /** Present only for managed/hosted deployments. */
+  organizationRequest?: WorkHubOrganizationRequest | null;
+}>) {
   const availableCount = [model.organizer, model.reviewer, model.participant].filter(
     Boolean,
   ).length;
+  const hosted = organizationRequest !== null;
+  const contactUrl = organizationRequest?.contactUrl ?? null;
+
   return (
     <section className={styles.workspaceGrid} id="workspaces" aria-label="Authorized workspaces">
       {model.organizer ? <OrganizerCard model={model.organizer} /> : null}
@@ -150,10 +163,26 @@ export function WorkHubCards({
       {model.participant ? <ParticipantCard model={model.participant} /> : null}
       {availableCount === 0 && !hasEventInvitations ? (
         <Alert className={styles.emptyState}>
-          <AlertTitle>No assigned work yet</AlertTitle>
+          <AlertTitle>
+            {hosted ? "No organization workspace yet" : "No assigned work yet"}
+          </AlertTitle>
           <AlertDescription>
-            This account is authenticated, but no organizer, reviewer, or participant workspace is
-            currently available.
+            {hosted ? (
+              <>
+                Organization workspaces on Eventloom are provisioned for your team. Contact us to
+                create an organization, then this account can open it from here.
+                {contactUrl ? (
+                  <>
+                    {" "}
+                    <a className={styles.emptyStateLink} href={contactUrl}>
+                      Contact Eventloom
+                    </a>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "This account is authenticated, but no organizer, reviewer, or participant workspace is currently available. Organization creation is handled by your deployment operator, not from this page."
+            )}
           </AlertDescription>
         </Alert>
       ) : null}

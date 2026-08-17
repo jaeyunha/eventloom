@@ -1,14 +1,17 @@
-import type { Metadata } from "next";
-import { WorkHub } from "@/features/work/work-hub";
+import { redirect } from "next/navigation";
+import { isManagedWebDeployment, organizationRequestUrl } from "@/env";
+import { WorkHubView } from "@/features/work/work-hub";
+import { loadWorkHubModel } from "@/features/work/work-hub-loader";
 
-export const dynamic = "force-dynamic";
+export default async function WorkPage() {
+  const model = await loadWorkHubModel();
+  if (model === null) {
+    redirect(`/login?next=${encodeURIComponent("/work")}`);
+  }
 
-export const metadata: Metadata = {
-  title: "Your work",
-  description:
-    "Open every organizer, reviewer, and participant workspace available to this account.",
-};
+  const organizationRequest = isManagedWebDeployment()
+    ? { contactUrl: organizationRequestUrl() }
+    : null;
 
-export default function WorkPage() {
-  return <WorkHub />;
+  return <WorkHubView model={model} organizationRequest={organizationRequest} />;
 }

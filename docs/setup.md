@@ -124,7 +124,12 @@ Use separate backend-only credentials:
 
 Local development defaults to `self-hosted`. Staging and production Wrangler
 configuration defaults to `managed`. Leaving a token unset keeps the matching
-routes unmounted. Install the secrets with the Cloudflare Worker secret sync for
+routes unmounted.
+
+On managed/hosted deployments, `/work` shows a contact message when the account
+has no organization workspace yet. Set optional `ORGANIZATION_REQUEST_URL`
+(for example `mailto:hello@example.com` or a scheduling link) to attach a CTA.
+Self-hosted deployments do not show that hosted contact prompt. Install the secrets with the Cloudflare Worker secret sync for
 any environment that must provision organizations.
 
 Managed multi-organization hosting for third parties is a licensor/hosted-service

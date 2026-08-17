@@ -454,3 +454,14 @@
     transform: none;
   }
 }
+
+.emptyStateLink {
+  color: var(--foreground);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.emptyStateLink:hover {
+  color: var(--foreground);
+}
