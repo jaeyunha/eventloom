@@ -62,11 +62,11 @@ const migrationNames = [
   "0043_crm_pipeline_actor_name.sql",
   "0044_event_retirement_compatibility.sql",
   "0045_immutable_speaker_projection_snapshots.sql",
-  "0041_speaker_asset_uploader.sql",
-  "0042_speaker_asset_creation_idempotency.sql",
-  "0043_speaker_task_replacement_baseline.sql",
-  "0044_private_download_attribution.sql",
-  "0045_private_object_cleanup.sql",
+  "0046_speaker_asset_uploader.sql",
+  "0047_speaker_asset_creation_idempotency.sql",
+  "0048_speaker_task_replacement_baseline.sql",
+  "0049_private_download_attribution.sql",
+  "0050_private_object_cleanup.sql",
 ] as const;
 
 class FakeR2Bucket {

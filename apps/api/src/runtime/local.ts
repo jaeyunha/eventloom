@@ -1668,6 +1668,24 @@ type LocalPrivateAssetObject = {
   readonly bytes: Uint8Array;
 };
 
+function sameUploadBinding(
+  left: PrivateAssetCapabilityBinding,
+  right: PrivateAssetCapabilityBinding,
+): boolean {
+  return (
+    left.capabilityId === right.capabilityId &&
+    left.tenantId === right.tenantId &&
+    left.eventId === right.eventId &&
+    left.submissionId === right.submissionId &&
+    left.participantId === right.participantId &&
+    left.objectKey === right.objectKey &&
+    left.fileName === right.fileName &&
+    left.contentType === right.contentType &&
+    left.sizeBytes === right.sizeBytes &&
+    left.expiresAt === right.expiresAt
+  );
+}
+
 class LocalPrivateAssetGateway implements PrivateAssetGateway {
   readonly #capabilities = new Map<string, LocalPrivateAssetRecord>();
   readonly #objects = new Map<string, LocalPrivateAssetObject>();
@@ -1692,7 +1710,12 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
   async registerUploadCapability(binding: PrivateAssetCapabilityBinding) {
     const token = await this.token("upload", binding);
     const existing = this.#capabilities.get(binding.capabilityId);
-    if (existing !== undefined && existing.kind === "upload" && existing.state === "pending") {
+    if (
+      existing !== undefined &&
+      existing.kind === "upload" &&
+      existing.state === "pending" &&
+      sameUploadBinding(existing.binding, binding)
+    ) {
       existing.tokens.add(token);
       return {
         method: "PUT" as const,

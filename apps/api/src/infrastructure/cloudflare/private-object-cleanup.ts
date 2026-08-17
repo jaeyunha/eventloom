@@ -27,7 +27,8 @@ interface ReadyReferenceRow {
 }
 
 function cleanupJobId(payload: CloudflareFileScanPayload): string {
-  return `private-object-delete:${payload.tenantId}:${payload.source}:${payload.assetId}`;
+  const expiry = payload.source === "private-upload" ? `:${payload.expiresAt}` : "";
+  return `private-object-delete:${payload.tenantId}:${payload.source}:${payload.assetId}${expiry}`;
 }
 
 export function privateObjectCleanupOutboxStatement(

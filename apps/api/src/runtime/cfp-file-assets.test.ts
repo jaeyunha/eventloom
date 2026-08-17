@@ -26,7 +26,7 @@ function createDatabase(): SqliteD1 {
   );
   database.executeScript(
     readFileSync(
-      join(process.cwd(), "apps/api/migrations/0045_private_object_cleanup.sql"),
+      join(process.cwd(), "apps/api/migrations/0050_private_object_cleanup.sql"),
       "utf8",
     ),
   );
