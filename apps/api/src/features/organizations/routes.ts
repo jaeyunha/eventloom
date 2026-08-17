@@ -94,9 +94,9 @@ async function entitlementAuditId(organizationId: string, key: string): Promise<
     "SHA-256",
     new TextEncoder().encode(`${organizationId}\u0000${key}`),
   );
-  const hex = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
   return `organization-entitlement:${hex}`;
 }
 

@@ -169,6 +169,7 @@ async function run() {
     targetEnvironment: options.environment,
     wranglerInventory,
   });
+  assertOrganizationProvisioningConfiguration(configurations[options.environment] ?? process.env);
   const migrationReadiness = inspectOrganizationIdMigrationReadiness({
     configurations,
     wranglerInventory,
