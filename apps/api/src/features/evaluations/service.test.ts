@@ -2449,7 +2449,8 @@ describe("decision outcome projection", () => {
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
     });
@@ -2485,7 +2486,8 @@ describe("decision outcome projection", () => {
       submissions,
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
     });
@@ -2506,7 +2508,8 @@ describe("decision outcome projection", () => {
         clock: () => new Date(nowIso),
         decisionProjection: {
           projectDecision: async (input) => {
-            projected.push(structuredClone(input));
+            const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+            projected.push(structuredClone(cloneable));
           },
         },
       },
@@ -2575,7 +2578,8 @@ describe("decision outcome projection", () => {
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
       acceptanceHandoff: {
@@ -2669,7 +2673,8 @@ describe("decision outcome projection", () => {
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
       acceptanceHandoff: {

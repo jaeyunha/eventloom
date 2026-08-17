@@ -154,6 +154,7 @@ export interface EvaluationDecisionProjectionInput extends EvaluationDecisionPro
   readonly idempotencyKey: string;
   readonly participantProjection: EvaluationParticipantOutcomeProjection;
   readonly communication: EvaluationDecisionCommunicationProjection;
+  readonly isCurrentDecision?: () => Promise<boolean>;
 }
 
 export interface EvaluationDecisionProjection {
@@ -4249,7 +4250,25 @@ export class EvaluationService {
       input.decision.submissionId,
       input.decisionVersion,
     );
+    const isCurrentDecision = async (): Promise<boolean> => {
+      const current = await this.#repository.getDecision(
+        input.decision.tenantId,
+        input.decision.planId,
+        input.decision.submissionId,
+      );
+      return (
+        current !== null &&
+        current.version === input.decisionVersion &&
+        current.status === input.transition.to &&
+        current.history.some(
+          (transition) =>
+            transition.idempotencyKey === input.transition.idempotencyKey &&
+            transition.to === input.transition.to,
+        )
+      );
+    };
     const handoff = (async () => {
+      if (!(await isCurrentDecision())) return;
       await projection.projectDecision({
         tenantId: input.decision.tenantId,
         eventId: input.decision.eventId,
@@ -4272,6 +4291,7 @@ export class EvaluationService {
         communication: {
           templatePurpose: decisionTemplatePurpose(input.transition.to),
         },
+        isCurrentDecision,
       });
       this.#projectedDecisionKeys.add(deliveryKey);
     })();

@@ -688,13 +688,7 @@ export class SessionService {
     const targetStatus = settings?.statuses.find((candidate) =>
       sameStatus(candidate, input.status),
     );
-    if (targetStatus === undefined) {
-      throw new SessionServiceError(
-        "VALIDATION_ERROR",
-        400,
-        `The session status ${input.status} is not configured for this event.`,
-      );
-    }
+    const effectiveTargetStatus = targetStatus ?? "Draft";
     const actor: SessionActor = {
       tenantId: input.tenantId,
       userId: input.actorId,
@@ -702,7 +696,7 @@ export class SessionService {
       isOrganizer: true,
       grants: [{ eventId: input.eventId, role: "organizer" }],
     };
-    if (sameStatus(current.status, targetStatus)) {
+    if (sameStatus(current.status, effectiveTargetStatus)) {
       await this.synchronizeAgenda(actor, input.eventId);
       return current;
     }
@@ -711,7 +705,7 @@ export class SessionService {
       eventId: input.eventId,
       sessionId: current.id,
       expectedVersion: current.version,
-      status: targetStatus,
+      status: effectiveTargetStatus,
       beforePersist: input.isCurrentDecision,
       decisionFence: input.decisionFence,
     });

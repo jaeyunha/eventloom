@@ -7620,6 +7620,7 @@ export class AirtableEvaluationDecisionProjection {
   async projectDecision(input: EvaluationDecisionProjectionInput): Promise<void> {
     const submission = await this.cfp.getSubmission(input.tenantId, input.submissionId);
     if (submission === null || submission.eventId !== input.eventId) return;
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     const decidedAudience =
       input.status === "accepted"
         ? "accepted_participants"
@@ -7669,7 +7670,9 @@ export class AirtableEvaluationDecisionProjection {
           .bind(input.tenantId, input.eventId, participant.id, decidedAudience),
       );
     }
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     if (audienceStatements.length > 0) await this.database.batch(audienceStatements);
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     const recipients = submission.participants
       .map((participant) => participant.email.trim())
       .filter((email) => email.length > 0);
@@ -7713,6 +7716,7 @@ export class AirtableEvaluationDecisionProjection {
             decisionStatus: input.status,
             decisionReason: input.reason,
           });
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     await enqueueCloudflareOutbox({
       database: this.database,
       queue: this.queue,

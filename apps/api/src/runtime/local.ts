@@ -3023,6 +3023,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           history: [],
         },
       });
+      if (!(await isCurrentDecision())) return;
       await speakerService.createOrganizerTask({
         eventId: input.eventId,
         accountId: input.decidedBy,
