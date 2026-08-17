@@ -3304,7 +3304,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     const unlocked = {
       ...plan,
       gradingRevision: undefined,
-      gradingLockedAt: undefined,
+      gradingLockedAt: null,
     };
     await repository.putPlan(unlocked, plan.version);
     const revision = {

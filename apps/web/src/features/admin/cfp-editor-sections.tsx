@@ -755,7 +755,10 @@ function renderFieldRuleRow({
     <div key={key} className={styles.fieldRuleRow}>
       <div className={styles.fieldCardHeading}>
         <div>
-          <span>Question {index + 1}{systemOwned ? " · System field" : ""}</span>
+          <span>
+            Question {index + 1}
+            {systemOwned ? " · System field" : ""}
+          </span>
           <strong>{field.label || "Untitled question"}</strong>
         </div>
         <span>{fieldTypeLabel(field.type)}</span>
@@ -777,15 +780,17 @@ function renderFieldRuleRow({
             value={field.key ?? field.id}
             readOnly={keyLocked}
             aria-readonly={keyLocked ? true : undefined}
-            title={keyLocked ? "Required system key: title" : "Use lowercase letters, numbers, and hyphens."}
+            title={
+              keyLocked
+                ? "Required system key: title"
+                : "Use lowercase letters, numbers, and hyphens."
+            }
             onChange={(event) => {
               if (keyLocked) return;
               onFieldChange(field.id, { key: event.target.value });
             }}
           />
-          {keyLocked ? (
-            <p className={styles.fieldHint}>Required system key: title</p>
-          ) : null}
+          {keyLocked ? <p className={styles.fieldHint}>Required system key: title</p> : null}
         </div>
         <div className={styles.fieldGroup}>
           <label htmlFor={`field-type-${field.id}`}>Field type</label>

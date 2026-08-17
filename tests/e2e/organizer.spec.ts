@@ -376,10 +376,7 @@ async function installOrganizerApi(
       await fulfillJson(route, [{ organizationId: ORGANIZATION_ID, name: "Eventloom organizers" }]);
       return;
     }
-    if (
-      request.method() === "GET" &&
-      url.pathname === "/api/admin/evaluations/reviewer/workspace"
-    ) {
+    if (request.method() === "GET" && url.pathname === "/api/account/reviewer-workspace") {
       await fulfillJson(route, { assignments: [] });
       return;
     }
@@ -870,7 +867,7 @@ test("canonical Settings navigation stays organization and event qualified", asy
       name: "Event settings sections",
     });
     if (!(await desktopNavigation.isVisible())) {
-      const trigger = page.getByRole("button", { name: "Choose event settings section" });
+      const trigger = page.getByRole("button", { name: "Choose Program settings section" });
       await expect(trigger).toBeVisible();
       if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
     }
@@ -902,8 +899,7 @@ test("canonical Settings navigation stays organization and event qualified", asy
   ]);
   await expectAgendaWorkspace(page);
 
-  const peopleNavigation = page.getByRole("navigation", { name: "People organizer navigation" });
-  const programSettingsLink = peopleNavigation.getByRole("link", {
+  const programSettingsLink = programNavigation.getByRole("link", {
     name: "Program settings",
     exact: true,
   });
