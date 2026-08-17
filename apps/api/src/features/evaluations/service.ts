@@ -193,6 +193,14 @@ export interface EvaluationOrganizerWorkspaceDiagnostic {
   readonly code: "decisions_unavailable";
   readonly message: string;
 }
+export interface EvaluationOrganizerSubmittedReview {
+  readonly id: string;
+  readonly roundId: string;
+  readonly submissionId: string;
+  readonly reviewerId: string;
+  readonly comment: string;
+  readonly submittedAt: string;
+}
 export interface EvaluationOrganizerWorkspace {
   readonly event: EvaluationEventMetadata;
   readonly plan: EvaluationPlan;
@@ -200,6 +208,7 @@ export interface EvaluationOrganizerWorkspace {
   readonly assignments: readonly EvaluationAssignment[];
   readonly progress: EvaluationProgress;
   readonly aggregates: readonly EvaluationAggregate[];
+  readonly submittedReviews: readonly EvaluationOrganizerSubmittedReview[];
   readonly decisions: Readonly<Record<string, EvaluationDecision>>;
   readonly diagnostics?: readonly EvaluationOrganizerWorkspaceDiagnostic[];
 }
@@ -643,31 +652,12 @@ function aggregateForSubmission(
 ): EvaluationAggregate {
   const roundRevision = round.revision ?? gradingRevision(plan);
   const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
-  const submissionAssignments = assignments.filter(
-    (assignment) =>
-      assignment.eventId === plan.eventId &&
-      assignment.roundId === round.id &&
-      assignment.submissionId === submissionId &&
-      isActionableAssignment(assignment) &&
-      (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
-      (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
-        roundRevision,
+  const submissionAssignments = assignments.filter((assignment) =>
+    isCountedAssignmentForRound(plan, round, submissionId, assignment),
   );
   const reviewByAssignment = new Map(
     reviews
-      .filter(
-        (review) =>
-          review.roundId === round.id &&
-          (review.rubricRevision ??
-            review.rubricVersion ??
-            review.planRevision ??
-            review.planVersion) === rubricRevision &&
-          (review.roundRevision ??
-            review.rubricRevision ??
-            review.rubricVersion ??
-            review.planRevision ??
-            review.planVersion) === roundRevision,
-      )
+      .filter((review) => isReviewForRoundRevision(plan, round, review))
       .map((review) => [review.assignmentId, review]),
   );
   const submittedReviews = submissionAssignments
@@ -904,6 +894,44 @@ function isActionableAssignment(assignment: EvaluationAssignment): boolean {
   return assignment.status !== "abstained" && assignment.status !== "superseded";
 }
 
+function isCountedAssignmentForRound(
+  plan: EvaluationPlan,
+  round: ReviewRound,
+  submissionId: string,
+  assignment: EvaluationAssignment,
+): boolean {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+  return (
+    assignment.eventId === plan.eventId &&
+    assignment.roundId === round.id &&
+    assignment.submissionId === submissionId &&
+    isActionableAssignment(assignment) &&
+    (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
+    (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
+      roundRevision
+  );
+}
+
+function isReviewForRoundRevision(
+  plan: EvaluationPlan,
+  round: ReviewRound,
+  review: EvaluationReview,
+): boolean {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+  return (
+    review.roundId === round.id &&
+    (review.rubricRevision ?? review.rubricVersion ?? review.planRevision ?? review.planVersion) ===
+      rubricRevision &&
+    (review.roundRevision ??
+      review.rubricRevision ??
+      review.rubricVersion ??
+      review.planRevision ??
+      review.planVersion) === roundRevision
+  );
+}
+
 function isReviewableSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
   return submission.status !== "withdrawn";
 }
@@ -1137,6 +1165,41 @@ export class EvaluationService {
     const decisions = Object.fromEntries(
       planDecisions.map((decision) => [decision.submissionId, decision] as const),
     );
+    const effectiveAssignmentById = new Map(
+      effectiveAssignments.map((assignment) => [assignment.id, assignment] as const),
+    );
+    const roundById = new Map(plan.rounds.map((candidate) => [candidate.id, candidate] as const));
+    const submittedReviews = reviews
+      .flatMap((review): readonly EvaluationOrganizerSubmittedReview[] => {
+        const assignment = effectiveAssignmentById.get(review.assignmentId);
+        const reviewRound = roundById.get(review.roundId);
+        if (
+          review.submittedAt === null ||
+          assignment === undefined ||
+          reviewRound === undefined ||
+          !isCountedAssignmentForRound(plan, reviewRound, review.submissionId, assignment) ||
+          !isReviewForRoundRevision(plan, reviewRound, review)
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: review.id,
+            roundId: review.roundId,
+            submissionId: review.submissionId,
+            reviewerId: review.reviewerId,
+            comment: review.comment,
+            submittedAt: review.submittedAt,
+          },
+        ];
+      })
+      .sort(
+        (left, right) =>
+          left.submissionId.localeCompare(right.submissionId) ||
+          left.roundId.localeCompare(right.roundId) ||
+          left.submittedAt.localeCompare(right.submittedAt) ||
+          left.reviewerId.localeCompare(right.reviewerId),
+      );
     return {
       event,
       plan,
@@ -1144,6 +1207,7 @@ export class EvaluationService {
       assignments: effectiveAssignments,
       progress: progressForAssignments(plan, effectiveAssignments),
       aggregates,
+      submittedReviews,
       decisions,
       ...(diagnostics === undefined ? {} : { diagnostics }),
     };
@@ -2838,21 +2902,20 @@ export class EvaluationService {
   ): Promise<readonly EvaluationReview[]> {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
-    findRound(plan, roundId);
+    const round = findRound(plan, roundId);
     const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
     const assignmentIds = new Set(
       assignments
-        .filter(
-          (assignment) =>
-            assignment.eventId === plan.eventId &&
-            assignment.roundId === roundId &&
-            assignment.submissionId === submissionId &&
-            isActionableAssignment(assignment),
-        )
+        .filter((assignment) => isCountedAssignmentForRound(plan, round, submissionId, assignment))
         .map((assignment) => assignment.id),
     );
     return (await this.#repository.listReviews(actor.tenantId, plan.id))
-      .filter((review) => assignmentIds.has(review.assignmentId) && review.submittedAt !== null)
+      .filter(
+        (review) =>
+          assignmentIds.has(review.assignmentId) &&
+          review.submittedAt !== null &&
+          isReviewForRoundRevision(plan, round, review),
+      )
       .map((review) => ({
         ...review,
         scores: Object.fromEntries(

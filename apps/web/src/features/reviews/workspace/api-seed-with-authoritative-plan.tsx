@@ -31,6 +31,7 @@ export function seedWithAuthoritativePlan(seed: ReviewPlanSeed, plan: ApiPlan): 
   );
   return {
     ...mapped,
+    submittedReviews: seed.submittedReviews,
     eventName: seed.eventName,
     eventTimeZone: seed.eventTimeZone,
     eventStartsAt: seed.eventStartsAt,
