@@ -44,6 +44,9 @@ export type CommunicationErrorCode =
   | "COMMUNICATION_CONFLICT"
   | "COMMUNICATION_UNAVAILABLE";
 
+export const COMMUNICATION_OPERATION_MARKER = "__eventloom_speaker_operation";
+export type CommunicationPreviewOperation = "generic" | "speaker_invitation";
+
 export class CommunicationError extends Error {
   readonly code: CommunicationErrorCode;
   readonly status: 400 | 403 | 404 | 409 | 503;
@@ -86,6 +89,7 @@ export interface CommunicationPreviewInput {
   recipientIds?: readonly string[];
   data?: CommunicationRenderData;
   protectedRecipientDataKeys?: readonly string[];
+  operation?: CommunicationPreviewOperation;
 }
 
 export interface SendGroupCommunicationInput {
@@ -996,7 +1000,11 @@ export class CommunicationService {
       }
       return snapshot;
     });
-    const data = cloneData(input.data);
+    const data = {
+      ...cloneData(input.data),
+      [COMMUNICATION_OPERATION_MARKER]:
+        input.operation === "speaker_invitation" ? "speaker_invitation" : "generic",
+    };
     const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
       const renderedRecipient = renderCommunicationTemplate(
         template,

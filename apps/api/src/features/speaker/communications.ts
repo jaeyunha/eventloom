@@ -1,4 +1,5 @@
 import {
+  COMMUNICATION_OPERATION_MARKER,
   CommunicationError,
   type CommunicationService,
   type CreateCommunicationTemplateInput,
@@ -15,7 +16,6 @@ import type { SpeakerEmailTemplate } from "./service";
 
 export type { SpeakerCommunications } from "./communications-types";
 export const SPEAKER_WELCOME_TEMPLATE_ID = "speaker-approved-welcome";
-const SPEAKER_OPERATION_MARKER = "__eventloom_speaker_operation";
 const encoder = new TextEncoder();
 const welcome = {
   name: "Speaker invitation",
@@ -238,12 +238,8 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     invitationWorkflow: boolean,
   ) {
     const template = await this.canonicalPreviewTemplate(input);
-    const { [SPEAKER_OPERATION_MARKER]: _ignored, ...callerData } = input.data ?? {};
-    const data = {
-      ...callerData,
-      portal_url: this.workHubUrl(),
-      [SPEAKER_OPERATION_MARKER]: invitationWorkflow ? "speaker_invitation" : "speaker_bulk_email",
-    };
+    const { [COMMUNICATION_OPERATION_MARKER]: _ignored, ...callerData } = input.data ?? {};
+    const data = { ...callerData, portal_url: this.workHubUrl() };
     return speakerPreviewDto(
       await this.communications.previewGroupSend(
         speakerCommunicationActor(input.organizationId, input.eventId, input.accountId),
@@ -256,6 +252,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
           recipientIds: input.participantIds,
           data,
           protectedRecipientDataKeys: ["portal_url"],
+          operation: invitationWorkflow ? "speaker_invitation" : "generic",
         },
       ),
     );
@@ -322,8 +319,8 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       const requestedRecipients = [...input.participantIds].sort((a, b) => a.localeCompare(b));
       const trustedRenderData =
         prior.data.portal_url === this.workHubUrl() &&
-        (prior.data[SPEAKER_OPERATION_MARKER] === undefined ||
-          prior.data[SPEAKER_OPERATION_MARKER] === "speaker_invitation") &&
+        (prior.data[COMMUNICATION_OPERATION_MARKER] === undefined ||
+          prior.data[COMMUNICATION_OPERATION_MARKER] === "speaker_invitation") &&
         prior.recipients.every((recipient) => recipient.data.portal_url === undefined);
       if (
         prior.purpose !== "organizer_group_email" ||

@@ -350,21 +350,27 @@ describe("durable speaker communications", () => {
     );
     if (welcomeTemplate === undefined) throw new Error("Expected the built-in welcome template.");
 
-    const genericPreview = await durable.facade.preview({
-      organizationId: ids.organizationId,
-      eventId: ids.eventId,
-      accountId: ids.organizerAccountId,
-      participantIds: ["participant-priya"],
-      templateId: welcomeTemplate.id,
-      templateVersion: welcomeTemplate.version,
-    });
-    await durable.facade.send({
-      organizationId: ids.organizationId,
-      eventId: ids.eventId,
-      accountId: ids.organizerAccountId,
-      previewId: genericPreview.id,
-      idempotencyKey: "generic-welcome-send",
-    });
+    const genericPreview = await durable.service.previewGroupSend(
+      speakerCommunicationActor(ids.organizationId, ids.eventId, ids.organizerAccountId),
+      {
+        eventId: ids.eventId,
+        purpose: "organizer_group_email",
+        audience: "all_participants",
+        recipientIds: ["participant-priya"],
+        templateId: welcomeTemplate.id,
+        templateVersion: welcomeTemplate.version,
+        data: { portal_url: "https://event.example.test/work" },
+        protectedRecipientDataKeys: ["portal_url"],
+      },
+    );
+    await durable.service.sendGroup(
+      speakerCommunicationActor(ids.organizationId, ids.eventId, ids.organizerAccountId),
+      {
+        eventId: ids.eventId,
+        previewId: genericPreview.id,
+        idempotencyKey: "generic-welcome-send",
+      },
+    );
     expect(delivered).toHaveLength(1);
     await expect(
       durable.facade.findInvitationReplay({
@@ -609,6 +615,12 @@ describe("durable speaker communications", () => {
       data: { portal_url: "https://event.example.test/login?next=/work" },
       protectedRecipientDataKeys: ["portal_url"],
     });
+    await lifecycle.database
+      .prepare(
+        "UPDATE communication_previews SET render_data_json=json_remove(render_data_json,'$.__eventloom_speaker_operation') WHERE id=?",
+      )
+      .bind(historicalPreview.id)
+      .run();
     const historicalSend = await durable.service.sendGroup(communicationActor, {
       eventId: ids.eventId,
       previewId: historicalPreview.id,
