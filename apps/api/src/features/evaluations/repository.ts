@@ -35,6 +35,7 @@ export interface EvaluationReviewWriteAuthority {
   readonly submissionId: string;
   readonly reviewerId: string;
   readonly expectedAssignmentVersion: number;
+  readonly expectedPlanVersion?: number | undefined;
 }
 
 export interface WriteEvaluationReview {
@@ -87,6 +88,7 @@ export interface EvaluationReviewWriteAdmission {
   readonly assignment: EvaluationAssignment;
   readonly expectedAssignmentVersion: number;
   readonly authorizedAt: string;
+  readonly expectedPlanVersion?: number | undefined;
 }
 
 export interface EvaluationProjectionReader {
@@ -737,6 +739,8 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     if (
       plan === undefined ||
       round === undefined ||
+      (admission.expectedPlanVersion !== undefined &&
+        plan.version !== admission.expectedPlanVersion) ||
       plan.status !== "open" ||
       (plan.closesAt != null && Date.parse(plan.closesAt) <= authorizedAt) ||
       (round.opensAt != null && Date.parse(round.opensAt) > authorizedAt) ||
@@ -1286,6 +1290,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       },
       expectedAssignmentVersion: authority.expectedAssignmentVersion,
       authorizedAt: review.updatedAt,
+      expectedPlanVersion: authority.expectedPlanVersion,
     });
     assertVersion(
       this.#reviews.get(storageKey(review.tenantId, review.assignmentId))?.version ?? null,

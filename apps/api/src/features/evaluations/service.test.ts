@@ -4899,7 +4899,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       reason: "Human evaluator adjusted the bounded score.",
       expectedVersion: editedSuggestion.version,
     });
-    expect(edited.suggestion).toMatchObject({ status: "edited" });
+    expect(edited.suggestion).toMatchObject({ status: "pending" });
     expect(edited.suggestion.history.at(-1)).toMatchObject({
       action: "edit",
       actorId: "reviewer-1",
@@ -4911,6 +4911,17 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       humanConfirmedBy: "reviewer-1",
       suggestionStatus: "edited",
     });
+    const completedEdit = await service.resolveAiSuggestion(
+      reviewer("reviewer-1"),
+      edited.suggestion.id,
+      {
+        action: "edit",
+        scores: { relevance: 7 },
+        reason: "Human evaluator adjusted the remaining bounded score.",
+        expectedVersion: edited.suggestion.version,
+      },
+    );
+    expect(completedEdit.suggestion.status).toBe("edited");
     const resolved = await service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
       action: "accept",
       expectedVersion: suggestion.version,
@@ -4929,10 +4940,27 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     if (resolvedReview === null) {
       throw new Error("Expected a resolved review.");
     }
+    const autosaved = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [
+        {
+          criterionId: "quality",
+          value: resolvedReview.scores.quality?.value as number,
+          origin: "human",
+        },
+      ],
+      comment: "A later comment edit must preserve accepted suggestion attribution.",
+      expectedVersion: resolvedReview.version,
+    });
+    expect(autosaved.scores.quality).toMatchObject({
+      origin: "ai",
+      humanConfirmedBy: "reviewer-1",
+      suggestionStatus: "accepted",
+      suggestionId: suggestion.id,
+    });
     const submitted = await service.submitReview(
       reviewer("reviewer-1"),
       assignment.id,
-      resolvedReview.version,
+      autosaved.version,
     );
     expect(submitted.submittedAt).not.toBeNull();
     expect(

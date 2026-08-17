@@ -584,9 +584,7 @@ function answerBoolean(answers: Record<string, unknown>, key: string): boolean {
   return answers[key] === true;
 }
 
-function promoteCanonicalTitleAnswers(
-  answers: Record<string, unknown>,
-): Record<string, unknown> {
+function promoteCanonicalTitleAnswers(answers: Record<string, unknown>): Record<string, unknown> {
   const currentTitle = answers.title;
   if (typeof currentTitle === "string" && currentTitle.trim().length > 0) {
     return answers;
@@ -625,9 +623,7 @@ function draftFromSubmission(eventSlug: string, submission: CfpServerSubmission)
     },
     submission: {
       title: answerString(answers, "title"),
-      description:
-        answerString(answers, "abstract") ||
-        answerString(answers, "description"),
+      description: answerString(answers, "abstract") || answerString(answers, "description"),
       format: answerString(answers, "format"),
       tags: Array.isArray(answers.tags)
         ? answers.tags.filter((value): value is string => typeof value === "string")

@@ -2637,6 +2637,23 @@ export class EvaluationService {
       const evidence = (inputScore.evidence ?? []).map((citation) =>
         requireText(citation, "Score evidence", 2_000),
       );
+      const previous = scores[criterion.id];
+      if (
+        inputScore.origin === "human" &&
+        previous?.origin === "ai" &&
+        previous.humanConfirmedBy !== null &&
+        previous.value === value
+      ) {
+        scores[criterion.id] = {
+          ...previous,
+          rubricRevision,
+          submissionRevision,
+          rubricVersion: rubricRevision,
+          submissionVersion: submissionRevision,
+          updatedAt: now,
+        };
+        continue;
+      }
       scores[criterion.id] = {
         criterionId: criterion.id,
         value,
@@ -2699,6 +2716,7 @@ export class EvaluationService {
         submissionId: assignment.submissionId,
         reviewerId: assignment.reviewerId,
         expectedAssignmentVersion: assignment.version,
+        expectedPlanVersion: plan.version,
       },
       review,
       expectedReviewVersion: current?.version ?? null,
@@ -2764,6 +2782,7 @@ export class EvaluationService {
         submissionId: assignment.submissionId,
         reviewerId: assignment.reviewerId,
         expectedAssignmentVersion: assignment.version,
+        expectedPlanVersion: plan.version,
       },
       review,
       expectedReviewVersion: current.version,
@@ -3117,9 +3136,33 @@ export class EvaluationService {
         ? { valueByCriterion: editedValues }
         : {}),
     };
+    const editedCriterionIds = new Set(
+      suggestion.history.flatMap((entry) =>
+        entry.action === "edit" && entry.valueByCriterion !== undefined
+          ? Object.keys(entry.valueByCriterion)
+          : [],
+      ),
+    );
+    if (action === "edit" && editedValues !== undefined) {
+      for (const criterionId of Object.keys(editedValues)) {
+        editedCriterionIds.add(criterionId);
+      }
+    }
+    const allCandidatesEdited =
+      action === "edit" &&
+      Object.keys(suggestion.candidates).every((criterionId) =>
+        editedCriterionIds.has(criterionId),
+      );
     const resolvedSuggestion: EvaluationSuggestion = {
       ...suggestion,
-      status: action === "accept" ? "accepted" : action === "edit" ? "edited" : "rejected",
+      status:
+        action === "accept"
+          ? "accepted"
+          : action === "edit"
+            ? allCandidatesEdited
+              ? "edited"
+              : "pending"
+            : "rejected",
       version: suggestion.version + 1,
       history: [...suggestion.history, auditEntry],
       audit: [...suggestion.audit, auditEntry],
@@ -3265,6 +3308,7 @@ export class EvaluationService {
         submissionId: assignment.submissionId,
         reviewerId: assignment.reviewerId,
         expectedAssignmentVersion: assignment.version,
+        expectedPlanVersion: plan.version,
       },
       review,
       expectedReviewVersion: current.version,

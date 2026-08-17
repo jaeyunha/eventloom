@@ -80,8 +80,7 @@ export function fieldStorageKey(field: Pick<CfpFormField, "id" | "key">): string
 
 export function isCanonicalTitleField(field: Pick<CfpFormField, "id" | "key">): boolean {
   return (
-    field.id === CANONICAL_TITLE_FIELD_KEY ||
-    fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY
+    field.id === CANONICAL_TITLE_FIELD_KEY || fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY
   );
 }
 
@@ -91,9 +90,7 @@ export function isKeyLockedField(
   return field.keyLocked === true || isCanonicalTitleField(field);
 }
 
-export function isSystemOwnedField(
-  field: Pick<CfpFormField, "id" | "key" | "system">,
-): boolean {
+export function isSystemOwnedField(field: Pick<CfpFormField, "id" | "key" | "system">): boolean {
   return field.system === true || isCanonicalTitleField(field);
 }
 

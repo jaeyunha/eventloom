@@ -143,7 +143,11 @@ function reviewWriteAuthorityGuard(
   input: WriteEvaluationReview,
 ): D1PreparedStatement {
   const { authority } = input;
-  const planVersion = input.review.planVersion ?? input.review.planRevision ?? 1;
+  const planVersion =
+    input.authority.expectedPlanVersion ??
+    input.review.planVersion ??
+    input.review.planRevision ??
+    1;
   const planRevision = input.review.planRevision ?? input.review.planVersion ?? 1;
   const roundRevision = input.review.roundRevision ?? input.review.rubricRevision ?? 1;
   const rubricRevision = input.review.rubricRevision ?? input.review.rubricVersion ?? 1;

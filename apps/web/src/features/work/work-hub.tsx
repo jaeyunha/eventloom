@@ -70,7 +70,11 @@ export function WorkHubView({
             </p>
           </section>
           <WorkEventInvitations invitations={invitations} onInvitationsChange={setInvitations} />
-          <WorkHubCards model={model} hasEventInvitations={invitations.length > 0} />
+          <WorkHubCards
+            model={model}
+            hasEventInvitations={invitations.length > 0}
+            organizationRequest={organizationRequest}
+          />
         </main>
       </div>
     </div>
