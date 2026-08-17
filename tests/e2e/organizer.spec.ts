@@ -610,7 +610,7 @@ test("verified organizer login opens the organization overview through the share
   const organizerWorkspace = page.locator('[data-workspace="organizer"]');
   await expect(organizerWorkspace).toBeVisible();
   const continueToOrganization = organizerWorkspace.getByRole("link", {
-    name: "Continue with Eventloom organizers",
+    name: "Open local organization organizer workspace",
   });
   await expect(continueToOrganization).toHaveAttribute("href", organizationEventsUrl());
   await clickLinkAndWaitForUrl(page, continueToOrganization, organizationEventsUrl());

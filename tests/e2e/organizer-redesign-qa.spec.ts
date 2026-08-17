@@ -144,7 +144,9 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
   await page.goto(`${organizationBase}/integrations`);
   await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Connection ownership" })).toBeVisible();
+  await page.goto(`${organizationBase}/integrations/event-bindings`);
   await expect(page.getByRole("heading", { name: "Event bindings" })).toBeVisible();
+  await page.goto(`${organizationBase}/integrations/api-keys`);
   await expect(page.getByRole("region", { name: "Organization API keys" })).toBeVisible();
   await expectNoPageOverflow(page);
 });

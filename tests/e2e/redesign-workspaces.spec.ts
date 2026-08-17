@@ -323,11 +323,13 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
   const organizerCard = page.locator('[data-workspace="organizer"]');
   const reviewerCard = page.locator('[data-workspace="reviewer"]');
   const participantCard = page.locator('[data-workspace="participant"]');
-  const workspaceLink = organizerCard.getByRole("link", { name: "Manage events" });
+  const workspaceLink = organizerCard.getByRole("link", {
+    name: "Open Civic Design Guild organizer workspace",
+  });
   await expect(organizerCard).toBeVisible();
   await expect(reviewerCard.getByRole("link", { name: "Review assignments" })).toBeVisible();
   await expect(participantCard.getByRole("link", { name: "View my proposals" })).toBeVisible();
-  await expect(workspaceLink).toHaveAttribute("href", "/admin");
+  await expect(workspaceLink).toHaveAttribute("href", "/admin/organizations/org-a/events");
   expect(await workspaceLink.evaluate(buttonHeight)).toBeGreaterThanOrEqual(44);
   await page.screenshot({
     path: testInfo.outputPath("account-hub-desktop.png"),
