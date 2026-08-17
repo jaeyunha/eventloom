@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { AuthPrincipal } from "../auth/types";
 import {
+  InMemoryOrganizationEntitlementRepository,
+  ManagedOrganizationPolicy,
+  type OrganizationPolicy,
+} from "../organizations/policy";
+import {
   createEventRoutes,
   type EventRouteDependencies,
   type EventRouteEnvironment,
@@ -41,15 +46,63 @@ function createService(
       return [];
     },
   },
+  organizationPolicy?: OrganizationPolicy,
 ) {
   let sequence = 0;
   const repository = new InMemoryEventRepository();
   const service = new EventService(repository, temporalDependencies, {
     clock: () => new Date(firstNow.getTime() + sequence * 1_000),
     generateId: () => `generated-${++sequence}`,
+    ...(organizationPolicy === undefined ? {} : { organizationPolicy }),
   });
   return { repository, service };
 }
+
+describe("event entitlement admission", () => {
+  const managedPolicy = (activeEvents: number) =>
+    new ManagedOrganizationPolicy(
+      new InMemoryOrganizationEntitlementRepository([
+        {
+          schemaVersion: 1,
+          organizationId: "org-a",
+          revision: 1,
+          state: "active",
+          capabilities: [],
+          limits: {
+            activeEvents,
+          },
+          notBefore: "2026-08-01T00:00:00.000Z",
+          expiresAt: null,
+        },
+      ]),
+      { clock: () => firstNow },
+    );
+
+  it("enforces the active-event limit across concurrent creation attempts", async () => {
+    const { repository, service } = createService(undefined, managedPolicy(1));
+
+    const results = await Promise.allSettled([
+      service.createEvent(actor(), createInput({ id: "event-one", slug: "event-one" })),
+      service.createEvent(actor(), createInput({ id: "event-two", slug: "event-two" })),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(repository.listEvents("org-a")).resolves.toHaveLength(1);
+  });
+
+  it("denies managed event creation when no organization entitlement exists", async () => {
+    const policy = new ManagedOrganizationPolicy(new InMemoryOrganizationEntitlementRepository(), {
+      clock: () => firstNow,
+    });
+    const { service } = createService(undefined, policy);
+
+    await expect(service.createEvent(actor(), createInput())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      status: 403,
+    });
+  });
+});
 
 describe("event temporal dependencies", () => {
   it("rejects shortening an event beneath active review or agenda boundaries", async () => {

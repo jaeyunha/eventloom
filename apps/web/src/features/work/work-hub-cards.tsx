@@ -32,19 +32,21 @@ function OrganizerCard({ model }: Readonly<{ model: NonNullable<WorkHubModel["or
             {model.organizationCount} organization{model.organizationCount === 1 ? "" : "s"}
           </Badge>
         </div>
-        <ContextNames names={model.organizationNames} />
-        <div className={styles.actions}>
-          {model.continueHref && model.continueLabel ? (
-            <Button asChild>
-              <Link href={model.continueHref}>
-                {model.continueLabel}
-                <ArrowRight data-icon="inline-end" aria-hidden="true" />
-              </Link>
-            </Button>
-          ) : null}
-          <Button asChild variant={model.continueHref ? "outline" : "default"}>
-            <Link href="/admin">Manage events</Link>
-          </Button>
+        <div className={styles.organizationChoices}>
+          {model.organizations.map((organization) => (
+            <div className={styles.organizationChoice} key={organization.organizationId}>
+              <span className={styles.organizationName}>{organization.name}</span>
+              <Button asChild variant="outline">
+                <Link
+                  href={organization.href}
+                  aria-label={`Open ${organization.name} organizer workspace`}
+                >
+                  Open organizer workspace
+                  <ArrowRight data-icon="inline-end" aria-hidden="true" />
+                </Link>
+              </Button>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>

@@ -185,7 +185,6 @@ function useMemberWorkspaceController({
   const [organizationsError, setOrganizationsError] = useState<string | null>(null);
   const [organizationNotice, setOrganizationNotice] = useState<string | null>(null);
   const [organizationDraft, setOrganizationDraft] = useState({
-    organizationId: "",
     slug: "",
     name: "",
     config: "{}",
@@ -225,7 +224,6 @@ function useMemberWorkspaceController({
         );
         if (current !== undefined) {
           setOrganizationDraft({
-            organizationId: "",
             slug: current.slug,
             name: current.name,
             config: JSON.stringify(current.config, null, 2),
@@ -405,49 +403,6 @@ function useMemberWorkspaceController({
     }
   }
 
-  async function createOrganization(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const nextOrganizationId = organizationDraft.organizationId.trim();
-    const nextSlug = organizationDraft.slug.trim();
-    const nextName = organizationDraft.name.trim();
-    const config = parseOrganizationConfigDraft();
-    if (!nextOrganizationId || !nextSlug || !nextName) {
-      setOrganizationNotice("Enter an organization identifier, slug, and display name.");
-      return;
-    }
-    if (config === null) {
-      setOrganizationNotice("Advanced configuration must be a JSON object.");
-      return;
-    }
-    setOrganizationBusy(true);
-    setOrganizationNotice(null);
-    try {
-      const response = await fetch(organizationRoute(baseUrl, organizationId), {
-        method: "POST",
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": `organization-${nextOrganizationId}`,
-        },
-        body: JSON.stringify({
-          organizationId: nextOrganizationId,
-          slug: nextSlug,
-          name: nextName,
-          config,
-        }),
-      });
-      const created = await organizationMutationResponse(response, "owner");
-      setOrganizationNotice(`Organization ${created.name} created.`);
-      setOrganizationDraft({ organizationId: "", slug: "", name: "", config: "{}" });
-      await loadOrganizations();
-    } catch (reason: unknown) {
-      setOrganizationNotice(errorMessage(reason));
-    } finally {
-      setOrganizationBusy(false);
-    }
-  }
-
   async function updateOrganization(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const current = organizations.find(
@@ -541,9 +496,6 @@ function useMemberWorkspaceController({
     },
     onOrganizationUpdate: (event: FormEvent<HTMLFormElement>) => {
       void updateOrganization(event);
-    },
-    onOrganizationCreate: (event: FormEvent<HTMLFormElement>) => {
-      void createOrganization(event);
     },
   };
 }

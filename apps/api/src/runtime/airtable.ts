@@ -90,6 +90,7 @@ import type {
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
 import { EvaluationService } from "../features/evaluations/service";
+import type { OrganizationPolicy } from "../features/organizations/policy";
 import type {
   EvaluationActor,
   EvaluationAssignment,
@@ -7352,6 +7353,7 @@ export interface D1ApplicationRuntimeOptions {
   readonly eventRoleInvitationAdapters: RuntimeEventRoleInvitationAdapters;
   readonly senderAddresses: OpenSendSenderAddresses;
   readonly calendarIntegrationOptions: CalendarIntegrationOptions;
+  readonly organizationPolicy?: OrganizationPolicy;
 }
 
 export async function reconcilePublishedAgendaCalendarInvitations(input: {
@@ -7855,43 +7857,51 @@ export function createD1ApplicationDependencies(
 ): ApiDependencies {
   const cfpRepository = options.businessRepositories.cfp;
   const eventRepository = options.businessRepositories.events;
-  const eventService = new EventService(eventRepository, {
-    async reviewBoundaries(organizationId, eventId) {
-      const plans = await options.businessRepositories.evaluations.listPlans(
-        organizationId,
-        eventId,
-      );
-      return plans.flatMap((plan) => [
-        ...(plan.closesAt === null ? [] : [{ label: "Review deadline", occursAt: plan.closesAt }]),
-        ...plan.rounds.flatMap((round) => [
-          ...(round.opensAt == null
+  const eventService = new EventService(
+    eventRepository,
+    {
+      async reviewBoundaries(organizationId, eventId) {
+        const plans = await options.businessRepositories.evaluations.listPlans(
+          organizationId,
+          eventId,
+        );
+        return plans.flatMap((plan) => [
+          ...(plan.closesAt === null
             ? []
-            : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
-          ...(round.closesAt == null
-            ? []
-            : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
-        ]),
-      ]);
+            : [{ label: "Review deadline", occursAt: plan.closesAt }]),
+          ...plan.rounds.flatMap((round) => [
+            ...(round.opensAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} opening`, occursAt: round.opensAt }]),
+            ...(round.closesAt == null
+              ? []
+              : [{ label: `Review round ${round.sequence} deadline`, occursAt: round.closesAt }]),
+          ]),
+        ]);
+      },
+      async agendaState(_organizationId, eventId) {
+        const state = await options.businessRepositories.agenda.load(eventId);
+        return state === null ? null : { timeZone: state.timeZone };
+      },
+      async agendaEntries(_organizationId, eventId) {
+        const state = await options.businessRepositories.agenda.load(eventId);
+        if (state === null) return [];
+        const published = state.revisions.find(
+          (revision) => revision.id === state.currentPublishedRevisionId,
+        );
+        return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
+          label: `Agenda entry ${entry.id}`,
+          startsAt: entry.startsAt,
+          endsAt: entry.endsAt,
+          startsAtLocal: entry.startsAtLocal,
+          endsAtLocal: entry.endsAtLocal,
+        }));
+      },
     },
-    async agendaState(_organizationId, eventId) {
-      const state = await options.businessRepositories.agenda.load(eventId);
-      return state === null ? null : { timeZone: state.timeZone };
-    },
-    async agendaEntries(_organizationId, eventId) {
-      const state = await options.businessRepositories.agenda.load(eventId);
-      if (state === null) return [];
-      const published = state.revisions.find(
-        (revision) => revision.id === state.currentPublishedRevisionId,
-      );
-      return [...state.draft.entries, ...(published?.entries ?? [])].map((entry) => ({
-        label: `Agenda entry ${entry.id}`,
-        startsAt: entry.startsAt,
-        endsAt: entry.endsAt,
-        startsAtLocal: entry.startsAtLocal,
-        endsAtLocal: entry.endsAtLocal,
-      }));
-    },
-  });
+    options.organizationPolicy === undefined
+      ? {}
+      : { organizationPolicy: options.organizationPolicy },
+  );
   const publicationRepository = options.businessRepositories.programPublication;
   let publicationService!: ProgramPublicationService;
   publicationService = new ProgramPublicationService(publicationRepository, {

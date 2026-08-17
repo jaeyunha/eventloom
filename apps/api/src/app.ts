@@ -35,6 +35,12 @@ import {
 } from "./features/event-invitations/routes";
 import { createEventAdminRoutes, type EventRouteDependencies } from "./features/events/routes";
 import { createMemberAdminRoutes, type MemberRouteDependencies } from "./features/members/routes";
+import {
+  createOrganizationProvisioningRoutes,
+  createSelfHostedOrganizationBootstrapRoutes,
+  type OrganizationProvisioningRouteDependencies,
+  type SelfHostedOrganizationBootstrapDependencies,
+} from "./features/organizations/routes";
 import { createPublicApiV1Routes, type PublicApiRoutesOptions } from "./features/public-api/routes";
 import { createRemixRoutes } from "./features/remix/routes";
 import type { RemixService } from "./features/remix/service";
@@ -174,6 +180,8 @@ export interface ApiDependencies<
   readonly reports?: ReportRouteDependencies;
   readonly remix?: RemixRouteDependencies;
   readonly members?: MemberRouteDependencies;
+  readonly organizationBootstrap?: SelfHostedOrganizationBootstrapDependencies;
+  readonly organizationProvisioning?: OrganizationProvisioningRouteDependencies;
   readonly crm?: CrmRouteDependencies;
 }
 
@@ -438,6 +446,7 @@ function assertAuthenticationConfigured(
       dependencies.reports !== undefined ||
       dependencies.remix !== undefined ||
       dependencies.members !== undefined ||
+      dependencies.organizationBootstrap !== undefined ||
       dependencies.crm !== undefined)
   ) {
     throw new TypeError(
@@ -488,6 +497,7 @@ export function createApp<
         "Idempotency-Key",
         "If-Match",
         "X-Request-ID",
+        "X-Eventloom-Bootstrap-Token",
         "Content-Length",
       ],
       allowMethods: ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"],
@@ -541,6 +551,7 @@ export function createApp<
     const authenticate = authenticationMiddleware(authenticator);
     app.use("/api/v1/organizations/*", authenticate);
     app.use("/api/account/*", authenticate);
+    app.use("/api/setup/organizations/*", authenticate);
     app.use("/api/admin/*", async (context, next) => {
       if (context.req.path.endsWith("/members/setup/activate")) {
         context.set("authPrincipal", null);
@@ -711,6 +722,18 @@ export function createApp<
     app.route(
       "/api/admin/organizations/:organizationId/members",
       createMemberAdminRoutes(dependencies.members),
+    );
+  }
+  if (dependencies.organizationBootstrap !== undefined) {
+    app.route(
+      "/api/setup/organizations",
+      createSelfHostedOrganizationBootstrapRoutes(dependencies.organizationBootstrap),
+    );
+  }
+  if (dependencies.organizationProvisioning !== undefined) {
+    app.route(
+      "/api/internal/organizations",
+      createOrganizationProvisioningRoutes(dependencies.organizationProvisioning),
     );
   }
   if (dependencies.crm !== undefined) {

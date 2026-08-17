@@ -165,6 +165,10 @@ export interface EventRepositoryCommand {
   event: Event;
   expectedVersion: number | null;
   audit?: EventAuditEntry;
+  creationEntitlement?: {
+    readonly revision: number;
+    readonly activeEventLimit: number | null;
+  };
 }
 
 export interface EventRepository {
@@ -187,6 +191,13 @@ export class EventRepositoryConflictError extends Error {
   constructor(message = "The event changed concurrently.") {
     super(message);
     this.name = "EventRepositoryConflictError";
+  }
+}
+
+export class EventRepositoryCapacityError extends Error {
+  constructor(message = "The organization event capacity has been reached.") {
+    super(message);
+    this.name = "EventRepositoryCapacityError";
   }
 }
 export const programPublicationStatuses = ["pending", "served", "failed"] as const;

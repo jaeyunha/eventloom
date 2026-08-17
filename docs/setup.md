@@ -61,6 +61,7 @@ Use loopback addresses consistently for local browser, callback, and API configu
 
 ```dotenv
 APP_ENV=local
+DEPLOYMENT_MODE=self-hosted
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
@@ -68,6 +69,7 @@ API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
+ORGANIZATION_PROVISIONING_TOKEN=<backend-only-operator-token>
 OPENSEND_API_URL=http://127.0.0.1:8026
 OPENSEND_API_KEY=local-development
 AUTH_FROM_EMAIL=login@local.example.test
@@ -92,6 +94,35 @@ The integrated runtime does not require or consume
 administration is composed only when its organization-scoped integration
 configuration is enabled; manual PAT mode must also be explicitly enabled and
 is not the hosted-production default.
+
+### Organization provisioning modes
+
+`DEPLOYMENT_MODE` is independent from `APP_ENV`:
+
+- `self-hosted` can expose the first-organization bootstrap route when
+  `ORGANIZATION_PROVISIONING_TOKEN` is configured.
+- `managed` and `self-hosted` both keep organization creation outside existing
+  organization workspaces. A control plane or self-hosting operator provisions
+  additional organizations through the authenticated internal route.
+
+`/work` is the account-level workspace chooser. A person who belongs to
+multiple organizations sees each authorized workspace there; creating another
+organization never happens from inside an existing organization’s Settings.
+
+The backend-only provisioning token is never exposed through a
+`NEXT_PUBLIC_*` variable. In self-hosted mode, an authenticated verified user
+with no memberships can bootstrap the first organization by sending the token
+in `X-Eventloom-Bootstrap-Token` to
+`POST /api/setup/organizations/bootstrap`. In managed mode, the control plane
+uses `Authorization: Bearer <token>` with
+`POST /api/internal/organizations`; its request supplies the stable owner user
+ID and a provider-neutral organization entitlement. Self-hosting operators can
+use the same route with an unrestricted entitlement. Reusing the same
+`Idempotency-Key` with the same payload returns the original organization.
+
+Local development defaults to `self-hosted`. Staging and production Wrangler
+configuration defaults to `managed`. Leaving the provisioning token unset
+keeps both provisioning routes unmounted.
 
 Apply local D1 migrations and start both services from the repository root:
 
