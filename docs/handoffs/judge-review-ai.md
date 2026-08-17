@@ -6,9 +6,8 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact source-fix head: `2263719f6cc26fa2e0b15c18797a4977f1c9057e`
-- The final branch tip may add metadata-only handoff synchronization; review
-  the source-fix head and this document together.
+- Exact pushed head: `7fbef309e4afb366523a25b32b818a59d4effadf`
+- Integrated latest `github/main`: `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
 - Issue: https://github.com/jaeyunha/eventloom/issues/47
 - PR is open, not merged, and no production deployment was performed.
@@ -39,42 +38,40 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at 2263719f
+## Exact-head verification at 7fbef309
 
-- Focused matrix: PASS — 10 files, 305 passed, 1 skipped, plus targeted
+- Focused matrix: PASS — 10 files, 312 passed, 1 skipped, plus targeted
   rationale, scoped acceptance/rejection, and submission-revision CAS
   regressions.
-- Authority-focused service/D1/composition suites: PASS — 198 passed.
-- Web review suite after autosave/partial-edit fixes: PASS — 62 passed.
+- Authority-focused service/D1/composition suites: PASS — merged-head
+  authority regressions passed.
 - API typecheck: PASS.
-- Web typecheck: PASS.
-- Lane-owned formatter and `git diff --check`: PASS.
-- `make check`: PASS, with nine existing lint warnings and no errors.
-- `make build`: PASS.
-- Chromium advisory QA: PASS — pending/uncounted state, dropdown mapping,
-  explicit confirmation, provenance, keyboard focus, CJK wrapping, and no
-  horizontal overflow.
-- `make test`: FAIL in current-main script validation before later API/runtime
-  phases. The remaining failure is duplicate migration ordinal `0034` between
-  `0034_organization_entitlements.sql` and
-  `0034_program_publication_reservations.sql`; neither migration is changed by
-  this lane. The unit phase passed with 2,350 tests and 3 skipped.
+- Web typecheck: FAIL in latest-main speaker/portal/file-upload paths
+  (8 errors across 7 unchanged files); no lane-owned web source is implicated.
+- `make check`: FAIL because it includes the same latest-main web typecheck
+  failures; lane-owned formatting and `git diff --check` pass.
+- `make build`: not rerun after latest-main integration.
+- Chromium advisory QA: not rerun after latest-main integration.
+- `make test`: FAIL in the unit phase with 1 unrelated latest-main CSS
+  contract failure in `apps/web/src/components/workspace/workspace-surface-tokens.test.ts`;
+  the lane-owned focused matrix passed. The merged-head unit phase reached
+  2,403 passed and 3 skipped.
 
 ## Five independent final reviews
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact source-fix head `2263719f6cc26fa2e0b15c18797a4977f1c9057e`
-- [ ] Code quality — exact source-fix head `2263719f6cc26fa2e0b15c18797a4977f1c9057e`
-- [ ] Functional/visual QA — exact source-fix head `2263719f6cc26fa2e0b15c18797a4977f1c9057e`
-- [ ] Context/dependencies — exact source-fix head `2263719f6cc26fa2e0b15c18797a4977f1c9057e`
-- [ ] Goal/compliance — exact source-fix head `2263719f6cc26fa2e0b15c18797a4977f1c9057e`
+- [ ] Security — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
+- [ ] Code quality — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
+- [ ] Functional/visual QA — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
+- [ ] Context/dependencies — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
+- [ ] Goal/compliance — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
 
 ## Remaining tasks
 
 - [ ] Run all five final reviews against the final exact head.
 - [ ] Record five PASS verdicts in this handoff and PR body.
-- [ ] Resolve or explicitly accept the current-main migration validation blocker.
+- [ ] Resolve or explicitly accept the latest-main full-gate blockers listed above.
 - [ ] Verify the PR remains open and mergeable at the final head.
 - [ ] Merge PR #34 only after all five reviews PASS and strict gates are
   acceptable.
