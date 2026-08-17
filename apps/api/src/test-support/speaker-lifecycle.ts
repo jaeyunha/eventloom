@@ -54,10 +54,10 @@ const migrationNames = [
   "0035_event_retirement_compatibility.sql",
   "0036_evaluation_export_jobs.sql",
   "0037_immutable_speaker_projection_snapshots.sql",
-  "0038_speaker_asset_uploader.sql",
-  "0039_speaker_asset_creation_idempotency.sql",
-  "0040_speaker_task_replacement_baseline.sql",
-  "0041_private_download_attribution.sql",
+  "0041_speaker_asset_uploader.sql",
+  "0042_speaker_asset_creation_idempotency.sql",
+  "0043_speaker_task_replacement_baseline.sql",
+  "0044_private_download_attribution.sql",
 ] as const;
 
 class FakeR2Bucket {

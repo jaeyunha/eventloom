@@ -1536,17 +1536,14 @@ export function createDeliverablesApi(
   ): Promise<DeliverableHeadshotReplacement> {
     const contentType = input.file.type.trim() || "application/octet-stream";
     const expectedLatestVersion =
-      input.supersedesAssetId === undefined ? undefined : (input.expectedLatestVersion ?? 1);
+      input.supersedesAssetId === undefined ? undefined : input.expectedLatestVersion;
     if (
       input.supersedesAssetId !== undefined &&
       (!Number.isSafeInteger(expectedLatestVersion) || (expectedLatestVersion ?? 0) <= 0)
     ) {
       throw new Error("The current headshot version could not be resolved.");
     }
-    const idempotencyKey =
-      input.supersedesAssetId === undefined
-        ? undefined
-        : (input.idempotencyKey ?? crypto.randomUUID());
+    const idempotencyKey = input.supersedesAssetId === undefined ? undefined : input.idempotencyKey;
     const authorization = normalizeUploadAuthorization(
       await speakerRequest<unknown>(
         `/organizer/profiles/${segment(input.participantId, "participant ID")}/headshot`,

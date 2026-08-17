@@ -2470,6 +2470,33 @@ function useSpeakerWorkspaceController({
     const participantId = selectedSpeaker.participantId;
     const expectedVersion = selectedSpeaker.version;
     const supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
+    let expectedLatestVersion: number | undefined;
+    if (supersedesAssetId !== undefined) {
+      const assets = await api.getAssets(participantId);
+      const predecessor = assets.find((asset) => asset.assetId === supersedesAssetId);
+      if (predecessor === undefined) {
+        dispatchProfileHeadshotDetails({
+          type: "headshot-failed",
+          message:
+            "The current headshot version could not be resolved; reload before replacing it.",
+        });
+        return;
+      }
+      const predecessorVersion = predecessor.version;
+      if (
+        typeof predecessorVersion !== "number" ||
+        !Number.isSafeInteger(predecessorVersion) ||
+        predecessorVersion <= 0
+      ) {
+        dispatchProfileHeadshotDetails({
+          type: "headshot-failed",
+          message:
+            "The current headshot version could not be resolved; reload before replacing it.",
+        });
+        return;
+      }
+      expectedLatestVersion = predecessorVersion;
+    }
     dispatchProfileHeadshotDetails({ type: "headshot-upload-started", fileName: file.name });
     try {
       const replacement = assertSpeakerHeadshotReplacement(
@@ -2478,7 +2505,13 @@ function useSpeakerWorkspaceController({
           submissionId: selectedHeadshotSubmissionId,
           file,
           expectedVersion,
-          ...(supersedesAssetId === undefined ? {} : { supersedesAssetId }),
+          ...(supersedesAssetId === undefined
+            ? {}
+            : {
+                supersedesAssetId,
+                expectedLatestVersion: expectedLatestVersion as number,
+                idempotencyKey: crypto.randomUUID(),
+              }),
         }),
         eventId,
         participantId,

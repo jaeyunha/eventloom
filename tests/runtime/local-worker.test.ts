@@ -1427,6 +1427,25 @@ describe.sequential("composed local Worker", () => {
     );
     expect(downloadGrant.url).not.toMatch(/^https?:/u);
 
+    const issuedAuditResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/audit`,
+      { headers: organizerHeaders },
+    );
+    const issuedAudit =
+      await jsonData<Array<{ action: string; actorAccountId: string; requesterKind?: string }>>(
+        issuedAuditResponse,
+      );
+    expect(issuedAuditResponse.status).toBe(200);
+    expect(issuedAudit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "download_authorized",
+          actorAccountId: "local-organizer",
+          requesterKind: "organizer",
+        }),
+      ]),
+    );
+
     const downloadResponse = await runtimeRequest(downloadGrant.url, {
       headers: organizerHeaders,
     });
@@ -1434,6 +1453,24 @@ describe.sequential("composed local Worker", () => {
     expect(downloadResponse.status).toBe(200);
     expect(downloadResponse.headers.get("content-type")).toBe("application/pdf");
     expect([...downloadedBytes]).toEqual([...new TextEncoder().encode(fileBody)]);
+
+    const consumedAuditResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/audit`,
+      { headers: organizerHeaders },
+    );
+    const consumedAudit =
+      await jsonData<Array<{ action: string; actorAccountId: string; requesterKind?: string }>>(
+        consumedAuditResponse,
+      );
+    expect(consumedAudit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "downloaded",
+          actorAccountId: "local-organizer",
+          requesterKind: "organizer",
+        }),
+      ]),
+    );
 
     const replayResponse = await runtimeRequest(downloadGrant.url, {
       headers: organizerHeaders,

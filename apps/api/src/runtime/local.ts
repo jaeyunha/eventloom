@@ -109,6 +109,7 @@ import type {
   FinalizeSpeakerAssetCommand,
   PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
+  PrivateDownloadCapabilityBinding,
   PrivateDownloadGrant,
   PrivateUploadGrant,
   RepositoryResult,
@@ -1631,10 +1632,10 @@ class LocalSessionRepository extends InMemorySessionRepository {
 }
 
 type LocalPrivateAssetRecord = {
-  readonly binding: PrivateAssetCapabilityBinding;
+  readonly binding: PrivateAssetCapabilityBinding | PrivateDownloadCapabilityBinding;
   readonly kind: "upload" | "download";
   readonly token: string;
-  state: "pending" | "uploaded" | "consumed";
+  state: "pending" | "uploaded" | "claiming" | "consumed";
 };
 
 type LocalPrivateAssetObject = {
@@ -1646,6 +1647,10 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
   readonly #capabilities = new Map<string, LocalPrivateAssetRecord>();
   readonly #objects = new Map<string, LocalPrivateAssetObject>();
   #sequence = 0;
+
+  constructor(
+    private readonly appendAssetAudit?: (entry: SpeakerAssetAuditEntry) => Promise<void>,
+  ) {}
 
   async createUploadGrant(_command: CreatePrivateUploadGrantCommand): Promise<PrivateUploadGrant> {
     throw new Error("A fully bound local upload capability is required.");
@@ -1678,7 +1683,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     };
   }
 
-  async registerDownloadCapability(binding: PrivateAssetCapabilityBinding) {
+  async registerDownloadCapability(binding: PrivateDownloadCapabilityBinding) {
     const object = this.#objects.get(binding.objectKey);
     if (
       object === undefined ||
@@ -1689,6 +1694,20 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     }
     const capabilityId = `download:${crypto.randomUUID()}`;
     const token = await this.token("download", binding);
+    const createdAt = new Date().toISOString();
+    await this.appendAssetAudit?.({
+      id: `private-download-issued:${capabilityId}`,
+      organizationId: binding.tenantId,
+      eventId: binding.eventId,
+      assetId: binding.capabilityId,
+      action: "download_authorized",
+      actorAccountId: binding.requesterAccountId,
+      requesterKind: binding.requesterKind,
+      capabilityId,
+      attributionBasis: "authenticated_requester",
+      occurredAt: createdAt,
+      version: binding.assetVersion,
+    });
     this.#capabilities.set(capabilityId, {
       binding: { ...binding },
       kind: "download",
@@ -1752,12 +1771,37 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     if (this.expired(capability.binding.expiresAt)) {
       throw new Error("The download capability has expired.");
     }
-    const object = this.#objects.get(capability.binding.objectKey);
+    capability.state = "claiming";
+    const binding = capability.binding;
+    if (!("requesterAccountId" in binding)) {
+      capability.state = "consumed";
+      throw new Error("The download capability is invalid.");
+    }
+    const claimId = crypto.randomUUID();
+    try {
+      await this.appendAssetAudit?.({
+        id: `private-download-consumed:${claimId}`,
+        organizationId: binding.tenantId,
+        eventId: binding.eventId,
+        assetId: binding.capabilityId,
+        action: "downloaded",
+        actorAccountId: binding.requesterAccountId,
+        requesterKind: binding.requesterKind,
+        capabilityId,
+        attributionBasis: "issuance_principal",
+        occurredAt: new Date().toISOString(),
+        version: binding.assetVersion,
+      });
+    } catch (error) {
+      capability.state = "uploaded";
+      throw error;
+    }
+    capability.state = "consumed";
+    const object = this.#objects.get(binding.objectKey);
     if (
       object === undefined ||
-      object.bytes.byteLength !== capability.binding.sizeBytes ||
-      object.contentType.trim().toLowerCase() !==
-        capability.binding.contentType.trim().toLowerCase()
+      object.bytes.byteLength !== binding.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== binding.contentType.trim().toLowerCase()
     ) {
       throw new Error("The requested private asset is not available.");
     }
@@ -1767,7 +1811,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       body: this.body(object.bytes),
       contentType: object.contentType,
       sizeBytes: object.bytes.byteLength,
-      fileName: capability.binding.fileName,
+      fileName: binding.fileName,
     };
   }
 
@@ -2861,7 +2905,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     { clock: () => new Date(SEEDED_AT) },
   );
   const authenticator = localAuthenticator(personas, eventInvitationRepository);
-  const privateAssetGateway = new LocalPrivateAssetGateway();
+  const privateAssetGateway = new LocalPrivateAssetGateway(
+    speakerRepository.appendAssetAudit.bind(speakerRepository),
+  );
   let speakerService!: SpeakerService;
   const publicRepository = new LocalPublicApiRepository();
   const eventRepository = new InMemoryEventRepository();

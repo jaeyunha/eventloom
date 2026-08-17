@@ -4703,7 +4703,7 @@ components:
         contentType: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 0 }
         uploaderLabel: { type: string, maxLength: 200 }
-        state: { type: string, enum: [pending, ready, rejected] }
+        state: { type: string, enum: [pending_upload, ready, rejected] }
         version: { $ref: "#/components/schemas/Version" }
         createdAt: { $ref: "#/components/schemas/Timestamp" }
         finalizedAt: { $ref: "#/components/schemas/Timestamp" }
@@ -4725,6 +4725,7 @@ components:
         fileName: { type: string, maxLength: 512 }
         contentType: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 1 }
+        expectedLatestVersion: { $ref: "#/components/schemas/Version" }
         supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
       additionalProperties: false
     UploadAuthorizationResponse:
@@ -4733,10 +4734,10 @@ components:
       properties:
         data:
           type: object
-          required: [asset, upload]
+          required: [asset, grant]
           properties:
             asset: { $ref: "#/components/schemas/PortalAsset" }
-            upload: { $ref: "#/components/schemas/Capability" }
+            grant: { $ref: "#/components/schemas/Capability" }
           additionalProperties: false
       additionalProperties: false
     UploadReceiptResponse:
@@ -4759,9 +4760,13 @@ components:
       additionalProperties: false
     Capability:
       type: object
-      required: [token, expiresAt]
+      required: [method, url, expiresAt]
       properties:
-        token: { type: string, minLength: 32, maxLength: 512, writeOnly: true }
+        method: { type: string, enum: [GET, PUT] }
+        url: { type: string, format: uri-reference }
+        headers:
+          type: object
+          additionalProperties: { type: string }
         expiresAt: { $ref: "#/components/schemas/Timestamp" }
       additionalProperties: false
     AssetFinalize:

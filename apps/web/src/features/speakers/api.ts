@@ -155,6 +155,8 @@ export interface SpeakerAsset {
   readonly byteSize: number;
   readonly status: "pending" | "ready" | "rejected" | string;
   readonly uploadedAt: string;
+  readonly version?: number;
+  readonly versionFamilyId?: string;
   readonly downloadUrl: string | null;
 }
 export interface SpeakerDownloadGrant {

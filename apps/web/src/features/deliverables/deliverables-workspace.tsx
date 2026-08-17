@@ -1638,6 +1638,14 @@ function useDeliverablesWorkspaceController({
       setError("Choose an accepted session owned by this speaker before replacing the headshot.");
       return;
     }
+    const predecessor =
+      input.supersedesAssetId === undefined
+        ? undefined
+        : assets.find((asset) => asset.id === input.supersedesAssetId);
+    if (input.supersedesAssetId !== undefined && predecessor === undefined) {
+      setError("The current headshot version could not be resolved; reload before replacing it.");
+      return;
+    }
     const scope = scopeRef.current;
     const busyLease = beginBusy();
     setError(null);
@@ -1652,6 +1660,12 @@ function useDeliverablesWorkspaceController({
       const next = await api.replaceHeadshot({
         ...input,
         expectedVersion: currentProfile.version,
+        ...(predecessor === undefined
+          ? {}
+          : {
+              expectedLatestVersion: predecessor.version,
+              idempotencyKey: crypto.randomUUID(),
+            }),
       });
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       invalidateDeliverablesCoreCache(scope);
