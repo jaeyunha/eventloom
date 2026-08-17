@@ -1184,6 +1184,7 @@ function createConfiguredAdapters(
 
 export class OutboxConsumer {
   readonly #repository: OutboxJobRepository;
+  readonly #database: D1Database | undefined;
   readonly #adapters: OutboxAdapters;
   readonly #statusRecorder: OutboxDeliveryStatusRecorder | undefined;
   readonly #now: () => Date;
@@ -1201,6 +1202,7 @@ export class OutboxConsumer {
     const optionsOnly = isOutboxOptions(bindingsOrOptions);
     const bindings = optionsOnly ? ({} as OutboxConsumerBindings) : bindingsOrOptions;
     const effectiveOptions = optionsOnly ? bindingsOrOptions : options;
+    this.#database = optionsOnly ? undefined : bindings.DB;
     this.#repository = effectiveOptions.repository ?? new D1OutboxJobRepository(bindings.DB);
     this.#statusRecorder = effectiveOptions.statusRecorder;
     this.#now = effectiveOptions.now ?? (() => new Date());
@@ -1463,6 +1465,37 @@ export class OutboxConsumer {
   ): Promise<OutboxDeliveryReceipt | undefined> {
     switch (job.topic) {
       case "communications": {
+        const payloadRecord = isRecord(job.payload) ? job.payload : null;
+        const fence = isRecord(payloadRecord?.decisionFence) ? payloadRecord.decisionFence : null;
+        if (
+          this.#database !== undefined &&
+          fence !== null &&
+          typeof fence.eventId === "string" &&
+          typeof fence.planId === "string" &&
+          typeof fence.submissionId === "string" &&
+          typeof fence.version === "number" &&
+          typeof fence.status === "string"
+        ) {
+          const current = await this.#database
+            .prepare(
+              `SELECT version, status
+                 FROM evaluation_decisions
+                WHERE organization_id = ?
+                  AND event_id = ?
+                  AND plan_id = ?
+                  AND submission_id = ?
+                LIMIT 1`,
+            )
+            .bind(job.tenantId, fence.eventId, fence.planId, fence.submissionId)
+            .first<{ version: number; status: string }>();
+          if (
+            current === null ||
+            current.version !== fence.version ||
+            current.status !== fence.status
+          ) {
+            return;
+          }
+        }
         let payload: OpenSendMessage;
         if (transient === undefined) {
           payload = parseEmailPayload(job.payload);

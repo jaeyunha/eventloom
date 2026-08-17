@@ -8026,6 +8026,13 @@ export class AirtableEvaluationDecisionProjection {
         templateId: template?.id,
         templateVersion: template?.version,
         status: input.status,
+        decisionFence: {
+          eventId: input.eventId,
+          planId: input.planId,
+          submissionId: input.submissionId,
+          version: input.decisionVersion,
+          status: input.status,
+        },
       },
       now: input.decidedAt,
       decisionFence: {
