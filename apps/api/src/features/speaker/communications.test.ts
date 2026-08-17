@@ -232,6 +232,75 @@ describe("durable speaker communications", () => {
     expect(new Set(templates.map((template) => template.id))).toHaveProperty("size", 2);
   });
 
+  it("canonicalizes legacy divergent HTML before preview and send", async () => {
+    const lifecycle = fixture();
+    const phase = lifecycle.createPhase();
+    await createSpeaker(
+      phase.service,
+      lifecycle.database,
+      "participant-priya",
+      "Priya Raman",
+      "priya@example.test",
+    );
+    const delivered: CommunicationDeliveryRequest[] = [];
+    const durable = communications(lifecycle.database as unknown as D1Database, delivered);
+    const actor = speakerCommunicationActor(
+      ids.organizationId,
+      ids.eventId,
+      ids.organizerAccountId,
+    );
+    const legacy = await durable.service.createTemplate(actor, {
+      eventId: ids.eventId,
+      id: "speaker-legacy-template",
+      name: "Legacy speaker message",
+      purpose: "organizer_group_email",
+      subject: "Hello {{first_name}}",
+      html: '<img src="https://attacker.example/pixel"><p>Stale body</p>',
+      text: "Hello {{first_name}}\n\nThis is the canonical plain-text body.",
+    });
+    const approved = await durable.service.approveTemplate(
+      actor,
+      ids.eventId,
+      legacy.id,
+      legacy.version,
+    );
+
+    const preview = await durable.facade.preview({
+      organizationId: ids.organizationId,
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      participantIds: ["participant-priya"],
+      templateId: approved.id,
+      templateVersion: approved.version,
+    });
+
+    expect(preview.templateVersion).toBe(approved.version + 1);
+    expect(preview.recipients[0]?.html).toBe(
+      "<p>Hello Priya</p>\n<p>This is the canonical plain-text body.</p>",
+    );
+    expect(preview.recipients[0]?.html).not.toContain("attacker.example");
+
+    const repeatedPreview = await durable.facade.preview({
+      organizationId: ids.organizationId,
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      participantIds: ["participant-priya"],
+      templateId: approved.id,
+      templateVersion: approved.version,
+    });
+    expect(repeatedPreview.templateVersion).toBe(preview.templateVersion);
+
+    await durable.facade.send({
+      organizationId: ids.organizationId,
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      previewId: preview.id,
+      idempotencyKey: "legacy-template-send",
+    });
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.html).toBe(preview.recipients[0]?.html);
+  });
+
   it("persists versions, exact previews, sends, provider timestamps, and history across recreation", async () => {
     const lifecycle = fixture();
     const phase = lifecycle.createPhase();

@@ -2,15 +2,11 @@
 
 ## Current Status
 
-**RETIRED BY USER DIRECTION.**
+**REOPENED BY USER DIRECTION FOR PR #62.**
 
-The lane retirement boundary superseded the remaining PR-delivery objective. The final
-allowed work was limited to the historical replay security correction, focused/exact
-verification, coherent organizer-surface screenshot correction, handoff update,
-checkpoint commit/push, and one detailed GitHub handoff issue.
-
-Do not resume feature work, open a PR, merge, deploy, or recreate this worktree unless
-the user explicitly starts a new task.
+The earlier retirement text is historical. The user explicitly reopened this lane
+for the staging-checkpoint verification and merge of PR #62 after integrating
+current github/main. This lane remains source-only: do not deploy production.
 
 ## Repository and Git State
 
@@ -38,6 +34,18 @@ SPK-13 fixes speaker bulk-email body divergence by making plaintext the canonica
 organizer-controlled draft across save, exact-version preview, generated HTML, raw
 multipart MIME, provider delivery, and idempotent replay.
 
+## Coordination with PR #31 — portal-reminders
+
+PR #31 (`judge-portal-reminders`) remains a separate reminder-scheduling lane. Its
+scheduled reminder offsets, recovery, and reminder-run idempotency are not part of
+SPK-13's organizer-triggered bulk speaker email flow. The shared communications
+boundary must nevertheless preserve the same consistency rules: plaintext is the
+canonical body, generated HTML is derived from that plaintext, and
+`portal_url`/other server-owned render data cannot be supplied by a caller or
+recipient snapshot. The lanes are not merge dependencies; after either lane merges,
+the shared communications checks should be rerun together for staging checkpoint
+confidence. No PR #31 implementation change is required by SPK-13.
+
 In scope:
 
 - Save dirty existing drafts before preview.
@@ -58,6 +66,24 @@ Out of scope:
 - Deployment or release claims.
 - Merging the PR.
 
+### Airtable boundary evidence
+
+Communication delivery and idempotency are D1-authoritative in the supported
+Cloudflare runtime. Airtable remains an optional asynchronous projection and is
+not constructed as the communications repository by runtime composition; the
+`AirtableCommunicationRepository` implementation is retained for adapter
+compatibility tests and migration tooling. Its legacy non-atomic
+find-then-create behavior is therefore not an SPK-13 delivery path or a reason
+to weaken D1's atomic same-key conflict handling. If Airtable is ever promoted
+to communications authority, it requires a separate adapter-hardening lane with
+an atomic idempotency claim before activation.
+
+The speaker service also keeps verified-account role-invitation persistence before
+provider delivery so a persistence failure cannot send an unusable invitation
+email; the existing regression locks that invariant. Cross-request
+role-invitation coordination is a separate authorization/idempotency follow-up
+and is not the Airtable adapter defect or the SPK-13 canonical-body merge gate.
+
 ## Completed Implementation
 
 ### Canonical body and exact draft binding
@@ -66,6 +92,9 @@ Out of scope:
   escaped paragraph/line-break HTML.
 - Speaker template creation/versioning ignores independent caller HTML and regenerates
   HTML from `text`.
+- Event-scoped built-in welcome templates retain their fixed server-owned semantic
+  `portal_url` anchor; only organizer-authored legacy templates are canonicalized at
+  preview.
 - The browser persists a dirty existing draft before preview and passes the exact saved
   template ID/version into preview.
 - Subject/body edits invalidate stale previews.

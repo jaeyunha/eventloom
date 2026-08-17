@@ -116,7 +116,59 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     return speakerTemplateDto(template);
   }
 
+  private async canonicalPreviewTemplate(
+    input: Parameters<SpeakerCommunications["preview"]>[0],
+  ): Promise<SpeakerEmailTemplate> {
+    const actor = speakerCommunicationActor(input.organizationId, input.eventId, input.accountId);
+    const template = await this.communications.getTemplate(
+      actor,
+      input.eventId,
+      input.templateId,
+      input.templateVersion,
+    );
+    const isTrustedWelcomeTemplate =
+      template.id === SPEAKER_WELCOME_TEMPLATE_ID ||
+      template.id.startsWith(`${SPEAKER_WELCOME_TEMPLATE_ID}:`);
+    const canonicalHtml = speakerEmailHtmlFromText(template.text);
+    if (
+      isTrustedWelcomeTemplate ||
+      template.status !== "approved" ||
+      template.html === canonicalHtml
+    ) {
+      return speakerTemplateDto(template);
+    }
+    const existingCanonical = (
+      await this.communications.listTemplates(actor, input.eventId, "organizer_group_email")
+    )
+      .filter(
+        (candidate) =>
+          candidate.id === template.id &&
+          candidate.status === "approved" &&
+          candidate.subject === template.subject &&
+          candidate.text === template.text &&
+          candidate.html === canonicalHtml,
+      )
+      .reduce<SpeakerEmailTemplate | undefined>(
+        (latest, candidate) =>
+          latest === undefined || candidate.version > latest.version
+            ? speakerTemplateDto(candidate)
+            : latest,
+        undefined,
+      );
+    if (existingCanonical !== undefined) return existingCanonical;
+    return this.createTemplateVersion({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      accountId: input.accountId,
+      templateId: template.id,
+      subject: template.subject,
+      text: template.text,
+      status: "approved",
+    });
+  }
+
   async preview(input: Parameters<SpeakerCommunications["preview"]>[0]) {
+    const template = await this.canonicalPreviewTemplate(input);
     return speakerPreviewDto(
       await this.communications.previewGroupSend(
         speakerCommunicationActor(input.organizationId, input.eventId, input.accountId),
@@ -124,10 +176,8 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
           eventId: input.eventId,
           purpose: "organizer_group_email",
           audience: "all_participants",
-          templateId: input.templateId,
-          ...(input.templateVersion === undefined
-            ? {}
-            : { templateVersion: input.templateVersion }),
+          templateId: template.id,
+          templateVersion: template.version,
           recipientIds: input.participantIds,
           data: { ...(input.data ?? {}), portal_url: this.workHubUrl() },
           protectedRecipientDataKeys: ["portal_url"],
