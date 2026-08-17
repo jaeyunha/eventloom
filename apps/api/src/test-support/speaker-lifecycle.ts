@@ -48,6 +48,7 @@ const migrationNames = [
   "0026_cfp_url_field_kind.sql",
   "0027_event_role_invitations.sql",
   "0028_remove_event_status.sql",
+  "0029_agenda_validation_revision.sql",
   "0033_private_download_capabilities.sql",
   "0034_program_publication_reservations.sql",
   "0035_event_retirement_compatibility.sql",

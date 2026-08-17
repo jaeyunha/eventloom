@@ -508,7 +508,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     expectedVersion: number | null,
     expectedAssignmentVersion: number,
   ): Promise<void> {
-    this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
+    await this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
     this.#suggestions.set(key, clone(suggestion));
@@ -522,7 +522,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution> {
-    this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
+    await this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
     const suggestionKey = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(
       this.#suggestions.get(suggestionKey)?.version ?? null,
@@ -575,18 +575,37 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     };
   }
 
-  #assertSuggestionAssignmentWritable(
+  async #assertSuggestionAssignmentWritable(
     suggestion: EvaluationSuggestion,
     expectedAssignmentVersion: number,
-  ): void {
+  ): Promise<void> {
     const assignmentKey = storageKey(suggestion.tenantId, suggestion.assignmentId);
     const assignment = this.#assignments.get(assignmentKey);
     assertVersion(assignment?.version ?? null, expectedAssignmentVersion, "Assignment");
     if (
-      assignment?.status === "abstained" ||
+      assignment === undefined ||
+      assignment.eventId !== suggestion.eventId ||
+      assignment.planId !== suggestion.planId ||
+      assignment.roundId !== suggestion.roundId ||
+      assignment.submissionId !== suggestion.submissionId ||
+      assignment.reviewerId !== suggestion.reviewerId ||
+      (assignment.status !== "assigned" && assignment.status !== "in_progress") ||
       this.#conflicts.has(storageKey(suggestion.tenantId, suggestion.assignmentId))
     ) {
       throw conflict("A conflict declaration removes access to this submission.");
+    }
+    if (this.#decisions.has(decisionKey(suggestion.tenantId, suggestion.planId, suggestion.submissionId))) {
+      throw conflict("A decision already exists for this submission.");
+    }
+    if (this.submissionSource !== undefined) {
+      const submission = await this.submissionSource.getSubmissionForReview(
+        suggestion.tenantId,
+        suggestion.eventId,
+        suggestion.submissionId,
+      );
+      if (submission?.status !== "submitted") {
+        throw conflict("This submission is no longer available for review.");
+      }
     }
   }
   async listReviewerWorkspaceRecords(

@@ -1963,21 +1963,10 @@ describe("review drafts, AI assistance, and aggregates", () => {
     const { service } = await fixture({ reviewsPerSubmission: 1 });
     const assignment = await assignOne(service);
     const actor = reviewer("reviewer-1");
-    const draft = await service.saveReview(actor, assignment.id, {
-      scores: [
-        {
-          criterionId: "quality",
-          value: 4,
-          origin: "ai",
-          evidence: ["Abstract describes a concrete audience outcome."],
-        },
-        { criterionId: "relevance", value: 8, origin: "human" },
-      ],
-      comment: "Promising proposal.",
-    });
+    const suggestion = await service.generateAiSuggestions(actor, assignment.id);
 
     await expectEvaluationError(
-      service.submitReview(actor, assignment.id, draft.version),
+      service.submitReview(actor, assignment.id, 0),
       "EVALUATION_INVALID_INPUT",
     );
     expect(await service.getAggregate(organizer, "plan-1", round.id, submission.id)).toMatchObject({
@@ -1985,13 +1974,12 @@ describe("review drafts, AI assistance, and aggregates", () => {
       averageWeightedTotal: null,
     });
 
-    const confirmed = await service.confirmAiScores(
-      actor,
-      assignment.id,
-      ["quality"],
-      draft.version,
-    );
-    await service.submitReview(actor, assignment.id, confirmed.version);
+    const resolved = await service.resolveAiSuggestion(actor, suggestion.id, {
+      action: "accept",
+      expectedVersion: suggestion.version,
+    });
+    if (resolved.review === null) throw new Error("Expected a resolved review.");
+    await service.submitReview(actor, assignment.id, resolved.review.version);
     const aggregate = await service.getAggregate(organizer, "plan-1", round.id, submission.id);
 
     expect(aggregate).toMatchObject({
@@ -2093,9 +2081,26 @@ describe("review drafts, AI assistance, and aggregates", () => {
       submissions,
     });
     const assignment = await assignOne(service);
-    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
-      scores: [{ criterionId: "quality", value: 4, origin: "ai", evidence: ["AI evidence."] }],
+    const baseDraft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
     });
+    const quality = baseDraft.scores.quality;
+    if (quality === undefined) throw new Error("Expected a quality score.");
+    const draft = {
+      ...baseDraft,
+      scores: {
+        ...baseDraft.scores,
+        quality: {
+          ...quality,
+          origin: "ai" as const,
+          evidence: ["AI evidence."],
+          humanConfirmedBy: null,
+          suggestionId: "legacy:test",
+          suggestionStatus: "pending" as const,
+        },
+      },
+    };
+    await repository.putReview(draft, baseDraft.version);
     let releaseWrite!: () => void;
     const writeEntered = new Promise<void>((resolve) => {
       repository.writeEntered = resolve;
@@ -2184,8 +2189,7 @@ describe("review drafts, AI assistance, and aggregates", () => {
         {
           criterionId: "quality",
           value: 3,
-          origin: "ai",
-          evidence: ["The abstract supplies an example."],
+          origin: "human",
         },
       ],
     });
@@ -2209,13 +2213,20 @@ describe("review drafts, AI assistance, and aggregates", () => {
     );
   });
 
-  it("requires cited evidence for AI suggestions", async () => {
+  it("rejects client-supplied AI scores", async () => {
     const { service } = await fixture({ reviewsPerSubmission: 1 });
     const assignment = await assignOne(service);
 
     await expectEvaluationError(
       service.saveReview(reviewer("reviewer-1"), assignment.id, {
-        scores: [{ criterionId: "quality", value: 4, origin: "ai" }],
+        scores: [
+          {
+            criterionId: "quality",
+            value: 4,
+            origin: "ai",
+            evidence: ["Fabricated provider evidence."],
+          },
+        ],
       }),
       "EVALUATION_INVALID_INPUT",
     );
@@ -3360,6 +3371,27 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     );
     expect(providerCalls).toBe(0);
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+  });
+
+  it("rejects an abstained assignment before invoking the provider", async () => {
+    let providerCalls = 0;
+    const { repository, service } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => {
+        providerCalls += 1;
+        return { candidates: validAiCandidates() };
+      },
+    });
+    const assignment = await assignOne(service);
+    await repository.putAssignmentsForTesting([
+      { ...assignment, status: "abstained", version: assignment.version + 1 },
+    ]);
+
+    await expectEvaluationError(
+      service.generateAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_FORBIDDEN",
+    );
+    expect(providerCalls).toBe(0);
   });
 
   it("requires an injected provider, snapshots revisions, and audits human resolutions", async () => {

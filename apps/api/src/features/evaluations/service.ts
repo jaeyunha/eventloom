@@ -383,6 +383,7 @@ function requireHumanReviewer(actor: EvaluationActor, assignment: EvaluationAssi
   if (
     actor.kind !== "human" ||
     assignment.status === "superseded" ||
+    assignment.status === "abstained" ||
     actor.userId !== assignment.reviewerId ||
     !hasRole(actor, assignment.eventId, "reviewer")
   ) {
@@ -2365,26 +2366,18 @@ export class EvaluationService {
         }
         value = inputScore.value;
       }
+      if (inputScore.origin === "ai") {
+        throw invalidInput("AI scores must be applied through an advisory suggestion.");
+      }
       const evidence = (inputScore.evidence ?? []).map((citation) =>
         requireText(citation, "Score evidence", 2_000),
       );
-      if (inputScore.origin === "ai" && evidence.length === 0) {
-        throw invalidInput("AI score suggestions must cite rubric evidence.");
-      }
       scores[criterion.id] = {
         criterionId: criterion.id,
         value,
         origin: inputScore.origin,
         evidence,
         humanConfirmedBy: null,
-        ...(inputScore.origin === "ai"
-          ? {
-              suggestionId: `legacy:${assignment.id}:${criterion.id}`,
-              suggestionStatus: "pending" as const,
-              rubricRevision,
-              submissionRevision,
-            }
-          : {}),
         rubricRevision,
         submissionRevision,
         rubricVersion: rubricRevision,

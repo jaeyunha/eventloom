@@ -137,6 +137,13 @@ function reviewWriteAuthorityGuard(
   input: WriteEvaluationReview,
 ): D1PreparedStatement {
   const { authority } = input;
+  const planVersion = input.review.planVersion ?? input.review.planRevision ?? 1;
+  const planRevision = input.review.planRevision ?? input.review.planVersion ?? 1;
+  const roundRevision = input.review.roundRevision ?? input.review.rubricRevision ?? 1;
+  const rubricRevision = input.review.rubricRevision ?? input.review.rubricVersion ?? 1;
+  const submissionRevision =
+    input.review.submissionRevision ?? input.review.submissionVersion ?? 1;
+  const reviewTimestamp = input.review.updatedAt;
   return guard(
     database,
     `EXISTS (
@@ -153,6 +160,29 @@ function reviewWriteAuthorityGuard(
       SELECT 1 FROM submissions
       WHERE organization_id = ? AND event_id = ? AND id = ?
         AND status = 'submitted'
+    )
+    AND EXISTS (
+      SELECT 1 FROM submission_versions
+      WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+        AND version = (
+          SELECT MAX(version) FROM submission_versions
+          WHERE organization_id = ? AND event_id = ? AND submission_id = ?
+        )
+        AND version = ?
+    )
+    AND EXISTS (
+      SELECT 1 FROM review_plans
+      WHERE organization_id = ? AND event_id = ? AND id = ?
+        AND status = 'open' AND version = ?
+        AND COALESCE(grading_revision, version) = ?
+        AND (closes_at IS NULL OR closes_at > ?)
+    )
+    AND EXISTS (
+      SELECT 1 FROM review_rounds
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ?
+        AND revision = ? AND rubric_revision = ?
+        AND (opens_at IS NULL OR opens_at <= ?)
+        AND (closes_at IS NULL OR closes_at > ?)
     )
     AND NOT EXISTS (
       SELECT 1 FROM evaluation_decisions
@@ -173,6 +203,24 @@ function reviewWriteAuthorityGuard(
       authority.tenantId,
       authority.eventId,
       authority.submissionId,
+      authority.tenantId,
+      authority.eventId,
+      authority.submissionId,
+      submissionRevision,
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      planVersion,
+      planRevision,
+      reviewTimestamp,
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      authority.roundId,
+      roundRevision,
+      rubricRevision,
+      reviewTimestamp,
+      reviewTimestamp,
       authority.tenantId,
       authority.eventId,
       authority.planId,
