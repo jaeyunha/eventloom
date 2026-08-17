@@ -67,6 +67,17 @@ const FILLER_TOKENS = new Set([
   "crondle",
   "splunge",
   "snazzle",
+  "alpha",
+  "beta",
+  "gamma",
+  "drivel",
+  "vacuous",
+  "lorem",
+  "ipsum",
+  "dolor",
+  "gibberish",
+  "placeholder",
+  "meaningless",
   "zorbles",
   "quux",
   "random",
@@ -122,6 +133,7 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   const explanationTokens = [...rationaleTokens].filter((token) => !sourceTokens.has(token));
   if (explanationTokens.some((token) => FILLER_TOKENS.has(token))) return false;
   if (explanationTokens.some((token) => /\d/u.test(token))) return false;
+  if (explanationTokens.some(isArtificialToken)) return false;
   return explanationTokens.length >= 1;
 }
 
@@ -174,6 +186,20 @@ function isSignificantToken(token: string): boolean {
   const length = [...token].length;
   return /^[\p{Script=Latin}\p{N}]+$/u.test(token) ? length >= 4 : length >= 2;
 }
+
+function isArtificialToken(token: string): boolean {
+  if (!/^[a-z]+$/u.test(token)) return false;
+  if (token.length >= 6 && !/[aeiouy]/u.test(token)) return true;
+  if (/([a-z])\1\1/u.test(token)) return true;
+  if (token.endsWith("x") && !COMMON_X_ENDING_WORDS.has(token)) return true;
+  if (token.startsWith("z") && !COMMON_Z_STARTING_WORDS.has(token)) return true;
+  if (token.includes("q") && !token.includes("qu")) return true;
+  return false;
+}
+
+const COMMON_X_ENDING_WORDS = new Set(["complex", "context", "exact", "index", "matrix", "syntax"]);
+
+const COMMON_Z_STARTING_WORDS = new Set(["zebra", "zero", "zinc", "zip", "zone", "zoom"]);
 
 function normalizeGroundingText(value: string): string {
   return value.normalize("NFC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
