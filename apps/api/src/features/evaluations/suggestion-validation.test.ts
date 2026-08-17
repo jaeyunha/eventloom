@@ -40,5 +40,23 @@ describe("suggestion rationale validation", () => {
         "Practical material for the audience.",
       ),
     ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "Practical material gives the audience zorbles flibbles.",
+        "Practical material for the audience.",
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "The rollback checklist gives engineering teams wugga blorptastic.",
+        "The rollback checklist documents deployment practices for engineering teams.",
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "The practical material supports audience needs through glorp wibble.",
+        "Practical material for the audience.",
+      ),
+    ).toBe(false);
   });
 });

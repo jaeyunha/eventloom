@@ -1387,6 +1387,16 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       expectedAssignmentVersion,
       "Assignment",
     );
+    if (assignment.status !== "assigned" && assignment.status !== "in_progress") {
+      throw conflict("This assignment is no longer available for review.");
+    }
+    if (
+      declaration.tenantId !== assignment.tenantId ||
+      declaration.eventId !== assignment.eventId ||
+      declaration.assignmentId !== assignment.id
+    ) {
+      throw conflict("The conflict declaration does not match this assignment.");
+    }
     if (this.#conflicts.has(conflictStorageKey)) {
       throw conflict("A conflict has already been declared for this assignment.");
     }

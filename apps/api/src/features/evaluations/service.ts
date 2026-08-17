@@ -2555,6 +2555,10 @@ export class EvaluationService {
       round,
       submissionRevision,
     );
+    const finalAuthority = await this.#getWritableAssignment(actor, assignment.id);
+    if (finalAuthority.assignment.version !== assignment.version) {
+      throw conflict("The review assignment changed while its context was loading.");
+    }
     return {
       assignment: effectiveAssignment(assignment, review ?? undefined),
       round,
