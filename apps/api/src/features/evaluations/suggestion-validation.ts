@@ -68,12 +68,15 @@ const EXPLANATORY_RELATION_WORDS = new Set([
   "enables",
   "explains",
   "gives",
+  "help",
   "identifies",
   "illustrates",
   "indicates",
+  "improve",
   "offers",
   "provide",
   "provides",
+  "resonate",
   "shows",
   "since",
   "supports",
@@ -117,11 +120,14 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "fit",
   "focus",
   "grounded",
+  "build",
   "high",
   "guidance",
   "helps",
+  "help",
   "immediately",
   "impact",
+  "improve",
   "implementation",
   "justification",
   "learn",
@@ -141,6 +147,7 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "workshop",
   "states",
   "reviewers",
+  "resonate",
   "ready",
   "scaling",
   "scale",
@@ -156,9 +163,11 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "tomorrow",
   "their",
   "through",
+  "understanding",
   "use",
   "useful",
   "will",
+  "skills",
   "依据",
   "具体",
   "活动",
@@ -239,10 +248,12 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   const explanationTokens = [...rationaleTokens].filter(
     (token) => !sourceTokens.has(token) && !RATIONALE_TEMPLATE_WORDS.has(token),
   );
-  if (explanationTokens.some((token) => FILLER_TOKENS.has(token))) return false;
+  const unrecognizedExplanationTokens = explanationTokens.filter(
+    (token) => !ALLOWED_EXPLANATION_WORDS.has(token),
+  );
   return (
     explanationTokens.length >= 2 &&
-    explanationTokens.some((token) => ALLOWED_EXPLANATION_WORDS.has(token))
+    unrecognizedExplanationTokens.length === 0
   );
 }
 
