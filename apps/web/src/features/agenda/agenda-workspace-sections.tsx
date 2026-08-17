@@ -115,7 +115,6 @@ export function previewFromPlacementFailure(error: AgendaApiError): AgendaPrevie
   return {
     ...failure.authoritativeSavedPreview,
     conflicts: failure.report.conflicts,
-    warnings: failure.report.warnings,
   };
 }
 
@@ -751,9 +750,7 @@ function AgendaReleaseCenter({
               <p className={styles.eyebrow}>Required check</p>
               <h3 id="validation-heading">Validate draft</h3>
             </div>
-            <span
-              className={validationIsCurrent ? styles.validatedBadge : styles.draftBadge}
-            >
+            <span className={validationIsCurrent ? styles.validatedBadge : styles.draftBadge}>
               {validationIsCurrent ? "Validated" : "Needs validation"}
             </span>
           </div>
@@ -2289,8 +2286,14 @@ function useScopedAgendaWorkspace({
     const token = beginOperation("validate");
     if (token === null) return;
     try {
-      const result = await currentSnapshot.api.preview(eventId);
+      const result = await currentSnapshot.api.validate({
+        eventId,
+        expectedVersion: currentSnapshot.data.draft.version,
+      });
       if (!operationIsCurrent(token)) return;
+      if (result.validatedAt === null) {
+        throw new Error("Agenda validation did not return an authoritative timestamp.");
+      }
       const nextData: AgendaWorkspaceData = {
         ...currentSnapshot.data,
         validation: {

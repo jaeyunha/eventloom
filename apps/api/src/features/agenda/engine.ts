@@ -281,6 +281,12 @@ export interface OverrideAgendaWarningInput {
   actorId: string;
 }
 
+export interface ValidateAgendaInput {
+  eventId: string;
+  expectedVersion: number;
+  actorId: string;
+}
+
 export interface PublishAgendaInput {
   eventId: string;
   expectedVersion: number;
@@ -324,11 +330,7 @@ export class DeterministicAgendaSuggestionProvider implements AgendaSuggestionPr
     }));
 
     for (const session of sessions) {
-      if (
-        existingSessionIds.has(session.id) &&
-        !request.criteria.ignoreExistingTimes &&
-        !request.criteria.ignoreExistingRooms
-      ) {
+      if (existingSessionIds.has(session.id) && !request.criteria.ignoreExistingTimes) {
         continue;
       }
       const duration = Math.max(1, Math.min(session.durationMinutes ?? 60, 240));
@@ -336,7 +338,10 @@ export class DeterministicAgendaSuggestionProvider implements AgendaSuggestionPr
 
       for (const window of windows) {
         const windowEnd = toMinutes(window.endLocal);
-        for (let startMinutes = toMinutes(window.startLocal); startMinutes + duration <= windowEnd; ) {
+        for (
+          let startMinutes = toMinutes(window.startLocal);
+          startMinutes + duration <= windowEnd;
+        ) {
           const endMinutes = startMinutes + duration;
           const startsAtLocal = `${window.date}T${formatMinutes(startMinutes)}`;
           const endsAtLocal = `${window.date}T${formatMinutes(endMinutes)}`;
@@ -770,41 +775,50 @@ export class AgendaEngine {
     return this.validationReport(state, materialized);
   }
 
-  async preview(
-    eventId: string,
-    actorId?: string,
-  ): Promise<AgendaPreview & { validatedAt: string }> {
-    return this.mutate(eventId, async (state) => {
+  async validate(
+    input: ValidateAgendaInput,
+  ): Promise<{ state: AgendaState; preview: AgendaPreview & { validatedAt: string } }> {
+    return this.mutate(input.eventId, async (state) => {
+      assertDraftVersion(state, input.expectedVersion);
+      requireNonEmpty(input.actorId, "actorId");
       const previousValidatedAt =
         state.validatedDraftVersion === state.draft.version ? state.validatedAt : undefined;
       const validatedAt = previousValidatedAt ?? this.now();
-      const result = { ...this.previewState(state), validatedAt };
+      const preview = { ...this.previewState(state), validatedAt };
+      const validatedState: AgendaState = {
+        ...state,
+        stateVersion: state.stateVersion + 1,
+        validatedDraftVersion: state.draft.version,
+        validatedAt,
+        audit: [
+          ...state.audit,
+          this.audit(input.eventId, input.actorId, "draft.validated", validatedAt, {
+            draftVersion: state.draft.version,
+          }),
+        ],
+      };
+      const result = {
+        state: previousValidatedAt === undefined ? validatedState : state,
+        preview,
+      };
       if (previousValidatedAt !== undefined) return { state, result, changed: false };
       return {
-        state: {
-          ...state,
-          stateVersion: state.stateVersion + 1,
-          validatedDraftVersion: state.draft.version,
-          validatedAt,
-          audit:
-            actorId === undefined
-              ? state.audit
-              : [
-                  ...state.audit,
-                  this.audit(eventId, actorId, "draft.validated", validatedAt, {
-                    draftVersion: state.draft.version,
-                  }),
-                ],
-        },
+        state: validatedState,
         result,
         changed: true,
       };
     });
   }
 
-  async inspectPreview(eventId: string): Promise<AgendaPreview> {
+  async preview(eventId: string): Promise<AgendaPreview> {
+    return (await this.inspectPreviewSnapshot(eventId)).preview;
+  }
+
+  async inspectPreviewSnapshot(
+    eventId: string,
+  ): Promise<{ state: AgendaState; preview: AgendaPreview }> {
     const state = await this.requireState(eventId);
-    return this.previewState(state);
+    return { state, preview: this.previewState(state) };
   }
 
   async updateDraft(input: UpdateAgendaDraftInput): Promise<AgendaDraft> {
@@ -968,6 +982,12 @@ export class AgendaEngine {
         throw new AgendaError(
           "PUBLICATION_BLOCKED",
           `Only accepted sessions can be published: ${nonAcceptedSessionId}`,
+        );
+      }
+      if (state.validatedDraftVersion !== state.draft.version || state.validatedAt === undefined) {
+        throw new AgendaError(
+          "PUBLICATION_BLOCKED",
+          "Validate the exact current agenda draft before publishing.",
         );
       }
       const current = currentRevision(state);

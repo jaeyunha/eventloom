@@ -31,8 +31,8 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   const validationResponse = page.waitForResponse((response) => {
     const request = response.request();
     return (
-      request.method() === "GET" &&
-      new URL(response.url()).pathname === `${agendaApi}/preview` &&
+      request.method() === "POST" &&
+      new URL(response.url()).pathname === `${agendaApi}/validate` &&
       response.status() === 200
     );
   });
@@ -40,7 +40,16 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   await validationResponse;
   await expect(page.getByText("Validated", { exact: true })).toBeVisible();
 
+  const persistedValidationWorkspace = page.waitForResponse((response) => {
+    const request = response.request();
+    return (
+      request.method() === "GET" &&
+      new URL(response.url()).pathname === agendaApi &&
+      response.status() === 200
+    );
+  });
   await page.reload();
+  await persistedValidationWorkspace;
   await expect(page.getByText("Validated", { exact: true })).toBeVisible();
 
   const conflictResponse = page.waitForResponse((response) => {
@@ -90,7 +99,6 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   await expect(editor).not.toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("agenda-conflict-visible.png"),
-    fullPage: true,
   });
 
   const moveResponse = page.waitForResponse((response) => {
@@ -120,8 +128,8 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   const revalidationResponse = page.waitForResponse((response) => {
     const request = response.request();
     return (
-      request.method() === "GET" &&
-      new URL(response.url()).pathname === `${agendaApi}/preview` &&
+      request.method() === "POST" &&
+      new URL(response.url()).pathname === `${agendaApi}/validate` &&
       response.status() === 200
     );
   });
@@ -137,12 +145,27 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   });
   await page.getByRole("button", { name: "Publish agenda" }).click();
   await publishResponse;
-  await expect(page.getByText("Validated", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Agenda revision published. Public projections are being refreshed."),
+  ).toBeVisible();
+  const publishedWorkspace = page.waitForResponse((response) => {
+    const request = response.request();
+    return (
+      request.method() === "GET" &&
+      new URL(response.url()).pathname === agendaApi &&
+      response.status() === 200
+    );
+  });
   await page.reload();
+  await publishedWorkspace;
   await expect(page.getByText("Validated", { exact: true })).toBeVisible();
+  await page.getByText("Validated", { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({
-    path: testInfo.outputPath("agenda-move-publish-validation-persisted.png"),
-    fullPage: true,
+    path: testInfo.outputPath("agenda-validation-persisted.png"),
+  });
+  await page.locator('[data-entry-id="local-entry-workshop"]:visible').scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("agenda-move-persisted.png"),
   });
 
   await page.getByRole("button", { name: "Configure suggestions" }).click();
@@ -173,9 +196,9 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   const firstSuggestion = page.getByRole("checkbox").first();
   await expect(firstSuggestion).toBeVisible();
   await firstSuggestion.check();
+  await firstSuggestion.scrollIntoViewIfNeeded();
   await page.screenshot({
     path: testInfo.outputPath("agenda-assisted-placement-proposed.png"),
-    fullPage: true,
   });
   const applyResponse = page.waitForResponse((response) => {
     const request = response.request();
@@ -189,19 +212,37 @@ test("persists validation, exposes rejected conflicts, moves sessions, and appli
   await page.getByRole("button", { name: "Apply selected changes" }).click();
   const applied = await applyResponse;
   const appliedBody = (await applied.json()) as {
-    data: { entries: readonly unknown[] };
+    data: { entries: readonly { id: string }[] };
   };
   expect(appliedBody.data.entries.length).toBeGreaterThan(2);
+  const assistedEntry = appliedBody.data.entries.find(
+    (entry) => entry.id !== "local-entry-keynote" && entry.id !== "local-entry-workshop",
+  );
+  expect(assistedEntry).toBeDefined();
   await expect(page.getByText(/Revision \d+ live/u)).toBeVisible();
   await expect(page.getByText("Needs validation", { exact: true })).toBeVisible();
   await expect(page.getByText("Selected advisory changes were applied")).toBeVisible();
 
+  const appliedWorkspace = page.waitForResponse((response) => {
+    const request = response.request();
+    return (
+      request.method() === "GET" &&
+      new URL(response.url()).pathname === agendaApi &&
+      response.status() === 200
+    );
+  });
   await page.reload();
-  await expect(page.locator('[data-entry-id]:visible')).toHaveCount(
+  await appliedWorkspace;
+  await expect(page.locator("[data-entry-id]:visible")).toHaveCount(
     appliedBody.data.entries.length,
   );
   await page.screenshot({
     path: testInfo.outputPath("agenda-assisted-placement-applied.png"),
-    fullPage: true,
+  });
+  const assistedCard = page.locator(`[data-entry-id="${assistedEntry?.id}"]:visible`);
+  await assistedCard.scrollIntoViewIfNeeded();
+  await expect(assistedCard).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("agenda-assisted-placement-entry-persisted.png"),
   });
 });

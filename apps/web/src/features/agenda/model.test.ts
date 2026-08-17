@@ -59,6 +59,14 @@ const data: AgendaWorkspaceData = {
   currentPublishedRevision: null,
 };
 
+const validatedData: AgendaWorkspaceData = {
+  ...data,
+  validation: {
+    draftVersion: data.draft.version,
+    validatedAt: "2026-08-08T12:01:00.000Z",
+  },
+};
+
 function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
   return {
     draftVersion: 4,
@@ -164,8 +172,9 @@ describe("agenda workspace model", () => {
   });
 
   it("requires validation of the exact current draft", () => {
-    expect(publicationReadiness(data, preview()).ready).toBe(true);
-    expect(publicationReadiness(data, preview({ draftVersion: 3 }))).toEqual({
+    expect(publicationReadiness(data, preview()).ready).toBe(false);
+    expect(publicationReadiness(validatedData, preview()).ready).toBe(true);
+    expect(publicationReadiness(validatedData, preview({ draftVersion: 3 }))).toEqual({
       ready: false,
       reasons: ["Validate the current draft before publishing."],
     });
@@ -173,7 +182,7 @@ describe("agenda workspace model", () => {
 
   it("blocks publication for hard conflicts and unoverridden warnings", () => {
     const readiness = publicationReadiness(
-      data,
+      validatedData,
       preview({
         conflicts: [
           {

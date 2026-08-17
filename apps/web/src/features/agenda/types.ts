@@ -102,7 +102,7 @@ export interface AgendaPreview {
     changed: number;
     removed: number;
   };
-  validatedAt: string;
+  validatedAt: string | null;
 }
 export interface AgendaPlacementFailureData extends AgendaCandidateDiagnostics {
   authoritativeSavedPreview: AgendaPreview;

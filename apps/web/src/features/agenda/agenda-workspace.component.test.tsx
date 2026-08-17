@@ -415,7 +415,15 @@ describe("agenda organizer workspace", () => {
         evaluated: true,
         report: {
           conflicts: [...preview.conflicts, participantConflict],
-          warnings: [],
+          warnings: [
+            {
+              id: "candidate-warning",
+              kind: "capacity",
+              entryIds: ["entry_keynote"],
+              message: "Rejected candidate warning",
+              overridden: false,
+            },
+          ],
         },
         authoritativeSavedPreview,
       },
@@ -424,7 +432,6 @@ describe("agenda organizer workspace", () => {
     expect(previewFromPlacementFailure(error)).toEqual({
       ...authoritativeSavedPreview,
       conflicts: [...preview.conflicts, participantConflict],
-      warnings: [],
     });
   });
 

@@ -336,6 +336,11 @@ describe("agenda validation", () => {
     expect(await engine.getPublishedAgenda("event-1")).toBeNull();
     const preview = await engine.preview("event-1");
     expect(preview.validation.warnings.map((warning) => warning.kind)).toEqual(["capacity"]);
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
+    });
     await expect(
       engine.publish({
         eventId: "event-1",
@@ -349,6 +354,11 @@ describe("agenda validation", () => {
       expectedVersion: draft.version,
       warningId: preview.validation.warnings[0]?.id ?? "missing",
       reason: "Overflow room is reserved and audited",
+      actorId: "organizer-1",
+    });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: overridden.version,
       actorId: "organizer-1",
     });
     const revision = await engine.publish({
@@ -414,11 +424,21 @@ describe("agenda concurrency and revisions", () => {
     const engine = createEngine();
     await initialize(engine);
 
-    await engine.preview("event-1");
-    expect(await engine.repository.load("event-1")).toMatchObject({
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+    });
+    const firstValidatedState = await engine.repository.load("event-1");
+    expect(firstValidatedState).toMatchObject({
       validatedDraftVersion: 1,
       validatedAt: "2026-08-08T18:00:00.000Z",
       draft: { version: 1 },
+    });
+    expect(firstValidatedState?.audit.at(-1)).toMatchObject({
+      actorId: "organizer-1",
+      action: "draft.validated",
+      details: { draftVersion: 1 },
     });
 
     const updated = await engine.updateDraft({
@@ -434,16 +454,58 @@ describe("agenda concurrency and revisions", () => {
       draft: { version: 2 },
     });
 
-    await engine.preview("event-1");
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: updated.version,
+        actorId: "organizer-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "PUBLICATION_BLOCKED",
+      message: "Validate the exact current agenda draft before publishing.",
+    });
+    await expect(
+      engine.validate({
+        eventId: "event-1",
+        expectedVersion: 1,
+        actorId: "organizer-1",
+      }),
+    ).rejects.toMatchObject({ code: "CONCURRENT_MODIFICATION" });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: updated.version,
+      actorId: "organizer-1",
+    });
     await engine.publish({
       eventId: "event-1",
       expectedVersion: updated.version,
       actorId: "organizer-1",
     });
-    expect(await engine.repository.load("event-1")).toMatchObject({
+    const publishedState = await engine.repository.load("event-1");
+    expect(publishedState).toMatchObject({
       validatedDraftVersion: 2,
       validatedAt: "2026-08-08T18:00:00.000Z",
       draft: { version: 2 },
+    });
+    if (publishedState === null) throw new Error("Expected published agenda state.");
+    const {
+      validatedDraftVersion: _validatedDraftVersion,
+      validatedAt: _validatedAt,
+      ...withoutValidation
+    } = publishedState;
+    await engine.repository.compareAndSwap("event-1", publishedState.stateVersion, {
+      ...withoutValidation,
+      stateVersion: publishedState.stateVersion + 1,
+    });
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: updated.version,
+        actorId: "organizer-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "PUBLICATION_BLOCKED",
+      message: "Validate the exact current agenda draft before publishing.",
     });
   });
 
@@ -457,6 +519,11 @@ describe("agenda concurrency and revisions", () => {
       entries: [
         entry("entry-2", "session-2", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
+    });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: firstDraft.version,
+      actorId: "organizer-1",
     });
     const first = await engine.publish({
       eventId: "event-1",
@@ -475,6 +542,11 @@ describe("agenda concurrency and revisions", () => {
     expect((await engine.getPublishedAgenda("event-1"))?.entries[0]?.startsAt).toBe(
       first.entries[0]?.startsAt,
     );
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: secondDraft.version,
+      actorId: "organizer-1",
+    });
     const second = await engine.publish({
       eventId: "event-1",
       expectedVersion: secondDraft.version,
@@ -506,6 +578,11 @@ describe("agenda concurrency and revisions", () => {
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
     });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+    });
     const released = await engine.publish({
       eventId: "event-1",
       expectedVersion: releasedDraft.version,
@@ -529,6 +606,11 @@ describe("agenda concurrency and revisions", () => {
         message: expect.stringContaining('active released commitment for "Opening"'),
       }),
     ]);
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: candidateDraft.version,
+      actorId: "organizer-1",
+    });
     await expect(
       engine.publish({
         eventId: "event-1",
@@ -550,6 +632,11 @@ describe("agenda concurrency and revisions", () => {
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
     });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+    });
     await engine.publish({
       eventId: "event-1",
       expectedVersion: releasedDraft.version,
@@ -565,6 +652,11 @@ describe("agenda concurrency and revisions", () => {
     });
 
     expect((await engine.preview("event-1")).releaseValidation.conflicts).toEqual([]);
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: updatedDraft.version,
+      actorId: "organizer-1",
+    });
     await expect(
       engine.publish({
         eventId: "event-1",
@@ -649,6 +741,33 @@ describe("advisory agenda suggestions", () => {
         startsAtLocal: "2026-08-10T10:00:00",
       }),
     );
+  });
+
+  it("keeps scheduled sessions fixed when room occupancy is ignored", async () => {
+    const engine = createEngine(new DeterministicAgendaSuggestionProvider());
+    await initialize(engine);
+    const draft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+
+    const run = await engine.generateSuggestion({
+      ...suggestionInput(draft.version),
+      ignoreExistingRooms: true,
+    });
+
+    expect(run.proposedEntries).toContainEqual(
+      expect.objectContaining({
+        sessionId: "session-1",
+        roomId: "room-large",
+        startsAtLocal: "2026-08-10T09:00:00",
+      }),
+    );
+    expect(run.diff.changes.find((change) => change.sessionId === "session-1")).toBeUndefined();
   });
 
   it("returns candidate diagnostics without polluting the authoritative saved preview", async () => {

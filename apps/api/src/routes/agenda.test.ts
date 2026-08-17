@@ -571,6 +571,11 @@ describe("canonical agenda draft routes", () => {
     expect(legacyWrite.status).toBe(200);
 
     const guardedApp = appFor(legacyEngine, principal(), "org-a", undefined, metadata);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const publish = await guardedApp.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -699,13 +704,36 @@ describe("canonical agenda draft routes", () => {
         conflicts: readonly unknown[];
         warnings: readonly unknown[];
         diff: { added: number; changed: number; removed: number };
-        validatedAt: string;
+        validatedAt: string | null;
       }>(preview),
     ).toMatchObject({
       draftVersion: 2,
       conflicts: [],
       warnings: [],
       diff: { added: 1, changed: 0, removed: 0 },
+      validatedAt: null,
+    });
+    const previewedWorkspace = await app.request(root);
+    expect(previewedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(previewedWorkspace),
+    ).toMatchObject({
+      draft: { version: 2 },
+      validation: null,
+    });
+    const validation = await app.request(`${root}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(validation.status).toBe(200);
+    expect(
+      await responseData<{ draftVersion: number; validatedAt: string | null }>(validation),
+    ).toMatchObject({
+      draftVersion: 2,
       validatedAt: expect.any(String),
     });
     const validatedWorkspace = await app.request(root);
@@ -754,7 +782,27 @@ describe("canonical agenda draft routes", () => {
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
 
-    const revalidated = await app.request(`${root}/preview`);
+    const unvalidatedPublish = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3 }),
+    });
+    expect(unvalidatedPublish.status).toBe(409);
+    expect(await responseError(unvalidatedPublish)).toMatchObject({
+      code: "CONFLICT",
+      message: "Validate the exact current agenda draft before publishing.",
+    });
+    const staleValidation = await app.request(`${root}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(staleValidation.status).toBe(409);
+    const revalidated = await app.request(`${root}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3 }),
+    });
     expect(revalidated.status).toBe(200);
     const published = await app.request(`${root}/publish`, {
       method: "POST",
@@ -850,6 +898,11 @@ describe("canonical agenda draft routes", () => {
       });
 
     expect((await update(1, [firstEntry])).status).toBe(200);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const firstPublish = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -868,6 +921,11 @@ describe("canonical agenda draft routes", () => {
       (await responseData<{ revision: { number: number } }>(cachedOldPublic)).revision.number,
     ).toBe(1);
 
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 3,
+      actorId: "organizer-a",
+    });
     const secondPublish = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -909,6 +967,11 @@ describe("canonical agenda draft routes", () => {
       }),
     });
     expect(draft.status).toBe(200);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const published = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -970,6 +1033,11 @@ describe("canonical agenda draft routes", () => {
     });
     expect(updated.status).toBe(200);
 
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const published = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -980,6 +1048,29 @@ describe("canonical agenda draft routes", () => {
       code: "INTEGRATION_UNAVAILABLE",
     });
     expect((await engine.getPublishedAgenda("event-a"))?.revisionNumber).toBe(1);
+    const persisted = await engine.repository.load("event-a");
+    if (persisted === null) throw new Error("Expected persisted agenda state.");
+    const {
+      validatedDraftVersion: _validatedDraftVersion,
+      validatedAt: _validatedAt,
+      ...withoutValidation
+    } = persisted;
+    await engine.repository.compareAndSwap("event-a", persisted.stateVersion, {
+      ...withoutValidation,
+      stateVersion: persisted.stateVersion + 1,
+    });
+    const blockedRetry = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(blockedRetry.status).toBe(409);
+    expect(afterPublish).toHaveBeenCalledTimes(1);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const retried = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1017,6 +1108,11 @@ describe("canonical agenda draft routes", () => {
         })
       ).status,
     ).toBe(200);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     expect(
       (
         await app.request(`${root}/publish`, {
@@ -1054,6 +1150,11 @@ describe("canonical agenda draft routes", () => {
     ).toMatchObject({
       conflicts: [],
       releaseConflicts: [{ kind: "participant", entryIds: ["entry-3", "entry-1"] }],
+    });
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 3,
+      actorId: "organizer-a",
     });
     const blocked = await app.request(`${root}/publish`, {
       method: "POST",
@@ -1244,7 +1345,7 @@ describe("canonical agenda draft routes", () => {
         title: "Deep dive",
         durationMinutes: 30,
         format: "Session",
-        speakerNames: ["participant-3"],
+        speakerNames: ["Speaker"],
         capacityRequired: 40,
         trackIds: [],
         trackNames: [],
@@ -1258,6 +1359,11 @@ describe("canonical agenda draft routes", () => {
       sessions: state.sessions.map((session) =>
         session.id === "session-1" ? { ...session, status: "ineligible" } : session,
       ),
+    });
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
     });
     const blockedPublish = await app.request(`${root}/publish`, {
       method: "POST",
@@ -1764,11 +1870,21 @@ describe("anonymous published agenda feeds", () => {
         });
 
       expect((await update(1, "room-large")).status).toBe(200);
+      await engine.validate({
+        eventId: "event-a",
+        expectedVersion: 2,
+        actorId: "organizer-a",
+      });
       expect((await publish(2)).status).toBe(200);
       expect((await publicApp.request(publicPath)).status).toBe(200);
       await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
 
       expect((await update(2, "room-small")).status).toBe(200);
+      await engine.validate({
+        eventId: "event-a",
+        expectedVersion: 3,
+        actorId: "organizer-a",
+      });
       expect((await publish(3)).status).toBe(200);
       expect(cachedResponse).toBeUndefined();
       const deletesBeforeOldPutSettles = deleteCache.mock.calls.length;

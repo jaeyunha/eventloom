@@ -298,11 +298,9 @@ export interface AgendaAuditEntry {
   details: Readonly<Record<string, string | number>>;
 }
 
-export interface AgendaState {
+interface AgendaStateCore {
   eventId: string;
   stateVersion: number;
-  validatedDraftVersion?: number;
-  validatedAt?: string;
   timeZone: string;
   minimumTravelMinutes: number;
   sessions: readonly AgendaSession[];
@@ -315,6 +313,18 @@ export interface AgendaState {
   audit: readonly AgendaAuditEntry[];
   suggestionRuns: readonly AgendaSuggestionRun[];
 }
+
+export type AgendaValidationMarker =
+  | {
+      validatedDraftVersion?: never;
+      validatedAt?: never;
+    }
+  | {
+      validatedDraftVersion: number;
+      validatedAt: string;
+    };
+
+export type AgendaState = AgendaStateCore & AgendaValidationMarker;
 
 export interface AgendaCatalog {
   sessions: readonly AgendaSession[];

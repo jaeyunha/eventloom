@@ -3340,9 +3340,9 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   }
 }
 
-interface StoredAgendaState extends AgendaState {
+type StoredAgendaState = AgendaState & {
   id: string;
-}
+};
 interface StoredAgendaEntry {
   id: string;
   eventId: string;

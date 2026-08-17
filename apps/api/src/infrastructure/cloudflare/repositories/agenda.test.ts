@@ -4,7 +4,7 @@ import { AgendaRepositoryConflictError } from "../../../features/agenda/infrastr
 import type { AgendaState } from "../../../features/agenda/types";
 import { D1AgendaRepository } from "./agenda";
 
-function statement(query: string) {
+function statement(query: string, agendaState: Record<string, unknown> | null = null) {
   const bound = { query, values: [] as unknown[] };
   return {
     bind(...values: unknown[]) {
@@ -15,6 +15,7 @@ function statement(query: string) {
       return { results: [] };
     },
     async first() {
+      if (query.includes("SELECT * FROM agenda_states")) return agendaState;
       if (query.includes("SELECT starts_at,ends_at,time_zone,schedule_dates_json FROM events")) {
         return {
           starts_at: "2026-08-13T00:00:00.000Z",
@@ -32,14 +33,14 @@ function statement(query: string) {
   };
 }
 
-function database() {
+function database(agendaState: Record<string, unknown> | null = null) {
   const statements: ReturnType<typeof statement>[] = [];
   const batch = vi.fn(async (items: readonly ReturnType<typeof statement>[]) =>
     items.map(() => ({ meta: { changes: 1 } })),
   );
   return {
     prepare(query: string) {
-      const prepared = statement(query);
+      const prepared = statement(query, agendaState);
       statements.push(prepared);
       return prepared;
     },
@@ -89,10 +90,25 @@ describe("D1 agenda repository commands", () => {
     const db = database();
     const repository = new D1AgendaRepository(db, "org-1");
     vi.spyOn(repository, "load").mockResolvedValue(null);
-    const initial = agendaState(1, "2026-08-13T12:00:00.000Z", "user-1");
+    const initial: AgendaState = {
+      ...agendaState(1, "2026-08-13T12:00:00.000Z", "user-1"),
+      validatedDraftVersion: 1,
+      validatedAt: "2026-08-13T12:05:00.000Z",
+    };
 
     await repository.compareAndSwap("event-1", null, initial);
 
+    const stateInsert = findStatement(db, "INSERT INTO agenda_states");
+    expect(stateInsert?.bound.values.slice(0, 8)).toEqual([
+      "org-1",
+      "event-1",
+      1,
+      "UTC",
+      0,
+      1,
+      initial.validatedAt,
+      null,
+    ]);
     const draftInsert = findStatement(db, "INSERT INTO agenda_drafts");
     expect(draftInsert?.bound.values.slice(0, 6)).toEqual([
       "org-1",
@@ -150,10 +166,16 @@ describe("D1 agenda repository commands", () => {
     const repository = new D1AgendaRepository(db, "org-1");
     const current = agendaState(1, "2026-08-13T12:00:00.000Z", "user-1");
     vi.spyOn(repository, "load").mockResolvedValue(current);
-    const next = agendaState(2, "2026-08-13T13:00:00.000Z", "user-2");
+    const next: AgendaState = {
+      ...agendaState(2, "2026-08-13T13:00:00.000Z", "user-2"),
+      validatedDraftVersion: 2,
+      validatedAt: "2026-08-13T13:05:00.000Z",
+    };
 
     await repository.compareAndSwap("event-1", 1, next);
 
+    const stateUpdate = findStatement(db, "UPDATE agenda_states SET");
+    expect(stateUpdate?.bound.values.slice(0, 6)).toEqual([2, "UTC", 0, 2, next.validatedAt, null]);
     const draftUpdate = findStatement(db, "UPDATE agenda_drafts SET");
     expect(draftUpdate?.bound.values.slice(0, 4)).toEqual([
       2,
@@ -167,5 +189,32 @@ describe("D1 agenda repository commands", () => {
     expect(queries).toContain("schedule_dates_json");
     const eventGuard = findStatement(db, "SELECT CASE WHEN");
     expect(eventGuard?.bound.values).toContain(next.timeZone);
+  });
+
+  it("rejects an incomplete validation marker before issuing a D1 write", async () => {
+    const db = database();
+    const repository = new D1AgendaRepository(db, "org-1");
+    const invalid = {
+      ...agendaState(1, "2026-08-13T12:00:00.000Z", "user-1"),
+      validatedDraftVersion: 1,
+    } as unknown as AgendaState;
+
+    await expect(repository.compareAndSwap("event-1", null, invalid)).rejects.toThrow(
+      "Invalid agenda validation marker.",
+    );
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it("uses a neutral D1 speaker-name fallback without exposing speaker ids", async () => {
+    const db = database({ state_version: 1 });
+    const repository = new D1AgendaRepository(db, "org-1");
+
+    await expect(repository.load("event-1")).rejects.toThrow("Agenda event-1 has no draft row");
+
+    const speakerProjection = findStatement(db, "speaker_names_json");
+    expect(speakerProjection?.bound.query).toContain(
+      "COALESCE(NULLIF(TRIM(display_name),''),'Speaker')",
+    );
+    expect(speakerProjection?.bound.query).not.toContain("COALESCE(display_name,speaker_id)");
   });
 });

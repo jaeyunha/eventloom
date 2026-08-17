@@ -159,7 +159,13 @@ export function publicationReadiness(
   if (data.draft.entries.length === 0) {
     reasons.push("Schedule at least one accepted session.");
   }
-  if (!preview || preview.draftVersion !== data.draft.version) {
+  if (
+    !preview ||
+    preview.draftVersion !== data.draft.version ||
+    preview.validatedAt === null ||
+    data.validation?.draftVersion !== data.draft.version ||
+    data.validation.validatedAt !== preview.validatedAt
+  ) {
     reasons.push("Validate the current draft before publishing.");
   } else {
     if (preview.conflicts.length > 0) {

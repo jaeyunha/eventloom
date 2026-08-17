@@ -2640,9 +2640,14 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
+  const deterministicAgendaSuggestions = new DeterministicAgendaSuggestionProvider();
   const agendaEngine = localAgendaEngine(
     eventRepository,
-    aiProviders?.agenda ?? new DeterministicAgendaSuggestionProvider(),
+    aiProviders?.agenda ?? {
+      suggest: (request) => ({
+        placements: deterministicAgendaSuggestions.suggest(request)?.placements?.slice(0, 1) ?? [],
+      }),
+    },
   );
   let sessionService!: SessionService;
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
@@ -3398,6 +3403,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           endsAtLocal: index === 0 ? "2026-09-18T10:00:00" : "2026-09-18T11:15:00",
         }),
       ),
+    });
+    await agendaEngine.validate({
+      eventId: "demo-event",
+      expectedVersion: updated.version,
+      actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
     });
     const revision = await agendaEngine.publish({
       eventId: "demo-event",

@@ -465,7 +465,8 @@ function agendaStrings(record: Record<string, unknown>, key: string): readonly s
 function agendaSessionSpeakerNames(session: unknown): readonly string[] {
   const record = agendaRecord(session);
   const names = agendaStrings(record, "speakerNames").filter((name) => name.trim().length > 0);
-  return names.length > 0 ? names : agendaStrings(record, "participantIds");
+  if (names.length > 0) return names;
+  return agendaStrings(record, "participantIds").map(() => "Speaker");
 }
 function agendaEntrySpeakerNames(entry: unknown, session: unknown): readonly string[] {
   const stored = agendaStrings(agendaRecord(entry), "speakerNames").filter(
@@ -495,6 +496,7 @@ function isAcceptedAgendaSession(session: AgendaState["sessions"][number]): bool
 function adminAgendaPreviewView(
   preview: Awaited<ReturnType<AgendaEngine["preview"]>>,
   warningOverrides: ReadonlyMap<string, string>,
+  validatedAt: string | null,
 ) {
   const unoverriddenWarningIds = new Set(preview.unoverriddenWarnings.map((warning) => warning.id));
   return {
@@ -514,7 +516,7 @@ function adminAgendaPreviewView(
       changed: preview.diff.changedEntryIds.length,
       removed: preview.diff.removedEntryIds.length,
     },
-    validatedAt: preview.validatedAt,
+    validatedAt,
   };
 }
 function adminAgendaWorkspaceView(
@@ -715,17 +717,32 @@ export function createAgendaAdminRoutes(
   });
 
   routes.get("/preview", async (context) => {
-    const principal = await organizerForEvent(context, dependencies);
+    await organizerForEvent(context, dependencies);
     const eventId = routeParam(context, "eventId");
-    const state = await dependencies.engine.repository.load(eventId);
-    if (state === null) {
-      return errorResponse(context, 404, "NOT_FOUND", "The event agenda was not found.");
-    }
-    const preview = await dependencies.engine.preview(eventId, principal.userId);
+    const { state, preview } = await dependencies.engine.inspectPreviewSnapshot(eventId);
     const warningOverrides = new Map(
       state.draft.warningOverrides.map((override) => [override.warningId, override.reason]),
     );
-    return context.json({ data: adminAgendaPreviewView(preview, warningOverrides) });
+    const validatedAt =
+      state.validatedDraftVersion === state.draft.version ? (state.validatedAt ?? null) : null;
+    return context.json({ data: adminAgendaPreviewView(preview, warningOverrides, validatedAt) });
+  });
+
+  routes.post("/validate", async (context) => {
+    const principal = await organizerForEvent(context, dependencies);
+    const eventId = routeParam(context, "eventId");
+    const input = await body(context, versionSchema);
+    const { state, preview } = await dependencies.engine.validate({
+      eventId,
+      expectedVersion: input.expectedVersion,
+      actorId: principal.userId,
+    });
+    const warningOverrides = new Map(
+      state.draft.warningOverrides.map((override) => [override.warningId, override.reason]),
+    );
+    return context.json({
+      data: adminAgendaPreviewView(preview, warningOverrides, preview.validatedAt),
+    });
   });
   routes.post("/suggestions", async (context) => {
     const principal = await organizerForEvent(context, dependencies);
@@ -822,9 +839,10 @@ export function createAgendaAdminRoutes(
       return context.json({ data });
     } catch (error) {
       if (!(error instanceof AgendaValidationError)) throw error;
-      const state = await dependencies.engine.repository.load(eventId);
-      if (state === null) throw error;
-      const savedPreview = await dependencies.engine.inspectPreview(eventId);
+      const { state, preview: savedPreview } =
+        await dependencies.engine.inspectPreviewSnapshot(eventId);
+      const validatedAt =
+        state.validatedDraftVersion === state.draft.version ? (state.validatedAt ?? null) : null;
       return context.json(
         {
           error: {
@@ -836,19 +854,23 @@ export function createAgendaAdminRoutes(
           data: {
             candidateDiagnostics: {
               evaluated: true,
-              report: error.report,
+              report: {
+                ...error.report,
+                warnings: error.report.warnings.map((warning) => ({
+                  ...warning,
+                  overridden: false,
+                })),
+              },
             },
             authoritativeSavedPreview: adminAgendaPreviewView(
-              {
-                ...savedPreview,
-                validatedAt: state.validatedAt ?? new Date().toISOString(),
-              },
+              savedPreview,
               new Map(
                 state.draft.warningOverrides.map((override) => [
                   override.warningId,
                   override.reason,
                 ]),
               ),
+              validatedAt,
             ),
           },
         },
@@ -874,19 +896,10 @@ export function createAgendaAdminRoutes(
     const input = await body(context, versionSchema);
     const eventId = routeParam(context, "eventId");
     const state = await dependencies.engine.repository.load(eventId);
-    const current =
-      state?.currentPublishedRevisionId === null || state?.currentPublishedRevisionId === undefined
-        ? null
-        : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
-          null);
     validateAgendaEntryDates(
       await agendaEventMetadata(dependencies, eventId),
       state?.draft.entries ?? [],
     );
-    if (current?.sourceDraftVersion === input.expectedVersion) {
-      await completePublicationHandoff(dependencies, eventId, current);
-      return context.json({ data: current });
-    }
     const data = await dependencies.engine.publish({
       eventId,
       actorId: principal.userId,
