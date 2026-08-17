@@ -13,12 +13,14 @@ import { createCalendarOpenSendMessage } from "../../integrations/opensend/calen
 import { OpenSendError, openSendMessageSchema } from "../../integrations/opensend/types";
 import {
   type CloudflareBindings,
+  type CloudflareFileScanPayload,
   type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
   type CloudflareOutboxTopic,
   type CloudflareReportsPayload,
   cloudflareOutboxTopics,
 } from "./bindings";
+import { D1PrivateObjectDeletionGateway } from "./private-object-cleanup";
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_BASE_RETRY_DELAY_MS = 1_000;
@@ -484,6 +486,7 @@ export interface OutboxAdapters {
   readonly "cache-invalidation"?: TopicAdapter<{ readonly eventId: string }>;
   readonly cacheInvalidation?: TopicAdapter<{ readonly eventId: string }>;
   readonly reports?: TopicAdapter<CloudflareReportsPayload>;
+  readonly "file-scan"?: TopicAdapter<CloudflareFileScanPayload>;
 }
 
 export interface OutboxConsumerBindings extends CloudflareBindings {
@@ -838,6 +841,49 @@ function parseCachePayload(value: unknown): { readonly eventId: string } {
 }
 
 const reportsPayloadKeys = new Set(["kind", "runId"]);
+const fileScanBaseKeys = new Set(["kind", "source", "tenantId", "eventId", "assetId", "objectKey"]);
+const cfpFileScanKeys = new Set([...fileScanBaseKeys, "submissionId"]);
+const privateUploadFileScanKeys = new Set([...fileScanBaseKeys, "expiresAt"]);
+
+function parseFileScanPayload(value: unknown): CloudflareFileScanPayload {
+  if (
+    !isRecord(value) ||
+    value.kind !== "private_object_delete" ||
+    (value.source !== "speaker" && value.source !== "cfp" && value.source !== "private-upload") ||
+    typeof value.tenantId !== "string" ||
+    value.tenantId.trim().length === 0 ||
+    typeof value.eventId !== "string" ||
+    value.eventId.trim().length === 0 ||
+    typeof value.assetId !== "string" ||
+    value.assetId.trim().length === 0 ||
+    typeof value.objectKey !== "string" ||
+    value.objectKey.trim().length === 0
+  ) {
+    malformedPayload("file-scan");
+  }
+  if (value.source === "speaker") {
+    if (!hasOnlyKeys(value, fileScanBaseKeys)) malformedPayload("file-scan");
+    return value as unknown as CloudflareFileScanPayload;
+  }
+  if (value.source === "cfp") {
+    if (
+      !hasOnlyKeys(value, cfpFileScanKeys) ||
+      typeof value.submissionId !== "string" ||
+      value.submissionId.trim().length === 0
+    ) {
+      malformedPayload("file-scan");
+    }
+    return value as unknown as CloudflareFileScanPayload;
+  }
+  if (
+    !hasOnlyKeys(value, privateUploadFileScanKeys) ||
+    typeof value.expiresAt !== "string" ||
+    validDate(value.expiresAt) === null
+  ) {
+    malformedPayload("file-scan");
+  }
+  return value as unknown as CloudflareFileScanPayload;
+}
 
 function parseReportsPayload(value: unknown): CloudflareReportsPayload {
   if (
@@ -971,6 +1017,7 @@ function createConfiguredAdapters(
   now: () => Date,
 ): OutboxAdapters {
   let client: OpenSendClient | undefined;
+  let privateObjectDeletion: D1PrivateObjectDeletionGateway | undefined;
   const senderAddresses: OpenSendSenderAddresses = {
     auth: bindings.AUTH_FROM_EMAIL ?? "",
     speakers: bindings.SPEAKERS_FROM_EMAIL ?? "",
@@ -1061,6 +1108,22 @@ function createConfiguredAdapters(
     calendar: sendCalendar,
     webhooks: deliverWebhook,
     "cache-invalidation": invalidateCache,
+    "file-scan": async (payload) => {
+      if (bindings.DB === undefined || bindings.PRIVATE_FILES === undefined) {
+        throw new OutboxDeliveryError(
+          "CONFIGURATION_ERROR",
+          "D1 and R2 are required for private object cleanup.",
+          { retryable: true },
+        );
+      }
+      privateObjectDeletion ??= new D1PrivateObjectDeletionGateway(
+        bindings.DB,
+        bindings.PRIVATE_FILES,
+        now,
+      );
+      await privateObjectDeletion.deleteIfAuthorized(payload);
+      return undefined;
+    },
   };
 }
 
@@ -1380,6 +1443,13 @@ export class OutboxConsumer {
       case "reports": {
         const payload = parseReportsPayload(job.payload);
         const adapter = this.#adapters.reports;
+        if (adapter === undefined) throw adapterError(job.topic);
+        await adapter(payload, context);
+        return;
+      }
+      case "file-scan": {
+        const payload = parseFileScanPayload(job.payload);
+        const adapter = this.#adapters["file-scan"];
         if (adapter === undefined) throw adapterError(job.topic);
         await adapter(payload, context);
         return;

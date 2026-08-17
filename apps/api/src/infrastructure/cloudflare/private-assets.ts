@@ -38,6 +38,7 @@ interface PrivateUploadRow {
   byte_size: number;
   state: string;
   scan_result_code: string | null;
+  expires_at: string | null;
 }
 
 interface StoredDownloadCapability {
@@ -626,7 +627,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     if (this.#database !== undefined) {
       return this.#database
         .prepare(
-          `SELECT object_key, content_type, byte_size, state, scan_result_code
+          `SELECT object_key, content_type, byte_size, state, scan_result_code, expires_at
              FROM private_uploads
             WHERE id = ?
             LIMIT 1`,
@@ -643,6 +644,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
           byte_size: stored.capability.sizeBytes,
           state: stored.state,
           scan_result_code: capabilityPayload(stored.capability),
+          expires_at: stored.capability.expiresAt,
         };
   }
 
@@ -678,8 +680,8 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
         .prepare(
           `INSERT INTO private_uploads
              (id, tenant_id, object_key, content_type, byte_size, checksum_sha256,
-              state, scan_result_code, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'not-computed', ?, ?, ?, ?)`,
+              state, scan_result_code, created_at, updated_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, 'not-computed', ?, ?, ?, ?, ?)`,
         )
         .bind(
           capabilityId,
@@ -691,6 +693,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
           payload,
           new Date().toISOString(),
           new Date().toISOString(),
+          capability.expiresAt,
         )
         .run();
       return;
@@ -713,10 +716,10 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     const result = await this.#database
       .prepare(
         `UPDATE private_uploads
-            SET state = ?, scan_result_code = ?, updated_at = ?
+            SET state = ?, scan_result_code = ?, updated_at = ?, expires_at = ?
           WHERE id = ? AND ${statePredicate}`,
       )
-      .bind(state, payload, new Date().toISOString(), capabilityId)
+      .bind(state, payload, new Date().toISOString(), capability.expiresAt, capabilityId)
       .run();
     if ((result.meta?.changes ?? 0) !== 1) {
       throw new Error("The private asset capability cannot be reauthorized.");

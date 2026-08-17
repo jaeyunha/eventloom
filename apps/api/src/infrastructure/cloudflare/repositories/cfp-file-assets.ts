@@ -160,6 +160,7 @@ export class D1CfpFileAssetGateway implements CfpFileAssetGateway {
       state: input.state,
       rejectionReason: input.state === "rejected" ? (input.rejectionReason ?? null) : null,
       finalizedAt: this.#now().toISOString(),
+      objectKey: asset.object_key,
     });
     const finalized = await this.#load(input);
     if (finalized.state !== input.state) {

@@ -58,6 +58,7 @@ const migrationNames = [
   "0042_speaker_asset_creation_idempotency.sql",
   "0043_speaker_task_replacement_baseline.sql",
   "0044_private_download_attribution.sql",
+  "0045_private_object_cleanup.sql",
 ] as const;
 
 class FakeR2Bucket {
@@ -72,6 +73,10 @@ class FakeR2Bucket {
       body: new Uint8Array(body),
       contentType: options.httpMetadata.contentType,
     });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.objects.delete(key);
   }
 
   async head(key: string) {

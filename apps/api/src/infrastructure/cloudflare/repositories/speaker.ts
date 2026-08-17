@@ -49,6 +49,7 @@ import type {
   UpdateSpeakerProfileCommand,
   UpsertOrganizerSpeakerAggregateCommand,
 } from "../../../features/speaker/types";
+import { privateObjectCleanupOutboxStatement } from "../private-object-cleanup";
 import { guard, updateGuard } from "./shared";
 
 export function portalSubmissionStatus(
@@ -2096,44 +2097,61 @@ export class D1SpeakerRepository
     if (current.state !== "pending_upload") return { ok: false, reason: "invalid_state" };
     const scope = await this.#eventScope(command.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
+    const statements: D1PreparedStatement[] = [
+      updateGuard(
+        this.#db,
+        "speaker_assets",
+        "organization_id = ? AND event_id = ? AND id = ? AND state = 'pending_upload'",
+        [scope.organizationId, command.eventId, command.assetId],
+      ),
+      updateGuard(
+        this.#db,
+        "speaker_assets",
+        "organization_id = ? AND event_id = ? AND version_family_id = ?",
+        [scope.organizationId, command.eventId, current.versionFamilyId ?? current.id],
+      ),
+      this.#db
+        .prepare(
+          `UPDATE speaker_assets
+              SET state = CASE WHEN id = ? THEN ? ELSE state END,
+                  finalized_at = CASE WHEN id = ? THEN ? ELSE finalized_at END,
+                  rejection_reason = CASE WHEN id = ? THEN ? ELSE rejection_reason END,
+                  latest_version_id = ?,
+                  current_version_id = ?
+            WHERE organization_id = ? AND event_id = ? AND version_family_id = ?`,
+        )
+        .bind(
+          command.assetId,
+          command.state,
+          command.assetId,
+          command.finalizedAt,
+          command.assetId,
+          command.rejectionReason ?? null,
+          command.latestVersionId,
+          command.currentVersionId ?? null,
+          scope.organizationId,
+          command.eventId,
+          current.versionFamilyId ?? current.id,
+        ),
+    ];
+    if (command.state === "rejected") {
+      statements.push(
+        privateObjectCleanupOutboxStatement(
+          this.#db,
+          {
+            kind: "private_object_delete",
+            source: "speaker",
+            tenantId: scope.organizationId,
+            eventId: command.eventId,
+            assetId: command.assetId,
+            objectKey: current.objectKey,
+          },
+          command.finalizedAt,
+        ) as D1PreparedStatement,
+      );
+    }
     try {
-      await this.#db.batch([
-        updateGuard(
-          this.#db,
-          "speaker_assets",
-          "organization_id = ? AND event_id = ? AND id = ? AND state = 'pending_upload'",
-          [scope.organizationId, command.eventId, command.assetId],
-        ),
-        updateGuard(
-          this.#db,
-          "speaker_assets",
-          "organization_id = ? AND event_id = ? AND version_family_id = ?",
-          [scope.organizationId, command.eventId, current.versionFamilyId ?? current.id],
-        ),
-        this.#db
-          .prepare(
-            `UPDATE speaker_assets
-                SET state = CASE WHEN id = ? THEN ? ELSE state END,
-                    finalized_at = CASE WHEN id = ? THEN ? ELSE finalized_at END,
-                    rejection_reason = CASE WHEN id = ? THEN ? ELSE rejection_reason END,
-                    latest_version_id = ?,
-                    current_version_id = ?
-              WHERE organization_id = ? AND event_id = ? AND version_family_id = ?`,
-          )
-          .bind(
-            command.assetId,
-            command.state,
-            command.assetId,
-            command.finalizedAt,
-            command.assetId,
-            command.rejectionReason ?? null,
-            command.latestVersionId,
-            command.currentVersionId ?? null,
-            scope.organizationId,
-            command.eventId,
-            current.versionFamilyId ?? current.id,
-          ),
-      ]);
+      await this.#db.batch(statements);
     } catch {
       return { ok: false, reason: "version_conflict" };
     }

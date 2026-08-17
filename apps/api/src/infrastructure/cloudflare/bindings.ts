@@ -12,6 +12,7 @@ export const cloudflareOutboxTopics = [
   "communications",
   "webhooks",
   "calendar",
+  "file-scan",
   "cache-invalidation",
   "reports",
 ] as const;
@@ -27,6 +28,34 @@ export interface CloudflareReportsPayload {
   readonly kind: "evaluation_review_export";
   readonly runId: string;
 }
+
+export type CloudflareFileScanPayload =
+  | {
+      readonly kind: "private_object_delete";
+      readonly source: "speaker";
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly assetId: string;
+      readonly objectKey: string;
+    }
+  | {
+      readonly kind: "private_object_delete";
+      readonly source: "cfp";
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly submissionId: string;
+      readonly assetId: string;
+      readonly objectKey: string;
+    }
+  | {
+      readonly kind: "private_object_delete";
+      readonly source: "private-upload";
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly assetId: string;
+      readonly objectKey: string;
+      readonly expiresAt: string;
+    };
 
 export interface CloudflareOutboxMessage {
   readonly version: 1;

@@ -51,6 +51,65 @@ const {
   otherOrganizerAccountId,
 } = speakerLifecycleIds;
 
+it("atomically records rejected speaker asset cleanup intent", async () => {
+  const fixture = createSpeakerLifecycleFixture();
+  fixtures.push(fixture);
+  const { repository } = fixture.createPhase();
+  const asset: SpeakerAsset = {
+    id: "asset-rejected-cleanup",
+    tenantId: organizationId,
+    eventId,
+    submissionId: acceptedSubmissionId,
+    participantId: acceptedParticipantId,
+    kind: "slides",
+    objectKey: "speaker/private/rejected-cleanup.pdf",
+    fileName: "rejected-cleanup.pdf",
+    contentType: "application/pdf",
+    sizeBytes: 4,
+    state: "pending_upload",
+    version: 1,
+    versionFamilyId: "asset-rejected-cleanup",
+    latestVersionId: "asset-rejected-cleanup",
+    commentThreadId: "asset-thread:rejected-cleanup",
+    createdAt: "2099-08-15T04:00:00.000Z",
+  };
+  await repository.createPendingAsset(asset);
+
+  await expect(
+    repository.finalizeAsset?.({
+      eventId,
+      assetId: asset.id,
+      state: "rejected",
+      rejectionReason: "Malware detected",
+      finalizedAt: "2099-08-15T04:01:00.000Z",
+      latestVersionId: asset.id,
+    }),
+  ).resolves.toMatchObject({ ok: true, value: { state: "rejected" } });
+
+  expect(
+    fixture.database.query<{ state: string }>(
+      `SELECT state FROM speaker_assets WHERE id = '${asset.id}'`,
+    ),
+  ).toEqual([{ state: "rejected" }]);
+  expect(
+    fixture.database.query<{ topic: string; payload_json: string }>(
+      `SELECT topic, payload_json FROM outbox_jobs WHERE topic = 'file-scan'`,
+    ),
+  ).toEqual([
+    {
+      topic: "file-scan",
+      payload_json: JSON.stringify({
+        kind: "private_object_delete",
+        source: "speaker",
+        tenantId: organizationId,
+        eventId,
+        assetId: asset.id,
+        objectKey: asset.objectKey,
+      }),
+    },
+  ]);
+});
+
 async function createAndAcceptSpeakerInvitation(input: {
   database: D1Database;
   invitationId: string;
