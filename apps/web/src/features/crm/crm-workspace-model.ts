@@ -104,7 +104,6 @@ export interface CrmEvent {
   readonly organizationId: string;
   readonly name: string;
   readonly slug?: string;
-  readonly status?: string;
   readonly startsAt?: string;
   readonly endsAt?: string;
 }

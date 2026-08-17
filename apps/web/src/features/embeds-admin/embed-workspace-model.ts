@@ -186,7 +186,6 @@ export interface EmbedEventRecord {
   readonly organizationId: string;
   readonly slug: string;
   readonly name: string;
-  readonly status: "draft" | "active" | "archived";
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
@@ -358,10 +357,6 @@ export function parseEmbedEventRecord(
   if (expectedEventId !== undefined && id !== expectedEventId) {
     throw new Error("The organizer event response does not match this event.");
   }
-  const status = value.status;
-  if (status !== "draft" && status !== "active" && status !== "archived") {
-    throw responseError("event.status is invalid.");
-  }
   if (!isRecord(value.cfpSettings) || typeof value.cfpSettings.enabled !== "boolean") {
     throw responseError("event.cfpSettings is invalid.");
   }
@@ -381,7 +376,6 @@ export function parseEmbedEventRecord(
     organizationId,
     slug: requiredResponseString(value.slug, "event.slug"),
     name: requiredResponseString(value.name, "event.name"),
-    status,
     timeZone: requiredResponseString(value.timeZone, "event.timeZone"),
     startsAt: requiredResponseString(value.startsAt, "event.startsAt"),
     endsAt: requiredResponseString(value.endsAt, "event.endsAt"),

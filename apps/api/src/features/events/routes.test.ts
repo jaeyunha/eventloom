@@ -184,6 +184,65 @@ function createInput(overrides: Partial<Parameters<EventService["createEvent"]>[
     ...overrides,
   };
 }
+
+describe("event lifecycle", () => {
+  it("creates complete event records without a separate lifecycle status", async () => {
+    const { service } = createService();
+
+    const created = await service.createEvent(actor(), createInput());
+
+    expect(created).not.toHaveProperty("status");
+    await expect(
+      service.listEvents(actor(), {
+        organizationId: "org-a",
+      }),
+    ).resolves.toEqual([created]);
+  });
+
+  it("rejects obsolete event status updates and archive routes", async () => {
+    const { service } = createService();
+    const created = await service.createEvent(actor(), createInput());
+    const app = appFor(service);
+
+    const updateResponse = await app.request(
+      `/api/admin/organizations/org-a/events/${created.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "remove-event-status-update",
+        },
+        body: JSON.stringify({
+          expectedVersion: created.version,
+          status: "active",
+        }),
+      },
+    );
+    const archiveResponse = await app.request(
+      `/api/admin/organizations/org-a/events/${created.id}/archive`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "remove-event-status-archive",
+        },
+        body: JSON.stringify({ expectedVersion: created.version }),
+      },
+    );
+    const statusListResponse = await app.request(
+      "/api/admin/organizations/org-a/events?status=active",
+    );
+    const archivedListResponse = await app.request(
+      "/api/admin/organizations/org-a/events?includeArchived=false",
+    );
+
+    expect(updateResponse.status).toBe(400);
+    expect(archiveResponse.status).toBe(404);
+    expect(statusListResponse.status).toBe(400);
+    expect(archivedListResponse.status).toBe(400);
+  });
+});
+
 function embedConfiguration(
   overrides: Partial<Event["embedConfigurations"][number]> = {},
 ): Event["embedConfigurations"][number] {
@@ -251,7 +310,7 @@ async function responseError(response: Response): Promise<{ code: string; messag
 }
 
 describe("organizer event domain", () => {
-  it("creates, lists, updates, gets, and archives only the event record", async () => {
+  it("creates, lists, updates, and gets only the event record", async () => {
     const { repository, service } = createService();
     const created = await service.createEvent(
       actor(),
@@ -288,14 +347,12 @@ describe("organizer event domain", () => {
       eventId: created.id,
       expectedVersion: created.version,
       name: "Summit 2026 revised",
-      status: "active",
       venue: "Auditorium",
       defaultCalendarSettings: { durationMinutes: 45 },
       embedConfigurations: [embedConfiguration()],
     });
     expect(updated).toMatchObject({
       name: "Summit 2026 revised",
-      status: "active",
       venue: "Auditorium",
       version: 2,
       updatedBy: "organizer-1",
@@ -316,26 +373,12 @@ describe("organizer event domain", () => {
     });
     expect(fetched).toEqual(updated);
 
-    const archived = await service.archiveEvent(actor(), {
-      organizationId: "org-a",
-      eventId: created.id,
-      expectedVersion: updated.version,
-    });
-    expect(archived).toMatchObject({ status: "archived", version: 3, updatedBy: "organizer-1" });
-    expect(
-      await service.listEvents(actor(), { organizationId: "org-a", includeArchived: false }),
-    ).toEqual([]);
-
     const audit = await service.listAudit(actor(), {
       organizationId: "org-a",
       eventId: created.id,
     });
-    expect(audit.map((entry) => entry.action)).toEqual(["created", "updated", "archived"]);
-    expect(audit.map((entry) => entry.actorId)).toEqual([
-      "organizer-1",
-      "organizer-1",
-      "organizer-1",
-    ]);
+    expect(audit.map((entry) => entry.action)).toEqual(["created", "updated"]);
+    expect(audit.map((entry) => entry.actorId)).toEqual(["organizer-1", "organizer-1"]);
   });
   it("persists, reloads, and replaces event embed configurations with versioned authorization", async () => {
     const { repository, service } = createService();
@@ -539,8 +582,7 @@ describe("organizer event routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedVersion: 2 }),
     });
-    expect(archiveResponse.status).toBe(200);
-    expect((await responseData<Event>(archiveResponse)).status).toBe("archived");
+    expect(archiveResponse.status).toBe(404);
 
     const reviewer = appFor(service, principal("org-a", "reviewer"));
     const denied = await reviewer.request(base);
@@ -641,7 +683,6 @@ function publicationService(options: { enqueueFailure?: Error } = {}) {
                 organizationId,
                 slug: "publication-event",
                 name: "Publication event",
-                status: "active",
                 timeZone: "UTC",
                 startsAt: "2026-09-18T09:00:00.000Z",
                 endsAt: "2026-09-18T17:00:00.000Z",

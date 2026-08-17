@@ -109,7 +109,6 @@ export function AdminCommandPaletteResults({
                       {result.kind === "event" ? (
                         <>
                           <span>{eventDates(result)}</span>
-                          <span className={styles.status}>{result.status}</span>
                           {result.current ? (
                             <span className={styles.current}>Current event</span>
                           ) : null}

@@ -90,7 +90,6 @@ function eventFromRows(
     organizationId: row.organizationId,
     slug: row.slug,
     name: row.name,
-    status: row.status as Event["status"],
     timeZone: row.timeZone,
     startsAt: row.startsAt,
     endsAt: row.endsAt,
@@ -207,13 +206,12 @@ export class D1EventRepository implements EventRepository {
             .bind(...this.#eventValues(event), event.id)
         : this.binding
             .prepare(
-              `UPDATE events SET slug = ?, name = ?, status = ?, time_zone = ?, starts_at = ?, ends_at = ?, schedule_dates_json = ?, venue = ?, cfp_enabled = ?, cfp_opens_at = ?, cfp_closes_at = ?, default_duration_minutes = ?, default_calendar_time_zone = ?, default_calendar_location = ?, version = ?, updated_at = ?, updated_by = ?
+              `UPDATE events SET slug = ?, name = ?, time_zone = ?, starts_at = ?, ends_at = ?, schedule_dates_json = ?, venue = ?, cfp_enabled = ?, cfp_opens_at = ?, cfp_closes_at = ?, default_duration_minutes = ?, default_calendar_time_zone = ?, default_calendar_location = ?, version = ?, updated_at = ?, updated_by = ?
                 WHERE organization_id = ? AND id = ? AND version = ?`,
             )
             .bind(
               event.slug,
               event.name,
-              event.status,
               event.timeZone,
               event.startsAt,
               event.endsAt,
@@ -458,7 +456,7 @@ export class D1EventRepository implements EventRepository {
       event.organizationId,
       event.slug,
       event.name,
-      event.status,
+      "active",
       event.timeZone,
       event.startsAt,
       event.endsAt,
@@ -501,7 +499,6 @@ export class D1EventRepository implements EventRepository {
   }
 
   #syncStatement(event: Event, audit: EventAuditEntry, condition: string): D1PreparedStatement {
-    const operation = audit.action === "archived" ? "archive" : "upsert";
     const payloadJson = JSON.stringify(event);
     return airtableSyncStatement(this.binding, {
       id: `sync:${audit.id}`,
@@ -509,7 +506,7 @@ export class D1EventRepository implements EventRepository {
       entityType: "event",
       applicationId: event.id,
       sourceVersion: event.version,
-      operation,
+      operation: "upsert",
       payloadJson,
       availableAt: audit.occurredAt,
       condition: {

@@ -1770,7 +1770,6 @@ export class SpeakerService {
             eventId: context.eventId,
             name: context.name,
             ...(context.slug === undefined ? {} : { slug: context.slug }),
-            ...(context.status === undefined ? {} : { status: context.status }),
             capabilities,
             submissionIds,
             participantIds: primaryParticipantId === undefined ? [] : [primaryParticipantId],

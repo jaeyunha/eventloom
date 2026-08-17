@@ -172,6 +172,10 @@ type SchedulerOrganizer = {
   readonly role: "owner" | "admin";
 };
 
+type LegacyRetiredEventRow = {
+  readonly id?: unknown;
+};
+
 async function listSchedulerOrganizers(
   bindings: RuntimeBindings,
 ): Promise<ReadonlyMap<string, readonly SchedulerOrganizer[]>> {
@@ -196,6 +200,21 @@ async function listSchedulerOrganizers(
     }
   }
   return byOrganization;
+}
+
+async function listLegacyRetiredEventIds(bindings: RuntimeBindings): Promise<ReadonlySet<string>> {
+  if (bindings.DB === undefined) return new Set();
+  const rows = await bindings.DB.prepare(
+    `SELECT id
+       FROM events
+      WHERE legacy_retired_at IS NOT NULL
+      ORDER BY id`,
+  ).all<LegacyRetiredEventRow>();
+  return new Set(
+    rows.results.flatMap((row) =>
+      typeof row.id === "string" && row.id.trim().length > 0 ? [row.id.trim()] : [],
+    ),
+  );
 }
 
 function escapeReminderHtml(value: string): string {
@@ -455,7 +474,10 @@ export async function runScheduledReminders(
   const communications = dependencies.communications?.service;
   const events = dependencies.events?.service;
   if (communications === undefined || events === undefined) return;
-  const organizersByOrganization = await listSchedulerOrganizers(bindings);
+  const [organizersByOrganization, legacyRetiredEventIds] = await Promise.all([
+    listSchedulerOrganizers(bindings),
+    listLegacyRetiredEventIds(bindings),
+  ]);
   for (const [organizationId, organizers] of organizersByOrganization) {
     const firstOrganizer = organizers[0];
     if (firstOrganizer === undefined) continue;
@@ -466,10 +488,12 @@ export async function runScheduledReminders(
         role: firstOrganizer.role,
         kind: "human",
       },
-      { organizationId, includeArchived: false },
+      { organizationId },
     );
     const eventIds = eventRecords
-      .filter((event) => event.organizationId === organizationId)
+      .filter(
+        (event) => event.organizationId === organizationId && !legacyRetiredEventIds.has(event.id),
+      )
       .map((event) => event.id)
       .sort((left, right) => left.localeCompare(right));
     for (const eventId of eventIds) {

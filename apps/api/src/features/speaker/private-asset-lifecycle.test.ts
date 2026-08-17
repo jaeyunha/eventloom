@@ -117,7 +117,6 @@ class LifecycleRepository implements SpeakerRepository {
       eventId: "event-1",
       name: "Event One",
       slug: "event-one",
-      status: "published",
       capabilities: [
         "profile-self",
         "submission-edit",

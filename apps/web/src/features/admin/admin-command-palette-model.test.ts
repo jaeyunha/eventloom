@@ -40,7 +40,6 @@ const eventPayload = {
       id: "event-annual-summit",
       name: "Annual Program Summit",
       slug: "annual/summit",
-      status: "active",
       startsAt: "2026-09-17T16:00:00.000Z",
       endsAt: "2026-09-18T00:00:00.000Z",
     },
@@ -48,7 +47,6 @@ const eventPayload = {
       id: "event-design-week",
       name: "Design Systems Week",
       slug: "design-week",
-      status: "draft",
       startsAt: "2026-10-08T16:00:00.000Z",
       endsAt: "2026-10-10T00:00:00.000Z",
     },
@@ -80,23 +78,22 @@ describe("admin command palette model", () => {
       group: "Events",
       href: "/admin/organizations/ai-engineer/events/event-annual-summit",
       kind: "event",
-      status: "active",
     });
     expect(results.some((result) => result.href === "/admin/events")).toBe(false);
     expect(results[0]?.href).not.toContain("annual%2Fsummit");
   });
 
-  it("filters across event names, statuses, and page keywords", () => {
+  it("filters across event names and page keywords", () => {
     // Given: event and page destinations are available.
     const events = parseAdminCommandEventsResponse(eventPayload);
 
     // When: the organizer searches each supported field.
-    const draftResults = buildAdminCommandResults({
+    const eventResults = buildAdminCommandResults({
       currentEventId: null,
       events,
       organizationId: "ai-engineer",
       pages,
-      query: "draft",
+      query: "design",
     });
     const peopleResults = buildAdminCommandResults({
       currentEventId: null,
@@ -107,7 +104,7 @@ describe("admin command palette model", () => {
     });
 
     // Then: the matching event and page are returned independently.
-    expect(draftResults.map((result) => result.label)).toEqual(["Design Systems Week"]);
+    expect(eventResults.map((result) => result.label)).toEqual(["Design Systems Week"]);
     expect(peopleResults.map((result) => result.label)).toEqual(["Members"]);
   });
 
@@ -120,7 +117,6 @@ describe("admin command palette model", () => {
           id: "event-live",
           name: "Live program",
           slug: "live-program",
-          status: "active",
         },
       ],
     };
