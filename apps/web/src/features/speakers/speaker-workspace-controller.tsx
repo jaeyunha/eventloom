@@ -2469,7 +2469,7 @@ function useSpeakerWorkspaceController({
     }
     const participantId = selectedSpeaker.participantId;
     const expectedVersion = selectedSpeaker.version;
-    const supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
+    let supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
     let expectedLatestVersion: number | undefined;
     if (supersedesAssetId !== undefined) {
       const assets = await api.getAssets(participantId);
@@ -2508,6 +2508,7 @@ function useSpeakerWorkspaceController({
         });
         return;
       }
+      supersedesAssetId = predecessor.assetId;
       expectedLatestVersion = predecessorVersion;
     }
     dispatchProfileHeadshotDetails({ type: "headshot-upload-started", fileName: file.name });

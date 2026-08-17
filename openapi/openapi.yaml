@@ -2733,7 +2733,7 @@ paths:
           in: header
           required: false
           description: Required for successor uploads; omitted for initial family creation.
-          schema: { type: string, minLength: 8, maxLength: 128 }
+          schema: { type: string, minLength: 1, maxLength: 300 }
       requestBody:
         required: true
         content:
@@ -2750,6 +2750,43 @@ paths:
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/AuthenticationError" }
         "403": { $ref: "#/components/responses/AuthorizationError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+
+  /api/speaker/events/{eventId}/organizer/profiles/{participantId}/headshot:
+    parameters:
+      - $ref: "#/components/parameters/EventId"
+      - name: participantId
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Identifier" }
+    post:
+      tags: [SpeakerOrganizer]
+      operationId: authorizeOrganizerHeadshotUpload
+      summary: Authorize an organizer headshot upload
+      description: Upload authorization requires an Idempotency-Key when superseding an existing asset.
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Required for successor uploads; omitted for initial family creation.
+          schema: { type: string, minLength: 1, maxLength: 300 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UploadAuthorization" }
+      responses:
+        "201":
+          description: Organizer-authorized upload capability and sanitized asset metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadAuthorizationResponse" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
         "409": { $ref: "#/components/responses/ConflictError" }
 
   /api/speaker/events/{eventId}/assets:

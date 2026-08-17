@@ -1481,6 +1481,17 @@ export class LocalSpeakerRepository
         version: command.returnTask.expectedVersion + 1,
         updatedAt: command.returnTask.transition?.occurredAt ?? command.reviewedAt,
       };
+      if (command.returnTask.transition !== undefined) {
+        const transitions = this.#taskTransitions.get(command.eventId) ?? [];
+        if (
+          !transitions.some((transition) => transition.id === command.returnTask?.transition?.id)
+        ) {
+          this.#taskTransitions.set(command.eventId, [
+            ...transitions,
+            clone(command.returnTask.transition),
+          ]);
+        }
+      }
     }
     return { ok: true, value: clone(reviewed) };
   }
