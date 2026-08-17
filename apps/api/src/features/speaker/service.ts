@@ -2256,15 +2256,10 @@ export class SpeakerService {
     const byParticipant = new Map<string, SpeakerRosterEntry>();
     for (const entry of stored) {
       const existing = byParticipant.get(entry.participantId);
-      const canonicalRosterId = `roster:${eventId}:${canonicalSubmissionId}:${entry.participantId}`;
-      const entryIsCanonicalRoster = entry.id === canonicalRosterId;
-      const existingIsCanonicalRoster = existing?.id === canonicalRosterId;
       if (
         existing === undefined ||
-        (entryIsCanonicalRoster && !existingIsCanonicalRoster) ||
-        (entryIsCanonicalRoster === existingIsCanonicalRoster &&
-          (entry.version > existing.version ||
-            (entry.version === existing.version && entry.updatedAt > existing.updatedAt)))
+        entry.version > existing.version ||
+        (entry.version === existing.version && entry.updatedAt > existing.updatedAt)
       ) {
         byParticipant.set(entry.participantId, entry);
       }
@@ -5571,28 +5566,7 @@ export class SpeakerService {
       throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The co-speaker email is invalid.");
     }
     const displayName = normalizeUserText(input.displayName, "The co-speaker name", 200);
-    let participantId = input.participantId?.trim();
-    if (participantId === undefined || participantId.length === 0) {
-      if (this.repository.resolveEventParticipant === undefined) {
-        participantId = `participant:${this.generateId()}`;
-      } else {
-        const resolution = await this.resolveEventParticipant({
-          organizationId: target.scope.tenantId ?? input.eventId,
-          eventId: input.eventId,
-          sourceType: "manual",
-          sourceId: `roster:${target.canonicalSubmissionId}:${email}`,
-          normalizedEmail: email,
-        });
-        if (resolution.state === "ambiguous") {
-          throw new SpeakerServiceError(
-            "VERSION_CONFLICT",
-            409,
-            "That email matches multiple speaker identities. Resolve the identity before inviting.",
-          );
-        }
-        participantId = resolution.participantId;
-      }
-    }
+    const participantId = input.participantId?.trim() || `participant:${this.generateId()}`;
     if (
       current.members.some(
         (member) =>
