@@ -26,6 +26,24 @@ export interface OrganizerWorkspaceRecords {
   readonly decisions: readonly EvaluationDecision[];
 }
 
+export interface EvaluationReviewWriteAuthority {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly roundId: string;
+  readonly assignmentId: string;
+  readonly submissionId: string;
+  readonly reviewerId: string;
+  readonly expectedAssignmentVersion: number;
+}
+
+export interface WriteEvaluationReview {
+  readonly authority: EvaluationReviewWriteAuthority;
+  readonly review: EvaluationReview;
+  readonly expectedReviewVersion: number | null;
+  readonly assignmentUpdate?: EvaluationAssignment | undefined;
+}
+
 export interface SubmissionReviewLookup {
   readonly eventId: string;
   readonly submissionId: string;
@@ -91,6 +109,7 @@ export interface EvaluationRepository extends EvaluationProjectionReader {
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution>;
+  writeReview(input: WriteEvaluationReview): Promise<void>;
   listOrganizerExportRecords(
     tenantId: string,
     eventId: string,
@@ -193,6 +212,10 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   readonly #suggestions = new Map<string, EvaluationSuggestion>();
   readonly #conflicts = new Map<string, EvaluationConflictDeclaration>();
   readonly #decisions = new Map<string, EvaluationDecision>();
+
+  constructor(
+    private readonly submissionSource?: Pick<SubmissionReviewSource, "getSubmissionForReview">,
+  ) {}
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     const plan = this.#plans.get(storageKey(tenantId, planId));
@@ -643,6 +666,75 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     const key = storageKey(review.tenantId, review.assignmentId);
     assertVersion(this.#reviews.get(key)?.version ?? null, expectedVersion, "Review");
     this.#reviews.set(key, clone(review));
+  }
+
+  async writeReview(input: WriteEvaluationReview): Promise<void> {
+    const { authority, review, assignmentUpdate } = input;
+    if (
+      review.tenantId !== authority.tenantId ||
+      review.eventId !== authority.eventId ||
+      review.planId !== authority.planId ||
+      review.roundId !== authority.roundId ||
+      review.assignmentId !== authority.assignmentId ||
+      review.submissionId !== authority.submissionId ||
+      review.reviewerId !== authority.reviewerId
+    ) {
+      throw conflict("Review write targeted another assignment.");
+    }
+    const assignmentKey = storageKey(authority.tenantId, authority.assignmentId);
+    const currentAssignment = this.#assignments.get(assignmentKey);
+    if (
+      currentAssignment === undefined ||
+      currentAssignment.eventId !== authority.eventId ||
+      currentAssignment.planId !== authority.planId ||
+      currentAssignment.roundId !== authority.roundId ||
+      currentAssignment.submissionId !== authority.submissionId ||
+      currentAssignment.reviewerId !== authority.reviewerId ||
+      currentAssignment.version !== authority.expectedAssignmentVersion ||
+      !["assigned", "in_progress"].includes(currentAssignment.status)
+    ) {
+      throw conflict("Assignment changed since it was loaded.");
+    }
+    if (this.#conflicts.has(assignmentKey)) {
+      throw conflict("A conflict has already been declared for this assignment.");
+    }
+    if (
+      this.#decisions.has(decisionKey(authority.tenantId, authority.planId, authority.submissionId))
+    ) {
+      throw conflict("A decision already exists for this submission.");
+    }
+    if (this.submissionSource !== undefined) {
+      const submission = await this.submissionSource.getSubmissionForReview(
+        authority.tenantId,
+        authority.eventId,
+        authority.submissionId,
+      );
+      if (submission?.status !== "submitted") {
+        throw conflict("This submission is no longer available for review.");
+      }
+    }
+    assertVersion(
+      this.#reviews.get(storageKey(review.tenantId, review.assignmentId))?.version ?? null,
+      input.expectedReviewVersion,
+      "Review",
+    );
+    if (assignmentUpdate !== undefined) {
+      if (
+        assignmentUpdate.id !== authority.assignmentId ||
+        assignmentUpdate.tenantId !== authority.tenantId ||
+        assignmentUpdate.eventId !== authority.eventId ||
+        assignmentUpdate.planId !== authority.planId ||
+        assignmentUpdate.roundId !== authority.roundId ||
+        assignmentUpdate.submissionId !== authority.submissionId ||
+        assignmentUpdate.reviewerId !== authority.reviewerId ||
+        assignmentUpdate.version !== authority.expectedAssignmentVersion + 1
+      ) {
+        throw conflict("Assignment transition targeted another revision.");
+      }
+    }
+    if (assignmentUpdate !== undefined)
+      this.#assignments.set(assignmentKey, clone(assignmentUpdate));
+    this.#reviews.set(storageKey(review.tenantId, review.assignmentId), clone(review));
   }
   async saveReviewDraft(
     assignment: EvaluationAssignment,

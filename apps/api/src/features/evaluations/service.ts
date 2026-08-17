@@ -14,7 +14,11 @@ import type {
   OrganizerWorkspaceRecords,
   SubmissionReviewSource,
 } from "./repository";
-import { isMeaningfulSuggestionRationale, scoreableRubricCriteria } from "./suggestion-validation";
+import {
+  isMeaningfulSuggestionRationale,
+  parseSubmissionExcerptReference,
+  scoreableRubricCriteria,
+} from "./suggestion-validation";
 import type {
   EvaluationActor,
   EvaluationAggregate,
@@ -1102,7 +1106,7 @@ export class EvaluationService {
             (submission) =>
               submission.tenantId === actor.tenantId &&
               submission.eventId === plan.eventId &&
-              isReviewableSubmission(submission),
+              isOrganizerWorkspaceSubmission(submission),
           )
           .map((submission) => [submission.id, submission] as const),
       ).values(),
@@ -2417,21 +2421,30 @@ export class EvaluationService {
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };
-    if (assignment.status === "assigned") {
-      await this.#repository.saveReviewDraft(
-        {
-          ...assignment,
-          status: "in_progress",
-          version: assignment.version + 1,
-          updatedAt: now,
-        },
-        assignment.version,
-        review,
-        current?.version ?? null,
-      );
-    } else {
-      await this.#repository.putReview(review, current?.version ?? null);
-    }
+    const assignmentUpdate =
+      assignment.status === "assigned"
+        ? {
+            ...assignment,
+            status: "in_progress" as const,
+            version: assignment.version + 1,
+            updatedAt: now,
+          }
+        : undefined;
+    await this.#repository.writeReview({
+      authority: {
+        tenantId: assignment.tenantId,
+        eventId: assignment.eventId,
+        planId: assignment.planId,
+        roundId: assignment.roundId,
+        assignmentId: assignment.id,
+        submissionId: assignment.submissionId,
+        reviewerId: assignment.reviewerId,
+        expectedAssignmentVersion: assignment.version,
+      },
+      review,
+      expectedReviewVersion: current?.version ?? null,
+      assignmentUpdate,
+    });
     return review;
   }
 
@@ -2481,7 +2494,20 @@ export class EvaluationService {
       version: current.version + 1,
       updatedAt: now,
     };
-    await this.#repository.putReview(review, current.version);
+    await this.#repository.writeReview({
+      authority: {
+        tenantId: assignment.tenantId,
+        eventId: assignment.eventId,
+        planId: assignment.planId,
+        roundId: assignment.roundId,
+        assignmentId: assignment.id,
+        submissionId: assignment.submissionId,
+        reviewerId: assignment.reviewerId,
+        expectedAssignmentVersion: assignment.version,
+      },
+      review,
+      expectedReviewVersion: current.version,
+    });
     return review;
   }
   async generateAiSuggestions(
@@ -2929,6 +2955,7 @@ export class EvaluationService {
     const plan = await this.#getPlan(actor.tenantId, assignment.planId);
     const round = findRound(plan, assignment.roundId);
     assertPlanIsWritable(plan, round, this.#clock());
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     if (current === null) {
       throw invalidInput("Create a review draft before submitting it.");
     }
@@ -2960,12 +2987,21 @@ export class EvaluationService {
       version: assignment.version + 1,
       updatedAt: now,
     };
-    await this.#repository.submitReview(
-      submittedAssignment,
-      assignment.version,
+    await this.#repository.writeReview({
+      authority: {
+        tenantId: assignment.tenantId,
+        eventId: assignment.eventId,
+        planId: assignment.planId,
+        roundId: assignment.roundId,
+        assignmentId: assignment.id,
+        submissionId: assignment.submissionId,
+        reviewerId: assignment.reviewerId,
+        expectedAssignmentVersion: assignment.version,
+      },
       review,
-      current.version,
-    );
+      expectedReviewVersion: current.version,
+      assignmentUpdate: submittedAssignment,
+    });
     return review;
   }
 
@@ -3682,17 +3718,29 @@ export class EvaluationService {
       ) {
         throw invalidInput("Every AI candidate must include a submission-specific rationale.");
       }
-      const evidence = candidate.evidence.map((citation) => {
+      const sourceReferences = candidate.provenance?.sourceReferences;
+      if (
+        !Array.isArray(sourceReferences) ||
+        sourceReferences.length !== candidate.evidence.length ||
+        sourceReferences.some((reference) => typeof reference !== "string")
+      ) {
+        throw invalidInput("Every AI candidate must include an exact submission excerpt.");
+      }
+      const parsedReferences = sourceReferences.map((reference) =>
+        parseSubmissionExcerptReference(reference, input.submission),
+      );
+      const exactReferences = parsedReferences.filter(
+        (reference): reference is NonNullable<typeof reference> => reference !== null,
+      );
+      if (exactReferences.length !== parsedReferences.length) {
+        throw invalidInput("Every AI candidate must include an exact submission excerpt.");
+      }
+      const evidence = candidate.evidence.map((citation, index) => {
         if (typeof citation !== "string") {
           throw invalidInput("Every AI candidate must include a submission-specific rationale.");
         }
         const rationale = requireText(citation, "AI evidence", 2_000);
-        if (
-          !isMeaningfulSuggestionRationale(
-            rationale,
-            `${input.submission.title} ${input.submission.abstract}`,
-          )
-        ) {
+        if (!isMeaningfulSuggestionRationale(rationale, exactReferences[index]?.excerpt ?? "")) {
           throw invalidInput("Every AI candidate must include a submission-specific rationale.");
         }
         return rationale;
@@ -3701,7 +3749,7 @@ export class EvaluationService {
         provider: candidate.provenance?.provider ?? "injected",
         model: candidate.provenance?.model ?? "unspecified",
         generatedAt: candidate.provenance?.generatedAt ?? this.#clock().toISOString(),
-        sourceReferences: candidate.provenance?.sourceReferences ?? evidence,
+        sourceReferences,
         ...(candidate.provenance?.promptVersion === undefined
           ? {}
           : { promptVersion: candidate.provenance.promptVersion }),

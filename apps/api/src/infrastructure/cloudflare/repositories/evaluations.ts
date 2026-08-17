@@ -5,6 +5,7 @@ import type {
   EvaluationRepository,
   OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
+  WriteEvaluationReview,
 } from "../../../features/evaluations/repository";
 import type {
   EvaluationAssignment,
@@ -127,6 +128,55 @@ function suggestionAssignmentGuard(
       suggestion.eventId,
       suggestion.planId,
       suggestion.submissionId,
+    ],
+  );
+}
+
+function reviewWriteAuthorityGuard(
+  database: D1Database,
+  input: WriteEvaluationReview,
+): D1PreparedStatement {
+  const { authority } = input;
+  return guard(
+    database,
+    `EXISTS (
+      SELECT 1 FROM review_assignments
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND round_id = ?
+        AND submission_id = ? AND id = ? AND reviewer_id = ? AND version = ?
+        AND status IN ('assigned', 'in_progress')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM evaluation_conflicts
+      WHERE organization_id = ? AND event_id = ? AND assignment_id = ?
+    )
+    AND EXISTS (
+      SELECT 1 FROM submissions
+      WHERE organization_id = ? AND event_id = ? AND id = ?
+        AND status = 'submitted'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM evaluation_decisions
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ?
+    )`,
+    [
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      authority.roundId,
+      authority.submissionId,
+      authority.assignmentId,
+      authority.reviewerId,
+      authority.expectedAssignmentVersion,
+      authority.tenantId,
+      authority.eventId,
+      authority.assignmentId,
+      authority.tenantId,
+      authority.eventId,
+      authority.submissionId,
+      authority.tenantId,
+      authority.eventId,
+      authority.planId,
+      authority.submissionId,
     ],
   );
 }
@@ -1145,6 +1195,46 @@ export class D1EvaluationRepository implements EvaluationRepository {
       this.database,
       this.reviewStatements(review, expectedVersion),
       "Review changed since it was loaded.",
+    );
+  }
+
+  async writeReview(input: WriteEvaluationReview) {
+    const { authority, review, assignmentUpdate } = input;
+    if (
+      review.tenantId !== authority.tenantId ||
+      review.eventId !== authority.eventId ||
+      review.planId !== authority.planId ||
+      review.roundId !== authority.roundId ||
+      review.assignmentId !== authority.assignmentId ||
+      review.submissionId !== authority.submissionId ||
+      review.reviewerId !== authority.reviewerId
+    ) {
+      writeConflict("Review write targeted another assignment.");
+    }
+    if (assignmentUpdate !== undefined) {
+      if (
+        assignmentUpdate.id !== authority.assignmentId ||
+        assignmentUpdate.tenantId !== authority.tenantId ||
+        assignmentUpdate.eventId !== authority.eventId ||
+        assignmentUpdate.planId !== authority.planId ||
+        assignmentUpdate.roundId !== authority.roundId ||
+        assignmentUpdate.submissionId !== authority.submissionId ||
+        assignmentUpdate.reviewerId !== authority.reviewerId ||
+        assignmentUpdate.version !== authority.expectedAssignmentVersion + 1
+      ) {
+        writeConflict("Assignment transition targeted another revision.");
+      }
+    }
+    await atomic(
+      this.database,
+      [
+        reviewWriteAuthorityGuard(this.database, input),
+        ...this.reviewStatements(review, input.expectedReviewVersion),
+        ...(assignmentUpdate === undefined
+          ? []
+          : [updateAssignment(this.database, assignmentUpdate)]),
+      ],
+      "Assignment, submission, conflict, decision, or review state changed.",
     );
   }
 

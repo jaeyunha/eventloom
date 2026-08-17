@@ -1,4 +1,4 @@
-import type { ReviewRound, RubricCriterion } from "./types";
+import type { ReviewRound, RubricCriterion, VisibleSubmissionReviewMaterial } from "./types";
 
 const GENERIC_RATIONALES = new Set([
   "bad",
@@ -224,6 +224,23 @@ export function canonicalSubmissionExcerpt(value: string, source: string): strin
     (token) => !PROMPT_CONTROL_WORDS.has(token) && !GROUNDING_STOP_WORDS.has(token),
   );
   return controlWords.length < 2 || topicalWords.length >= 2 ? value : null;
+}
+
+export interface SubmissionExcerptReference {
+  readonly source: "title" | "abstract";
+  readonly excerpt: string;
+}
+
+export function parseSubmissionExcerptReference(
+  reference: string,
+  submission: Readonly<Pick<VisibleSubmissionReviewMaterial, "title" | "abstract">>,
+): SubmissionExcerptReference | null {
+  const separator = reference.indexOf(":");
+  if (separator < 1) return null;
+  const source = reference.slice(0, separator);
+  if (source !== "title" && source !== "abstract") return null;
+  const excerpt = canonicalSubmissionExcerpt(reference.slice(separator + 1), submission[source]);
+  return excerpt === null ? null : { source, excerpt };
 }
 
 function significantTokens(value: string): ReadonlySet<string> {

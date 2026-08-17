@@ -6,6 +6,7 @@ import {
   type OrganizerWorkspaceRecords,
   type ReviewerWorkspaceRecords,
   type SubmissionReviewLookup,
+  type WriteEvaluationReview,
 } from "./repository";
 import {
   type EvaluationDecisionProjectionInput,
@@ -93,6 +94,17 @@ class GatedSuggestionRepository extends InMemoryEvaluationRepository {
     this.resolutionEntered?.();
     if (this.resolutionGate !== null) await this.resolutionGate;
     return super.resolveSuggestion(...args);
+  }
+}
+
+class GatedReviewWriteRepository extends InMemoryEvaluationRepository {
+  writeGate: Promise<void> | null = null;
+  writeEntered: (() => void) | null = null;
+
+  override async writeReview(input: WriteEvaluationReview): Promise<void> {
+    this.writeEntered?.();
+    if (this.writeGate !== null) await this.writeGate;
+    return super.writeReview(input);
   }
 }
 
@@ -309,11 +321,17 @@ function validAiCandidates(): readonly [
       criterionId: "quality",
       value: 4,
       evidence: ["The practical material gives the audience a concrete outcome."],
+      provenance: {
+        sourceReferences: ["abstract:Practical material for the audience."],
+      },
     },
     {
       criterionId: "relevance",
       value: 8,
       evidence: ["The practical audience focus directly supports program relevance."],
+      provenance: {
+        sourceReferences: ["abstract:Practical material for the audience."],
+      },
     },
   ];
 }
@@ -335,13 +353,13 @@ async function fixture(
   } = {},
 ) {
   let currentTime = new Date(nowIso);
-  const repository = options.repository ?? new InMemoryEvaluationRepository();
   const submissions =
     options.submissions ??
     new InMemorySubmissionReviewSource([
       options.submissionMaterial ?? submission,
       { ...submission, id: "submission-2", title: "Another session" },
     ]);
+  const repository = options.repository ?? new InMemoryEvaluationRepository(submissions);
   const service = new EvaluationService(
     repository,
     submissions,
@@ -2037,6 +2055,107 @@ describe("review drafts, AI assistance, and aggregates", () => {
       submitted,
     );
   });
+
+  it("rejects an autosave when a conflict commits before the guarded review write", async () => {
+    const submissions = new InMemorySubmissionReviewSource([submission]);
+    const repository = new GatedReviewWriteRepository(submissions);
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      repository,
+      submissions,
+    });
+    const assignment = await assignOne(service);
+    let releaseWrite!: () => void;
+    const writeEntered = new Promise<void>((resolve) => {
+      repository.writeEntered = resolve;
+      repository.writeGate = new Promise<void>((resolveGate) => {
+        releaseWrite = resolveGate;
+      });
+    });
+    const save = service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+
+    await writeEntered;
+    await service.declareConflict(reviewer("reviewer-1"), assignment.id, "Cannot review fairly.");
+    releaseWrite();
+
+    await expectEvaluationError(save, "EVALUATION_CONFLICT");
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toBeNull();
+  });
+
+  it("rejects AI confirmation when a conflict commits before the guarded review write", async () => {
+    const submissions = new InMemorySubmissionReviewSource([submission]);
+    const repository = new GatedReviewWriteRepository(submissions);
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      repository,
+      submissions,
+    });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "ai", evidence: ["AI evidence."] }],
+    });
+    let releaseWrite!: () => void;
+    const writeEntered = new Promise<void>((resolve) => {
+      repository.writeEntered = resolve;
+      repository.writeGate = new Promise<void>((resolveGate) => {
+        releaseWrite = resolveGate;
+      });
+    });
+    const confirm = service.confirmAiScores(
+      reviewer("reviewer-1"),
+      assignment.id,
+      ["quality"],
+      draft.version,
+    );
+
+    await writeEntered;
+    await service.declareConflict(reviewer("reviewer-1"), assignment.id, "Cannot review fairly.");
+    releaseWrite();
+
+    await expectEvaluationError(confirm, "EVALUATION_CONFLICT");
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toMatchObject({
+      version: draft.version,
+      scores: { quality: { origin: "ai" } },
+    });
+  });
+
+  it("rejects submission when withdrawal commits before the guarded review write", async () => {
+    const submissions = new InMemorySubmissionReviewSource([submission]);
+    const repository = new GatedReviewWriteRepository(submissions);
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      repository,
+      submissions,
+    });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+    });
+    let releaseWrite!: () => void;
+    const writeEntered = new Promise<void>((resolve) => {
+      repository.writeEntered = resolve;
+      repository.writeGate = new Promise<void>((resolveGate) => {
+        releaseWrite = resolveGate;
+      });
+    });
+    const submit = service.submitReview(reviewer("reviewer-1"), assignment.id, draft.version);
+
+    await writeEntered;
+    submissions.set({ ...submission, status: "withdrawn", version: (submission.version ?? 0) + 1 });
+    releaseWrite();
+
+    await expectEvaluationError(submit, "EVALUATION_CONFLICT");
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toMatchObject({
+      version: draft.version,
+      submittedAt: null,
+    });
+  });
+
   it("does not expose assignments persisted for another event", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 1 });
     const assignment = await assignOne(service);
@@ -3065,6 +3184,23 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([suggestion]);
   });
 
+  it("rejects provider candidates without exact source references", async () => {
+    const { provenance: _ignored, ...withoutCitation } = validAiCandidates()[0];
+    await expectProviderCandidatesRejected([withoutCitation, validAiCandidates()[1]]);
+  });
+
+  it("rejects case-modified provider excerpts at the service boundary", async () => {
+    await expectProviderCandidatesRejected([
+      {
+        ...validAiCandidates()[0],
+        provenance: {
+          sourceReferences: ["abstract:practical material for the audience."],
+        },
+      },
+      validAiCandidates()[1],
+    ]);
+  });
+
   it("rejects a one-word rationale without persisting a suggestion", async () => {
     await expectProviderCandidatesRejected([
       { ...validAiCandidates()[0], evidence: ["Excellent"] },
@@ -3112,11 +3248,17 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
           criterionId: "quality",
           value: 4,
           evidence: ["回滚清单和故障演练提供了具体的部署可靠性依据。"],
+          provenance: {
+            sourceReferences: ["abstract:通过回滚清单和故障演练帮助团队提高部署可靠性。"],
+          },
         },
         {
           criterionId: "relevance",
           value: 8,
           evidence: ["部署可靠性和故障演练直接对应活动主题。"],
+          provenance: {
+            sourceReferences: ["abstract:通过回滚清单和故障演练帮助团队提高部署可靠性。"],
+          },
         },
       ],
     },
@@ -3132,11 +3274,21 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
           criterionId: "quality",
           value: 4,
           evidence: ["รายการตรวจสอบและการฝึกซ้อมอธิบายแนวทางที่ทีมสามารถนำไปใช้ได้จริง"],
+          provenance: {
+            sourceReferences: [
+              "abstract:รายการตรวจสอบการย้อนกลับและการฝึกซ้อมช่วยให้ทีมปรับใช้ได้อย่างน่าเชื่อถือ",
+            ],
+          },
         },
         {
           criterionId: "relevance",
           value: 8,
-          evidence: ["การปรับใช้ที่น่าเชื่อถือและการย้อนกลับสอดคล้องกับหัวข้องานโดยตรง"],
+          evidence: ["รายการตรวจสอบและการฝึกซ้อมอธิบายแนวทางที่ทีมสามารถนำไปใช้ได้จริง"],
+          provenance: {
+            sourceReferences: [
+              "abstract:รายการตรวจสอบการย้อนกลับและการฝึกซ้อมช่วยให้ทีมปรับใช้ได้อย่างน่าเชื่อถือ",
+            ],
+          },
         },
       ],
     },
@@ -3224,7 +3376,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
               provider: "test-provider",
               model: "test-model",
               generatedAt: nowIso,
-              sourceReferences: ["abstract"],
+              sourceReferences: ["abstract:Practical material for the audience."],
             },
           },
           {
@@ -3235,7 +3387,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
               provider: "test-provider",
               model: "test-model",
               generatedAt: nowIso,
-              sourceReferences: ["abstract"],
+              sourceReferences: ["abstract:Practical material for the audience."],
             },
           },
         ],

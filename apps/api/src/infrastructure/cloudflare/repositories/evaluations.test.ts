@@ -464,6 +464,38 @@ describe("D1EvaluationRepository compound CAS", () => {
     expect(db.batches[0]?.[0]?.values.slice(0, 4)).toEqual(["org-1", "event-1", "assignment-1", 1]);
   });
 
+  it("batches the compound review authority guard before every review write", async () => {
+    const db = database();
+    await new D1EvaluationRepository(db as unknown as D1Database).writeReview({
+      authority: {
+        tenantId: assignment.tenantId,
+        eventId: assignment.eventId,
+        planId: assignment.planId,
+        roundId: assignment.roundId,
+        assignmentId: assignment.id,
+        submissionId: assignment.submissionId,
+        reviewerId: assignment.reviewerId,
+        expectedAssignmentVersion: assignment.version,
+      },
+      review,
+      expectedReviewVersion: null,
+      assignmentUpdate: {
+        ...assignment,
+        status: "in_progress",
+        version: assignment.version + 1,
+      },
+    });
+
+    expect(db.batches).toHaveLength(1);
+    expect(batchSql(db)).toContain("status IN ('assigned', 'in_progress')");
+    expect(batchSql(db)).toContain("FROM evaluation_conflicts");
+    expect(batchSql(db)).toContain("FROM submissions");
+    expect(batchSql(db)).toContain("status = 'submitted'");
+    expect(batchSql(db)).toContain("FROM evaluation_decisions");
+    expect(batchSql(db)).toContain("INSERT INTO evaluation_reviews");
+    expect(batchSql(db)).toContain("UPDATE review_assignments");
+  });
+
   it("uses one tenant-scoped guard for assignment abstention and conflict insertion", async () => {
     const db = database();
     await new D1EvaluationRepository(db as unknown as D1Database).abstainAssignment(
