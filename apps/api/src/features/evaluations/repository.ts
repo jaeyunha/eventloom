@@ -1023,13 +1023,13 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     admission?: EvaluationReviewWriteAdmission | number,
   ): Promise<void> {
     if (typeof admission === "object") this.#assertReviewWriteAdmission(admission);
-    const expectedAssignmentVersion =
-      typeof admission === "number"
-          ? admission
-          : (admission?.expectedAssignmentVersion ??
-            this.#assignments.get(storageKey(suggestion.tenantId, suggestion.assignmentId))
-              ?.version ??
-            0);
+      const expectedAssignmentVersion =
+        typeof admission === "number"
+        ? admission
+        : (admission?.expectedAssignmentVersion ??
+          this.#assignments.get(storageKey(suggestion.tenantId, suggestion.assignmentId))
+            ?.version ??
+          0);
     await this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
