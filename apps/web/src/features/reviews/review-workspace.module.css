@@ -971,6 +971,7 @@
 
 .aiSuggestion {
   flex: 1 1 auto;
+  min-inline-size: 0;
   padding: 0.8rem;
   border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
   border-radius: var(--radius-sm);
@@ -980,25 +981,45 @@
 .aiSuggestion > div:first-child {
   display: flex;
   gap: 0.8rem;
+  min-inline-size: 0;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .aiLabel {
+  min-inline-size: 0;
   padding: 0.2rem 0.4rem;
   border-radius: 0.35rem;
+  overflow-wrap: anywhere;
 }
 
 .aiSuggestion strong {
+  min-inline-size: 0;
   color: var(--color-ink);
   font-size: 1.15rem;
+  overflow-wrap: anywhere;
+  text-align: end;
 }
 
 .aiSuggestion ul {
+  min-inline-size: 0;
   margin: 0.6rem 0 0.75rem;
   padding-left: 1.1rem;
   color: var(--color-muted);
   font-size: 0.78rem;
+}
+
+.aiSuggestion li,
+.aiSuggestion p {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.evaluatorMode .aiSuggestion .aiLabel,
+.evaluatorMode .aiSuggestion .fieldHint,
+.evaluatorMode .aiSuggestion ul {
+  color: var(--color-ink);
 }
 
 .aiSuggestion li + li {
