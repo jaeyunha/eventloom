@@ -3,6 +3,11 @@
 import type { ApiPlan } from "./api-api-plan";
 import { evaluationRequest } from "./model-evaluation-request";
 import type { OrganizerRoundActions } from "./organizer-authoring-round-actions";
+import {
+  clearRetainedRevisionSync,
+  readRetainedRevisionSync,
+  retainRevisionSync,
+} from "./organizer-revision-sync-token";
 import { reviewTemporalDraftError } from "./review-temporal-policy";
 
 export function useOrganizerPlanActions(scope: OrganizerRoundActions) {
@@ -127,17 +132,52 @@ export function useOrganizerPlanActions(scope: OrganizerRoundActions) {
     setBusy(true);
     setMessage(null);
     try {
+      const desiredClosesAt = planClosesAt.trim().length === 0 ? null : planClosesAt;
+      let currentVersion = version;
+      let retained = readRetainedRevisionSync(seed);
+      if (retained !== null && currentVersion === retained.expectedVersion + 1) {
+        const recovered = await evaluationRequest<ApiPlan>(
+          baseUrl,
+          `/plans/${encodeURIComponent(seed.planId)}/reconcile-revision-family`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              expectedVersion: currentVersion,
+              revisionSyncToken: retained.token,
+            }),
+          },
+        );
+        clearRetainedRevisionSync(seed);
+        setPlanClosesAt(recovered.closesAt ?? "");
+        setVersion(recovered.version);
+        onAuthoritativePlan?.(recovered);
+        currentVersion = recovered.version;
+        retained = null;
+        const recoveredMatches =
+          desiredClosesAt === null
+            ? recovered.closesAt === null
+            : recovered.closesAt !== null &&
+              Date.parse(desiredClosesAt) === Date.parse(recovered.closesAt);
+        if (recoveredMatches) {
+          setMessage("Review closing date saved.");
+          return;
+        }
+      }
+      const revisionSyncToken = retained?.token ?? crypto.randomUUID();
+      retainRevisionSync(seed, { expectedVersion: currentVersion, token: revisionSyncToken });
       const updated = await evaluationRequest<ApiPlan>(
         baseUrl,
         `/plans/${encodeURIComponent(seed.planId)}/schedule`,
         {
           method: "PATCH",
           body: JSON.stringify({
-            expectedVersion: version,
-            closesAt: planClosesAt.trim().length === 0 ? null : planClosesAt,
+            expectedVersion: currentVersion,
+            closesAt: desiredClosesAt,
+            revisionSyncToken,
           }),
         },
       );
+      clearRetainedRevisionSync(seed);
       setPlanClosesAt(updated.closesAt ?? "");
       setVersion(updated.version);
       setStatus(updated.status);

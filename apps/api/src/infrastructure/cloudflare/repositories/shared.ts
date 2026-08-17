@@ -33,8 +33,10 @@ export interface AirtableSyncWrite {
   };
 }
 
+type D1StatementDatabase = Pick<D1Database, "prepare">;
+
 export function statement(
-  database: D1Database,
+  database: D1StatementDatabase,
   sql: string,
   values: readonly D1Value[] = [],
 ): D1PreparedStatement {

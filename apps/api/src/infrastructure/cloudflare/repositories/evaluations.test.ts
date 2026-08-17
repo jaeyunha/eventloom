@@ -1,12 +1,33 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { D1Database } from "@cloudflare/workers-types";
 import { describe, expect, it } from "vitest";
 
 import type {
   EvaluationAssignment,
+  EvaluationPlan,
   EvaluationReview,
   EvaluationSuggestion,
 } from "../../../features/evaluations/types";
+import { SqliteD1 } from "../../../test-support/sqlite-d1";
 import { D1EvaluationRepository } from "./evaluations";
+
+function migration(name: string): string {
+  return readFileSync(resolve(process.cwd(), "apps/api/migrations", name), "utf8");
+}
+
+const fullEvaluationSchema = `
+CREATE TABLE organizations (
+  organization_id TEXT PRIMARY KEY NOT NULL
+);
+CREATE TABLE events (
+  organization_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  ends_at TEXT,
+  PRIMARY KEY (organization_id, id)
+);
+${migration("0009_evaluations.sql")}
+`;
 
 interface RecordedStatement {
   readonly sql: string;
@@ -228,6 +249,40 @@ describe("D1EvaluationRepository consistency", () => {
     expect(database.sessionConstraints).toEqual(["first-primary"]);
   });
 
+  it("loads revision schedules in two primary-consistent queries without rubric hydration", async () => {
+    const database = new RecordingD1();
+    database.firstRows.push({
+      id: "plan-1",
+      organization_id: "org-1",
+      event_id: "event-1",
+      predecessor_plan_id: "plan-0",
+      status: "open",
+      closes_at: null,
+      version: 3,
+      updated_at: timestamp,
+    });
+    database.allRows.push([
+      {
+        id: "round-1",
+        predecessor_round_id: "round-0",
+        revision: 2,
+        opens_at: "2026-08-10T00:00:00.000Z",
+        closes_at: "2026-08-20T00:00:00.000Z",
+      },
+    ]);
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await expect(repository.getPlanScheduleState("org-1", "plan-1")).resolves.toMatchObject({
+      id: "plan-1",
+      rounds: [{ id: "round-1", revision: 2 }],
+    });
+    expect(database.sessionConstraints).toEqual(["first-primary"]);
+    expect(database.statements).toHaveLength(2);
+    expect(database.statements.map((statement) => statement.sql).join("\n")).not.toContain(
+      "rubric_criteria",
+    );
+  });
+
   it("reads assignments and reviews from the primary for reviewer writes", async () => {
     const database = new RecordingD1();
     const repository = new D1EvaluationRepository(database as unknown as D1Database);
@@ -245,6 +300,55 @@ describe("D1EvaluationRepository consistency", () => {
     await repository.listAssignments("org-1", "plan-1");
 
     expect(database.sessionConstraints).toEqual(["first-primary"]);
+  });
+
+  it("atomically guards assignment distribution with the authoritative tip and schedule", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.applyAssignmentDistribution(
+      {
+        tenantId: "org-1",
+        eventId: "event-1",
+        planId: "plan-1",
+        roundId: "round-1",
+        planVersion: 1,
+      },
+      {
+        assignments: [],
+        expectedActiveVersions: [],
+        reason: "Organizer updated reviewer assignments.",
+        authorizedAt: timestamp,
+      },
+    );
+
+    const sql = database.statements.map((recorded) => recorded.sql).join("\n");
+    expect(sql).toContain("WITH RECURSIVE family");
+    expect(sql).toContain("review_plan_lineage_repairs_required");
+    expect(sql).toContain("round.closes_at");
+
+    database.statements.length = 0;
+    await repository.applyAssignmentDistribution(
+      {
+        tenantId: "org-1",
+        eventId: "event-1",
+        planId: "plan-1",
+        roundId: "round-1",
+        planVersion: 1,
+      },
+      {
+        assignments: [],
+        expectedActiveVersions: [],
+        reason: "Organizer removed reviewer assignment.",
+        authorizedAt: timestamp,
+        allowClosedCleanup: true,
+      },
+    );
+
+    const cleanupSql = database.statements.map((recorded) => recorded.sql).join("\n");
+    expect(cleanupSql).toContain("WITH RECURSIVE family");
+    expect(cleanupSql).toContain("review_plan_lineage_repairs_required");
+    expect(cleanupSql).not.toContain("round.closes_at");
   });
 
   it("reads decisions from the primary for organizer transitions", async () => {
@@ -299,10 +403,11 @@ describe("D1EvaluationRepository consistency", () => {
       updatedAt: timestamp,
     };
 
-    await repository.putPlanState(plan, 2);
+    await repository.putPlanState(plan, 2, []);
 
     const sql = database.batches[0]?.map((statement) => statement.sql).join("\n") ?? "";
     expect(sql).toContain("UPDATE review_plans");
+    expect(sql).toContain("successor.predecessor_plan_id = p.id");
     expect(sql).not.toContain("DELETE FROM review_rounds");
     expect(sql).not.toContain("DELETE FROM review_rubrics");
     expect(sql).not.toContain("INSERT INTO review_rounds");
@@ -344,6 +449,47 @@ describe("D1EvaluationRepository consistency", () => {
     expect(memberDelete).toBeGreaterThan(-1);
     expect(poolDelete).toBeGreaterThan(memberDelete);
     expect(roundDelete).toBeGreaterThan(poolDelete);
+  });
+
+  it("guards revision insertion against a concurrent predecessor successor", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.putPlan(
+      {
+        id: "plan-2",
+        tenantId: "org-1",
+        eventId: "event-1",
+        predecessorPlanId: "plan-1",
+        name: "Review revision",
+        status: "draft",
+        blindReview: false,
+        closesAt: null,
+        assignmentRule: {
+          reviewsPerSubmission: 1,
+          maxAssignmentsPerReviewer: 5,
+          autoDistribute: false,
+        },
+        rounds: [],
+        version: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      null,
+      {
+        predecessorPlanId: "plan-1",
+        expectedVersion: 3,
+        lineageVersions: [
+          { planId: "plan-1", expectedVersion: 3 },
+          { planId: "plan-0", expectedVersion: 8 },
+        ],
+      },
+    );
+
+    const sql = database.batches[0]?.map((statement) => statement.sql).join("\n") ?? "";
+    expect(sql).toContain("predecessor.status IN ('open', 'closed')");
+    expect(sql).toContain("successor.predecessor_plan_id = predecessor.id");
+    expect(database.statements.flatMap((entry) => entry.values)).toContain("plan-0");
   });
 });
 const assignment: EvaluationAssignment = {
@@ -403,12 +549,82 @@ function batchSql(db: RecordingD1): string {
   return db.batches[0]?.map((item) => item.sql).join("\n") ?? "";
 }
 
+const operationalScheduleSchema = `
+CREATE TABLE events (
+  organization_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  starts_at TEXT NOT NULL,
+  ends_at TEXT NOT NULL,
+  time_zone TEXT NOT NULL,
+  PRIMARY KEY (organization_id, id)
+);
+CREATE TABLE review_plans (
+  id TEXT PRIMARY KEY NOT NULL,
+  organization_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  predecessor_plan_id TEXT,
+  revision_sync_pending INTEGER NOT NULL DEFAULT 0,
+  revision_sync_token TEXT,
+  status TEXT NOT NULL,
+  closes_at TEXT,
+  version INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE review_rounds (
+  id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  organization_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  opens_at TEXT,
+  closes_at TEXT,
+  PRIMARY KEY (organization_id, event_id, plan_id, id, revision)
+);
+`;
+
+function operationalPlan(
+  id: string,
+  version: number,
+  roundId: string,
+  roundRevision: number,
+): EvaluationPlan {
+  return {
+    id,
+    tenantId: "org-1",
+    eventId: "event-1",
+    name: "Review",
+    status: "open",
+    blindReview: false,
+    closesAt: "2026-08-31T20:00:00-04:00",
+    assignmentRule: {
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 5,
+      autoDistribute: false,
+    },
+    rounds: [
+      {
+        id: roundId,
+        revision: roundRevision,
+        name: "Initial",
+        sequence: 1,
+        opensAt: "2026-08-20T00:00:00.000Z",
+        closesAt: "2026-08-31T00:00:00.000Z",
+        rubric: { id: "rubric-1", name: "Initial", criteria: [] },
+      },
+    ],
+    version,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
 describe("D1EvaluationRepository compound CAS", () => {
   it("updates plan schedule without rebuilding preserved review state", async () => {
     const database = new RecordingD1();
     const repository = new D1EvaluationRepository(database as unknown as D1Database);
     const timestamp = "2026-08-13T00:00:00.000Z";
-    await repository.putPlanSchedule?.(
+    await repository.putPlanSchedule(
       {
         id: "plan-1",
         tenantId: "org-1",
@@ -422,24 +638,369 @@ describe("D1EvaluationRepository compound CAS", () => {
           maxAssignmentsPerReviewer: 5,
           autoDistribute: false,
         },
-        rounds: [],
+        rounds: [
+          {
+            id: "round-1",
+            revision: 2,
+            name: "Initial",
+            sequence: 1,
+            opensAt: "2026-08-20T00:00:00.000Z",
+            closesAt: "2026-08-31T00:00:00.000Z",
+            rubric: { id: "rubric-1", name: "Initial", criteria: [] },
+          },
+        ],
         version: 4,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
       3,
+      [
+        {
+          expectedVersion: 6,
+          plan: {
+            id: "plan-0",
+            tenantId: "org-1",
+            eventId: "event-1",
+            status: "open",
+            closesAt: "2026-08-31T20:00:00-04:00",
+            rounds: [
+              {
+                id: "round-0",
+                revision: 3,
+                opensAt: "2026-08-20T00:00:00.000Z",
+                closesAt: "2026-08-31T00:00:00.000Z",
+              },
+            ],
+            version: 7,
+            updatedAt: timestamp,
+          },
+        },
+      ],
     );
     const sql = database.statements.map((entry) => entry.sql).join("\n");
+    const values = database.statements.flatMap((entry) => entry.values);
+    expect(database.batches).toHaveLength(1);
     expect(sql).toContain("UPDATE review_plans");
+    expect(sql).toContain("successor.predecessor_plan_id = p.id");
     expect(sql).toContain("closes_at");
-    expect(
-      database.statements.find((entry) => entry.sql.includes("SET closes_at"))?.values[0],
-    ).toBe("2026-09-01T00:00:00.000Z");
-    expect(database.statements.at(-1)?.values).toEqual(["org-1", "event-1", "plan-1"]);
+    expect(database.statements.find((entry) => entry.sql.includes("SET status"))?.values[1]).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+    expect(sql).toContain("UPDATE review_rounds");
+    expect(sql).toContain("opens_at");
+    expect(sql).toContain("revision = ?");
+    expect(values).toContain("plan-1");
+    expect(values).toContain("plan-0");
     expect(sql).not.toContain("DELETE FROM review_rounds");
     expect(sql).not.toContain("review_rubrics");
     expect(sql).not.toContain("review_assignments");
   });
+
+  it("reconciles mapped ancestors without mutating the authoritative tip", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+    const tip = {
+      ...operationalPlan("plan-1", 4, "round-1", 2),
+      predecessorPlanId: "plan-0",
+      status: "closed" as const,
+    };
+    const ancestor = {
+      ...operationalPlan("plan-0", 7, "round-0", 3),
+      status: "closed" as const,
+    };
+
+    await repository.reconcilePlanRevisionFamily(
+      tip,
+      4,
+      [{ plan: ancestor, expectedVersion: 6 }],
+      "11111111-1111-4111-8111-111111111111",
+    );
+
+    const sql = database.statements.map((entry) => entry.sql).join("\n");
+    const planUpdates = database.statements.filter((entry) =>
+      entry.sql.includes("UPDATE review_plans"),
+    );
+    expect(database.batches).toHaveLength(1);
+    expect(sql).toContain("successor.predecessor_plan_id = p.id");
+    expect(planUpdates).toHaveLength(1);
+    expect(planUpdates[0]?.values).toContain("plan-0");
+    expect(planUpdates[0]?.values).not.toContain("plan-1");
+  });
+
+  it("chunks one oversized legacy ancestor under the authoritative tip guard", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+    const tip = {
+      ...operationalPlan("plan-1", 4, "round-1", 2),
+      predecessorPlanId: "plan-0",
+    };
+    const ancestorBase = operationalPlan("plan-0", 7, "round-0", 3);
+    const ancestorRound = ancestorBase.rounds[0];
+    if (ancestorRound === undefined) throw new Error("Expected an ancestor round fixture.");
+    const ancestor = {
+      ...ancestorBase,
+      rounds: Array.from({ length: 201 }, (_, index) => ({
+        ...ancestorRound,
+        id: `round-${index}`,
+      })),
+    };
+
+    await repository.reconcilePlanRevisionFamily(
+      tip,
+      4,
+      [{ plan: ancestor, expectedVersion: 6 }],
+      "22222222-2222-4222-8222-222222222222",
+    );
+
+    expect(database.batches).toHaveLength(2);
+    expect(
+      database.batches[0]?.filter((entry) => entry.sql.includes("UPDATE review_rounds")),
+    ).toHaveLength(200);
+    expect(
+      database.batches[1]?.filter((entry) => entry.sql.includes("UPDATE review_rounds")),
+    ).toHaveLength(1);
+    expect(database.batches[0]?.map((entry) => entry.sql).join("\n")).toContain(
+      "successor.predecessor_plan_id = p.id",
+    );
+    expect(database.batches[1]?.map((entry) => entry.sql).join("\n")).toContain(
+      "UPDATE review_plans",
+    );
+  });
+
+  it("blocks successor insertion between oversized reconciliation batches", async () => {
+    const database = new SqliteD1("eventloom-review-sync-lock-", fullEvaluationSchema);
+    try {
+      database.executeScript(migration("0028_review_plan_revision_lineage.sql"));
+      database.executeScript(migration("0031_review_plan_revision_sync_lock.sql"));
+      database.executeScript(migration("0032_review_plan_revision_sync_token.sql"));
+      database.executeScript(`
+        INSERT INTO organizations (organization_id) VALUES ('org-1');
+        INSERT INTO events (organization_id, id, ends_at)
+        VALUES ('org-1', 'event-1', '2026-09-30T23:59:00.000Z');
+      `);
+      const repository = new D1EvaluationRepository(database as unknown as D1Database);
+      const rootBase = operationalPlan("plan-0", 2, "round-0", 2);
+      const rootRound = rootBase.rounds[0];
+      if (rootRound === undefined) throw new Error("Expected a root round fixture.");
+      const root: EvaluationPlan = {
+        ...rootBase,
+        gradingRevision: 2,
+        gradingLockedAt: timestamp,
+        rounds: Array.from({ length: 201 }, (_, index) => ({
+          ...rootRound,
+          id: `root-round-${index}`,
+          sequence: index + 1,
+          rubric: {
+            ...rootRound.rubric,
+            id: `root-rubric-${index}`,
+          },
+        })),
+      };
+      const tip: EvaluationPlan = {
+        ...root,
+        id: "plan-1",
+        predecessorPlanId: root.id,
+        status: "closed",
+        version: 4,
+        rounds: root.rounds.map((round, index) => ({
+          ...round,
+          id: `tip-round-${index}`,
+          predecessorRoundId: round.id,
+          opensAt: "2026-08-21T00:00:00.000Z",
+          closesAt: "2026-08-31T00:00:00.000Z",
+          rubric: {
+            ...round.rubric,
+            id: `tip-rubric-${index}`,
+          },
+        })),
+      };
+      const roundRows = [...root.rounds, ...tip.rounds]
+        .map(
+          (round) =>
+            `('${round.id}', 'org-1', 'event-1', '${
+              round.predecessorRoundId === null || round.predecessorRoundId === undefined
+                ? root.id
+                : tip.id
+            }', '${round.name}', ${round.sequence}, ${round.revision}, '${round.rubric.id}', ${
+              round.rubricRevision ?? round.revision
+            }, '${round.opensAt}', '${round.closesAt}', 0, 'none', NULL, ${
+              round.predecessorRoundId === null || round.predecessorRoundId === undefined
+                ? "NULL"
+                : `'${round.predecessorRoundId}'`
+            })`,
+        )
+        .join(",\n");
+      database.executeScript(`
+        INSERT INTO review_plans (
+          organization_id, event_id, id, predecessor_plan_id, name, status,
+          revision_sync_pending, blind_review, closes_at, reviews_per_submission,
+          max_assignments_per_reviewer, track_filter, auto_distribute,
+          reviewer_projection_field_ids_json, reviewer_projection_file_ids_json,
+          grading_revision, grading_locked_at, version, created_at, updated_at
+        ) VALUES
+          (
+            'org-1', 'event-1', '${root.id}', NULL, '${root.name}', 'open',
+            0, 0, NULL, 1, 5, NULL, 0, '[]', '[]', 2, '${timestamp}',
+            ${root.version}, '${timestamp}', '${timestamp}'
+          ),
+          (
+            'org-1', 'event-1', '${tip.id}', '${root.id}', '${tip.name}', 'closed',
+            0, 0, NULL, 1, 5, NULL, 0, '[]', '[]', 2, '${timestamp}',
+            ${tip.version}, '${timestamp}', '${timestamp}'
+          );
+        INSERT INTO review_rounds (
+          id, organization_id, event_id, plan_id, name, sequence, revision,
+          rubric_id, rubric_revision, opens_at, closes_at, blind_review,
+          anonymization, track_filter, predecessor_round_id
+        ) VALUES ${roundRows};
+      `);
+      const closingTip = tip;
+      const revisionSyncToken = "11111111-1111-4111-8111-111111111111";
+      await repository.beginPlanRevisionSync(closingTip, closingTip.version, revisionSyncToken);
+      await repository.beginPlanRevisionSync(closingTip, closingTip.version, revisionSyncToken);
+      await expect(
+        repository.beginPlanRevisionSync(
+          closingTip,
+          closingTip.version,
+          "22222222-2222-4222-8222-222222222222",
+        ),
+      ).rejects.toThrow("Evaluation plan changed since it was loaded.");
+      const reconciledRoot: EvaluationPlan = {
+        ...root,
+        status: "closed",
+        rounds: root.rounds.map((round) => ({
+          ...round,
+          opensAt: "2026-08-21T00:00:00.000Z",
+          closesAt: "2026-08-31T00:00:00.000Z",
+        })),
+        version: root.version + 1,
+      };
+      const successor: EvaluationPlan = {
+        ...closingTip,
+        id: "plan-2",
+        predecessorPlanId: closingTip.id,
+        status: "draft",
+        gradingRevision: undefined,
+        gradingLockedAt: null,
+        version: 1,
+        rounds: closingTip.rounds.map((round, index) => ({
+          ...round,
+          id: `successor-round-${index}`,
+          predecessorRoundId: round.id,
+          rubric: {
+            ...round.rubric,
+            id: `successor-rubric-${index}`,
+          },
+        })),
+      };
+      let insertion: Promise<void> | undefined;
+      database.beforeNextBatch(() => {
+        database.beforeNextBatch(() => {
+          insertion = repository.putPlan(successor, null, {
+            predecessorPlanId: closingTip.id,
+            expectedVersion: closingTip.version,
+            lineageVersions: [
+              { planId: closingTip.id, expectedVersion: closingTip.version },
+              { planId: root.id, expectedVersion: root.version },
+            ],
+          });
+        });
+      });
+
+      await repository.reconcilePlanRevisionFamily(
+        closingTip,
+        closingTip.version,
+        [{ plan: reconciledRoot, expectedVersion: root.version }],
+        revisionSyncToken,
+      );
+      if (insertion === undefined) throw new Error("Expected an interleaved successor insertion.");
+      await expect(insertion).rejects.toThrow("Evaluation plan changed since it was loaded.");
+      await repository.completePlanRevisionSync(closingTip, closingTip.version, revisionSyncToken);
+
+      const plans = await database
+        .prepare(
+          `SELECT id, status, version, revision_sync_pending
+             FROM review_plans
+            WHERE organization_id = 'org-1'
+              AND id IN ('${root.id}', '${tip.id}', '${successor.id}')
+            ORDER BY id`,
+        )
+        .all<{
+          id: string;
+          status: string;
+          version: number;
+          revision_sync_pending: number;
+        }>();
+      expect(plans.results).toEqual([
+        {
+          id: root.id,
+          status: "closed",
+          version: root.version + 1,
+          revision_sync_pending: 0,
+        },
+        {
+          id: tip.id,
+          status: "closed",
+          version: tip.version,
+          revision_sync_pending: 0,
+        },
+      ]);
+    } finally {
+      database.dispose();
+    }
+  });
+
+  it("updates only the current immutable round revision", async () => {
+    const database = new SqliteD1("eventloom-review-schedule-", operationalScheduleSchema);
+    try {
+      database.executeScript(`
+        INSERT INTO events VALUES (
+          'org-1', 'event-1', 'Event', '2026-08-01T00:00:00.000Z',
+          '2026-09-30T23:59:00.000Z', 'America/New_York'
+        );
+        INSERT INTO review_plans VALUES (
+          'plan-1', 'org-1', 'event-1', NULL, 0, NULL, 'open', '2026-08-30T00:00:00.000Z', 3,
+          '${timestamp}'
+        );
+        INSERT INTO review_rounds VALUES (
+          'round-1', 1, 'org-1', 'event-1', 'plan-1',
+          '2026-08-10T00:00:00.000Z', '2026-08-20T00:00:00.000Z'
+        );
+        INSERT INTO review_rounds VALUES (
+          'round-1', 2, 'org-1', 'event-1', 'plan-1',
+          '2026-08-11T00:00:00.000Z', '2026-08-21T00:00:00.000Z'
+        );
+      `);
+      await new D1EvaluationRepository(database as unknown as D1Database).putPlanSchedule(
+        operationalPlan("plan-1", 4, "round-1", 2),
+        3,
+        [],
+      );
+
+      const rounds = await database
+        .prepare("SELECT revision, opens_at, closes_at FROM review_rounds ORDER BY revision")
+        .all<{
+          revision: number;
+          opens_at: string;
+          closes_at: string;
+        }>();
+      expect(rounds.results).toEqual([
+        {
+          revision: 1,
+          opens_at: "2026-08-10T00:00:00.000Z",
+          closes_at: "2026-08-20T00:00:00.000Z",
+        },
+        {
+          revision: 2,
+          opens_at: "2026-08-20T00:00:00.000Z",
+          closes_at: "2026-08-31T00:00:00.000Z",
+        },
+      ]);
+    } finally {
+      database.dispose();
+    }
+  });
+
   it("batches tenant/event-scoped assignment and review guards before saving a draft", async () => {
     const db = database();
     await new D1EvaluationRepository(db as unknown as D1Database).saveReviewDraft(
@@ -447,17 +1008,27 @@ describe("D1EvaluationRepository compound CAS", () => {
       1,
       review,
       null,
+      timestamp,
     );
 
     expect(db.batches).toHaveLength(1);
     expect(batchSql(db)).toContain(
       "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
     );
+    expect(batchSql(db)).toContain("WITH RECURSIVE family");
+    expect(batchSql(db)).toContain("tip.revision_sync_pending = 0");
+    expect(batchSql(db)).toContain("review_plan_lineage_repairs_required");
+    expect(batchSql(db)).toContain("assignment.status IN ('assigned', 'in_progress')");
+    expect(batchSql(db)).toContain("round.opens_at IS NULL OR round.opens_at <= ?");
+    expect(batchSql(db)).toContain("round.closes_at IS NULL OR round.closes_at > ?");
     expect(batchSql(db)).toContain("organization_id = ? AND assignment_id = ?");
     expect(batchSql(db)).toContain("INSERT INTO evaluation_reviews");
     expect(batchSql(db)).toContain("INSERT INTO evaluation_scores");
     expect(batchSql(db)).toContain("INSERT INTO evaluation_score_evidence");
-    expect(db.batches[0]?.[0]?.values.slice(0, 4)).toEqual(["org-1", "event-1", "assignment-1", 1]);
+    const assignmentGuard = db.batches[0]?.find((entry) =>
+      entry.sql.includes("review_assignments"),
+    );
+    expect(assignmentGuard?.values.slice(0, 4)).toEqual(["org-1", "event-1", "assignment-1", 1]);
   });
 
   it("uses one tenant-scoped guard for assignment abstention and conflict insertion", async () => {
@@ -520,13 +1091,19 @@ describe("D1EvaluationRepository compound CAS", () => {
       1,
       review,
       null,
+      {
+        assignment,
+        expectedAssignmentVersion: 1,
+        authorizedAt: timestamp,
+      },
     );
 
     expect(db.batches).toHaveLength(1);
     expect(batchSql(db)).toContain("evaluation_suggestions");
     expect(batchSql(db)).toContain("review_assignments");
     expect(batchSql(db)).toContain("evaluation_reviews");
-    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(3);
+    expect(batchSql(db)).toContain("WITH RECURSIVE family");
+    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(5);
   });
 
   it("tenant-scopes plan, assignment, review, suggestion, conflict, and decision reads", async () => {
