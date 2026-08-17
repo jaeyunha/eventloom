@@ -2221,6 +2221,31 @@ export class D1SpeakerRepository
           )
           .bind(scope.organizationId, task.eventId, task.id, offset),
       );
+    if (command.audit !== undefined) {
+      statements.push(
+        this.#db
+          .prepare(
+            "INSERT INTO audit_events (id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,details_json,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)",
+          )
+          .bind(
+            command.audit.id,
+            scope.organizationId,
+            "user",
+            command.actorAccountId,
+            command.audit.action,
+            "speaker_task",
+            task.id,
+            json({
+              eventId: task.eventId,
+              previousVersion: command.expectedVersion,
+              version: task.version,
+              previousReminderOffsetsMinutes: command.audit.previousReminderOffsetsMinutes,
+              reminderOffsetsMinutes: task.reminderOffsetsMinutes,
+            }),
+            task.updatedAt,
+          ),
+      );
+    }
     try {
       const result = await this.#db.batch(statements);
       if ((result[0]?.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };

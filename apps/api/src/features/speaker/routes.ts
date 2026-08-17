@@ -111,6 +111,28 @@ const organizerTaskCreateSchema = z.object({
     .min(1),
 });
 
+const reminderOffsetSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .refine(Number.isSafeInteger, "Expected a safe integer.");
+
+const organizerTaskReminderOffsetsSchema = z
+  .object({
+    expectedVersion: z.number().int().nonnegative().refine(Number.isSafeInteger),
+    reminderOffsetsMinutes: z.array(reminderOffsetSchema),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.reminderOffsetsMinutes).size !== value.reminderOffsetsMinutes.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["reminderOffsetsMinutes"],
+        message: "Reminder offsets must be unique.",
+      });
+    }
+  });
+
 const organizerTaskUpdateSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   instructions: z.string().max(10_000).optional(),
@@ -1870,6 +1892,25 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
     });
     return context.json({ data }, 201);
   });
+  app.put("/:taskId/reminder-offsets", async (context) => {
+    const body = await parseBody(context, organizerTaskReminderOffsetsSchema);
+    if (!body) {
+      return context.json(
+        errorBody(context, "VALIDATION_ERROR", "The reminder schedule payload is invalid."),
+        400,
+      );
+    }
+    const data = await dependencies.service.updateOrganizerTaskReminderOffsets({
+      organizationId: requiredSpeakerParam(context, "organizationId"),
+      eventId: requiredSpeakerParam(context, "eventId"),
+      accountId: context.get("speakerAccountId"),
+      taskId: requiredSpeakerParam(context, "taskId"),
+      expectedVersion: body.expectedVersion,
+      reminderOffsetsMinutes: body.reminderOffsetsMinutes,
+    });
+    return context.json({ data });
+  });
+
   app.patch("/:taskId", async (context) => {
     const body = await parseBody(context, organizerTaskUpdateSchema);
     if (!body) {

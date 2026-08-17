@@ -16,7 +16,9 @@ import type {
   CommunicationTemplate,
   CommunicationTemplatePurpose,
   ReminderCandidate,
+  ReminderDispatch,
   ReminderOutboxDelivery,
+  ReminderRun,
   ReminderRuntime,
 } from "./types";
 
@@ -828,6 +830,64 @@ function reminderCandidate(overrides: Partial<ReminderCandidate> = {}): Reminder
   } as ReminderCandidate;
 }
 
+const recoveryIdempotencyKey =
+  "reminder:tenant-1:event-1:automatic:task:task-1:application-1:2026-08-09T12:00:00.000Z";
+const recoveryRunId = "reminder-run:tenant-1:event-1:automatic:2026-08-09T12:00:00.000Z";
+
+function recoveryRun(): ReminderRun {
+  return {
+    id: recoveryRunId,
+    organizationId: tenantId,
+    eventId,
+    triggerType: "automatic",
+    audienceType: "task",
+    audienceRevision: "revision-1",
+    candidateCount: 1,
+    eligibleCount: 0,
+    queuedCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    state: "running",
+    configurationFailure: null,
+    actorId: automation.userId,
+    startedAt: now,
+    completedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function recoveryDispatch(status: "candidate" | "eligible" | "failed"): ReminderDispatch {
+  const eligible = status !== "candidate";
+  const failed = status === "failed";
+  return {
+    id: `reminder-dispatch:${recoveryIdempotencyKey}`,
+    runId: recoveryRunId,
+    organizationId: tenantId,
+    eventId,
+    recipient: "application-1",
+    subject: { type: "task", taskId: "task-1" },
+    eligibilityReason: "due",
+    cadenceWindow: "2026-08-09T12:00:00.000Z",
+    idempotencyKey: recoveryIdempotencyKey,
+    providerMessageId: null,
+    status,
+    skipMetadata: null,
+    failureMetadata: failed ? { stage: "enqueue", reason: "queue unavailable" } : null,
+    createdAt: now,
+    updatedAt: now,
+    eligibleAt: eligible ? now : null,
+    skippedAt: null,
+    queuedAt: null,
+    providerAcceptedAt: null,
+    deliveredAt: null,
+    failedAt: failed ? now : null,
+    bouncedAt: null,
+    completedAt: failed ? now : null,
+    outboxJobId: null,
+  };
+}
+
 class FakeReminderOutbox implements ReminderOutboxDelivery {
   readonly requests: Parameters<ReminderOutboxDelivery["enqueue"]>[0][] = [];
   fail = false;
@@ -876,6 +936,119 @@ function reminderFixture(
 }
 
 describe("reminder domain", () => {
+  it.each(["candidate", "eligible", "failed"] as const)(
+    "recovers an existing %s dispatch in its original run during a later hourly run",
+    async (status) => {
+      const candidate = reminderCandidate();
+      const repository = new InMemoryReminderRepository({
+        runs: [recoveryRun()],
+        dispatches: [recoveryDispatch(status)],
+      });
+      const outbox = new FakeReminderOutbox();
+      const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+        clock: () => new Date("2026-08-09T13:05:00.000Z"),
+        reminders: {
+          repository,
+          source: {
+            async listCandidates() {
+              return {
+                audienceType: "task",
+                audienceRevision: "revision-2",
+                candidates: [candidate],
+              };
+            },
+          },
+          outbox,
+        },
+      });
+
+      const later = await service.runAutomaticReminders(automation, {
+        eventId,
+        scheduledAt: "2026-08-09T13:05:00.000Z",
+      });
+
+      expect(later).toMatchObject({
+        candidateCount: 0,
+        eligibleCount: 0,
+        queuedCount: 0,
+        failedCount: 0,
+        state: "completed",
+      });
+      expect(await repository.listDispatches(tenantId, eventId, later.id)).toEqual([]);
+      const [recovered] = await repository.listDispatches(tenantId, eventId, recoveryRunId);
+      expect(recovered).toMatchObject({
+        runId: recoveryRunId,
+        status: "queued",
+        failureMetadata: null,
+        failedAt: null,
+        completedAt: null,
+        outboxJobId: "job-1",
+      });
+      expect(await repository.getRun(tenantId, eventId, recoveryRunId)).toMatchObject({
+        candidateCount: 1,
+        eligibleCount: 1,
+        queuedCount: 1,
+        failedCount: 0,
+        state: "completed",
+      });
+      expect(outbox.requests).toHaveLength(1);
+    },
+  );
+
+  it("does not reopen a terminal provider failure during a later hourly run", async () => {
+    const terminal = {
+      ...recoveryDispatch("failed"),
+      failureMetadata: { reason: "REQUEST_REJECTED" },
+      outboxJobId: "job-terminal",
+    };
+    const repository = new InMemoryReminderRepository({
+      runs: [recoveryRun()],
+      dispatches: [terminal],
+    });
+    const outbox = new FakeReminderOutbox();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      clock: () => new Date("2026-08-09T13:05:00.000Z"),
+      reminders: {
+        repository,
+        source: {
+          async listCandidates() {
+            return {
+              audienceType: "task",
+              audienceRevision: "revision-2",
+              candidates: [reminderCandidate()],
+            };
+          },
+        },
+        outbox,
+      },
+    });
+
+    await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T13:05:00.000Z",
+    });
+
+    expect(await repository.getDispatch(tenantId, eventId, terminal.id)).toMatchObject({
+      status: "failed",
+      failureMetadata: { reason: "REQUEST_REJECTED" },
+      outboxJobId: "job-terminal",
+    });
+    expect(outbox.requests).toHaveLength(0);
+  });
+
+  it("tags enqueue-origin failures for later recovery", async () => {
+    const { service, repository, outbox } = reminderFixture([reminderCandidate()]);
+    outbox.fail = true;
+
+    await service.runAutomaticReminders(automation, { eventId, scheduledAt: now });
+
+    const [dispatch] = await repository.listDispatches(tenantId, eventId);
+    expect(dispatch).toMatchObject({
+      status: "failed",
+      failureMetadata: { stage: "enqueue", reason: "outbox unavailable" },
+    });
+  });
+
   it("uses one hourly automatic run and one cadence dispatch across later Cron runs", async () => {
     const candidate = reminderCandidate();
     const { service, repository, outbox } = reminderFixture([candidate]);
@@ -893,8 +1066,23 @@ describe("reminder domain", () => {
     });
     expect(replay.id).toBe(first.id);
     expect(later.id).not.toBe(first.id);
+    expect(first).toMatchObject({
+      candidateCount: 1,
+      eligibleCount: 1,
+      queuedCount: 1,
+      skippedCount: 0,
+      failedCount: 0,
+    });
+    expect(later).toMatchObject({
+      candidateCount: 0,
+      eligibleCount: 0,
+      queuedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+    });
     expect(outbox.requests).toHaveLength(1);
     expect(await repository.listDispatches(tenantId, eventId)).toHaveLength(1);
+    expect(await repository.listDispatches(tenantId, eventId, later.id)).toHaveLength(0);
   });
 
   it("persists missing-email skips and keeps queue success queued", async () => {

@@ -710,6 +710,71 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     }
   }, 120_000);
 
+  it("durably replaces reminder offsets and records the winning organizer audit", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const firstPhase = fixture.createPhase();
+    const admitted = await firstPhase.service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Reminder Speaker",
+      email: "reminder-speaker@example.test",
+      jobTitle: "Engineer",
+      company: "Example",
+      biography: "Reminder lifecycle speaker.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "reminder-offset-speaker",
+    });
+    const participantId = admitted.speakers[0]?.participantId;
+    if (participantId === undefined) throw new Error("Expected an admitted speaker.");
+    const [created] = await firstPhase.service.createOrganizerTask({
+      eventId,
+      accountId: organizerAccountId,
+      type: "upload",
+      title: "Upload reminder deck",
+      dueAt: "2099-09-01",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 1_000_000,
+      acceptedAssetKinds: ["slides"],
+      reminderOffsetsMinutes: [60],
+      assignments: [{ participantId, submissionId: null }],
+    });
+    if (created === undefined) throw new Error("Expected a reminder task.");
+
+    await expect(
+      firstPhase.service.updateOrganizerTaskReminderOffsets({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        taskId: created.id,
+        expectedVersion: created.version,
+        reminderOffsetsMinutes: [10_080, 0, 1_440],
+      }),
+    ).resolves.toMatchObject({
+      reminderOffsetsMinutes: [0, 1_440, 10_080],
+      version: 2,
+    });
+
+    const restarted = fixture.createPhase();
+    await expect(restarted.repository.getTask(eventId, created.id)).resolves.toMatchObject({
+      reminderOffsetsMinutes: [0, 1_440, 10_080],
+      version: 2,
+    });
+    expect(
+      fixture.database.query<{ actor_id: string; action: string; details_json: string }>(
+        `SELECT actor_id, action, details_json FROM audit_events WHERE resource_type = 'speaker_task' AND resource_id = ${sqlString(created.id)}`,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        actor_id: organizerAccountId,
+        action: "speaker_task.reminder_offsets_updated",
+        details_json: expect.stringContaining('"reminderOffsetsMinutes":[0,1440,10080]'),
+      }),
+    ]);
+  });
+
   it("roundtrips immutable file pointers, cross-role comments, approval, and ZIP export", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);

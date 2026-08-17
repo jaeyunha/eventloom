@@ -45,6 +45,10 @@ import {
   validateSpeakerTaskAssignment,
 } from "./speaker-task-model";
 import { SpeakerWorkspace } from "./speaker-workspace";
+import {
+  parseReminderOffsetDraft,
+  SpeakerReminderOffsetEditor,
+} from "./speaker-workspace-sections";
 import { SPEAKER_WELCOME_EMAIL_STARTER } from "./speaker-workspace-types";
 
 const speaker: SpeakerRecord = {
@@ -108,7 +112,58 @@ const task = {
   completedAt: null,
   sessionId: null,
   latestAssetId: null,
+  version: 2,
 };
+describe("organizer reminder offset controls", () => {
+  it("parses an empty schedule and canonicalizes valid offsets", () => {
+    expect(parseReminderOffsetDraft(" ")).toEqual({ ok: true, offsets: [] });
+    expect(parseReminderOffsetDraft("10080, 0, 1440")).toEqual({
+      ok: true,
+      offsets: [0, 1_440, 10_080],
+    });
+  });
+
+  it.each(["60, 60", "-1", "1.5", "not-a-number", "9007199254740992"])(
+    "rejects an invalid reminder offset draft: %s",
+    (draft) => {
+      expect(parseReminderOffsetDraft(draft)).toEqual({
+        ok: false,
+        message: expect.any(String),
+      });
+    },
+  );
+
+  it("renders an accessible reminder schedule editor without server diagnostics", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SpeakerReminderOffsetEditor, {
+        task: { ...task, type: "file_request", status: "in_progress" },
+        item: {
+          taskId: task.taskId,
+          participantId: task.participantId,
+          title: task.title,
+          dueAt: task.dueAt,
+          reminderOffsetsMinutes: [1_440],
+          eligible: false,
+          reason: "outside_window",
+        },
+        onSave: async () => ({
+          organizationId: "org-1",
+          eventId: "event-1",
+          taskId: task.taskId,
+          reminderOffsetsMinutes: [1_440],
+          version: 3,
+          updatedAt: "2026-08-10T00:00:00.000Z",
+        }),
+      }),
+    );
+
+    expect(markup).toContain(`aria-label="Reminder offsets in minutes for ${task.title}"`);
+    expect(markup).toContain("Save reminder schedule");
+    expect(markup).toContain("Clear the field to disable scheduled reminders.");
+    expect(markup).not.toContain("outside_window");
+  });
+});
+
 describe("organizer headshot preview stability", () => {
   it("keeps the secure preview key stable across roster and detail refreshes", () => {
     const initial = organizerHeadshotPreviewKey("participant-1", "asset-headshot", headshotAsset);
@@ -654,6 +709,51 @@ describe("speaker API adapter", () => {
       idempotencyKey: "invite-once",
     });
   });
+  it("updates one task reminder schedule through the canonical organizer command", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const api = createSpeakerApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async (input, init) => {
+        calls.push({ input, ...(init === undefined ? {} : { init }) });
+        return Response.json({
+          data: {
+            organizationId: "org-1",
+            eventId: "event-1",
+            taskId: "task-1",
+            reminderOffsetsMinutes: [0, 1_440],
+            version: 3,
+            updatedAt: "2026-08-10T00:00:00.000Z",
+          },
+        });
+      },
+    );
+
+    await expect(
+      api.updateTaskReminderOffsets({
+        taskId: "task-1",
+        expectedVersion: 2,
+        reminderOffsetsMinutes: [1_440, 0],
+      }),
+    ).resolves.toEqual({
+      organizationId: "org-1",
+      eventId: "event-1",
+      taskId: "task-1",
+      reminderOffsetsMinutes: [0, 1_440],
+      version: 3,
+      updatedAt: "2026-08-10T00:00:00.000Z",
+    });
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.test/api/admin/organizations/org-1/events/event-1/speaker-tasks/task-1/reminder-offsets",
+    );
+    expect(calls[0]?.init).toMatchObject({ method: "PUT", credentials: "include" });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      expectedVersion: 2,
+      reminderOffsetsMinutes: [1_440, 0],
+    });
+  });
+
   it("loads multi-speaker progress with one batch task request and groups tasks in roster order", async () => {
     const multiSpeakerRoster: SpeakerRosterEnvelope = {
       ...roster,

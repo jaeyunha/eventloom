@@ -99,6 +99,7 @@ export type SpeakerServiceErrorCode =
   | "INVALID_TASK_TRANSITION"
   | "TASK_DEPENDENCY_INCOMPLETE"
   | "TASK_NOT_ACTIVE"
+  | "TASK_REMINDERS_NOT_EDITABLE"
   | "TASK_ASSET_NOT_READY"
   | "UPLOAD_POLICY_VIOLATION"
   | "ASSET_UPLOAD_RETRY_INVALID"
@@ -466,6 +467,20 @@ function isSpeakerTransitionAllowed(task: SpeakerTask, toStatus: SpeakerTaskStat
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+function normalizeReminderOffsets(values: readonly number[]): number[] {
+  if (
+    values.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    new Set(values).size !== values.length
+  ) {
+    throw new SpeakerServiceError(
+      "VALIDATION_ERROR",
+      400,
+      "Reminder offsets must be unique non-negative safe integers.",
+    );
+  }
+  return [...values].sort((left, right) => left - right);
 }
 function exportArchiveComponent(value: string | undefined, fallback: string): string {
   const normalized = stripFileNameControls((value ?? "").normalize("NFC").replace(/[\\/]/gu, "-"))
@@ -2681,7 +2696,14 @@ export class SpeakerService {
     return this.updateOrganizerTask(input);
   }
 
-  async updateOrganizerTask(input: SpeakerTaskUpdateInput): Promise<SpeakerTask> {
+  async updateOrganizerTask(
+    input: SpeakerTaskUpdateInput,
+    audit?: {
+      id: string;
+      action: "speaker_task.reminder_offsets_updated";
+      previousReminderOffsetsMinutes: readonly number[];
+    },
+  ): Promise<SpeakerTask> {
     const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
     assertExpectedVersion(input.expectedVersion);
     const current = await this.repository.getTask(input.eventId, input.taskId);
@@ -2798,6 +2820,7 @@ export class SpeakerService {
       task: updated,
       expectedVersion: input.expectedVersion,
       actorAccountId: input.accountId,
+      ...(audit === undefined ? {} : { audit }),
     });
     if (!result.ok) {
       if (result.reason === "version_conflict" || result.reason === "invalid_state") {
@@ -2822,6 +2845,68 @@ export class SpeakerService {
       );
     }
     return persisted;
+  }
+
+  async updateOrganizerTaskReminderOffsets(input: {
+    organizationId: string;
+    eventId: string;
+    accountId: string;
+    taskId: string;
+    expectedVersion: number;
+    reminderOffsetsMinutes: readonly number[];
+  }): Promise<{
+    organizationId: string;
+    eventId: string;
+    taskId: string;
+    reminderOffsetsMinutes: readonly number[];
+    version: number;
+    updatedAt: string;
+  }> {
+    await this.requireOrganizerOrganizationScope(
+      input.organizationId,
+      input.eventId,
+      input.accountId,
+    );
+    assertExpectedVersion(input.expectedVersion);
+    const reminderOffsetsMinutes = normalizeReminderOffsets(input.reminderOffsetsMinutes);
+    const current = (await this.listOrganizerTasks(input.eventId, input.accountId)).find(
+      (task) => task.id === input.taskId,
+    );
+    if (current === undefined) throw notFound();
+    if (
+      current.owner !== "speaker" ||
+      current.type !== "upload" ||
+      (current.dueAt ?? current.dueDate) === undefined ||
+      ["completed", "submitted", "waived"].includes(current.status)
+    ) {
+      throw new SpeakerServiceError(
+        "TASK_REMINDERS_NOT_EDITABLE",
+        409,
+        "Reminder schedules can be changed only for incomplete speaker upload tasks with a due date.",
+      );
+    }
+    const updated = await this.updateOrganizerTask(
+      {
+        eventId: input.eventId,
+        accountId: input.accountId,
+        taskId: input.taskId,
+        expectedVersion: input.expectedVersion,
+        reminderOffsetsMinutes,
+      },
+      {
+        id: `audit:speaker-task-reminder-offsets:${input.taskId}:${input.expectedVersion + 1}`,
+        action: "speaker_task.reminder_offsets_updated",
+        previousReminderOffsetsMinutes: [...current.reminderOffsetsMinutes],
+      },
+    );
+    return {
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      taskId: input.taskId,
+      reminderOffsetsMinutes: [...updated.reminderOffsetsMinutes],
+      version: updated.version,
+      updatedAt: updated.updatedAt,
+    };
   }
 
   async listDeliverables(
