@@ -179,6 +179,7 @@ describe("Airtable communication D1 delivery", () => {
       state: "queued",
       attemptCount: 0,
       availableAt: new Date(database.row.availableAt),
+      leaseOwner: null,
       leaseExpiresAt: null,
     };
     const outbox = new InMemoryOutboxJobRepository([outboxJob]);

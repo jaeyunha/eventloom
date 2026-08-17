@@ -1,6 +1,7 @@
 "use client";
 
 import { CalendarDays } from "lucide-react";
+import Link from "next/link";
 import {
   type SyntheticEvent,
   useCallback,
@@ -282,6 +283,7 @@ function SessionEditor({
 
 function SpeakerAssignments({
   eventId,
+  organizationId,
   session,
   speakers,
   loading,
@@ -291,6 +293,7 @@ function SpeakerAssignments({
   onRetry,
 }: Readonly<{
   eventId: string;
+  organizationId: string;
   session: SessionRecord;
   speakers: readonly SessionSpeakerCandidate[] | null;
   loading: boolean;
@@ -354,6 +357,15 @@ function SpeakerAssignments({
         <CardDescription>
           Review the assigned speakers, then add or remove people from the event roster.
         </CardDescription>
+        <Button asChild size="sm" variant="outline">
+          <Link
+            href={`/admin/organizations/${encodeURIComponent(
+              organizationId,
+            )}/events/${encodeURIComponent(eventId)}/speakers`}
+          >
+            Add or edit speakers
+          </Link>
+        </Button>
       </CardHeader>
       <CardContent className={styles.stack}>
         <section
@@ -667,6 +679,7 @@ export function SessionsWorkspaceView({
                     error={speakerError}
                     key={`${eventId}\u0000${selected.id}`}
                     loading={loadingSpeakers}
+                    organizationId={organizationId}
                     session={selected}
                     speakers={speakers}
                     onRetry={onRetrySpeakers}

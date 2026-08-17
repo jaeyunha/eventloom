@@ -97,6 +97,17 @@ describe("agenda catalog synchronization", () => {
     await expect(engine.getOutbox("event-a")).resolves.toEqual([]);
   });
 
+  it("re-reads the approval-gated catalog after a stale publication refresh", async () => {
+    const { synchronizer } = setup();
+    let attempts = 0;
+    const synchronized = await synchronizer.synchronizePublishedContent(input, async () => {
+      attempts += 1;
+      return { status: attempts === 1 ? "stale" : "unchanged" };
+    });
+    expect(attempts).toBe(2);
+    expect(synchronized.catalog).toEqual(catalog());
+  });
+
   it("projects eligible sessions, room and track additions, including duration", async () => {
     const { repository, synchronizer, setCatalog } = setup();
     await synchronizer.ensureInitialized(input);

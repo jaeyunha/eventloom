@@ -19,7 +19,6 @@ export interface OrganizerOverviewEvent {
   readonly id: string;
   readonly name: string;
   readonly slug: string | null;
-  readonly status: string | null;
   readonly startsAt: string | null;
   readonly endsAt: string | null;
 }

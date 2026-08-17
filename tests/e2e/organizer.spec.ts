@@ -56,7 +56,6 @@ function eventRecord(input: {
     organizationId: ORGANIZATION_ID,
     slug: input.slug,
     name: input.name,
-    status: "active",
     timeZone,
     startsAt: input.startsAt,
     endsAt: input.endsAt,
@@ -257,7 +256,6 @@ function overviewCoreFor(events: readonly OrganizerEventRecord[]): OrganizerOver
       id: event.id,
       name: event.name,
       slug: event.slug,
-      status: event.status,
       startsAt: event.startsAt,
       endsAt: event.endsAt,
     })),
@@ -413,7 +411,6 @@ async function installOrganizerApi(
         "name",
         "slug",
         "startsAt",
-        "status",
         "timeZone",
         "venue",
       ]);
@@ -443,7 +440,6 @@ async function installOrganizerApi(
           createdBy: session.userId,
           timeZone: body.timeZone,
         }),
-        status: body.status ?? "draft",
         venue: body.venue ?? null,
         cfpSettings: body.cfpSettings,
         defaultCalendarSettings: body.defaultCalendarSettings,
@@ -816,13 +812,23 @@ test("dedicated Events page creates an event with canonical timezone and dates",
   await page.getByRole("textbox", { name: /^Event location\b/u }).fill("DevFlow Studio");
   await page.getByRole("button", { name: "Create event", exact: true }).click();
 
-  await expect(page.getByText("Event created.", { exact: true })).toBeVisible();
+  const creationToast = page.locator("[data-sonner-toast]");
+  await expect(creationToast).toBeVisible();
+  await expect(page.locator("[data-sonner-toaster]")).toHaveAttribute("data-x-position", "right");
+  await expect(page.locator("[data-sonner-toaster]")).toHaveAttribute("data-y-position", "bottom");
+  await page.clock.fastForward(3_100);
+  await expect(creationToast).toBeHidden();
   await page.getByRole("tab", { name: "List", exact: true }).click();
   const row = page.getByRole("row").filter({ hasText: "DevFlow Conf 2027" });
   await expect(row).toBeVisible();
   await expect(row).toContainText(`/${SECONDARY_EVENT_ID}`);
   await expect(row).toContainText("America/Los_Angeles");
-  await expect(row).toContainText("Draft");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileWidth = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth);
 
   expect(api.createdInputs).toHaveLength(1);
   expect(api.createdInputs[0]).toMatchObject({
@@ -832,7 +838,6 @@ test("dedicated Events page creates an event with canonical timezone and dates",
     startsAt: "2027-03-18T16:00:00.000Z",
     endsAt: "2027-03-19T23:30:00.000Z",
     venue: "DevFlow Studio",
-    status: "draft",
     cfpSettings: { enabled: false, opensAt: null, closesAt: null },
   });
 });

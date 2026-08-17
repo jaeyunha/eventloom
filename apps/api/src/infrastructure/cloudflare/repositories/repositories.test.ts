@@ -52,7 +52,6 @@ const event: Event = {
   organizationId: "org-1",
   slug: "event-1",
   name: "Event",
-  status: "active",
   timeZone: "UTC",
   startsAt: now,
   endsAt: "2026-08-14T12:00:00.000Z",
@@ -127,7 +126,7 @@ describe("D1 event repository commands", () => {
     expect(queries).toContain("s.time_zone <> ?");
     expect(queries).toContain("FROM agenda_entries e");
     expect(queries).toContain("FROM json_each(?)");
-    expect(db.statements[0]?.bound.values[6]).toBe('["2026-08-13","2026-08-14"]');
+    expect(db.statements[0]?.bound.values[5]).toBe('["2026-08-13","2026-08-14"]');
     expect(queries).toContain("INSERT INTO audit_events");
     expect(queries).toContain("INSERT INTO airtable_sync_jobs");
     expect(queries).toContain("attempt_count");
@@ -187,6 +186,8 @@ describe("D1 event repository commands", () => {
       audit: { ...eventAudit, action: "created", version: 1 },
     });
     const queries = db.statements.map((item) => item.bound.query).join("\n");
+    expect(db.statements[0]?.bound.query).toContain("name, status, time_zone");
+    expect(db.statements[0]?.bound.values[4]).toBe("active");
     expect(queries).toContain("INSERT INTO agenda_states");
     expect(queries).toContain("INSERT INTO agenda_drafts");
     expect(queries).not.toContain("INSERT INTO agenda_revisions");

@@ -120,7 +120,6 @@ test("builds exact fixture-driven CFP schema and leaves downstream state empty i
   assert.deepEqual(event.rooms, fixture.event.rooms);
   assert.equal(event.timezone, "America/Los_Angeles");
   assert.equal(eventFields["Time Zone"], "America/Los_Angeles");
-  assert.equal(eventFields.Status, "open");
 
   const form = JSON.parse(fieldsFor(records, "CFP Forms", "devflow-conf-2027-cfp")["Fields JSON"]);
   const byKey = new Map(form.submissionFields.map((field) => [field.key, field]));

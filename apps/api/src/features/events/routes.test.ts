@@ -184,6 +184,65 @@ function createInput(overrides: Partial<Parameters<EventService["createEvent"]>[
     ...overrides,
   };
 }
+
+describe("event lifecycle", () => {
+  it("creates complete event records without a separate lifecycle status", async () => {
+    const { service } = createService();
+
+    const created = await service.createEvent(actor(), createInput());
+
+    expect(created).not.toHaveProperty("status");
+    await expect(
+      service.listEvents(actor(), {
+        organizationId: "org-a",
+      }),
+    ).resolves.toEqual([created]);
+  });
+
+  it("rejects obsolete event status updates and archive routes", async () => {
+    const { service } = createService();
+    const created = await service.createEvent(actor(), createInput());
+    const app = appFor(service);
+
+    const updateResponse = await app.request(
+      `/api/admin/organizations/org-a/events/${created.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "remove-event-status-update",
+        },
+        body: JSON.stringify({
+          expectedVersion: created.version,
+          status: "active",
+        }),
+      },
+    );
+    const archiveResponse = await app.request(
+      `/api/admin/organizations/org-a/events/${created.id}/archive`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "remove-event-status-archive",
+        },
+        body: JSON.stringify({ expectedVersion: created.version }),
+      },
+    );
+    const statusListResponse = await app.request(
+      "/api/admin/organizations/org-a/events?status=active",
+    );
+    const archivedListResponse = await app.request(
+      "/api/admin/organizations/org-a/events?includeArchived=false",
+    );
+
+    expect(updateResponse.status).toBe(400);
+    expect(archiveResponse.status).toBe(404);
+    expect(statusListResponse.status).toBe(400);
+    expect(archivedListResponse.status).toBe(400);
+  });
+});
+
 function embedConfiguration(
   overrides: Partial<Event["embedConfigurations"][number]> = {},
 ): Event["embedConfigurations"][number] {
@@ -251,7 +310,7 @@ async function responseError(response: Response): Promise<{ code: string; messag
 }
 
 describe("organizer event domain", () => {
-  it("creates, lists, updates, gets, and archives only the event record", async () => {
+  it("creates, lists, updates, and gets only the event record", async () => {
     const { repository, service } = createService();
     const created = await service.createEvent(
       actor(),
@@ -288,14 +347,12 @@ describe("organizer event domain", () => {
       eventId: created.id,
       expectedVersion: created.version,
       name: "Summit 2026 revised",
-      status: "active",
       venue: "Auditorium",
       defaultCalendarSettings: { durationMinutes: 45 },
       embedConfigurations: [embedConfiguration()],
     });
     expect(updated).toMatchObject({
       name: "Summit 2026 revised",
-      status: "active",
       venue: "Auditorium",
       version: 2,
       updatedBy: "organizer-1",
@@ -316,26 +373,12 @@ describe("organizer event domain", () => {
     });
     expect(fetched).toEqual(updated);
 
-    const archived = await service.archiveEvent(actor(), {
-      organizationId: "org-a",
-      eventId: created.id,
-      expectedVersion: updated.version,
-    });
-    expect(archived).toMatchObject({ status: "archived", version: 3, updatedBy: "organizer-1" });
-    expect(
-      await service.listEvents(actor(), { organizationId: "org-a", includeArchived: false }),
-    ).toEqual([]);
-
     const audit = await service.listAudit(actor(), {
       organizationId: "org-a",
       eventId: created.id,
     });
-    expect(audit.map((entry) => entry.action)).toEqual(["created", "updated", "archived"]);
-    expect(audit.map((entry) => entry.actorId)).toEqual([
-      "organizer-1",
-      "organizer-1",
-      "organizer-1",
-    ]);
+    expect(audit.map((entry) => entry.action)).toEqual(["created", "updated"]);
+    expect(audit.map((entry) => entry.actorId)).toEqual(["organizer-1", "organizer-1"]);
   });
   it("persists, reloads, and replaces event embed configurations with versioned authorization", async () => {
     const { repository, service } = createService();
@@ -539,8 +582,7 @@ describe("organizer event routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedVersion: 2 }),
     });
-    expect(archiveResponse.status).toBe(200);
-    expect((await responseData<Event>(archiveResponse)).status).toBe("archived");
+    expect(archiveResponse.status).toBe(404);
 
     const reviewer = appFor(service, principal("org-a", "reviewer"));
     const denied = await reviewer.request(base);
@@ -625,7 +667,14 @@ const rebuildInput = {
   releasedAssetRevision: 2,
 };
 
-function publicationService(options: { enqueueFailure?: Error } = {}) {
+function publicationService(
+  options: {
+    enqueueFailure?: Error;
+    invalidationFailure?: Error;
+    clock?: () => Date;
+    reservationTtlMs?: number;
+  } = {},
+) {
   const repository = new InMemoryProgramPublicationRepository();
   const enqueued: unknown[] = [];
   const invalidated: unknown[] = [];
@@ -641,7 +690,6 @@ function publicationService(options: { enqueueFailure?: Error } = {}) {
                 organizationId,
                 slug: "publication-event",
                 name: "Publication event",
-                status: "active",
                 timeZone: "UTC",
                 startsAt: "2026-09-18T09:00:00.000Z",
                 endsAt: "2026-09-18T17:00:00.000Z",
@@ -671,15 +719,33 @@ function publicationService(options: { enqueueFailure?: Error } = {}) {
       cacheInvalidation: {
         invalidate: async (input) => {
           invalidated.push(input);
+          if (options.invalidationFailure !== undefined) throw options.invalidationFailure;
         },
       },
     },
     {
-      clock: () => new Date(`2026-08-12T12:00:0${id}.000Z`),
+      clock: options.clock ?? (() => new Date(`2026-08-12T12:00:0${id}.000Z`)),
       generateId: () => `release-${++id}`,
+      ...(options.reservationTtlMs === undefined
+        ? {}
+        : { reservationTtlMs: options.reservationTtlMs }),
     },
   );
   return { service, repository, enqueued, invalidated };
+}
+
+function pendingReservationOwner(state: {
+  readonly pendingReleaseId: string | null;
+  readonly releases: readonly {
+    readonly id: string;
+    readonly reservationOwnerId?: string | null;
+  }[];
+}): string {
+  const owner = state.releases.find(({ id }) => id === state.pendingReleaseId)?.reservationOwnerId;
+  if (owner === null || owner === undefined) {
+    throw new Error("Expected pending publication reservation ownership.");
+  }
+  return owner;
 }
 
 function projectionFixtures() {
@@ -835,6 +901,156 @@ describe("program publication and saved embeds", () => {
     expect(JSON.stringify(first)).not.toContain("private/org-a");
   });
 
+  it("reserves a rebuild before publication side effects without enqueueing it", async () => {
+    const active = publicationService();
+    const pending = await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+    });
+    expect(active.enqueued).toEqual([]);
+    expect(pending).toMatchObject({
+      servedManifest: null,
+      pendingRevision: 1,
+      releases: [{ lifecycle: "pending" }],
+    });
+    const served = await active.service.completeRebuild({
+      organizationId: "org-a",
+      eventId: "event-publication",
+      releaseId: pending.pendingReleaseId ?? "",
+      revision: pending.pendingRevision ?? 0,
+      expectedPublicationVersion: pending.version,
+      reservationOwnerId: pendingReservationOwner(pending),
+    });
+    expect(served.servedManifest).toMatchObject({ revision: 1, lifecycle: "served" });
+  });
+
+  it("resumes owned pending rebuilds and rejects active foreign reservations", async () => {
+    const active = publicationService();
+    const first = await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      reservationOwnerId: "owner-a",
+    });
+    const resumed = await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      reservationOwnerId: "owner-a",
+    });
+    expect(resumed).toEqual(first);
+    await expect(
+      active.service.reserveRebuild(actor(), {
+        ...rebuildInput,
+        eventId: "event-publication",
+        reservationOwnerId: "owner-b",
+      }),
+    ).rejects.toThrow("already active");
+    await expect(
+      active.service.completeRebuild({
+        organizationId: "org-a",
+        eventId: "event-publication",
+        releaseId: first.pendingReleaseId ?? "",
+        revision: first.pendingRevision ?? 0,
+        expectedPublicationVersion: first.version,
+        reservationOwnerId: "owner-b",
+      }),
+    ).rejects.toThrow("no longer owned");
+
+    const replacement = await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      agendaProjectionId: "agenda-projection-2",
+      agendaRevisionNumber: 2,
+      agendaSourceHash: "agenda-hash-2",
+      speakerProjectionId: "speaker-projection-2",
+      speakerRevisionNumber: 2,
+      speakerSourceHash: "speaker-hash-2",
+      approvedContentRevision: 2,
+      reservationOwnerId: "owner-a",
+    });
+    expect(replacement).toMatchObject({
+      pendingRevision: 2,
+      releases: [
+        { lifecycle: "failed", failureReason: "Superseded by a newer publication reservation." },
+        {
+          revision: 2,
+          lifecycle: "pending",
+          agendaProjectionId: "agenda-projection-2",
+          speakerProjectionId: "speaker-projection-2",
+        },
+      ],
+    });
+  });
+
+  it("transfers an expired identical reservation to a recovering owner", async () => {
+    let now = Date.parse("2026-08-12T12:00:00.000Z");
+    const active = publicationService({
+      clock: () => new Date(now),
+      reservationTtlMs: 1_000,
+    });
+    await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      reservationOwnerId: "owner-a",
+    });
+    now += 1_001;
+    const expired = await active.repository.getState("org-a", "event-publication");
+    if (expired === null) throw new Error("Expected an expired pending reservation.");
+    await expect(
+      active.service.completeRebuild({
+        organizationId: "org-a",
+        eventId: "event-publication",
+        releaseId: expired.pendingReleaseId ?? "",
+        revision: expired.pendingRevision ?? 0,
+        expectedPublicationVersion: expired.version,
+        reservationOwnerId: "owner-a",
+      }),
+    ).rejects.toThrow("has expired");
+    const replacement = await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      reservationOwnerId: "owner-b",
+    });
+    expect(replacement).toMatchObject({
+      pendingRevision: 1,
+      releases: [{ lifecycle: "pending", reservationOwnerId: "owner-b" }],
+    });
+    await expect(
+      active.service.completeRebuild({
+        organizationId: "org-a",
+        eventId: "event-publication",
+        releaseId: replacement.pendingReleaseId ?? "",
+        revision: replacement.pendingRevision ?? 0,
+        expectedPublicationVersion: replacement.version,
+        reservationOwnerId: "owner-b",
+      }),
+    ).resolves.toMatchObject({ servedRevision: 1, pendingRevision: null });
+  });
+
+  it("keeps a release pending until durable cache invalidation is recorded", async () => {
+    const active = publicationService({
+      invalidationFailure: new Error("cache outbox unavailable"),
+    });
+    const pending = await active.service.reserveRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+    });
+    await expect(
+      active.service.completeRebuild({
+        organizationId: "org-a",
+        eventId: "event-publication",
+        releaseId: pending.pendingReleaseId ?? "",
+        revision: pending.pendingRevision ?? 0,
+        expectedPublicationVersion: pending.version,
+        reservationOwnerId: pendingReservationOwner(pending),
+      }),
+    ).rejects.toThrow("cache outbox unavailable");
+    await expect(active.repository.getState("org-a", "event-publication")).resolves.toMatchObject({
+      servedManifest: null,
+      pendingRevision: 1,
+      releases: [{ lifecycle: "pending" }],
+    });
+  });
+
   it("fails closed on the first rebuild failure and keeps the prior served release on refresh failure", async () => {
     const failed = publicationService({ enqueueFailure: new Error("queue unavailable") });
     const firstFailure = await failed.service.requestRebuild(actor(), {
@@ -858,6 +1074,7 @@ describe("program publication and saved embeds", () => {
       releaseId: pending.pendingReleaseId ?? "",
       revision: pending.pendingRevision ?? 0,
       expectedPublicationVersion: pending.version,
+      reservationOwnerId: pendingReservationOwner(pending),
     });
     const refresh = await active.service.requestRebuild(actor(), {
       ...rebuildInput,
@@ -873,6 +1090,7 @@ describe("program publication and saved embeds", () => {
       releaseId: refresh.pendingReleaseId ?? "",
       revision: refresh.pendingRevision ?? 0,
       expectedPublicationVersion: refresh.version,
+      reservationOwnerId: pendingReservationOwner(refresh),
       reason: "projection incomplete",
     });
 
@@ -896,6 +1114,7 @@ describe("program publication and saved embeds", () => {
       releaseId: firstPending.pendingReleaseId ?? "",
       revision: firstPending.pendingRevision ?? 0,
       expectedPublicationVersion: firstPending.version,
+      reservationOwnerId: pendingReservationOwner(firstPending),
     });
     const refresh = await active.service.requestRebuild(actor(), {
       ...rebuildInput,
@@ -912,6 +1131,7 @@ describe("program publication and saved embeds", () => {
         releaseId: firstPending.pendingReleaseId ?? "",
         revision: firstPending.pendingRevision ?? 0,
         expectedPublicationVersion: refresh.version,
+        reservationOwnerId: pendingReservationOwner(firstPending),
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
     const refreshed = await active.service.completeRebuild({
@@ -920,6 +1140,7 @@ describe("program publication and saved embeds", () => {
       releaseId: refresh.pendingReleaseId ?? "",
       revision: refresh.pendingRevision ?? 0,
       expectedPublicationVersion: refresh.version,
+      reservationOwnerId: pendingReservationOwner(refresh),
     });
     const rolledBack = await active.service.rollback(actor(), {
       eventId: "event-publication",
@@ -958,6 +1179,10 @@ describe("program publication and saved embeds", () => {
       version: number;
       pendingReleaseId: string;
       pendingRevision: number;
+      releases: readonly {
+        id: string;
+        reservationOwnerId?: string | null;
+      }[];
     }>(response);
     const served = await active.service.completeRebuild({
       organizationId: "org-a",
@@ -965,6 +1190,7 @@ describe("program publication and saved embeds", () => {
       releaseId: pending.pendingReleaseId,
       revision: pending.pendingRevision,
       expectedPublicationVersion: pending.version,
+      reservationOwnerId: pendingReservationOwner(pending),
     });
     const { agendaProjection, speakerProjection } = projectionFixtures();
     const safeAgendaProjection = structuredClone(agendaProjection) as unknown as {

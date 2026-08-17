@@ -414,9 +414,7 @@ describe.sequential("composed local Worker", () => {
     const events = await jsonData<Array<Record<string, unknown>>>(eventResponse);
     expect(eventResponse.status).toBe(200);
     expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: eventId, status: "active", slug: eventId }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ id: eventId, slug: eventId })]),
     );
 
     const eventDetailResponse = await runtimeRequest(
@@ -427,7 +425,6 @@ describe.sequential("composed local Worker", () => {
     expect(eventDetailResponse.status).toBe(200);
     expect(eventDetail).toMatchObject({
       id: eventId,
-      status: "active",
       cfpSettings: { enabled: true },
       embedConfigurations: [expect.objectContaining({ enabled: true, widgetId: "agenda" })],
     });
@@ -710,7 +707,7 @@ describe.sequential("composed local Worker", () => {
     expect(serialized).not.toContain("updatedBy");
   });
 
-  it("creates, reviews, and idempotently submits a CFP draft through the composed runtime", async () => {
+  it("creates, edits, and idempotently resubmits CFP data through the composed runtime", async () => {
     const applicantSignUpResponse = await runtimeRequest(
       "/api/auth/sign-up/email",
       jsonRequest("POST", {
@@ -857,10 +854,33 @@ describe.sequential("composed local Worker", () => {
       `${cfpBase}/submissions/${created.id}/submit`,
       submitInit,
     );
-    const submitted = await jsonData<{
-      submission: { id: string; status: string; version: number };
+    type RuntimeCfpSubmission = {
+      id: string;
+      status: string;
+      version: number;
+      submittedAt: string | null;
+      completedSteps: string[];
+      answers: Record<string, unknown>;
+      participants: Array<{
+        id: string;
+        firstName: string;
+        lastName: string;
+        email: string;
+        role: string;
+        biography: string;
+        answers: Record<string, unknown>;
+      }>;
+    };
+    type RuntimeCfpSubmitResult = {
+      submission: RuntimeCfpSubmission;
+      receipt: {
+        submissionId: string;
+        version: number;
+        submittedAt: string;
+      };
       confirmationQueued: boolean;
-    }>(submitResponse);
+    };
+    const submitted = await jsonData<RuntimeCfpSubmitResult>(submitResponse);
     expect(submitResponse.status).toBe(200);
     expect(submitted.submission).toMatchObject({ id: created.id, status: "submitted" });
     expect(submitted.confirmationQueued).toBe(true);
@@ -869,12 +889,204 @@ describe.sequential("composed local Worker", () => {
       `${cfpBase}/submissions/${created.id}/submit`,
       submitInit,
     );
-    const submitReplay = await jsonData<{
-      submission: { id: string; status: string; version: number };
-      confirmationQueued: boolean;
-    }>(submitReplayResponse);
+    const submitReplay = await jsonData<RuntimeCfpSubmitResult>(submitReplayResponse);
     expect(submitReplayResponse.status).toBe(200);
     expect(submitReplay).toEqual(submitted);
+
+    const submittedAt = submitted.submission.submittedAt;
+    const submittedCompletedSteps = submitted.submission.completedSteps;
+    const submittedParticipantIds = submitted.submission.participants.map(
+      (participant) => participant.id,
+    );
+    const submittedVersion = submitted.submission.version;
+    const submittedParticipantsReloadResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      { headers: applicantHeaders },
+    );
+    const submittedParticipantsReload = await jsonData<RuntimeCfpSubmission>(
+      submittedParticipantsReloadResponse,
+    );
+    expect(submittedParticipantsReloadResponse.status).toBe(200);
+    expect(submittedParticipantsReload).toEqual(submitted.submission);
+
+    const editPatchInit = jsonRequest(
+      "PATCH",
+      {
+        expectedVersion: submittedVersion,
+        answers: {
+          ...submitted.submission.answers,
+          abstract: "Updated after submission without losing lifecycle state.",
+        },
+      },
+      { ...applicantHeaders, "idempotency-key": "runtime-cfp-submitted-edit-patch-1" },
+    );
+    const editPatchResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      editPatchInit,
+    );
+    const editedDraft = await jsonData<RuntimeCfpSubmission>(editPatchResponse);
+    expect(editPatchResponse.status).toBe(200);
+    expect(editedDraft).toMatchObject({
+      status: "submitted",
+      submittedAt,
+      completedSteps: submittedCompletedSteps,
+      version: submittedVersion + 1,
+    });
+    expect(editedDraft.answers.abstract).toBe(
+      "Updated after submission without losing lifecycle state.",
+    );
+    expect(editedDraft.participants.map((participant) => participant.id)).toEqual(
+      submittedParticipantIds,
+    );
+
+    const editPatchReplayResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      editPatchInit,
+    );
+    const editedDraftReplay = await jsonData<typeof editedDraft>(editPatchReplayResponse);
+    expect(editPatchReplayResponse.status).toBe(200);
+    expect(editedDraftReplay).toEqual(editedDraft);
+
+    const participantsReloadResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      { headers: applicantHeaders },
+    );
+    const participantsReload = await jsonData<RuntimeCfpSubmission>(participantsReloadResponse);
+    expect(participantsReloadResponse.status).toBe(200);
+    expect(participantsReload).toEqual(editedDraft);
+
+    const editedParticipantRecords = participantsReload.participants.map((participant) => ({
+      ...participant,
+      answers: { ...participant.answers, company: "Runtime Systems" },
+    }));
+    const participantsEditInit = jsonRequest(
+      "PUT",
+      {
+        expectedVersion: participantsReload.version,
+        participants: editedParticipantRecords,
+        secondaryContacts: [],
+      },
+      {
+        ...applicantHeaders,
+        "idempotency-key": "runtime-cfp-submitted-edit-participants-1",
+      },
+    );
+    const participantsEditResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/participants`,
+      participantsEditInit,
+    );
+    const editedParticipants = await jsonData<typeof editedDraft>(participantsEditResponse);
+    expect(participantsEditResponse.status).toBe(200);
+    expect(editedParticipants).toMatchObject({
+      status: "submitted",
+      submittedAt,
+      completedSteps: submittedCompletedSteps,
+      version: submittedVersion + 2,
+    });
+    expect(editedParticipants.participants.map((participant) => participant.id)).toEqual(
+      submittedParticipantIds,
+    );
+    expect(editedParticipants.participants[0]?.answers.company).toBe("Runtime Systems");
+
+    const participantsEditReplayResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/participants`,
+      participantsEditInit,
+    );
+    const editedParticipantsReplay = await jsonData<typeof editedDraft>(
+      participantsEditReplayResponse,
+    );
+    expect(participantsEditReplayResponse.status).toBe(200);
+    expect(editedParticipantsReplay).toEqual(editedParticipants);
+
+    const reviewReloadResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      {
+        headers: applicantHeaders,
+      },
+    );
+    const reviewReload = await jsonData<RuntimeCfpSubmission>(reviewReloadResponse);
+    expect(reviewReloadResponse.status).toBe(200);
+    expect(reviewReload).toEqual(editedParticipants);
+
+    const editedReviewInit = {
+      method: "POST",
+      headers: {
+        ...applicantHeaders,
+        "idempotency-key": "runtime-cfp-submitted-edit-review-1",
+      },
+    };
+    const editedReviewResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/review`,
+      editedReviewInit,
+    );
+    const editedReview = await jsonData<{
+      canSubmit: boolean;
+      issues: unknown[];
+      version: number;
+    }>(editedReviewResponse);
+    expect(editedReviewResponse.status).toBe(200);
+    expect(editedReview).toMatchObject({
+      canSubmit: true,
+      issues: [],
+      version: editedParticipants.version,
+    });
+
+    const editedReviewReplayResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/review`,
+      editedReviewInit,
+    );
+    const editedReviewReplay = await jsonData<typeof editedReview>(editedReviewReplayResponse);
+    expect(editedReviewReplayResponse.status).toBe(200);
+    expect(editedReviewReplay).toEqual(editedReview);
+
+    const resubmitInit = jsonRequest(
+      "POST",
+      {
+        expectedVersion: reviewReload.version,
+      },
+      {
+        ...applicantHeaders,
+        "idempotency-key": "runtime-cfp-submitted-edit-resubmit-1",
+      },
+    );
+    const resubmitResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/submit`,
+      resubmitInit,
+    );
+    const resubmitted = await jsonData<RuntimeCfpSubmitResult>(resubmitResponse);
+    expect(resubmitResponse.status).toBe(200);
+    expect(resubmitted.submission).toEqual(reviewReload);
+    expect(resubmitted.submission).toMatchObject({
+      status: "submitted",
+      submittedAt,
+      completedSteps: submittedCompletedSteps,
+      version: editedParticipants.version,
+    });
+    expect(resubmitted.submission.participants.map((participant) => participant.id)).toEqual(
+      submittedParticipantIds,
+    );
+    expect(resubmitted.submission.participants[0]?.answers.company).toBe("Runtime Systems");
+    expect(resubmitted.receipt).toMatchObject({
+      submissionId: created.id,
+      submittedAt,
+      version: editedParticipants.version,
+    });
+    expect(resubmitted.confirmationQueued).toBe(false);
+
+    const resubmitReplayResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/submit`,
+      resubmitInit,
+    );
+    const resubmitReplay = await jsonData<RuntimeCfpSubmitResult>(resubmitReplayResponse);
+    expect(resubmitReplayResponse.status).toBe(200);
+    expect(resubmitReplay).toEqual(resubmitted);
+
+    const reconciledResponse = await runtimeRequest(`${cfpBase}/submissions/${created.id}/draft`, {
+      headers: applicantHeaders,
+    });
+    const reconciled = await jsonData<RuntimeCfpSubmission>(reconciledResponse);
+    expect(reconciledResponse.status).toBe(200);
+    expect(reconciled).toEqual(reviewReload);
   });
 
   it("completes a seeded speaker task upload and authorized local download", async () => {

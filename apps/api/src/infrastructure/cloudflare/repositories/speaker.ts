@@ -180,7 +180,7 @@ export class D1SpeakerRepository
     const rows = await this.#db
       .withSession("first-primary")
       .prepare(
-        `SELECT e.organization_id, e.id AS event_id, e.name, e.slug, e.status,
+        `SELECT e.organization_id, e.id AS event_id, e.name, e.slug,
                 group_concat(DISTINCT pg.participant_id) AS participant_ids,
                 group_concat(DISTINCT sp.submission_id) AS submission_ids
            FROM participant_grants pg
@@ -215,7 +215,6 @@ export class D1SpeakerRepository
         eventId: String(row.event_id),
         name: String(row.name),
         slug: String(row.slug),
-        status: String(row.status),
         capabilities: [
           "profile-self",
           "task-response",
@@ -270,7 +269,6 @@ export class D1SpeakerRepository
                 e.id AS event_id,
                 e.name AS event_name,
                 e.slug AS event_slug,
-                e.status AS event_status,
                 s.id AS submission_id,
                 sp.participant_id
            FROM submissions AS s
@@ -315,7 +313,6 @@ export class D1SpeakerRepository
         eventId,
         name: String(row.event_name),
         slug: String(row.event_slug),
-        status: String(row.event_status),
         capabilities: ["submission-edit"],
         submissionIds: [submissionId],
         participantIds: participantId === undefined ? [] : [participantId],

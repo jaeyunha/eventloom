@@ -5,5 +5,5 @@ export function reviewerDisplayLabel(
   members: readonly OrganizationMember[],
 ): string {
   const member = members.find((candidate) => candidate.userId === reviewerId);
-  return member?.name?.trim() || member?.email || reviewerId;
+  return member?.name?.trim() || member?.email || "Reviewer unavailable";
 }

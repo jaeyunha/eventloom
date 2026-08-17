@@ -174,6 +174,8 @@ describe("D1 runtime composition", () => {
 
     expect(statements[0]).toContain("WHERE p.served_revision IS NOT NULL");
     expect(statements[0]).not.toContain("deleted_at");
+    expect(statements[0]).not.toContain("events.status");
+    expect(statements[0]).toContain("e.legacy_retired_at IS NULL");
   });
 
   it("resolves a publication manifest without requiring an event tombstone column", async () => {
@@ -205,7 +207,8 @@ describe("D1 runtime composition", () => {
 
     await store.getProgramPublicationManifest("forward-summit-2028");
 
-    expect(statements[0]).toContain("WHERE lower(slug) = ? LIMIT 2");
+    expect(statements[0]).toContain("WHERE legacy_retired_at IS NULL");
+    expect(statements[0]).toContain("AND lower(slug) = ? LIMIT 2");
     expect(statements[0]).not.toContain("deleted_at");
   });
 

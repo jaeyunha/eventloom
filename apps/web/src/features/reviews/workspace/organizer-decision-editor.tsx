@@ -5,6 +5,7 @@ import { Checkbox } from "../../../components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
 import styles from ".././review-workspace.module.css";
 import { evaluationRequest } from "./model-evaluation-request";
+import { participantDisplayLabel } from "./model-participant-display-label";
 import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
 
@@ -33,6 +34,7 @@ export function DecisionEditor({
   const [busy, setBusy] = useState(false);
 
   const decisionVersionRef = useRef<number | undefined>(decision?.version);
+  const participantNames = participantDisplayLabel(aggregate.participants);
   async function saveDecision(): Promise<void> {
     if (!status) {
       setError("Choose accept, waitlist, or reject before confirming.");
@@ -81,7 +83,7 @@ export function DecisionEditor({
     <article className={styles.decisionCard}>
       <div className={styles.decisionSummary}>
         <div>
-          <span className={styles.cardLabel}>{aggregate.reference}</span>
+          {participantNames ? <span className={styles.cardLabel}>{participantNames}</span> : null}
           <h3>{aggregate.title}</h3>
         </div>
         <span className={styles.scorePill}>

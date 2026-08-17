@@ -14,11 +14,11 @@ communications, scheduling, publication, and a built-in Speaker CRM into one
 tenant-safe system.
 
 > [!IMPORTANT]
-> Eventloom is in active development. The source and local test suites are
-> substantial, but every product area remains **partial** and no area is
-> **release-verified**. Repository visibility, local fixtures, and configured
-> providers are not production-readiness claims. See the
-> [product contract](spec/eventloom.md) for exact status.
+> Eventloom is in active development. Broad end-to-end workflows are
+> implemented and tested across CFP intake, review, speaker operations,
+> scheduling, publication, reporting, and Speaker CRM. Complete production
+> release verification is still in progress; see the
+> [product contract](spec/eventloom.md) for current evidence and known gaps.
 
 [Quick start](#quick-start) · [Architecture](#architecture) ·
 [Self-hosting](#self-hosting) · [Documentation](#documentation) ·
@@ -260,18 +260,9 @@ Do not treat deployable configuration as production readiness. Follow
 
 ## Contributing
 
-Focused fixes and well-scoped improvements are welcome.
-
-1. Read [`AGENTS.md`](AGENTS.md), [`spec/eventloom.md`](spec/eventloom.md), and
-   the relevant architecture or operational guide.
-2. Work in a dedicated branch or worktree and preserve unrelated changes.
-3. Add behavioral coverage for observable changes; do not weaken existing tests.
-4. Run the focused tests while editing, then the full relevant gate.
-5. Open a pull request that separates local/mock evidence from deployed evidence.
-
-For larger changes, describe the user workflow, system boundary, and acceptance
-criteria before implementation. Keep credentials, provider payloads, browser
-profiles, recordings, generated output, and private evidence out of commits.
+Focused fixes and well-scoped improvements are welcome. Read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for project boundaries, local setup,
+verification expectations, pull request guidance, and contribution licensing.
 
 ## Project status
 

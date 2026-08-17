@@ -32,6 +32,7 @@ function job(overrides: Partial<OutboxJob> = {}): OutboxJob {
     state: "pending",
     attemptCount: 0,
     availableAt: NOW,
+    leaseOwner: null,
     leaseExpiresAt: null,
     ...overrides,
   };
@@ -143,6 +144,52 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.acked).toBe(true);
     expect(queueMessage.retries).toEqual([]);
     expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("retries a live lease at its expiry instead of exhausting Queue retries", async () => {
+    const leaseExpiresAt = new Date(NOW.getTime() + 5 * 60_000);
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        state: "processing",
+        attemptCount: 1,
+        leaseOwner: "active-worker",
+        leaseExpiresAt,
+      }),
+    ]);
+    const queueMessage = message(queueBody(), 4);
+
+    await run(queueMessage, repository, { communications: vi.fn(async () => undefined) });
+
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([300]);
+    expect(repository.get("job-1")).toMatchObject({
+      state: "processing",
+      attemptCount: 1,
+      leaseOwner: "active-worker",
+    });
+  });
+
+  it("prevents an expired lease owner from completing a successor claim", async () => {
+    const repository = new InMemoryOutboxJobRepository([job()]);
+    const first = await repository.claim("job-1", NOW, 60_000, "worker-a");
+    const second = await repository.claim(
+      "job-1",
+      new Date(NOW.getTime() + 60_001),
+      60_000,
+      "worker-b",
+    );
+    if (first.outcome !== "claimed" || second.outcome !== "claimed") {
+      throw new Error("Expected both outbox claims.");
+    }
+
+    await expect(repository.markDelivered(first.job, NOW)).rejects.toThrow(
+      "Outbox delivery state could not be persisted.",
+    );
+    expect(repository.get("job-1")).toMatchObject({
+      state: "processing",
+      attemptCount: 2,
+      leaseOwner: "worker-b",
+    });
   });
   it("persists provider completion through the communication status boundary", async () => {
     const repository = new InMemoryOutboxJobRepository([
@@ -874,6 +921,47 @@ describe("Cloudflare outbox consumer", () => {
       state: "dead-letter",
       attemptCount: 3,
     });
+  });
+
+  it("validates and dispatches evaluation review export reports", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        topic: "reports",
+        payload: { kind: "evaluation_review_export", runId: "run-1" },
+      }),
+    ]);
+    const dispatch = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody("reports"));
+
+    await run(queueMessage, repository, { reports: dispatch });
+    const duplicate = message(queueBody("reports"));
+    await run(duplicate, repository, { reports: dispatch });
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith(
+      { kind: "evaluation_review_export", runId: "run-1" },
+      expect.objectContaining({ topic: "reports", jobId: "job-1" }),
+    );
+    expect(queueMessage.acked).toBe(true);
+    expect(duplicate.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it.each([
+    { kind: "evaluation_review_export", runId: "" },
+    { kind: "evaluation_review_export", runId: "run-1", extra: true },
+    { kind: "other_report", runId: "run-1" },
+  ])("rejects malformed reports payload $kind", async (payload) => {
+    const repository = new InMemoryOutboxJobRepository([job({ topic: "reports", payload })]);
+    const dispatch = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody("reports"));
+
+    await run(queueMessage, repository, { reports: dispatch });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")?.state).toBe("queued");
   });
 
   it.each(["accelevents", "file-scan"] as const)(

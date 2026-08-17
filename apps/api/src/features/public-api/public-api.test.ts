@@ -215,10 +215,10 @@ describe("public API v1", () => {
     }
 
     const declared = await app.request(
-      `/api/v1/organizations/org-1/events?filter=${encodeURIComponent(JSON.stringify({ status: "draft" }))}`,
+      `/api/v1/organizations/org-1/events?filter=${encodeURIComponent(JSON.stringify({ slug: "summit" }))}`,
     );
     expect(declared.status).toBe(200);
-    expect(repository.lastFilters).toEqual({ status: "draft" });
+    expect(repository.lastFilters).toEqual({ slug: "summit" });
   });
 
   it("rejects a cursor bound to another organization", async () => {
