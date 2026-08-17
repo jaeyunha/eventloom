@@ -10,7 +10,10 @@ commit, review, and PR links are maintained in
 
 - Repository: `jaeyunha/eventloom`
 - Branch: `judge-public-widgets`
+- Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-public-widgets`
 - Integrated base before final delivery: `5de02118b194c429bee50bf3eac9acd5ffeecf1e`
+- Current candidate commit: `f55fd06a93e0683600b3fea94709b99fa72f1205`
+- Pull request: https://github.com/jaeyunha/eventloom/pull/60 (OPEN, unmerged, undeployed)
 - Checkpoint commit:
   `06299a29a52e8706e5951bf35d06bbe1c26963f9`
 - The base includes PR #42 feature head:
