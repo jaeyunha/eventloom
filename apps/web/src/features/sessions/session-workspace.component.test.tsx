@@ -134,6 +134,8 @@ describe("sessions workspace presentation", () => {
     expect(markup).toContain("Avery Kim");
     expect(markup).toContain("Primary");
     expect(markup).toContain("Morgan Lee");
+    expect(markup).toContain("Add or edit speakers");
+    expect(markup).toContain('href="/admin/organizations/org-1/events/event-1/speakers"');
     expect(markup).toContain("Save speaker assignments");
     expect(markup).toContain('role="checkbox"');
     expect(markup).toContain("Change history");
@@ -141,6 +143,23 @@ describe("sessions workspace presentation", () => {
     expect(markup).toContain("Version 1 - Created");
     expect(markup).toContain("Restore version 1");
     expect(markup).toContain("Current");
+  });
+
+  it("encodes reserved organization and event route characters", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionsWorkspaceView, {
+        organizationId: "organization one/#%",
+        eventId: "event one/#%",
+        sessions: [session],
+        selectedSessionId: session.id,
+        history: [],
+        speakers: [],
+      }),
+    );
+
+    expect(markup).toContain(
+      'href="/admin/organizations/organization%20one%2F%23%25/events/event%20one%2F%23%25/speakers"',
+    );
   });
 
   it("distinguishes an empty roster from an unavailable roster and announces success politely", () => {
