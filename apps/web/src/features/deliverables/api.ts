@@ -146,6 +146,7 @@ export interface DeliverableAsset {
   readonly submissionId?: string;
   readonly sessionTitle?: string;
   readonly participantName?: string;
+  readonly uploaderLabel?: string;
   readonly participantId: string;
   readonly taskId?: string;
   readonly kind: DeliverableAssetKind;
@@ -506,6 +507,9 @@ function publicAsset(value: unknown): DeliverableAsset {
     ...(typeof candidate.sessionTitle === "string" ? { sessionTitle: candidate.sessionTitle } : {}),
     ...(typeof candidate.participantName === "string"
       ? { participantName: candidate.participantName }
+      : {}),
+    ...(typeof candidate.uploaderLabel === "string"
+      ? { uploaderLabel: candidate.uploaderLabel }
       : {}),
     ...(typeof candidate.taskId === "string" ? { taskId: candidate.taskId } : {}),
     ...(typeof candidate.version === "number" ? { version: candidate.version } : {}),

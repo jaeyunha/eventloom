@@ -99,6 +99,7 @@ import type { Session } from "../features/sessions/types";
 import { CommunicationSpeakerCommunications } from "../features/speaker/communications";
 import { SpeakerService } from "../features/speaker/service";
 import type {
+  CreatePendingSpeakerAssetVersionCommand,
   CreatePrivateUploadGrantCommand,
   FinalizeSpeakerAssetCommand,
   PrivateAssetCapabilityBinding,
@@ -533,6 +534,7 @@ class LocalSpeakerRepository
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
   readonly #assetComments = new Map<string, SpeakerAssetComment[]>();
+  readonly #assetVersionCreations = new Map<string, { requestDigest: string; assetId: string }>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
   readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
@@ -751,6 +753,9 @@ class LocalSpeakerRepository
         ]),
       ],
     };
+  }
+  async getAccountDisplayName(accountId: string): Promise<string | null> {
+    return LOCAL_PERSONAS.find((persona) => persona.userId === accountId)?.name ?? null;
   }
 
   async listActiveParticipantIds(organizationId: string, eventId: string): Promise<string[]> {
@@ -1214,6 +1219,52 @@ class LocalSpeakerRepository
     this.#ensureEvent(asset.eventId);
     this.#assets.get(asset.eventId)?.push(clone(asset));
     return clone(asset);
+  }
+
+  async createPendingAssetVersion(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const { asset } = command;
+    this.#ensureEvent(asset.eventId);
+    const assets = this.#assets.get(asset.eventId) ?? [];
+    const key = `${asset.tenantId ?? asset.eventId}\u0000${asset.eventId}\u0000${command.idempotencyKey}`;
+    const replay = this.#assetVersionCreations.get(key);
+    if (replay !== undefined) {
+      const stored = assets.find((candidate) => candidate.id === replay.assetId);
+      return replay.requestDigest === command.requestDigest && stored !== undefined
+        ? { ok: true, value: clone(stored) }
+        : { ok: false, reason: "version_conflict" };
+    }
+    const familyId = asset.versionFamilyId ?? asset.id;
+    const expected = assets.find(
+      (candidate) =>
+        candidate.id === command.expectedLatestAssetId &&
+        (candidate.versionFamilyId ?? candidate.id) === familyId,
+    );
+    if (
+      expected === undefined ||
+      expected.version !== command.expectedLatestVersion ||
+      expected.state !== "ready" ||
+      asset.state !== "pending_upload" ||
+      asset.supersedesAssetId !== expected.id ||
+      asset.version !== command.expectedLatestVersion + 1 ||
+      asset.versionId !== asset.id ||
+      asset.latestVersionId !== asset.id ||
+      assets.some(
+        (candidate) =>
+          (candidate.versionFamilyId ?? candidate.id) === familyId &&
+          (candidate.version ?? 0) > command.expectedLatestVersion,
+      )
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const stored = clone(asset);
+    assets.push(stored);
+    this.#assetVersionCreations.set(key, {
+      requestDigest: command.requestDigest,
+      assetId: stored.id,
+    });
+    return { ok: true, value: clone(stored) };
   }
 
   async getAsset(eventId: string, assetId: string) {

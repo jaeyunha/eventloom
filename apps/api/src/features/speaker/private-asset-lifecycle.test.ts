@@ -214,6 +214,15 @@ class LifecycleRepository implements SpeakerRepository {
       },
     );
   }
+  getAccountDisplayName(accountId: string): Promise<string | null> {
+    return Promise.resolve(
+      accountId === "account-1"
+        ? "Alex Rivera"
+        : accountId === "organizer"
+          ? "Local Organizer"
+          : null,
+    );
+  }
   getOrganizerAccessScope(
     eventId: string,
     accountId: string,
@@ -696,6 +705,8 @@ describe("private speaker asset lifecycle", () => {
     expect(authorization.asset).toMatchObject({
       tenantId: "tenant-1",
       submissionId: "submission-1",
+      uploaderAccountId: "account-1",
+      uploaderLabel: "Alex Rivera",
       version: 1,
       versionFamilyId: "asset-family:asset-1",
       commentThreadId: "asset-comments:asset-family:asset-1",
@@ -721,6 +732,42 @@ describe("private speaker asset lifecycle", () => {
     expect(gateway.invalidatedUploadBindings).toEqual([
       expect.objectContaining({ capabilityId: authorization.asset.id }),
     ]);
+  });
+
+  it("records the authenticated organizer separately from the asset participant", async () => {
+    const repository = new LifecycleRepository();
+    repository.organizerScopes.set("event-1:organizer", {
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      role: "owner",
+    });
+    const service = new SpeakerService(
+      withTestSpeakerOrganizerLifecycle(repository),
+      new CapabilityGateway(),
+      {
+        speakerSender,
+        now: () => new Date(now),
+        generateId: () => "organizer-headshot",
+      },
+    );
+
+    const authorization = await service.issueOrganizerUploadGrant({
+      eventId: "event-1",
+      accountId: "organizer",
+      participantId: "participant-1",
+      kind: "headshot",
+      fileName: "headshot.jpg",
+      contentType: "image/jpeg",
+      sizeBytes: 3,
+    });
+
+    expect(authorization.asset).toMatchObject({
+      participantId: "participant-1",
+      uploaderAccountId: "organizer",
+      uploaderLabel: "Local Organizer",
+    });
   });
 
   it("re-authorizes the same pending asset from immutable persisted metadata", async () => {

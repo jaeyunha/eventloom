@@ -5267,6 +5267,10 @@ export class SpeakerService {
         );
       }
     }
+    const resolvedUploaderLabel = await this.repository.getAccountDisplayName?.(input.accountId);
+    const uploaderLabel =
+      resolvedUploaderLabel?.trim() ||
+      (organizerScope === null ? "Participant uploader" : "Organizer uploader");
     const versionFamilyId = existing?.versionFamilyId ?? existing?.id ?? `asset-family:${assetId}`;
     const asset: SpeakerAsset = {
       id: assetId,
@@ -5274,6 +5278,8 @@ export class SpeakerService {
       eventId: input.eventId,
       ...(submissionId === undefined ? {} : { submissionId }),
       participantId: input.participantId,
+      uploaderAccountId: input.accountId,
+      uploaderLabel,
       ...(taskId === undefined ? {} : { taskId }),
       kind: input.kind,
       objectKey: [

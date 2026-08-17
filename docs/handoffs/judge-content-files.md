@@ -1,0 +1,326 @@
+# Lane handoff: judge-content-files
+
+## Paused state
+
+This lane is **paused by user request**. Do not merge or deploy it. The current
+checkpoint intentionally preserves partially implemented follow-up work so it
+can be resumed without reconstructing the investigation.
+
+## Repository and branch
+
+- Repository: `https://github.com/jaeyunha/eventloom`
+- Branch: `judge-content-files`
+- Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-content-files`
+- Pull request: https://github.com/jaeyunha/eventloom/pull/39
+- Pull request state at pause: `OPEN`, non-draft, `CLEAN`, not merged
+- Exact GitHub-main base incorporated before this checkpoint:
+  `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`
+- Exact pushed head before the checkpoint commit:
+  `20b3b7b6db27e882ec139ee16c87c966ab39ea4b`
+- The checkpoint commit containing this document is the next commit on the same
+  branch. Resolve its exact SHA with `git rev-parse HEAD` after fetching the
+  pushed branch; the handoff issue records that pushed SHA.
+
+## Lane objective and scope
+
+Complete the judge remediation for speaker file upload, retrieval,
+replacement, immutable version history, organizer review metadata, and
+server-authoritative export while preserving:
+
+- tenant and event authorization boundaries;
+- server-created private object keys;
+- atomic review/task stale-write protection;
+- two-minute, one-time, `no-store` download capabilities;
+- validated immutable replacement lineage;
+- retained downloadable historical versions;
+- D1 as authoritative state and the Cloudflare outbox for durable external
+  effects.
+
+## Completed implementation
+
+The first verified commit, `20b3b7b6db27e882ec139ee16c87c966ab39ea4b`,
+is already pushed and present in PR #39. It:
+
+- atomically persists an organizer `needs_changes` review, family pointer
+  updates, task CAS/update, task transition, and audit in one D1 batch;
+- mirrors the successful path in local runtime storage;
+- returns a submitted upload task to `needs_changes`;
+- proves v1 review, returned note/action, v2 upload, immutable v1/v2 history,
+  participant Files visibility, and authoritative-current ZIP behavior;
+- adds local fixture parity needed for participant Files;
+- keeps object keys and capability material out of browser responses.
+
+The paused, not-yet-pushed follow-up patch currently contains:
+
+- migration `0034_speaker_asset_uploader.sql`;
+- immutable asset uploader account ID plus upload-time display-label snapshot
+  in the domain, D1 schema/repository, local repository, service, organizer
+  parser, and file-review context;
+- a service regression where an organizer uploader is distinct from the
+  speaker and a web model regression for the same distinction;
+- speaker-facing asset serialization that removes `reviewedBy` and
+  `uploaderAccountId`, while organizer audit storage remains intact;
+- migration `0035_speaker_asset_creation_idempotency.sql`;
+- typed `CreatePendingSpeakerAssetVersionCommand`;
+- partial D1 and local repository implementations for optimistic/idempotent
+  pending replacement creation;
+- lifecycle fixture migration ordering for `0034` and `0035`.
+
+The pending-version repository command is **not wired into the service, HTTP
+routes, or clients yet**. It is preserved as a syntactically coherent
+checkpoint, not claimed as completed behavior.
+
+## Remaining tasks
+
+### Uploader provenance and safe serialization
+
+- [ ] Add D1/API response coverage proving organizer uploader and speaker can
+      differ while only the human-safe uploader label is projected.
+- [ ] Add speaker portal/list/history/finalize/retry response tests proving
+      `reviewedBy`, `uploaderAccountId`, object keys, and tenant IDs are absent.
+- [ ] Add organizer audit/parser coverage proving authoritative reviewer
+      attribution remains available only on organizer-authorized surfaces.
+- [ ] Re-run the content collection browser scenario and replace the old
+      duplicate-speaker assertion with a field-scoped uploader assertion.
+
+### Atomic and idempotent replacement authorization
+
+- [ ] Wire `createPendingAssetVersion` into `SpeakerService.issueUploadGrant`
+      for every successor asset.
+- [ ] Carry expected latest asset ID/version, an idempotency key, and a stable
+      request digest through service, routes, portal client, organizer client,
+      and test fixtures.
+- [ ] Remove the non-atomic service-only family-head decision and treat the
+      repository command as the authority.
+- [ ] Map a losing writer or mismatched idempotency replay to controlled
+      `VERSION_CONFLICT` / HTTP 409 without disguising operational D1 failures.
+- [ ] Verify D1 same-key replay returns the canonical stored asset, different
+      keys yield one winner, and changed payload with the same key conflicts.
+- [ ] Verify local storage has identical CAS/replay semantics and never appends
+      duplicate version-2 children.
+- [ ] Add deterministic parallel service, D1, local-runtime, and HTTP tests:
+      one canonical v2, stable same-key replay, deterministic current
+      selection, no grant for the loser, and retained/downloadable v1 bytes.
+
+### Review/task atomicity and task-state invariant
+
+- [ ] Add an actual D1 `reviewAsset` rollback test using a valid asset review
+      version and stale task CAS between pre-read and batch.
+- [ ] Assert review state/version, task state/version, transition row, every
+      family pointer, and asset audit remain unchanged except for the winning
+      concurrent task version.
+- [ ] Add actual `LocalSpeakerRepository` rollback parity, including stored
+      transition/audit evidence if local storage is extended to retain them.
+- [ ] Define the invariant for every reachable linked upload-task status:
+      `not_started`, `in_progress`, `submitted`, `needs_changes`, `completed`,
+      `waived`, `overdue`, and `reopened`.
+- [ ] Make a successful `needs_changes` review atomically leave the linked task
+      in actionable `needs_changes`, with CAS and a durable transition when a
+      transition is required.
+- [ ] For an already-returned task, atomically verify its status/version while
+      preserving the existing durable return transition.
+- [ ] Reject the review without any asset/task/pointer/audit mutation when the
+      task invariant cannot be established.
+- [ ] Add D1 and local parity regressions for every reachable task state and
+      rollback path.
+
+### Replacement baseline before resubmission
+
+- [ ] Persist the immutable returned asset ID as a replacement baseline on the
+      linked task in a new migration after `0035`.
+- [ ] Establish that baseline in the same atomic review/task mutation.
+- [ ] Require the authoritative current asset in that exact family to be a
+      ready version newer than the baseline before `needs_changes -> submitted`.
+- [ ] At minimum reject an unchanged current asset whose review state remains
+      `needs_changes`.
+- [ ] Preserve the baseline through work-in-progress transitions and clear it
+      only in the successful submission CAS.
+- [ ] Add service, D1 reload, local runtime, and HTTP regressions for:
+      v1 returned; immediate resubmit conflict; pending/rejected/unrelated
+      versions still conflict; ready v2 succeeds; baseline clears.
+
+### Attributable private downloads
+
+- [ ] Persist requester account, requester kind (`speaker` or `organizer`),
+      event/participant/asset linkage, and opaque capability ID at grant
+      issuance.
+- [ ] Never persist or log raw capability tokens, verifier digests outside the
+      private capability table, or full capability URLs.
+- [ ] Atomically record issuance audit and one-time capability claim/consumption
+      audit in D1.
+- [ ] Attribute consumption to the issuance principal without claiming the
+      bearer URL was presented by the same human.
+- [ ] Preserve the existing two-minute expiry, `no-store`, exact token digest
+      verification, and one-winner replay denial.
+- [ ] Cover speaker and organizer grants, invalid/expired tokens, parallel
+      consumption, replay denial, failed audit rollback, and token-free audit
+      serialization.
+
+### Durable private R2 cleanup
+
+- [ ] Add an idempotent private-object delete operation to the gateway and
+      local fake.
+- [ ] Make rejected finalization atomically persist asset/capability state and a
+      durable cleanup outbox job before any R2 deletion.
+- [ ] Add D1-authoritative expiry/reconciliation for abandoned pending uploads
+      and historical post-invalidation failures.
+- [ ] Activate a typed `file-scan` outbox effect that resolves the object key
+      from the authoritative rejected asset instead of trusting queue payload
+      storage coordinates.
+- [ ] Add retry, lease, dead-letter, and stranded-job republish behavior using
+      existing outbox infrastructure.
+- [ ] Never delete `ready` assets, including intentionally retained
+      superseded historical versions.
+- [ ] Cover rejected, expired/unfinalized, reauthorized, transient delete
+      failure, retry/dead-letter, missing object, tenant mismatch, and
+      retained-history cases.
+
+### Delivery and review
+
+- [ ] Fetch `github/main` again and incorporate any new revision without
+      overwriting unrelated merged work.
+- [ ] Complete PR #39 description with judge/rubric IDs, root cause,
+      before/after behavior, reproducible manual QA, limitations, conflict
+      files, exact base/head, and accessible screenshot evidence.
+- [ ] Re-run all five post-implementation reviewers on the exact final head.
+- [ ] Do not merge or deploy from this lane.
+
+## Known review findings and unresolved risks
+
+- PR #39 goal and quality review failed at head
+  `20b3b7b6db27e882ec139ee16c87c966ab39ea4b` because the original Uploader
+  field duplicated Speaker instead of recording the authenticated actor.
+- Security review requires removal of raw `reviewedBy` account IDs from all
+  speaker-facing asset payloads while keeping organizer audit attribution.
+- Concurrent replacement authorization is currently non-atomic in the
+  shipped service path. The paused patch adds an unused repository command,
+  but until wiring and tests are complete, D1/local behavior is not claimed
+  fixed.
+- A returned task can currently be resubmitted without a replacement because
+  the returned ready v1 still satisfies readiness.
+- A `needs_changes` asset review currently returns only submitted tasks; other
+  reachable states can leave the task non-actionable or inconsistent.
+- Repository-level D1 rollback proof for a stale linked task is still missing.
+- Download issuance/consumption lacks durable requester attribution.
+- Rejected and abandoned private bytes lack durable outbox cleanup.
+- The partial D1 pending-version method has passed typecheck and existing
+  suites but has no focused behavioral test and must be treated as unfinished.
+
+## Verification evidence at checkpoint
+
+### Passed
+
+- `git diff --check`
+- `bun run --filter @eventloom/api typecheck`
+- `bun run --filter @eventloom/web typecheck`
+- `bunx vitest run apps/api/src/features/speaker/private-asset-lifecycle.test.ts apps/web/src/features/deliverables/file-review-model.test.ts --reporter=dot`
+  - 2 files passed; 28 tests passed.
+- `bunx vitest run apps/api/src/infrastructure/cloudflare/repositories/speaker-lifecycle.test.ts --reporter=dot`
+  - 8 tests passed.
+- `bun run test:runtime -- --reporter=dot`
+  - 10 tests passed.
+- `bunx vitest run apps/api/src/infrastructure/cloudflare/repositories/speaker.test.ts --reporter=dot`
+  - 17 tests passed.
+- `bun run test:scripts`
+- `make test`
+  - Full unit, script, API, and runtime gate exited 0 after the migration
+    header repair.
+- `make build`
+  - All packages exited 0. Next.js emitted its known dynamic route diagnostic
+    for `/events`, but the web build exited 0.
+- `make check`
+  - Typecheck, Biome lint, and Biome format gate exited 0 after formatting
+    repairs.
+
+### Failed and repaired
+
+- The first `make test` run failed because migrations `0034` and `0035` did not
+  include the repository-required `PRAGMA foreign_keys = ON;`. Both migrations
+  now include it; `bun run test:scripts` and the full `make test` rerun passed.
+- The first `make check` run failed only on formatter output in the partial
+  route/D1/local edits. The files were formatted manually with `apply_patch`;
+  the full rerun passed.
+
+### Not run or not yet valid
+
+- No Playwright/browser run was performed after the paused partial patch. The
+  prior pushed commit had a passing content collection scenario, but new
+  uploader/serialization changes require a fresh run when work resumes.
+- No focused test exists yet for `createPendingAssetVersion`; it is not wired
+  into production behavior.
+- None of the new task-state invariant, replacement-baseline, download-audit,
+  or durable-cleanup regressions has been implemented or run.
+- Final post-implementation review is not passing and must be repeated on the
+  eventual exact head.
+
+## Dependencies and merge order
+
+1. Fetch and compare latest `github/main` before editing. Merge current main
+   into this checkpoint branch normally; do not force-push.
+2. Keep migration order stable:
+   - `0034_speaker_asset_uploader.sql`
+   - `0035_speaker_asset_creation_idempotency.sql`
+   - future replacement-baseline migration
+   - future download-attribution migration
+   - future private-cleanup migration
+3. Finish domain/repository commands before route/client wiring.
+4. Finish D1 and local parity before browser acceptance.
+5. Finish durable cleanup/outbox integration before claiming rejected or
+   abandoned bytes are handled.
+6. Run focused suites, then `make check`, `make test`, `make build`, isolated
+   Playwright on safe ports, and all five reviewers.
+7. Update PR #39 but do not merge or deploy.
+
+## Dirty, generated, and untracked file disposition
+
+- All current source, test, migration, and handoff changes are lane-owned and
+  must be preserved.
+- `make clean` was run after verification. `.next`, API `dist`, coverage,
+  Playwright report, and `test-results` are absent.
+- `.debug-journal.md` was removed as a generated lane artifact.
+- No browser screenshots or build output are staged.
+- The two new migration files, the new file-review model test, and this
+  handoff document are intentional source/checkpoint files.
+
+## Precise resume instructions
+
+```bash
+cd /Users/jaeyunha/wt/open-sessionboard/judge-content-files
+git status --short --branch
+git fetch github main
+git rev-parse HEAD
+git rev-parse github/main
+git merge-base HEAD github/main
+gh pr view 39 --repo jaeyunha/eventloom \
+  --json url,state,mergeStateStatus,baseRefName,headRefName,headRefOid
+```
+
+Read this document and the linked handoff issue before editing. If
+`github/main` advanced, merge it into `judge-content-files` without force and
+resolve only lane-owned conflicts. Then resume in this order:
+
+1. Add failing tests for pending-version CAS/replay and wire the partial
+   repository command through service/routes/clients.
+2. Add actual D1/local review rollback proofs and the all-task-state invariant.
+3. Add the returned-asset replacement baseline and no-v2 submission conflict.
+4. Finish safe reviewer/uploader API coverage.
+5. Add attributable private download issuance/consumption.
+6. Add durable outbox-backed R2 cleanup and expiry reconciliation.
+7. Run:
+
+```bash
+bun run --filter @eventloom/api typecheck
+bun run --filter @eventloom/web typecheck
+bunx vitest run apps/api/src/features/speaker/private-asset-lifecycle.test.ts \
+  apps/api/src/infrastructure/cloudflare/repositories/speaker-lifecycle.test.ts \
+  apps/api/src/infrastructure/cloudflare/repositories/speaker.test.ts \
+  apps/web/src/features/deliverables/file-review-model.test.ts --reporter=dot
+bun run test:runtime -- --reporter=dot
+make check
+make test
+make build
+bun run test:e2e -- tests/e2e/content-collection-detail.spec.ts
+```
+
+Finally, update PR #39 and the handoff issue with the exact new base/head and
+verification evidence. Do not merge or deploy.

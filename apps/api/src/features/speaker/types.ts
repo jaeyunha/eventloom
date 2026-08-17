@@ -248,6 +248,10 @@ export interface SpeakerAsset {
   participantId: string;
   /** Organizer-only display label projected from the accepted event roster. */
   participantName?: string;
+  /** Internal authenticated account that created this immutable asset version. */
+  uploaderAccountId?: string;
+  /** Upload-time display label snapshot safe for authorized organizer projection. */
+  uploaderLabel?: string;
   /** Accepted submission title projected for organizer file-library grouping. */
   sessionTitle?: string;
   taskId?: string;
@@ -657,6 +661,14 @@ export interface SpeakerAssetReviewCommand {
   returnTask?: TransitionSpeakerTaskCommand;
 }
 
+export interface CreatePendingSpeakerAssetVersionCommand {
+  asset: SpeakerAsset;
+  expectedLatestAssetId: string;
+  expectedLatestVersion: number;
+  idempotencyKey: string;
+  requestDigest: string;
+}
+
 export interface SpeakerAssetAuditEntry {
   id: string;
   organizationId: string;
@@ -1047,6 +1059,7 @@ export interface SpeakerRepository {
     eventId: string,
     accountId: string,
   ): Promise<SpeakerOrganizerAccessScope | null>;
+  getAccountDisplayName?(accountId: string): Promise<string | null>;
   listSubmissions(eventId: string, submissionIds: readonly string[]): Promise<SpeakerSubmission[]>;
   getOrganizerReadModel?(
     eventId: string,
@@ -1089,6 +1102,9 @@ export interface SpeakerRepository {
     command: TransitionSpeakerTaskCommand,
   ): Promise<RepositoryResult<{ task: SpeakerTask; transition: SpeakerTaskTransition }>>;
   createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset>;
+  createPendingAssetVersion?(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>>;
   getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null>;
   /** Optional while legacy/local repositories are migrated. */
   listAssets?(eventId: string, participantIds: readonly string[]): Promise<SpeakerAsset[]>;

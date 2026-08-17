@@ -14,6 +14,7 @@ import {
 } from "../../../db/schema";
 import type {
   CommitOrganizerSpeakerImportCommand,
+  CreatePendingSpeakerAssetVersionCommand,
   FinalizeSpeakerAssetCommand,
   OrganizationQualifiedSpeakerSubmission,
   OrganizationQualifiedSpeakerTask,
@@ -48,7 +49,7 @@ import type {
   UpdateSpeakerProfileCommand,
   UpsertOrganizerSpeakerAggregateCommand,
 } from "../../../features/speaker/types";
-import { updateGuard } from "./shared";
+import { guard, updateGuard } from "./shared";
 
 export function portalSubmissionStatus(
   submissionStatus: string,
@@ -487,6 +488,15 @@ export class D1SpeakerRepository
       submissionIds: commaSeparatedIds(scope.submission_ids),
       participantIds: commaSeparatedIds(scope.participant_ids),
     };
+  }
+
+  async getAccountDisplayName(accountId: string): Promise<string | null> {
+    const row = await this.#db
+      .prepare(`SELECT name FROM auth_users WHERE id = ? LIMIT 1`)
+      .bind(accountId)
+      .first<Record<string, unknown>>();
+    const name = row?.name;
+    return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
   }
 
   async getOrganizerReadModel(
@@ -1751,8 +1761,8 @@ export class D1SpeakerRepository
     await this.#db.batch([
       this.#db
         .prepare(
-          `INSERT INTO speaker_assets (id, organization_id, event_id, submission_id, participant_id, task_id, kind, object_key, file_name, content_type, size_bytes, state, version, version_family_id, supersedes_asset_id, comment_thread_id, review_state, review_note, reviewed_at, reviewed_by, review_version, latest_version_id, current_version_id, approved_version_id, released_version_id, rejection_reason, created_at, finalized_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO speaker_assets (id, organization_id, event_id, submission_id, participant_id, task_id, kind, object_key, file_name, content_type, size_bytes, uploader_account_id, uploader_label, state, version, version_family_id, supersedes_asset_id, comment_thread_id, review_state, review_note, reviewed_at, reviewed_by, review_version, latest_version_id, current_version_id, approved_version_id, released_version_id, rejection_reason, created_at, finalized_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           asset.id,
@@ -1766,6 +1776,8 @@ export class D1SpeakerRepository
           asset.fileName,
           asset.contentType,
           asset.sizeBytes,
+          asset.uploaderAccountId ?? null,
+          asset.uploaderLabel ?? null,
           asset.state,
           version,
           asset.versionFamilyId ?? asset.id,
@@ -1788,6 +1800,202 @@ export class D1SpeakerRepository
     const persisted = await this.getAsset(asset.eventId, asset.id);
     if (persisted === null) throw new Error("The speaker asset was not persisted.");
     return persisted;
+  }
+
+  async createPendingAssetVersion(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const { asset } = command;
+    const scope = await this.#eventScope(asset.eventId);
+    if (
+      scope === null ||
+      (asset.tenantId !== undefined && asset.tenantId !== scope.organizationId) ||
+      asset.state !== "pending_upload" ||
+      asset.supersedesAssetId !== command.expectedLatestAssetId ||
+      asset.version !== command.expectedLatestVersion + 1 ||
+      asset.versionId !== asset.id ||
+      asset.latestVersionId !== asset.id
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const storedForKey = async () => {
+      const rows = await this.#orm
+        .select()
+        .from(speakerAssets)
+        .where(
+          and(
+            eq(speakerAssets.organizationId, scope.organizationId),
+            eq(speakerAssets.eventId, asset.eventId),
+            eq(speakerAssets.creationIdempotencyKey, command.idempotencyKey),
+          ),
+        )
+        .limit(2);
+      return rows;
+    };
+    const existing = await storedForKey();
+    if (existing.length > 0) {
+      const replay = existing[0];
+      return replay !== undefined &&
+        replay.creationRequestDigest === command.requestDigest &&
+        replay.versionFamilyId === asset.versionFamilyId &&
+        replay.supersedesAssetId === command.expectedLatestAssetId &&
+        replay.version === command.expectedLatestVersion + 1
+        ? { ok: true, value: this.#asset(replay) }
+        : { ok: false, reason: "version_conflict" };
+    }
+
+    const familyId = asset.versionFamilyId ?? asset.id;
+    const predicate = `(
+      EXISTS (
+        SELECT 1
+          FROM speaker_assets
+         WHERE organization_id = ?
+           AND event_id = ?
+           AND creation_idempotency_key = ?
+           AND creation_request_digest = ?
+      )
+      OR (
+        NOT EXISTS (
+          SELECT 1
+            FROM speaker_assets
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND creation_idempotency_key = ?
+        )
+        AND EXISTS (
+          SELECT 1
+            FROM speaker_assets
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND version_family_id = ?
+             AND id = ?
+             AND version = ?
+             AND state = 'ready'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM speaker_assets
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND version_family_id = ?
+             AND version > ?
+        )
+      )
+    )`;
+    const statements = [
+      guard(this.#db, predicate, [
+        scope.organizationId,
+        asset.eventId,
+        command.idempotencyKey,
+        command.requestDigest,
+        scope.organizationId,
+        asset.eventId,
+        command.idempotencyKey,
+        scope.organizationId,
+        asset.eventId,
+        familyId,
+        command.expectedLatestAssetId,
+        command.expectedLatestVersion,
+        scope.organizationId,
+        asset.eventId,
+        familyId,
+        command.expectedLatestVersion,
+      ]),
+      this.#db
+        .prepare(
+          `INSERT INTO speaker_assets (
+             id, organization_id, event_id, submission_id, participant_id, task_id,
+             kind, object_key, file_name, content_type, size_bytes,
+             uploader_account_id, uploader_label, state, version, version_family_id,
+             supersedes_asset_id, comment_thread_id, review_state, review_note,
+             reviewed_at, reviewed_by, review_version, latest_version_id,
+             current_version_id, approved_version_id, released_version_id,
+             rejection_reason, created_at, finalized_at,
+             creation_idempotency_key, creation_request_digest
+           )
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+              SELECT 1
+                FROM speaker_assets
+               WHERE organization_id = ?
+                 AND event_id = ?
+                 AND creation_idempotency_key = ?
+            )`,
+        )
+        .bind(
+          asset.id,
+          scope.organizationId,
+          asset.eventId,
+          asset.submissionId ?? null,
+          asset.participantId,
+          asset.taskId ?? null,
+          asset.kind,
+          asset.objectKey,
+          asset.fileName,
+          asset.contentType,
+          asset.sizeBytes,
+          asset.uploaderAccountId ?? null,
+          asset.uploaderLabel ?? null,
+          asset.state,
+          asset.version,
+          familyId,
+          asset.supersedesAssetId,
+          asset.commentThreadId ?? `asset-thread:${asset.id}`,
+          asset.reviewState ?? null,
+          asset.reviewNote ?? null,
+          asset.reviewedAt ?? null,
+          asset.reviewedBy ?? null,
+          asset.reviewVersion ?? 0,
+          asset.latestVersionId ?? null,
+          asset.currentVersionId ?? null,
+          asset.approvedVersionId ?? null,
+          asset.releasedVersionId ?? null,
+          asset.rejectionReason ?? null,
+          asset.createdAt,
+          asset.finalizedAt ?? null,
+          command.idempotencyKey,
+          command.requestDigest,
+          scope.organizationId,
+          asset.eventId,
+          command.idempotencyKey,
+        ),
+    ];
+    try {
+      await this.#db.batch(statements);
+    } catch (error) {
+      const replay = await storedForKey();
+      const row = replay[0];
+      if (
+        row !== undefined &&
+        row.creationRequestDigest === command.requestDigest &&
+        row.versionFamilyId === familyId &&
+        row.supersedesAssetId === command.expectedLatestAssetId &&
+        row.version === command.expectedLatestVersion + 1
+      ) {
+        return { ok: true, value: this.#asset(row) };
+      }
+      const family = (await this.listAssets(asset.eventId, [asset.participantId])).filter(
+        (candidate) => (candidate.versionFamilyId ?? candidate.id) === familyId,
+      );
+      const expected = family.find((candidate) => candidate.id === command.expectedLatestAssetId);
+      if (
+        expected === undefined ||
+        expected.version !== command.expectedLatestVersion ||
+        expected.state !== "ready" ||
+        family.some((candidate) => (candidate.version ?? 0) > command.expectedLatestVersion)
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+      throw error;
+    }
+    const persisted = (await storedForKey())[0];
+    return persisted !== undefined &&
+      persisted.creationRequestDigest === command.requestDigest &&
+      persisted.versionFamilyId === familyId &&
+      persisted.supersedesAssetId === command.expectedLatestAssetId &&
+      persisted.version === command.expectedLatestVersion + 1
+      ? { ok: true, value: this.#asset(persisted) }
+      : { ok: false, reason: "version_conflict" };
   }
 
   async getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null> {
@@ -2441,6 +2649,12 @@ export class D1SpeakerRepository
       fileName: String(row.file_name),
       contentType: String(row.content_type),
       sizeBytes: Number(row.size_bytes),
+      ...(row.uploader_account_id === null || row.uploader_account_id === undefined
+        ? {}
+        : { uploaderAccountId: String(row.uploader_account_id) }),
+      ...(row.uploader_label === null || row.uploader_label === undefined
+        ? {}
+        : { uploaderLabel: String(row.uploader_label) }),
       state: String(row.state) as SpeakerAsset["state"],
       createdAt: String(row.created_at),
       version: Number(row.version),
@@ -2497,6 +2711,8 @@ export class D1SpeakerRepository
       fileName: row.fileName,
       contentType: row.contentType,
       sizeBytes: row.sizeBytes,
+      ...(row.uploaderAccountId === null ? {} : { uploaderAccountId: row.uploaderAccountId }),
+      ...(row.uploaderLabel === null ? {} : { uploaderLabel: row.uploaderLabel }),
       state: row.state,
       createdAt: row.createdAt,
       version: row.version,

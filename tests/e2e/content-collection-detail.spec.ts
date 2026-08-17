@@ -162,8 +162,8 @@ test("content collection file review stays aligned in light and dark themes", as
   await expect(fileReviewDialog.getByRole("tab", { name: "Overview" })).toBeVisible();
   await expect(fileReviewDialog.getByRole("tab", { name: /Comments/u })).toBeVisible();
   await expect(fileReviewDialog.getByRole("tab", { name: /Versions/u })).toBeVisible();
-  await expect(fileReviewDialog.getByText("Uploader", { exact: true })).toBeVisible();
-  await expect(fileReviewDialog.getByText("Alex Rivera", { exact: true })).toHaveCount(2);
+  const uploaderField = fileReviewDialog.getByText("Uploader", { exact: true }).locator("..");
+  await expect(uploaderField).toContainText("Alex Rivera");
   await expect(fileReviewDialog.getByText("Authoritative pointers", { exact: true })).toHaveCount(
     0,
   );

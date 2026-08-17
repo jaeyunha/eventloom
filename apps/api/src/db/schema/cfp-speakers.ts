@@ -496,6 +496,10 @@ export const speakerAssets = sqliteTable(
     fileName: text("file_name").notNull(),
     contentType: text("content_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
+    uploaderAccountId: text("uploader_account_id"),
+    uploaderLabel: text("uploader_label"),
+    creationIdempotencyKey: text("creation_idempotency_key"),
+    creationRequestDigest: text("creation_request_digest"),
     state: text().notNull(),
     version: integer().notNull(),
     versionFamilyId: text("version_family_id").notNull(),
@@ -528,11 +532,17 @@ export const speakerAssets = sqliteTable(
       columns: [t.organizationId, t.eventId, t.taskId],
       foreignColumns: [speakerTasks.organizationId, speakerTasks.eventId, speakerTasks.id],
     }).onDelete("restrict"),
+    foreignKey({ columns: [t.uploaderAccountId], foreignColumns: [authUsers.id] }).onDelete(
+      "set null",
+    ),
     foreignKey({ columns: [t.supersedesAssetId], foreignColumns: [t.id] }).onDelete("restrict"),
     unique().on(t.objectKey),
     unique().on(t.organizationId, t.id),
     unique().on(t.organizationId, t.eventId, t.id),
     unique().on(t.organizationId, t.eventId, t.versionFamilyId, t.version),
+    uniqueIndex("speaker_assets_creation_idempotency_uidx")
+      .on(t.organizationId, t.eventId, t.creationIdempotencyKey)
+      .where(sql`${t.creationIdempotencyKey} IS NOT NULL`),
     index("speaker_assets_participant_idx").on(
       t.organizationId,
       t.eventId,
