@@ -233,6 +233,8 @@ export interface ProgramPublicationManifest {
   rollbackTargetRevision: number | null;
   cacheRevision: number;
   sourceTrigger: ProgramPublicationSourceTrigger;
+  reservationOwnerId?: string | null;
+  reservationExpiresAt?: string | null;
   failureReason: string | null;
 }
 
@@ -284,6 +286,8 @@ export interface ProgramPublicationRebuildRequest {
   approvedProfileRevision: number;
   releasedAssetRevision: number;
   parentServedRevision?: number | null;
+  reservationOwnerId?: string;
+  reservationExpiresAt?: string;
 }
 
 export interface ProgramPublicationCompletionInput {
@@ -292,6 +296,7 @@ export interface ProgramPublicationCompletionInput {
   releaseId: string;
   revision: number;
   expectedPublicationVersion: number;
+  reservationOwnerId: string;
 }
 export interface ProgramPublicationFailureInput extends ProgramPublicationCompletionInput {
   reason: string;
@@ -339,6 +344,7 @@ export interface ProgramPublicationServiceDependencies {
 export interface ProgramPublicationServiceOptions {
   clock?: () => Date;
   generateId?: () => string;
+  reservationTtlMs?: number;
 }
 
 export interface ProgramAgendaProjectionEntry {

@@ -168,6 +168,8 @@ const programManifestSchema = z
     rollbackTargetRevision: expectedVersionSchema.nullable(),
     cacheRevision: expectedVersionSchema,
     sourceTrigger: z.enum(programPublicationSourceTriggers),
+    reservationOwnerId: identifierSchema.nullable().optional(),
+    reservationExpiresAt: instantSchema.nullable().optional(),
     failureReason: z.string().trim().min(1).max(2_000).nullable(),
   })
   .strict();
