@@ -65,7 +65,7 @@ describe("organizer reviewer pool panel", () => {
     expect(markup).toContain("3 of 12 assigned");
     expect(markup).toContain("Blair Chen");
     expect(markup).toContain("Save review team");
-    expect(markup).toContain("/admin/organizations/org-1/members?tab=invite");
+    expect(markup).not.toContain("/admin/organizations/org-1/members?tab=invite");
     expect(markup).not.toContain("event-private-id");
     expect(markup).not.toContain("round-private-id");
   });

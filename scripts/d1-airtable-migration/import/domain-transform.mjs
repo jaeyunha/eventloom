@@ -42,12 +42,6 @@ function sourceRecord(table, record) {
   };
 }
 
-function normalizeEventStatus(value) {
-  if (value === "archived" || value === "closed") return "archived";
-  if (value === "active" || value === "open" || value === "published") return "active";
-  return "draft";
-}
-
 function scope(payload, fields, fallbackEventOrganization = DEFAULT_ORGANIZATION) {
   return {
     organizationId: text(
@@ -200,6 +194,14 @@ function transformEvent(context, source) {
   const opensAt = text(cfp.opensAt, payload.opensAt);
   const closesAt = text(cfp.closesAt, payload.closesAt);
   const createdAt = instant(fields["Created At"] ?? payload.createdAt, source.createdTime);
+  const updatedAt = instant(fields["Updated At"] ?? payload.updatedAt, createdAt);
+  const legacyStatus = text(fields.Status, payload.status)?.toLowerCase();
+  const rollbackStatus =
+    legacyStatus === "closed"
+      ? "archived"
+      : ["draft", "active", "archived"].includes(legacyStatus)
+        ? legacyStatus
+        : "active";
   add(
     context,
     source,
@@ -210,7 +212,8 @@ function transformEvent(context, source) {
         organization_id: organizationId,
         slug: text(fields.Slug, payload.slug, id),
         name: text(fields.Name, payload.name, id),
-        status: normalizeEventStatus(payload.status ?? fields.Status),
+        status: rollbackStatus,
+        legacy_retired_at: rollbackStatus === "archived" ? updatedAt : null,
         time_zone: timeZone,
         starts_at: startsAt,
         ends_at: endsAt,
@@ -226,7 +229,7 @@ function transformEvent(context, source) {
         default_calendar_location: text(calendar.location, payload.venue, payload.location) ?? null,
         version: integer(fields.Version ?? payload.version),
         created_at: createdAt,
-        updated_at: instant(fields["Updated At"] ?? payload.updatedAt, createdAt),
+        updated_at: updatedAt,
         created_by: text(payload.createdBy, "system"),
         updated_by: text(payload.updatedBy, payload.createdBy, "system"),
       },

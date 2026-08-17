@@ -86,7 +86,6 @@ describe("local fixture event graph", () => {
         body: JSON.stringify({
           name: "Fresh binding event",
           slug: "fresh-binding-event",
-          status: "draft",
           timeZone: "UTC",
           startsAt: "2026-10-02T09:00:00.000Z",
           endsAt: "2026-10-02T17:00:00.000Z",
@@ -132,7 +131,6 @@ describe("local fixture event graph", () => {
         body: JSON.stringify({
           name: "Local persistence event",
           slug: "local-persistence-event",
-          status: "draft",
           timeZone: "UTC",
           startsAt,
           endsAt,

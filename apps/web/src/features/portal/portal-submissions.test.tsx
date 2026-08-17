@@ -12,7 +12,6 @@ const context: PortalContext = {
   eventId: "event-1",
   slug: "event-one",
   name: "Event One",
-  status: "active",
   capabilities: ["submission-edit"],
   submissionIds: ["550e8400-e29b-41d4-a716-446655440000"],
   participantIds: ["participant-1"],

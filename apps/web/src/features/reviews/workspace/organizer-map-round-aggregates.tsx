@@ -25,7 +25,7 @@ export function mapRoundAggregates(
     );
     return {
       id: submission.id,
-      reference: submission.id,
+      reference: "",
       title: submission.title,
       countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
       possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",

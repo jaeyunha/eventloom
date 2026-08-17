@@ -244,7 +244,6 @@ const DEFAULT_JSON_FIELD = "Settings JSON";
 const EVENT_INDEXED_FIELDS = {
   Name: "name",
   Slug: "slug",
-  Status: "status",
   "Time Zone": "timeZone",
   "Starts At": "startsAt",
   "Ends At": "endsAt",
@@ -1205,12 +1204,6 @@ export class AirtableWebhookRepository implements WebhookRepository {
     return datesFromDelivery(updated);
   }
 }
-function eventStatusFromRecord(value: unknown): Event["status"] {
-  if (value === "draft") return "draft";
-  if (value === "archived") return "archived";
-  return "active";
-}
-
 function eventInstantFromRecord(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const parsed = Date.parse(value);
@@ -1241,10 +1234,6 @@ function eventDateOnly(value: string, timeZone: string): string | null {
   } catch {
     return null;
   }
-}
-
-function eventPhysicalStatus(value: unknown): string | null {
-  return value === "open" || value === "closed" ? value : null;
 }
 
 function eventRecord(value: JsonRecord): Event {
@@ -1298,7 +1287,6 @@ function eventRecord(value: JsonRecord): Event {
     organizationId,
     slug,
     name,
-    status: eventStatusFromRecord(value.status),
     timeZone,
     startsAt,
     endsAt,
@@ -1408,9 +1396,6 @@ export class AirtableEventRepository implements EventRepository {
       throw new EventRepositoryConflictError();
     }
     const stored = clone(event) as unknown as JsonRecord;
-    const physicalStatus = eventPhysicalStatus(existingRaw?.status);
-    if (physicalStatus !== null && existing?.status === event.status)
-      stored.status = physicalStatus;
     if (existing === undefined) {
       await this.#events.create(stored);
     } else {
@@ -3727,7 +3712,6 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
       id,
       name: textValue(record, "name", "title") ?? id,
       slug: textValue(record, "slug"),
-      status: eventStatusFromRecord(record.status),
       startsAt: textValue(record, "startsAt", "startsOn", "startAt"),
       endsAt: textValue(record, "endsAt", "endsOn", "endAt"),
     };

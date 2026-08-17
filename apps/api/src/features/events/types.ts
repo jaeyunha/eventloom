@@ -1,6 +1,3 @@
-export const eventStatuses = ["draft", "active", "archived"] as const;
-
-export type EventStatus = (typeof eventStatuses)[number];
 export type EventOrganizationRole = "owner" | "admin" | "reviewer" | "speaker";
 
 /** The minimum actor shape accepted by the event domain service. */
@@ -88,7 +85,6 @@ export interface Event {
   organizationId: string;
   slug: string;
   name: string;
-  status: EventStatus;
   timeZone: string;
   startsAt: string;
   endsAt: string;
@@ -104,7 +100,7 @@ export interface Event {
   updatedBy: string;
 }
 
-export type EventMutationAction = "created" | "updated" | "archived";
+export type EventMutationAction = "created" | "updated";
 
 export interface EventAuditEntry {
   id: string;
@@ -135,7 +131,6 @@ export interface CreateEventInput {
   id?: string;
   slug?: string;
   name: string;
-  status?: EventStatus;
   timeZone: string;
   startsAt: string;
   endsAt: string;
@@ -152,7 +147,6 @@ export interface UpdateEventInput {
   expectedVersion: number;
   slug?: string;
   name?: string;
-  status?: EventStatus;
   timeZone?: string;
   startsAt?: string;
   endsAt?: string;
@@ -163,16 +157,8 @@ export interface UpdateEventInput {
   embedConfigurations?: readonly EventEmbedConfigurationInput[];
 }
 
-export interface ArchiveEventInput {
-  organizationId?: string;
-  eventId: string;
-  expectedVersion: number;
-}
-
 export interface ListEventsInput {
   organizationId?: string;
-  status?: EventStatus;
-  includeArchived?: boolean;
 }
 
 export interface EventRepositoryCommand {

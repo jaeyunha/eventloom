@@ -111,7 +111,6 @@ describe("organizer event routes", () => {
           {
             ...events[0],
             organizationId: "ai-engineer",
-            status: "draft",
           },
         ],
       }),

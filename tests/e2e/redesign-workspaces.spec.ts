@@ -56,7 +56,6 @@ const organizerEventFixture = {
   organizationId: ORGANIZATION_ID,
   slug: EVENT_ID,
   name: "Open Sessionboard Conference",
-  status: "active",
   timeZone: "America/Los_Angeles",
   startsAt: "2026-09-18T16:00:00.000Z",
   endsAt: "2026-09-18T23:00:00.000Z",
@@ -1324,7 +1323,7 @@ test("reviewers renders a bounded assignment index with one replacement editor",
   await expect(page.getByRole("combobox", { name: "Round" }).locator("option:checked")).toHaveText(
     targetRoundName ?? "",
   );
-  await expect(page.getByRole("combobox", { name: "Submission" })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "Proposal" })).toHaveValue(
     targetSubmissionId ?? "",
   );
 
