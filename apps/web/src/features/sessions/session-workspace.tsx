@@ -358,7 +358,11 @@ function SpeakerAssignments({
           Review the assigned speakers, then add or remove people from the event roster.
         </CardDescription>
         <Button asChild size="sm" variant="outline">
-          <Link href={`/admin/organizations/${organizationId}/events/${eventId}/speakers`}>
+          <Link
+            href={`/admin/organizations/${encodeURIComponent(
+              organizationId,
+            )}/events/${encodeURIComponent(eventId)}/speakers`}
+          >
             Add or edit speakers
           </Link>
         </Button>

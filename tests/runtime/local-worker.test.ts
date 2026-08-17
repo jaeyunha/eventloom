@@ -855,7 +855,18 @@ describe.sequential("composed local Worker", () => {
       submitInit,
     );
     const submitted = await jsonData<{
-      submission: { id: string; status: string; version: number };
+      submission: {
+        id: string;
+        status: string;
+        version: number;
+        submittedAt: string | null;
+        completedSteps: string[];
+        answers: Record<string, unknown>;
+        participants: Array<{
+          id: string;
+          answers: Record<string, unknown>;
+        }>;
+      };
       confirmationQueued: boolean;
     }>(submitResponse);
     expect(submitResponse.status).toBe(200);
@@ -872,6 +883,137 @@ describe.sequential("composed local Worker", () => {
     }>(submitReplayResponse);
     expect(submitReplayResponse.status).toBe(200);
     expect(submitReplay).toEqual(submitted);
+
+    const submittedAt = submitted.submission.submittedAt;
+    const submittedCompletedSteps = submitted.submission.completedSteps;
+    const submittedParticipantIds = submitted.submission.participants.map(
+      (participant) => participant.id,
+    );
+    const submittedVersion = submitted.submission.version;
+    const editPatchInit = jsonRequest(
+      "PATCH",
+      {
+        expectedVersion: submittedVersion,
+        answers: {
+          ...submitted.submission.answers,
+          abstract: "Updated after submission without losing lifecycle state.",
+        },
+      },
+      { ...applicantHeaders, "idempotency-key": "runtime-cfp-submitted-edit-patch-1" },
+    );
+    const editPatchResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      editPatchInit,
+    );
+    const editedDraft = await jsonData<{
+      status: string;
+      version: number;
+      submittedAt: string | null;
+      completedSteps: string[];
+      answers: Record<string, unknown>;
+      participants: Array<{
+        id: string;
+        firstName: string;
+        lastName: string;
+        email: string;
+        role: string;
+        biography: string;
+        answers: Record<string, unknown>;
+      }>;
+    }>(editPatchResponse);
+    expect(editPatchResponse.status).toBe(200);
+    expect(editedDraft).toMatchObject({
+      status: "submitted",
+      submittedAt,
+      completedSteps: submittedCompletedSteps,
+      version: submittedVersion + 1,
+    });
+    expect(editedDraft.answers.abstract).toBe(
+      "Updated after submission without losing lifecycle state.",
+    );
+    expect(editedDraft.participants.map((participant) => participant.id)).toEqual(
+      submittedParticipantIds,
+    );
+
+    const editPatchReplayResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/draft`,
+      editPatchInit,
+    );
+    const editedDraftReplay = await jsonData<typeof editedDraft>(editPatchReplayResponse);
+    expect(editPatchReplayResponse.status).toBe(200);
+    expect(editedDraftReplay).toEqual(editedDraft);
+
+    const editedParticipantRecords = editedDraft.participants.map((participant) => ({
+      ...participant,
+      answers: { ...participant.answers, company: "Runtime Systems" },
+    }));
+    const participantsEditInit = jsonRequest(
+      "PUT",
+      {
+        expectedVersion: editedDraft.version,
+        participants: editedParticipantRecords,
+        secondaryContacts: [],
+      },
+      {
+        ...applicantHeaders,
+        "idempotency-key": "runtime-cfp-submitted-edit-participants-1",
+      },
+    );
+    const participantsEditResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/participants`,
+      participantsEditInit,
+    );
+    const editedParticipants = await jsonData<typeof editedDraft>(participantsEditResponse);
+    expect(participantsEditResponse.status).toBe(200);
+    expect(editedParticipants).toMatchObject({
+      status: "submitted",
+      submittedAt,
+      completedSteps: submittedCompletedSteps,
+      version: submittedVersion + 2,
+    });
+    expect(editedParticipants.participants.map((participant) => participant.id)).toEqual(
+      submittedParticipantIds,
+    );
+    expect(editedParticipants.participants[0]?.answers.company).toBe("Runtime Systems");
+
+    const participantsEditReplayResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/participants`,
+      participantsEditInit,
+    );
+    const editedParticipantsReplay = await jsonData<typeof editedDraft>(
+      participantsEditReplayResponse,
+    );
+    expect(participantsEditReplayResponse.status).toBe(200);
+    expect(editedParticipantsReplay).toEqual(editedParticipants);
+
+    const reloadedResponse = await runtimeRequest(`${cfpBase}/submissions/${created.id}/draft`, {
+      headers: applicantHeaders,
+    });
+    const reloaded = await jsonData<typeof editedDraft>(reloadedResponse);
+    expect(reloadedResponse.status).toBe(200);
+    expect(reloaded).toEqual(editedParticipants);
+
+    const editedReviewResponse = await runtimeRequest(
+      `${cfpBase}/submissions/${created.id}/review`,
+      {
+        method: "POST",
+        headers: {
+          ...applicantHeaders,
+          "idempotency-key": "runtime-cfp-submitted-edit-review-1",
+        },
+      },
+    );
+    const editedReview = await jsonData<{
+      canSubmit: boolean;
+      issues: unknown[];
+      version: number;
+    }>(editedReviewResponse);
+    expect(editedReviewResponse.status).toBe(200);
+    expect(editedReview).toMatchObject({
+      canSubmit: true,
+      issues: [],
+      version: editedParticipants.version,
+    });
   });
 
   it("completes a seeded speaker task upload and authorized local download", async () => {

@@ -284,7 +284,7 @@ test("account access mode stays locked while authentication is pending", async (
 test("submitter completes the account-first CFP with two participants", async ({
   page,
   authSession,
-}) => {
+}, testInfo) => {
   test.setTimeout(60_000);
   await installCfpApi(page, authSession, {
     eventId: "evt_evaluator_2026",
@@ -446,6 +446,90 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(
     page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
+
+  const completionStorageKey =
+    "eventloom:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp";
+  const completionSubmissionId = await page.evaluate(
+    (storageKey) => window.sessionStorage.getItem(storageKey),
+    completionStorageKey,
+  );
+  expect(completionSubmissionId).toMatch(/^submission[_-]/);
+  if (!completionSubmissionId) {
+    throw new Error("Expected the completed submission handoff to retain its submission ID.");
+  }
+  const loadSubmittedEdit = async (submissionId: string): Promise<DynamicCfpSubmission> =>
+    page.evaluate(
+      async ({ id }) => {
+        const response = await fetch(
+          `/api/cfp/organizations/evaluator-org/events/evt_evaluator_2026/submissions/${encodeURIComponent(id)}/draft`,
+        );
+        const payload = (await response.json()) as { data: DynamicCfpSubmission };
+        return payload.data;
+      },
+      { id: submissionId },
+    );
+  const submittedSnapshot = await loadSubmittedEdit(completionSubmissionId);
+
+  await page.getByRole("button", { name: "Edit submission" }).click();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/account$`));
+  await expect(accountEmail).toHaveValue("ada@example.test");
+  await page.getByRole("button", { name: "Continue to proposal" }).click();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/submission$`));
+  const afterBackForward = await loadSubmittedEdit(completionSubmissionId);
+  expect(afterBackForward.id).toBe(submittedSnapshot.id);
+  expect(afterBackForward.version).toBe(submittedSnapshot.version);
+  expect(
+    await page.evaluate(() =>
+      window.localStorage.getItem(
+        "eventloom:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+      ),
+    ),
+  ).toBe(completionSubmissionId);
+
+  await page.getByLabel("Title").fill("Designing calm incident response after submission");
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/participants$`)),
+    page.getByRole("button", { name: "Next step →" }).click(),
+  ]);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/participants$`));
+  await expect(page.getByLabel("First Name").first()).toHaveValue("Ada");
+  await expect(page.getByLabel("Email").nth(1)).toHaveValue("grace@example.test");
+  await Promise.all([
+    page.waitForURL(new RegExp(`${EVALUATOR_CFP_PATH}/review$`)),
+    page.getByRole("button", { name: "Continue to review →" }).click(),
+  ]);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`${EVALUATOR_CFP_PATH}/review$`));
+  await expect(
+    page.getByText("Designing calm incident response after submission", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: /Ada Speaker/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: /Grace Cooper/ })).toBeVisible();
+  const submittedEdit = await loadSubmittedEdit(completionSubmissionId);
+  expect(submittedEdit).toMatchObject({
+    id: submittedSnapshot.id,
+    status: "submitted",
+    submittedAt: submittedSnapshot.submittedAt,
+    completedSteps: submittedSnapshot.completedSteps,
+  });
+  expect(submittedEdit.participants.map((participant) => participant.id)).toEqual(
+    submittedSnapshot.participants.map((participant) => participant.id),
+  );
+  expect(submittedEdit.participants[0]?.answers).toEqual(
+    submittedSnapshot.participants[0]?.answers,
+  );
+  expect(submittedEdit.answers.title).toBe("Designing calm incident response after submission");
+  expect(submittedEdit.version).toBeGreaterThan(submittedSnapshot.version);
+  await page.screenshot({
+    path: testInfo.outputPath("submitted-edit-review.png"),
+    fullPage: true,
+  });
+
+  await page.goto(`${EVALUATOR_CFP_PATH}/complete`);
+  await expect(page.getByRole("heading", { level: 1, name: "Submission complete" })).toBeVisible();
   const statusDashboard = page.getByRole("button", { name: "View submission status dashboard" });
   await Promise.all([
     page.waitForURL(/\/portal\/submissions\?event=evt_evaluator_2026$/),

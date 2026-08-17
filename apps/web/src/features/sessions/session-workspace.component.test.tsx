@@ -145,6 +145,23 @@ describe("sessions workspace presentation", () => {
     expect(markup).toContain("Current");
   });
 
+  it("encodes reserved organization and event route characters", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionsWorkspaceView, {
+        organizationId: "organization/one?region=west",
+        eventId: "event/one#schedule",
+        sessions: [session],
+        selectedSessionId: session.id,
+        history: [],
+        speakers: [],
+      }),
+    );
+
+    expect(markup).toContain(
+      'href="/admin/organizations/organization%2Fone%3Fregion%3Dwest/events/event%2Fone%23schedule/speakers"',
+    );
+  });
+
   it("distinguishes an empty roster from an unavailable roster and announces success politely", () => {
     const emptyMarkup = renderToStaticMarkup(
       createElement(SessionsWorkspaceView, {
