@@ -444,6 +444,7 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     events: 0,
     analytics: 0,
   };
+  let contactMutationGeneration = 0;
   let disposed = false;
   const errors: Record<CrmWorkspaceReadKind, string | null> = {
     contacts: null,
@@ -467,13 +468,14 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
 
   async function loadContacts(filter: CrmWorkspaceContactFilter): Promise<void> {
     const generation = ++generations.contacts;
+    const mutationGeneration = contactMutationGeneration;
     handlers.setContactsLoading(true);
     setReadError("contacts", null);
     try {
       const nextContacts = await api.listContacts(filter);
-      if (isCurrent("contacts", generation)) {
-        handlers.setContacts((current) => mergeContactCollection(current, nextContacts));
-      }
+      if (!isCurrent("contacts", generation)) return;
+      if (contactMutationGeneration !== mutationGeneration) return loadContacts(filter);
+      handlers.setContacts((current) => mergeContactCollection(current, nextContacts));
     } catch (reason) {
       if (isCurrent("contacts", generation)) setReadError("contacts", messageFromError(reason));
     } finally {
@@ -533,6 +535,9 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     loadEvents,
     loadAnalytics,
     refresh,
+    markContactMutation() {
+      contactMutationGeneration += 1;
+    },
     activate() {
       disposed = false;
     },
@@ -548,6 +553,16 @@ export async function refreshCrmAnalyticsAfterContactSave(
 ): Promise<void> {
   if (existingContact === undefined) await loadAnalytics();
 }
+
+export async function refreshCrmEventMembershipAfterSave(
+  loadHistory: () => Promise<readonly CrmHistoryEntry[]>,
+  loadAnalytics: () => Promise<void>,
+  loadContacts: () => Promise<void>,
+): Promise<readonly CrmHistoryEntry[]> {
+  const [history] = await Promise.all([loadHistory(), loadAnalytics(), loadContacts()]);
+  return history;
+}
+
 function contactIdentityChanged(previous: CrmContact, next: CrmContact): boolean {
   return (
     previous.firstName !== next.firstName ||

@@ -257,6 +257,40 @@ describe("CrmService", () => {
     });
   });
 
+  it("does not translate repository storage failures into optimistic conflicts", async () => {
+    const failure = new Error("deliberate late history failure");
+    class LateFailureRepository extends InMemoryCrmRepository {
+      override async saveContact(
+        contact: CrmContact,
+        expectedVersion: number | null,
+        transitionAudit?: CrmContactTransitionAudit,
+      ): Promise<CrmContact> {
+        if (expectedVersion !== null) throw failure;
+        return super.saveContact(contact, expectedVersion, transitionAudit);
+      }
+    }
+    const crm = new CrmService(
+      { repository: new LateFailureRepository() },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-late-failure`,
+      },
+    );
+    const created = await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Late Failure",
+    });
+
+    await expect(
+      crm.updateContact(actor, {
+        organizationId: actor.organizationId,
+        contactId: created.id,
+        expectedVersion: created.version,
+        company: "Must roll back",
+      }),
+    ).rejects.toBe(failure);
+  });
+
   it("persists pipeline scoring and one human-readable transition audit", async () => {
     const crm = service();
     const namedActor = { ...actor, actorName: "Owner Ada" } as CrmActor;

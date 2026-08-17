@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthPrincipal } from "../auth/types";
 import { type CrmRouteEnvironment, type CrmRouteService, createCrmRoutes } from "./routes";
+import { CrmServiceError } from "./service";
 import type { CrmContact } from "./types";
 
 const organizationId = "organization-1";
@@ -130,5 +131,34 @@ describe("CRM concurrency route validation", () => {
       expect.objectContaining({ userId: principal.userId }),
       expect.objectContaining({ expectedVersion: 1 }),
     );
+  });
+
+  it("returns 409 only for optimistic conflicts and 500 for internal failures", async () => {
+    const { app, updateContact } = testApp();
+    updateContact.mockRejectedValueOnce(
+      new CrmServiceError("CRM_CONFLICT", "The contact changed before it could be saved.", 409, {
+        current: contact,
+      }),
+    );
+
+    const conflict = await request(app, `/contacts/${contact.id}`, "PATCH", {
+      displayName: "Ada",
+      expectedVersion: 1,
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: { current: contact },
+      },
+    });
+
+    updateContact.mockRejectedValueOnce(new Error("deliberate late history failure"));
+    const failure = await request(app, `/contacts/${contact.id}`, "PATCH", {
+      displayName: "Ada",
+      expectedVersion: 1,
+    });
+    expect(failure.status).toBe(500);
+    expect(await failure.text()).toBe("Internal Server Error");
   });
 });

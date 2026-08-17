@@ -60,6 +60,7 @@ import {
   preferNewerCrmContact,
   refreshCrmAnalyticsAfterContactSave,
   refreshCrmDuplicatesAfterContactSave,
+  refreshCrmEventMembershipAfterSave,
   refreshSelectedContactAfterCollectionReload,
   renderVariablePreview,
 } from "./crm-workspace-model";
@@ -2176,6 +2177,7 @@ interface CrmDirectoryControllerState {
   readonly loadEvents: () => Promise<void>;
   readonly loadAnalytics: () => Promise<void>;
   readonly refresh: () => Promise<void>;
+  readonly markContactMutation: () => void;
 }
 
 function useCrmDirectoryController({
@@ -2329,6 +2331,7 @@ function useCrmDirectoryController({
     loadEvents,
     loadAnalytics,
     refresh,
+    markContactMutation: workspaceReadCoordinator.markContactMutation,
   };
 }
 
@@ -2813,7 +2816,9 @@ function useCrmPipelineActions({
   dispatchDirectory,
   dispatchContactSelection,
   loadAnalytics,
+  loadContacts,
   setPipelineHistory,
+  markContactMutation,
 }: {
   readonly api: CrmApi;
   readonly contacts: readonly CrmContact[];
@@ -2825,7 +2830,9 @@ function useCrmPipelineActions({
   readonly dispatchDirectory: Dispatch<CrmDirectoryAction>;
   readonly dispatchContactSelection: Dispatch<CrmContactSelectionAction>;
   readonly loadAnalytics: () => Promise<void>;
+  readonly loadContacts: () => Promise<void>;
   readonly setPipelineHistory: (value: CrmStateUpdate<readonly CrmPipelineEntry[]>) => void;
+  readonly markContactMutation: () => void;
 }): {
   readonly movePipeline: (contactId: string, stage: CrmPipelineStage) => Promise<void>;
   readonly enrollPipeline: (input: {
@@ -2846,12 +2853,14 @@ function useCrmPipelineActions({
         stage,
         expectedVersion: contact.version,
       });
+      markContactMutation();
       dispatchDirectory({ type: "replace-contact", contact: next });
       if (selectedContact?.id === next.id)
         dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
       const [, nextPipelineHistory] = await Promise.all([
         loadAnalytics(),
         selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
+        loadContacts(),
       ]);
       if (nextPipelineHistory !== null) setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`${displayName(next)} moved to ${stage}.`);
@@ -2886,6 +2895,7 @@ function useCrmPipelineActions({
         ...(input.rationale.trim() ? { rationale: input.rationale.trim() } : {}),
         ...(enrollmentNote ? { note: enrollmentNote } : {}),
       });
+      markContactMutation();
       dispatchDirectory({ type: "replace-contact", contact: next });
       if (selectedContact?.id === next.id)
         dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
@@ -2893,6 +2903,7 @@ function useCrmPipelineActions({
       const [, nextPipelineHistory] = await Promise.all([
         stageChanged ? loadAnalytics() : Promise.resolve(),
         selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
+        loadContacts(),
       ]);
       if (nextPipelineHistory !== null) setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`${displayName(next)} enrolled in the ${input.stage} pipeline stage.`);
@@ -2913,11 +2924,13 @@ function useCrmPipelineActions({
         expectedVersion: selectedContact.version,
         ...(note.trim() ? { note: note.trim() } : {}),
       });
+      markContactMutation();
       dispatchContactSelection({ type: "pipeline-contact-updated", contact: next });
       dispatchDirectory({ type: "replace-contact", contact: next });
       const [nextPipelineHistory] = await Promise.all([
         api.getPipelineHistory(next.id),
         selectedContact.pipelineStage === next.pipelineStage ? Promise.resolve() : loadAnalytics(),
+        loadContacts(),
       ]);
       setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`Pipeline stage saved as ${stage}.`);
@@ -2939,6 +2952,7 @@ function useCrmContactActions({
   busyLeaseRef,
   dispatchContactSelection,
   loadAnalytics,
+  loadContacts,
   setHistory,
 }: {
   readonly api: CrmApi;
@@ -2949,6 +2963,7 @@ function useCrmContactActions({
   readonly busyLeaseRef: MutableRefObject<number>;
   readonly dispatchContactSelection: Dispatch<CrmContactSelectionAction>;
   readonly loadAnalytics: () => Promise<void>;
+  readonly loadContacts: () => Promise<void>;
   readonly setHistory: (value: CrmStateUpdate<readonly CrmHistoryEntry[]>) => void;
 }): {
   readonly addNote: (body: string) => Promise<void>;
@@ -2998,10 +3013,11 @@ function useCrmContactActions({
           ? "Canonical event relationship created."
           : "The canonical event relationship already existed; no duplicate was created.",
       );
-      const [nextHistory] = await Promise.all([
-        api.getContactHistory(selectedContact.id),
-        loadAnalytics(),
-      ]);
+      const nextHistory = await refreshCrmEventMembershipAfterSave(
+        () => api.getContactHistory(selectedContact.id),
+        loadAnalytics,
+        loadContacts,
+      );
       setHistory(nextHistory);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -3247,7 +3263,9 @@ export function useCrmWorkspaceController(
     dispatchDirectory: directory.dispatchDirectory,
     dispatchContactSelection: selection.dispatchContactSelection,
     loadAnalytics: directory.loadAnalytics,
+    loadContacts: directory.loadContacts,
     setPipelineHistory: selection.setPipelineHistory,
+    markContactMutation: directory.markContactMutation,
   });
   const contactActions = useCrmContactActions({
     api: directory.api,
@@ -3258,6 +3276,7 @@ export function useCrmWorkspaceController(
     busyLeaseRef,
     dispatchContactSelection: selection.dispatchContactSelection,
     loadAnalytics: directory.loadAnalytics,
+    loadContacts: directory.loadContacts,
     setHistory: selection.setHistory,
   });
   const outreach = useCrmOutreachActions({
@@ -3288,6 +3307,7 @@ export function useCrmWorkspaceController(
             expectedVersion: selection.selectedContact.version,
           })
         : await directory.api.createContact(input);
+      directory.markContactMutation();
       selection.dispatchContactSelection({ type: "contact-saved", contact: next });
       directory.dispatchDirectory({ type: "replace-contact", contact: next });
       setStatusMessage(
@@ -3300,6 +3320,7 @@ export function useCrmWorkspaceController(
           directory.api.findDuplicates(contactId),
         ),
         refreshCrmAnalyticsAfterContactSave(selection.selectedContact, directory.loadAnalytics),
+        directory.loadContacts(),
       ]);
       if (nextDuplicates !== null) selection.setDuplicates(nextDuplicates);
     } catch (reason) {

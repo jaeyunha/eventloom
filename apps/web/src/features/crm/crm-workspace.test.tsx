@@ -8,11 +8,13 @@ import {
   type CrmApi,
   type CrmContact,
   type CrmEvent,
+  type CrmHistoryEntry,
   type CrmSegment,
   createCrmWorkspaceReadCoordinator,
   preferNewerCrmContact,
   refreshCrmAnalyticsAfterContactSave,
   refreshCrmDuplicatesAfterContactSave,
+  refreshCrmEventMembershipAfterSave,
   refreshSelectedContactAfterCollectionReload,
 } from "./crm-workspace-model";
 
@@ -1003,6 +1005,47 @@ describe("CRM workspace read coordination", () => {
     coordinator.dispose();
   });
 
+  it("does not let a delayed collection response drop a contact created after the read began", async () => {
+    const contactsRead = deferred<readonly CrmContact[]>();
+    const createdContact = {
+      ...contact,
+      id: "contact-2",
+      displayName: "Grace Hopper",
+      email: "grace@example.test",
+      version: 1,
+    };
+    const api = {
+      listContacts: vi
+        .fn()
+        .mockImplementationOnce(() => contactsRead.promise)
+        .mockResolvedValue([contact, createdContact]),
+    } as unknown as CrmApi;
+    let currentContacts: readonly CrmContact[] = [contact];
+    const handlers = {
+      ...readHandlers(),
+      setContacts: vi.fn(
+        (
+          update:
+            | readonly CrmContact[]
+            | ((current: readonly CrmContact[]) => readonly CrmContact[]),
+        ) => {
+          currentContacts = typeof update === "function" ? update(currentContacts) : update;
+        },
+      ),
+    };
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+    const load = coordinator.loadContacts({ status: "active" });
+
+    currentContacts = [contact, createdContact];
+    coordinator.markContactMutation();
+    contactsRead.resolve([contact]);
+    await load;
+
+    expect(currentContacts).toEqual([contact, createdContact]);
+    expect(api.listContacts).toHaveBeenCalledTimes(2);
+    coordinator.dispose();
+  });
+
   it("refreshes each intended resource exactly once", async () => {
     const api = {
       listContacts: vi.fn(async () => [contact]),
@@ -1108,6 +1151,32 @@ describe("CRM contact analytics refresh", () => {
       ),
     ).resolves.toEqual({ contactId: contact.id, matches: [] });
     expect(findDuplicates).toHaveBeenCalledWith(contact.id);
+  });
+  it("reloads filtered contacts after event membership changes", async () => {
+    const history: readonly CrmHistoryEntry[] = [
+      {
+        id: "history-1",
+        organizationId: contact.organizationId,
+        contactId: contact.id,
+        kind: "event",
+        eventId: "event-1",
+        sessionId: null,
+        title: "Added to event",
+        detail: "Speaker",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        metadata: {},
+      },
+    ];
+    const loadHistory = vi.fn(async () => history);
+    const loadAnalytics = vi.fn(async () => undefined);
+    const loadContacts = vi.fn(async () => undefined);
+
+    await expect(
+      refreshCrmEventMembershipAfterSave(loadHistory, loadAnalytics, loadContacts),
+    ).resolves.toBe(history);
+    expect(loadHistory).toHaveBeenCalledOnce();
+    expect(loadAnalytics).toHaveBeenCalledOnce();
+    expect(loadContacts).toHaveBeenCalledOnce();
   });
 });
 
