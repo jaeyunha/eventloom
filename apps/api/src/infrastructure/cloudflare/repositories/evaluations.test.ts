@@ -6,6 +6,10 @@ import type {
   EvaluationReview,
   EvaluationSuggestion,
 } from "../../../features/evaluations/types";
+import {
+  createSpeakerLifecycleFixture,
+  speakerLifecycleIds,
+} from "../../../test-support/speaker-lifecycle";
 import { D1EvaluationRepository } from "./evaluations";
 
 interface RecordedStatement {
@@ -393,6 +397,114 @@ describe("D1EvaluationRepository compound CAS", () => {
     for (const prepared of db.statements) {
       expect(prepared.sql).toContain("organization_id = ?");
       expect(prepared.values[0]).toBe("org-1");
+    }
+  });
+});
+
+const migratedSuggestion: EvaluationSuggestion = {
+  id: "suggestion-migrated-1",
+  tenantId: speakerLifecycleIds.organizationId,
+  eventId: speakerLifecycleIds.eventId,
+  planId: "plan-migrated-1",
+  roundId: "round-migrated-1",
+  assignmentId: "assignment-migrated-1",
+  submissionId: speakerLifecycleIds.acceptedSubmissionId,
+  reviewerId: "reviewer-migrated-1",
+  rubricRevision: 1,
+  submissionRevision: 1,
+  criterionCandidates: [],
+  candidates: {},
+  provenance: {
+    provider: "provider",
+    model: "model",
+    generatedAt: timestamp,
+    sourceReferences: [],
+  },
+  status: "pending",
+  version: 1,
+  history: [],
+  audit: [],
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+function seedMigratedEvaluationAssignment(
+  database: ReturnType<typeof createSpeakerLifecycleFixture>["database"],
+): void {
+  database.executeScript(`
+    INSERT INTO review_plans (
+      id, organization_id, event_id, name, status, blind_review,
+      reviews_per_submission, max_assignments_per_reviewer, auto_distribute,
+      reviewer_projection_field_ids_json, reviewer_projection_file_ids_json,
+      version, created_at, updated_at
+    ) VALUES (
+      '${migratedSuggestion.planId}', '${migratedSuggestion.tenantId}',
+      '${migratedSuggestion.eventId}', 'Migrated review', 'open', 0,
+      1, 5, 0, '[]', '[]', 1, '${timestamp}', '${timestamp}'
+    );
+    INSERT INTO review_rounds (
+      id, organization_id, event_id, plan_id, name, sequence, revision,
+      rubric_id, rubric_revision, blind_review, anonymization
+    ) VALUES (
+      '${migratedSuggestion.roundId}', '${migratedSuggestion.tenantId}',
+      '${migratedSuggestion.eventId}', '${migratedSuggestion.planId}',
+      'Migrated round', 0, 1, 'rubric-migrated-1', 1, 0, 'none'
+    );
+    INSERT INTO review_assignments (
+      id, organization_id, event_id, plan_id, round_id, round_revision,
+      submission_id, reviewer_id, status, plan_version, rubric_revision,
+      submission_revision, version, created_at, updated_at
+    ) VALUES (
+      '${migratedSuggestion.assignmentId}', '${migratedSuggestion.tenantId}',
+      '${migratedSuggestion.eventId}', '${migratedSuggestion.planId}',
+      '${migratedSuggestion.roundId}', 1, '${migratedSuggestion.submissionId}',
+      '${migratedSuggestion.reviewerId}', 'in_progress', 1, 1, 1, 1,
+      '${timestamp}', '${timestamp}'
+    );
+  `);
+}
+
+describe("D1EvaluationRepository migrated lifecycle CAS", () => {
+  it("persists a suggestion through the migrated submissions.id guard", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+
+      await repository.putSuggestion(migratedSuggestion, null, 1);
+
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
+      ).resolves.toMatchObject({
+        id: migratedSuggestion.id,
+        status: "pending",
+      });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("persists no suggestion when withdrawal commits immediately before the D1 batch", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    try {
+      seedMigratedEvaluationAssignment(fixture.database);
+      const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      fixture.database.beforeNextBatch(() => {
+        fixture.database.run(
+          `UPDATE submissions
+           SET status = 'withdrawn', version = version + 1, updated_at = '${timestamp}'
+           WHERE organization_id = '${migratedSuggestion.tenantId}'
+             AND event_id = '${migratedSuggestion.eventId}'
+             AND id = '${migratedSuggestion.submissionId}'`,
+        );
+      });
+
+      await expect(repository.putSuggestion(migratedSuggestion, null, 1)).rejects.toThrow();
+      await expect(
+        repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
+      ).resolves.toBeNull();
+    } finally {
+      fixture.dispose();
     }
   });
 });

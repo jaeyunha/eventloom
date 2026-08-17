@@ -947,9 +947,7 @@ function isOrganizerWorkspaceSubmission(
   return submission.status === "submitted" || submission.status === "under_review";
 }
 
-function isActiveReviewSubmission(
-  submission: Readonly<{ status?: string | undefined }>,
-): boolean {
+function isActiveReviewSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
   return submission.status === "submitted";
 }
 
@@ -3684,9 +3682,7 @@ export class EvaluationService {
       submissionIds.filter((submissionId, index) => {
         const material = materialById.get(submissionId);
         return (
-          material !== undefined &&
-          isActiveReviewSubmission(material) &&
-          decisions[index] === null
+          material !== undefined && isActiveReviewSubmission(material) && decisions[index] === null
         );
       }),
     );

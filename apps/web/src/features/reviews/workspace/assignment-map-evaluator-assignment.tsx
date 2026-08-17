@@ -102,7 +102,7 @@ export function mapEvaluatorAssignment(
       const candidate = candidates[0];
       if (
         criterion === undefined ||
-        criterionType(criterion) !== "numeric" ||
+        criterionType(criterion) === "free_text" ||
         candidate === undefined
       ) {
         continue;
