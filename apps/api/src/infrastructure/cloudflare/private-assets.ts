@@ -591,13 +591,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
               AND participant_id IS NOT NULL
               AND asset_version IS NOT NULL`,
         )
-        .bind(
-          consumedAt,
-          claimId,
-          capability.capabilityId,
-          consumedAt,
-          capability.capabilityHash,
-        ),
+        .bind(consumedAt, claimId, capability.capabilityId, consumedAt, capability.capabilityHash),
       this.#database
         .prepare(
           `INSERT INTO speaker_asset_comments

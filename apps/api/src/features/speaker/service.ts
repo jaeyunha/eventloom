@@ -6562,22 +6562,22 @@ export class SpeakerService {
         baseline === undefined || baselineFamilyId === undefined
           ? false
           : [...assetsByFamily.values()]
-            .filter((family) =>
-              family.some((asset) => (asset.versionFamilyId ?? asset.id) === baselineFamilyId),
-            )
-            .map((family) => ({
-              baseline,
-              current: assetFamilyPointers(family)?.current,
-            }))
-            .some(
-              ({ baseline: returned, current }) =>
-                current !== undefined &&
-                current.state === "ready" &&
-                current.id !== returned.id &&
-                (current.version ?? 0) > (returned.version ?? 0) &&
-                (task.acceptedAssetKinds === undefined ||
-                  task.acceptedAssetKinds.includes(current.kind)),
-            );
+              .filter((family) =>
+                family.some((asset) => (asset.versionFamilyId ?? asset.id) === baselineFamilyId),
+              )
+              .map((family) => ({
+                baseline,
+                current: assetFamilyPointers(family)?.current,
+              }))
+              .some(
+                ({ baseline: returned, current }) =>
+                  current !== undefined &&
+                  current.state === "ready" &&
+                  current.id !== returned.id &&
+                  (current.version ?? 0) > (returned.version ?? 0) &&
+                  (task.acceptedAssetKinds === undefined ||
+                    task.acceptedAssetKinds.includes(current.kind)),
+              );
       if (!replacementReady) {
         throw new SpeakerServiceError(
           "TASK_ASSET_NOT_READY",

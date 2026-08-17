@@ -592,13 +592,13 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     });
 
     const reloaded = fixture.createPhase();
-    await expect(reloaded.repository.getAsset(eventId, authorization.asset.id)).resolves.toMatchObject(
-      {
-        participantId,
-        uploaderAccountId: organizerAccountId,
-        uploaderLabel: "Organizer",
-      },
-    );
+    await expect(
+      reloaded.repository.getAsset(eventId, authorization.asset.id),
+    ).resolves.toMatchObject({
+      participantId,
+      uploaderAccountId: organizerAccountId,
+      uploaderLabel: "Organizer",
+    });
     await expect(
       reloaded.service.listOrganizerAssets(eventId, organizerAccountId, participantId),
     ).resolves.toEqual([
@@ -1494,16 +1494,16 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         participantId,
         taskId,
         kind: "slides",
-      fileName: input.fileName,
-      contentType: "application/pdf",
-      sizeBytes: input.bytes.byteLength,
-      ...(input.supersedesAssetId === undefined
-        ? {}
-        : {
-            supersedesAssetId: input.supersedesAssetId,
-            expectedLatestVersion: 1,
-            idempotencyKey: `content-roundtrip-replacement-${input.fileName}`,
-          }),
+        fileName: input.fileName,
+        contentType: "application/pdf",
+        sizeBytes: input.bytes.byteLength,
+        ...(input.supersedesAssetId === undefined
+          ? {}
+          : {
+              supersedesAssetId: input.supersedesAssetId,
+              expectedLatestVersion: 1,
+              idempotencyKey: `content-roundtrip-replacement-${input.fileName}`,
+            }),
       });
       const capability = privateCapabilityParts(authorization.grant.url);
       await service.consumeUploadCapability(

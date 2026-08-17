@@ -1223,16 +1223,14 @@ class LocalSpeakerRepository
       const assets = (this.#assets.get(command.eventId) ?? []).filter(
         (asset) => asset.taskId === task.id,
       );
-      const baseline = assets.find(
-        (asset) => asset.id === task.replacementBaselineAssetId,
-      );
-      const family = baseline === undefined
-        ? []
-        : assets.filter(
-            (asset) =>
-              (asset.versionFamilyId ?? asset.id) ===
-              (baseline.versionFamilyId ?? baseline.id),
-          );
+      const baseline = assets.find((asset) => asset.id === task.replacementBaselineAssetId);
+      const family =
+        baseline === undefined
+          ? []
+          : assets.filter(
+              (asset) =>
+                (asset.versionFamilyId ?? asset.id) === (baseline.versionFamilyId ?? baseline.id),
+            );
       const current =
         family.find((asset) => asset.currentVersionId === asset.id) ??
         [...family].sort((left, right) => (right.version ?? 0) - (left.version ?? 0))[0];
@@ -1242,8 +1240,7 @@ class LocalSpeakerRepository
         current.state !== "ready" ||
         current.id === baseline.id ||
         (current.version ?? 0) <= (baseline.version ?? 0) ||
-        (task.acceptedAssetKinds !== undefined &&
-          !task.acceptedAssetKinds.includes(current.kind))
+        (task.acceptedAssetKinds !== undefined && !task.acceptedAssetKinds.includes(current.kind))
       ) {
         return { ok: false, reason: "invalid_state" } as const;
       }
@@ -1266,10 +1263,7 @@ class LocalSpeakerRepository
     tasks[index] = updated;
     const transitions = this.#taskTransitions.get(command.eventId) ?? [];
     if (!transitions.some((transition) => transition.id === command.transition.id)) {
-      this.#taskTransitions.set(command.eventId, [
-        ...transitions,
-        clone(command.transition),
-      ]);
+      this.#taskTransitions.set(command.eventId, [...transitions, clone(command.transition)]);
     }
     return {
       ok: true,
@@ -1342,6 +1336,15 @@ class LocalSpeakerRepository
     );
   }
 
+  async listAssetHistory(eventId: string, versionFamilyId: string) {
+    this.#ensureEvent(eventId);
+    return clone(
+      (this.#assets.get(eventId) ?? []).filter(
+        (asset) => (asset.versionFamilyId ?? asset.id) === versionFamilyId,
+      ),
+    );
+  }
+
   async finalizeAsset(
     command: FinalizeSpeakerAssetCommand,
   ): Promise<RepositoryResult<SpeakerAsset>> {
@@ -1364,6 +1367,17 @@ class LocalSpeakerRepository
         : { rejectionReason: command.rejectionReason }),
     };
     assets[index] = finalized;
+    if (command.state === "ready") {
+      const familyId = asset.versionFamilyId ?? asset.id;
+      for (const [candidateIndex, candidate] of assets.entries()) {
+        if ((candidate.versionFamilyId ?? candidate.id) !== familyId) continue;
+        assets[candidateIndex] = {
+          ...candidate,
+          latestVersionId: asset.id,
+          currentVersionId: asset.id,
+        };
+      }
+    }
     return { ok: true, value: clone(finalized) };
   }
 

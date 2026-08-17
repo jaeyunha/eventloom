@@ -1321,8 +1321,10 @@ describe.sequential("composed local Worker", () => {
           fileName: "deck-v2.pdf",
           contentType: "application/pdf",
           sizeBytes: new TextEncoder().encode(replacementBody).byteLength,
+          supersedesAssetId: upload.asset.id,
+          expectedLatestVersion: upload.asset.version,
         },
-        speakerHeaders,
+        { ...speakerHeaders, "idempotency-key": "local-runtime-replacement-v2" },
       ),
     );
     expect(

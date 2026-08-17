@@ -12,6 +12,7 @@ import {
 import { SpeakerService, SpeakerServiceError } from "./service";
 import { withTestSpeakerOrganizerLifecycle } from "./test-lifecycle-adapter";
 import type {
+  CreatePendingSpeakerAssetVersionCommand,
   CreatePrivateUploadGrantCommand,
   PrivateAssetGateway,
   PrivateDownloadGrant,
@@ -201,6 +202,24 @@ class FakeSpeakerRepository implements SpeakerRepository {
   createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset> {
     this.assets.push(asset);
     return Promise.resolve(asset);
+  }
+
+  createPendingAssetVersion(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const predecessor = this.assets.find(
+      (asset) =>
+        asset.eventId === command.asset.eventId && asset.id === command.expectedLatestAssetId,
+    );
+    if (
+      predecessor === undefined ||
+      predecessor.version !== command.expectedLatestVersion ||
+      predecessor.state !== "ready"
+    ) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    this.assets.push(command.asset);
+    return Promise.resolve({ ok: true, value: command.asset });
   }
 
   getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null> {
@@ -3824,6 +3843,8 @@ describe("SpeakerService private asset authorization", () => {
       accountId: "account-1",
       participantId: "participant-1",
       supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: "speaker-test-successor-v2",
       kind: "slides",
       fileName: "slides-v2.pdf",
       contentType: "application/pdf",
@@ -3851,6 +3872,8 @@ describe("SpeakerService private asset authorization", () => {
         participantId: "participant-1",
         taskId: "different-task",
         supersedesAssetId: first.asset.id,
+        expectedLatestVersion: 1,
+        idempotencyKey: "speaker-test-invalid-task",
         kind: "slides",
         fileName: "slides-conflict.pdf",
         contentType: "application/pdf",
@@ -3873,6 +3896,8 @@ describe("SpeakerService private asset authorization", () => {
         accountId: "account-1",
         participantId: "participant-1",
         supersedesAssetId: "foreign-asset",
+        expectedLatestVersion: 1,
+        idempotencyKey: "speaker-test-foreign-asset",
         kind: "slides",
         fileName: "slides-foreign.pdf",
         contentType: "application/pdf",

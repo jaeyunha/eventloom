@@ -6,8 +6,8 @@ import { withTestSpeakerOrganizerLifecycle } from "./test-lifecycle-adapter";
 import type {
   CreatePendingSpeakerAssetVersionCommand,
   PrivateAssetCapabilityBinding,
-  PrivateDownloadCapabilityBinding,
   PrivateAssetGateway,
+  PrivateDownloadCapabilityBinding,
   PrivateDownloadGrant,
   PrivateDownloadObject,
   PrivateUploadGrant,
@@ -80,10 +80,7 @@ class LifecycleRepository implements SpeakerRepository {
     },
   ];
   readonly assets: SpeakerAsset[] = [];
-  readonly assetVersionCreations = new Map<
-    string,
-    { requestDigest: string; assetId: string }
-  >();
+  readonly assetVersionCreations = new Map<string, { requestDigest: string; assetId: string }>();
   readonly roster: SpeakerRosterEntry[] = [];
   readonly forms: SpeakerTaskFormDefinition[] = [
     {
@@ -1031,13 +1028,7 @@ describe("private speaker asset lifecycle", () => {
   it("authorizes exactly one concurrent replacement for an expected family head", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
-    const ids = [
-      "asset-v1",
-      "asset-v2-a",
-      "asset-v2-b",
-      "asset-v2-replay",
-      "asset-v2-mismatch",
-    ];
+    const ids = ["asset-v1", "asset-v2-a", "asset-v2-b", "asset-v2-replay", "asset-v2-mismatch"];
     const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
@@ -1425,7 +1416,7 @@ describe("private speaker asset lifecycle", () => {
       assetId: first.asset.id,
       state: "ready",
     });
-    const submitted = await service.transitionTask({
+    await service.transitionTask({
       eventId: "event-1",
       accountId: "account-1",
       taskId: "upload-task",
@@ -1750,7 +1741,9 @@ describe("private speaker asset lifecycle", () => {
         body: "x",
       }),
     ).toHaveProperty("status", 201);
-    const slidesObjectKey = repository.assets.find((asset) => asset.id === "slides-asset")?.objectKey;
+    const slidesObjectKey = repository.assets.find(
+      (asset) => asset.id === "slides-asset",
+    )?.objectKey;
     if (slidesObjectKey === undefined) throw new Error("Expected the pending slides asset.");
     gateway.uploaded.add(slidesObjectKey);
 
@@ -1770,9 +1763,7 @@ describe("private speaker asset lifecycle", () => {
     };
     expect(listResponse.status).toBe(200);
 
-    const historyResponse = await routes.request(
-      "/events/event-1/assets/slides-asset/history",
-    );
+    const historyResponse = await routes.request("/events/event-1/assets/slides-asset/history");
     const historyBody = (await historyResponse.json()) as {
       data: Record<string, unknown>[];
     };

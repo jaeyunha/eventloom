@@ -2266,7 +2266,7 @@ export class D1SpeakerRepository
         ),
         this.#db
           .prepare(
-          "UPDATE speaker_tasks SET status = ?, replacement_baseline_asset_id = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+            "UPDATE speaker_tasks SET status = ?, replacement_baseline_asset_id = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
           )
           .bind(
             command.returnTask.toStatus,
@@ -2280,22 +2280,24 @@ export class D1SpeakerRepository
           ),
         ...(command.returnTask.transition === undefined
           ? []
-          : [this.#db
-          .prepare(
-            "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          )
-          .bind(
-            command.returnTask.transition.id,
-            scope.organizationId,
-            command.eventId,
-            command.returnTask.taskId,
-            command.returnTask.transition.participantId,
-            command.returnTask.transition.actorAccountId,
-            command.returnTask.fromStatus,
-            command.returnTask.toStatus,
-            command.returnTask.transition.note ?? null,
-            command.returnTask.transition.occurredAt,
-          )]),
+          : [
+              this.#db
+                .prepare(
+                  "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(
+                  command.returnTask.transition.id,
+                  scope.organizationId,
+                  command.eventId,
+                  command.returnTask.taskId,
+                  command.returnTask.transition.participantId,
+                  command.returnTask.transition.actorAccountId,
+                  command.returnTask.fromStatus,
+                  command.returnTask.toStatus,
+                  command.returnTask.transition.note ?? null,
+                  command.returnTask.transition.occurredAt,
+                ),
+            ]),
       );
     }
     if (command.audit !== undefined) statements.push(this.#auditStatement(command.audit));
