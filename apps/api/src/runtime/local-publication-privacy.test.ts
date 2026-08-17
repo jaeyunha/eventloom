@@ -9,10 +9,13 @@ const airtableSource = readFileSync(
 );
 
 describe("local publication speaker privacy", () => {
-  it("uses neutral Speaker fallbacks instead of raw participant ids", () => {
+  it("routes speaker labels through neutralSpeakerDisplayName instead of raw ids", () => {
     for (const source of [localSource, airtableSource]) {
-      expect(source).toContain('?? "Speaker"');
+      expect(source).toContain("neutralSpeakerDisplayName(");
       expect(source).not.toMatch(/\?\?\s*participantId\b/);
+      expect(source).not.toMatch(
+        /displayName:\s*profile\?\.displayName\s*\?\?\s*approvedSpeakerNameById/,
+      );
     }
   });
 });

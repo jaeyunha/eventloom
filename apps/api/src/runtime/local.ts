@@ -14,6 +14,7 @@ import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import type {
   AgendaEntryInput,
   AgendaRepository,
@@ -3586,7 +3587,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         const approvedSpeakerName =
           entry.metadata?.speakerNames[speakerIndex] ??
           session.speakerRoster.find((reference) => reference.id === participantId)?.displayName;
-        if (approvedSpeakerName !== undefined) {
+        if (typeof approvedSpeakerName === "string" && approvedSpeakerName.trim().length > 0) {
           approvedSpeakerNameById.set(participantId, approvedSpeakerName);
         }
       }
@@ -3607,7 +3608,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
               return served === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? "Speaker",
+                    displayName: neutralSpeakerDisplayName(
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -3629,8 +3632,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? "Speaker",
+              displayName: neutralSpeakerDisplayName(
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,

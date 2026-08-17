@@ -11,6 +11,7 @@ import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import { localDateInTimeZone } from "../features/agenda/timezone";
 import type { AgendaEntry, AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { RequestAuthenticator } from "../features/auth/authenticator";
@@ -8664,7 +8665,7 @@ export function createD1ApplicationDependencies(
             values.push({ id: session.id, title: session.title, trackNames });
             sessionsByParticipantId.set(participantId, values);
             const approvedSpeakerName = entry.metadata?.speakerNames[speakerIndex];
-            if (approvedSpeakerName !== undefined) {
+            if (typeof approvedSpeakerName === "string" && approvedSpeakerName.trim().length > 0) {
               approvedSpeakerNameById.set(participantId, approvedSpeakerName);
             }
           }
@@ -8724,7 +8725,9 @@ export function createD1ApplicationDependencies(
               return servedSpeaker === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? "Speaker",
+                    displayName: neutralSpeakerDisplayName(
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -8744,8 +8747,10 @@ export function createD1ApplicationDependencies(
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? "Speaker",
+              displayName: neutralSpeakerDisplayName(
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,
