@@ -321,6 +321,62 @@ describe("durable speaker communications", () => {
     expect(delivered[0]?.html).toBe(preview.recipients[0]?.html);
   });
 
+  it("does not replay a generic welcome send as an invitation operation", async () => {
+    const lifecycle = fixture();
+    const phase = lifecycle.createPhase();
+    await createSpeaker(
+      phase.service,
+      lifecycle.database,
+      "participant-priya",
+      "Priya Raman",
+      "priya@example.test",
+    );
+    const delivered: CommunicationDeliveryRequest[] = [];
+    const durable = communications(lifecycle.database as unknown as D1Database, delivered);
+    const invitationPreview = await durable.facade.previewInvitations({
+      organizationId: ids.organizationId,
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      participantIds: ["participant-priya"],
+    });
+    expect(invitationPreview).toHaveLength(1);
+    const welcomeTemplate = (
+      await durable.facade.listTemplates(ids.organizationId, ids.eventId, ids.organizerAccountId)
+    ).find(
+      (template) =>
+        template.subject === "Review your speaker invitation" &&
+        template.html.includes("Sign in to the work hub") &&
+        template.text.includes("review and accept your speaker invitation"),
+    );
+    if (welcomeTemplate === undefined) throw new Error("Expected the built-in welcome template.");
+
+    const genericPreview = await durable.facade.preview({
+      organizationId: ids.organizationId,
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      participantIds: ["participant-priya"],
+      templateId: welcomeTemplate.id,
+      templateVersion: welcomeTemplate.version,
+    });
+    await durable.facade.send({
+      organizationId: ids.organizationId,
+      eventId: ids.eventId,
+      accountId: ids.organizerAccountId,
+      previewId: genericPreview.id,
+      idempotencyKey: "generic-welcome-send",
+    });
+    expect(delivered).toHaveLength(1);
+    await expect(
+      durable.facade.findInvitationReplay({
+        organizationId: ids.organizationId,
+        eventId: ids.eventId,
+        accountId: ids.organizerAccountId,
+        participantIds: ["participant-priya"],
+        idempotencyKey: "generic-welcome-send",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
   it("persists versions, exact previews, sends, provider timestamps, and history across recreation", async () => {
     const lifecycle = fixture();
     const phase = lifecycle.createPhase();

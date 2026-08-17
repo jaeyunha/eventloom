@@ -15,6 +15,7 @@ import type { SpeakerEmailTemplate } from "./service";
 
 export type { SpeakerCommunications } from "./communications-types";
 export const SPEAKER_WELCOME_TEMPLATE_ID = "speaker-approved-welcome";
+const SPEAKER_OPERATION_MARKER = "__eventloom_speaker_operation";
 const encoder = new TextEncoder();
 const welcome = {
   name: "Speaker invitation",
@@ -229,7 +230,20 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
   }
 
   async preview(input: Parameters<SpeakerCommunications["preview"]>[0]) {
+    return this.previewWithWorkflowMarker(input, false);
+  }
+
+  private async previewWithWorkflowMarker(
+    input: Parameters<SpeakerCommunications["preview"]>[0],
+    invitationWorkflow: boolean,
+  ) {
     const template = await this.canonicalPreviewTemplate(input);
+    const { [SPEAKER_OPERATION_MARKER]: _ignored, ...callerData } = input.data ?? {};
+    const data = {
+      ...callerData,
+      portal_url: this.workHubUrl(),
+      [SPEAKER_OPERATION_MARKER]: invitationWorkflow ? "speaker_invitation" : "speaker_bulk_email",
+    };
     return speakerPreviewDto(
       await this.communications.previewGroupSend(
         speakerCommunicationActor(input.organizationId, input.eventId, input.accountId),
@@ -240,7 +254,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
           templateId: template.id,
           templateVersion: template.version,
           recipientIds: input.participantIds,
-          data: { ...(input.data ?? {}), portal_url: this.workHubUrl() },
+          data,
           protectedRecipientDataKeys: ["portal_url"],
         },
       ),
@@ -273,12 +287,15 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
 
   async previewInvitations(input: Parameters<SpeakerCommunications["previewInvitations"]>[0]) {
     const template = await this.ensureWelcomeTemplate(input);
-    const preview = await this.preview({
-      ...input,
-      templateId: template.id,
-      templateVersion: template.version,
-      data: { portal_url: this.workHubUrl() },
-    });
+    const preview = await this.previewWithWorkflowMarker(
+      {
+        ...input,
+        templateId: template.id,
+        templateVersion: template.version,
+        data: { portal_url: this.workHubUrl() },
+      },
+      true,
+    );
     return preview.recipients.map((recipient) => ({
       participantId: recipient.participantId,
       recipientEmail: recipient.email,
@@ -305,6 +322,8 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
       const requestedRecipients = [...input.participantIds].sort((a, b) => a.localeCompare(b));
       const trustedRenderData =
         prior.data.portal_url === this.workHubUrl() &&
+        (prior.data[SPEAKER_OPERATION_MARKER] === undefined ||
+          prior.data[SPEAKER_OPERATION_MARKER] === "speaker_invitation") &&
         prior.recipients.every((recipient) => recipient.data.portal_url === undefined);
       if (
         prior.purpose !== "organizer_group_email" ||
@@ -345,12 +364,15 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     const replay = await this.findInvitationReplay(input);
     if (replay !== null) return replay;
     const template = await this.ensureWelcomeTemplate(input);
-    const preview = await this.preview({
-      ...input,
-      templateId: template.id,
-      templateVersion: template.version,
-      data: { portal_url: this.workHubUrl() },
-    });
+    const preview = await this.previewWithWorkflowMarker(
+      {
+        ...input,
+        templateId: template.id,
+        templateVersion: template.version,
+        data: { portal_url: this.workHubUrl() },
+      },
+      true,
+    );
     const send = await this.send({ ...input, previewId: preview.id });
     const replayed = false;
     const recipients = send.deliveries.map((delivery) => ({
