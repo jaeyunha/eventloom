@@ -33,4 +33,9 @@ export interface ApiSuggestion {
     promptVersion?: string;
     traceId?: string;
   };
+  history?: readonly {
+    action: "accept" | "edit" | "reject" | "generate" | "stale";
+    criterionId?: string;
+    valueByCriterion?: Readonly<Record<string, number>>;
+  }[];
 }

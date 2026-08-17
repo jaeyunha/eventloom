@@ -45,6 +45,16 @@ export function useEvaluatorAutosaveActions(scope: EvaluatorState) {
     }
     for (const suggestion of suggestions) {
       if (suggestion.status !== "pending") continue;
+      const resolvedCriterionIds = new Set(
+        suggestion.history?.flatMap((entry) =>
+          entry.action === "reject" && entry.criterionId !== undefined
+            ? [entry.criterionId]
+            : entry.action !== "edit" && entry.action !== "accept"
+              ? []
+              : Object.keys(entry.valueByCriterion ?? {}),
+        ),
+      );
+      if (resolvedCriterionIds.has(criterionId)) continue;
       const criterion = criteriaById.get(criterionId);
       if (criterion === undefined || criterionType(criterion) === "free_text") continue;
       const candidate = suggestion.candidates[criterionId]?.[0];

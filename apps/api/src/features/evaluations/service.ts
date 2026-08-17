@@ -3146,31 +3146,41 @@ export class EvaluationService {
       action,
       actorId: actor.userId,
       at: now,
+      ...(input.criterionId === undefined ? {} : { criterionId: input.criterionId }),
       ...(reason.length === 0 ? {} : { reason }),
       ...((action === "edit" || action === "accept") && editedValues !== undefined
         ? { valueByCriterion: editedValues }
         : {}),
     };
     const editedCriterionIds = new Set(
-      suggestion.history.flatMap((entry) =>
-        (entry.action === "edit" || entry.action === "accept") &&
-        entry.valueByCriterion !== undefined
-          ? Object.keys(entry.valueByCriterion)
-          : [],
-      ),
+      suggestion.history.flatMap((entry) => {
+        if (
+          (entry.action === "edit" || entry.action === "accept") &&
+          entry.valueByCriterion !== undefined
+        ) {
+          return Object.keys(entry.valueByCriterion);
+        }
+        if (entry.action === "reject" && entry.criterionId !== undefined) {
+          return [entry.criterionId];
+        }
+        return [];
+      }),
     );
     if ((action === "edit" || action === "accept") && editedValues !== undefined) {
       for (const criterionId of Object.keys(editedValues)) {
         editedCriterionIds.add(criterionId);
       }
     }
+    if (action === "reject" && input.criterionId !== undefined) {
+      editedCriterionIds.add(input.criterionId);
+    }
+    const allCandidatesResolved = Object.keys(suggestion.candidates).every((criterionId) =>
+      editedCriterionIds.has(criterionId),
+    );
     const allCandidatesEdited =
       action === "accept" && editedValues === undefined
         ? true
-        : (action === "edit" || action === "accept") &&
-          Object.keys(suggestion.candidates).every((criterionId) =>
-            editedCriterionIds.has(criterionId),
-          );
+        : (action === "edit" || action === "accept") && allCandidatesResolved;
     const resolvedSuggestion: EvaluationSuggestion = {
       ...suggestion,
       status:
@@ -3182,7 +3192,9 @@ export class EvaluationService {
             ? allCandidatesEdited
               ? "edited"
               : "pending"
-            : "rejected",
+            : action === "reject" && input.criterionId !== undefined && !allCandidatesResolved
+              ? "pending"
+              : "rejected",
       version: suggestion.version + 1,
       history: [...suggestion.history, auditEntry],
       audit: [...suggestion.audit, auditEntry],

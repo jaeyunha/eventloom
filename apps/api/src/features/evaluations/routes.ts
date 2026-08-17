@@ -202,6 +202,7 @@ const resolveSuggestionSchema = z.object({
   action: z.enum(["accept", "edit", "reject"]),
   expectedVersion: z.number().int().positive(),
   reason: z.string().optional(),
+  criterionId: z.string().optional(),
   scores: z.record(z.string(), z.number()).optional(),
   criterionScores: z.record(z.string(), z.number()).optional(),
 });

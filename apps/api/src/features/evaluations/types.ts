@@ -475,6 +475,7 @@ export interface EvaluationSuggestionAuditEntry {
   readonly action: EvaluationSuggestionResolutionAction | "generate" | "stale";
   readonly actorId: string | null;
   readonly at: string;
+  readonly criterionId?: string;
   readonly reason?: string;
   readonly valueByCriterion?: Readonly<Record<string, number>>;
 }
