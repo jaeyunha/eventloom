@@ -11,6 +11,7 @@ import {
 import { PublishedGuideArticle } from "./portal-published-content";
 import styles from "./portal-workspace.module.css";
 import type { PortalResource, PortalWikiPage } from "./types";
+import type { ParticipantSafeGuideFailure } from "./portal-provider-model";
 
 type GuideItem = {
   readonly kind: "Resource" | "Guide";
@@ -21,9 +22,9 @@ export interface EventGuideWorkspaceViewProps {
   readonly eventName: string;
   readonly available: boolean;
   readonly resources: readonly PortalResource[];
-  readonly resourceError?: string | null;
+  readonly resourceError?: ParticipantSafeGuideFailure | null;
   readonly wiki: readonly PortalWikiPage[];
-  readonly wikiError?: string | null;
+  readonly wikiError?: ParticipantSafeGuideFailure | null;
 }
 
 export function EventGuideWorkspaceView({
@@ -66,14 +67,34 @@ export function EventGuideWorkspaceView({
         <WorkspaceState
           variant="error"
           title="Event resources unavailable"
-          description={resourceError}
+          description={
+            <>
+              {resourceError.message}
+              {resourceError.supportId === null ? null : (
+                <>
+                  <br />
+                  <span>Support ID: {resourceError.supportId}.</span>
+                </>
+              )}
+            </>
+          }
         />
       ) : null}
       {available && wikiError ? (
         <WorkspaceState
           variant="error"
           title="Event guide pages unavailable"
-          description={wikiError}
+          description={
+            <>
+              {wikiError.message}
+              {wikiError.supportId === null ? null : (
+                <>
+                  <br />
+                  <span>Support ID: {wikiError.supportId}.</span>
+                </>
+              )}
+            </>
+          }
         />
       ) : null}
       {!available ? (

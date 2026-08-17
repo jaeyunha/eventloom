@@ -232,6 +232,7 @@ interface PortalScenarioState {
 export interface PortalApiOptions {
   expiredDownloadAssetId?: string;
   unavailableResource?: "resources" | "wiki";
+  unavailableResourceMessage?: string;
 }
 
 export interface PortalApiHarness {
@@ -1099,7 +1100,10 @@ export async function installPortalApi(
         return;
       }
       if (options.unavailableResource === "resources") {
-        await notFound(route, "The requested speaker resource was not found.");
+        await notFound(
+          route,
+          options.unavailableResourceMessage ?? "The requested speaker resource was not found.",
+        );
         return;
       }
       await send(
@@ -1115,7 +1119,10 @@ export async function installPortalApi(
         return;
       }
       if (options.unavailableResource === "wiki") {
-        await notFound(route, "The requested speaker resource was not found.");
+        await notFound(
+          route,
+          options.unavailableResourceMessage ?? "The requested speaker resource was not found.",
+        );
         return;
       }
       await send(

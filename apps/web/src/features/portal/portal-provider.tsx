@@ -31,6 +31,8 @@ import {
   loadPortalStartup,
   messageFrom,
   normalizeCapabilities,
+  participantSafeGuideFailure,
+  type ParticipantSafeGuideFailure,
   type PortalPrefetchResult,
   portalContextResponseForTarget,
   portalViewAfterLoadFailure,
@@ -80,8 +82,8 @@ export interface PortalWorkspaceState {
 }
 
 export interface PortalWorkspaceGuideErrors {
-  resources: string | null;
-  wiki: string | null;
+  resources: ParticipantSafeGuideFailure | null;
+  wiki: ParticipantSafeGuideFailure | null;
 }
 
 const emptyWorkspace: PortalWorkspaceState = {
@@ -704,11 +706,14 @@ function usePortalProviderValue({
             : listResources !== undefined &&
                 hasPortalCapability(target.capabilities, "resource-read")
               ? safely(
-                  () => listResources(target.eventId, signal),
-                  [] as PortalResource[],
-                  (resourceError) => {
-                    nextGuideErrors.resources = messageFrom(resourceError);
-                  },
+                () => listResources(target.eventId, signal),
+                [] as PortalResource[],
+                (resourceError) => {
+                  nextGuideErrors.resources = participantSafeGuideFailure(
+                    resourceError,
+                    "resources",
+                  );
+                },
                 )
               : Promise.resolve([] as PortalResource[]);
 
@@ -718,11 +723,11 @@ function usePortalProviderValue({
             ? Promise.resolve([...nextView.wiki])
             : listWiki !== undefined && hasPortalCapability(target.capabilities, "resource-read")
               ? safely(
-                  () => listWiki(target.eventId, signal),
-                  [] as PortalWikiPage[],
-                  (wikiError) => {
-                    nextGuideErrors.wiki = messageFrom(wikiError);
-                  },
+                () => listWiki(target.eventId, signal),
+                [] as PortalWikiPage[],
+                (wikiError) => {
+                  nextGuideErrors.wiki = participantSafeGuideFailure(wikiError, "wiki");
+                },
                 )
               : Promise.resolve([] as PortalWikiPage[]);
 

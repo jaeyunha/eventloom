@@ -6,6 +6,7 @@ import {
   assetBelongsToPortalContext,
   createPortalProviderApi,
   loadPortalRosters,
+  participantSafeGuideFailure,
   portalContextLabel,
   portalContextResponseForTarget,
   portalViewAfterLoadFailure,
@@ -86,6 +87,22 @@ function view(
 }
 
 describe("speaker portal provider", () => {
+  it("maps guide failures to fixed participant-safe copy", () => {
+    const sensitiveMessage =
+      "Storage bucket speaker-private-prod denied access with credential token secret-value.";
+    const failure = participantSafeGuideFailure(
+      new PortalApiError("NOT_FOUND", sensitiveMessage, 404, "trace_support-123"),
+      "resources",
+    );
+
+    expect(failure).toEqual({
+      message: "Published event resources are not available for this event.",
+      supportId: "trace_support-123",
+    });
+    expect(JSON.stringify(failure)).not.toContain(sensitiveMessage);
+    expect(JSON.stringify(failure)).not.toContain("secret-value");
+  });
+
   it("constructs the production API against the same-origin speaker gateway", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

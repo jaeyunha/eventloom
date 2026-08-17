@@ -383,7 +383,12 @@ test("optional resource failure stays local while accepted session data remains 
   authSession,
   page,
 }) => {
-  await installPortalApi(page, authSession, { unavailableResource: "resources" });
+  const sensitiveMessage =
+    "Storage bucket speaker-private-prod denied access with credential token secret-value.";
+  await installPortalApi(page, authSession, {
+    unavailableResource: "resources",
+    unavailableResourceMessage: sensitiveMessage,
+  });
 
   await page.goto("/portal?workspace=co-speakers");
   await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
@@ -395,7 +400,12 @@ test("optional resource failure stays local while accepted session data remains 
   await page.goto("/portal?workspace=resources");
   await expect(page.getByRole("heading", { level: 1, name: "Event guide" })).toBeVisible();
   await expect(page.getByText("Event resources unavailable", { exact: true })).toBeVisible();
-  await expect(page.getByText("The requested speaker resource was not found.")).toBeVisible();
+  await expect(
+    page.getByText("Published event resources are not available for this event.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Support ID: e2e-portal-trace.", { exact: true })).toBeVisible();
+  await expect(page.getByText(sensitiveMessage, { exact: true })).toHaveCount(0);
+  await expect(page.getByText("secret-value", { exact: false })).toHaveCount(0);
   await expect(
     page.getByRole("heading", { level: 2, name: "Welcome to Evaluator Summit" }),
   ).toBeVisible();
