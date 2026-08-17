@@ -45,7 +45,7 @@ export type CommunicationErrorCode =
   | "COMMUNICATION_UNAVAILABLE";
 
 export const COMMUNICATION_OPERATION_MARKER = "__eventloom_speaker_operation";
-export type CommunicationPreviewOperation = "generic" | "speaker_invitation";
+type CommunicationPreviewOperation = "generic" | "speaker_invitation";
 
 export class CommunicationError extends Error {
   readonly code: CommunicationErrorCode;
@@ -89,7 +89,6 @@ export interface CommunicationPreviewInput {
   recipientIds?: readonly string[];
   data?: CommunicationRenderData;
   protectedRecipientDataKeys?: readonly string[];
-  operation?: CommunicationPreviewOperation;
 }
 
 export interface SendGroupCommunicationInput {
@@ -950,6 +949,21 @@ export class CommunicationService {
     actor: CommunicationActor,
     input: CommunicationPreviewInput,
   ): Promise<CommunicationPreview> {
+    return this.previewGroupSendInternal(actor, input, "generic");
+  }
+
+  async previewInvitationGroupSend(
+    actor: CommunicationActor,
+    input: CommunicationPreviewInput,
+  ): Promise<CommunicationPreview> {
+    return this.previewGroupSendInternal(actor, input, "speaker_invitation");
+  }
+
+  private async previewGroupSendInternal(
+    actor: CommunicationActor,
+    input: CommunicationPreviewInput,
+    operation: CommunicationPreviewOperation,
+  ): Promise<CommunicationPreview> {
     requireOrganizer(actor, input.eventId);
     if (input.purpose !== "organizer_group_email" && input.purpose !== "decision") {
       throw invalidInput(
@@ -1003,7 +1017,7 @@ export class CommunicationService {
     const data = {
       ...cloneData(input.data),
       [COMMUNICATION_OPERATION_MARKER]:
-        input.operation === "speaker_invitation" ? "speaker_invitation" : "generic",
+        operation === "speaker_invitation" ? "speaker_invitation" : "generic",
     };
     const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
       const renderedRecipient = renderCommunicationTemplate(

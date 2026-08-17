@@ -240,22 +240,21 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     const template = await this.canonicalPreviewTemplate(input);
     const { [COMMUNICATION_OPERATION_MARKER]: _ignored, ...callerData } = input.data ?? {};
     const data = { ...callerData, portal_url: this.workHubUrl() };
-    return speakerPreviewDto(
-      await this.communications.previewGroupSend(
-        speakerCommunicationActor(input.organizationId, input.eventId, input.accountId),
-        {
-          eventId: input.eventId,
-          purpose: "organizer_group_email",
-          audience: "all_participants",
-          templateId: template.id,
-          templateVersion: template.version,
-          recipientIds: input.participantIds,
-          data,
-          protectedRecipientDataKeys: ["portal_url"],
-          operation: invitationWorkflow ? "speaker_invitation" : "generic",
-        },
-      ),
-    );
+    const actor = speakerCommunicationActor(input.organizationId, input.eventId, input.accountId);
+    const groupInput = {
+      eventId: input.eventId,
+      purpose: "organizer_group_email" as const,
+      audience: "all_participants" as const,
+      templateId: template.id,
+      templateVersion: template.version,
+      recipientIds: input.participantIds,
+      data,
+      protectedRecipientDataKeys: ["portal_url"],
+    };
+    const preview = invitationWorkflow
+      ? await this.communications.previewInvitationGroupSend(actor, groupInput)
+      : await this.communications.previewGroupSend(actor, groupInput);
+    return speakerPreviewDto(preview);
   }
 
   async send(input: Parameters<SpeakerCommunications["send"]>[0]) {

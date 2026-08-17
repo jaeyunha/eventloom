@@ -84,6 +84,14 @@ email; the existing regression locks that invariant. Cross-request
 role-invitation coordination is a separate authorization/idempotency follow-up
 and is not the Airtable adapter defect or the SPK-13 canonical-body merge gate.
 
+New sends receive a server-owned operation marker from the shared communication
+service: generic previews are marked `generic`, and only the dedicated speaker
+invitation preview method can mark `speaker_invitation`. Persisted rows created
+before this marker existed are accepted without a marker solely for backward
+compatibility; those rows are ambiguous compatibility data and cannot be
+semantically distinguished from a pre-marker generic welcome send. Strict
+invitation-versus-bulk binding applies to all new marked rows.
+
 ## Completed Implementation
 
 ### Canonical body and exact draft binding
