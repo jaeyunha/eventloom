@@ -24,10 +24,10 @@ a post-rebase migration consolidation checkpoint.
 The retirement diff is limited to:
 
 - `apps/api/migrations/0035_review_plan_revision_lineage.sql`
-- `apps/api/migrations/0036_review_plan_lineage_repairs.sql`
-- `apps/api/migrations/0037_review_plan_lineage_repair_triggers.sql`
-- `apps/api/migrations/0038_review_plan_revision_sync_lock.sql`
-- `apps/api/migrations/0039_review_plan_revision_sync_token.sql`
+- `apps/api/migrations/0037_review_plan_lineage_repairs.sql`
+- `apps/api/migrations/0038_review_plan_lineage_repair_triggers.sql`
+- `apps/api/migrations/0039_review_plan_revision_sync_lock.sql`
+- `apps/api/migrations/0040_review_plan_revision_sync_token.sql`
 - `apps/api/src/infrastructure/cloudflare/repositories/evaluations.test.ts`
 - `apps/api/src/db/review-plan-lineage-migrations.test.ts`
 - `docs/release-runbook.md`

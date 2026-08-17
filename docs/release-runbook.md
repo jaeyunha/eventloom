@@ -166,17 +166,17 @@ does not replace the Wrangler-owned numbered migration path.
 ### Legacy review-plan lineage repair
 
 Migrations `0035_review_plan_revision_lineage.sql`,
-`0036_review_plan_lineage_repairs.sql`, and
-`0037_review_plan_lineage_repair_triggers.sql` record plausible repair
+`0037_review_plan_lineage_repairs.sql`, and
+`0038_review_plan_lineage_repair_triggers.sql` record plausible repair
 candidates but do not infer predecessor relationships from legacy
 user-controlled IDs. The candidate predicate rejects independent roots whose
 IDs merely contain `-revision-` while preserving the old 100-character
-truncation format. Migration `0037` installs the same final predicate as
+truncation format. Migration `0038` installs the same final predicate as
 durable insert triggers so revisions written by the old Worker during
 migration/deployment overlap are still recorded.
-Migration `0038_review_plan_revision_sync_lock.sql` adds the internal
+Migration `0039_review_plan_revision_sync_lock.sql` adds the internal
 family-synchronization lock used by the candidate Worker, and migration
-`0039_review_plan_revision_sync_token.sql` adds its resumable owner token.
+`0040_review_plan_revision_sync_token.sql` adds its resumable owner token.
 Apply all five migrations before deploying that Worker. After applying them to
 an environment that already contains review-plan revisions:
 

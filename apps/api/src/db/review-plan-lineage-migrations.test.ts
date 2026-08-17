@@ -46,10 +46,10 @@ describe("review plan lineage migrations", () => {
       `);
 
       database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
-      database.executeScript(migration("0036_review_plan_lineage_repairs.sql"));
-      database.executeScript(migration("0037_review_plan_lineage_repair_triggers.sql"));
-      database.executeScript(migration("0038_review_plan_revision_sync_lock.sql"));
-      database.executeScript(migration("0039_review_plan_revision_sync_token.sql"));
+      database.executeScript(migration("0037_review_plan_lineage_repairs.sql"));
+      database.executeScript(migration("0038_review_plan_lineage_repair_triggers.sql"));
+      database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
+      database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));
 
       database.executeScript(`
         INSERT INTO review_plans (
@@ -147,10 +147,10 @@ describe("review plan lineage migrations", () => {
         );
       `);
       database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
-      database.executeScript(migration("0036_review_plan_lineage_repairs.sql"));
-      database.executeScript(migration("0037_review_plan_lineage_repair_triggers.sql"));
-      database.executeScript(migration("0038_review_plan_revision_sync_lock.sql"));
-      database.executeScript(migration("0039_review_plan_revision_sync_token.sql"));
+      database.executeScript(migration("0037_review_plan_lineage_repairs.sql"));
+      database.executeScript(migration("0038_review_plan_lineage_repair_triggers.sql"));
+      database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
+      database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));
 
       const remainingTriggers = await database
         .prepare(
@@ -223,10 +223,10 @@ describe("review plan lineage migrations", () => {
       `);
 
       database.executeScript(migration("0035_review_plan_revision_lineage.sql"));
-      database.executeScript(migration("0036_review_plan_lineage_repairs.sql"));
-      database.executeScript(migration("0037_review_plan_lineage_repair_triggers.sql"));
-      database.executeScript(migration("0038_review_plan_revision_sync_lock.sql"));
-      database.executeScript(migration("0039_review_plan_revision_sync_token.sql"));
+      database.executeScript(migration("0037_review_plan_lineage_repairs.sql"));
+      database.executeScript(migration("0038_review_plan_lineage_repair_triggers.sql"));
+      database.executeScript(migration("0039_review_plan_revision_sync_lock.sql"));
+      database.executeScript(migration("0040_review_plan_revision_sync_token.sql"));
 
       const repairs = await database
         .prepare(

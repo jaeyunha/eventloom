@@ -1624,7 +1624,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
     };
   }
 
-    async putReview(
+  async putReview(
     review: EvaluationReview,
     expectedVersion: number | null,
     admission: EvaluationReviewWriteAdmission,
