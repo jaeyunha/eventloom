@@ -349,7 +349,6 @@ describe("Airtable communication D1 delivery", () => {
           tasks: [
             {
               taskId: "task-1",
-              version: 1,
               participantId: "participant-1",
               title: "Upload Final Headshot",
               dueAt: "2027-04-14",

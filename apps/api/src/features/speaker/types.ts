@@ -557,10 +557,17 @@ export interface SpeakerTaskUpdateInput {
   status?: SpeakerTaskStatus;
 }
 
+export interface SpeakerTaskRepositoryAudit {
+  id: string;
+  action: "speaker_task.reminder_offsets_updated";
+  previousReminderOffsetsMinutes: readonly number[];
+}
+
 export interface SpeakerTaskRepositoryCommand {
   task: SpeakerTask;
   expectedVersion: number | null;
   actorAccountId: string;
+  audit?: SpeakerTaskRepositoryAudit;
 }
 
 export type SpeakerDeliverableStatus = SpeakerTaskStatus | "pending" | "uploaded";

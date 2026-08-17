@@ -3440,6 +3440,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       successorAssignment: assignmentC,
       expectedAssignmentVersion: assignmentA.version,
       reason: "Reviewer conflict disclosed after assignment.",
+      authorizedAt: replacedAt,
     };
 
     await expect(repository.replaceAssignment(scope, replacement)).rejects.toMatchObject({
@@ -3487,6 +3488,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
           { assignmentId: assignmentC.id, version: 1 },
         ],
         reason: "Organizer removed the completed reviewer.",
+        authorizedAt: replacedAt,
       }),
     ).rejects.toThrow("changed since the distribution was previewed");
     await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
@@ -3500,6 +3502,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         { assignmentId: assignmentC.id, version: assignmentC.version },
       ],
       reason: "Organizer removed the completed reviewer.",
+      authorizedAt: replacedAt,
     });
     expect(distributed.activeAssignments).toEqual([
       expect.objectContaining({
@@ -3696,6 +3699,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         version: assignment.version,
       })),
       reason: "Replace the full reviewer slate.",
+      authorizedAt: committedAt,
     });
 
     expect(materializationBatchCount).toBe(2);
@@ -3906,6 +3910,11 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         assignment.version,
         review,
         null,
+        {
+          assignment: resolvedAssignment,
+          expectedAssignmentVersion: assignment.version,
+          authorizedAt: later,
+        },
       ),
     ).resolves.toEqual({ suggestion: resolvedSuggestion, review });
     await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(
@@ -3924,6 +3933,11 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         assignment.version,
         review,
         null,
+        {
+          assignment: resolvedAssignment,
+          expectedAssignmentVersion: assignment.version,
+          authorizedAt: later,
+        },
       ),
     ).rejects.toThrow("Suggestion changed since it was loaded");
     await expect(

@@ -57,11 +57,9 @@ import type {
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
   SpeakerReminderDeliveryReceipt,
-  SpeakerReminderHistoryRecord,
   SpeakerReminderPreview,
   SpeakerReminderQueueInput,
   SpeakerReminderQueueResult,
-  SpeakerReminderRecipient,
   SpeakerReminderRecord,
   SpeakerReminderTask,
   SpeakerRepository,
@@ -100,6 +98,7 @@ export type SpeakerServiceErrorCode =
   | "TASK_DEPENDENCY_INCOMPLETE"
   | "TASK_NOT_ACTIVE"
   | "TASK_ASSET_NOT_READY"
+  | "TASK_REMINDERS_NOT_EDITABLE"
   | "UPLOAD_POLICY_VIOLATION"
   | "ASSET_UPLOAD_RETRY_INVALID"
   | "ASSET_FINALIZATION_INVALID"
@@ -467,6 +466,43 @@ function isSpeakerTransitionAllowed(task: SpeakerTask, toStatus: SpeakerTaskStat
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
+
+function normalizeReminderOffsets(values: readonly number[]): number[] {
+  if (
+    values.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    new Set(values).size !== values.length
+  ) {
+    throw new SpeakerServiceError(
+      "VALIDATION_ERROR",
+      400,
+      "Reminder offsets must be unique non-negative safe integers.",
+    );
+  }
+  return [...values].sort((left, right) => left - right);
+}
+
+function reminderCadenceWindow(
+  deadlineAt: string | null,
+  offsets: readonly number[],
+  referenceNow: Date,
+): string {
+  const dueTime = deadlineAt === null ? Number.NaN : Date.parse(deadlineAt);
+  if (!Number.isFinite(dueTime)) return "unscheduled";
+  const thresholds = [
+    ...new Set([
+      dueTime,
+      ...offsets
+        .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
+        .map((offset) => dueTime - offset * 60_000),
+    ]),
+  ].sort((left, right) => left - right);
+  const active = thresholds.filter((threshold) => threshold <= referenceNow.getTime()).at(-1);
+  const firstThreshold = thresholds[0] ?? dueTime;
+  return active === undefined
+    ? `before:${new Date(firstThreshold).toISOString()}`
+    : new Date(active).toISOString();
+}
+
 function exportArchiveComponent(value: string | undefined, fallback: string): string {
   const normalized = stripFileNameControls((value ?? "").normalize("NFC").replace(/[\\/]/gu, "-"))
     .replace(/\.\.+/gu, "-")
@@ -1274,85 +1310,6 @@ type SpeakerReminderRecipientBuilder = {
   taskIds: string[];
   tasks: SpeakerReminderTask[];
 };
-
-function reminderSnapshotSelectionMatches(
-  record: SpeakerReminderRecord,
-  taskIds: readonly string[] | undefined,
-  recipientIds: readonly string[] | undefined,
-): boolean {
-  const selectedTaskIds = [...(taskIds ?? record.taskIds)].sort();
-  const selectedRecipientIds = [...(recipientIds ?? record.recipientIds)].sort();
-  const storedTaskIds = [...record.taskIds].sort();
-  const storedRecipientIds = [...record.recipientIds].sort();
-  return (
-    selectedTaskIds.length === storedTaskIds.length &&
-    selectedTaskIds.every((taskId, index) => taskId === storedTaskIds[index]) &&
-    selectedRecipientIds.length === storedRecipientIds.length &&
-    selectedRecipientIds.every(
-      (participantId, index) => participantId === storedRecipientIds[index],
-    )
-  );
-}
-
-async function reminderSnapshotFingerprint(
-  recipients: readonly SpeakerReminderRecipient[],
-): Promise<string> {
-  const canonical = recipients
-    .map((recipient) => ({
-      participantId: recipient.participantId,
-      displayName: recipient.displayName,
-      email: recipient.email?.trim().toLowerCase() ?? null,
-      taskIds: [...recipient.taskIds].sort(),
-      tasks: recipient.tasks
-        .map((task) => ({
-          taskId: task.taskId,
-          version: task.version,
-          participantId: task.participantId,
-          title: task.title,
-          dueAt: task.dueAt ?? null,
-          cadenceWindow: task.cadenceWindow ?? null,
-        }))
-        .sort((left, right) => left.taskId.localeCompare(right.taskId)),
-    }))
-    .sort((left, right) => left.participantId.localeCompare(right.participantId));
-  return speakerSourceDigest(`speaker-reminder-snapshot:v1\u0000${JSON.stringify(canonical)}`);
-}
-
-function reminderCadenceWindow(
-  deadlineAt: string | null,
-  offsets: readonly number[],
-  referenceNow: Date,
-): string {
-  const dueTime = deadlineAt === null ? Number.NaN : Date.parse(deadlineAt);
-  if (!Number.isFinite(dueTime)) return "unscheduled";
-  const thresholds = [
-    ...new Set([
-      dueTime,
-      ...offsets
-        .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
-        .map((offset) => dueTime - offset * 60_000),
-    ]),
-  ].sort((left, right) => left - right);
-  const active = thresholds.filter((threshold) => threshold <= referenceNow.getTime()).at(-1);
-  const firstThreshold = thresholds[0] ?? dueTime;
-  return active === undefined
-    ? `before:${new Date(firstThreshold).toISOString()}`
-    : new Date(active).toISOString();
-}
-
-async function reminderPreviewFromRecord(
-  record: SpeakerReminderRecord,
-): Promise<SpeakerReminderPreview> {
-  const recipients = record.receipts.map((receipt) => structuredClone(receipt.snapshot));
-  return {
-    organizationId: record.organizationId,
-    eventId: record.eventId,
-    snapshotFingerprint: await reminderSnapshotFingerprint(recipients),
-    taskIds: [...record.taskIds],
-    recipientIds: [...record.recipientIds],
-    recipients,
-  };
-}
 const speakerImportMaximumBytes = 1_048_576;
 const speakerImportMaximumRows = 500;
 const speakerImportHeaderAliases: Readonly<Record<string, string>> = {
@@ -1633,6 +1590,7 @@ export class SpeakerService {
   private readonly communications: SpeakerCommunications | undefined;
   private readonly eventTemporalSource: SpeakerEventTemporalSource | undefined;
   private readonly invitationCreator: SpeakerEventInvitationCreator | undefined;
+  private readonly reminderCache = new Map<string, SpeakerReminderQueueResult>();
 
   constructor(
     private readonly repository: SpeakerRepository & Partial<SpeakerOrganizerLifecycleRepository>,
@@ -2822,6 +2780,61 @@ export class SpeakerService {
       );
     }
     return persisted;
+  }
+
+  async updateOrganizerTaskReminderOffsets(input: {
+    organizationId: string;
+    eventId: string;
+    accountId: string;
+    taskId: string;
+    expectedVersion: number;
+    reminderOffsetsMinutes: readonly number[];
+  }): Promise<{
+    organizationId: string;
+    eventId: string;
+    taskId: string;
+    reminderOffsetsMinutes: readonly number[];
+    version: number;
+    updatedAt: string;
+  }> {
+    await this.requireOrganizerOrganizationScope(
+      input.organizationId,
+      input.eventId,
+      input.accountId,
+    );
+    assertExpectedVersion(input.expectedVersion);
+    const reminderOffsetsMinutes = normalizeReminderOffsets(input.reminderOffsetsMinutes);
+    const current = (await this.listOrganizerTasks(input.eventId, input.accountId)).find(
+      (task) => task.id === input.taskId,
+    );
+    if (current === undefined) throw notFound();
+    if (
+      current.owner !== "speaker" ||
+      current.type !== "upload" ||
+      (current.dueAt ?? current.dueDate) === undefined ||
+      ["completed", "submitted", "waived"].includes(current.status)
+    ) {
+      throw new SpeakerServiceError(
+        "TASK_REMINDERS_NOT_EDITABLE",
+        409,
+        "Reminder schedules can be changed only for incomplete speaker upload tasks with a due date.",
+      );
+    }
+    const updated = await this.updateOrganizerTask({
+      eventId: input.eventId,
+      accountId: input.accountId,
+      taskId: input.taskId,
+      expectedVersion: input.expectedVersion,
+      reminderOffsetsMinutes,
+    });
+    return {
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      taskId: input.taskId,
+      reminderOffsetsMinutes: [...updated.reminderOffsetsMinutes],
+      version: updated.version,
+      updatedAt: updated.updatedAt,
+    };
   }
 
   async listDeliverables(
@@ -4166,26 +4179,7 @@ export class SpeakerService {
     accountId: string;
     taskIds?: readonly string[];
     recipientIds?: readonly string[];
-    idempotencyKey?: string;
   }): Promise<SpeakerReminderPreview> {
-    const idempotencyKey = input.idempotencyKey?.trim() ?? "";
-    if (idempotencyKey.length > 0) {
-      const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
-      const existing = await this.repository.getReminder(input.eventId, idempotencyKey);
-      if (existing !== null) {
-        if (existing.organizationId !== scope.tenantId || existing.eventId !== input.eventId) {
-          throw notFound();
-        }
-        if (!reminderSnapshotSelectionMatches(existing, input.taskIds, input.recipientIds)) {
-          throw new SpeakerServiceError(
-            "VERSION_CONFLICT",
-            409,
-            "The reminder idempotency key belongs to a different recipient snapshot.",
-          );
-        }
-        return reminderPreviewFromRecord(existing);
-      }
-    }
     const previewNow = this.now();
     const eligibility = await this.previewReminderEligibility({
       eventId: input.eventId,
@@ -4219,7 +4213,6 @@ export class SpeakerService {
       const profile = profileByParticipant.get(row.participantId);
       const task = {
         taskId: row.task.id,
-        version: row.task.version,
         title: row.task.title,
         ...(row.task.dueAt === undefined ? {} : { dueAt: row.task.dueAt }),
         participantId: row.participantId,
@@ -4253,23 +4246,13 @@ export class SpeakerService {
         tasks: [...recipient.tasks],
       }))
       .sort((left, right) => left.participantId.localeCompare(right.participantId));
-    const preview: SpeakerReminderPreview = {
+    return {
       organizationId: matrix.organizationId,
       eventId: input.eventId,
-      snapshotFingerprint: await reminderSnapshotFingerprint(recipients),
       recipients,
       recipientIds: recipients.map((recipient) => recipient.participantId),
       taskIds: unique(recipients.flatMap((recipient) => recipient.taskIds)),
     };
-    if (idempotencyKey.length === 0 || preview.recipients.length === 0) return preview;
-    return (
-      await this.reserveReminderSnapshot({
-        preview,
-        eventId: input.eventId,
-        idempotencyKey,
-        actorAccountId: input.accountId,
-      })
-    ).preview;
   }
 
   async previewReminderEligibility(input: {
@@ -4518,80 +4501,16 @@ export class SpeakerService {
     return this.listOrganizerSpeakerEmailHistory(organizationId, eventId, accountId);
   }
   async queueReminders(input: SpeakerReminderQueueInput): Promise<SpeakerReminderQueueResult> {
-    const explicitIdempotencyKey = input.idempotencyKey?.trim() ?? "";
-    const requestedFingerprint = input.snapshotFingerprint.trim();
-    if (!/^[0-9a-f]{64}$/u.test(requestedFingerprint)) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "The reminder snapshot fingerprint is invalid.",
-      );
-    }
-    if (explicitIdempotencyKey.length === 0) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "The reminder idempotency key is required.",
-      );
-    }
-    const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
-    const existing = await this.repository.getReminder(input.eventId, explicitIdempotencyKey);
-    if (existing === null) {
-      throw new SpeakerServiceError(
-        "VERSION_CONFLICT",
-        409,
-        "Preview and reserve the reminder snapshot before queueing it.",
-      );
-    }
-    if (existing.organizationId !== scope.tenantId || existing.eventId !== input.eventId) {
-      throw notFound();
-    }
-    const storedPreview = await reminderPreviewFromRecord(existing);
-    if (
-      !reminderSnapshotSelectionMatches(existing, input.taskIds, input.recipientIds) ||
-      storedPreview.snapshotFingerprint !== requestedFingerprint
-    ) {
-      throw new SpeakerServiceError(
-        "VERSION_CONFLICT",
-        409,
-        "The reminder idempotency key belongs to a different recipient snapshot.",
-      );
-    }
+    const preview = await this.previewOutstandingReminders(input);
+    const idempotencyKey =
+      input.idempotencyKey?.trim() ||
+      `deliverables-reminder:${preview.organizationId}:${input.eventId}:${preview.taskIds.slice().sort().join(",")}:${preview.recipientIds.slice().sort().join(",")}`;
     return this.queueReminderPreview({
-      preview: storedPreview,
+      preview,
       eventId: input.eventId,
-      idempotencyKey: explicitIdempotencyKey,
-      actorAccountId: existing.actorAccountId,
+      idempotencyKey,
+      actorAccountId: input.accountId,
     });
-  }
-
-  async getReminderRecord(input: {
-    readonly eventId: string;
-    readonly accountId: string;
-    readonly idempotencyKey: string;
-  }): Promise<SpeakerReminderHistoryRecord> {
-    const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
-    const record = await this.repository.getReminder(input.eventId, input.idempotencyKey);
-    if (
-      record === null ||
-      record.organizationId !== scope.tenantId ||
-      record.eventId !== input.eventId
-    ) {
-      throw notFound();
-    }
-    return {
-      organizationId: record.organizationId,
-      eventId: record.eventId,
-      idempotencyKey: record.idempotencyKey,
-      taskIds: [...record.taskIds],
-      recipientIds: [...record.recipientIds],
-      receipts: record.receipts.map((receipt) => ({
-        participantId: receipt.participantId,
-        status: receipt.state,
-        receiptId: null,
-      })),
-      createdAt: record.createdAt,
-    };
   }
 
   async queueScheduledReminders(
@@ -4670,7 +4589,7 @@ export class SpeakerService {
         receipts: [],
       };
     }
-    const idempotencyKey = `scheduled-deliverables-reminder:${organizationId}:${eventId}:${preview.snapshotFingerprint}`;
+    const idempotencyKey = `scheduled-deliverables-reminder:${organizationId}:${eventId}:${preview.taskIds.slice().sort().join(",")}:${preview.recipientIds.slice().sort().join(",")}`;
     return this.queueReminderPreview({
       preview,
       eventId,
@@ -4679,74 +4598,65 @@ export class SpeakerService {
     });
   }
 
-  private async reserveReminderSnapshot(input: {
-    readonly preview: SpeakerReminderPreview;
-    readonly eventId: string;
-    readonly idempotencyKey: string;
-    readonly actorAccountId: string;
-  }): Promise<{
-    readonly stored: SpeakerReminderRecord;
-    readonly preview: SpeakerReminderPreview;
-  }> {
-    const { preview, eventId, idempotencyKey, actorAccountId } = input;
-    const recipients = preview.recipients
-      .map((recipient) => ({
-        ...structuredClone(recipient),
-        taskIds: [...recipient.taskIds].sort(),
-        tasks: recipient.tasks
-          .map((task) => structuredClone(task))
-          .sort((left, right) => left.taskId.localeCompare(right.taskId)),
-      }))
-      .sort((left, right) => left.participantId.localeCompare(right.participantId));
-    const recipientIds = recipients.map((recipient) => recipient.participantId);
-    const taskIds = [...new Set(recipients.flatMap((recipient) => recipient.taskIds))].sort();
-    const reservation: SpeakerReminderRecord = {
-      id: this.generateId(),
-      organizationId: preview.organizationId,
-      eventId,
-      idempotencyKey,
-      taskIds,
-      recipientIds,
-      receipts: recipients.map((recipient) => ({
-        participantId: recipient.participantId,
-        state: "pending" as const,
-        outboxJobId: null,
-        snapshot: structuredClone(recipient),
-      })),
-      createdAt: this.now().toISOString(),
-      actorAccountId,
-    };
-    const stored = (await this.repository.reserveReminder(reservation)).record;
-    const storedPreview = await reminderPreviewFromRecord(stored);
-    const storedTaskIds = [...stored.taskIds].sort();
-    const storedRecipientIds = [...stored.recipientIds].sort();
-    if (
-      stored.organizationId !== preview.organizationId ||
-      stored.eventId !== eventId ||
-      storedPreview.snapshotFingerprint !== preview.snapshotFingerprint ||
-      storedTaskIds.length !== taskIds.length ||
-      storedTaskIds.some((taskId, index) => taskId !== taskIds[index]) ||
-      storedRecipientIds.length !== recipientIds.length ||
-      storedRecipientIds.some((participantId, index) => participantId !== recipientIds[index])
-    ) {
-      throw new SpeakerServiceError(
-        "VERSION_CONFLICT",
-        409,
-        "The reminder idempotency key belongs to a different recipient snapshot.",
-      );
-    }
-    return { stored, preview: storedPreview };
-  }
-
   private async queueReminderPreview(input: {
     readonly preview: SpeakerReminderPreview;
     readonly eventId: string;
     readonly idempotencyKey: string;
     readonly actorAccountId: string;
   }): Promise<SpeakerReminderQueueResult> {
-    const { preview, eventId, idempotencyKey } = input;
-    if (preview.recipients.length === 0) {
+    const { preview, eventId, idempotencyKey, actorAccountId } = input;
+    const cacheKey = `${preview.organizationId}:${eventId}:${idempotencyKey}`;
+    const cached = this.reminderCache.get(cacheKey);
+    if (cached !== undefined) {
+      const receipts = cached.receipts.map((receipt) =>
+        receipt.status === "failed"
+          ? structuredClone(receipt)
+          : { ...receipt, status: "duplicate" as const },
+      );
       return {
+        ...structuredClone(cached),
+        queued: false,
+        duplicate:
+          receipts.length > 0 && receipts.every((receipt) => receipt.status === "duplicate"),
+        sentCount: 0,
+        failedCount: receipts.filter((receipt) => receipt.status === "failed").length,
+        duplicateCount: receipts.filter((receipt) => receipt.status === "duplicate").length,
+        receipts,
+      };
+    }
+    const stored =
+      this.repository.getReminder === undefined
+        ? null
+        : await this.repository.getReminder(eventId, idempotencyKey);
+    if (
+      stored !== null &&
+      stored.organizationId === preview.organizationId &&
+      stored.eventId === eventId
+    ) {
+      const receipts = stored.receipts.map((receipt) =>
+        receipt.status === "failed"
+          ? structuredClone(receipt)
+          : { ...structuredClone(receipt), status: "duplicate" as const },
+      );
+      const failedCount = receipts.filter((receipt) => receipt.status === "failed").length;
+      const duplicateCount = receipts.filter((receipt) => receipt.status === "duplicate").length;
+      const duplicate: SpeakerReminderQueueResult = {
+        organizationId: stored.organizationId,
+        eventId: stored.eventId,
+        idempotencyKey,
+        queued: false,
+        duplicate: duplicateCount > 0 && failedCount === 0,
+        sentCount: 0,
+        failedCount,
+        duplicateCount,
+        recipientIds: [...stored.recipientIds],
+        receipts,
+      };
+      this.reminderCache.set(cacheKey, duplicate);
+      return duplicate;
+    }
+    if (preview.recipients.length === 0) {
+      const empty: SpeakerReminderQueueResult = {
         organizationId: preview.organizationId,
         eventId,
         idempotencyKey,
@@ -4758,20 +4668,16 @@ export class SpeakerService {
         duplicateCount: 0,
         receipts: [],
       };
+      this.reminderCache.set(cacheKey, empty);
+      return empty;
     }
-    const { stored } = await this.reserveReminderSnapshot(input);
-    const priorReceipts = new Map(
-      stored.receipts.map((receipt) => [receipt.participantId, receipt] as const),
-    );
-    const recipientsToAttempt = stored.receipts.filter((receipt) => receipt.state !== "queued");
-    const delivery = recipientsToAttempt.length === 0 ? undefined : this.delivery;
+    const delivery = this.delivery;
     if (
-      recipientsToAttempt.length > 0 &&
-      (delivery === undefined ||
-        (delivery.enqueue === undefined &&
-          delivery.queue === undefined &&
-          delivery.enqueueReminder === undefined &&
-          delivery.enqueueDeliverableReminder === undefined))
+      delivery === undefined ||
+      (delivery.enqueue === undefined &&
+        delivery.queue === undefined &&
+        delivery.enqueueReminder === undefined &&
+        delivery.enqueueDeliverableReminder === undefined)
     ) {
       throw new SpeakerServiceError(
         "REMINDER_UNAVAILABLE",
@@ -4779,25 +4685,24 @@ export class SpeakerService {
         "Transactional reminder delivery is not configured.",
       );
     }
-    const attempted = await Promise.all(
-      recipientsToAttempt.map(async (storedReceipt) => {
-        const recipient = structuredClone(storedReceipt.snapshot);
+    const receipts = await Promise.all(
+      preview.recipients.map(async (recipient) => {
         const command: SpeakerReminderDeliveryInput = {
-          organizationId: stored.organizationId,
+          organizationId: preview.organizationId,
           eventId,
           recipient,
           idempotencyKey: `${idempotencyKey}:${recipient.participantId}`,
-          actorAccountId: stored.actorAccountId,
+          actorAccountId,
         };
         try {
           let deliveryReceipt: SpeakerReminderDeliveryReceipt;
-          if (delivery?.enqueue !== undefined) {
+          if (delivery.enqueue !== undefined) {
             deliveryReceipt = await delivery.enqueue(command);
-          } else if (delivery?.queue !== undefined) {
+          } else if (delivery.queue !== undefined) {
             deliveryReceipt = await delivery.queue(command);
-          } else if (delivery?.enqueueReminder !== undefined) {
+          } else if (delivery.enqueueReminder !== undefined) {
             deliveryReceipt = await delivery.enqueueReminder(command);
-          } else if (delivery?.enqueueDeliverableReminder !== undefined) {
+          } else if (delivery.enqueueDeliverableReminder !== undefined) {
             deliveryReceipt = await delivery.enqueueDeliverableReminder(command);
           } else {
             throw new SpeakerServiceError(
@@ -4806,64 +4711,32 @@ export class SpeakerService {
               "Transactional reminder delivery is not configured.",
             );
           }
-          const status =
-            deliveryReceipt.status === "failed"
-              ? ("failed" as const)
-              : deliveryReceipt.queued === true
-                ? ("queued" as const)
+          return {
+            participantId: recipient.participantId,
+            status:
+              deliveryReceipt.status === "failed"
+                ? ("failed" as const)
                 : deliveryReceipt.duplicate === true
                   ? ("duplicate" as const)
                   : deliveryReceipt.queued === false
                     ? ("failed" as const)
-                    : ("queued" as const);
-          return {
-            publicReceipt: {
-              participantId: recipient.participantId,
-              status,
-              receiptId: null,
-            },
-            storedAttempt: {
-              participantId: recipient.participantId,
-              nextState: status === "failed" ? ("failed" as const) : ("queued" as const),
-              outboxJobId: deliveryReceipt.id ?? storedReceipt.outboxJobId,
-            },
+                    : ("queued" as const),
+            receiptId: deliveryReceipt.id ?? null,
           };
         } catch {
           return {
-            publicReceipt: {
-              participantId: recipient.participantId,
-              status: "failed" as const,
-              receiptId: null,
-            },
-            storedAttempt: {
-              participantId: recipient.participantId,
-              nextState: "failed" as const,
-              outboxJobId: storedReceipt.outboxJobId,
-            },
+            participantId: recipient.participantId,
+            status: "failed" as const,
+            receiptId: null,
           };
         }
       }),
     );
-    const attemptedByRecipient = new Map(
-      attempted.map((entry) => [entry.publicReceipt.participantId, entry.publicReceipt] as const),
-    );
-    const receipts = stored.recipientIds.map((participantId) => {
-      const attemptedReceipt = attemptedByRecipient.get(participantId);
-      if (attemptedReceipt !== undefined) return attemptedReceipt;
-      const prior = priorReceipts.get(participantId);
-      return prior?.state === "queued"
-        ? {
-            participantId,
-            status: "duplicate" as const,
-            receiptId: null,
-          }
-        : { participantId, status: "failed" as const, receiptId: null };
-    });
     const sentCount = receipts.filter((receipt) => receipt.status === "queued").length;
     const failedCount = receipts.filter((receipt) => receipt.status === "failed").length;
     const duplicateCount = receipts.filter((receipt) => receipt.status === "duplicate").length;
     const result: SpeakerReminderQueueResult = {
-      organizationId: stored.organizationId,
+      organizationId: preview.organizationId,
       eventId,
       idempotencyKey,
       queued: sentCount > 0,
@@ -4871,21 +4744,27 @@ export class SpeakerService {
       sentCount,
       failedCount,
       duplicateCount,
-      recipientIds: stored.recipientIds,
+      recipientIds: preview.recipientIds,
       receipts,
     };
-    const storedAttempts = attempted.map((entry) => entry.storedAttempt);
-    if (storedAttempts.length > 0) {
-      await this.repository.mergeReminderReceipts({
+    this.reminderCache.set(cacheKey, result);
+    if (this.repository.saveReminder !== undefined) {
+      const record: SpeakerReminderRecord = {
+        id: this.generateId(),
+        organizationId: preview.organizationId,
         eventId,
         idempotencyKey,
-        taskIds: stored.taskIds,
-        recipientIds: stored.recipientIds,
-        attempted: storedAttempts,
-      });
+        taskIds: preview.taskIds,
+        recipientIds: preview.recipientIds,
+        receipts: structuredClone(receipts),
+        createdAt: this.now().toISOString(),
+        actorAccountId,
+      };
+      await this.repository.saveReminder(record);
     }
     return result;
   }
+
   async getContent(
     eventId: string,
     accountId: string,
@@ -5144,7 +5023,6 @@ export class SpeakerService {
     accountId: string;
     taskIds?: readonly string[];
     recipientIds?: readonly string[];
-    idempotencyKey?: string;
   }): Promise<SpeakerReminderPreview> {
     return this.previewOutstandingReminders(input);
   }
