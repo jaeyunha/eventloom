@@ -16,6 +16,7 @@ const workspace = {
     updatedBy: "Avery",
     entries: [],
   },
+  validation: null,
   rooms: [],
   tracks: [],
   acceptedSessionIds: [],
@@ -458,7 +459,7 @@ describe("agenda API adapter", () => {
     expect(requestedUrl).toBe("/api/admin/organizations/org%2Fa/events/event%2Fa/agenda");
   });
 
-  it("uses GET preview and publishes through the canonical route before reloading the workspace", async () => {
+  it("keeps GET preview read-only and validates before canonical publication", async () => {
     const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const preview = {
       draftVersion: 2,
@@ -466,11 +467,20 @@ describe("agenda API adapter", () => {
       releaseConflicts: [],
       warnings: [],
       diff: { added: 0, changed: 0, removed: 0 },
+      validatedAt: null,
+    };
+    const validation = {
+      ...preview,
       validatedAt: "2026-08-08T12:00:00.000Z",
     };
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, init });
-      const data = String(input).endsWith("/preview") ? preview : workspace;
+      const url = String(input);
+      const data = url.endsWith("/preview")
+        ? preview
+        : url.endsWith("/validate")
+          ? validation
+          : workspace;
       return new Response(JSON.stringify({ data }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -479,17 +489,23 @@ describe("agenda API adapter", () => {
     const api = createAgendaApi("https://api.example.com", "org_open", fetcher);
 
     await expect(api.preview("evt/open")).resolves.toStrictEqual(preview);
+    await expect(api.validate({ eventId: "evt/open", expectedVersion: 2 })).resolves.toStrictEqual(
+      validation,
+    );
     const published = await api.publish({ eventId: "evt/open", expectedVersion: 2 });
     expect(published).toStrictEqual(workspace);
 
     expect(calls.map((call) => String(call.input))).toEqual([
       "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/preview",
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/validate",
       "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/publish",
       "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda",
     ]);
     expect(calls[0]?.init).toMatchObject({ method: "GET", credentials: "include" });
     expect(calls[1]?.init).toMatchObject({ method: "POST", credentials: "include" });
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ expectedVersion: 2 });
+    expect(calls[2]?.init).toMatchObject({ method: "POST", credentials: "include" });
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ expectedVersion: 2 });
   });
   it("preserves structured conflict details from failed mutations", async () => {
     const fetcher = async () => {

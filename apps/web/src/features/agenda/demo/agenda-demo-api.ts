@@ -365,6 +365,8 @@ function buildSuggestion(
 
 export function createAgendaDemoApi(eventId: string): AgendaApi {
   let version = 3;
+  let validatedDraftVersion: number | null = null;
+  let validatedAt: string | null = null;
   let rooms: AgendaRoom[] = initialRooms.map((room) => ({ ...room }));
   let tracks: AgendaTrack[] = initialTracks.map((track) => ({ ...track }));
   let calendarDelivery: AgendaCalendarDeliveryState = {
@@ -439,6 +441,10 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         updatedBy: "Demo organizer",
         entries,
       },
+      validation:
+        validatedDraftVersion === null || validatedAt === null
+          ? null
+          : { draftVersion: validatedDraftVersion, validatedAt },
       rooms,
       tracks,
       acceptedSessionIds: sessions.map((session) => session.id),
@@ -449,14 +455,23 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
   }
 
   function preview(): AgendaPreview {
+    const currentValidatedAt = validatedDraftVersion === version ? validatedAt : null;
     return clone({
       draftVersion: version,
       conflicts: conflictsFor(entries),
       releaseConflicts: [],
       warnings: warningsFor(entries, overrides, rooms),
       diff: diffFrom(entries, publishedEntries),
-      validatedAt: timestamp(),
+      validatedAt: currentValidatedAt,
     });
+  }
+
+  function validate(): AgendaPreview {
+    if (validatedDraftVersion !== version || validatedAt === null) {
+      validatedDraftVersion = version;
+      validatedAt = timestamp();
+    }
+    return preview();
   }
 
   function entryFrom(input: AgendaEntryInput): AgendaEntry {
@@ -724,6 +739,11 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       assertEvent(requestedEventId);
       return preview();
     },
+    async validate(input) {
+      assertEvent(input.eventId);
+      assertVersion(input.expectedVersion);
+      return validate();
+    },
     async getCalendarDelivery(requestedEventId, signal) {
       if (signal?.aborted) throw new DOMException("The request was aborted.", "AbortError");
       assertEvent(requestedEventId);
@@ -766,6 +786,13 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
     async publish(input) {
       assertEvent(input.eventId);
       assertVersion(input.expectedVersion);
+      if (validatedDraftVersion !== version || validatedAt === null) {
+        throw new AgendaApiError(
+          "PUBLICATION_BLOCKED",
+          "Validate the exact current agenda draft before publishing.",
+          409,
+        );
+      }
       const validation = preview();
       const unoverriddenWarnings = validation.warnings.filter((warning) => !warning.overridden);
       if (
@@ -781,10 +808,19 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
           { conflicts: validation.conflicts, warnings: validation.warnings },
         );
       }
+      const currentRevision = revisions.find((revision) => revision.current);
+      const currentDiff = diffFrom(entries, publishedEntries);
+      if (
+        currentRevision !== undefined &&
+        currentDiff.added === 0 &&
+        currentDiff.changed === 0 &&
+        currentDiff.removed === 0
+      ) {
+        return workspace();
+      }
       publishedEntries = clone(entries);
       revisions = revisions.map((revision) => ({ ...revision, current: false }));
       const nextNumber = Math.max(0, ...revisions.map((revision) => revision.number)) + 1;
-      touch();
       revisions = [
         {
           id: `revision_${nextNumber}`,

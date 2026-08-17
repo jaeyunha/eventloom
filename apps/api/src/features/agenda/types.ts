@@ -287,6 +287,7 @@ export type AgendaAuditAction =
   | "agenda.suggestion.applied"
   | "catalog.updated"
   | "draft.updated"
+  | "draft.validated"
   | "warning.overridden";
 
 export interface AgendaAuditEntry {
@@ -298,7 +299,7 @@ export interface AgendaAuditEntry {
   details: Readonly<Record<string, string | number>>;
 }
 
-export interface AgendaState {
+interface AgendaStateCore {
   eventId: string;
   stateVersion: number;
   timeZone: string;
@@ -313,6 +314,18 @@ export interface AgendaState {
   audit: readonly AgendaAuditEntry[];
   suggestionRuns: readonly AgendaSuggestionRun[];
 }
+
+export type AgendaValidationMarker =
+  | {
+      validatedDraftVersion?: never;
+      validatedAt?: never;
+    }
+  | {
+      validatedDraftVersion: number;
+      validatedAt: string;
+    };
+
+export type AgendaState = AgendaStateCore & AgendaValidationMarker;
 
 export interface AgendaCatalog {
   sessions: readonly AgendaSession[];

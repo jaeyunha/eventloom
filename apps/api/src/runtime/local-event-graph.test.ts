@@ -420,6 +420,138 @@ describe("local fixture event graph", () => {
     ).not.toContain(session.id);
   }, 45_000);
 
+  it("retains public speakers and headshots when rolling back a local program release", async () => {
+    const freshDependencies = createLocalDependencies();
+    const freshApp = createApp(freshDependencies);
+    const sessionService = freshDependencies.sessions?.service;
+    if (sessionService === undefined) throw new Error("Expected local session service.");
+    const organizerHeaders = {
+      "content-type": "application/json",
+      cookie: "better-auth.session_token=local-session",
+    };
+    const publicationPath =
+      "/api/admin/organizations/local-organization/events/demo-event/publication";
+    const readPublication = async () => {
+      const response = await freshApp.request(
+        publicationPath,
+        { headers: organizerHeaders },
+        environment,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        data: {
+          version: number;
+          servedRevision: number;
+          servedManifest: {
+            speakerProjectionId: string;
+            speakerRevisionNumber: number;
+            speakerSourceHash: string;
+          } | null;
+        };
+      };
+    };
+    const readPublicSpeakers = async () => {
+      const response = await freshApp.request(
+        "/api/public/events/demo-event/speakers",
+        undefined,
+        environment,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        data: {
+          speakers: readonly {
+            id: string;
+            photoUrl: string | null;
+            sessionTitles: readonly string[];
+          }[];
+        };
+      };
+    };
+
+    const initialSpeakers = await readPublicSpeakers();
+    const initialSpeaker = initialSpeakers.data.speakers.find(
+      (speaker) => speaker.photoUrl !== null,
+    );
+    if (initialSpeaker?.photoUrl === null || initialSpeaker === undefined) {
+      throw new Error("Expected a released local speaker headshot.");
+    }
+    const initialHeadshot = await freshApp.request(initialSpeaker.photoUrl, undefined, environment);
+    expect(initialHeadshot.status).toBe(200);
+    const initialHeadshotBytes = new Uint8Array(await initialHeadshot.arrayBuffer());
+    const releaseOne = await readPublication();
+    if (releaseOne.data.servedManifest === null) {
+      throw new Error("Expected the initial local served manifest.");
+    }
+
+    const agendaResponse = await freshApp.request(
+      "/api/public/events/demo-event/agenda.json",
+      undefined,
+      environment,
+    );
+    expect(agendaResponse.status).toBe(200);
+    const agenda = (await agendaResponse.json()) as {
+      data: { entries: readonly { sessionId: string; title: string }[] };
+    };
+    const publishedEntry = agenda.data.entries[0];
+    if (publishedEntry === undefined) throw new Error("Expected a published local session.");
+    const sessions = await sessionService.listSessions(organizer, {
+      eventId: "demo-event",
+      limit: 100,
+    });
+    const session = sessions.find(({ id }) => id === publishedEntry.sessionId);
+    if (session === undefined) throw new Error("Expected the published canonical session.");
+    const edited = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: session.version,
+      title: `${publishedEntry.title} release two`,
+    });
+    await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: edited.version,
+      contentStatus: "Approved",
+    });
+
+    const releaseTwo = await readPublication();
+    expect(releaseTwo.data.servedRevision).toBeGreaterThan(releaseOne.data.servedRevision);
+    expect(releaseTwo.data.servedManifest?.speakerProjectionId).not.toBe(
+      releaseOne.data.servedManifest.speakerProjectionId,
+    );
+
+    const rollbackResponse = await freshApp.request(
+      `${publicationPath}/rollback`,
+      {
+        method: "POST",
+        headers: organizerHeaders,
+        body: JSON.stringify({
+          targetRevision: releaseOne.data.servedRevision,
+          expectedServedRevision: releaseTwo.data.servedRevision,
+          expectedPublicationVersion: releaseTwo.data.version,
+        }),
+      },
+      environment,
+    );
+    expect(rollbackResponse.status).toBe(200);
+
+    const rollbackState = await readPublication();
+    expect(rollbackState.data.servedRevision).toBeGreaterThan(releaseTwo.data.servedRevision);
+    expect(rollbackState.data.servedManifest).toMatchObject({
+      speakerProjectionId: releaseOne.data.servedManifest.speakerProjectionId,
+      speakerRevisionNumber: releaseOne.data.servedManifest.speakerRevisionNumber,
+      speakerSourceHash: releaseOne.data.servedManifest.speakerSourceHash,
+    });
+    const rolledBackSpeakers = await readPublicSpeakers();
+    expect(rolledBackSpeakers.data.speakers).toEqual(initialSpeakers.data.speakers);
+    const rolledBackHeadshot = await freshApp.request(
+      initialSpeaker.photoUrl,
+      undefined,
+      environment,
+    );
+    expect(rolledBackHeadshot.status).toBe(200);
+    expect(new Uint8Array(await rolledBackHeadshot.arrayBuffer())).toEqual(initialHeadshotBytes);
+  }, 45_000);
+
   it("lists only events with a served public release", async () => {
     const app = createApp(dependencies);
     const response = await app.request("/api/public/events", undefined, environment);

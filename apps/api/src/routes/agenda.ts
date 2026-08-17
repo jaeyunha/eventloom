@@ -465,7 +465,8 @@ function agendaStrings(record: Record<string, unknown>, key: string): readonly s
 function agendaSessionSpeakerNames(session: unknown): readonly string[] {
   const record = agendaRecord(session);
   const names = agendaStrings(record, "speakerNames").filter((name) => name.trim().length > 0);
-  return names.length > 0 ? names : agendaStrings(record, "participantIds");
+  if (names.length > 0) return names;
+  return agendaStrings(record, "participantIds").map(() => "Speaker");
 }
 function agendaEntrySpeakerNames(entry: unknown, session: unknown): readonly string[] {
   const stored = agendaStrings(agendaRecord(entry), "speakerNames").filter(
@@ -495,6 +496,7 @@ function isAcceptedAgendaSession(session: AgendaState["sessions"][number]): bool
 function adminAgendaPreviewView(
   preview: Awaited<ReturnType<AgendaEngine["preview"]>>,
   warningOverrides: ReadonlyMap<string, string>,
+  validatedAt: string | null,
 ) {
   const unoverriddenWarningIds = new Set(preview.unoverriddenWarnings.map((warning) => warning.id));
   return {
@@ -514,7 +516,7 @@ function adminAgendaPreviewView(
       changed: preview.diff.changedEntryIds.length,
       removed: preview.diff.removedEntryIds.length,
     },
-    validatedAt: new Date().toISOString(),
+    validatedAt,
   };
 }
 function adminAgendaWorkspaceView(
@@ -587,6 +589,13 @@ function adminAgendaWorkspaceView(
         };
       }),
     },
+    validation:
+      state.validatedDraftVersion === undefined || state.validatedAt === undefined
+        ? null
+        : {
+            draftVersion: state.validatedDraftVersion,
+            validatedAt: state.validatedAt,
+          },
     rooms: state.rooms.map((room) => ({ id: room.id, name: room.name, capacity: room.capacity })),
     tracks: state.tracks.map((track, index) => ({
       id: track.id,
@@ -710,15 +719,30 @@ export function createAgendaAdminRoutes(
   routes.get("/preview", async (context) => {
     await organizerForEvent(context, dependencies);
     const eventId = routeParam(context, "eventId");
-    const state = await dependencies.engine.repository.load(eventId);
-    if (state === null) {
-      return errorResponse(context, 404, "NOT_FOUND", "The event agenda was not found.");
-    }
-    const preview = await dependencies.engine.preview(eventId);
+    const { state, preview } = await dependencies.engine.inspectPreviewSnapshot(eventId);
     const warningOverrides = new Map(
       state.draft.warningOverrides.map((override) => [override.warningId, override.reason]),
     );
-    return context.json({ data: adminAgendaPreviewView(preview, warningOverrides) });
+    const validatedAt =
+      state.validatedDraftVersion === state.draft.version ? (state.validatedAt ?? null) : null;
+    return context.json({ data: adminAgendaPreviewView(preview, warningOverrides, validatedAt) });
+  });
+
+  routes.post("/validate", async (context) => {
+    const principal = await organizerForEvent(context, dependencies);
+    const eventId = routeParam(context, "eventId");
+    const input = await body(context, versionSchema);
+    const { state, preview } = await dependencies.engine.validate({
+      eventId,
+      expectedVersion: input.expectedVersion,
+      actorId: principal.userId,
+    });
+    const warningOverrides = new Map(
+      state.draft.warningOverrides.map((override) => [override.warningId, override.reason]),
+    );
+    return context.json({
+      data: adminAgendaPreviewView(preview, warningOverrides, preview.validatedAt),
+    });
   });
   routes.post("/suggestions", async (context) => {
     const principal = await organizerForEvent(context, dependencies);
@@ -792,26 +816,67 @@ export function createAgendaAdminRoutes(
     const input = await body(context, updateDraftSchema);
     const eventId = routeParam(context, "eventId");
     validateAgendaEntryDates(await agendaEventMetadata(dependencies, eventId), input.entries);
-    const data = await dependencies.engine.updateDraft({
-      eventId,
-      actorId: principal.userId,
-      expectedVersion: input.expectedVersion,
-      entries: input.entries.map((entry) => ({
-        id: entry.id,
-        sessionId: entry.sessionId,
-        roomId: entry.roomId,
-        trackIds: entry.trackIds,
-        startsAtLocal: entry.startsAtLocal,
-        endsAtLocal: entry.endsAtLocal,
-        ...(entry.startDisambiguation === undefined
-          ? {}
-          : { startDisambiguation: entry.startDisambiguation }),
-        ...(entry.endDisambiguation === undefined
-          ? {}
-          : { endDisambiguation: entry.endDisambiguation }),
-      })),
-    });
-    return context.json({ data });
+    try {
+      const data = await dependencies.engine.updateDraft({
+        eventId,
+        actorId: principal.userId,
+        expectedVersion: input.expectedVersion,
+        entries: input.entries.map((entry) => ({
+          id: entry.id,
+          sessionId: entry.sessionId,
+          roomId: entry.roomId,
+          trackIds: entry.trackIds,
+          startsAtLocal: entry.startsAtLocal,
+          endsAtLocal: entry.endsAtLocal,
+          ...(entry.startDisambiguation === undefined
+            ? {}
+            : { startDisambiguation: entry.startDisambiguation }),
+          ...(entry.endDisambiguation === undefined
+            ? {}
+            : { endDisambiguation: entry.endDisambiguation }),
+        })),
+      });
+      return context.json({ data });
+    } catch (error) {
+      if (!(error instanceof AgendaValidationError)) throw error;
+      const { state, preview: savedPreview } =
+        await dependencies.engine.inspectPreviewSnapshot(eventId);
+      const validatedAt =
+        state.validatedDraftVersion === state.draft.version ? (state.validatedAt ?? null) : null;
+      return context.json(
+        {
+          error: {
+            code: "CONFLICT",
+            message: "The agenda contains unresolved scheduling conflicts.",
+            traceId: traceId(context),
+            details: conflictDetails(error),
+          },
+          data: {
+            candidateDiagnostics: {
+              evaluated: true,
+              report: {
+                ...error.report,
+                warnings: error.report.warnings.map((warning) => ({
+                  ...warning,
+                  overridden: false,
+                })),
+              },
+            },
+            authoritativeSavedPreview: adminAgendaPreviewView(
+              savedPreview,
+              new Map(
+                state.draft.warningOverrides.map((override) => [
+                  override.warningId,
+                  override.reason,
+                ]),
+              ),
+              validatedAt,
+            ),
+          },
+        },
+        409,
+      );
+    }
   });
 
   routes.post("/warnings/:warningId/override", async (context) => {
@@ -1132,6 +1197,9 @@ const PUBLIC_AGENDA_CACHE_TTL_MS = 60_000;
 const PUBLIC_AGENDA_CACHE_MAX_ENTRIES = 128;
 const PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES = 256;
 const PUBLIC_AGENDA_CACHE_PATH_PREFIX = "/api/public/events/";
+const PUBLIC_AGENDA_REVISION_HEADER = "x-sessionboard-agenda-revision";
+const PUBLIC_PROGRAM_REVISION_HEADER = "x-sessionboard-program-revision";
+const PUBLIC_CACHE_REVISION_HEADER = "x-sessionboard-cache-revision";
 
 interface PublicResponseCache {
   match(request: Request): Promise<Response | undefined>;
@@ -1143,13 +1211,15 @@ interface AgendaCachedResponse {
   readonly body: string;
   readonly contentType: string;
   readonly etag: string;
+  readonly revisionNumber: number;
+  readonly programRevision: number;
+  readonly cacheRevision: number;
 }
 
 interface AgendaCacheEntry extends AgendaCachedResponse {
   readonly eventId: string;
   readonly eventSlug: string;
   readonly expiresAt: number;
-  readonly revisionNumber: number;
 }
 
 interface AgendaCacheState {
@@ -1157,8 +1227,8 @@ interface AgendaCacheState {
   readonly bypassed: Set<string>;
   readonly generations: Map<string, number>;
   readonly persistence: Map<string, Promise<void>>;
-  readonly minimumRevisions: Map<string, number>;
-  readonly latestRevisions: Map<string, number>;
+  readonly minimumCacheRevisions: Map<string, number>;
+  readonly latestCacheRevisions: Map<string, number>;
 }
 
 const agendaCacheStates = new WeakMap<object, AgendaCacheState>();
@@ -1185,8 +1255,8 @@ function agendaCacheState(engine: AgendaEngine): AgendaCacheState {
     bypassed: new Set(),
     generations: new Map(),
     persistence: new Map(),
-    minimumRevisions: new Map(),
-    latestRevisions: new Map(),
+    minimumCacheRevisions: new Map(),
+    latestCacheRevisions: new Map(),
   };
   agendaCacheStates.set(key, created);
   return created;
@@ -1214,6 +1284,9 @@ function agendaCacheResponseHeaders(entry: AgendaCachedResponse): Headers {
     "cache-control": PUBLIC_AGENDA_CACHE_CONTROL,
     "content-type": entry.contentType,
     etag: entry.etag,
+    [PUBLIC_AGENDA_REVISION_HEADER]: String(entry.revisionNumber),
+    [PUBLIC_PROGRAM_REVISION_HEADER]: String(entry.programRevision),
+    [PUBLIC_CACHE_REVISION_HEADER]: String(entry.cacheRevision),
   });
 }
 
@@ -1248,9 +1321,28 @@ function rememberAgendaCacheEntry(
   }
 }
 
+function agendaCacheRevision(headers: Headers, name: string): number | null {
+  const raw = headers.get(name);
+  if (raw === null) return null;
+  const revision = Number(raw);
+  return Number.isSafeInteger(revision) && revision > 0 ? revision : null;
+}
+
+function agendaCacheMatchesManifest(
+  entry: AgendaCachedResponse,
+  manifest: ProgramPublicationManifest,
+): boolean {
+  return (
+    entry.revisionNumber === manifest.agendaRevisionNumber &&
+    entry.programRevision === manifest.revision &&
+    entry.cacheRevision === manifest.cacheRevision
+  );
+}
+
 async function readAgendaCacheResponse(
   state: AgendaCacheState,
   path: string,
+  servedManifest?: ProgramPublicationManifest,
 ): Promise<AgendaCachedResponse | null> {
   if (state.bypassed.has(path)) {
     removeExpiredAgendaEntries(state);
@@ -1258,21 +1350,44 @@ async function readAgendaCacheResponse(
   }
   removeExpiredAgendaEntries(state);
   const memoryEntry = state.entries.get(path);
-  if (memoryEntry !== undefined) return memoryEntry;
+  if (memoryEntry !== undefined) {
+    if (servedManifest === undefined || agendaCacheMatchesManifest(memoryEntry, servedManifest)) {
+      return memoryEntry;
+    }
+    state.entries.delete(path);
+    agendaCacheIndex.delete(path);
+  }
   const workerCache = workerResponseCache();
   if (workerCache !== null) {
     try {
-      const cached = await workerCache.match(publicCacheRequest(path));
+      const cacheRequest = publicCacheRequest(path);
+      const cached = await workerCache.match(cacheRequest);
       if (cached !== undefined && cached.status === 200) {
         const etag = cached.headers.get("etag");
         const contentType = cached.headers.get("content-type");
-        if (etag !== null && contentType !== null) {
-          return {
+        const revisionNumber = agendaCacheRevision(cached.headers, PUBLIC_AGENDA_REVISION_HEADER);
+        const programRevision = agendaCacheRevision(cached.headers, PUBLIC_PROGRAM_REVISION_HEADER);
+        const cacheRevision = agendaCacheRevision(cached.headers, PUBLIC_CACHE_REVISION_HEADER);
+        if (
+          etag !== null &&
+          contentType !== null &&
+          revisionNumber !== null &&
+          programRevision !== null &&
+          cacheRevision !== null
+        ) {
+          const entry: AgendaCachedResponse = {
             body: await cached.clone().text(),
             contentType,
             etag,
+            revisionNumber,
+            programRevision,
+            cacheRevision,
           };
+          if (servedManifest === undefined || agendaCacheMatchesManifest(entry, servedManifest)) {
+            return entry;
+          }
         }
+        await workerCache.delete(cacheRequest);
       }
     } catch {
       // Cache API failures must never turn a public read into an error.
@@ -1332,9 +1447,9 @@ function writeAgendaCacheResponse(
   path: string,
   entry: AgendaCacheEntry,
 ): void {
-  if ((state.minimumRevisions.get(path) ?? 0) > entry.revisionNumber) return;
-  if ((state.latestRevisions.get(path) ?? 0) > entry.revisionNumber) return;
-  state.latestRevisions.set(path, entry.revisionNumber);
+  if ((state.minimumCacheRevisions.get(path) ?? 0) > entry.cacheRevision) return;
+  if ((state.latestCacheRevisions.get(path) ?? 0) > entry.cacheRevision) return;
+  state.latestCacheRevisions.set(path, entry.cacheRevision);
   const generation = nextAgendaCacheGeneration(state, path);
   state.bypassed.delete(path);
   rememberAgendaCacheEntry(state, path, entry);
@@ -1347,6 +1462,7 @@ export async function invalidatePublishedAgendaCache(
   engine: AgendaEngine,
   eventId: string,
   revision: PublishedAgendaRevision,
+  cacheRevision?: number,
 ): Promise<void> {
   const state = agendaCacheStates.get(engine as unknown as object);
   const paths = new Set<string>();
@@ -1378,9 +1494,12 @@ export async function invalidatePublishedAgendaCache(
     for (const path of paths) {
       state.bypassed.add(path);
       nextAgendaCacheGeneration(state, path);
-      state.minimumRevisions.set(
+      state.minimumCacheRevisions.set(
         path,
-        Math.max(state.minimumRevisions.get(path) ?? 0, revision.revisionNumber),
+        Math.max(
+          state.minimumCacheRevisions.get(path) ?? 0,
+          cacheRevision ?? revision.revisionNumber,
+        ),
       );
     }
     while (state.bypassed.size > PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES) {
@@ -1616,12 +1735,14 @@ async function publishedProjection(
     | "getProgramPublicationManifest"
     | "publicRevisionNumberForEventSlug"
   >,
+  servedManifest?: ProgramPublicationManifest,
 ): Promise<PublishedAgendaProjectionValue | null> {
   const eventSlug = publicEventSlug(context);
   if (eventSlug === null) return null;
   let revision: PublishedAgendaRevision | null;
   if (dependencies.getProgramPublicationManifest !== undefined) {
-    const manifest = await dependencies.getProgramPublicationManifest(eventSlug);
+    const manifest =
+      servedManifest ?? (await dependencies.getProgramPublicationManifest(eventSlug));
     if (manifest === null || manifest.lifecycle !== "served") return null;
     const eventId =
       dependencies.eventIdForSlug === undefined
@@ -1677,7 +1798,14 @@ export function createPublishedAgendaRoutes(
   const cacheState = agendaCacheState(dependencies.engine);
   const projectionForRequest = (
     context: AgendaContext,
-  ): Promise<PublishedAgendaProjectionValue | null> => publishedProjection(context, dependencies);
+    servedManifest?: ProgramPublicationManifest,
+  ): Promise<PublishedAgendaProjectionValue | null> =>
+    publishedProjection(context, dependencies, servedManifest);
+  const publicNotFound = (context: AgendaContext): Response => {
+    const response = errorResponse(context, 404, "NOT_FOUND", "A published agenda was not found.");
+    response.headers.set("cache-control", "no-store");
+    return response;
+  };
 
   const cachedFeed = async (
     context: AgendaContext,
@@ -1686,14 +1814,26 @@ export function createPublishedAgendaRoutes(
   ): Promise<Response> => {
     const cacheable = anonymousAgendaRequest(context);
     const path = publicCachePath(context);
+    let servedManifest: ProgramPublicationManifest | undefined;
+    if (dependencies.getProgramPublicationManifest !== undefined) {
+      const eventSlug = publicEventSlug(context);
+      if (eventSlug === null) {
+        return publicNotFound(context);
+      }
+      const manifest = await dependencies.getProgramPublicationManifest(eventSlug);
+      if (manifest === null || manifest.lifecycle !== "served") {
+        return publicNotFound(context);
+      }
+      servedManifest = manifest;
+    }
     if (cacheable) {
-      const cached = await readAgendaCacheResponse(cacheState, path);
+      const cached = await readAgendaCacheResponse(cacheState, path, servedManifest);
       if (cached !== null)
         return feedResponse(context, cached.body, cached.contentType, cached.etag);
     }
-    const result = await projectionForRequest(context);
+    const result = await projectionForRequest(context, servedManifest);
     if (result === null) {
-      return errorResponse(context, 404, "NOT_FOUND", "A published agenda was not found.");
+      return publicNotFound(context);
     }
     const body = render(result);
     const etag = await feedEtag(body);
@@ -1705,6 +1845,8 @@ export function createPublishedAgendaRoutes(
         eventId: result.eventId,
         eventSlug: result.eventSlug,
         revisionNumber: result.revisionNumber,
+        programRevision: servedManifest?.revision ?? result.revisionNumber,
+        cacheRevision: servedManifest?.cacheRevision ?? result.revisionNumber,
         expiresAt: Date.now() + PUBLIC_AGENDA_CACHE_TTL_MS,
       });
     }
