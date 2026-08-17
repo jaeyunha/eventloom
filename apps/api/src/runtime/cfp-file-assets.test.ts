@@ -147,6 +147,29 @@ describe("production CFP file asset persistence", () => {
     ).resolves.toBeNull();
   });
 
+  it("does not publish ready when cleanup wins after byte verification", async () => {
+    const fixture = createCfpAssetFixture(createDatabase());
+    const authorization = await issueUpload(fixture);
+    fixture.privateAssets.verified = true;
+    fixture.privateAssets.cleanupAfterVerification = true;
+
+    await expect(
+      fixture.gateway.finalizeUpload({
+        tenantId: fixture.event.tenantId,
+        eventId: fixture.event.id,
+        submissionId: fixture.submission.id,
+        owner: "submission",
+        fieldKey: "slides",
+        assetId: authorization.asset.assetId,
+        state: "ready",
+        idempotencyKey: "finalize-file-cleanup-race",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.database.query<{ state: string }>("SELECT state FROM cfp_file_assets")).toEqual([
+      { state: "pending_upload" },
+    ]);
+  });
+
   it("rolls back rejected cleanup intent when the CFP finalization CAS loses", async () => {
     const fixture = createCfpAssetFixture(createDatabase());
     const authorization = await issueUpload(fixture, "issue-file-rejection-race");
