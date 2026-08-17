@@ -54,7 +54,12 @@ export function useEvaluatorScoreActions(scope: EvaluatorSuggestionController) {
   function confirmAiSuggestion(criterion: RubricCriterion): void {
     const generated = suggestionForCriterion(criterion.id);
     if (generated !== null) {
-      void resolveSuggestion(generated.suggestion, "accept");
+      void resolveSuggestion(
+        generated.suggestion,
+        "accept",
+        criterion.id,
+        generated.candidate.value,
+      );
       return;
     }
     if (suggestions.some((candidate) => candidate.candidates[criterion.id]?.length !== undefined)) {

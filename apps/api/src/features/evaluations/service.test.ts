@@ -4911,17 +4911,18 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       humanConfirmedBy: "reviewer-1",
       suggestionStatus: "edited",
     });
-    const completedEdit = await service.resolveAiSuggestion(
+    const acceptedAfterPartial = await service.resolveAiSuggestion(
       reviewer("reviewer-1"),
       edited.suggestion.id,
       {
-        action: "edit",
+        action: "accept",
         scores: { relevance: 7 },
-        reason: "Human evaluator adjusted the remaining bounded score.",
         expectedVersion: edited.suggestion.version,
       },
     );
-    expect(completedEdit.suggestion.status).toBe("edited");
+    expect(acceptedAfterPartial.suggestion.status).toBe("accepted");
+    expect(acceptedAfterPartial.review?.scores.quality?.value).toBe(5);
+    expect(acceptedAfterPartial.review?.scores.relevance?.value).toBe(7);
     const resolved = await service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
       action: "accept",
       expectedVersion: suggestion.version,

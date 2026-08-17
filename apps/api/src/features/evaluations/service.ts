@@ -3021,9 +3021,10 @@ export class EvaluationService {
     let assignmentUpdate: EvaluationAssignment | null = null;
 
     if (action === "accept" || action === "edit") {
+      const scopedValues = input.criterionScores ?? input.scores;
       const values =
-        action === "edit"
-          ? (input.criterionScores ?? input.scores)
+        action === "edit" || (action === "accept" && scopedValues !== undefined)
+          ? scopedValues
           : Object.fromEntries(
               Object.entries(suggestion.candidates).map(([criterionId, candidates]) => [
                 criterionId,
@@ -3132,7 +3133,7 @@ export class EvaluationService {
       actorId: actor.userId,
       at: now,
       ...(reason.length === 0 ? {} : { reason }),
-      ...(action === "edit" && editedValues !== undefined
+      ...((action === "edit" || action === "accept") && editedValues !== undefined
         ? { valueByCriterion: editedValues }
         : {}),
     };
@@ -3143,21 +3144,25 @@ export class EvaluationService {
           : [],
       ),
     );
-    if (action === "edit" && editedValues !== undefined) {
+    if ((action === "edit" || action === "accept") && editedValues !== undefined) {
       for (const criterionId of Object.keys(editedValues)) {
         editedCriterionIds.add(criterionId);
       }
     }
     const allCandidatesEdited =
-      action === "edit" &&
-      Object.keys(suggestion.candidates).every((criterionId) =>
-        editedCriterionIds.has(criterionId),
-      );
+      action === "accept" && editedValues === undefined
+        ? true
+        : (action === "edit" || action === "accept") &&
+          Object.keys(suggestion.candidates).every((criterionId) =>
+            editedCriterionIds.has(criterionId),
+          );
     const resolvedSuggestion: EvaluationSuggestion = {
       ...suggestion,
       status:
         action === "accept"
-          ? "accepted"
+          ? allCandidatesEdited
+            ? "accepted"
+            : "pending"
           : action === "edit"
             ? allCandidatesEdited
               ? "edited"

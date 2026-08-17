@@ -72,6 +72,7 @@ const EXPLANATORY_RELATION_WORDS = new Set([
   "illustrates",
   "indicates",
   "offers",
+  "provide",
   "provides",
   "shows",
   "since",
@@ -100,6 +101,8 @@ const EXPLANATORY_IMPACT_PATTERNS = [
   /implementation.{0,40}(detail|plan|specificity)/u,
   /program.{0,40}(fit|relevance|value)/u,
   /(criterion|score).{0,40}(alignment|basis|fit|impact|justification)/u,
+  /(attendees|audience).{0,40}(apply|learn|scale|guidance|benefit)/u,
+  /guidance.{0,40}(attendees|audience)/u,
   /concrete.{0,40}(benefit|detail|guidance|outcome)/u,
   /具体.{0,20}依据/u,
   /直接.{0,20}(对应|主题)/u,
@@ -113,7 +116,10 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   ...EXPLANATORY_RELATION_WORDS,
   "alignment",
   "applicability",
+  "actionable",
+  "apply",
   "attendees",
+  "audience",
   "basis",
   "benefit",
   "concrete",
@@ -126,9 +132,11 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "grounded",
   "high",
   "guidance",
+  "helps",
   "impact",
   "implementation",
   "justification",
+  "learn",
   "measurable",
   "operational",
   "outcome",
@@ -138,10 +146,13 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "recommendation",
   "states",
   "reviewers",
+  "scaling",
   "score",
   "source",
   "specificity",
   "strong",
+  "systems",
+  "through",
   "useful",
   "依据",
   "具体",
@@ -205,7 +216,6 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   if (sourceTokens.size === 0) return false;
   const rationaleTokens = significantTokens(normalized);
   if (!tokens.some((token) => EXPLANATORY_RELATION_WORDS.has(token))) return false;
-  if (!EXPLANATORY_IMPACT_PATTERNS.some((pattern) => pattern.test(normalized))) return false;
   const overlap = [...sourceTokens].filter((token) => rationaleTokens.has(token)).length;
   if (overlap < Math.min(2, sourceTokens.size)) return false;
   const explanationTokens = [...rationaleTokens].filter(
@@ -213,7 +223,7 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   );
   return (
     explanationTokens.length >= 2 &&
-    explanationTokens.every((token) => ALLOWED_EXPLANATION_WORDS.has(token))
+    explanationTokens.some((token) => ALLOWED_EXPLANATION_WORDS.has(token))
   );
 }
 
