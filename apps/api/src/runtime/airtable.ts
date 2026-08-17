@@ -11,6 +11,7 @@ import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import { localDateInTimeZone } from "../features/agenda/timezone";
 import type { AgendaEntry, AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { RequestAuthenticator } from "../features/auth/authenticator";
@@ -201,6 +202,7 @@ import {
   D1PublishedSpeakerProjectionStore,
   type PublishedSpeakerProjectionRecord,
   publishedHeadshotContentType,
+  selectReleasedSpeakerHeadshot,
 } from "../infrastructure/cloudflare/repositories/published-speakers";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import {
@@ -3331,9 +3333,9 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   }
 }
 
-interface StoredAgendaState extends AgendaState {
+type StoredAgendaState = AgendaState & {
   id: string;
-}
+};
 interface StoredAgendaEntry {
   id: string;
   eventId: string;
@@ -8639,7 +8641,7 @@ export function createD1ApplicationDependencies(
             values.push({ id: session.id, title: session.title, trackNames });
             sessionsByParticipantId.set(participantId, values);
             const approvedSpeakerName = entry.metadata?.speakerNames[speakerIndex];
-            if (approvedSpeakerName !== undefined) {
+            if (typeof approvedSpeakerName === "string" && approvedSpeakerName.trim().length > 0) {
               approvedSpeakerNameById.set(participantId, approvedSpeakerName);
             }
           }
@@ -8655,17 +8657,14 @@ export function createD1ApplicationDependencies(
           }
         >();
         for (const profile of profiles) {
-          if (profile.headshotAssetId === undefined) continue;
-          const asset = assets.find(
-            (candidate) =>
-              candidate.id === profile.headshotAssetId &&
-              candidate.tenantId === organizationId &&
-              candidate.eventId === eventId &&
-              candidate.participantId === profile.participantId &&
-              candidate.kind === "headshot" &&
-              candidate.state === "ready" &&
-              candidate.reviewState === "approved",
-          );
+          const asset = selectReleasedSpeakerHeadshot(assets, {
+            tenantId: organizationId,
+            eventId,
+            participantId: profile.participantId,
+            ...(profile.headshotAssetId === undefined
+              ? {}
+              : { selectedAssetId: profile.headshotAssetId }),
+          });
           if (asset === undefined) continue;
           const contentType = publishedHeadshotContentType(asset.contentType);
           if (
@@ -8699,7 +8698,10 @@ export function createD1ApplicationDependencies(
               return servedSpeaker === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    displayName: neutralSpeakerDisplayName(
+                      participantId,
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -8719,8 +8721,11 @@ export function createD1ApplicationDependencies(
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
+              displayName: neutralSpeakerDisplayName(
+                participantId,
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,
@@ -8744,8 +8749,9 @@ export function createD1ApplicationDependencies(
               )
             : Object.fromEntries(publishedHeadshots);
         const speakerHash = await publicationSourceHash({ speakers, headshots });
+        const speakerProjectionId = `${revision.id}:${speakerHash}`;
         const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
-          id: revision.id,
+          id: speakerProjectionId,
           organizationId,
           eventId,
           event: {
@@ -8791,6 +8797,12 @@ export function createD1ApplicationDependencies(
           }
           return;
         }
+        await agendaMutationLock.renew(eventId);
+        await publishedSpeakerProjections.putPublishedSpeakers(
+          publishedSpeakerProjection,
+          revision,
+          agendaHash,
+        );
         const pending = await publicationService.reserveRebuild(actor, {
           organizationId,
           eventId,
@@ -8824,26 +8836,14 @@ export function createD1ApplicationDependencies(
         if (releaseId === null || pendingRevision === null) {
           throw new Error("The reserved D1 publication is missing pending release metadata.");
         }
+        const pendingManifest = pending.releases.find(
+          (release) => release.id === releaseId && release.revision === pendingRevision,
+        );
         try {
           await agendaMutationLock.renew(eventId);
-          await publishedSpeakerProjections.putPublishedSpeakers(
-            publishedSpeakerProjection,
-            revision,
-            agendaHash,
-          );
-          const pendingManifest = pending.releases.find(
-            (release) => release.id === releaseId && release.revision === pendingRevision,
-          );
           if (pendingManifest === undefined) {
             throw new Error("The reserved D1 publication manifest could not be resolved.");
           }
-          await invalidatePublishedSpeakerCache(
-            publishedSpeakerProjections,
-            event.slug,
-            pendingRevision,
-            pendingManifest.cacheRevision,
-          );
-          await invalidatePublishedAgendaCache(agendaEngine, eventId, revision);
           await agendaMutationLock.renew(eventId);
           await publicationService.completeRebuild({
             organizationId,
@@ -8868,6 +8868,30 @@ export function createD1ApplicationDependencies(
             throw new AggregateError([error, failure], "D1 publication handoff cleanup failed.");
           }
           throw error;
+        }
+        try {
+          await invalidatePublishedSpeakerCache(
+            publishedSpeakerProjections,
+            event.slug,
+            pendingRevision,
+            pendingManifest.cacheRevision,
+          );
+          await invalidatePublishedAgendaCache(
+            agendaEngine,
+            eventId,
+            revision,
+            pendingManifest.cacheRevision,
+          );
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "program_publication_cache_invalidation_failed",
+              eventId,
+              releaseId,
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            }),
+          );
         }
         await agendaMutationLock.renew(eventId);
         const served = await publicationRepository.getState(organizationId, eventId);

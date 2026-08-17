@@ -353,7 +353,7 @@ describe("public embeds", () => {
         view: "itinerary",
       }),
     );
-    const navigationStart = markup.indexOf('<nav aria-label="Published event views">');
+    const navigationStart = markup.indexOf('<nav aria-label="Published event views"');
     const navigationEnd = markup.indexOf("</nav>", navigationStart);
     const navigation = markup.slice(navigationStart, navigationEnd);
 

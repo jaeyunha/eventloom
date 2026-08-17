@@ -113,20 +113,8 @@ test("event timezone keeps editor, calendar, API, and public dates aligned", asy
   });
 
   const eventId = created.id;
-  const version = created.version;
   expect(typeof eventId).toBe("string");
-  expect(typeof version).toBe("number");
-  if (typeof eventId !== "string" || typeof version !== "number") {
-    throw new Error("Created event did not include a typed id and version.");
-  }
-
-  const publishResponse = await context.request.patch(`${adminEventPath}/${eventId}`, {
-    data: {
-      expectedVersion: version,
-      status: "active",
-    },
-  });
-  expect(publishResponse.status()).toBe(200);
+  if (typeof eventId !== "string") throw new Error("Created event did not include a typed id.");
 
   const agendaResponse = await context.request.post(`${adminEventPath}/${eventId}/agenda`, {
     data: {
@@ -143,6 +131,15 @@ test("event timezone keeps editor, calendar, API, and public dates aligned", asy
   if (typeof agendaVersion !== "number") {
     throw new Error("Created agenda did not include a numeric version.");
   }
+  const validateAgendaResponse = await context.request.post(
+    `${adminEventPath}/${eventId}/agenda/validate`,
+    {
+      data: {
+        expectedVersion: agendaVersion,
+      },
+    },
+  );
+  expect(validateAgendaResponse.status()).toBe(200);
   const publishAgendaResponse = await context.request.post(
     `${adminEventPath}/${eventId}/agenda/publish`,
     {

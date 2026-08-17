@@ -6,6 +6,7 @@ import type {
   AgendaRepository,
   AgendaState,
   AgendaSuggestionRun,
+  AgendaValidationMarker,
   PublishedAgendaRevision,
 } from "../../../features/agenda/types";
 import {
@@ -23,6 +24,38 @@ const json = (value: unknown): string => JSON.stringify(value);
 const text = (value: unknown): string => String(value);
 const nullable = (value: unknown): string | null => (value == null ? null : String(value));
 const number = (value: unknown): number => Number(value);
+
+function validationMarkerFromRow(row: Row): AgendaValidationMarker {
+  const hasVersion = row.validated_draft_version != null;
+  const hasTimestamp = row.validated_at != null;
+  if (hasVersion !== hasTimestamp)
+    throw new TypeError("Invalid persisted agenda validation marker.");
+  if (!hasVersion) return {};
+  const validatedDraftVersion = number(row.validated_draft_version);
+  const validatedAt = text(row.validated_at);
+  if (
+    !Number.isInteger(validatedDraftVersion) ||
+    validatedDraftVersion <= 0 ||
+    validatedAt.trim().length === 0
+  ) {
+    throw new TypeError("Invalid persisted agenda validation marker.");
+  }
+  return { validatedDraftVersion, validatedAt };
+}
+
+function assertValidationMarker(state: AgendaState): void {
+  const hasVersion = state.validatedDraftVersion !== undefined;
+  const hasTimestamp = state.validatedAt !== undefined;
+  if (
+    hasVersion !== hasTimestamp ||
+    (hasVersion &&
+      (!Number.isInteger(state.validatedDraftVersion) ||
+        state.validatedDraftVersion <= 0 ||
+        state.validatedAt.trim().length === 0))
+  ) {
+    throw new TypeError("Invalid agenda validation marker.");
+  }
+}
 
 function parse<T>(value: unknown): T {
   return JSON.parse(String(value)) as T;
@@ -212,7 +245,7 @@ export class D1AgendaRepository implements AgendaRepository {
       this.db
         .prepare(`SELECT s.*, COALESCE((SELECT json_group_array(speaker_id) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') participant_ids_json,
         COALESCE((SELECT json_group_array(resource_id) FROM session_resources x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') resource_ids_json,
-        COALESCE((SELECT json_group_array(display_name) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id AND display_name IS NOT NULL),'[]') speaker_names_json,
+        COALESCE((SELECT json_group_array(CASE WHEN NULLIF(TRIM(display_name),'') IS NULL OR TRIM(display_name)=speaker_id THEN 'Speaker' ELSE display_name END) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') speaker_names_json,
         COALESCE((SELECT json_group_array(track_id) FROM session_tracks x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id ORDER BY ordinal),'[]') track_ids_json
         FROM sessions s WHERE organization_id=? AND event_id=? AND deleted_at IS NULL ORDER BY id`)
         .bind(this.organizationId, eventId)
@@ -339,6 +372,7 @@ export class D1AgendaRepository implements AgendaRepository {
     return {
       eventId,
       stateVersion: number(root.state_version),
+      ...validationMarkerFromRow(root),
       timeZone: text(root.time_zone),
       minimumTravelMinutes: number(root.minimum_travel_minutes),
       sessions: (sessionRows.results ?? []).map((row) => ({
@@ -398,6 +432,7 @@ export class D1AgendaRepository implements AgendaRepository {
   ): Promise<void> {
     if (next.eventId !== eventId || next.stateVersion !== (expectedStateVersion ?? 0) + 1)
       throw new AgendaRepositoryConflictError(eventId);
+    assertValidationMarker(next);
     const current = await this.load(eventId);
     if ((current?.stateVersion ?? null) !== expectedStateVersion)
       throw new AgendaRepositoryConflictError(eventId);
@@ -451,14 +486,16 @@ export class D1AgendaRepository implements AgendaRepository {
       statements.push(
         statement(
           this.db,
-          `INSERT INTO agenda_states (organization_id,event_id,state_version,time_zone,minimum_travel_minutes,current_published_revision_id,created_at,updated_at)
-        SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=?)`,
+          `INSERT INTO agenda_states (organization_id,event_id,state_version,time_zone,minimum_travel_minutes,validated_draft_version,validated_at,current_published_revision_id,created_at,updated_at)
+        SELECT ?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM agenda_states WHERE organization_id=? AND event_id=?)`,
           [
             this.organizationId,
             eventId,
             next.stateVersion,
             next.timeZone,
             next.minimumTravelMinutes,
+            next.validatedDraftVersion ?? null,
+            next.validatedAt ?? null,
             next.currentPublishedRevisionId,
             token,
             token,
@@ -490,11 +527,13 @@ export class D1AgendaRepository implements AgendaRepository {
       statements.push(
         statement(
           this.db,
-          `UPDATE agenda_states SET state_version=?,time_zone=?,minimum_travel_minutes=?,current_published_revision_id=?,updated_at=? WHERE organization_id=? AND event_id=? AND state_version=?`,
+          `UPDATE agenda_states SET state_version=?,time_zone=?,minimum_travel_minutes=?,validated_draft_version=?,validated_at=?,current_published_revision_id=?,updated_at=? WHERE organization_id=? AND event_id=? AND state_version=?`,
           [
             next.stateVersion,
             next.timeZone,
             next.minimumTravelMinutes,
+            next.validatedDraftVersion ?? null,
+            next.validatedAt ?? null,
             next.currentPublishedRevisionId,
             token,
             this.organizationId,
