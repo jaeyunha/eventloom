@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact source-fix head: `5c9f453f3e513ed634b646a44ae7c122221a7b7d`
+- Exact source-fix head: `d0f096a244f5666425ef64ce31e0a4d750e74865`
 - The final branch tip may add metadata-only handoff synchronization; review
   the source-fix head and this document together.
 - PR: https://github.com/jaeyunha/eventloom/pull/34
@@ -64,11 +64,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact source-fix head `5c9f453f3e513ed634b646a44ae7c122221a7b7d`
-- [ ] Code quality — exact source-fix head `5c9f453f3e513ed634b646a44ae7c122221a7b7d`
-- [ ] Functional/visual QA — exact source-fix head `5c9f453f3e513ed634b646a44ae7c122221a7b7d`
-- [ ] Context/dependencies — exact source-fix head `5c9f453f3e513ed634b646a44ae7c122221a7b7d`
-- [ ] Goal/compliance — exact source-fix head `5c9f453f3e513ed634b646a44ae7c122221a7b7d`
+- [ ] Security — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
+- [ ] Code quality — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
+- [ ] Functional/visual QA — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
+- [ ] Context/dependencies — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
+- [ ] Goal/compliance — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
 
 ## Remaining tasks
 
