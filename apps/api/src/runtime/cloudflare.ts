@@ -747,10 +747,6 @@ function repositoryConflict(error: unknown): boolean {
   return error instanceof Error && /constraint|unique|duplicate/i.test(error.message);
 }
 
-function missingOrganizationEntitlementsTable(error: unknown): boolean {
-  return error instanceof Error && /no such table: organization_entitlements/i.test(error.message);
-}
-
 /** D1-backed identity, membership, and invitation metadata. */
 export class D1MemberIdentityRepository implements MemberIdentityRepository {
   readonly #idempotency: D1IdempotencyStore;
@@ -1354,20 +1350,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           input.organizationId,
           input.organizationId,
         );
-      let result: Awaited<ReturnType<typeof guardedInsert.run>>;
-      try {
-        result = await guardedInsert.run();
-      } catch (error) {
-        if (!missingOrganizationEntitlementsTable(error)) throw error;
-        result = await this.database
-          .prepare(
-            `INSERT INTO organization_memberships
-               (organization_id, user_id, role, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)`,
-          )
-          .bind(input.organizationId, input.userId, input.role, input.createdAt, input.updatedAt)
-          .run();
-      }
+      const result = await guardedInsert.run();
       if (Number(result.meta?.changes ?? 1) === 0) {
         throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
       }
@@ -1386,10 +1369,9 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     role: MemberMembership["role"],
     updatedAt: string,
   ): Promise<void> {
-    try {
-      const guardedUpdate = await this.database
-        .prepare(
-          `UPDATE organization_memberships
+    const guardedUpdate = await this.database
+      .prepare(
+        `UPDATE organization_memberships
               SET role = ?, updated_at = ?
             WHERE organization_id = ? AND user_id = ?
               AND (
@@ -1419,33 +1401,22 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
                      )
                 )
               )`,
-        )
-        .bind(
-          role,
-          updatedAt,
-          organizationId,
-          userId,
-          role,
-          organizationId,
-          updatedAt,
-          updatedAt,
-          organizationId,
-          organizationId,
-        )
-        .run();
-      if (Number(guardedUpdate.meta?.changes ?? 1) === 0) {
-        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
-      }
-    } catch (error) {
-      if (!missingOrganizationEntitlementsTable(error)) throw error;
-      await this.database
-        .prepare(
-          `UPDATE organization_memberships
-              SET role = ?, updated_at = ?
-            WHERE organization_id = ? AND user_id = ?`,
-        )
-        .bind(role, updatedAt, organizationId, userId)
-        .run();
+      )
+      .bind(
+        role,
+        updatedAt,
+        organizationId,
+        userId,
+        role,
+        organizationId,
+        updatedAt,
+        updatedAt,
+        organizationId,
+        organizationId,
+      )
+      .run();
+    if (Number(guardedUpdate.meta?.changes ?? 1) === 0) {
+      throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
     }
   }
 
@@ -1629,27 +1600,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           input.organizationId,
           input.organizationId,
         );
-      let result: Awaited<ReturnType<typeof guardedInsert.run>>;
-      try {
-        result = await guardedInsert.run();
-      } catch (error) {
-        if (!missingOrganizationEntitlementsTable(error)) throw error;
-        result = await this.database
-          .prepare(
-            `INSERT INTO auth_verifications
-               (id, identifier, token_digest, expires_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            input.id,
-            invitationIdentifier(envelope),
-            temporaryDigest,
-            input.expiresAt,
-            input.createdAt,
-            input.updatedAt,
-          )
-          .run();
-      }
+      const result = await guardedInsert.run();
       if (Number(result.meta?.changes ?? 1) === 0) {
         throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
       }

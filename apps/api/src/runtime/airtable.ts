@@ -3895,6 +3895,13 @@ export class CloudflareAgendaMutationLock implements DurableObjectAgendaCoordina
   }
 }
 
+export class IdempotencyLeaseLostError extends Error {
+  constructor() {
+    super("The idempotency lease was lost before the operation completed.");
+    this.name = "IdempotencyLeaseLostError";
+  }
+}
+
 export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoordinator {
   readonly #database: D1Database;
   readonly #leaseMs: number;
@@ -3987,7 +3994,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     response: IdempotencyStoredResponse;
   }): Promise<void> {
     const tenantId = tenantFromScope(input.scope);
-    await this.#database
+    const result = await this.#database
       .prepare(
         `UPDATE idempotency_records
             SET state = 'completed', response_status = ?, response_json = ?, expires_at = ?
@@ -4005,6 +4012,9 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         input.leaseId ?? "",
       )
       .run();
+    if (Number(result.meta?.changes ?? 0) !== 1) {
+      throw new IdempotencyLeaseLostError();
+    }
   }
 
   async release(input: {
