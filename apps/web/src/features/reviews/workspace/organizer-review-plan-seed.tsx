@@ -1,6 +1,7 @@
 "use client";
 
 import type { ApiPlan } from "./api-api-plan";
+import type { ApiSubmittedReview } from "./api-api-submitted-review";
 import type { ReviewPlanAssignment } from "./assignment-review-plan-assignment";
 import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
@@ -45,6 +46,7 @@ export interface ReviewPlanSeed {
   sourceRounds?: ApiPlan["rounds"];
   sourceClosesAt?: string | null;
   aggregates: readonly AggregateRow[];
+  submittedReviews: readonly ApiSubmittedReview[];
   assignments: readonly ReviewPlanAssignment[];
   progress: {
     totalAssignments: number;
