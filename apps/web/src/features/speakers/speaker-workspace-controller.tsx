@@ -1966,7 +1966,6 @@ function useSpeakerWorkspaceController({
       if (requestId === importRequestRef.current) {
         dispatchImportTaskInvitation({ type: "import-preview-busy-changed", busy: false });
       }
-      if (requestId === importRequestRef.current) input.value = "";
     }
   }
   async function commitCsv(): Promise<void> {
