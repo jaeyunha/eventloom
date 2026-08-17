@@ -3609,6 +3609,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
                 ? {
                     id: participantId,
                     displayName: neutralSpeakerDisplayName(
+                      participantId,
                       approvedSpeakerNameById.get(participantId),
                     ),
                     pronouns: null,
@@ -3633,6 +3634,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             return {
               id: participantId,
               displayName: neutralSpeakerDisplayName(
+                participantId,
                 profile?.displayName,
                 approvedSpeakerNameById.get(participantId),
               ),

@@ -8726,6 +8726,7 @@ export function createD1ApplicationDependencies(
                 ? {
                     id: participantId,
                     displayName: neutralSpeakerDisplayName(
+                      participantId,
                       approvedSpeakerNameById.get(participantId),
                     ),
                     pronouns: null,
@@ -8748,6 +8749,7 @@ export function createD1ApplicationDependencies(
             return {
               id: participantId,
               displayName: neutralSpeakerDisplayName(
+                participantId,
                 profile?.displayName,
                 approvedSpeakerNameById.get(participantId),
               ),
