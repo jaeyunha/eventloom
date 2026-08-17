@@ -326,10 +326,8 @@
 }
 
 .scheduleFooter {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
+  display: grid;
+  gap: 0.75rem;
   margin-top: 0.75rem;
 }
 .timeHint {
@@ -339,16 +337,11 @@
   line-height: 1.55;
 }
 .scheduleFooter > :global(.eventScheduleTimezone) {
-  flex: 0 1 18rem;
-  margin-left: auto;
+  width: min(18rem, 100%);
+  justify-self: end;
 }
 
 @media (max-width: 50rem) {
-  .scheduleFooter {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .scheduleFooter > :global(.eventScheduleTimezone) {
     width: 100%;
     margin-left: 0;
