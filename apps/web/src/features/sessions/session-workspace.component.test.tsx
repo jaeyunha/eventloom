@@ -148,8 +148,8 @@ describe("sessions workspace presentation", () => {
   it("encodes reserved organization and event route characters", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionsWorkspaceView, {
-        organizationId: "organization/one?region=west",
-        eventId: "event/one#schedule",
+        organizationId: "organization one/#%",
+        eventId: "event one/#%",
         sessions: [session],
         selectedSessionId: session.id,
         history: [],
@@ -158,7 +158,7 @@ describe("sessions workspace presentation", () => {
     );
 
     expect(markup).toContain(
-      'href="/admin/organizations/organization%2Fone%3Fregion%3Dwest/events/event%2Fone%23schedule/speakers"',
+      'href="/admin/organizations/organization%20one%2F%23%25/events/event%20one%2F%23%25/speakers"',
     );
   });
 

@@ -74,7 +74,8 @@ at:
 - Added a fixture participant custom field so the real Worker regression
   verifies participant custom-answer persistence.
 - Added reserved-character route coverage and encoded both route segments with
-  `encodeURIComponent`.
+  `encodeURIComponent`; the component regression exercises space, `#`, `%`,
+  and `/` in both organization and event IDs.
 - Added a fixture-backed browser regression for completion -> Edit submission
   -> Back -> forward -> participants reload -> review reload.
 - Repaired the partial browser test callback so `testInfo.outputPath(...)` is
