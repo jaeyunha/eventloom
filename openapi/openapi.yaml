@@ -2776,13 +2776,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/UploadAuthorization" }
+            schema: { $ref: "#/components/schemas/OrganizerHeadshotUploadAuthorization" }
       responses:
         "201":
           description: Organizer-authorized upload capability and sanitized asset metadata.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/UploadAuthorizationResponse" }
+              schema: { $ref: "#/components/schemas/OrganizerHeadshotUploadAuthorizationResponse" }
         "400": { $ref: "#/components/responses/ValidationError" }
         "401": { $ref: "#/components/responses/AuthenticationError" }
         "403": { $ref: "#/components/responses/AuthorizationError" }
@@ -4736,20 +4736,35 @@ components:
       additionalProperties: false
     PortalAsset:
       type: object
-      required: [id, participantId, kind, fileName, contentType, sizeBytes, state, version, createdAt]
+      required: [id, eventId, participantId, kind, fileName, contentType, sizeBytes, state, version, createdAt]
       properties:
         id: { $ref: "#/components/schemas/Identifier" }
+        eventId: { $ref: "#/components/schemas/Identifier" }
         participantId: { $ref: "#/components/schemas/Identifier" }
         submissionId: { $ref: "#/components/schemas/Identifier" }
+        participantName: { type: string, maxLength: 200 }
         taskId: { $ref: "#/components/schemas/Identifier" }
+        sessionTitle: { type: string, maxLength: 500 }
         versionFamilyId: { $ref: "#/components/schemas/Identifier" }
+        supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
+        latestVersionId: { $ref: "#/components/schemas/Identifier" }
+        currentVersionId: { $ref: "#/components/schemas/Identifier" }
+        approvedVersionId: { $ref: "#/components/schemas/Identifier" }
+        releasedVersionId: { $ref: "#/components/schemas/Identifier" }
         kind: { type: string, enum: [headshot, slides, supporting_file] }
         fileName: { type: string, maxLength: 512 }
         contentType: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 0 }
         uploaderLabel: { type: string, maxLength: 200 }
         state: { type: string, enum: [pending_upload, ready, rejected] }
+        reviewState: { type: string, enum: [approved, needs_changes] }
+        reviewNote: { type: string }
+        reviewedAt: { $ref: "#/components/schemas/Timestamp" }
+        reviewVersion: { $ref: "#/components/schemas/Version" }
         version: { $ref: "#/components/schemas/Version" }
+        commentThreadId: { $ref: "#/components/schemas/Identifier" }
+        versionId: { $ref: "#/components/schemas/Identifier" }
+        rejectionReason: { type: string }
         createdAt: { $ref: "#/components/schemas/Timestamp" }
         finalizedAt: { $ref: "#/components/schemas/Timestamp" }
       additionalProperties: false
@@ -4773,7 +4788,32 @@ components:
         expectedLatestVersion: { $ref: "#/components/schemas/Version" }
         supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
       additionalProperties: false
+    OrganizerHeadshotUploadAuthorization:
+      type: object
+      required: [participantId, kind, fileName, contentType, sizeBytes]
+      properties:
+        participantId: { $ref: "#/components/schemas/Identifier" }
+        submissionId: { $ref: "#/components/schemas/Identifier" }
+        kind: { type: string, enum: [headshot] }
+        fileName: { type: string, maxLength: 512 }
+        contentType: { type: string, maxLength: 200 }
+        sizeBytes: { type: integer, minimum: 1 }
+        expectedLatestVersion: { $ref: "#/components/schemas/Version" }
+        supersedesAssetId: { $ref: "#/components/schemas/Identifier" }
+      additionalProperties: false
     UploadAuthorizationResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [asset, grant]
+          properties:
+            asset: { $ref: "#/components/schemas/PortalAsset" }
+            grant: { $ref: "#/components/schemas/Capability" }
+          additionalProperties: false
+      additionalProperties: false
+    OrganizerHeadshotUploadAuthorizationResponse:
       type: object
       required: [data]
       properties:

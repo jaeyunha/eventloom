@@ -2044,7 +2044,7 @@ export class D1SpeakerRepository
       if (
         expected === undefined ||
         expected.version !== command.expectedLatestVersion ||
-        expected.state !== "ready" ||
+        (expected.state !== "ready" && expected.state !== "rejected") ||
         family.some((candidate) => (candidate.version ?? 0) > command.expectedLatestVersion)
       ) {
         return { ok: false, reason: "version_conflict" };

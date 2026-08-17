@@ -60,6 +60,17 @@ const uploadSchema = z.object({
   expectedLatestVersion: z.number().int().positive().optional(),
 });
 
+const organizerHeadshotUploadSchema = z.object({
+  participantId: z.string().trim().min(1),
+  submissionId: z.string().trim().min(1).optional(),
+  kind: z.literal("headshot"),
+  fileName: z.string(),
+  contentType: z.string().trim().min(1),
+  sizeBytes: z.number().int().positive(),
+  supersedesAssetId: z.string().trim().min(1).optional(),
+  expectedLatestVersion: z.number().int().positive().optional(),
+});
+
 const finalizeAssetSchema = z.object({
   state: z.enum(["ready", "rejected"]),
   rejectionReason: z.string().optional(),
@@ -652,7 +663,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
   });
 
   app.post("/events/:eventId/organizer/profiles/:participantId/headshot", async (context) => {
-    const body = await parseBody(context, uploadSchema);
+    const body = await parseBody(context, organizerHeadshotUploadSchema);
     if (!body) {
       return context.json(
         errorBody(context, "VALIDATION_ERROR", "The headshot upload payload is invalid."),
@@ -679,7 +690,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       contentType: body.contentType,
       sizeBytes: body.sizeBytes,
     });
-    return context.json({ data: { ...result, asset: publicAsset(result.asset) } }, 201);
+    return context.json({ data: { ...result, asset: speakerAsset(result.asset) } }, 201);
   });
 
   app.post("/events/:eventId/organizer/reminders/preview", async (context) => {

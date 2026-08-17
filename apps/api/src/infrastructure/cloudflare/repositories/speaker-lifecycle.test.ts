@@ -785,6 +785,66 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     );
   });
 
+  it("rethrows D1 failures when a rejected predecessor is unchanged", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const phase = fixture.createPhase();
+    const authorization = await phase.service.issueOrganizerUploadGrant({
+      eventId,
+      accountId: organizerAccountId,
+      participantId: acceptedParticipantId,
+      kind: "headshot",
+      fileName: "rejected-predecessor.png",
+      contentType: "image/png",
+      sizeBytes: 3,
+    });
+    const upload = privateCapabilityParts(authorization.grant.url);
+    await phase.service.consumeUploadCapability(
+      upload.capabilityId,
+      upload.token,
+      new Request("https://api.example.test/private-upload", {
+        method: "PUT",
+        headers: { "content-type": "image/png", "content-length": "3" },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+    );
+    const rejected = await phase.service.finalizeAsset({
+      eventId,
+      accountId: organizerAccountId,
+      assetId: authorization.asset.id,
+      state: "rejected",
+      rejectionReason: "The uploaded file needs replacement.",
+      organizer: true,
+    });
+    if (rejected.version === undefined) throw new Error("Expected a versioned rejected asset.");
+
+    const candidate: SpeakerAsset = {
+      ...rejected,
+      id: "rejected-successor",
+      state: "pending_upload",
+      version: rejected.version + 1,
+      versionId: "rejected-successor",
+      supersedesAssetId: rejected.id,
+      latestVersionId: "rejected-successor",
+      currentVersionId: rejected.id,
+      objectKey: "events/event-1/participants/accepted-participant/headshot/rejected-successor",
+      createdAt: "2099-08-15T06:00:00.000Z",
+    };
+    fixture.database.beforeNextBatch(() => {
+      throw new Error("d1 unavailable");
+    });
+
+    await expect(
+      phase.repository.createPendingAssetVersion({
+        asset: candidate,
+        expectedLatestAssetId: rejected.id,
+        expectedLatestVersion: rejected.version,
+        idempotencyKey: "rejected-successor-d1-failure",
+        requestDigest: "rejected-successor-d1-failure-digest",
+      }),
+    ).rejects.toThrow("d1 unavailable");
+  });
+
   it("roundtrips organizer, participant, task, profile, and private-headshot state", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);

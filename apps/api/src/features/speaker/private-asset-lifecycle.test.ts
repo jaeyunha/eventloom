@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { R2PrivateAssetGateway } from "../../infrastructure/cloudflare/private-assets";
 import { createSpeakerRoutes } from "./routes";
 import { SpeakerService } from "./service";
@@ -1741,6 +1741,39 @@ describe("private speaker asset lifecycle", () => {
     releasePut?.();
     await consuming;
     await expect(gateway.verifyUploadCapability(uploadBinding)).resolves.toBe(true);
+  });
+
+  it("does not finalize an uploaded capability after its expiry", async () => {
+    const bucket = new MemoryBucket();
+    const gateway = new R2PrivateAssetGateway(bucket as never, "https://api.invalid");
+    const clock = Date.now();
+    const uploadBinding = binding({
+      capabilityId: "expired-after-upload",
+      expiresAt: new Date(clock + 1_000).toISOString(),
+    });
+    const upload = await gateway.registerUploadCapability(uploadBinding);
+    await gateway.consumeUploadCapability(
+      uploadBinding.capabilityId,
+      opaqueToken(upload.url),
+      new Request("https://api.invalid", {
+        method: "PUT",
+        headers: {
+          "content-type": uploadBinding.contentType,
+          "content-length": String(uploadBinding.sizeBytes),
+        },
+        body: new Uint8Array(uploadBinding.sizeBytes),
+      }),
+    );
+
+    vi.setSystemTime(clock + 2_000);
+    try {
+      await expect(gateway.verifyUploadCapability(uploadBinding)).resolves.toBe(false);
+      await expect(gateway.invalidateUploadCapability(uploadBinding)).rejects.toThrow(
+        /cannot be invalidated/u,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("accepts participant-scoped capabilities without a submission binding", async () => {

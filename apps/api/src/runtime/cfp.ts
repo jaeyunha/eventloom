@@ -557,6 +557,10 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     if (asset.state !== "pending_upload") {
       throw new CfpError("VALIDATION_FAILED", "The private upload asset is no longer available.");
     }
+    const expiration = Date.parse(capability.expiresAt);
+    if (!Number.isFinite(expiration) || expiration <= this.#now().getTime()) {
+      throw new CfpError("VALIDATION_FAILED", "The private upload capability has expired.");
+    }
     if (input.state === "ready") {
       const uploaded =
         this.#privateAssets?.inspectObject === undefined
@@ -621,17 +625,34 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
 }
 
 class LocalCfpIdempotency implements CfpIdempotencyCoordinator {
-  readonly #operations = new Map<string, Promise<unknown>>();
+  readonly #operations = new Map<string, { fingerprint: string; promise: Promise<unknown> }>();
 
-  run<T>(scope: string, idempotencyKey: string, operation: () => Promise<T>): Promise<T> {
+  run<T>(
+    scope: string,
+    idempotencyKey: string,
+    operation: () => Promise<T>,
+    fingerprint = `cfp:${scope}:${idempotencyKey}`,
+  ): Promise<T> {
     const storageKey = key(scope, idempotencyKey);
     const existing = this.#operations.get(storageKey);
-    if (existing !== undefined) return existing as Promise<T>;
+    if (existing !== undefined) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(
+          new CfpError(
+            "CONFLICT",
+            "The idempotency key was already used with a different request.",
+          ),
+        );
+      }
+      return existing.promise as Promise<T>;
+    }
     const pending = operation().catch((error) => {
-      this.#operations.delete(storageKey);
+      if (this.#operations.get(storageKey)?.promise === pending) {
+        this.#operations.delete(storageKey);
+      }
       throw error;
     });
-    this.#operations.set(storageKey, pending);
+    this.#operations.set(storageKey, { fingerprint, promise: pending });
     return pending;
   }
 }

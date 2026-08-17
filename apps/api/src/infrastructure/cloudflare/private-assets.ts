@@ -122,6 +122,11 @@ async function capabilityHash(token: string): Promise<string> {
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function capabilityExpired(expiresAt: string): boolean {
+  const expiration = Date.parse(expiresAt);
+  return !Number.isFinite(expiration) || expiration <= Date.now();
+}
+
 /** R2 private bytes are reachable only through database-backed opaque capabilities. */
 export class R2PrivateAssetGateway implements PrivateAssetGateway {
   readonly #bucket: R2Bucket;
@@ -438,6 +443,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       capability === null ||
       capability.kind !== "upload" ||
       row.state !== "uploaded" ||
+      capabilityExpired(capability.expiresAt) ||
       capability.tenantId !== binding.tenantId ||
       capability.eventId !== binding.eventId ||
       capability.submissionId !== binding.submissionId ||
@@ -459,6 +465,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       row === null ||
       capability === null ||
       capability.kind !== "upload" ||
+      capabilityExpired(capability.expiresAt) ||
       capability.tenantId !== binding.tenantId ||
       capability.eventId !== binding.eventId ||
       capability.submissionId !== binding.submissionId ||
@@ -478,9 +485,15 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       .prepare(
         `UPDATE private_uploads
             SET state = 'deleted', updated_at = ?
-          WHERE id = ? AND state IN ('pending', 'uploaded') AND scan_result_code = ?`,
+          WHERE id = ? AND state IN ('pending', 'uploaded') AND scan_result_code = ?
+            AND expires_at > ?`,
       )
-      .bind(new Date().toISOString(), binding.capabilityId, row.scan_result_code)
+      .bind(
+        new Date().toISOString(),
+        binding.capabilityId,
+        row.scan_result_code,
+        new Date().toISOString(),
+      )
       .run();
     if ((result.meta?.changes ?? 0) !== 1) {
       throw new Error("The upload capability cannot be invalidated.");
