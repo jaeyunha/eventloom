@@ -101,7 +101,18 @@ const organizerTaskCreateSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
-  reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
+  reminderOffsetsMinutes: z
+    .array(
+      z
+        .number()
+        .int()
+        .nonnegative()
+        .refine(Number.isSafeInteger)
+        .refine((value) => value % 60 === 0)
+        .refine((value) => value <= 365 * 24 * 60),
+    )
+    .max(24)
+    .optional(),
   assignments: z
     .array(
       z.object({
@@ -111,6 +122,30 @@ const organizerTaskCreateSchema = z.object({
     )
     .min(1),
 });
+
+const reminderOffsetSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .refine(Number.isSafeInteger, "Expected a safe integer.")
+  .refine((value) => value % 60 === 0, "Expected a whole-hour increment in minutes.")
+  .refine((value) => value <= 365 * 24 * 60, "Expected an offset within one year.");
+
+const organizerTaskReminderOffsetsSchema = z
+  .object({
+    expectedVersion: z.number().int().nonnegative().refine(Number.isSafeInteger),
+    reminderOffsetsMinutes: z.array(reminderOffsetSchema).max(24),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.reminderOffsetsMinutes).size !== value.reminderOffsetsMinutes.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["reminderOffsetsMinutes"],
+        message: "Reminder offsets must be unique.",
+      });
+    }
+  });
 
 const organizerTaskUpdateSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
@@ -123,7 +158,7 @@ const organizerTaskUpdateSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
-  reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
+  // Reminder offsets mutate only through the dedicated reminder-offsets command.
   status: z.enum(speakerTaskStatuses).optional(),
   expectedVersion: z.number().int().nonnegative(),
 });
@@ -434,9 +469,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data: task });
@@ -826,9 +858,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data: task });
@@ -1906,6 +1935,25 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
     });
     return context.json({ data }, 201);
   });
+  app.put("/:taskId/reminder-offsets", async (context) => {
+    const body = await parseBody(context, organizerTaskReminderOffsetsSchema);
+    if (!body) {
+      return context.json(
+        errorBody(context, "VALIDATION_ERROR", "The reminder schedule payload is invalid."),
+        400,
+      );
+    }
+    const data = await dependencies.service.updateOrganizerTaskReminderOffsets({
+      organizationId: requiredSpeakerParam(context, "organizationId"),
+      eventId: requiredSpeakerParam(context, "eventId"),
+      accountId: context.get("speakerAccountId"),
+      taskId: requiredSpeakerParam(context, "taskId"),
+      expectedVersion: body.expectedVersion,
+      reminderOffsetsMinutes: body.reminderOffsetsMinutes,
+    });
+    return context.json({ data });
+  });
+
   app.patch("/:taskId", async (context) => {
     const body = await parseBody(context, organizerTaskUpdateSchema);
     if (!body) {
@@ -1935,9 +1983,6 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data });

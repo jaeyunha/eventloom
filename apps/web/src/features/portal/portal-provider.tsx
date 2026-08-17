@@ -31,6 +31,8 @@ import {
   loadPortalStartup,
   messageFrom,
   normalizeCapabilities,
+  participantSafeGuideFailure,
+  type ParticipantSafeGuideFailure,
   type PortalPrefetchResult,
   portalContextResponseForTarget,
   portalViewAfterLoadFailure,
@@ -77,6 +79,11 @@ export interface PortalWorkspaceState {
   taskResponseHistories: Record<string, PortalTaskResponse[]>;
   resources: PortalResource[];
   wiki: PortalWikiPage[];
+}
+
+export interface PortalWorkspaceGuideErrors {
+  resources: ParticipantSafeGuideFailure | null;
+  wiki: ParticipantSafeGuideFailure | null;
 }
 
 const emptyWorkspace: PortalWorkspaceState = {
@@ -232,6 +239,7 @@ function portalScopeReducer(state: PortalScopeState, action: PortalScopeAction):
 
 type PortalWorkspaceReducerState = {
   workspace: PortalWorkspaceState;
+  guideErrors: PortalWorkspaceGuideErrors;
   loading: boolean;
   error: string | null;
 };
@@ -240,6 +248,7 @@ type PortalWorkspaceAction =
   | { type: "reset" }
   | { type: "loading-set"; loading: boolean }
   | { type: "error-set"; error: string | null }
+  | { type: "guide-errors-set"; guideErrors: PortalWorkspaceGuideErrors }
   | { type: "workspace-set"; workspace: PortalWorkspaceState }
   | { type: "roster-set"; submissionId: string; roster: PortalRosterEnvelope }
   | { type: "asset-added"; asset: PortalAsset }
@@ -256,7 +265,12 @@ type PortalWorkspaceAction =
     };
 
 function initialPortalWorkspaceState(): PortalWorkspaceReducerState {
-  return { workspace: emptyWorkspace, loading: false, error: null };
+  return {
+    workspace: emptyWorkspace,
+    guideErrors: emptyWorkspaceGuideErrors,
+    loading: false,
+    error: null,
+  };
 }
 
 function portalWorkspaceReducer(
@@ -270,6 +284,8 @@ function portalWorkspaceReducer(
       return { ...state, loading: action.loading };
     case "error-set":
       return { ...state, error: action.error };
+    case "guide-errors-set":
+      return { ...state, guideErrors: action.guideErrors };
     case "workspace-set":
       return { ...state, workspace: action.workspace };
     case "roster-set":
@@ -429,6 +445,11 @@ function portalAsyncReducer(state: PortalAsyncState, action: PortalAsyncAction):
 }
 const EMPTY_PARTICIPANT_ID_LIST: readonly string[] = [];
 
+const emptyWorkspaceGuideErrors: PortalWorkspaceGuideErrors = {
+  resources: null,
+  wiki: null,
+};
+
 interface PortalContextValue {
   eventId: string;
   /** The selected event query is a display/navigation hint, never an authority source. */
@@ -443,6 +464,7 @@ interface PortalContextValue {
   switchContext(contextId: string): Promise<boolean>;
   view: PortalView | null;
   workspace: PortalWorkspaceState;
+  workspaceGuideErrors: PortalWorkspaceGuideErrors;
   workspaceLoading: boolean;
   workspaceError: string | null;
   loading: boolean;
@@ -560,7 +582,12 @@ function usePortalProviderValue({
     view,
     profileRevision,
   } = scopeState;
-  const { workspace, loading: workspaceLoading, error: workspaceError } = workspaceState;
+  const {
+    workspace,
+    guideErrors: workspaceGuideErrors,
+    loading: workspaceLoading,
+    error: workspaceError,
+  } = workspaceState;
   const {
     loading,
     error,
@@ -594,6 +621,7 @@ function usePortalProviderValue({
       const generation = ++loadGeneration.current;
       workspaceDispatch({ type: "loading-set", loading: true });
       workspaceDispatch({ type: "error-set", error: null });
+      workspaceDispatch({ type: "guide-errors-set", guideErrors: emptyWorkspaceGuideErrors });
       workspaceDispatch({ type: "workspace-set", workspace: emptyWorkspace });
       try {
         const nextWorkspace: PortalWorkspaceState = {
@@ -607,17 +635,25 @@ function usePortalProviderValue({
           resources: [],
           wiki: [],
         };
+        const nextGuideErrors: PortalWorkspaceGuideErrors = {
+          resources: null,
+          wiki: null,
+        };
         const failures: unknown[] = [];
         const formTasks = nextView.tasks.filter(
           (task) => task.type === "form" && taskBelongsToPortalContext(task, target),
         );
 
-        const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
+        const safely = async <T,>(
+          operation: () => Promise<T>,
+          fallback: T,
+          onFailure: (error: unknown) => void = (error) => failures.push(error),
+        ): Promise<T> => {
           try {
             return await operation();
           } catch (operationError) {
             if (!isAbort(operationError)) {
-              failures.push(operationError);
+              onFailure(operationError);
             }
             return fallback;
           }
@@ -669,7 +705,16 @@ function usePortalProviderValue({
             ? Promise.resolve([...nextView.resources])
             : listResources !== undefined &&
                 hasPortalCapability(target.capabilities, "resource-read")
-              ? safely(() => listResources(target.eventId, signal), [] as PortalResource[])
+              ? safely(
+                  () => listResources(target.eventId, signal),
+                  [] as PortalResource[],
+                  (resourceError) => {
+                    nextGuideErrors.resources = participantSafeGuideFailure(
+                      resourceError,
+                      "resources",
+                    );
+                  },
+                )
               : Promise.resolve([] as PortalResource[]);
 
         const listWiki = api.listWiki;
@@ -677,7 +722,13 @@ function usePortalProviderValue({
           nextView.wiki !== undefined
             ? Promise.resolve([...nextView.wiki])
             : listWiki !== undefined && hasPortalCapability(target.capabilities, "resource-read")
-              ? safely(() => listWiki(target.eventId, signal), [] as PortalWikiPage[])
+              ? safely(
+                  () => listWiki(target.eventId, signal),
+                  [] as PortalWikiPage[],
+                  (wikiError) => {
+                    nextGuideErrors.wiki = participantSafeGuideFailure(wikiError, "wiki");
+                  },
+                )
               : Promise.resolve([] as PortalWikiPage[]);
 
         const taskLoad =
@@ -767,6 +818,7 @@ function usePortalProviderValue({
           return;
         }
         workspaceDispatch({ type: "workspace-set", workspace: nextWorkspace });
+        workspaceDispatch({ type: "guide-errors-set", guideErrors: nextGuideErrors });
         if (failures.length > 0) {
           workspaceDispatch({ type: "error-set", error: messageFrom(failures[0]) });
         }
@@ -2216,6 +2268,7 @@ function usePortalProviderValue({
       switchContext,
       view,
       workspace,
+      workspaceGuideErrors,
       workspaceLoading,
       workspaceError,
       loading,
@@ -2289,6 +2342,7 @@ function usePortalProviderValue({
       uploadWorkspaceFile,
       view,
       workspace,
+      workspaceGuideErrors,
       workspaceError,
       workspaceLoading,
     ],

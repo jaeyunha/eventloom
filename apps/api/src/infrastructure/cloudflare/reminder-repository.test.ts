@@ -9,6 +9,7 @@ import {
 import { CloudflareReminderOutbox } from "./reminder-repository";
 
 class ReminderOutboxD1 {
+  insertedRows = 0;
   row:
     | {
         id: string;
@@ -23,6 +24,18 @@ class ReminderOutboxD1 {
   prepare(query: string) {
     return {
       bind: (...values: unknown[]) => {
+        if (query.includes("json_extract(payload_json, '$.effect')")) {
+          return {
+            all: async () => {
+              if (this.row?.state !== "pending") return { results: [] };
+              const eventId = values[1];
+              const payload = JSON.parse(this.row.payloadJson) as { eventId?: unknown };
+              return eventId === null || payload.eventId === eventId
+                ? { results: [{ id: this.row.id }] }
+                : { results: [] };
+            },
+          };
+        }
         if (query.includes("INSERT INTO outbox_jobs")) {
           return {
             run: async () => {
@@ -34,6 +47,7 @@ class ReminderOutboxD1 {
                 string,
               ];
               if (this.row === undefined) {
+                this.insertedRows += 1;
                 this.row = {
                   id,
                   tenantId,
@@ -80,6 +94,101 @@ function deliveryMessage(body: CloudflareOutboxMessage): OutboxQueueMessage & { 
 }
 
 describe("Cloudflare reminder outbox", () => {
+  it("retries a pending immutable reminder row after a queue-send fault", async () => {
+    const database = new ReminderOutboxD1();
+    const successfulWakeups: CloudflareOutboxMessage[] = [];
+    let queueCalls = 0;
+    const outbox = new CloudflareReminderOutbox(
+      database as unknown as D1Database,
+      {
+        async send(message: CloudflareOutboxMessage) {
+          queueCalls += 1;
+          if (queueCalls === 1) throw new Error("queue unavailable");
+          successfulWakeups.push(message);
+        },
+      } as unknown as Queue<CloudflareOutboxMessage>,
+    );
+    const input = {
+      dispatchId: "dispatch-fault",
+      runId: "run-1",
+      organizationId: "org-1",
+      eventId: "event-1",
+      recipient: "recipient@example.com",
+      from: "speakers@sessionboard.namuh.co" as const,
+      senderPurpose: "speakers" as const,
+      subject: "Original reminder",
+      html: "<p>Original reminder</p>",
+      text: "Original reminder",
+      idempotencyKey: "reminder-fault-1",
+    };
+
+    await expect(outbox.enqueue(input)).rejects.toThrow("queue unavailable");
+    const originalPayload = database.row?.payloadJson;
+    expect(database.row?.state).toBe("pending");
+
+    await expect(
+      outbox.enqueue({
+        ...input,
+        subject: "Changed reminder",
+        html: "<p>Changed reminder</p>",
+        text: "Changed reminder",
+      }),
+    ).resolves.toEqual({ outboxJobId: "reminder-outbox:dispatch-fault" });
+
+    expect(database.insertedRows).toBe(1);
+    expect(database.row?.payloadJson).toBe(originalPayload);
+    expect(database.row?.state).toBe("queued");
+    expect(successfulWakeups).toHaveLength(1);
+  });
+
+  it("requeues pending reminder rows without candidate rediscovery", async () => {
+    const database = new ReminderOutboxD1();
+    const queued: CloudflareOutboxMessage[] = [];
+    let fail = true;
+    const outbox = new CloudflareReminderOutbox(
+      database as unknown as D1Database,
+      {
+        async send(message: CloudflareOutboxMessage) {
+          if (fail) throw new Error("queue unavailable");
+          queued.push(message);
+        },
+      } as unknown as Queue<CloudflareOutboxMessage>,
+    );
+    const input = {
+      dispatchId: "dispatch-pending",
+      runId: "run-original",
+      organizationId: "org-1",
+      eventId: "event-1",
+      recipient: "recipient@example.com",
+      from: "speakers@sessionboard.namuh.co" as const,
+      senderPurpose: "speakers" as const,
+      subject: "Reminder",
+      html: "<p>Reminder</p>",
+      text: "Reminder",
+      idempotencyKey: "reminder-pending-1",
+    };
+    await expect(outbox.enqueue(input)).rejects.toThrow("queue unavailable");
+    fail = false;
+
+    await expect(
+      outbox.requeuePending({ organizationId: "org-1", eventId: "other-event" }),
+    ).resolves.toEqual({ requeued: 0 });
+    await expect(
+      outbox.requeuePending({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toEqual({ requeued: 1 });
+    await expect(
+      outbox.requeuePending({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toEqual({ requeued: 0 });
+
+    expect(database.row?.state).toBe("queued");
+    expect(queued).toEqual([
+      expect.objectContaining({
+        jobId: "reminder-outbox:dispatch-pending",
+        tenantId: "org-1",
+      }),
+    ]);
+  });
+
   it("persists the reminder purpose and rotates only the delivery envelope sender", async () => {
     const oldSender = "program@legacy.example";
     const database = new ReminderOutboxD1();

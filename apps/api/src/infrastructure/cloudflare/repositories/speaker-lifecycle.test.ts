@@ -1303,6 +1303,139 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     }
   }, 120_000);
 
+  it("durably replaces reminder offsets and records the winning organizer audit", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const firstPhase = fixture.createPhase();
+    const admitted = await firstPhase.service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Reminder Speaker",
+      email: "reminder-speaker@example.test",
+      jobTitle: "Engineer",
+      company: "Example",
+      biography: "Reminder lifecycle speaker.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "reminder-offset-speaker",
+    });
+    const participantId = admitted.speakers[0]?.participantId;
+    if (participantId === undefined) throw new Error("Expected an admitted speaker.");
+    const [created] = await firstPhase.service.createOrganizerTask({
+      eventId,
+      accountId: organizerAccountId,
+      type: "upload",
+      title: "Upload reminder deck",
+      dueAt: "2099-09-01",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 1_000_000,
+      acceptedAssetKinds: ["slides"],
+      reminderOffsetsMinutes: [60],
+      assignments: [{ participantId, submissionId: null }],
+    });
+    if (created === undefined) throw new Error("Expected a reminder task.");
+
+    await expect(
+      firstPhase.service.updateOrganizerTaskReminderOffsets({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        taskId: created.id,
+        expectedVersion: created.version,
+        reminderOffsetsMinutes: [10_080, 0, 1_440],
+      }),
+    ).resolves.toMatchObject({
+      reminderOffsetsMinutes: [0, 1_440, 10_080],
+      version: 2,
+    });
+
+    const restarted = fixture.createPhase();
+    await expect(restarted.repository.getTask(eventId, created.id)).resolves.toMatchObject({
+      reminderOffsetsMinutes: [0, 1_440, 10_080],
+      version: 2,
+    });
+    expect(
+      fixture.database.query<{ actor_id: string; action: string; details_json: string }>(
+        `SELECT actor_id, action, details_json FROM audit_events WHERE resource_type = 'speaker_task' AND resource_id = ${sqlString(created.id)}`,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        actor_id: organizerAccountId,
+        action: "speaker_task.reminder_offsets_updated",
+        details_json: expect.stringContaining('"reminderOffsetsMinutes":[0,1440,10080]'),
+      }),
+    ]);
+  });
+
+  it("leaves task offsets and audit unchanged when a stale D1 CAS loses", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const { service } = fixture.createPhase();
+    const admitted = await service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Task CAS Speaker",
+      email: "task-cas@example.test",
+      jobTitle: "Engineer",
+      company: "Example",
+      biography: "Task CAS lifecycle speaker.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "task-cas-speaker",
+    });
+    const participantId = admitted.speakers[0]?.participantId;
+    if (participantId === undefined) throw new Error("Expected a task CAS speaker.");
+    const [created] = await service.createOrganizerTask({
+      eventId,
+      accountId: organizerAccountId,
+      type: "upload",
+      title: "Upload CAS deck",
+      dueAt: "2099-09-01",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 1_000_000,
+      acceptedAssetKinds: ["slides"],
+      reminderOffsetsMinutes: [60],
+      assignments: [{ participantId, submissionId: null }],
+    });
+    if (created === undefined) throw new Error("Expected a task CAS fixture.");
+
+    fixture.database.beforeNextBatch(() => {
+      fixture.database.run(
+        `UPDATE speaker_tasks
+            SET version = version + 1, updated_at = '2099-08-15T04:30:00.000Z'
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND id = '${created.id}' AND version = ${created.version}`,
+      );
+    });
+    await expect(
+      service.updateOrganizerTaskReminderOffsets({
+        organizationId,
+        eventId,
+        accountId: organizerAccountId,
+        taskId: created.id,
+        expectedVersion: created.version,
+        reminderOffsetsMinutes: [0, 1_440],
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT", status: 409 });
+
+    expect(
+      fixture.database.query<{ offset_minutes: number }>(
+        `SELECT offset_minutes FROM speaker_task_reminder_offsets
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND task_id = '${created.id}' ORDER BY offset_minutes`,
+      ),
+    ).toEqual([{ offset_minutes: 60 }]);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM audit_events
+          WHERE resource_type = 'speaker_task' AND resource_id = '${created.id}'
+            AND action = 'speaker_task.reminder_offsets_updated'`,
+      )[0]?.count,
+    ).toBe(0);
+  });
+
   it("roundtrips immutable file pointers, cross-role comments, approval, and ZIP export", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);
