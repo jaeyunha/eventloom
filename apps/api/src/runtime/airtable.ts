@@ -3112,6 +3112,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       task,
       expectedVersion: null,
       actorAccountId: input.decidedBy,
+      ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
     });
     if (!created.ok) throw new Error("The accepted speaker profile task was not persisted.");
   }
@@ -3313,6 +3314,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
           invitedByActorType: "user",
           invitedByActorId: input.decidedBy,
           invitedAt: input.decidedAt,
+          ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
         });
       }),
     );

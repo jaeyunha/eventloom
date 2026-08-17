@@ -1168,21 +1168,49 @@ export class D1SpeakerRepository
       : { firstName: normalized.slice(0, split), lastName: normalized.slice(split + 1).trim() };
   }
 
-  #communicationRecipientStatements(input: {
-    organizationId: string;
-    eventId: string;
-    participantId: string;
-    displayName: string;
-    email: string;
-    updatedAt: string;
-  }): D1PreparedStatement[] {
+  #communicationRecipientStatements(
+    input: {
+      organizationId: string;
+      eventId: string;
+      participantId: string;
+      displayName: string;
+      email: string;
+      updatedAt: string;
+    },
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): D1PreparedStatement[] {
     const firstName = this.#participantNames(input.displayName).firstName;
+    const decisionGuard =
+      decisionFence === undefined
+        ? { sql: "", values: [] as readonly unknown[] }
+        : {
+            sql: ` WHERE EXISTS (
+              SELECT 1
+              FROM evaluation_decisions
+              WHERE organization_id = ?
+                AND event_id = ?
+                AND plan_id = ?
+                AND submission_id = ?
+                AND version = ?
+                AND status = ?
+            )`,
+            values: [
+              decisionFence.tenantId,
+              decisionFence.eventId,
+              decisionFence.planId,
+              decisionFence.submissionId,
+              decisionFence.version,
+              decisionFence.status,
+            ],
+          };
     return [
       this.#db
         .prepare(
           `INSERT INTO communication_recipients
              (id,organization_id,event_id,participant_id,email,display_name,data_json,updated_at)
-           VALUES (?,?,?,?,?,?,?,?)
+           ${
+             decisionFence === undefined ? "VALUES (?,?,?,?,?,?,?,?)" : "SELECT ?,?,?,?,?,?,?,? "
+}${decisionGuard.sql}
            ON CONFLICT(id) DO UPDATE SET
              organization_id=excluded.organization_id,
              event_id=excluded.event_id,
@@ -1201,15 +1229,24 @@ export class D1SpeakerRepository
           input.displayName,
           json({ first_name: firstName, display_name: input.displayName, email: input.email }),
           input.updatedAt,
+          ...decisionGuard.values,
         ),
       this.#db
         .prepare(
           `INSERT INTO communication_recipient_audiences
              (organization_id,event_id,recipient_id,audience)
-           VALUES (?,?,?,'all_participants')
+           ${
+             decisionFence === undefined ? "VALUES (?,?,?,'all_participants')" : "SELECT ?,?,?,? "
+}${decisionGuard.sql}
            ON CONFLICT(organization_id,event_id,recipient_id,audience) DO NOTHING`,
         )
-        .bind(input.organizationId, input.eventId, input.participantId),
+        .bind(
+          input.organizationId,
+          input.eventId,
+          input.participantId,
+          ...(decisionFence === undefined ? [] : ["all_participants"]),
+          ...decisionGuard.values,
+        ),
     ];
   }
 
@@ -1462,14 +1499,17 @@ export class D1SpeakerRepository
         if (result?.meta.changes !== 1) return { ok: false, reason: "version_conflict" };
         if (email.length !== 0) {
           await this.#db.batch(
-            this.#communicationRecipientStatements({
-              organizationId: scope.organizationId,
-              eventId: profile.eventId,
-              participantId: profile.participantId,
-              displayName: profile.displayName,
-              email,
-              updatedAt: profile.updatedAt,
-            }),
+            this.#communicationRecipientStatements(
+              {
+                organizationId: scope.organizationId,
+                eventId: profile.eventId,
+                participantId: profile.participantId,
+                displayName: profile.displayName,
+                email,
+                updatedAt: profile.updatedAt,
+              },
+              decisionFence,
+            ),
           );
         }
       }
@@ -2190,7 +2230,21 @@ export class D1SpeakerRepository
         this.#db
           .prepare(
             `INSERT INTO speaker_tasks (id, organization_id, event_id, submission_id, participant_id, type, owner, title, description, instructions, status, due_at, allowed_mime_types_json, max_bytes, accepted_asset_kinds_json, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ${
+           command.decisionFence === undefined
+             ? "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             : `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                  SELECT 1
+                  FROM evaluation_decisions
+                  WHERE organization_id = ?
+                    AND event_id = ?
+                    AND plan_id = ?
+                    AND submission_id = ?
+                    AND version = ?
+                    AND status = ?
+                )`
+}`,
           )
           .bind(
             task.id,
@@ -2211,6 +2265,16 @@ export class D1SpeakerRepository
             task.version,
             task.updatedAt,
             task.updatedAt,
+            ...(command.decisionFence === undefined
+              ? []
+              : [
+                  command.decisionFence.tenantId,
+                  command.decisionFence.eventId,
+                  command.decisionFence.planId,
+                  command.decisionFence.submissionId,
+                  command.decisionFence.version,
+                  command.decisionFence.status,
+                ]),
           ),
       );
     } else {

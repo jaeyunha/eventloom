@@ -577,6 +577,7 @@ export interface SpeakerTaskRepositoryCommand {
   expectedVersion: number | null;
   actorAccountId: string;
   audit?: SpeakerTaskRepositoryAudit;
+  decisionFence?: SpeakerDecisionWriteFence;
 }
 
 export type SpeakerDeliverableStatus = SpeakerTaskStatus | "pending" | "uploaded";

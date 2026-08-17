@@ -2941,6 +2941,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       if (!(await isCurrentDecision())) return;
       await Promise.all(
         material.participants.map(async (participant) => {
+          if (!(await isCurrentDecision())) return;
           const email = participant.email.trim().toLowerCase();
           const recipients = personas.filter(
             (persona) => persona.email.trim().toLowerCase() === email,
@@ -2948,6 +2949,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           if (email.length === 0 || recipients.length !== 1) return;
           const recipient = recipients[0];
           if (recipient === undefined) return;
+          if (!(await isCurrentDecision())) return;
           const existing = (
             await eventInvitationRepository.listForVerifiedAccount(recipient.userId, email)
           ).find(
@@ -2966,6 +2968,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             }
             return;
           }
+          if (!(await isCurrentDecision())) return;
           await eventRoleInvitationAdapters.speakerCreator.create({
             id: `local-speaker-invitation:${input.eventId}:${participant.id}`,
             organizationId: input.tenantId,

@@ -139,7 +139,7 @@ export class D1EventRoleInvitationRepository implements EventRoleInvitationRepos
       );
     }
     try {
-      await this.database
+      const statement = this.database
         .prepare(
           `INSERT INTO event_role_invitations
             (id, organization_id, event_id, role, recipient_user_id, normalized_email,
@@ -147,8 +147,22 @@ export class D1EventRoleInvitationRepository implements EventRoleInvitationRepos
              invited_by_actor_id, invited_at, accepted_by_user_id, accepted_at,
              declined_by_user_id, declined_at, revoked_by_actor_type, revoked_by_actor_id,
              revoked_at, version, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, NULL, NULL, NULL,
-                   NULL, NULL, NULL, 1, ?)`,
+           ${
+             input.decisionFence === undefined
+               ? "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, ?)"
+               : `SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, NULL, NULL, NULL,
+                         NULL, NULL, NULL, 1, ?
+                  WHERE EXISTS (
+                    SELECT 1
+                    FROM evaluation_decisions
+                    WHERE organization_id = ?
+                      AND event_id = ?
+                      AND plan_id = ?
+                      AND submission_id = ?
+                      AND version = ?
+                      AND status = ?
+                  )`
+}`,
         )
         .bind(
           input.id,
@@ -163,8 +177,21 @@ export class D1EventRoleInvitationRepository implements EventRoleInvitationRepos
           input.invitedByActorId ?? null,
           input.invitedAt,
           input.invitedAt,
-        )
-        .run();
+          ...(input.decisionFence === undefined
+            ? []
+            : [
+                input.decisionFence.tenantId,
+                input.decisionFence.eventId,
+                input.decisionFence.planId,
+                input.decisionFence.submissionId,
+                input.decisionFence.version,
+                input.decisionFence.status,
+              ]),
+        );
+      const result = await statement.run();
+      if (input.decisionFence !== undefined && result.meta.changes !== 1) {
+        throw new EventRoleInvitationRepositoryConflictError("The decision is no longer current.");
+      }
     } catch (error) {
       const concurrent = await this.findByCreationKey(
         input.organizationId,
