@@ -210,6 +210,31 @@ describe("Cloudflare outbox consumer", () => {
     expect(repository.get("job-1")?.state).toBe("failed");
   });
 
+  it("fails closed for legacy decision communication without fence metadata", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          from: "auth@sessionboard.namuh.co",
+          to: ["recipient@example.com"],
+          subject: "Decision",
+          html: "<p>Decision</p>",
+          text: "Decision",
+          idempotencyKey: "idem-job-1",
+          purpose: "decision",
+          status: "accepted",
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("failed");
+  });
+
   it("retries a live lease at its expiry instead of exhausting Queue retries", async () => {
     const leaseExpiresAt = new Date(NOW.getTime() + 5 * 60_000);
     const repository = new InMemoryOutboxJobRepository([
