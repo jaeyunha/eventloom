@@ -4916,13 +4916,13 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       edited.suggestion.id,
       {
         action: "accept",
-        scores: { relevance: 7 },
+        scores: { relevance: 8 },
         expectedVersion: edited.suggestion.version,
       },
     );
     expect(acceptedAfterPartial.suggestion.status).toBe("accepted");
     expect(acceptedAfterPartial.review?.scores.quality?.value).toBe(5);
-    expect(acceptedAfterPartial.review?.scores.relevance?.value).toBe(7);
+    expect(acceptedAfterPartial.review?.scores.relevance?.value).toBe(8);
     const resolved = await service.resolveAiSuggestion(reviewer("reviewer-1"), suggestion.id, {
       action: "accept",
       expectedVersion: suggestion.version,

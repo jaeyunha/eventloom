@@ -3055,6 +3055,13 @@ export class EvaluationService {
             ? normalizeDropdownValue(criterion, inputValue)
             : inputValue;
         const candidate = suggestion.candidates[criterionId]?.[0];
+        if (
+          action === "accept" &&
+          scopedValues !== undefined &&
+          (candidate === undefined || candidate.value !== inputValue)
+        ) {
+          throw invalidInput("An accepted score must match the suggested candidate.");
+        }
         scores[criterionId] = {
           criterionId,
           value,
@@ -3139,7 +3146,8 @@ export class EvaluationService {
     };
     const editedCriterionIds = new Set(
       suggestion.history.flatMap((entry) =>
-        entry.action === "edit" && entry.valueByCriterion !== undefined
+        (entry.action === "edit" || entry.action === "accept") &&
+        entry.valueByCriterion !== undefined
           ? Object.keys(entry.valueByCriterion)
           : [],
       ),

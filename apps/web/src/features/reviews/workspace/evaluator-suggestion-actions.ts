@@ -82,10 +82,14 @@ export function useEvaluatorSuggestionActions(scope: EvaluatorAutosaveController
           body: JSON.stringify({
             action,
             expectedVersion: suggestion.version,
-            ...(action === "edit" && criterionId !== undefined && value !== undefined
+            ...((action === "edit" || action === "accept") &&
+            criterionId !== undefined &&
+            value !== undefined
               ? {
                   scores: { [criterionId]: value },
-                  reason: "Edited by the assigned human evaluator.",
+                  ...(action === "edit"
+                    ? { reason: "Edited by the assigned human evaluator." }
+                    : {}),
                 }
               : {}),
             ...(action === "reject" ? { reason: "Rejected by the assigned human evaluator." } : {}),
