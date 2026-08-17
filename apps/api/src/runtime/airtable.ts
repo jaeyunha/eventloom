@@ -180,6 +180,7 @@ import type {
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
   SpeakerReminderDeliveryReceipt,
+  SpeakerReminderTask,
   SpeakerRepository,
   SpeakerTask,
   UpdateBiographyCommand,
@@ -6702,6 +6703,12 @@ async function speakerDeliveryKey(
   );
 }
 
+function reminderTaskSummary(task: SpeakerReminderTask): string {
+  const title = task.title.trim();
+  const dueAt = task.dueAt?.trim() ?? "";
+  return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
+}
+
 export class CloudflareSpeakerDeliveryAdapter
   implements SpeakerReminderDelivery, SpeakerEmailDelivery
 {
@@ -6822,7 +6829,10 @@ export class CloudflareSpeakerDeliveryAdapter
     input: SpeakerReminderDeliveryInput,
   ): Promise<SpeakerReminderDeliveryReceipt> {
     const recipientEmail = await this.verifiedRecipientEmail(input.recipient.email);
-    if (recipientEmail === null) return { queued: false, duplicate: true };
+    if (recipientEmail === null) return { status: "failed", queued: false, duplicate: false };
+    if (await this.matchesScheduledReminder(input, recipientEmail)) {
+      return { queued: false, duplicate: true };
+    }
     const deliveryKey = await speakerDeliveryKey(
       "reminder",
       input.organizationId,
@@ -6831,12 +6841,7 @@ export class CloudflareSpeakerDeliveryAdapter
       input.recipient.participantId,
     );
     const taskSummaries = input.recipient.tasks
-      .map((task) => {
-        const title = task.title.trim();
-        if (title.length === 0) return "";
-        const dueAt = task.dueAt?.trim() ?? "";
-        return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
-      })
+      .map(reminderTaskSummary)
       .filter((summary) => summary.length > 0);
     const taskSummary =
       taskSummaries.length === 0 ? "your outstanding speaker tasks" : taskSummaries.join(", ");
@@ -6865,6 +6870,58 @@ export class CloudflareSpeakerDeliveryAdapter
       queued: result.queued,
       duplicate: !result.inserted,
     };
+  }
+
+  private async matchesScheduledReminder(
+    input: SpeakerReminderDeliveryInput,
+    recipientEmail: string,
+  ): Promise<boolean> {
+    const task = input.recipient.tasks.length === 1 ? input.recipient.tasks[0] : undefined;
+    const cadenceWindow = task?.cadenceWindow?.trim() ?? "";
+    if (task === undefined || cadenceWindow.length === 0) return false;
+    const deduplicationKey = [
+      "reminder",
+      input.organizationId,
+      input.eventId,
+      "scheduled",
+      `task:${task.taskId}`,
+      task.participantId,
+      cadenceWindow,
+    ].join(":");
+    const row = await this.database
+      .prepare(
+        "SELECT state, payload_json FROM outbox_jobs WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ? LIMIT 1",
+      )
+      .bind(input.organizationId, deduplicationKey)
+      .first<{ state?: unknown; payload_json?: unknown }>();
+    if (row === null || row === undefined) return false;
+    const state = typeof row.state === "string" ? row.state : "";
+    if (!["pending", "queued", "processing", "delivered"].includes(state)) return false;
+    if (typeof row.payload_json !== "string") return false;
+    try {
+      const parsed: unknown = JSON.parse(row.payload_json);
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        !("payload" in parsed) ||
+        parsed.payload === null ||
+        typeof parsed.payload !== "object"
+      ) {
+        return false;
+      }
+      const payload = parsed.payload as Record<string, unknown>;
+      const summary = reminderTaskSummary(task);
+      const recipients = payload.to;
+      return (
+        payload.subject === `Reminder: ${summary}` &&
+        payload.text === `Please complete ${summary}.` &&
+        Array.isArray(recipients) &&
+        recipients.length === 1 &&
+        recipients[0] === recipientEmail
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async verifiedRecipientEmail(candidate: string | undefined): Promise<string | null> {
