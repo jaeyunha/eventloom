@@ -3377,7 +3377,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 10 },
-      rounds: [],
+      rounds: [{ id: roundId, sequence: 1, opensAt: now, closesAt: null }],
       version: 4,
       createdAt: now,
       updatedAt: now,
@@ -3567,7 +3567,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 20, maxAssignmentsPerReviewer: 20 },
-      rounds: [],
+      rounds: [{ id: roundId, sequence: 1, opensAt: now, closesAt: null }],
       version: 3,
       createdAt: now,
       updatedAt: now,
@@ -3778,6 +3778,28 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const now = "2026-08-10T12:00:00.000Z";
     const later = "2026-08-10T12:10:00.000Z";
     const transport = new FormulaRecordingTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      recordId: "rec00000000000300",
+      fields: {
+        "Application ID": planId,
+        "Rounds JSON": JSON.stringify({
+          id: planId,
+          tenantId,
+          eventId,
+          name: "Suggestion plan",
+          status: "open",
+          blindReview: false,
+          closesAt: null,
+          assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 10 },
+          rounds: [{ id: roundId, sequence: 1, opensAt: now, closesAt: null }],
+          version: 4,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      },
+    });
     const assignment = {
       id: assignmentId,
       tenantId,
@@ -3846,115 +3868,10 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       transport,
     });
 
-    await repository.putSuggestion(suggestion, null);
-    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(suggestion);
-    await expect(repository.getSuggestion("tenant-other", suggestion.id)).resolves.toBeNull();
-    await expect(repository.listSuggestions(tenantId, planId)).resolves.toEqual([suggestion]);
-
-    const resolvedSuggestion = {
-      ...suggestion,
-      status: "accepted" as const,
-      version: 2,
-      history: [
-        ...suggestion.history,
-        { action: "accept" as const, actorId: reviewerId, at: later },
-      ],
-      audit: [...suggestion.audit, { action: "accept" as const, actorId: reviewerId, at: later }],
-      updatedAt: later,
-    };
-    const resolvedAssignment = {
-      ...assignment,
-      status: "in_progress" as const,
-      version: 2,
-      updatedAt: later,
-    };
-    const review = {
-      id: `review:${assignmentId}`,
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      assignmentId,
-      submissionId,
-      reviewerId,
-      scores: {
-        quality: {
-          criterionId: "quality",
-          value: 4,
-          origin: "ai" as const,
-          evidence: candidate.evidence,
-          humanConfirmedBy: reviewerId,
-          suggestionId: suggestion.id,
-          suggestionStatus: "accepted" as const,
-          rubricRevision: 7,
-          submissionRevision: 2,
-          updatedAt: later,
-        },
-      },
-      comment: "",
-      submittedAt: null,
-      version: 1,
-      planRevision: 4,
-      rubricRevision: 7,
-      roundRevision: 3,
-      submissionRevision: 2,
-      createdAt: later,
-      updatedAt: later,
-    };
-
-    await expect(
-      repository.resolveSuggestion(
-        resolvedSuggestion,
-        suggestion.version,
-        resolvedAssignment,
-        assignment.version,
-        review,
-        null,
-        {
-          assignment: resolvedAssignment,
-          expectedAssignmentVersion: assignment.version,
-          authorizedAt: later,
-        },
-      ),
-    ).resolves.toEqual({ suggestion: resolvedSuggestion, review });
-    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(
-      resolvedSuggestion,
+    await expect(repository.putSuggestion(suggestion, null)).rejects.toThrow(
+      "Evaluation review writes require the authoritative D1 runtime.",
     );
-    await expect(repository.getAssignment(tenantId, assignmentId)).resolves.toEqual(
-      resolvedAssignment,
-    );
-    await expect(repository.getReview(tenantId, assignmentId)).resolves.toEqual(review);
-
-    await expect(
-      repository.resolveSuggestion(
-        resolvedSuggestion,
-        suggestion.version,
-        resolvedAssignment,
-        assignment.version,
-        review,
-        null,
-        {
-          assignment: resolvedAssignment,
-          expectedAssignmentVersion: assignment.version,
-          authorizedAt: later,
-        },
-      ),
-    ).rejects.toThrow("Suggestion changed since it was loaded");
-    await expect(
-      repository.putSuggestion(
-        { ...resolvedSuggestion, eventId: "event-other", version: 3 },
-        resolvedSuggestion.version,
-      ),
-    ).rejects.toThrow("Suggestion changed since it was loaded");
-    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
-    const resolutionMutation = transport.requests.find(
-      (request) =>
-        request.method === "PATCH" &&
-        request.recordId === undefined &&
-        (request.body as { readonly records?: readonly unknown[] } | undefined)?.records?.length ===
-          3,
-    );
-    expect(resolutionMutation).toBeDefined();
+    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toBeNull();
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();

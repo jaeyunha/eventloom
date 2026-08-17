@@ -63,6 +63,7 @@ import type {
   SpeakerReminderRecord,
   SpeakerReminderTask,
   SpeakerRepository,
+  SpeakerTaskRepositoryAudit,
   SpeakerRosterEntry,
   SpeakerRosterEnvelope,
   SpeakerRosterMember,
@@ -2639,7 +2640,10 @@ export class SpeakerService {
     return this.updateOrganizerTask(input);
   }
 
-  async updateOrganizerTask(input: SpeakerTaskUpdateInput): Promise<SpeakerTask> {
+  async updateOrganizerTask(
+    input: SpeakerTaskUpdateInput,
+    audit?: SpeakerTaskRepositoryAudit,
+  ): Promise<SpeakerTask> {
     const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
     assertExpectedVersion(input.expectedVersion);
     const current = await this.repository.getTask(input.eventId, input.taskId);
@@ -2756,6 +2760,7 @@ export class SpeakerService {
       task: updated,
       expectedVersion: input.expectedVersion,
       actorAccountId: input.accountId,
+      ...(audit === undefined ? {} : { audit }),
     });
     if (!result.ok) {
       if (result.reason === "version_conflict" || result.reason === "invalid_state") {
@@ -2820,13 +2825,20 @@ export class SpeakerService {
         "Reminder schedules can be changed only for incomplete speaker upload tasks with a due date.",
       );
     }
-    const updated = await this.updateOrganizerTask({
-      eventId: input.eventId,
-      accountId: input.accountId,
-      taskId: input.taskId,
-      expectedVersion: input.expectedVersion,
-      reminderOffsetsMinutes,
-    });
+    const updated = await this.updateOrganizerTask(
+      {
+        eventId: input.eventId,
+        accountId: input.accountId,
+        taskId: input.taskId,
+        expectedVersion: input.expectedVersion,
+        reminderOffsetsMinutes,
+      },
+      {
+        id: `audit:speaker-task-reminder-offsets:${input.taskId}:${input.expectedVersion + 1}`,
+        action: "speaker_task.reminder_offsets_updated",
+        previousReminderOffsetsMinutes: [...current.reminderOffsetsMinutes],
+      },
+    );
     return {
       organizationId: input.organizationId,
       eventId: input.eventId,
