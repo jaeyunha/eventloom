@@ -121,6 +121,33 @@ const evaluationInput: EvaluationSuggestionProviderInput = {
   },
 };
 
+const dropdownEvaluationInput: EvaluationSuggestionProviderInput = {
+  ...evaluationInput,
+  round: {
+    ...evaluationInput.round,
+    rubric: {
+      ...evaluationInput.round.rubric,
+      criteria: [
+        {
+          id: "criterion-3",
+          label: "Recommendation",
+          description: "What is the overall recommendation?",
+          minimum: 1,
+          maximum: 5,
+          weight: 1,
+          required: true,
+          inputType: "dropdown",
+          options: [
+            { label: "Reject", value: "reject" },
+            { label: "Maybe", value: "maybe" },
+            { label: "Accept", value: "accept" },
+          ],
+        },
+      ],
+    },
+  },
+};
+
 const remixInput: RemixProviderInput = {
   tenantId: "tenant-1",
   eventId: "event-1",
@@ -397,14 +424,19 @@ describe("Cloudflare Workers AI advisory providers", () => {
             minItems: 1,
             maxItems: 1,
             items: {
-              properties: {
-                criterionId: { enum: ["quality"] },
-                evidence: {
-                  minItems: 1,
-                  maxItems: 3,
-                  items: { type: "string", minLength: 1, maxLength: 2_000 },
+              anyOf: [
+                {
+                  properties: {
+                    criterionId: { const: "quality" },
+                    value: { type: "number", minimum: 1, maximum: 5 },
+                    evidence: {
+                      minItems: 1,
+                      maxItems: 3,
+                      items: { type: "string", minLength: 1, maxLength: 2_000 },
+                    },
+                  },
                 },
-              },
+              ],
             },
           },
         },
@@ -424,6 +456,100 @@ describe("Cloudflare Workers AI advisory providers", () => {
     expect(prompt).not.toContain("Accessible design");
     expect(prompt).not.toContain("private@example.test");
     expect(prompt).not.toContain("Private biography");
+  });
+
+  it("rejects dropdown candidates outside the configured options", async () => {
+    const ai = new FakeAi();
+    ai.enqueue(
+      json({
+        candidates: [
+          {
+            criterionId: "criterion-3",
+            value: 5,
+            evidence: [
+              "The abstract gives a concrete implementation plan and measurable audience outcome.",
+            ],
+          },
+        ],
+      }),
+    );
+    const providers = createCloudflareAiProviders(ai, { model: "deterministic-stub" });
+
+    await expect(providers.evaluations.generate(dropdownEvaluationInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+    expect(ai.calls[0]?.inputs.response_format).toMatchObject({
+      schema: {
+        properties: {
+          candidates: {
+            items: {
+              anyOf: [
+                {
+                  properties: {
+                    criterionId: { const: "criterion-3" },
+                    value: { type: "number", enum: [1, 2, 3] },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(promptOf(ai)).toContain(
+      '"options":[{"label":"Reject","value":"reject","score":1},{"label":"Maybe","value":"maybe","score":2},{"label":"Accept","value":"accept","score":3}]',
+    );
+  });
+
+  it("parses a valid dropdown candidate through the OpenAI Responses binding", async () => {
+    const writtenEvidence =
+      "The abstract gives a concrete implementation plan and measurable audience outcome.";
+    const binding = createOpenAiResponsesBinding({
+      apiKey: "test-secret-never-print",
+      fetch: async () =>
+        Response.json({
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    candidates: [
+                      {
+                        criterionId: "criterion-3",
+                        value: 3,
+                        evidence: [writtenEvidence],
+                      },
+                    ],
+                  }),
+                },
+              ],
+            },
+          ],
+        }),
+    });
+    const providers = createCloudflareAiProviders(binding, {
+      evaluationModel: "gpt-test",
+      providerName: "openai-responses",
+      promptVersion: "openai-responses-v1",
+      now: () => new Date("2026-08-09T12:00:00.000Z"),
+    });
+
+    await expect(providers.evaluations.generate(dropdownEvaluationInput)).resolves.toMatchObject({
+      candidates: [
+        {
+          criterionId: "criterion-3",
+          value: 3,
+          evidence: [writtenEvidence],
+          provenance: {
+            provider: "openai-responses",
+            model: "gpt-test",
+            promptVersion: "openai-responses-v1",
+          },
+        },
+      ],
+    });
   });
 
   it("rejects ungrounded evaluation evidence, unknown criteria, and invalid scores", async () => {

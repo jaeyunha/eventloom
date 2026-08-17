@@ -3795,7 +3795,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       transport,
     });
 
-    await repository.putSuggestion(suggestion, null);
+    await repository.putSuggestion(suggestion, null, assignment.version);
     await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(suggestion);
     await expect(repository.getSuggestion("tenant-other", suggestion.id)).resolves.toBeNull();
     await expect(repository.listSuggestions(tenantId, planId)).resolves.toEqual([suggestion]);
@@ -3883,6 +3883,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       repository.putSuggestion(
         { ...resolvedSuggestion, eventId: "event-other", version: 3 },
         resolvedSuggestion.version,
+        resolvedAssignment.version,
       ),
     ).rejects.toThrow("Suggestion changed since it was loaded");
     expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);

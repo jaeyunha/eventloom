@@ -84,6 +84,36 @@ async function atomic(
   }
 }
 
+function suggestionAssignmentGuard(
+  database: D1Database,
+  suggestion: EvaluationSuggestion,
+  expectedAssignmentVersion: number,
+): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+      SELECT 1 FROM review_assignments
+      WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ?
+        AND reviewer_id = ? AND version = ? AND status <> 'abstained'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM evaluation_conflicts
+      WHERE organization_id = ? AND event_id = ? AND assignment_id = ?
+    )`,
+    [
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.planId,
+      suggestion.assignmentId,
+      suggestion.reviewerId,
+      expectedAssignmentVersion,
+      suggestion.tenantId,
+      suggestion.eventId,
+      suggestion.assignmentId,
+    ],
+  );
+}
+
 function canonicalPlanBoundaries(plan: EvaluationPlan): EvaluationPlan {
   const canonical = (value: string | null | undefined): string | null | undefined => {
     if (value === null || value === undefined) return value;
@@ -790,10 +820,17 @@ export class D1EvaluationRepository implements EvaluationRepository {
     return Promise.all(rows(result).map((row) => this.hydrateSuggestion(row)));
   }
 
-  async putSuggestion(suggestion: EvaluationSuggestion, expectedVersion: number | null) {
+  async putSuggestion(
+    suggestion: EvaluationSuggestion,
+    expectedVersion: number | null,
+    expectedAssignmentVersion: number,
+  ) {
     await atomic(
       this.database,
-      this.suggestionStatements(suggestion, expectedVersion),
+      [
+        suggestionAssignmentGuard(this.database, suggestion, expectedAssignmentVersion),
+        ...this.suggestionStatements(suggestion, expectedVersion),
+      ],
       "Suggestion changed since it was loaded.",
     );
   }
@@ -802,7 +839,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
     suggestion: EvaluationSuggestion,
     expectedSuggestionVersion: number,
     assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
+    expectedAssignmentVersion: number,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution> {
@@ -816,7 +853,10 @@ export class D1EvaluationRepository implements EvaluationRepository {
     ) {
       writeConflict("Suggestion resolution targeted another assignment.");
     }
-    const commands = [...this.suggestionStatements(suggestion, expectedSuggestionVersion)];
+    const commands = [
+      suggestionAssignmentGuard(this.database, suggestion, expectedAssignmentVersion),
+      ...this.suggestionStatements(suggestion, expectedSuggestionVersion),
+    ];
     if (assignment !== null) {
       commands.push(
         expectedAssignmentVersion === null

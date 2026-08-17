@@ -1352,6 +1352,57 @@ describe("review workspace", () => {
     expect(markup).not.toContain('id="abstention-reason"');
   });
 
+  it("renders pending dropdown AI values as advisory option labels", () => {
+    const assignment = testAssignment("summit-2026");
+    const provenance = {
+      provider: "openai-responses",
+      model: "gpt-test",
+      generatedAt: "2026-08-16T20:00:00.000Z",
+      sourceReferences: ["abstract"],
+      promptVersion: "openai-responses-v1",
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "evaluator",
+        initialState: {
+          assignment: {
+            ...assignment,
+            aiSuggestions: {},
+            suggestions: [
+              {
+                id: "suggestion-dropdown",
+                status: "pending",
+                version: 1,
+                rubricRevision: 3,
+                submissionRevision: 7,
+                candidates: {
+                  recommendation: [
+                    {
+                      id: "candidate-recommendation",
+                      criterionId: "recommendation",
+                      value: 3,
+                      evidence: [
+                        "The submission gives a concrete delivery plan and audience outcome.",
+                      ],
+                      provenance,
+                    },
+                  ],
+                },
+                provenance,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(markup).toContain("AI suggestion · pending");
+    expect(markup).toContain("<strong>Reject</strong>");
+    expect(markup).toContain("The submission gives a concrete delivery plan");
+    expect(markup).toContain("AI suggestions never count until you confirm or edit them.");
+  });
+
   it("exposes explicit draft state text and per-criterion validation hooks", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {

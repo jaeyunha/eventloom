@@ -51,12 +51,16 @@ export interface EvaluationRepository {
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
   getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null>;
   listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]>;
-  putSuggestion(suggestion: EvaluationSuggestion, expectedVersion: number | null): Promise<void>;
+  putSuggestion(
+    suggestion: EvaluationSuggestion,
+    expectedVersion: number | null,
+    expectedAssignmentVersion: number,
+  ): Promise<void>;
   resolveSuggestion(
     suggestion: EvaluationSuggestion,
     expectedSuggestionVersion: number,
     assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
+    expectedAssignmentVersion: number,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution>;
@@ -464,7 +468,9 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
+    expectedAssignmentVersion: number,
   ): Promise<void> {
+    this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
     this.#suggestions.set(key, clone(suggestion));
@@ -474,10 +480,11 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     suggestion: EvaluationSuggestion,
     expectedSuggestionVersion: number,
     assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
+    expectedAssignmentVersion: number,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution> {
+    this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
     const suggestionKey = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(
       this.#suggestions.get(suggestionKey)?.version ?? null,
@@ -528,6 +535,21 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       suggestion: clone(suggestion),
       review: review === null ? null : clone(review),
     };
+  }
+
+  #assertSuggestionAssignmentWritable(
+    suggestion: EvaluationSuggestion,
+    expectedAssignmentVersion: number,
+  ): void {
+    const assignmentKey = storageKey(suggestion.tenantId, suggestion.assignmentId);
+    const assignment = this.#assignments.get(assignmentKey);
+    assertVersion(assignment?.version ?? null, expectedAssignmentVersion, "Assignment");
+    if (
+      assignment?.status === "abstained" ||
+      this.#conflicts.has(storageKey(suggestion.tenantId, suggestion.assignmentId))
+    ) {
+      throw conflict("A conflict declaration removes access to this submission.");
+    }
   }
   async listReviewerWorkspaceRecords(
     tenantId: string,

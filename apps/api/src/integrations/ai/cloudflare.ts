@@ -10,6 +10,7 @@ import type {
   EvaluationSuggestionProviderCandidate,
   EvaluationSuggestionProviderInput,
   EvaluationSuggestionProviderResult,
+  RubricCriterion,
 } from "../../features/evaluations/types";
 import type {
   RemixField,
@@ -829,6 +830,18 @@ function evaluationResponseFormat(
   input: EvaluationSuggestionProviderInput,
 ): Record<string, unknown> {
   const criteria = scoreableEvaluationCriteria(input);
+  const evidence = {
+    type: "array",
+    minItems: 1,
+    maxItems: 3,
+    items: {
+      type: "string",
+      minLength: 1,
+      maxLength: 2_000,
+      description:
+        "A concise written rationale that quotes or specifically paraphrases the supplied abstract; never a source field label.",
+    },
+  };
   return {
     type: "json_schema",
     name: "evaluation_proposal",
@@ -842,29 +855,23 @@ function evaluationResponseFormat(
           minItems: criteria.length,
           maxItems: criteria.length,
           items: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              criterionId: { type: "string", enum: criteria.map(({ id }) => id) },
-              value: {
-                type: "number",
-                minimum: Math.min(...criteria.map(({ minimum }) => minimum)),
-                maximum: Math.max(...criteria.map(({ maximum }) => maximum)),
+            anyOf: criteria.map((criterion) => ({
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                criterionId: { type: "string", const: criterion.id },
+                value:
+                  (criterion.inputType ?? "numeric") === "dropdown"
+                    ? { type: "number", enum: dropdownScoreValues(criterion) }
+                    : {
+                        type: "number",
+                        minimum: criterion.minimum,
+                        maximum: criterion.maximum,
+                      },
+                evidence,
               },
-              evidence: {
-                type: "array",
-                minItems: 1,
-                maxItems: 3,
-                items: {
-                  type: "string",
-                  minLength: 1,
-                  maxLength: 2_000,
-                  description:
-                    "A concise written rationale that quotes or specifically paraphrases the supplied abstract; never a source field label.",
-                },
-              },
-            },
-            required: ["criterionId", "value", "evidence"],
+              required: ["criterionId", "value", "evidence"],
+            })),
           },
         },
       },
@@ -905,9 +912,10 @@ function evaluationPrompt(input: EvaluationSuggestionProviderInput): string {
         ...(criterion.options === undefined
           ? {}
           : {
-              options: criterion.options.map((option) => ({
+              options: criterion.options.map((option, optionIndex) => ({
                 label: option.label,
                 value: option.value,
+                score: criterion.minimum + optionIndex,
               })),
             }),
       })),
@@ -920,7 +928,7 @@ function evaluationPrompt(input: EvaluationSuggestionProviderInput): string {
     "evaluation",
     context,
     payload,
-    "Return only {candidates:[{criterionId,value,evidence}]} JSON with exactly one candidate for every supplied criterion. value must be a numeric score within that criterion's bounds. evidence must contain 1 to 3 concise written rationales that quote or specifically paraphrase the supplied abstract. Do not return source labels such as abstract, title, or answers.<id>; AI output is advisory and must not make a decision.",
+    "Return only {candidates:[{criterionId,value,evidence}]} JSON with exactly one candidate for every supplied criterion. value must be a numeric score within that criterion's bounds; for a dropdown criterion it must equal the score attached to one of the supplied options. evidence must contain 1 to 3 concise written rationales that quote or specifically paraphrase the supplied abstract. Do not return source labels such as abstract, title, or answers.<id>; AI output is advisory and must not make a decision.",
   );
 }
 
@@ -928,6 +936,10 @@ function scoreableEvaluationCriteria(input: EvaluationSuggestionProviderInput) {
   return input.round.rubric.criteria.filter(
     (criterion) => (criterion.inputType ?? "numeric") !== "free_text",
   );
+}
+
+function dropdownScoreValues(criterion: RubricCriterion): number[] {
+  return (criterion.options ?? []).map((_, optionIndex) => criterion.minimum + optionIndex);
 }
 
 function parseEvaluationOutput(
@@ -970,6 +982,12 @@ function parseEvaluationOutput(
         !Number.isFinite(value.value) ||
         value.value < criterion.minimum ||
         value.value > criterion.maximum
+      ) {
+        throw invalidOutput();
+      }
+      if (
+        (criterion.inputType ?? "numeric") === "dropdown" &&
+        !dropdownScoreValues(criterion).includes(value.value)
       ) {
         throw invalidOutput();
       }

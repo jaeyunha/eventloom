@@ -2,6 +2,8 @@
 import styles from "../review-workspace.module.css";
 import type { ApiSuggestion } from "./api-api-suggestion";
 import type { EvaluatorController } from "./evaluator-controller";
+import { criterionNumericValue } from "./model-criterion-numeric-value";
+import { criterionType } from "./model-criterion-type";
 import type { RubricCriterion } from "./scorecard-rubric-criterion";
 
 export function EvaluatorSuggestionCard({
@@ -17,15 +19,19 @@ export function EvaluatorSuggestionCard({
 }>) {
   const { suggestionBusy, reviewLocked, confirmAiSuggestion, resolveSuggestion, scoreValues } =
     controller;
+  const suggestionValue =
+    criterionType(criterion) === "dropdown"
+      ? (criterion.options?.find(
+          (_, optionIndex) => criterion.minimum + optionIndex === suggestion.value,
+        )?.label ?? String(suggestion.value))
+      : `${suggestion.value} / ${criterion.maximum}`;
   return (
     <aside className={styles.aiSuggestion} aria-label={`AI suggestion for ${criterion.label}`}>
       <div>
         <span className={styles.aiLabel}>
           AI suggestion · {suggestionRecord?.status ?? "uncounted"}
         </span>
-        <strong>
-          {suggestion.value} / {criterion.maximum}
-        </strong>
+        <strong>{suggestionValue}</strong>
       </div>
       <p className={styles.fieldHint}>Cited evidence</p>
       <ul>
@@ -77,7 +83,7 @@ export function EvaluatorSuggestionCard({
                   suggestionRecord,
                   "edit",
                   criterion.id,
-                  Number(scoreValues[criterion.id]),
+                  criterionNumericValue(criterion, scoreValues[criterion.id] ?? ""),
                 )
               }
               disabled={suggestionBusy || reviewLocked}

@@ -237,8 +237,8 @@ function database() {
   return new RecordingD1();
 }
 
-function batchSql(db: RecordingD1): string {
-  return db.batches[0]?.map((item) => item.sql).join("\n") ?? "";
+function batchSql(db: RecordingD1, batchIndex = 0): string {
+  return db.batches[batchIndex]?.map((item) => item.sql).join("\n") ?? "";
 }
 
 describe("D1EvaluationRepository compound CAS", () => {
@@ -318,7 +318,7 @@ describe("D1EvaluationRepository compound CAS", () => {
 
     expect(db.batches).toHaveLength(1);
     expect(batchSql(db)).toContain("EXISTS (SELECT 1 FROM review_assignments");
-    expect(batchSql(db)).toContain("NOT EXISTS (SELECT 1 FROM evaluation_conflicts");
+    expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
     expect(batchSql(db)).toContain("INSERT INTO evaluation_conflicts");
   });
 
@@ -351,20 +351,25 @@ describe("D1EvaluationRepository compound CAS", () => {
       updatedAt: timestamp,
     };
 
-    await new D1EvaluationRepository(db as unknown as D1Database).resolveSuggestion(
-      suggestion,
-      1,
-      assignment,
-      1,
-      review,
+    const repository = new D1EvaluationRepository(db as unknown as D1Database);
+    await repository.putSuggestion(
+      { ...suggestion, status: "pending", version: 1 },
       null,
+      assignment.version,
     );
+    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(2);
+    expect(batchSql(db)).toContain("status <> 'abstained'");
+    expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
 
-    expect(db.batches).toHaveLength(1);
-    expect(batchSql(db)).toContain("evaluation_suggestions");
-    expect(batchSql(db)).toContain("review_assignments");
-    expect(batchSql(db)).toContain("evaluation_reviews");
-    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(3);
+    await repository.resolveSuggestion(suggestion, 1, assignment, 1, review, null);
+
+    expect(db.batches).toHaveLength(2);
+    expect(batchSql(db, 1)).toContain("evaluation_suggestions");
+    expect(batchSql(db, 1)).toContain("review_assignments");
+    expect(batchSql(db, 1)).toContain("evaluation_reviews");
+    expect(db.batches[1]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(4);
+    expect(batchSql(db, 1)).toContain("status <> 'abstained'");
+    expect(batchSql(db, 1)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
   });
 
   it("tenant-scopes plan, assignment, review, suggestion, conflict, and decision reads", async () => {

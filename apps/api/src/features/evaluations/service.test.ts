@@ -70,6 +70,20 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
     return assignment === null ? null : { ...assignment, status: "assigned" };
   }
 }
+
+class GatedSuggestionRepository extends InMemoryEvaluationRepository {
+  resolutionGate: Promise<void> | null = null;
+  resolutionEntered: (() => void) | null = null;
+
+  override async resolveSuggestion(
+    ...args: Parameters<InMemoryEvaluationRepository["resolveSuggestion"]>
+  ) {
+    this.resolutionEntered?.();
+    if (this.resolutionGate !== null) await this.resolutionGate;
+    return super.resolveSuggestion(...args);
+  }
+}
+
 class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   planGate: Promise<void> | null = null;
   planListCalls = 0;
@@ -247,7 +261,10 @@ const submission: SubmissionReviewMaterial = {
 };
 
 async function fixture(
-  options: Pick<EvaluationServiceOptions, "acceptanceHandoff" | "decisionProjection"> & {
+  options: Pick<
+    EvaluationServiceOptions,
+    "acceptanceHandoff" | "aiSuggestionProducer" | "decisionProjection"
+  > & {
     blindReview?: boolean;
     reviewsPerSubmission?: number;
     maxAssignmentsPerReviewer?: number;
@@ -281,6 +298,9 @@ async function fixture(
       ...(options.decisionProjection === undefined
         ? {}
         : { decisionProjection: options.decisionProjection }),
+      ...(options.aiSuggestionProducer === undefined
+        ? {}
+        : { aiSuggestionProducer: options.aiSuggestionProducer }),
     },
   );
   const draft = await service.createPlan(organizer, {
@@ -1921,11 +1941,25 @@ describe("review drafts, AI assistance, and aggregates", () => {
 
 describe("conflicts, progress, and decisions", () => {
   it("makes abstention remove submission access and excludes it from actionable progress", async () => {
-    const { service } = await fixture({ reviewsPerSubmission: 1 });
+    const { service } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({
+        candidates: [
+          {
+            criterionId: "quality",
+            value: 4,
+            evidence: ["The abstract names a concrete audience outcome."],
+          },
+        ],
+      }),
+    });
     const assignment = await assignOne(service);
     const actor = reviewer("reviewer-1");
     await service.saveReview(actor, assignment.id, {
       scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    const suggestion = await service.generateAiSuggestions(actor, {
+      assignmentId: assignment.id,
     });
 
     const declaration = await service.declareConflict(
@@ -1937,6 +1971,21 @@ describe("conflicts, progress, and decisions", () => {
     expect(declaration.reviewerId).toBe(actor.userId);
     await expectEvaluationError(
       service.getReviewContext(actor, assignment.id),
+      "EVALUATION_FORBIDDEN",
+    );
+    await expectEvaluationError(
+      service.generateAiSuggestions(actor, { assignmentId: assignment.id }),
+      "EVALUATION_FORBIDDEN",
+    );
+    await expectEvaluationError(
+      service.listAiSuggestions(actor, assignment.id),
+      "EVALUATION_FORBIDDEN",
+    );
+    await expectEvaluationError(
+      service.resolveAiSuggestion(actor, suggestion.id, {
+        action: "accept",
+        expectedVersion: suggestion.version,
+      }),
       "EVALUATION_FORBIDDEN",
     );
     const progress = await service.getProgress(organizer, "plan-1");
@@ -1961,6 +2010,98 @@ describe("conflicts, progress, and decisions", () => {
         completionPercent: 0,
       },
     ]);
+  });
+
+  it("rejects an in-flight suggestion generation after conflict declaration", async () => {
+    let announceProviderStarted: () => void = () => {
+      throw new Error("Provider start signal was not initialized.");
+    };
+    let releaseProvider: () => void = () => {
+      throw new Error("Provider release signal was not initialized.");
+    };
+    const providerStarted = new Promise<void>((resolve) => {
+      announceProviderStarted = resolve;
+    });
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const { repository, service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => {
+        announceProviderStarted();
+        await providerGate;
+        return {
+          candidates: [
+            {
+              criterionId: "quality",
+              value: 4,
+              evidence: ["The abstract names a concrete audience outcome."],
+            },
+          ],
+        };
+      },
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    const generation = service.generateAiSuggestions(actor, {
+      assignmentId: assignment.id,
+    });
+    await providerStarted;
+    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+    releaseProvider();
+
+    await expectEvaluationError(generation, "EVALUATION_CONFLICT");
+    expect(await repository.listSuggestions(tenantId, plan.id)).toEqual([]);
+  });
+
+  it("rejects an in-flight suggestion resolution after conflict declaration", async () => {
+    const repository = new GatedSuggestionRepository();
+    const { service } = await fixture({
+      repository,
+      reviewsPerSubmission: 1,
+      aiSuggestionProducer: async () => ({
+        candidates: [
+          {
+            criterionId: "quality",
+            value: 4,
+            evidence: ["The abstract names a concrete audience outcome."],
+          },
+        ],
+      }),
+    });
+    const assignment = await assignOne(service);
+    const actor = reviewer("reviewer-1");
+    await service.saveReview(actor, assignment.id, {
+      scores: [{ criterionId: "quality", value: 3, origin: "human" }],
+    });
+    const suggestion = await service.generateAiSuggestions(actor, {
+      assignmentId: assignment.id,
+    });
+    let releaseResolution: () => void = () => {
+      throw new Error("Resolution release signal was not initialized.");
+    };
+    const resolutionEntered = new Promise<void>((resolve) => {
+      repository.resolutionEntered = resolve;
+    });
+    repository.resolutionGate = new Promise<void>((resolve) => {
+      releaseResolution = resolve;
+    });
+    const resolution = service.resolveAiSuggestion(actor, suggestion.id, {
+      action: "accept",
+      expectedVersion: suggestion.version,
+    });
+    await resolutionEntered;
+    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+    releaseResolution();
+
+    await expectEvaluationError(resolution, "EVALUATION_CONFLICT");
+    expect(await repository.getSuggestion(tenantId, suggestion.id)).toMatchObject({
+      status: "pending",
+      version: suggestion.version,
+    });
+    expect(await repository.getReview(tenantId, assignment.id)).toMatchObject({
+      scores: { quality: { value: 3, origin: "human" } },
+    });
   });
 
   it("rejects incomplete acceptance before persisting a decision", async () => {

@@ -2331,6 +2331,7 @@ export class EvaluationService {
     const assignmentId = typeof input === "string" ? input : input.assignmentId;
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
+    await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     const { plan, round } = await this.#assignmentContext(assignment);
     if (assignment.status === "submitted") {
       throw conflict("A submitted review cannot receive AI suggestions.");
@@ -2434,7 +2435,7 @@ export class EvaluationService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.#repository.putSuggestion(suggestion, null);
+    await this.#repository.putSuggestion(suggestion, null, assignment.version);
     return suggestion;
   }
 
@@ -2457,6 +2458,7 @@ export class EvaluationService {
   ): Promise<readonly EvaluationSuggestion[]> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
+    await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     const { plan, round } = await this.#assignmentContext(assignment);
     const material = await this.#submissions.getSubmissionForReview(
       actor.tenantId,
@@ -2489,6 +2491,7 @@ export class EvaluationService {
     if (suggestion === null) throw notFound("The AI evaluation suggestion was not found.");
     const assignment = await this.#getAssignment(actor.tenantId, suggestion.assignmentId);
     requireHumanReviewer(actor, assignment);
+    await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     if (suggestion.reviewerId !== actor.userId) throw forbidden();
     const { plan, round } = await this.#assignmentContext(assignment);
     if (assignment.status === "submitted") {
@@ -2519,7 +2522,7 @@ export class EvaluationService {
         actor.userId,
         this.#clock().toISOString(),
       );
-      await this.#repository.putSuggestion(staleSuggestion, suggestion.version);
+      await this.#repository.putSuggestion(staleSuggestion, suggestion.version, assignment.version);
       throw conflict("The AI evaluation suggestion is stale and must be regenerated.");
     }
     if (suggestion.status !== "pending") {
@@ -2667,7 +2670,7 @@ export class EvaluationService {
       resolvedSuggestion,
       suggestion.version,
       assignmentUpdate,
-      assignmentUpdate === null ? null : assignment.version,
+      assignment.version,
       review === currentReview ? null : review,
       review === currentReview ? null : (currentReview?.version ?? null),
     );
@@ -3367,7 +3370,7 @@ export class EvaluationService {
           current.submissionRevision !== submissionRevision)
       ) {
         current = this.#markSuggestionStale(current, actor.userId, this.#clock().toISOString());
-        await this.#repository.putSuggestion(current, suggestion.version);
+        await this.#repository.putSuggestion(current, suggestion.version, assignment.version);
       }
       currentSuggestions.push(current);
     }
@@ -3410,8 +3413,9 @@ export class EvaluationService {
       suggestions
         .filter((suggestion) => suggestion.status === "pending")
         .map(async (suggestion) => {
+          const assignment = await this.#getAssignment(tenantId, suggestion.assignmentId);
           const updated = this.#markSuggestionStale(suggestion, actorId, at);
-          await this.#repository.putSuggestion(updated, suggestion.version);
+          await this.#repository.putSuggestion(updated, suggestion.version, assignment.version);
         }),
     );
   }
@@ -3562,14 +3566,18 @@ export class EvaluationService {
   ): Promise<{ assignment: EvaluationAssignment; plan: EvaluationPlan; round: ReviewRound }> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
-    if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
-      throw forbidden("A conflict declaration removes access to this submission.");
-    }
+    await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     const plan = await this.#getPlan(actor.tenantId, assignment.planId);
     const round = findRound(plan, assignment.roundId);
     assertPlanIsWritable(plan, round, this.#clock());
     await this.#requireActiveSubmission(plan, assignment.submissionId);
     return { assignment, plan, round };
+  }
+
+  async #requireNoAssignmentConflict(tenantId: string, assignmentId: string): Promise<void> {
+    if (await this.#repository.getConflict(tenantId, assignmentId)) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
   }
 
   async #getPlan(tenantId: string, planId: string): Promise<EvaluationPlan> {

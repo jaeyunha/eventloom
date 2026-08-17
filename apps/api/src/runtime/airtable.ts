@@ -2152,8 +2152,13 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
+    expectedAssignmentVersion: number,
   ): Promise<void> {
-    const existingRecord = await this.#evaluations.findWithRecordId(suggestion.id);
+    const [existingRecord, currentAssignment, conflictDeclaration] = await Promise.all([
+      this.#evaluations.findWithRecordId(suggestion.id),
+      this.getAssignment(suggestion.tenantId, suggestion.assignmentId),
+      this.getConflict(suggestion.tenantId, suggestion.assignmentId),
+    ]);
     const existing =
       existingRecord !== undefined && isEvaluationSuggestionRecord(existingRecord.entity)
         ? untagged(existingRecord.entity)
@@ -2172,6 +2177,14 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       throw conflict("Suggestion changed since it was loaded.");
     }
     assertEvaluationVersion(existing?.version ?? null, expectedVersion, "Suggestion");
+    assertEvaluationVersion(
+      currentAssignment?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    if (currentAssignment?.status === "abstained" || conflictDeclaration !== null) {
+      throw conflict("A conflict declaration removes access to this submission.");
+    }
     await this.#upsertEvaluationEntities([tagged(suggestion, "evaluation_suggestion")]);
   }
 
@@ -2179,15 +2192,14 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     suggestion: EvaluationSuggestion,
     expectedSuggestionVersion: number,
     assignment: EvaluationAssignment | null,
-    expectedAssignmentVersion: number | null,
+    expectedAssignmentVersion: number,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution> {
-    const [records, effectiveAssignment] = await Promise.all([
+    const [records, effectiveAssignment, conflictDeclaration] = await Promise.all([
       this.#evaluations.listWithRecordIds(),
-      assignment === null
-        ? Promise.resolve(null)
-        : this.getAssignment(assignment.tenantId, assignment.id),
+      this.getAssignment(suggestion.tenantId, suggestion.assignmentId),
+      this.getConflict(suggestion.tenantId, suggestion.assignmentId),
     ]);
     const suggestionRecord = records.find(
       ({ entity }) => entity.id === suggestion.id && isEvaluationSuggestionRecord(entity),
@@ -2209,6 +2221,14 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       throw conflict("Suggestion changed since it was loaded.");
     }
     assertEvaluationVersion(currentSuggestion.version, expectedSuggestionVersion, "Suggestion");
+    assertEvaluationVersion(
+      effectiveAssignment?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    if (effectiveAssignment?.status === "abstained" || conflictDeclaration !== null) {
+      throw conflict("A conflict declaration removes access to this submission.");
+    }
 
     const entities: object[] = [
       tagged(suggestion, "evaluation_suggestion") as unknown as JsonRecord,
