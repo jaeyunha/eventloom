@@ -94,8 +94,8 @@ export interface CrmPipelineEntry {
 export interface CrmPipelineUpdateInput {
   readonly stage: CrmPipelineStage;
   readonly expectedVersion: number;
-  readonly score?: number;
-  readonly rationale?: string;
+  readonly score?: number | null;
+  readonly rationale?: string | null;
   readonly note?: string;
 }
 
@@ -405,8 +405,12 @@ const CRM_WORKSPACE_READ_KINDS: readonly CrmWorkspaceReadKind[] = [
   "analytics",
 ];
 
+type CrmContactCollectionUpdate =
+  | readonly CrmContact[]
+  | ((current: readonly CrmContact[]) => readonly CrmContact[]);
+
 interface CrmWorkspaceReadHandlers {
-  readonly setContacts: (contacts: readonly CrmContact[]) => void;
+  readonly setContacts: (update: CrmContactCollectionUpdate) => void;
   readonly setSegments: (segments: readonly CrmSegment[]) => void;
   readonly setEvents: (events: readonly CrmEvent[]) => void;
   readonly setAnalytics: (analytics: CrmAnalytics) => void;
@@ -415,6 +419,23 @@ interface CrmWorkspaceReadHandlers {
   readonly setEventsLoading: (loading: boolean) => void;
   readonly setAnalyticsLoading: (loading: boolean) => void;
   readonly setError: (error: string | null) => void;
+}
+
+export function preferNewerCrmContact(
+  current: CrmContact | undefined,
+  candidate: CrmContact,
+): CrmContact {
+  return current?.id === candidate.id && current.version > candidate.version ? current : candidate;
+}
+
+function mergeContactCollection(
+  current: readonly CrmContact[],
+  candidates: readonly CrmContact[],
+): readonly CrmContact[] {
+  const currentById = new Map(current.map((contact) => [contact.id, contact]));
+  return candidates.map((candidate) =>
+    preferNewerCrmContact(currentById.get(candidate.id), candidate),
+  );
 }
 
 export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWorkspaceReadHandlers) {
@@ -451,7 +472,9 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     setReadError("contacts", null);
     try {
       const nextContacts = await api.listContacts(filter);
-      if (isCurrent("contacts", generation)) handlers.setContacts(nextContacts);
+      if (isCurrent("contacts", generation)) {
+        handlers.setContacts((current) => mergeContactCollection(current, nextContacts));
+      }
     } catch (reason) {
       if (isCurrent("contacts", generation)) setReadError("contacts", messageFromError(reason));
     } finally {

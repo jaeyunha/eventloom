@@ -10,6 +10,7 @@ import {
   type CrmEvent,
   type CrmSegment,
   createCrmWorkspaceReadCoordinator,
+  preferNewerCrmContact,
   refreshCrmAnalyticsAfterContactSave,
   refreshCrmDuplicatesAfterContactSave,
   refreshSelectedContactAfterCollectionReload,
@@ -799,6 +800,29 @@ describe("organization CRM workspace", () => {
     });
   });
 
+  it("preserves explicit null pipeline score and rationale clearing", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher = vi.fn<TestFetcher>(async (input, init = {}) => {
+      calls.push({ url: String(input), init });
+      return response(contact);
+    });
+    const api = createCrmApi("https://api.example.test", "org/one", fetcher);
+
+    await api.updatePipeline(contact.id, {
+      stage: "qualified",
+      expectedVersion: contact.version,
+      score: null,
+      rationale: null,
+    });
+
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      stage: "qualified",
+      expectedVersion: contact.version,
+      score: null,
+      rationale: null,
+    });
+  });
+
   it("makes an empty directory action-first and hides data-dependent controls", () => {
     const markup = renderToStaticMarkup(
       createElement(CrmWorkspaceView, {
@@ -936,7 +960,47 @@ describe("CRM workspace read coordination", () => {
     firstContactsRead.resolve([contact]);
     await firstLoad;
 
-    expect(handlers.setContacts).toHaveBeenLastCalledWith([newerContact]);
+    const contactUpdate = handlers.setContacts.mock.lastCall?.[0] as
+      | readonly CrmContact[]
+      | ((current: readonly CrmContact[]) => readonly CrmContact[]);
+    expect(typeof contactUpdate).toBe("function");
+    expect(typeof contactUpdate === "function" ? contactUpdate([contact]) : contactUpdate).toEqual([
+      newerContact,
+    ]);
+    coordinator.dispose();
+  });
+
+  it("does not let a delayed collection response overwrite a newer saved contact", async () => {
+    const contactsRead = deferred<readonly CrmContact[]>();
+    const api = {
+      listContacts: vi.fn(() => contactsRead.promise),
+    } as unknown as CrmApi;
+    let currentContacts: readonly CrmContact[] = [contact];
+    const handlers = {
+      ...readHandlers(),
+      setContacts: vi.fn(
+        (
+          update:
+            | readonly CrmContact[]
+            | ((current: readonly CrmContact[]) => readonly CrmContact[]),
+        ) => {
+          currentContacts = typeof update === "function" ? update(currentContacts) : update;
+        },
+      ),
+    };
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+    const load = coordinator.loadContacts({ status: "active" });
+    const savedContact = {
+      ...contact,
+      company: "Newer saved company",
+      version: contact.version + 1,
+    };
+
+    currentContacts = [savedContact];
+    contactsRead.resolve([contact]);
+    await load;
+
+    expect(currentContacts).toEqual([savedContact]);
     coordinator.dispose();
   });
 
@@ -1081,5 +1145,30 @@ describe("CRM selected contact refresh", () => {
     await refresh;
 
     expect(applyContact).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a newer saved selected contact with a delayed lower version", async () => {
+    const contactRead = deferred<CrmContact>();
+    let selectedContact = contact;
+    const refresh = refreshSelectedContactAfterCollectionReload({
+      contactId: contact.id,
+      expectedSelectionGeneration: 4,
+      currentSelectionGeneration: () => 4,
+      getContact: vi.fn(() => contactRead.promise),
+      applyContact: (candidate) => {
+        selectedContact = preferNewerCrmContact(selectedContact, candidate);
+      },
+    });
+    const savedContact = {
+      ...contact,
+      displayName: "Newer Saved Contact",
+      version: contact.version + 1,
+    };
+
+    selectedContact = savedContact;
+    contactRead.resolve(contact);
+    await refresh;
+
+    expect(selectedContact).toEqual(savedContact);
   });
 });

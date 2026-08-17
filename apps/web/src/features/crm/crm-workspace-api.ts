@@ -166,7 +166,9 @@ export function createCrmApi(
           stage: input.stage,
           expectedVersion: input.expectedVersion,
           ...(input.score === undefined ? {} : { score: input.score }),
-          ...(input.rationale?.trim() ? { rationale: input.rationale.trim() } : {}),
+          ...(input.rationale === undefined
+            ? {}
+            : { rationale: input.rationale === null ? null : input.rationale.trim() }),
           ...(input.note?.trim() ? { note: input.note.trim() } : {}),
         }),
       );

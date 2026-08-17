@@ -81,7 +81,7 @@ export interface CreateCrmContactInput extends CrmContactInput {
 export interface UpdateCrmContactInput extends CrmContactInput {
   readonly organizationId: string;
   readonly contactId: string;
-  readonly expectedVersion?: number | undefined;
+  readonly expectedVersion: number;
   readonly pipelineNote?: string | null | undefined;
 }
 
@@ -287,7 +287,7 @@ export interface UpdateCrmPipelineInput {
   readonly organizationId: string;
   readonly contactId: string;
   readonly stage: CrmPipelineStage;
-  readonly expectedVersion?: number | undefined;
+  readonly expectedVersion: number;
   readonly score?: number | null | undefined;
   readonly rationale?: string | null | undefined;
   readonly note?: string | null | undefined;

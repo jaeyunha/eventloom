@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CrmContact, CrmPipelineEntry } from "../../../features/crm/types";
+import type {
+  CrmContact,
+  CrmContactTransitionAudit,
+  CrmPipelineEntry,
+} from "../../../features/crm/types";
 import type { Event, EventAuditEntry } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
 import type { Session, SessionAuditEntry, SessionSettings } from "../../../features/sessions/types";
@@ -137,6 +141,31 @@ const crmContact: CrmContact = {
   createdAt: now,
   updatedAt: now,
 };
+const crmTransitionAudit: CrmContactTransitionAudit = {
+  pipeline: {
+    id: "pipeline-1",
+    organizationId: crmContact.organizationId,
+    contactId: crmContact.id,
+    fromStage: "new",
+    toStage: "qualified",
+    note: "Strong fit",
+    actorId: "user-1",
+    actorName: "owner@example.test",
+    createdAt: now,
+  },
+  history: {
+    id: "history-1",
+    organizationId: crmContact.organizationId,
+    contactId: crmContact.id,
+    kind: "pipeline",
+    eventId: null,
+    sessionId: null,
+    title: "Pipeline stage changed",
+    detail: "new to qualified",
+    occurredAt: now,
+    metadata: { pipelineEntryId: "pipeline-1" },
+  },
+};
 
 describe("D1 event repository commands", () => {
   it("batches tenant-scoped CAS, audit, and sync-job persistence", async () => {
@@ -243,6 +272,32 @@ describe("D1 CRM repository commands", () => {
       name: "CrmRepositoryConflictError",
       message: "The contact version is invalid.",
     });
+  });
+
+  it("rolls back contact CAS and both transition histories through one rejected batch", async () => {
+    const db = database();
+    db.batch.mockRejectedValueOnce(new Error("general history insert failed"));
+
+    await expect(
+      new D1CrmRepository(db).saveContact(crmContact, 1, crmTransitionAudit),
+    ).rejects.toMatchObject({
+      name: "CrmRepositoryConflictError",
+      message: "The contact changed before it could be saved. general history insert failed",
+    });
+
+    expect(db.batch).toHaveBeenCalledOnce();
+    const batchedStatements = db.batch.mock.calls[0]?.[0] as readonly ReturnType<
+      typeof statement
+    >[];
+    const queries = batchedStatements.map((item) => item.bound.query);
+    const contactIndex = queries.findIndex((query) => query.startsWith("UPDATE crm_contacts"));
+    const pipelineIndex = queries.findIndex((query) =>
+      query.startsWith("INSERT INTO crm_pipeline_history"),
+    );
+    const historyIndex = queries.findIndex((query) => query.startsWith("INSERT INTO crm_history"));
+    expect(contactIndex).toBeGreaterThanOrEqual(0);
+    expect(pipelineIndex).toBeGreaterThan(contactIndex);
+    expect(historyIndex).toBeGreaterThan(pipelineIndex);
   });
 
   it("filters contacts through event participant-link membership", async () => {

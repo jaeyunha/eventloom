@@ -11,6 +11,7 @@ import type {
   CrmContactInput,
   CrmContactSearch,
   CrmPipelineStage,
+  CrmValue,
   ImportCrmContactsInput,
   MergeCrmContactsInput,
   SendCrmOutreachInput,
@@ -76,6 +77,16 @@ type ContactBody = CrmContactInput & { readonly idempotencyKey?: string };
 
 const idSchema = z.string().trim().min(1).max(200);
 const optionalTextSchema = z.string().trim().max(20_000).nullable().optional();
+const crmValueSchema: z.ZodType<CrmValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(crmValueSchema),
+    z.record(z.string(), crmValueSchema),
+  ]),
+);
 const contactSchema = z
   .object({
     firstName: optionalTextSchema,
@@ -89,7 +100,7 @@ const contactSchema = z
     linkedinUrl: optionalTextSchema,
     notes: optionalTextSchema,
     tags: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
-    customFields: z.record(z.string().trim().min(1).max(100), z.unknown()).optional(),
+    customFields: z.record(z.string().trim().min(1).max(100), crmValueSchema).optional(),
     source: z.enum(["manual", "csv", "speaker", "import"]).optional(),
     pipelineStage: z
       .enum([
@@ -107,6 +118,10 @@ const contactSchema = z
     idempotencyKey: z.string().trim().min(1).max(512).optional(),
   })
   .strict();
+const contactUpdateSchema = contactSchema
+  .omit({ idempotencyKey: true })
+  .extend({ expectedVersion: z.number().int().positive() });
+type ContactUpdateBody = z.infer<typeof contactUpdateSchema>;
 const importSchema = z
   .object({
     csv: z.string().max(2_000_000).optional(),
@@ -158,7 +173,7 @@ const pipelineSchema = z
       "won",
       "lost",
     ]),
-    expectedVersion: z.number().int().positive().optional(),
+    expectedVersion: z.number().int().positive(),
     score: z.number().finite().min(0).max(100).nullable().optional(),
     rationale: z.string().trim().max(2_000).nullable().optional(),
     note: z.string().trim().max(2_000).nullable().optional(),
@@ -442,10 +457,7 @@ export function createCrmRoutes(dependencies: CrmRouteDependencies): Hono<CrmRou
   routes.patch("/contacts/:contactId", async (context) => {
     try {
       const organizationId = routeParam(context, "organizationId");
-      const input = await body<ContactBody & { expectedVersion?: number }>(
-        context,
-        contactSchema.extend({ expectedVersion: z.number().int().positive().optional() }),
-      );
+      const input = await body<ContactUpdateBody>(context, contactUpdateSchema);
       const data: UpdateCrmContactInput = {
         organizationId,
         contactId: routeParam(context, "contactId"),

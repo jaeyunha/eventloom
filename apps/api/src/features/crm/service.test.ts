@@ -7,7 +7,12 @@ import {
   CrmServiceError,
   InMemoryCrmRepository,
 } from "./service";
-import type { CrmActor, CrmContact, CrmContactTransitionAudit } from "./types";
+import type {
+  CrmActor,
+  CrmContact,
+  CrmContactTransitionAudit,
+  UpdateCrmPipelineInput,
+} from "./types";
 
 const actor: CrmActor = { kind: "user", organizationId: "org-a", userId: "owner-a", role: "owner" };
 const otherActor: CrmActor = {
@@ -292,6 +297,33 @@ describe("CrmService", () => {
       }),
     ]);
   });
+
+  it.each([undefined, 0, -1, 1.5])(
+    "rejects invalid pipeline expectedVersion %s at the service boundary",
+    async (expectedVersion) => {
+      const crm = service();
+      const contact = await crm.createContact(actor, {
+        organizationId: actor.organizationId,
+        displayName: "Runtime Version Guard",
+      });
+      const input = {
+        organizationId: actor.organizationId,
+        contactId: contact.id,
+        stage: "qualified",
+        ...(expectedVersion === undefined ? {} : { expectedVersion }),
+      } as unknown as UpdateCrmPipelineInput;
+
+      await expect(crm.setPipelineStage(actor, input)).rejects.toMatchObject({
+        name: "CrmServiceError",
+        code: "CRM_INVALID_INPUT",
+        message: "expectedVersion must be a positive integer.",
+      });
+      await expect(crm.getContact(actor, actor.organizationId, contact.id)).resolves.toMatchObject({
+        pipelineStage: "new",
+        version: contact.version,
+      });
+    },
+  );
 
   it("keeps pipeline state and audit unchanged when the atomic save fails", async () => {
     class FailingTransitionRepository extends InMemoryCrmRepository {
@@ -831,6 +863,7 @@ describe("CrmService", () => {
     const progressed = await crm.setPipelineStage(actor, {
       organizationId: "org-a",
       contactId: contact.id,
+      expectedVersion: contact.version,
       stage: "qualified",
       note: "Strong fit",
     });
@@ -1446,6 +1479,7 @@ describe("CrmService", () => {
     await crm.setPipelineStage(actor, {
       organizationId: "org-a",
       contactId: retired.id,
+      expectedVersion: retired.version,
       stage: "qualified",
     });
     const projection = await crm.addContactToEvent(actor, {

@@ -304,6 +304,13 @@ function optionalText(
 function identifier(value: unknown, field: string): string {
   return text(value, field, MAX_ID);
 }
+
+function concurrencyVersion(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+    throw invalid("expectedVersion must be a positive integer.");
+  return value;
+}
+
 function normalizeMergeScalarWinners(
   value: MergeCrmContactsInput["fieldWinners"],
 ): Readonly<Partial<Record<CrmMergeScalarField, string>>> {
@@ -927,7 +934,7 @@ export class CrmService {
     const repository = this.requireRepository();
     const current = await this.getContact(actor, organizationId, contactId);
     const contact = this.buildContact(organizationId, input, current, current.source);
-    const expectedVersion = input.expectedVersion ?? current.version;
+    const expectedVersion = concurrencyVersion(input.expectedVersion);
     if (expectedVersion !== current.version)
       throw conflict("The contact changed. Reload it before saving.", { current: clone(current) });
     if (contact.email !== null && contact.email !== current.email) {
@@ -1343,7 +1350,10 @@ export class CrmService {
     const segmentId = identifier(input.segmentId, "segmentId");
     assertActor(actor, organizationId);
     const current = await this.getSegment(actor, organizationId, segmentId);
-    const expectedVersion = input.expectedVersion ?? current.version;
+    const expectedVersion =
+      input.expectedVersion === undefined
+        ? current.version
+        : concurrencyVersion(input.expectedVersion);
     if (expectedVersion !== current.version)
       throw conflict("The segment changed. Reload it before saving.");
     const next: CrmSegment = {
@@ -1940,7 +1950,7 @@ export class CrmService {
     const nextStage = stage(input.stage);
     assertActor(actor, organizationId);
     const current = await this.getContact(actor, organizationId, contactId);
-    const expectedVersion = input.expectedVersion ?? current.version;
+    const expectedVersion = concurrencyVersion(input.expectedVersion);
     if (expectedVersion !== current.version)
       throw conflict("The contact changed. Reload it before saving.", { current: clone(current) });
     const note = optionalText(input.note, "note", 2_000) ?? null;

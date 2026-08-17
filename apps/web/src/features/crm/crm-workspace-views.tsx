@@ -57,6 +57,7 @@ import {
   mergeValuePresent,
   messageFromError,
   parseCsvPreview,
+  preferNewerCrmContact,
   refreshCrmAnalyticsAfterContactSave,
   refreshCrmDuplicatesAfterContactSave,
   refreshSelectedContactAfterCollectionReload,
@@ -499,6 +500,9 @@ function crmContactSelectionReducer(
         outreachRecipients: [action.contact],
       };
     case "contact-refreshed":
+      if (preferNewerCrmContact(state.selectedContact, action.contact) === state.selectedContact) {
+        return state;
+      }
       return {
         ...state,
         selectedContact: action.contact,
