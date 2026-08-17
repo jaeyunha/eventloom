@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact source-fix head: `d0f096a244f5666425ef64ce31e0a4d750e74865`
+- Exact source-fix head: `bb06f3fa13bc0b08938e754fca6c282a117e0612`
 - The final branch tip may add metadata-only handoff synchronization; review
   the source-fix head and this document together.
 - PR: https://github.com/jaeyunha/eventloom/pull/34
@@ -39,11 +39,11 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at 5c9f453f
+## Exact-head verification at bb06f3fa
 
-- Focused matrix: PASS — 10 files, 305 passed, 1 skipped before the final
-  rationale-threshold-only correction; the targeted rationale and partial
-  acceptance regressions pass after it.
+- Focused matrix: PASS — 10 files, 305 passed, 1 skipped, plus targeted
+  rationale, scoped acceptance/rejection, and submission-revision CAS
+  regressions.
 - Authority-focused service/D1/composition suites: PASS — 198 passed.
 - Web review suite after autosave/partial-edit fixes: PASS — 62 passed.
 - API typecheck: PASS.
@@ -64,11 +64,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
-- [ ] Code quality — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
-- [ ] Functional/visual QA — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
-- [ ] Context/dependencies — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
-- [ ] Goal/compliance — exact source-fix head `d0f096a244f5666425ef64ce31e0a4d750e74865`
+- [ ] Security — exact source-fix head `bb06f3fa13bc0b08938e754fca6c282a117e0612`
+- [ ] Code quality — exact source-fix head `bb06f3fa13bc0b08938e754fca6c282a117e0612`
+- [ ] Functional/visual QA — exact source-fix head `bb06f3fa13bc0b08938e754fca6c282a117e0612`
+- [ ] Context/dependencies — exact source-fix head `bb06f3fa13bc0b08938e754fca6c282a117e0612`
+- [ ] Goal/compliance — exact source-fix head `bb06f3fa13bc0b08938e754fca6c282a117e0612`
 
 ## Remaining tasks
 
