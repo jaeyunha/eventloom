@@ -69,6 +69,11 @@ export interface EvaluationRepository {
     tenantId: string,
     eventId: string,
   ): Promise<OrganizerWorkspaceRecords>;
+  listOrganizerExportRecords(
+    tenantId: string,
+    eventId: string,
+    planId: string,
+  ): Promise<OrganizerWorkspaceRecords>;
   putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
   saveReviewDraft(
     assignment: EvaluationAssignment,
@@ -586,6 +591,19 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       decisions: [...this.#decisions.values()]
         .filter((decision) => decision.tenantId === tenantId && decision.eventId === eventId)
         .map(clone),
+    };
+  }
+
+  async listOrganizerExportRecords(
+    tenantId: string,
+    eventId: string,
+    planId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    const records = await this.listOrganizerWorkspaceRecords(tenantId, eventId);
+    return {
+      assignments: records.assignments.filter((assignment) => assignment.planId === planId),
+      reviews: records.reviews.filter((review) => review.planId === planId),
+      decisions: records.decisions.filter((decision) => decision.planId === planId),
     };
   }
 

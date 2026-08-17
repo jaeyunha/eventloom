@@ -1282,6 +1282,8 @@ describe("CFP submission lifecycle", () => {
 
     expect(edited.status).toBe("submitted");
     expect(edited.answers.abstract).toContain("Updated: now includes 2026 benchmark data.");
+    expect(edited.completedSteps).toEqual(submitted.submission.completedSteps);
+    expect(edited.participants).toEqual(submitted.submission.participants);
   });
   it("requires audited reopening for post-close edits and allows pre-decision withdrawal", async () => {
     const { service, repository, clock } = createFixture();
