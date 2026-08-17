@@ -40,7 +40,14 @@ import {
   type RuntimeBindings,
   runtimeBindingsForEnvironment,
 } from "./cloudflare";
-import { createRuntimeApp, createRuntimeWorker, runScheduledReminders } from "./composition";
+import {
+  AUTOMATIC_REMINDER_CRON,
+  createRuntimeApp,
+  createRuntimeWorker,
+  EVALUATION_EXPORT_RECOVERY_CRON,
+  runScheduledReminders,
+  shouldRunScheduledReminders,
+} from "./composition";
 import { createRuntimeEventRoleInvitationAdapters } from "./d1";
 import {
   createLocalDependencies,
@@ -2315,6 +2322,11 @@ describe("fixture local runtime composition", () => {
     await expect(
       scheduled({ scheduledTime: Date.now() } as never, bindings, {} as ExecutionContext),
     ).resolves.toBeUndefined();
+  });
+  it("keeps automatic reminders hourly while exports recover every five minutes", () => {
+    expect(shouldRunScheduledReminders(EVALUATION_EXPORT_RECOVERY_CRON)).toBe(false);
+    expect(shouldRunScheduledReminders(AUTOMATIC_REMINDER_CRON)).toBe(true);
+    expect(shouldRunScheduledReminders(undefined)).toBe(true);
   });
   it("skips retired legacy events before recording automatic reminder runs", async () => {
     const reminders = new InMemoryReminderRepository();

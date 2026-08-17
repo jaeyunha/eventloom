@@ -1916,6 +1916,18 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
     };
   }
 
+  async listOrganizerExportRecords(
+    tenantId: string,
+    eventId: string,
+    planId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    const records = await this.listOrganizerWorkspaceRecords(tenantId, eventId);
+    return {
+      assignments: records.assignments.filter((assignment) => assignment.planId === planId),
+      reviews: records.reviews.filter((review) => review.planId === planId),
+      decisions: records.decisions.filter((decision) => decision.planId === planId),
+    };
+  }
   async getConflict(
     tenantId: string,
     assignmentId: string,

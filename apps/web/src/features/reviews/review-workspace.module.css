@@ -2225,6 +2225,31 @@
     flex: 1 1 auto;
   }
 
+  .resultsToolbar {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .resultsToolbar > .resultsExportControls {
+    display: contents;
+  }
+
+  .resultsToolbar > button,
+  .resultsExportControls > button,
+  .resultsExportControls > a {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .resultsExportControls > .formError {
+    grid-column: 1 / -1;
+  }
+
+  .resultsRoundField {
+    gap: 0.15rem;
+  }
+
   .tabButton {
     padding-inline: 0.7rem;
   }

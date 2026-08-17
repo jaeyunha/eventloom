@@ -1,8 +1,20 @@
 import { Hono } from "hono";
 import { ZodError, z } from "zod";
 import { EvaluationError, forbidden, notFound } from "./errors";
-import type { EvaluationService } from "./service";
-import type { EvaluationActor } from "./types";
+import {
+  type EvaluationExport,
+  type EvaluationExportCoordinator,
+  EvaluationExportError,
+  type EvaluationExportGeneration,
+  EvaluationExportGenerationError,
+  type RunningEvaluationExport,
+} from "./export-jobs";
+import {
+  type EvaluationOrganizerReviewExportSnapshot,
+  type EvaluationService,
+  isHumanConfirmedScore,
+} from "./service";
+import type { EvaluationActor, EvaluationReview, ReviewRound } from "./types";
 
 export interface EvaluationRouteEnvironment {
   Variables: {
@@ -53,6 +65,8 @@ export interface EvaluationRouteOptions {
   readonly reminders?: EvaluationReminderBoundary | undefined;
   /** Resolves verified reviewer emails to canonical user IDs at the production boundary. */
   readonly reviewerIdentity?: EvaluationReviewerIdentityBoundary | undefined;
+  /** Persists and processes review-results export runs; absent means fail closed. */
+  readonly resultsExports?: EvaluationExportCoordinator | undefined;
 }
 
 const criterionInputTypeSchema = z.enum(["numeric", "dropdown", "free_text"]);
@@ -264,23 +278,34 @@ function csvCell(value: unknown): string {
   return /[",\r\n]/u.test(safeText) ? `"${safeText.replace(/"/gu, '""')}"` : safeText;
 }
 
+export function createUniqueCsvHeaders(
+  candidates: readonly {
+    readonly header: string;
+    readonly stableId: string;
+  }[],
+): string[] {
+  const usedSerializedHeaders = new Set<string>();
+  return candidates.map(({ header, stableId }) => {
+    let candidate = header;
+    while (usedSerializedHeaders.has(csvCell(candidate))) {
+      candidate = `${candidate} [${stableId}]`;
+    }
+    usedSerializedHeaders.add(csvCell(candidate));
+    return candidate;
+  });
+}
+
 function reviewerScoreValue(
   criterion: {
     readonly inputType?: "numeric" | "dropdown" | "free_text" | undefined;
     readonly minimum: number;
     readonly options?: readonly { readonly label: string; readonly value: string }[] | undefined;
   },
-  score: { readonly value: number | string; readonly evidence: readonly string[] } | undefined,
+  score: { readonly value: number | string },
 ): string {
-  if (score === undefined) return "";
-  const inputType = criterion.inputType ?? "numeric";
-  if (inputType === "dropdown") {
-    if (typeof score.value === "string") return score.value;
+  if ((criterion.inputType ?? "numeric") === "dropdown" && typeof score.value === "number") {
     const index = Math.round(score.value - criterion.minimum);
     return criterion.options?.[index]?.value ?? String(score.value);
-  }
-  if (inputType === "free_text") {
-    return typeof score.value === "string" ? score.value : (score.evidence[0] ?? "");
   }
   return String(score.value);
 }
@@ -292,137 +317,273 @@ function freeTextResponse(comment: string, criterionId: string): string {
   const end = comment.indexOf("[/scorecard-response]", valueStart);
   return (end < 0 ? comment.slice(valueStart) : comment.slice(valueStart, end)).trim();
 }
+function reviewerComment(comment: string): string {
+  let remaining = comment;
+  const startMarker = '[scorecard-response id="';
+  const endMarker = "[/scorecard-response]";
+  while (true) {
+    const start = remaining.indexOf(startMarker);
+    if (start < 0) break;
+    const valueStart = remaining.indexOf("]", start + startMarker.length);
+    if (valueStart < 0) break;
+    const end = remaining.indexOf(endMarker, valueStart + 1);
+    if (end < 0) break;
+    remaining = `${remaining.slice(0, start)}${remaining.slice(end + endMarker.length)}`;
+  }
+  return remaining.trim();
+}
+function readableNumber(value: number | null): string {
+  return value === null ? "" : String(Number(value.toFixed(6)));
+}
+function reviewMatchesRound(review: EvaluationReview, round: ReviewRound, planVersion: number) {
+  const rubricRevision = round.rubricRevision ?? planVersion;
+  const roundRevision = round.revision ?? planVersion;
+  return (
+    review.roundId === round.id &&
+    (review.rubricRevision ?? review.rubricVersion ?? review.planRevision ?? review.planVersion) ===
+      rubricRevision &&
+    (review.roundRevision ??
+      review.rubricRevision ??
+      review.rubricVersion ??
+      review.planRevision ??
+      review.planVersion) === roundRevision
+  );
+}
+function submittedReviews(
+  snapshot: EvaluationOrganizerReviewExportSnapshot,
+  round: ReviewRound,
+  submissionId: string,
+): readonly EvaluationReview[] {
+  const rubricRevision =
+    round.rubricRevision ?? snapshot.plan.gradingRevision ?? snapshot.plan.version;
+  const roundRevision = round.revision ?? snapshot.plan.gradingRevision ?? snapshot.plan.version;
+  const assignmentIds = new Set(
+    snapshot.assignments
+      .filter(
+        (assignment) =>
+          assignment.roundId === round.id &&
+          assignment.submissionId === submissionId &&
+          assignment.status !== "abstained" &&
+          assignment.status !== "superseded" &&
+          (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
+          (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
+            roundRevision,
+      )
+      .map((assignment) => assignment.id),
+  );
+  return snapshot.reviews
+    .filter(
+      (review) =>
+        review.submissionId === submissionId &&
+        assignmentIds.has(review.assignmentId) &&
+        reviewMatchesRound(review, round, snapshot.plan.gradingRevision ?? snapshot.plan.version),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
 
-async function evaluationPlanCsv(
-  service: EvaluationService,
-  currentActor: EvaluationActor,
-  planId: string,
-): Promise<string> {
-  const plan = await service.getPlan(currentActor, planId);
-  const [submissions, assignments] = await Promise.all([
-    service.listOrganizerSubmissions(currentActor, plan.eventId),
-    service.listOrganizerAssignments(currentActor, plan.id),
-  ]);
-  const decisions = new Map(
-    await Promise.all(
-      submissions.map(
-        async (submission) =>
-          [submission.id, await service.getDecision(currentActor, plan.id, submission.id)] as const,
-      ),
-    ),
+export function renderEvaluationPlanCsv(
+  snapshot: EvaluationOrganizerReviewExportSnapshot,
+): EvaluationExportGeneration {
+  const rounds = [...snapshot.plan.rounds].sort(
+    (left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id),
   );
-  const aggregatesByRound = new Map(
-    await Promise.all(
-      plan.rounds.map(async (round) => {
-        const aggregates = await service.listAggregates(currentActor, plan.id, round.id);
-        return [
-          round.id,
-          new Map(aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const)),
-        ] as const;
-      }),
-    ),
+  const aggregates = new Map(
+    snapshot.aggregates.map((aggregate) => [
+      `${aggregate.roundId}\u0000${aggregate.submissionId}`,
+      aggregate,
+    ]),
   );
-  const roundColumns = plan.rounds.flatMap((round) => [
-    `round_${round.id}_submitted_reviews`,
-    `round_${round.id}_expected_reviews`,
-    `round_${round.id}_average_weighted_total`,
-    `round_${round.id}_possible_weighted_total`,
-    `round_${round.id}_comments`,
-    ...round.rubric.criteria.map((criterion) => `round_${round.id}_criterion_${criterion.id}`),
-  ]);
-  const headers = [
-    "submission_id",
-    "title",
-    "participants",
-    "decision_status",
-    "decision_reason",
-    "assignment_reviewers",
-    "assignment_statuses",
-    ...roundColumns,
-  ];
-  const rows = await Promise.all(
-    [...submissions]
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .map(async (submission) => {
-        const submissionAssignments = assignments
-          .filter((assignment) => assignment.submissionId === submission.id)
-          .sort((left, right) => left.id.localeCompare(right.id));
-        const roundValues = (
-          await Promise.all(
-            plan.rounds.map(async (round) => {
-              const aggregate = aggregatesByRound.get(round.id)?.get(submission.id);
-              if (aggregate === undefined) {
-                throw new Error(
-                  `The aggregate for submission ${submission.id} and round ${round.id} is unavailable.`,
-                );
-              }
-              const reviews = await service.listSubmittedReviews(
-                currentActor,
-                plan.id,
-                round.id,
-                submission.id,
-              );
-              const criterionValues = round.rubric.criteria.map((criterion) => {
-                const values = reviews
-                  .flatMap((review) => {
-                    const score = review.scores[criterion.id];
-                    if (criterion.inputType === "free_text") {
-                      const response = freeTextResponse(review.comment, criterion.id);
-                      const storedValue =
-                        typeof score?.value === "string" ? score.value.trim() : "";
-                      const value = response.length > 0 ? response : storedValue;
-                      return value.length === 0 ? [] : [value];
-                    }
-                    return score === undefined ||
-                      score.origin !== "human" ||
-                      score.humanConfirmedBy === null
-                      ? []
-                      : [reviewerScoreValue(criterion, score)];
-                  })
-                  .sort((left, right) => left.localeCompare(right));
-                return values.join(" | ");
-              });
-              return [
-                aggregate.submittedReviewCount,
-                aggregate.expectedReviewCount,
-                aggregate.averageWeightedTotal === null
-                  ? ""
-                  : aggregate.averageWeightedTotal.toFixed(6),
-                aggregate.possibleWeightedTotal.toFixed(6),
-                reviews
-                  .map((review) => review.comment.trim())
-                  .filter((comment) => comment.length > 0)
-                  .sort((left, right) => left.localeCompare(right))
-                  .join(" | "),
-                ...criterionValues,
-              ];
-            }),
-          )
-        ).flat();
-        const participants = submission.participants
-          .map((participant) => {
-            const role =
-              "role" in participant && typeof participant.role === "string"
-                ? ` (${participant.role})`
-                : "";
-            return `${participant.displayName}${role}`;
+  const roundNameCounts = new Map<string, number>();
+  for (const round of rounds) {
+    roundNameCounts.set(round.name, (roundNameCounts.get(round.name) ?? 0) + 1);
+  }
+  const roundHeaderPrefix = (round: (typeof rounds)[number]): string =>
+    roundNameCounts.get(round.name) === 1 ? round.name : `${round.name} [${round.id}]`;
+  const criterionHeaderCounts = new Map<string, number>();
+  for (const round of rounds) {
+    for (const criterion of round.rubric.criteria) {
+      const header = `${roundHeaderPrefix(round)} - ${criterion.label}`;
+      criterionHeaderCounts.set(header, (criterionHeaderCounts.get(header) ?? 0) + 1);
+    }
+  }
+  const headerCandidates = [
+    "Submission ID",
+    "Title",
+    "Participants",
+    "Lifecycle status",
+    "Decision status",
+    "Decision reason",
+    "Assignment reviewers",
+    "Assignment statuses",
+  ].map((header) => ({ header, stableId: header }));
+  const appendHeader = (header: string, stableId: string): void => {
+    headerCandidates.push({ header, stableId });
+  };
+  for (const round of rounds) {
+    const prefix = roundHeaderPrefix(round);
+    appendHeader(`${prefix} - Submitted reviews`, `${round.id}/submitted-reviews`);
+    appendHeader(`${prefix} - Expected reviews`, `${round.id}/expected-reviews`);
+    appendHeader(`${prefix} - Aggregate score`, `${round.id}/aggregate-score`);
+    appendHeader(`${prefix} - Possible score`, `${round.id}/possible-score`);
+    appendHeader(`${prefix} - Reviewer comments`, `${round.id}/reviewer-comments`);
+    for (const criterion of round.rubric.criteria) {
+      const base = `${prefix} - ${criterion.label}`;
+      appendHeader(
+        criterionHeaderCounts.get(base) === 1 ? base : `${base} [${round.id}/${criterion.id}]`,
+        `${round.id}/${criterion.id}`,
+      );
+    }
+  }
+  const headers = createUniqueCsvHeaders(headerCandidates);
+  const rows = snapshot.submissions.map((submission) => {
+    const submissionAssignments = snapshot.assignments
+      .filter((assignment) => assignment.submissionId === submission.id)
+      .sort(
+        (left, right) =>
+          rounds.findIndex((round) => round.id === left.roundId) -
+            rounds.findIndex((round) => round.id === right.roundId) ||
+          left.id.localeCompare(right.id),
+      );
+    const roundValues = rounds.flatMap((round) => {
+      const aggregate = aggregates.get(`${round.id}\u0000${submission.id}`);
+      if (aggregate === undefined) {
+        throw new Error(
+          `The aggregate for submission ${submission.id} and round ${round.id} is unavailable.`,
+        );
+      }
+      const reviews = submittedReviews(snapshot, round, submission.id);
+      const criterionValues = round.rubric.criteria.map((criterion) => {
+        const values = reviews
+          .flatMap((review) => {
+            const score = review.scores[criterion.id];
+            if (criterion.inputType === "free_text") {
+              const storedValue =
+                isHumanConfirmedScore(score) && typeof score.value === "string"
+                  ? score.value.trim()
+                  : "";
+              const value =
+                storedValue.length > 0
+                  ? storedValue
+                  : freeTextResponse(review.comment, criterion.id);
+              return value.length === 0 ? [] : [value];
+            }
+            return isHumanConfirmedScore(score) ? [reviewerScoreValue(criterion, score)] : [];
           })
+          .sort((left, right) => left.localeCompare(right));
+        return values.join(" | ");
+      });
+      return [
+        aggregate.submittedReviewCount,
+        aggregate.expectedReviewCount,
+        readableNumber(aggregate.averageWeightedTotal),
+        readableNumber(aggregate.possibleWeightedTotal),
+        reviews
+          .map((review) => reviewerComment(review.comment))
+          .filter((comment) => comment.length > 0)
           .sort((left, right) => left.localeCompare(right))
-          .join(" | ");
-        const decision = decisions.get(submission.id);
-        return [
-          submission.id,
-          submission.title,
-          participants,
-          decision?.status ?? "",
-          decision?.history.at(-1)?.reason ?? "",
-          submissionAssignments.map((assignment) => assignment.reviewerId).join(" | "),
-          submissionAssignments.map((assignment) => assignment.status).join(" | "),
-          ...roundValues,
-        ];
-      }),
+          .join(" | "),
+        ...criterionValues,
+      ];
+    });
+    const participants = submission.participants
+      .map((participant) => {
+        const role =
+          "role" in participant && typeof participant.role === "string"
+            ? ` (${participant.role})`
+            : "";
+        return `${participant.displayName}${role}`;
+      })
+      .sort((left, right) => left.localeCompare(right))
+      .join(" | ");
+    const decision = snapshot.decisions[submission.id];
+    return [
+      submission.id,
+      submission.title,
+      participants,
+      submission.status,
+      decision?.status ?? "undecided",
+      decision?.history.at(-1)?.reason ?? "",
+      submissionAssignments.map((assignment) => assignment.reviewerId).join(" | "),
+      submissionAssignments.map((assignment) => assignment.status).join(" | "),
+      ...roundValues,
+    ];
+  });
+  return {
+    body: `${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}\n`,
+    rowCount: rows.length,
+  };
+}
+
+export function createEvaluationExportGenerator(service: EvaluationService): {
+  generate(job: RunningEvaluationExport): Promise<EvaluationExportGeneration>;
+} {
+  return {
+    generate: async (job) => {
+      const snapshot = await service.getOrganizerReviewExportSnapshot(
+        {
+          tenantId: job.tenantId,
+          userId: job.requestedBy,
+          kind: "human",
+          grants: [{ eventId: job.eventId, role: "organizer" }],
+        },
+        job.planId,
+      );
+      if (snapshot.plan.version !== job.planVersion) {
+        throw new EvaluationExportGenerationError(
+          "The review plan changed after this export was requested. Request a new export.",
+        );
+      }
+      try {
+        return renderEvaluationPlanCsv(snapshot);
+      } catch (error) {
+        throw new EvaluationExportGenerationError(
+          "The evaluation results could not be rendered safely.",
+          { cause: error },
+        );
+      }
+    },
+  };
+}
+
+function requireResultsExports(options: EvaluationRouteOptions): EvaluationExportCoordinator {
+  if (options.resultsExports !== undefined) return options.resultsExports;
+  throw new EvaluationExportError(
+    "EVALUATION_EXPORT_UNAVAILABLE",
+    "Review results exports are temporarily unavailable.",
+    503,
   );
-  return `${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`;
+}
+
+function evaluationExportPath(planId: string, runId: string): string {
+  return `/api/admin/evaluations/plans/${encodeURIComponent(planId)}/exports/${encodeURIComponent(runId)}`;
+}
+
+function evaluationExportResponse(job: EvaluationExport): Record<string, unknown> {
+  const statusUrl = evaluationExportPath(job.planId, job.id);
+  return {
+    id: job.id,
+    planId: job.planId,
+    status: job.status,
+    fileName: job.fileName,
+    createdAt: job.requestedAt,
+    statusUrl,
+    downloadUrl: `${statusUrl}/download`,
+    ...(job.status === "running" ? { startedAt: job.startedAt } : {}),
+    ...(job.status === "ready"
+      ? {
+          startedAt: job.startedAt,
+          completedAt: job.completedAt,
+          rowCount: job.rowCount,
+        }
+      : {}),
+    ...(job.status === "failed"
+      ? {
+          startedAt: job.startedAt,
+          completedAt: job.completedAt,
+          error: job.error,
+        }
+      : {}),
+  };
 }
 
 export function createEvaluationRoutes(
@@ -431,15 +592,54 @@ export function createEvaluationRoutes(
 ): Hono<EvaluationRouteEnvironment> {
   const routes = new Hono<EvaluationRouteEnvironment>();
 
-  routes.get("/plans/:planId/export.csv", async (context) => {
-    const csv = await evaluationPlanCsv(service, actor(context), context.req.param("planId"));
-    const filename = `evaluation-${context.req.param("planId").replace(/[^a-z0-9_-]/giu, "-")}.csv`;
-    return context.body(csv, 200, {
-      "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="${filename}"`,
+  routes.post("/plans/:planId/exports", async (context) => {
+    const currentActor = actor(context);
+    const plan = await service.getOrganizerPlan(currentActor, context.req.param("planId"));
+    const idempotencyKey = z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .parse(context.req.header("idempotency-key"));
+    const job = await requireResultsExports(options).request({
+      tenantId: currentActor.tenantId,
+      eventId: plan.eventId,
+      planId: plan.id,
+      planVersion: plan.version,
+      requestedBy: currentActor.userId,
+      idempotencyKey,
+    });
+    return context.json({ data: evaluationExportResponse(job) }, 202);
+  });
+
+  routes.get("/plans/:planId/exports/:runId", async (context) => {
+    const currentActor = actor(context);
+    const plan = await service.getOrganizerPlan(currentActor, context.req.param("planId"));
+    const job = await requireResultsExports(options).get({
+      tenantId: currentActor.tenantId,
+      eventId: plan.eventId,
+      planId: plan.id,
+      runId: context.req.param("runId"),
+    });
+    return context.json({ data: evaluationExportResponse(job) });
+  });
+
+  routes.get("/plans/:planId/exports/:runId/download", async (context) => {
+    const currentActor = actor(context);
+    const plan = await service.getOrganizerPlan(currentActor, context.req.param("planId"));
+    const download = await requireResultsExports(options).download({
+      tenantId: currentActor.tenantId,
+      eventId: plan.eventId,
+      planId: plan.id,
+      runId: context.req.param("runId"),
+    });
+    return context.body(download.body, 200, {
+      "content-type": download.contentType,
+      "content-disposition": `attachment; filename="${download.fileName}"`,
       "cache-control": "no-store",
     });
   });
+
   routes.get("/reviewer/workspace", async (context) => {
     const eventId = context.req.query("eventId");
     const organizationId = context.req.query("organizationId");
@@ -1059,6 +1259,9 @@ export function createEvaluationRoutes(
       );
     }
     if (error instanceof EvaluationError) {
+      return context.json({ error: { code: error.code, message: error.message } }, error.status);
+    }
+    if (error instanceof EvaluationExportError) {
       return context.json({ error: { code: error.code, message: error.message } }, error.status);
     }
     throw error;
