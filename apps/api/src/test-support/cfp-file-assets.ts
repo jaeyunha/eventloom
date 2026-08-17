@@ -69,7 +69,8 @@ export class RecordingPrivateAssets {
 
   async verifyUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<boolean> {
     this.verifiedBindings.push(binding);
-    const verified = this.verified && this.capabilityStates.get(binding.capabilityId) === "uploaded";
+    const verified =
+      this.verified && this.capabilityStates.get(binding.capabilityId) === "uploaded";
     if (verified && this.cleanupAfterVerification) {
       this.capabilityStates.set(binding.capabilityId, "deleted");
     }
