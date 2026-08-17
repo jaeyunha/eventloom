@@ -81,22 +81,23 @@ The pushed continuation contains:
 
 ## Current verification on the pushed head
 
-- `make check`: **FAIL, pre-existing main-only formatting errors** in
-  `apps/web/src/features/admin/cfp-editor-model.ts`,
-  `apps/web/src/features/admin/cfp-editor-sections.tsx`, and
-  `apps/web/src/features/cfp/cfp-wizard.tsx`; no lane file is implicated.
-- `make test`: **FAIL, one unrelated main-only test**:
-  `apps/web/src/features/work/work-hub.test.tsx`; 2,319 tests passed and 3
-  were skipped.
-- API/web typechecks: **PASS**.
-- API/web builds: **PASS**.
+- API typecheck and API Worker dry-run build: **PASS**.
+- Web typecheck and web build: **FAIL on eight pre-existing main-only
+  TypeScript errors** in file-upload, event-date-picker, CFP/portal upload,
+  and speaker-workspace code; none of the failing hunks are lane-owned.
+- Full formatter check: **FAIL on four pre-existing main-only files**:
+  `apps/web/src/components/ui/file-upload.tsx`,
+  `apps/web/src/features/cfp/cfp-wizard-sections.tsx`,
+  `apps/web/src/features/portal/portal-task-upload.tsx`, and
+  `tests/e2e/file-upload-dropzone-qa.spec.ts`.
+- Full unit/integration gate has the documented unrelated main-only
+  `work-hub` assertion; focused lane suites pass.
 - Focused speaker, D1, local runtime, cleanup, outbox, CFP, composition,
   OpenAPI, and web client suites: **PASS**.
 - Isolated Playwright scenario
   `tests/e2e/content-collection-detail.spec.ts`: **PASS**.
-- Migration validator: **FAIL on pre-existing main ordinal collisions**
-  (`0034`, `0035`, `0037`); lane migrations are uniquely renumbered to
-  `0041`-`0045`.
+- Migration validator: **PASS**, with lane migrations uniquely numbered
+  `0046`-`0050`.
 - No production deployment performed.
 
 The remaining review items below are historical checkpoint tasks; current
@@ -222,9 +223,8 @@ still requires independent current-head product verification PASS results.
 ## Known review findings and unresolved risks
 
 - Atomic review/task CAS is covered by D1 and local stale-task regressions.
-- The repository's current main branch still has pre-existing migration ordinal
-  collisions (`0034`, `0035`, and `0037`) and three pre-existing formatting
-  failures; this lane does not alter unrelated main migrations or UI files.
+- Advanced main retains eight pre-existing web typecheck errors and four
+  pre-existing formatter failures; this lane does not alter those files.
 - The full unit gate has one pre-existing `work-hub` assertion failure; all
   other current-head tests pass.
 - Final merge remains gated on independent product verification and a second
