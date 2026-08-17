@@ -90,6 +90,7 @@ import type {
   EvaluationAcceptanceHandoff,
   EvaluationAcceptanceHandoffInput,
   EvaluationDecisionProjectionInput,
+  EvaluationSessionDecisionReconciliationInput,
   EvaluationSubmissionRecord,
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
@@ -105,6 +106,7 @@ import type {
   EvaluationAssignmentScope,
   EvaluationConflictDeclaration,
   EvaluationDecision,
+  EvaluationDecisionStatus,
   EvaluationPlan,
   EvaluationReview,
   EvaluationReviewHistory,
@@ -175,6 +177,7 @@ import type {
   SpeakerAccountWorkloadRepository,
   SpeakerInvitationDeliveryInput,
   SpeakerInvitationDeliveryReceipt,
+  SpeakerDecisionWriteFence,
   SpeakerOrganizerLifecycleRepository,
   SpeakerProfile,
   SpeakerReminderDelivery,
@@ -2876,12 +2879,15 @@ function sessionsDiffer(left: Session, right: Session): boolean {
   );
 }
 interface EvaluationAcceptanceSpeakerRepository extends SpeakerRepository {
-  ensureProfile?(input: {
-    readonly eventId: string;
-    readonly participant: SubmissionParticipant;
-    readonly updatedAt: string;
-    readonly organizationId?: string;
-  }): Promise<SpeakerProfile>;
+  ensureProfile?(
+    input: {
+      readonly eventId: string;
+      readonly participant: SubmissionParticipant;
+      readonly updatedAt: string;
+      readonly organizationId?: string;
+    },
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): Promise<SpeakerProfile>;
   ensureProfileTask?(input: {
     readonly eventId: string;
     readonly submissionId: string;
@@ -2926,8 +2932,10 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const scope = `${input.tenantId}:evaluation-acceptance`;
     const transitionKey = input.idempotencyKey.trim();
     const key = `acceptance:${input.submissionId}:${transitionKey}`;
+    const isCurrentDecision = input.isCurrentDecision ?? (async () => true);
     let acceptedSubmission: Submission | undefined;
     await idempotency.run(scope, key, async () => {
+      if (!(await isCurrentDecision())) return { accepted: false };
       const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
       if (submission === null || submission.eventId !== input.eventId) {
         throw new Error("The accepted submission was not found for the event.");
@@ -2936,20 +2944,23 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         throw new Error("An accepted submission must contain at least one speaker.");
       }
       acceptedSubmission = submission;
+      const session = await this.#ensureCanonicalSession(input, submission).catch(
+        (error: unknown) => {
+          throw new Error("Accepted session projection failed.", { cause: error });
+        },
+      );
+      if (!(await isCurrentDecision())) return { accepted: false };
       const profiles = await Promise.all(
         submission.participants.map(async (participant) => {
           const profile = await this.#ensureProfile(input, participant);
+          if (!(await isCurrentDecision())) return profile.id;
           await this.#ensureProfileTask(input, participant.id);
           return profile.id;
         }),
       ).catch((error: unknown) => {
         throw new Error("Accepted speaker onboarding failed.", { cause: error });
       });
-      const session = await this.#ensureCanonicalSession(input, submission).catch(
-        (error: unknown) => {
-          throw new Error("Accepted session projection failed.", { cause: error });
-        },
-      );
+      if (!(await isCurrentDecision())) return { accepted: false };
 
       await Promise.all([
         this.#database
@@ -2957,7 +2968,17 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             `INSERT INTO audit_events
                (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
                 trace_id, details_json, occurred_at)
-             VALUES (?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?)
+             SELECT ?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?
+             WHERE EXISTS (
+               SELECT 1
+               FROM evaluation_decisions
+               WHERE organization_id = ?
+                 AND event_id = ?
+                 AND plan_id = ?
+                 AND submission_id = ?
+                 AND version = ?
+                 AND status = 'accepted'
+             )
              ON CONFLICT (id) DO NOTHING`,
           )
           .bind(
@@ -2974,6 +2995,11 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
               sessionId: session.id,
             }),
             input.decidedAt,
+            input.tenantId,
+            input.eventId,
+            input.planId,
+            input.submissionId,
+            input.decisionVersion,
           )
           .run(),
         this.#enqueue(
@@ -2989,7 +3015,70 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const submission =
       acceptedSubmission ?? (await this.#cfp.getSubmission(input.tenantId, input.submissionId));
     if (submission === null || submission.eventId !== input.eventId) return;
+    if (!(await isCurrentDecision())) return;
     await this.#ensureSpeakerInvitations(input, submission);
+  }
+
+  async reconcileSessionDecision(
+    input: EvaluationSessionDecisionReconciliationInput,
+  ): Promise<void> {
+    const isCurrentDecision = async (): Promise<boolean> => {
+      const current = await this.#database
+        .prepare(
+          `SELECT version, status
+           FROM evaluation_decisions
+           WHERE organization_id = ?1
+             AND event_id = ?2
+             AND plan_id = ?3
+             AND submission_id = ?4
+           LIMIT 1`,
+        )
+        .bind(input.tenantId, input.eventId, input.planId, input.submissionId)
+        .first<{ version: number; status: string }>();
+      return (
+        current !== null &&
+        current.version === input.decisionVersion &&
+        current.status === input.status
+      );
+    };
+    if (!(await isCurrentDecision())) return;
+    const reconciliationInput = {
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      sessionId: `session-${input.submissionId}`,
+      status: input.status,
+      actorId: input.decidedBy,
+      isCurrentDecision,
+      decisionFence: input.decisionFence,
+    } as const;
+    if (this.#sessionService !== undefined) {
+      await this.#sessionService.reconcileDecisionSessionStatus(reconciliationInput);
+      return;
+    }
+    const current = await this.#sessions.getSession(
+      input.tenantId,
+      input.eventId,
+      reconciliationInput.sessionId,
+    );
+    if (current === null || !(await isCurrentDecision())) return;
+    const next: Session = {
+      ...current,
+      status: input.status === "rejected" ? "Rejected" : "Waitlisted",
+      version: current.version + 1,
+      updatedAt: input.decidedAt,
+      updatedBy: input.decidedBy,
+      history: [
+        ...current.history,
+        {
+          id: `${current.id}:v${current.version + 1}`,
+          action: "updated",
+          version: current.version + 1,
+          actorId: input.decidedBy,
+          occurredAt: input.decidedAt,
+        },
+      ],
+    };
+    await this.#sessions.putSession(next, current.version, input.decisionFence);
   }
 
   async #ensureProfile(
@@ -2998,12 +3087,16 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   ): Promise<SpeakerProfile> {
     const ensureProfile = this.#speakers.ensureProfile;
     if (ensureProfile !== undefined) {
-      return ensureProfile.call(this.#speakers, {
-        eventId: input.eventId,
-        participant,
-        organizationId: input.tenantId,
-        updatedAt: input.decidedAt,
-      });
+      return ensureProfile.call(
+        this.#speakers,
+        {
+          eventId: input.eventId,
+          participant,
+          organizationId: input.tenantId,
+          updatedAt: input.decidedAt,
+        },
+        input.decisionFence,
+      );
     }
     const existing = await this.#speakers.getProfile(input.eventId, participant.id);
     if (existing !== null) return existing;
@@ -3020,7 +3113,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       version: 1,
       updatedAt: input.decidedAt,
     };
-    const created = await this.#speakers.createProfile?.(profile);
+    const created = await this.#speakers.createProfile?.(profile, input.decisionFence);
     if (created?.ok === true) return created.value;
     throw new Error("The accepted speaker profile could not be persisted.");
   }
@@ -3064,6 +3157,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       task,
       expectedVersion: null,
       actorAccountId: input.decidedBy,
+      ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
     });
     if (!created.ok) throw new Error("The accepted speaker profile task was not persisted.");
   }
@@ -3074,6 +3168,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   ): Promise<Session> {
     const id = `session-${submission.id}`;
     const current = await this.#sessions.getSession(input.tenantId, input.eventId, id);
+    const isCurrentDecision = input.isCurrentDecision ?? (async () => true);
     const formatIds = submissionAnswerIds(submission, "formatId");
     const formatLabels = submissionAnswerIds(submission, "format");
     const trackIdsFromAnswers = submissionAnswerIds(submission, "trackIds", "trackId");
@@ -3152,10 +3247,15 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       updatedBy: current?.updatedBy ?? input.decidedBy,
       history: [...(current?.history ?? [])],
     };
+    if (!(await isCurrentDecision())) return current ?? base;
     if (this.#sessionService !== undefined) {
       return this.#sessionService.upsertAcceptedSession({
         session: base,
         actorId: input.decidedBy,
+        ...(input.isCurrentDecision === undefined
+          ? {}
+          : { beforePersist: input.isCurrentDecision }),
+        decisionFence: input.decisionFence,
       });
     }
     if (current === null) {
@@ -3176,7 +3276,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
           },
         ],
       };
-      await this.#sessions.putSession(created, null);
+      await this.#sessions.putSession(created, null, input.decisionFence);
       await this.#sessions.appendAudit({
         id: `${id}:v1`,
         tenantId: input.tenantId,
@@ -3211,7 +3311,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         },
       ],
     };
-    await this.#sessions.putSession(updated, current.version);
+    await this.#sessions.putSession(updated, current.version, input.decisionFence);
     await this.#sessions.appendAudit({
       id: `${id}:v${nextVersion}`,
       tenantId: input.tenantId,
@@ -3249,6 +3349,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         if ((users.results ?? []).length !== 1) return;
         const user = users.results[0];
         if (user === undefined) return;
+        if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
         await this.#invitationCreator.create({
           id: `event-role-invitation:speaker:${input.eventId}:${participant.id}`,
           organizationId: input.tenantId,
@@ -3261,6 +3362,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
           invitedByActorType: "user",
           invitedByActorId: input.decidedBy,
           invitedAt: input.decidedAt,
+          ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
         });
       }),
     );
@@ -3279,10 +3381,34 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         `INSERT INTO outbox_jobs
            (id, tenant_id, topic, deduplication_key, payload_json, state,
             attempt_count, available_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+         SELECT ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1
+           FROM evaluation_decisions
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND plan_id = ?
+             AND submission_id = ?
+             AND version = ?
+             AND status = 'accepted'
+         )
          ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
       )
-      .bind(jobId, input.tenantId, topic, deduplicationKey, JSON.stringify(payload), now, now, now)
+      .bind(
+        jobId,
+        input.tenantId,
+        topic,
+        deduplicationKey,
+        JSON.stringify(payload),
+        now,
+        now,
+        now,
+        input.tenantId,
+        input.eventId,
+        input.planId,
+        input.submissionId,
+        input.decisionVersion,
+      )
       .run();
     const inserted = result.meta === undefined || result.meta.changes > 0;
     const state = inserted
@@ -3294,6 +3420,25 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             .first<{ state: string }>()
         )?.state;
     if (state === "pending") {
+      const current = await this.#database
+        .prepare(
+          `SELECT version, status
+             FROM evaluation_decisions
+            WHERE organization_id = ?
+              AND event_id = ?
+              AND plan_id = ?
+              AND submission_id = ?
+            LIMIT 1`,
+        )
+        .bind(input.tenantId, input.eventId, input.planId, input.submissionId)
+        .first<{ version: number; status: EvaluationDecisionStatus }>();
+      if (
+        current === null ||
+        current.version !== input.decisionVersion ||
+        current.status !== "accepted"
+      ) {
+        return;
+      }
       await this.#queue.send({
         version: 1,
         jobId,
@@ -4016,8 +4161,13 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       .run();
   }
 
-  async run<T>(scope: string, key: string, operation: () => Promise<T>): Promise<T> {
-    const fingerprint = `cfp:${scope}:${key}`;
+  async run<T>(
+    scope: string,
+    key: string,
+    operation: () => Promise<T>,
+    requestFingerprint?: string,
+  ): Promise<T> {
+    const fingerprint = requestFingerprint ?? `cfp:${scope}:${key}`;
     const claim = await this.begin({ scope, key, fingerprint });
     if (claim.status === "replay") return claim.response.body as T;
     if (claim.status === "conflict")
@@ -6500,6 +6650,13 @@ async function enqueueCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
+  readonly decisionFence?: {
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: EvaluationDecisionStatus;
+  };
 }): Promise<{
   readonly jobId: string;
   readonly inserted: boolean;
@@ -6514,6 +6671,37 @@ async function enqueueCloudflareOutbox(input: {
       queued: false,
       state: staged.state,
     };
+  }
+  if (input.decisionFence !== undefined) {
+    const current = await input.database
+      .prepare(
+        `SELECT version, status
+           FROM evaluation_decisions
+          WHERE organization_id = ?
+            AND event_id = ?
+            AND plan_id = ?
+            AND submission_id = ?
+          LIMIT 1`,
+      )
+      .bind(
+        input.tenantId,
+        input.decisionFence.eventId,
+        input.decisionFence.planId,
+        input.decisionFence.submissionId,
+      )
+      .first<{ version: number; status: EvaluationDecisionStatus }>();
+    if (
+      current === null ||
+      current.version !== input.decisionFence.version ||
+      current.status !== input.decisionFence.status
+    ) {
+      return {
+        jobId: staged.jobId,
+        inserted: false,
+        queued: false,
+        state: staged.state,
+      };
+    }
   }
   await input.queue.send({
     version: 1,
@@ -6543,6 +6731,13 @@ async function stageCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
+  readonly decisionFence?: {
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: EvaluationDecisionStatus;
+  };
 }): Promise<{
   readonly jobId: string;
   readonly inserted: boolean;
@@ -6556,7 +6751,21 @@ async function stageCloudflareOutbox(input: {
       `INSERT INTO outbox_jobs
          (id, tenant_id, topic, deduplication_key, payload_json, state,
           attempt_count, available_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+       ${
+         input.decisionFence === undefined
+           ? "VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)"
+           : `SELECT ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?
+              WHERE EXISTS (
+                SELECT 1
+                FROM evaluation_decisions
+                WHERE organization_id = ?
+                  AND event_id = ?
+                  AND plan_id = ?
+                  AND submission_id = ?
+                  AND version = ?
+                  AND status = ?
+              )`
+}
        ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
     )
     .bind(
@@ -6568,6 +6777,16 @@ async function stageCloudflareOutbox(input: {
       now,
       now,
       now,
+      ...(input.decisionFence === undefined
+        ? []
+        : [
+            input.tenantId,
+            input.decisionFence.eventId,
+            input.decisionFence.planId,
+            input.decisionFence.submissionId,
+            input.decisionFence.version,
+            input.decisionFence.status,
+          ]),
     )
     .run();
   const changes = result.meta?.changes;
@@ -7663,6 +7882,7 @@ export class AirtableEvaluationDecisionProjection {
   async projectDecision(input: EvaluationDecisionProjectionInput): Promise<void> {
     const submission = await this.cfp.getSubmission(input.tenantId, input.submissionId);
     if (submission === null || submission.eventId !== input.eventId) return;
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     const decidedAudience =
       input.status === "accepted"
         ? "accepted_participants"
@@ -7670,6 +7890,24 @@ export class AirtableEvaluationDecisionProjection {
           ? "waitlisted_participants"
           : "rejected_participants";
     const updatedAt = new Date().toISOString();
+    const decisionFenceSql = `EXISTS (
+      SELECT 1
+      FROM evaluation_decisions
+      WHERE organization_id = ?
+        AND event_id = ?
+        AND plan_id = ?
+        AND submission_id = ?
+        AND version = ?
+        AND status = ?
+    )`;
+    const decisionFenceValues = [
+      input.tenantId,
+      input.eventId,
+      input.planId,
+      input.submissionId,
+      input.decisionVersion,
+      input.status,
+    ];
     const audienceStatements: D1PreparedStatement[] = [];
     for (const participant of submission.participants) {
       const displayName =
@@ -7679,7 +7917,8 @@ export class AirtableEvaluationDecisionProjection {
           .prepare(
             `INSERT INTO communication_recipients
                (id, organization_id, event_id, participant_id, email, display_name, data_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE ${decisionFenceSql}
              ON CONFLICT(id) DO UPDATE SET
                email = excluded.email,
                display_name = excluded.display_name,
@@ -7695,24 +7934,35 @@ export class AirtableEvaluationDecisionProjection {
             displayName,
             JSON.stringify({ submissionId: input.submissionId }),
             updatedAt,
+            ...decisionFenceValues,
           ),
         this.database
           .prepare(
             `DELETE FROM communication_recipient_audiences
               WHERE organization_id = ? AND event_id = ? AND recipient_id = ?
-                AND audience IN ('accepted_participants','waitlisted_participants','rejected_participants')`,
+                AND audience IN ('accepted_participants','waitlisted_participants','rejected_participants')
+                AND ${decisionFenceSql}`,
           )
-          .bind(input.tenantId, input.eventId, participant.id),
+          .bind(input.tenantId, input.eventId, participant.id, ...decisionFenceValues),
         this.database
           .prepare(
             `INSERT INTO communication_recipient_audiences
                (organization_id, event_id, recipient_id, audience)
-             VALUES (?, ?, ?, ?)`,
+             SELECT ?, ?, ?, ?
+             WHERE ${decisionFenceSql}`,
           )
-          .bind(input.tenantId, input.eventId, participant.id, decidedAudience),
+          .bind(
+            input.tenantId,
+            input.eventId,
+            participant.id,
+            decidedAudience,
+            ...decisionFenceValues,
+          ),
       );
     }
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     if (audienceStatements.length > 0) await this.database.batch(audienceStatements);
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     const recipients = submission.participants
       .map((participant) => participant.email.trim())
       .filter((email) => email.length > 0);
@@ -7756,6 +8006,7 @@ export class AirtableEvaluationDecisionProjection {
             decisionStatus: input.status,
             decisionReason: input.reason,
           });
+    if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
     await enqueueCloudflareOutbox({
       database: this.database,
       queue: this.queue,
@@ -7775,8 +8026,22 @@ export class AirtableEvaluationDecisionProjection {
         templateId: template?.id,
         templateVersion: template?.version,
         status: input.status,
+        decisionFence: {
+          eventId: input.eventId,
+          planId: input.planId,
+          submissionId: input.submissionId,
+          version: input.decisionVersion,
+          status: input.status,
+        },
       },
       now: input.decidedAt,
+      decisionFence: {
+        eventId: input.eventId,
+        planId: input.planId,
+        submissionId: input.submissionId,
+        version: input.decisionVersion,
+        status: input.status,
+      },
     });
   }
 }

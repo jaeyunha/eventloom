@@ -184,7 +184,6 @@ export interface PortalAsset {
   reviewState?: "approved" | "needs_changes";
   reviewNote?: string;
   reviewedAt?: string;
-  reviewedBy?: string;
   reviewVersion?: number;
   commentThreadId?: string;
   rejectionReason?: string;

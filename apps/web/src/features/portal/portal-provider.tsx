@@ -1,4 +1,5 @@
 "use client";
+
 import { useSearchParams } from "next/navigation";
 
 import {
@@ -19,6 +20,7 @@ import {
   scopePortalContextToAuthorizedParticipants,
   scopePortalViewToAuthorizedParticipants,
 } from "./model";
+import type { ParticipantSafeGuideFailure, PortalPrefetchResult } from "./portal-provider-model";
 import {
   acceptedSubmissionId,
   assetBelongsToPortalContext,
@@ -32,8 +34,6 @@ import {
   messageFrom,
   normalizeCapabilities,
   participantSafeGuideFailure,
-  type ParticipantSafeGuideFailure,
-  type PortalPrefetchResult,
   portalContextResponseForTarget,
   portalViewAfterLoadFailure,
   portalViewMatchesSelection,
@@ -1149,14 +1149,35 @@ function usePortalProviderValue({
       try {
         let finalizedHeadshot: PortalAsset | undefined;
         if (input.headshot && api.uploadFile && api.finalizeAsset) {
+          const supersededHeadshot = input.profile.headshotAssetId
+            ? (() => {
+                const referenced = view?.assets?.find(
+                  (asset) => asset.id === input.profile.headshotAssetId,
+                );
+                if (referenced === undefined) return undefined;
+                const familyId = referenced.versionFamilyId ?? referenced.id;
+                return (view?.assets ?? [])
+                  .filter(
+                    (asset) =>
+                      (asset.versionFamilyId ?? asset.id) === familyId &&
+                      (asset.state === "ready" || asset.state === "rejected") &&
+                      Number.isSafeInteger(asset.version) &&
+                      (asset.version ?? 0) > 0,
+                  )
+                  .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))[0];
+              })()
+            : undefined;
           asyncDispatch({ type: "profile-mutation-set", phase: "pending" });
           const pending = await api.uploadFile({
             eventId: targetContext.eventId,
             participantId: activeParticipantId,
             kind: "headshot",
             file: input.headshot,
-            ...(input.profile.headshotAssetId
-              ? { supersedesAssetId: input.profile.headshotAssetId }
+            ...(supersededHeadshot
+              ? {
+                  supersedesAssetId: supersededHeadshot.id,
+                  expectedLatestVersion: supersededHeadshot.version,
+                }
               : {}),
           });
           if (!profileAssetBelongsToPortalContext(pending, targetContext)) {
@@ -1260,7 +1281,7 @@ function usePortalProviderValue({
         }
       }
     },
-    [api, can, context, contexts, hydrate, selectedParticipantId],
+    [api, can, context, contexts, hydrate, selectedParticipantId, view],
   );
 
   const transitionTask = useCallback(
@@ -1372,6 +1393,16 @@ function usePortalProviderValue({
       }
       const targetContext = context;
       const generation = loadGeneration.current;
+      const predecessor = (view?.assets ?? [])
+        .filter(
+          (asset) =>
+            asset.taskId === task.id &&
+            asset.kind === kind &&
+            (asset.state === "ready" || asset.state === "rejected") &&
+            Number.isSafeInteger(asset.version) &&
+            (asset.version ?? 0) > 0,
+        )
+        .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))[0];
       asyncDispatch({ type: "task-busy-set", taskId: task.id, busy: true });
       asyncDispatch({ type: "mutation-error-set", error: null });
       try {
@@ -1381,6 +1412,12 @@ function usePortalProviderValue({
           taskId: task.id,
           kind,
           file,
+          ...(predecessor === undefined
+            ? {}
+            : {
+                supersedesAssetId: predecessor.id,
+                expectedLatestVersion: predecessor.version ?? 1,
+              }),
         });
         const finalized = await api.finalizeAsset({
           eventId: targetContext.eventId,
@@ -1732,6 +1769,11 @@ function usePortalProviderValue({
           eventId: targetContext.eventId,
           ...input,
           submissionId: uploadSubmissionId,
+          ...(input.supersedesAssetId === undefined
+            ? {}
+            : {
+                expectedLatestVersion: supersededAsset?.version ?? 1,
+              }),
         });
         if (
           pendingAsset.state !== "pending_upload" ||

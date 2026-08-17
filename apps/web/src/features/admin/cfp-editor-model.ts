@@ -305,15 +305,17 @@ const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
     options: [],
   },
 ];
-function coreTitleField(): CfpFormField {
-  const field = CORE_PROPOSAL_FIELDS.find((candidate) => candidate.id === "title");
-  if (field === undefined) throw new Error("The core CFP title field is missing.");
+function firstCoreProposalField(): CfpFormField {
+  const field = CORE_PROPOSAL_FIELDS[0];
+  if (field === undefined) {
+    throw new Error("The core proposal field set must not be empty.");
+  }
   return field;
 }
 
 function asCanonicalTitleField(
   field: CfpFormField,
-  fallback: CfpFormField = coreTitleField(),
+  fallback: CfpFormField = firstCoreProposalField(),
 ): CfpFormField {
   return {
     ...fallback,
@@ -355,11 +357,11 @@ export function repairCanonicalTitleFields(fields: CfpFormField[]): CfpFormField
   const titleLike = fields.filter((field) => looksLikeTitleField(field));
   if (titleLike.length === 1) {
     const target = titleLike[0];
-    if (target === undefined) return fields;
+    if (target === undefined) return [asCanonicalTitleField(firstCoreProposalField()), ...fields];
     return fields.map((field) => (field.id === target.id ? asCanonicalTitleField(field) : field));
   }
 
-  return [asCanonicalTitleField(coreTitleField()), ...fields];
+  return [asCanonicalTitleField(firstCoreProposalField()), ...fields];
 }
 
 export function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {

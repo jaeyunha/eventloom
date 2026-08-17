@@ -675,4 +675,32 @@ describe("D1 session repository commands", () => {
     expect(queries).toContain("INSERT INTO session_statuses");
     expect(queries).toContain("NOT EXISTS");
   });
+
+  it("fences session writes against the current evaluation decision", async () => {
+    const db = database();
+    const repository = new D1SessionRepository(db);
+
+    await repository.commit({
+      operation: "putSession",
+      value: session,
+      expectedVersion: 1,
+      audit: sessionAudit,
+      decisionFence: {
+        tenantId: "org-1",
+        eventId: "event-1",
+        planId: "plan-1",
+        submissionId: "submission-1",
+        version: 3,
+        status: "rejected",
+      },
+    });
+
+    const primary = db.statements[0];
+    expect(primary?.bound.query).toContain("FROM evaluation_decisions");
+    expect(primary?.bound.query).toContain("organization_id = ?");
+    expect(primary?.bound.values).toContain("plan-1");
+    expect(primary?.bound.values).toContain("submission-1");
+    expect(primary?.bound.values).toContain(3);
+    expect(primary?.bound.values).toContain("rejected");
+  });
 });

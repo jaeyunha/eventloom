@@ -19,7 +19,16 @@ function createDatabase(): SqliteD1 {
     readFileSync(join(process.cwd(), "apps/api/src/test-support/cfp-file-assets-base.sql"), "utf8"),
   );
   database.executeScript(
+    readFileSync(join(process.cwd(), "apps/api/migrations/0002_operational_state.sql"), "utf8"),
+  );
+  database.executeScript(
     readFileSync(join(process.cwd(), "apps/api/migrations/0024_cfp_file_assets.sql"), "utf8"),
+  );
+  database.executeScript(
+    readFileSync(
+      join(process.cwd(), "apps/api/migrations/0050_private_object_cleanup.sql"),
+      "utf8",
+    ),
   );
   return database;
 }
@@ -120,6 +129,10 @@ describe("production CFP file asset persistence", () => {
       capabilityId: authorization.asset.assetId,
       participantId: "__cfp_submission__",
     });
+    expect(fixture.privateAssets.invalidated.at(-1)).toMatchObject({
+      capabilityId: authorization.asset.assetId,
+      participantId: "__cfp_submission__",
+    });
     expect(fixture.database.query<{ state: string }>("SELECT state FROM cfp_file_assets")).toEqual([
       { state: "ready" },
     ]);
@@ -132,6 +145,57 @@ describe("production CFP file asset persistence", () => {
         owner: "submission",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("does not publish ready when cleanup wins after byte verification", async () => {
+    const fixture = createCfpAssetFixture(createDatabase());
+    const authorization = await issueUpload(fixture);
+    fixture.privateAssets.verified = true;
+    fixture.privateAssets.cleanupAfterVerification = true;
+
+    await expect(
+      fixture.gateway.finalizeUpload({
+        tenantId: fixture.event.tenantId,
+        eventId: fixture.event.id,
+        submissionId: fixture.submission.id,
+        owner: "submission",
+        fieldKey: "slides",
+        assetId: authorization.asset.assetId,
+        state: "ready",
+        idempotencyKey: "finalize-file-cleanup-race",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.database.query<{ state: string }>("SELECT state FROM cfp_file_assets")).toEqual([
+      { state: "pending_upload" },
+    ]);
+  });
+
+  it("rolls back rejected cleanup intent when the CFP finalization CAS loses", async () => {
+    const fixture = createCfpAssetFixture(createDatabase());
+    const authorization = await issueUpload(fixture, "issue-file-rejection-race");
+    fixture.database.beforeNextBatch(() => {
+      fixture.database.run(
+        `UPDATE cfp_file_assets SET state = 'ready' WHERE id = '${authorization.asset.assetId}'`,
+      );
+    });
+
+    await expect(
+      fixture.gateway.finalizeUpload({
+        tenantId: fixture.event.tenantId,
+        eventId: fixture.event.id,
+        submissionId: fixture.submission.id,
+        owner: "submission",
+        fieldKey: "slides",
+        assetId: authorization.asset.assetId,
+        state: "rejected",
+        rejectionReason: "Malware detected",
+        idempotencyKey: "reject-file-race",
+      }),
+    ).rejects.toThrow();
+    expect(fixture.database.query<{ state: string }>("SELECT state FROM cfp_file_assets")).toEqual([
+      { state: "ready" },
+    ]);
+    expect(fixture.database.query("SELECT id FROM outbox_jobs")).toEqual([]);
   });
 
   it("invalidates a rejected upload capability", async () => {
@@ -152,5 +216,23 @@ describe("production CFP file asset persistence", () => {
       }),
     ).resolves.toMatchObject({ state: "rejected" });
     expect(fixture.privateAssets.invalidated).toHaveLength(1);
+    expect(
+      fixture.database.query<{ topic: string; payload_json: string }>(
+        "SELECT topic, payload_json FROM outbox_jobs",
+      ),
+    ).toEqual([
+      {
+        topic: "file-scan",
+        payload_json: JSON.stringify({
+          kind: "private_object_delete",
+          source: "cfp",
+          tenantId: fixture.event.tenantId,
+          eventId: fixture.event.id,
+          submissionId: fixture.submission.id,
+          assetId: authorization.asset.assetId,
+          objectKey: fixture.privateAssets.registered[0]?.objectKey,
+        }),
+      },
+    ]);
   });
 });

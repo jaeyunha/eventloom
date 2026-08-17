@@ -14,6 +14,7 @@ import {
 } from "../../../db/schema";
 import type {
   CommitOrganizerSpeakerImportCommand,
+  CreatePendingSpeakerAssetVersionCommand,
   FinalizeSpeakerAssetCommand,
   OrganizationQualifiedSpeakerSubmission,
   OrganizationQualifiedSpeakerTask,
@@ -37,6 +38,7 @@ import type {
   SpeakerPortalContext,
   SpeakerPortalContextScopeProjection,
   SpeakerProfile,
+  SpeakerDecisionWriteFence,
   SpeakerSubmission,
   SpeakerTask,
   SpeakerTaskFormDefinition,
@@ -48,7 +50,8 @@ import type {
   UpdateSpeakerProfileCommand,
   UpsertOrganizerSpeakerAggregateCommand,
 } from "../../../features/speaker/types";
-import { updateGuard } from "./shared";
+import { privateObjectCleanupOutboxStatement } from "../private-object-cleanup";
+import { guard, updateGuard } from "./shared";
 
 export function portalSubmissionStatus(
   submissionStatus: string,
@@ -487,6 +490,15 @@ export class D1SpeakerRepository
       submissionIds: commaSeparatedIds(scope.submission_ids),
       participantIds: commaSeparatedIds(scope.participant_ids),
     };
+  }
+
+  async getAccountDisplayName(accountId: string): Promise<string | null> {
+    const row = await this.#db
+      .prepare(`SELECT name FROM auth_users WHERE id = ? LIMIT 1`)
+      .bind(accountId)
+      .first<Record<string, unknown>>();
+    const name = row?.name;
+    return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
   }
 
   async getOrganizerReadModel(
@@ -1167,21 +1179,49 @@ export class D1SpeakerRepository
       : { firstName: normalized.slice(0, split), lastName: normalized.slice(split + 1).trim() };
   }
 
-  #communicationRecipientStatements(input: {
-    organizationId: string;
-    eventId: string;
-    participantId: string;
-    displayName: string;
-    email: string;
-    updatedAt: string;
-  }): D1PreparedStatement[] {
+  #communicationRecipientStatements(
+    input: {
+      organizationId: string;
+      eventId: string;
+      participantId: string;
+      displayName: string;
+      email: string;
+      updatedAt: string;
+    },
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): D1PreparedStatement[] {
     const firstName = this.#participantNames(input.displayName).firstName;
+    const decisionGuard =
+      decisionFence === undefined
+        ? { sql: "", values: [] as readonly unknown[] }
+        : {
+            sql: ` WHERE EXISTS (
+              SELECT 1
+              FROM evaluation_decisions
+              WHERE organization_id = ?
+                AND event_id = ?
+                AND plan_id = ?
+                AND submission_id = ?
+                AND version = ?
+                AND status = ?
+            )`,
+            values: [
+              decisionFence.tenantId,
+              decisionFence.eventId,
+              decisionFence.planId,
+              decisionFence.submissionId,
+              decisionFence.version,
+              decisionFence.status,
+            ],
+          };
     return [
       this.#db
         .prepare(
           `INSERT INTO communication_recipients
              (id,organization_id,event_id,participant_id,email,display_name,data_json,updated_at)
-           VALUES (?,?,?,?,?,?,?,?)
+           ${
+             decisionFence === undefined ? "VALUES (?,?,?,?,?,?,?,?)" : "SELECT ?,?,?,?,?,?,?,? "
+}${decisionGuard.sql}
            ON CONFLICT(id) DO UPDATE SET
              organization_id=excluded.organization_id,
              event_id=excluded.event_id,
@@ -1200,15 +1240,24 @@ export class D1SpeakerRepository
           input.displayName,
           json({ first_name: firstName, display_name: input.displayName, email: input.email }),
           input.updatedAt,
+          ...decisionGuard.values,
         ),
       this.#db
         .prepare(
           `INSERT INTO communication_recipient_audiences
              (organization_id,event_id,recipient_id,audience)
-           VALUES (?,?,?,'all_participants')
+           ${
+             decisionFence === undefined ? "VALUES (?,?,?,'all_participants')" : "SELECT ?,?,?,? "
+}${decisionGuard.sql}
            ON CONFLICT(organization_id,event_id,recipient_id,audience) DO NOTHING`,
         )
-        .bind(input.organizationId, input.eventId, input.participantId),
+        .bind(
+          input.organizationId,
+          input.eventId,
+          input.participantId,
+          ...(decisionFence === undefined ? [] : ["all_participants"]),
+          ...decisionGuard.values,
+        ),
     ];
   }
 
@@ -1372,58 +1421,109 @@ export class D1SpeakerRepository
     return rows.map((row) => this.#profile(row));
   }
 
-  async createProfile(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>> {
+  async createProfile(
+    profile: SpeakerProfile,
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): Promise<RepositoryResult<SpeakerProfile>> {
     const scope = await this.#eventScope(profile.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
     try {
       const email = profile.email?.trim() ?? "";
-      await this.#db.batch([
-        this.#db
-          .prepare(
-            `INSERT INTO speaker_profiles
-               (id, organization_id, event_id, participant_id, display_name, email, job_title,
-                company, status, biography, social_links_json, travel_required, arrival_at,
-                departure_at, accommodation, dietary_requirements, accessibility_needs,
-                travel_notes, headshot_asset_id, source_type, source_id, version, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            profile.id,
-            scope.organizationId,
-            profile.eventId,
-            profile.participantId,
-            profile.displayName,
-            email.length === 0 ? null : email,
-            profile.jobTitle ?? "",
-            profile.company ?? "",
-            profile.status ?? "",
-            profile.biography,
-            json(profile.socialLinks ?? {}),
-            profile.travelLogistics?.travelRequired ? 1 : 0,
-            profile.travelLogistics?.arrivalAt ?? null,
-            profile.travelLogistics?.departureAt ?? null,
-            profile.travelLogistics?.accommodation ?? "",
-            profile.travelLogistics?.dietaryRequirements ?? "",
-            profile.travelLogistics?.accessibilityNeeds ?? "",
-            profile.travelLogistics?.travelNotes ?? "",
-            profile.headshotAssetId ?? null,
-            profile.sourceType ?? null,
-            profile.sourceId ?? null,
-            profile.version,
-            profile.updatedAt,
-            profile.updatedAt,
-          ),
-        ...(email.length === 0
-          ? []
-          : this.#communicationRecipientStatements({
-              organizationId: scope.organizationId,
-              eventId: profile.eventId,
-              participantId: profile.participantId,
-              displayName: profile.displayName,
-              email,
-              updatedAt: profile.updatedAt,
-            })),
-      ]);
+      const profileValues = [
+        profile.id,
+        scope.organizationId,
+        profile.eventId,
+        profile.participantId,
+        profile.displayName,
+        email.length === 0 ? null : email,
+        profile.jobTitle ?? "",
+        profile.company ?? "",
+        profile.status ?? "",
+        profile.biography,
+        json(profile.socialLinks ?? {}),
+        profile.travelLogistics?.travelRequired ? 1 : 0,
+        profile.travelLogistics?.arrivalAt ?? null,
+        profile.travelLogistics?.departureAt ?? null,
+        profile.travelLogistics?.accommodation ?? "",
+        profile.travelLogistics?.dietaryRequirements ?? "",
+        profile.travelLogistics?.accessibilityNeeds ?? "",
+        profile.travelLogistics?.travelNotes ?? "",
+        profile.headshotAssetId ?? null,
+        profile.sourceType ?? null,
+        profile.sourceId ?? null,
+        profile.version,
+        profile.updatedAt,
+        profile.updatedAt,
+      ];
+      const profileStatement = this.#db
+        .prepare(
+          `INSERT INTO speaker_profiles
+             (id, organization_id, event_id, participant_id, display_name, email, job_title,
+              company, status, biography, social_links_json, travel_required, arrival_at,
+              departure_at, accommodation, dietary_requirements, accessibility_needs,
+              travel_notes, headshot_asset_id, source_type, source_id, version, created_at, updated_at)
+           ${
+             decisionFence === undefined
+               ? "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+               : `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                  WHERE EXISTS (
+                    SELECT 1
+                    FROM evaluation_decisions
+                    WHERE organization_id = ?
+                      AND event_id = ?
+                      AND plan_id = ?
+                      AND submission_id = ?
+                      AND version = ?
+                      AND status = ?
+                  )`
+}`,
+        )
+        .bind(
+          ...profileValues,
+          ...(decisionFence === undefined
+            ? []
+            : [
+                decisionFence.tenantId,
+                decisionFence.eventId,
+                decisionFence.planId,
+                decisionFence.submissionId,
+                decisionFence.version,
+                decisionFence.status,
+              ]),
+        );
+      if (decisionFence === undefined) {
+        await this.#db.batch([
+          profileStatement,
+          ...(email.length === 0
+            ? []
+            : this.#communicationRecipientStatements({
+                organizationId: scope.organizationId,
+                eventId: profile.eventId,
+                participantId: profile.participantId,
+                displayName: profile.displayName,
+                email,
+                updatedAt: profile.updatedAt,
+              })),
+        ]);
+      } else {
+        const [result] = await this.#db.batch([profileStatement]);
+        if (result?.meta.changes !== 1) return { ok: false, reason: "version_conflict" };
+        if (email.length !== 0) {
+          await this.#db.batch(
+            this.#communicationRecipientStatements(
+              {
+                organizationId: scope.organizationId,
+                eventId: profile.eventId,
+                participantId: profile.participantId,
+                displayName: profile.displayName,
+                email,
+                updatedAt: profile.updatedAt,
+              },
+              decisionFence,
+            ),
+          );
+        }
+      }
     } catch {
       return { ok: false, reason: "version_conflict" };
     }
@@ -1701,11 +1801,56 @@ export class D1SpeakerRepository
     const scope = await this.#eventScope(command.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
     const statements = [
+      ...(command.toStatus === "submitted" && command.replacementBaselineAssetId !== undefined
+        ? [
+            guard(
+              this.#db,
+              `EXISTS (
+                SELECT 1
+                  FROM speaker_tasks AS task
+                  JOIN speaker_assets AS baseline
+                    ON baseline.organization_id = task.organization_id
+                   AND baseline.event_id = task.event_id
+                   AND baseline.id = task.replacement_baseline_asset_id
+                  JOIN speaker_assets AS current
+                    ON current.organization_id = baseline.organization_id
+                   AND current.event_id = baseline.event_id
+                   AND current.version_family_id = baseline.version_family_id
+                   AND current.id = current.current_version_id
+                 WHERE task.organization_id = ?
+                   AND task.event_id = ?
+                   AND task.id = ?
+                   AND task.version = ?
+                   AND task.status = ?
+                   AND task.replacement_baseline_asset_id = ?
+                   AND current.state = 'ready'
+                   AND current.version > baseline.version
+                   AND (
+                     task.accepted_asset_kinds_json = '[]'
+                     OR EXISTS (
+                       SELECT 1
+                         FROM json_each(task.accepted_asset_kinds_json)
+                        WHERE value = current.kind
+                     )
+                   )
+              )`,
+              [
+                scope.organizationId,
+                command.eventId,
+                command.taskId,
+                command.expectedVersion,
+                command.fromStatus,
+                command.replacementBaselineAssetId,
+              ],
+            ),
+          ]
+        : []),
       this.#db
         .prepare(
-          "UPDATE speaker_tasks SET status = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          "UPDATE speaker_tasks SET status = ?, replacement_baseline_asset_id = CASE WHEN ? = 'submitted' THEN NULL ELSE replacement_baseline_asset_id END, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
         )
         .bind(
+          command.toStatus,
           command.toStatus,
           command.transition.occurredAt,
           scope.organizationId,
@@ -1716,7 +1861,13 @@ export class D1SpeakerRepository
         ),
       this.#db
         .prepare(
-          "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          `INSERT INTO speaker_task_transitions
+             (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM speaker_tasks
+               WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?
+            )`,
         )
         .bind(
           command.transition.id,
@@ -1729,11 +1880,22 @@ export class D1SpeakerRepository
           command.toStatus,
           command.transition.note ?? null,
           command.transition.occurredAt,
+          scope.organizationId,
+          command.eventId,
+          command.taskId,
+          command.expectedVersion + 1,
+          command.toStatus,
         ),
     ];
     try {
       const result = await this.#db.batch(statements);
-      if ((result[0]?.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
+      const updateIndex =
+        command.toStatus === "submitted" && command.replacementBaselineAssetId !== undefined
+          ? 1
+          : 0;
+      if ((result[updateIndex]?.meta?.changes ?? 0) !== 1) {
+        return { ok: false, reason: "version_conflict" };
+      }
     } catch {
       return { ok: false, reason: "version_conflict" };
     }
@@ -1751,8 +1913,8 @@ export class D1SpeakerRepository
     await this.#db.batch([
       this.#db
         .prepare(
-          `INSERT INTO speaker_assets (id, organization_id, event_id, submission_id, participant_id, task_id, kind, object_key, file_name, content_type, size_bytes, state, version, version_family_id, supersedes_asset_id, comment_thread_id, review_state, review_note, reviewed_at, reviewed_by, review_version, latest_version_id, current_version_id, approved_version_id, released_version_id, rejection_reason, created_at, finalized_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO speaker_assets (id, organization_id, event_id, submission_id, participant_id, task_id, kind, object_key, file_name, content_type, size_bytes, uploader_account_id, uploader_label, state, version, version_family_id, supersedes_asset_id, comment_thread_id, review_state, review_note, reviewed_at, reviewed_by, review_version, latest_version_id, current_version_id, approved_version_id, released_version_id, rejection_reason, created_at, finalized_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           asset.id,
@@ -1766,6 +1928,8 @@ export class D1SpeakerRepository
           asset.fileName,
           asset.contentType,
           asset.sizeBytes,
+          asset.uploaderAccountId ?? null,
+          asset.uploaderLabel ?? null,
           asset.state,
           version,
           asset.versionFamilyId ?? asset.id,
@@ -1788,6 +1952,202 @@ export class D1SpeakerRepository
     const persisted = await this.getAsset(asset.eventId, asset.id);
     if (persisted === null) throw new Error("The speaker asset was not persisted.");
     return persisted;
+  }
+
+  async createPendingAssetVersion(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const { asset } = command;
+    const scope = await this.#eventScope(asset.eventId);
+    if (
+      scope === null ||
+      (asset.tenantId !== undefined && asset.tenantId !== scope.organizationId) ||
+      asset.state !== "pending_upload" ||
+      asset.supersedesAssetId !== command.expectedLatestAssetId ||
+      asset.version !== command.expectedLatestVersion + 1 ||
+      asset.versionId !== asset.id ||
+      asset.latestVersionId !== asset.id
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const storedForKey = async () => {
+      const rows = await this.#orm
+        .select()
+        .from(speakerAssets)
+        .where(
+          and(
+            eq(speakerAssets.organizationId, scope.organizationId),
+            eq(speakerAssets.eventId, asset.eventId),
+            eq(speakerAssets.creationIdempotencyKey, command.idempotencyKey),
+          ),
+        )
+        .limit(2);
+      return rows;
+    };
+    const existing = await storedForKey();
+    if (existing.length > 0) {
+      const replay = existing[0];
+      return replay !== undefined &&
+        replay.creationRequestDigest === command.requestDigest &&
+        replay.versionFamilyId === asset.versionFamilyId &&
+        replay.supersedesAssetId === command.expectedLatestAssetId &&
+        replay.version === command.expectedLatestVersion + 1
+        ? { ok: true, value: this.#asset(replay) }
+        : { ok: false, reason: "version_conflict" };
+    }
+
+    const familyId = asset.versionFamilyId ?? asset.id;
+    const predicate = `(
+      EXISTS (
+        SELECT 1
+          FROM speaker_assets
+         WHERE organization_id = ?
+           AND event_id = ?
+           AND creation_idempotency_key = ?
+           AND creation_request_digest = ?
+      )
+      OR (
+        NOT EXISTS (
+          SELECT 1
+            FROM speaker_assets
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND creation_idempotency_key = ?
+        )
+        AND EXISTS (
+          SELECT 1
+            FROM speaker_assets
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND version_family_id = ?
+             AND id = ?
+             AND version = ?
+             AND state IN ('ready', 'rejected')
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM speaker_assets
+           WHERE organization_id = ?
+             AND event_id = ?
+             AND version_family_id = ?
+             AND version > ?
+        )
+      )
+    )`;
+    const statements = [
+      guard(this.#db, predicate, [
+        scope.organizationId,
+        asset.eventId,
+        command.idempotencyKey,
+        command.requestDigest,
+        scope.organizationId,
+        asset.eventId,
+        command.idempotencyKey,
+        scope.organizationId,
+        asset.eventId,
+        familyId,
+        command.expectedLatestAssetId,
+        command.expectedLatestVersion,
+        scope.organizationId,
+        asset.eventId,
+        familyId,
+        command.expectedLatestVersion,
+      ]),
+      this.#db
+        .prepare(
+          `INSERT INTO speaker_assets (
+             id, organization_id, event_id, submission_id, participant_id, task_id,
+             kind, object_key, file_name, content_type, size_bytes,
+             uploader_account_id, uploader_label, state, version, version_family_id,
+             supersedes_asset_id, comment_thread_id, review_state, review_note,
+             reviewed_at, reviewed_by, review_version, latest_version_id,
+             current_version_id, approved_version_id, released_version_id,
+             rejection_reason, created_at, finalized_at,
+             creation_idempotency_key, creation_request_digest
+           )
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+              SELECT 1
+                FROM speaker_assets
+               WHERE organization_id = ?
+                 AND event_id = ?
+                 AND creation_idempotency_key = ?
+            )`,
+        )
+        .bind(
+          asset.id,
+          scope.organizationId,
+          asset.eventId,
+          asset.submissionId ?? null,
+          asset.participantId,
+          asset.taskId ?? null,
+          asset.kind,
+          asset.objectKey,
+          asset.fileName,
+          asset.contentType,
+          asset.sizeBytes,
+          asset.uploaderAccountId ?? null,
+          asset.uploaderLabel ?? null,
+          asset.state,
+          asset.version,
+          familyId,
+          asset.supersedesAssetId,
+          asset.commentThreadId ?? `asset-thread:${asset.id}`,
+          asset.reviewState ?? null,
+          asset.reviewNote ?? null,
+          asset.reviewedAt ?? null,
+          asset.reviewedBy ?? null,
+          asset.reviewVersion ?? 0,
+          asset.latestVersionId ?? null,
+          asset.currentVersionId ?? null,
+          asset.approvedVersionId ?? null,
+          asset.releasedVersionId ?? null,
+          asset.rejectionReason ?? null,
+          asset.createdAt,
+          asset.finalizedAt ?? null,
+          command.idempotencyKey,
+          command.requestDigest,
+          scope.organizationId,
+          asset.eventId,
+          command.idempotencyKey,
+        ),
+    ];
+    try {
+      await this.#db.batch(statements);
+    } catch (error) {
+      const replay = await storedForKey();
+      const row = replay[0];
+      if (
+        row !== undefined &&
+        row.creationRequestDigest === command.requestDigest &&
+        row.versionFamilyId === familyId &&
+        row.supersedesAssetId === command.expectedLatestAssetId &&
+        row.version === command.expectedLatestVersion + 1
+      ) {
+        return { ok: true, value: this.#asset(row) };
+      }
+      const family = (await this.listAssets(asset.eventId, [asset.participantId])).filter(
+        (candidate) => (candidate.versionFamilyId ?? candidate.id) === familyId,
+      );
+      const expected = family.find((candidate) => candidate.id === command.expectedLatestAssetId);
+      if (
+        expected === undefined ||
+        expected.version !== command.expectedLatestVersion ||
+        (expected.state !== "ready" && expected.state !== "rejected") ||
+        family.some((candidate) => (candidate.version ?? 0) > command.expectedLatestVersion)
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+      throw error;
+    }
+    const persisted = (await storedForKey())[0];
+    return persisted !== undefined &&
+      persisted.creationRequestDigest === command.requestDigest &&
+      persisted.versionFamilyId === familyId &&
+      persisted.supersedesAssetId === command.expectedLatestAssetId &&
+      persisted.version === command.expectedLatestVersion + 1
+      ? { ok: true, value: this.#asset(persisted) }
+      : { ok: false, reason: "version_conflict" };
   }
 
   async getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null> {
@@ -1832,44 +2192,61 @@ export class D1SpeakerRepository
     if (current.state !== "pending_upload") return { ok: false, reason: "invalid_state" };
     const scope = await this.#eventScope(command.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
+    const statements: D1PreparedStatement[] = [
+      updateGuard(
+        this.#db,
+        "speaker_assets",
+        "organization_id = ? AND event_id = ? AND id = ? AND state = 'pending_upload'",
+        [scope.organizationId, command.eventId, command.assetId],
+      ),
+      updateGuard(
+        this.#db,
+        "speaker_assets",
+        "organization_id = ? AND event_id = ? AND version_family_id = ?",
+        [scope.organizationId, command.eventId, current.versionFamilyId ?? current.id],
+      ),
+      this.#db
+        .prepare(
+          `UPDATE speaker_assets
+              SET state = CASE WHEN id = ? THEN ? ELSE state END,
+                  finalized_at = CASE WHEN id = ? THEN ? ELSE finalized_at END,
+                  rejection_reason = CASE WHEN id = ? THEN ? ELSE rejection_reason END,
+                  latest_version_id = ?,
+                  current_version_id = ?
+            WHERE organization_id = ? AND event_id = ? AND version_family_id = ?`,
+        )
+        .bind(
+          command.assetId,
+          command.state,
+          command.assetId,
+          command.finalizedAt,
+          command.assetId,
+          command.rejectionReason ?? null,
+          command.latestVersionId,
+          command.currentVersionId ?? null,
+          scope.organizationId,
+          command.eventId,
+          current.versionFamilyId ?? current.id,
+        ),
+    ];
+    if (command.state === "rejected") {
+      statements.push(
+        privateObjectCleanupOutboxStatement(
+          this.#db,
+          {
+            kind: "private_object_delete",
+            source: "speaker",
+            tenantId: scope.organizationId,
+            eventId: command.eventId,
+            assetId: command.assetId,
+            objectKey: current.objectKey,
+          },
+          command.finalizedAt,
+        ) as D1PreparedStatement,
+      );
+    }
     try {
-      await this.#db.batch([
-        updateGuard(
-          this.#db,
-          "speaker_assets",
-          "organization_id = ? AND event_id = ? AND id = ? AND state = 'pending_upload'",
-          [scope.organizationId, command.eventId, command.assetId],
-        ),
-        updateGuard(
-          this.#db,
-          "speaker_assets",
-          "organization_id = ? AND event_id = ? AND version_family_id = ?",
-          [scope.organizationId, command.eventId, current.versionFamilyId ?? current.id],
-        ),
-        this.#db
-          .prepare(
-            `UPDATE speaker_assets
-                SET state = CASE WHEN id = ? THEN ? ELSE state END,
-                    finalized_at = CASE WHEN id = ? THEN ? ELSE finalized_at END,
-                    rejection_reason = CASE WHEN id = ? THEN ? ELSE rejection_reason END,
-                    latest_version_id = ?,
-                    current_version_id = ?
-              WHERE organization_id = ? AND event_id = ? AND version_family_id = ?`,
-          )
-          .bind(
-            command.assetId,
-            command.state,
-            command.assetId,
-            command.finalizedAt,
-            command.assetId,
-            command.rejectionReason ?? null,
-            command.latestVersionId,
-            command.currentVersionId ?? null,
-            scope.organizationId,
-            command.eventId,
-            current.versionFamilyId ?? current.id,
-          ),
-      ]);
+      await this.#db.batch(statements);
     } catch {
       return { ok: false, reason: "version_conflict" };
     }
@@ -1898,6 +2275,26 @@ export class D1SpeakerRepository
       return { ok: false, reason: "version_conflict" };
     const scope = await this.#eventScope(command.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
+    if (command.returnTask !== undefined) {
+      const task = await this.getTask(command.eventId, command.returnTask.taskId);
+      if (task === null) return { ok: false, reason: "not_found" };
+      if (
+        command.returnTask.eventId !== command.eventId ||
+        command.returnTask.baselineAssetId !== command.assetId ||
+        (command.returnTask.transition !== undefined &&
+          (command.returnTask.transition.eventId !== command.eventId ||
+            command.returnTask.transition.taskId !== command.returnTask.taskId ||
+            command.returnTask.transition.participantId !== task.participantId))
+      ) {
+        return { ok: false, reason: "invalid_state" };
+      }
+      if (
+        task.version !== command.returnTask.expectedVersion ||
+        task.status !== command.returnTask.fromStatus
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+    }
     const statements: D1PreparedStatement[] = [
       updateGuard(
         this.#db,
@@ -1966,6 +2363,56 @@ export class D1SpeakerRepository
           command.reviewedBy,
         ),
     ];
+    if (command.returnTask !== undefined) {
+      statements.push(
+        updateGuard(
+          this.#db,
+          "speaker_tasks",
+          "organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          [
+            scope.organizationId,
+            command.eventId,
+            command.returnTask.taskId,
+            command.returnTask.expectedVersion,
+            command.returnTask.fromStatus,
+          ],
+        ),
+        this.#db
+          .prepare(
+            "UPDATE speaker_tasks SET status = ?, replacement_baseline_asset_id = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          )
+          .bind(
+            command.returnTask.toStatus,
+            command.returnTask.baselineAssetId,
+            command.returnTask.transition?.occurredAt ?? command.reviewedAt,
+            scope.organizationId,
+            command.eventId,
+            command.returnTask.taskId,
+            command.returnTask.expectedVersion,
+            command.returnTask.fromStatus,
+          ),
+        ...(command.returnTask.transition === undefined
+          ? []
+          : [
+              this.#db
+                .prepare(
+                  "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(
+                  command.returnTask.transition.id,
+                  scope.organizationId,
+                  command.eventId,
+                  command.returnTask.taskId,
+                  command.returnTask.transition.participantId,
+                  command.returnTask.transition.actorAccountId,
+                  command.returnTask.fromStatus,
+                  command.returnTask.toStatus,
+                  command.returnTask.transition.note ?? null,
+                  command.returnTask.transition.occurredAt,
+                ),
+            ]),
+      );
+    }
     if (command.audit !== undefined) statements.push(this.#auditStatement(command.audit));
     try {
       await this.#db.batch(statements);
@@ -1991,6 +2438,16 @@ export class D1SpeakerRepository
       value.releasedVersionId !== expectedReleasedVersionId
     ) {
       return { ok: false, reason: "version_conflict" };
+    }
+    if (command.returnTask !== undefined) {
+      const task = await this.getTask(command.eventId, command.returnTask.taskId);
+      if (
+        task === null ||
+        task.status !== command.returnTask.toStatus ||
+        task.version !== command.returnTask.expectedVersion + 1
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
     }
     return { ok: true, value };
   }
@@ -2140,8 +2597,22 @@ export class D1SpeakerRepository
       statements.push(
         this.#db
           .prepare(
-            `INSERT INTO speaker_tasks (id, organization_id, event_id, submission_id, participant_id, type, owner, title, description, instructions, status, due_at, allowed_mime_types_json, max_bytes, accepted_asset_kinds_json, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO speaker_tasks (id, organization_id, event_id, submission_id, participant_id, type, owner, title, description, instructions, status, due_at, allowed_mime_types_json, max_bytes, accepted_asset_kinds_json, replacement_baseline_asset_id, version, created_at, updated_at)
+         ${
+           command.decisionFence === undefined
+             ? "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             : `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                  SELECT 1
+                  FROM evaluation_decisions
+                  WHERE organization_id = ?
+                    AND event_id = ?
+                    AND plan_id = ?
+                    AND submission_id = ?
+                    AND version = ?
+                    AND status = ?
+                )`
+}`,
           )
           .bind(
             task.id,
@@ -2159,16 +2630,27 @@ export class D1SpeakerRepository
             json(task.allowedMimeTypes ?? []),
             task.maxBytes ?? task.maxSizeBytes ?? null,
             json(task.acceptedAssetKinds ?? []),
+            task.replacementBaselineAssetId ?? null,
             task.version,
             task.updatedAt,
             task.updatedAt,
+            ...(command.decisionFence === undefined
+              ? []
+              : [
+                  command.decisionFence.tenantId,
+                  command.decisionFence.eventId,
+                  command.decisionFence.planId,
+                  command.decisionFence.submissionId,
+                  command.decisionFence.version,
+                  command.decisionFence.status,
+                ]),
           ),
       );
     } else {
       statements.push(
         this.#db
           .prepare(
-            `UPDATE speaker_tasks SET submission_id = ?, participant_id = ?, type = ?, owner = ?, title = ?, description = ?, instructions = ?, status = ?, due_at = ?, allowed_mime_types_json = ?, max_bytes = ?, accepted_asset_kinds_json = ?, version = ?, updated_at = ?
+            `UPDATE speaker_tasks SET submission_id = ?, participant_id = ?, type = ?, owner = ?, title = ?, description = ?, instructions = ?, status = ?, due_at = ?, allowed_mime_types_json = ?, max_bytes = ?, accepted_asset_kinds_json = ?, replacement_baseline_asset_id = ?, version = ?, updated_at = ?
          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
           )
           .bind(
@@ -2184,6 +2666,7 @@ export class D1SpeakerRepository
             json(task.allowedMimeTypes ?? []),
             task.maxBytes ?? task.maxSizeBytes ?? null,
             json(task.acceptedAssetKinds ?? []),
+            task.replacementBaselineAssetId ?? null,
             task.version,
             task.updatedAt,
             scope.organizationId,
@@ -2385,6 +2868,9 @@ export class D1SpeakerRepository
       allowedMimeTypes: row.allowedMimeTypesJson as string[],
       ...(row.maxBytes === null ? {} : { maxBytes: row.maxBytes, maxSizeBytes: row.maxBytes }),
       acceptedAssetKinds: row.acceptedAssetKindsJson as SpeakerTask["acceptedAssetKinds"],
+      ...(row.replacementBaselineAssetId === null
+        ? {}
+        : { replacementBaselineAssetId: row.replacementBaselineAssetId }),
       version: row.version,
       updatedAt: row.updatedAt,
     } as SpeakerTask;
@@ -2469,6 +2955,12 @@ export class D1SpeakerRepository
       fileName: String(row.file_name),
       contentType: String(row.content_type),
       sizeBytes: Number(row.size_bytes),
+      ...(row.uploader_account_id === null || row.uploader_account_id === undefined
+        ? {}
+        : { uploaderAccountId: String(row.uploader_account_id) }),
+      ...(row.uploader_label === null || row.uploader_label === undefined
+        ? {}
+        : { uploaderLabel: String(row.uploader_label) }),
       state: String(row.state) as SpeakerAsset["state"],
       createdAt: String(row.created_at),
       version: Number(row.version),
@@ -2525,6 +3017,8 @@ export class D1SpeakerRepository
       fileName: row.fileName,
       contentType: row.contentType,
       sizeBytes: row.sizeBytes,
+      ...(row.uploaderAccountId === null ? {} : { uploaderAccountId: row.uploaderAccountId }),
+      ...(row.uploaderLabel === null ? {} : { uploaderLabel: row.uploaderLabel }),
       state: row.state,
       createdAt: row.createdAt,
       version: row.version,

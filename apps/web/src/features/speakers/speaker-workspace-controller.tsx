@@ -1937,7 +1937,7 @@ function useSpeakerWorkspaceController({
       dispatchProfileHeadshotDetails({ type: "save-busy-changed", busy: false });
     }
   }
-  async function previewCsv(file: File): Promise<void> {
+  async function previewCsv(file: File, input?: HTMLInputElement): Promise<void> {
     const requestId = importRequestRef.current + 1;
     importRequestRef.current = requestId;
     dispatchImportTaskInvitation({ type: "import-preview-started", fileName: file.name });
@@ -1966,6 +1966,7 @@ function useSpeakerWorkspaceController({
       if (requestId === importRequestRef.current) {
         dispatchImportTaskInvitation({ type: "import-preview-busy-changed", busy: false });
       }
+      if (requestId === importRequestRef.current && input !== undefined) input.value = "";
     }
   }
   async function commitCsv(): Promise<void> {
@@ -2457,7 +2458,48 @@ function useSpeakerWorkspaceController({
     }
     const participantId = selectedSpeaker.participantId;
     const expectedVersion = selectedSpeaker.version;
-    const supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
+    let supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
+    let expectedLatestVersion: number | undefined;
+    if (supersedesAssetId !== undefined) {
+      const assets = await api.getAssets(participantId);
+      const referenced = assets.find((asset) => asset.assetId === supersedesAssetId);
+      const predecessor =
+        referenced === undefined
+          ? undefined
+          : assets
+              .filter(
+                (asset) =>
+                  (asset.versionFamilyId ?? asset.assetId) ===
+                    (referenced.versionFamilyId ?? referenced.assetId) &&
+                  (asset.status === "ready" || asset.status === "rejected") &&
+                  typeof asset.version === "number" &&
+                  asset.version > 0,
+              )
+              .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))[0];
+      if (predecessor === undefined) {
+        dispatchProfileHeadshotDetails({
+          type: "headshot-failed",
+          message:
+            "The current headshot version could not be resolved; reload before replacing it.",
+        });
+        return;
+      }
+      const predecessorVersion = predecessor.version;
+      if (
+        typeof predecessorVersion !== "number" ||
+        !Number.isSafeInteger(predecessorVersion) ||
+        predecessorVersion <= 0
+      ) {
+        dispatchProfileHeadshotDetails({
+          type: "headshot-failed",
+          message:
+            "The current headshot version could not be resolved; reload before replacing it.",
+        });
+        return;
+      }
+      supersedesAssetId = predecessor.assetId;
+      expectedLatestVersion = predecessorVersion;
+    }
     dispatchProfileHeadshotDetails({ type: "headshot-upload-started", fileName: file.name });
     try {
       const replacement = assertSpeakerHeadshotReplacement(
@@ -2466,7 +2508,12 @@ function useSpeakerWorkspaceController({
           submissionId: selectedHeadshotSubmissionId,
           file,
           expectedVersion,
-          ...(supersedesAssetId === undefined ? {} : { supersedesAssetId }),
+          ...(supersedesAssetId === undefined
+            ? {}
+            : {
+                supersedesAssetId,
+                expectedLatestVersion: expectedLatestVersion as number,
+              }),
         }),
         eventId,
         participantId,
@@ -2649,7 +2696,7 @@ function useSpeakerWorkspaceController({
             fileName: importFileName,
             preview: importPreview,
             onOpenChange: (open) => dispatchRoster({ type: "csv-dialog-changed", open }),
-            onPreview: (file) => void previewCsv(file),
+            onPreview: (file: File) => void previewCsv(file),
             onCommit: () => void commitCsv(),
           },
           onQueryChange: (nextQuery) => dispatchRoster({ type: "query-changed", query: nextQuery }),

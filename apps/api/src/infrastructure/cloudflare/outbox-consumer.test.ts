@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { D1Database } from "@cloudflare/workers-types";
 import type { CloudflareOutboxInvitationTransient } from "./bindings";
 import {
   consumeOutboxQueue,
@@ -144,6 +145,94 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.acked).toBe(true);
     expect(queueMessage.retries).toEqual([]);
     expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("drops a decision communication whose authoritative version is stale", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          from: "auth@sessionboard.namuh.co",
+          to: ["recipient@example.com"],
+          subject: "Decision",
+          html: "<p>Decision</p>",
+          text: "Decision",
+          idempotencyKey: "idem-job-1",
+          purpose: "decision",
+          status: "accepted",
+          decisionFence: {
+            eventId: "event-1",
+            planId: "plan-1",
+            submissionId: "submission-1",
+            version: 1,
+            status: "accepted",
+          },
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => undefined);
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn(async () => ({ version: 2, status: "rejected" })),
+        })),
+      })),
+    } as unknown as D1Database;
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings({ DB: database }));
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("fails closed for malformed decision communication fence metadata", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          from: "auth@sessionboard.namuh.co",
+          to: ["recipient@example.com"],
+          subject: "Decision",
+          html: "<p>Decision</p>",
+          text: "Decision",
+          idempotencyKey: "idem-job-1",
+          decisionFence: { version: "1" },
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("failed");
+  });
+
+  it("fails closed for legacy decision communication without fence metadata", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          from: "auth@sessionboard.namuh.co",
+          to: ["recipient@example.com"],
+          subject: "Decision",
+          html: "<p>Decision</p>",
+          text: "Decision",
+          idempotencyKey: "idem-job-1",
+          purpose: "decision",
+          status: "accepted",
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("failed");
   });
 
   it("retries a live lease at its expiry instead of exhausting Queue retries", async () => {
@@ -964,17 +1053,65 @@ describe("Cloudflare outbox consumer", () => {
     expect(repository.get("job-1")?.state).toBe("queued");
   });
 
-  it.each(["accelevents", "file-scan"] as const)(
-    "does not acknowledge disabled %s work",
-    async (topic) => {
-      const repository = new InMemoryOutboxJobRepository([job()]);
-      const queueMessage = message({ ...queueBody(), topic });
+  it("dispatches a typed private-object cleanup payload", async () => {
+    const payload = {
+      kind: "private_object_delete" as const,
+      source: "speaker" as const,
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      assetId: "asset-1",
+      objectKey: "speaker/private/asset-1.pdf",
+    };
+    const repository = new InMemoryOutboxJobRepository([job({ topic: "file-scan", payload })]);
+    const remove = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody("file-scan"));
 
-      await run(queueMessage, repository, {});
+    await run(queueMessage, repository, { "file-scan": remove });
 
-      expect(queueMessage.acked).toBe(false);
-      expect(queueMessage.retries).toEqual([1]);
-      expect(repository.get("job-1")?.state).toBe("pending");
-    },
-  );
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith(
+      payload,
+      expect.objectContaining({ topic: "file-scan", jobId: "job-1" }),
+    );
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("retries a transient private-object deletion failure", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        topic: "file-scan",
+        payload: {
+          kind: "private_object_delete",
+          source: "cfp",
+          tenantId: "tenant-1",
+          eventId: "event-1",
+          submissionId: "submission-1",
+          assetId: "asset-1",
+          objectKey: "cfp/private/asset-1.pdf",
+        },
+      }),
+    ]);
+    const remove = vi.fn(async () => {
+      throw new OutboxDeliveryError("R2_UNAVAILABLE", "R2 unavailable", { retryable: true });
+    });
+    const queueMessage = message(queueBody("file-scan"));
+
+    await run(queueMessage, repository, { "file-scan": remove });
+
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")).toMatchObject({ state: "queued", attemptCount: 1 });
+  });
+
+  it("does not acknowledge disabled accelevents work", async () => {
+    const repository = new InMemoryOutboxJobRepository([job()]);
+    const queueMessage = message({ ...queueBody(), topic: "accelevents" });
+
+    await run(queueMessage, repository, {});
+
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")?.state).toBe("pending");
+  });
 });

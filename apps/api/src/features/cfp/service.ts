@@ -151,7 +151,7 @@ export interface CfpFileAssetGateway extends CfpFileAssetAuthorizer {
 }
 
 export interface CfpIdempotencyCoordinator {
-  run<T>(scope: string, key: string, operation: () => Promise<T>): Promise<T>;
+  run<T>(scope: string, key: string, operation: () => Promise<T>, fingerprint?: string): Promise<T>;
 }
 
 /**
@@ -269,6 +269,21 @@ function requireIdempotencyKey(key: string): string {
     );
   }
   return normalized;
+}
+
+async function cfpFileUploadFingerprint(
+  operation: "issue" | "finalize",
+  input: object,
+): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify({ version: 1, operation, input })),
+    ),
+  );
+  return `cfp-file-upload-v1:${[...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function ensureTenant(resourceTenantId: string, tenantId: string): void {
@@ -1261,6 +1276,11 @@ export class CfpService {
     idempotencyKey: string;
   }): Promise<CfpFileUploadAuthorization> {
     const key = requireIdempotencyKey(input.idempotencyKey);
+    await this.#getFileUploadContext(input);
+    const fingerprint = await cfpFileUploadFingerprint("issue", {
+      ...input,
+      idempotencyKey: key,
+    });
     return this.#idempotency.run(
       `${input.tenantId}:cfp:file-upload:issue:${input.submissionId}:${input.fieldKey}:${key}`,
       key,
@@ -1311,6 +1331,7 @@ export class CfpService {
         });
         return authorization;
       },
+      fingerprint,
     );
   }
 
@@ -1327,6 +1348,11 @@ export class CfpService {
     idempotencyKey: string;
   }): Promise<CfpFileAsset> {
     const key = requireIdempotencyKey(input.idempotencyKey);
+    await this.#getFileUploadContext(input);
+    const fingerprint = await cfpFileUploadFingerprint("finalize", {
+      ...input,
+      idempotencyKey: key,
+    });
     return this.#idempotency.run(
       `${input.tenantId}:cfp:file-upload:finalize:${input.submissionId}:${input.assetId}:${key}`,
       key,
@@ -1427,6 +1453,7 @@ export class CfpService {
         if (result.state === "ready") this.#validateFinalizedFileAsset(context.field, result);
         return result;
       },
+      fingerprint,
     );
   }
 

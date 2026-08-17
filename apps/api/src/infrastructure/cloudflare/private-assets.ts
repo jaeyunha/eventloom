@@ -3,6 +3,7 @@ import type {
   CreatePrivateUploadGrantCommand,
   PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
+  PrivateDownloadCapabilityBinding,
   PrivateDownloadGrant,
   PrivateDownloadObject,
   PrivateUploadGrant,
@@ -37,6 +38,7 @@ interface PrivateUploadRow {
   byte_size: number;
   state: string;
   scan_result_code: string | null;
+  expires_at: string | null;
 }
 
 interface StoredDownloadCapability {
@@ -49,11 +51,23 @@ interface StoredDownloadCapability {
   capabilityHash: string;
   expiresAt: string;
   consumedAt: string | null;
+  eventId: string;
+  participantId: string;
+  requesterAccountId: string;
+  requesterKind: "speaker" | "organizer";
+  assetVersion: number;
+  capabilityId: string;
 }
 
 interface PrivateDownloadCapabilityRow {
   asset_id: string;
   tenant_id: string;
+  event_id: string | null;
+  participant_id: string | null;
+  requester_account_id: string | null;
+  requester_kind: "speaker" | "organizer" | null;
+  asset_version: number | null;
+  capability_id: string | null;
   object_key: string;
   content_type: string;
   byte_size: number;
@@ -106,6 +120,11 @@ async function capabilityHash(token: string): Promise<string> {
   const bytes = new TextEncoder().encode(token);
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function capabilityExpired(expiresAt: string): boolean {
+  const expiration = Date.parse(expiresAt);
+  return !Number.isFinite(expiration) || expiration <= Date.now();
 }
 
 /** R2 private bytes are reachable only through database-backed opaque capabilities. */
@@ -169,7 +188,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
   }
 
   async registerDownloadCapability(
-    binding: PrivateAssetCapabilityBinding,
+    binding: PrivateDownloadCapabilityBinding,
   ): Promise<PrivateDownloadGrant> {
     const object = await this.#bucket.head(binding.objectKey);
     if (
@@ -192,6 +211,12 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       capabilityHash: await capabilityHash(token),
       expiresAt: binding.expiresAt,
       consumedAt: null,
+      eventId: binding.eventId,
+      participantId: binding.participantId,
+      requesterAccountId: binding.requesterAccountId,
+      requesterKind: binding.requesterKind,
+      assetVersion: binding.assetVersion,
+      capabilityId,
     };
     const createdAt = new Date().toISOString();
     const retentionCutoff = new Date(
@@ -209,26 +234,63 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
         .prepare("DELETE FROM private_download_capabilities WHERE expires_at <= ?")
         .bind(retentionCutoff)
         .run();
-      await this.#database
-        .prepare(
-          `INSERT INTO private_download_capabilities
-             (id, asset_id, tenant_id, object_key, content_type, byte_size, file_name,
-              token_digest, expires_at, consumed_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-        )
-        .bind(
-          capabilityId,
-          capability.assetId,
-          capability.tenantId,
-          capability.objectKey,
-          capability.contentType,
-          capability.sizeBytes,
-          capability.fileName,
-          capability.capabilityHash,
-          capability.expiresAt,
-          createdAt,
-        )
-        .run();
+      await this.#database.batch([
+        this.#database
+          .prepare(
+            `INSERT INTO private_download_capabilities
+               (id, asset_id, tenant_id, event_id, participant_id, requester_account_id,
+                requester_kind, asset_version, capability_id, object_key, content_type,
+                byte_size, file_name, token_digest, expires_at, consumed_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+          )
+          .bind(
+            capabilityId,
+            capability.assetId,
+            capability.tenantId,
+            capability.eventId,
+            capability.participantId,
+            capability.requesterAccountId,
+            capability.requesterKind,
+            capability.assetVersion,
+            capability.capabilityId,
+            capability.objectKey,
+            capability.contentType,
+            capability.sizeBytes,
+            capability.fileName,
+            capability.capabilityHash,
+            capability.expiresAt,
+            createdAt,
+          ),
+        this.#database
+          .prepare(
+            "INSERT INTO speaker_asset_comments (id, organization_id, event_id, asset_id, version_id, body, author_label, author_account_id, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .bind(
+            `private-download-issued:${capabilityId}`,
+            capability.tenantId,
+            capability.eventId,
+            capability.assetId,
+            capability.assetId,
+            JSON.stringify({
+              id: `private-download-issued:${capabilityId}`,
+              organizationId: capability.tenantId,
+              eventId: capability.eventId,
+              assetId: capability.assetId,
+              action: "download_authorized",
+              actorAccountId: capability.requesterAccountId,
+              requesterKind: capability.requesterKind,
+              capabilityId,
+              attributionBasis: "authenticated_requester",
+              occurredAt: createdAt,
+              version: capability.assetVersion,
+            }),
+            "__speaker_asset_audit__",
+            capability.requesterAccountId,
+            capability.assetVersion,
+            createdAt,
+            createdAt,
+          ),
+      ]);
     }
     return {
       method: "GET",
@@ -292,6 +354,14 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     if (capability === null) {
       return this.consumeLegacyDownloadCapability(capabilityId, token);
     }
+    if (
+      capability.eventId.length === 0 ||
+      capability.participantId.length === 0 ||
+      capability.requesterAccountId.length === 0 ||
+      capability.capabilityId !== capabilityId
+    ) {
+      throw new Error("The download capability is invalid.");
+    }
     await this.assertToken(capability, token);
     if (Date.parse(capability.expiresAt) <= Date.now()) {
       throw new Error("The download capability has expired.");
@@ -299,11 +369,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     if (capability.consumedAt !== null) {
       throw new Error("The download capability has already been used.");
     }
-    await this.claimDownloadCapability(
-      capabilityId,
-      capability.capabilityHash,
-      new Date().toISOString(),
-    );
+    await this.claimDownloadCapability(capability, new Date().toISOString());
     const object = await this.#bucket.get(capability.objectKey);
     if (object === null || object.body === null) {
       throw new Error("The requested private asset is not available.");
@@ -377,6 +443,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       capability === null ||
       capability.kind !== "upload" ||
       row.state !== "uploaded" ||
+      capabilityExpired(capability.expiresAt) ||
       capability.tenantId !== binding.tenantId ||
       capability.eventId !== binding.eventId ||
       capability.submissionId !== binding.submissionId ||
@@ -398,6 +465,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       row === null ||
       capability === null ||
       capability.kind !== "upload" ||
+      capabilityExpired(capability.expiresAt) ||
       capability.tenantId !== binding.tenantId ||
       capability.eventId !== binding.eventId ||
       capability.submissionId !== binding.submissionId ||
@@ -417,9 +485,15 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       .prepare(
         `UPDATE private_uploads
             SET state = 'deleted', updated_at = ?
-          WHERE id = ? AND state IN ('pending', 'uploaded') AND scan_result_code = ?`,
+          WHERE id = ? AND state IN ('pending', 'uploaded') AND scan_result_code = ?
+            AND expires_at > ?`,
       )
-      .bind(new Date().toISOString(), binding.capabilityId, row.scan_result_code)
+      .bind(
+        new Date().toISOString(),
+        binding.capabilityId,
+        row.scan_result_code,
+        new Date().toISOString(),
+      )
       .run();
     if ((result.meta?.changes ?? 0) !== 1) {
       throw new Error("The upload capability cannot be invalidated.");
@@ -456,8 +530,9 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     }
     const row = await this.#database
       .prepare(
-        `SELECT asset_id, tenant_id, object_key, content_type, byte_size, file_name,
-                token_digest, expires_at, consumed_at
+        `SELECT asset_id, tenant_id, event_id, participant_id, requester_account_id,
+                requester_kind, asset_version, capability_id, object_key, content_type,
+                byte_size, file_name, token_digest, expires_at, consumed_at
            FROM private_download_capabilities
           WHERE id = ?
           LIMIT 1`,
@@ -468,6 +543,12 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     return {
       assetId: row.asset_id,
       tenantId: row.tenant_id,
+      eventId: row.event_id ?? "",
+      participantId: row.participant_id ?? "",
+      requesterAccountId: row.requester_account_id ?? "",
+      requesterKind: row.requester_kind ?? "speaker",
+      assetVersion: row.asset_version ?? 1,
+      capabilityId: row.capability_id ?? capabilityId,
       objectKey: row.object_key,
       contentType: row.content_type,
       sizeBytes: row.byte_size,
@@ -479,16 +560,15 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
   }
 
   private async claimDownloadCapability(
-    capabilityId: string,
-    expectedCapabilityHash: string,
+    capability: StoredDownloadCapability,
     consumedAt: string,
   ): Promise<void> {
     if (this.#database === undefined) {
-      const stored = this.#downloadCapabilities.get(capabilityId);
+      const stored = this.#downloadCapabilities.get(capability.capabilityId);
       if (
         stored === undefined ||
         stored.consumedAt !== null ||
-        stored.capabilityHash !== expectedCapabilityHash ||
+        stored.capabilityHash !== capability.capabilityHash ||
         Date.parse(stored.expiresAt) <= Date.parse(consumedAt)
       ) {
         throw new Error("The download capability is invalid or already used.");
@@ -496,18 +576,62 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       stored.consumedAt = consumedAt;
       return;
     }
-    const result = await this.#database
-      .prepare(
-        `UPDATE private_download_capabilities
-            SET consumed_at = ?
-          WHERE id = ?
-            AND consumed_at IS NULL
-            AND expires_at > ?
-            AND token_digest = ?`,
-      )
-      .bind(consumedAt, capabilityId, consumedAt, expectedCapabilityHash)
-      .run();
-    if (result.meta.changes !== 1) {
+    const claimId = crypto.randomUUID();
+    const audit = JSON.stringify({
+      id: `private-download-consumed:${claimId}`,
+      organizationId: capability.tenantId,
+      eventId: capability.eventId,
+      assetId: capability.assetId,
+      action: "downloaded",
+      actorAccountId: capability.requesterAccountId,
+      requesterKind: capability.requesterKind,
+      capabilityId: capability.capabilityId,
+      attributionBasis: "issuance_principal",
+      occurredAt: consumedAt,
+      version: capability.assetVersion,
+    });
+    const results = await this.#database.batch([
+      this.#database
+        .prepare(
+          `UPDATE private_download_capabilities
+              SET consumed_at = ?, consumption_claim_id = ?
+            WHERE id = ?
+              AND consumed_at IS NULL
+              AND expires_at > ?
+              AND token_digest = ?
+              AND requester_account_id IS NOT NULL
+              AND requester_kind IN ('speaker', 'organizer')
+              AND event_id IS NOT NULL
+              AND participant_id IS NOT NULL
+              AND asset_version IS NOT NULL`,
+        )
+        .bind(consumedAt, claimId, capability.capabilityId, consumedAt, capability.capabilityHash),
+      this.#database
+        .prepare(
+          `INSERT INTO speaker_asset_comments
+             (id, organization_id, event_id, asset_id, version_id, body,
+              author_label, author_account_id, version, created_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             FROM private_download_capabilities
+            WHERE id = ? AND consumption_claim_id = ?`,
+        )
+        .bind(
+          `private-download-consumed:${claimId}`,
+          capability.tenantId,
+          capability.eventId,
+          capability.assetId,
+          capability.assetId,
+          audit,
+          "__speaker_asset_audit__",
+          capability.requesterAccountId,
+          capability.assetVersion,
+          consumedAt,
+          consumedAt,
+          capability.capabilityId,
+          claimId,
+        ),
+    ]);
+    if ((results[0]?.meta?.changes ?? 0) !== 1) {
       throw new Error("The download capability is invalid or already used.");
     }
   }
@@ -516,7 +640,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     if (this.#database !== undefined) {
       return this.#database
         .prepare(
-          `SELECT object_key, content_type, byte_size, state, scan_result_code
+          `SELECT object_key, content_type, byte_size, state, scan_result_code, expires_at
              FROM private_uploads
             WHERE id = ?
             LIMIT 1`,
@@ -533,6 +657,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
           byte_size: stored.capability.sizeBytes,
           state: stored.state,
           scan_result_code: capabilityPayload(stored.capability),
+          expires_at: stored.capability.expiresAt,
         };
   }
 
@@ -568,8 +693,8 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
         .prepare(
           `INSERT INTO private_uploads
              (id, tenant_id, object_key, content_type, byte_size, checksum_sha256,
-              state, scan_result_code, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'not-computed', ?, ?, ?, ?)`,
+              state, scan_result_code, created_at, updated_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, 'not-computed', ?, ?, ?, ?, ?)`,
         )
         .bind(
           capabilityId,
@@ -581,6 +706,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
           payload,
           new Date().toISOString(),
           new Date().toISOString(),
+          capability.expiresAt,
         )
         .run();
       return;
@@ -594,19 +720,20 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     }
     const canReplace =
       existing.state === "pending" ||
+      (capability.kind === "upload" && existing.state === "deleted") ||
       (capability.kind === "download" && existing.state !== "scanning");
     if (!canReplace) {
       throw new Error("The private asset capability cannot be reauthorized.");
     }
     const statePredicate =
-      capability.kind === "upload" ? "state = 'pending'" : "state <> 'scanning'";
+      capability.kind === "upload" ? "state IN ('pending', 'deleted')" : "state <> 'scanning'";
     const result = await this.#database
       .prepare(
         `UPDATE private_uploads
-            SET state = ?, scan_result_code = ?, updated_at = ?
+            SET state = ?, scan_result_code = ?, updated_at = ?, expires_at = ?
           WHERE id = ? AND ${statePredicate}`,
       )
-      .bind(state, payload, new Date().toISOString(), capabilityId)
+      .bind(state, payload, new Date().toISOString(), capability.expiresAt, capabilityId)
       .run();
     if ((result.meta?.changes ?? 0) !== 1) {
       throw new Error("The private asset capability cannot be reauthorized.");

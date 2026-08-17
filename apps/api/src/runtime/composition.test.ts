@@ -2555,6 +2555,13 @@ function acceptanceDatabase(
                 const row = outbox.get(String(values[0]));
                 return (row === undefined ? null : { state: row.state }) as T | null;
               }
+              if (query.includes("FROM evaluation_decisions")) {
+                const submissionId = String(values[3]);
+                return {
+                  version: 1,
+                  status: submissionId.includes("accepted") ? "accepted" : "rejected",
+                } as T;
+              }
               if (query.includes("FROM auth_users")) {
                 events.push("db:auth-users");
                 return options.speakerGrantAvailable === false

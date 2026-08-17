@@ -40,7 +40,7 @@ export interface FileUploadProps {
   readonly describedBy?: string | undefined;
   readonly ariaLabel?: string;
   readonly invalid?: boolean;
-  readonly inputRef?: Ref<HTMLInputElement>;
+  readonly inputRef?: Ref<HTMLInputElement> | undefined;
   readonly files?: readonly FileUploadItem[];
   readonly emptyState?: ReactNode;
   readonly onFilesSelected: (files: readonly File[]) => void;

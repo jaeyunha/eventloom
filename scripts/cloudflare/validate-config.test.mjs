@@ -57,10 +57,10 @@ test("accepts every checked-in ordered D1 migration", () => {
   }
 });
 
-test("rejects duplicate migration ordinals", () => {
+test("rejects duplicate migration ordinals even when filenames differ", () => {
   assert.throws(
     () => validateMigrationOrdinals(["0036_evaluation_export_jobs.sql", "0036_other.sql"]),
-    /Migration ordinal 0036 is duplicated/,
+    /Migration ordinal 0036 is duplicated/u,
   );
 });
 

@@ -210,6 +210,9 @@ describe("deliverables API", () => {
             currentVersionId: "asset-v2",
             approvedVersionId: "asset-v1",
             releasedVersionId: "asset-v1",
+            uploaderLabel: "Local Organizer",
+            uploaderAccountId: "organizer-account",
+            reviewedBy: "reviewer-account",
             objectKey: "private/object",
             tenantId: "private-tenant",
           },
@@ -223,7 +226,10 @@ describe("deliverables API", () => {
       currentVersionId: "asset-v2",
       approvedVersionId: "asset-v1",
       releasedVersionId: "asset-v1",
+      uploaderLabel: "Local Organizer",
+      reviewedBy: "reviewer-account",
     });
+    expect(assets?.[0]).not.toHaveProperty("uploaderAccountId");
     expect(assets?.[0]).not.toHaveProperty("objectKey");
     expect(assets?.[0]).not.toHaveProperty("tenantId");
   });
@@ -329,6 +335,8 @@ describe("deliverables API", () => {
       participantId: "participant-1",
       file: new File(["headshot-v2"], "speaker.png", { type: "image/png" }),
       supersedesAssetId: "asset-headshot-v1",
+      expectedLatestVersion: 1,
+      idempotencyKey: "headshot-replacement-1",
       expectedVersion: 2,
     });
 
@@ -347,7 +355,11 @@ describe("deliverables API", () => {
       contentType: "image/png",
       sizeBytes: 11,
       supersedesAssetId: "asset-headshot-v1",
+      expectedLatestVersion: 1,
     });
+    expect(new Headers(calls[0]?.init?.headers).get("idempotency-key")).toBe(
+      "headshot-replacement-1",
+    );
     expect(calls[1]?.init?.credentials).toBe("omit");
     expect(calls[1]?.init?.body).toBeInstanceOf(File);
     expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ state: "ready" });

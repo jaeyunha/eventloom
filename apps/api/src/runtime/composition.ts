@@ -12,6 +12,7 @@ import {
 } from "../features/evaluations/export-jobs";
 import { createEvaluationExportGenerator } from "../features/evaluations/routes";
 import type { EvaluationActor } from "../features/evaluations/types";
+import { dispatchPendingEvaluationDecisionJobs } from "../infrastructure/cloudflare/evaluation-decision-outbox";
 import {
   CloudflareEvaluationExportQueue,
   D1EvaluationExportStore,
@@ -23,6 +24,7 @@ import {
   type OutboxConsumerBindings,
   type OutboxDeliveryStatusRecorder,
 } from "../infrastructure/cloudflare/outbox-consumer";
+import { reconcilePrivateObjectCleanup } from "../infrastructure/cloudflare/private-object-cleanup";
 import {
   CloudflareReminderOutbox,
   D1ReminderRepository,
@@ -743,6 +745,21 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
         executionContext,
         {
           adapters: {
+            "evaluation-decisions": async (payload) => {
+              const service = runtime.dependencies.evaluations?.service;
+              if (service === undefined) {
+                throw new Error("The evaluation decision processor is unavailable.");
+              }
+              await service.replayPersistedDecisionWork({
+                tenantId: payload.tenantId,
+                planId: payload.planId,
+                submissionId: payload.submissionId,
+                status: payload.status,
+                decisionVersion: payload.decisionVersion,
+                transitionIdempotencyKey: payload.transitionIdempotencyKey,
+              });
+              return undefined;
+            },
             reports: async (payload, context) => {
               const coordinator = runtime.dependencies.evaluations?.resultsExports;
               if (coordinator === undefined) {
@@ -796,11 +813,21 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
             "DB and OUTBOX_QUEUE are required for evaluation export dispatch.",
           ]);
         }
-        await dispatchPendingEvaluationExportJobs(
-          effectiveBindings.DB,
-          effectiveBindings.OUTBOX_QUEUE,
-          { now: () => scheduledAt },
-        );
+        await Promise.all([
+          dispatchPendingEvaluationExportJobs(
+            effectiveBindings.DB,
+            effectiveBindings.OUTBOX_QUEUE,
+            { now: () => scheduledAt },
+          ),
+          dispatchPendingEvaluationDecisionJobs(
+            effectiveBindings.DB,
+            effectiveBindings.OUTBOX_QUEUE,
+            { now: () => scheduledAt },
+          ),
+          reconcilePrivateObjectCleanup(effectiveBindings.DB, effectiveBindings.OUTBOX_QUEUE, {
+            now: () => scheduledAt,
+          }),
+        ]);
       }
       if (shouldRunScheduledReminders(controller.cron)) {
         await runScheduledReminders(runtime.dependencies, bindings, scheduledAt);
