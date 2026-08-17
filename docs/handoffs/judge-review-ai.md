@@ -1,221 +1,217 @@
-# Judge Review AI Lane Handoff
+# judge-review-ai lane handoff
 
-> **Paused by user request.** Do not resume feature work, merge, deploy, or delete
-> this worktree/branch until the lane is explicitly resumed.
+Updated: 2026-08-17
 
-## Repository and lane
+## Current status
 
-- Repository: `jaeyunha/eventloom`
+The lane is active and in final verification. It is not paused. No production
+deployment was performed.
+
+- Repository: `https://github.com/jaeyunha/eventloom`
 - Branch: `judge-review-ai`
-- GitHub branch:
-  <https://github.com/jaeyunha/eventloom/tree/judge-review-ai>
-- Worktree:
-  `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
-- Pull request: [PR #34](https://github.com/jaeyunha/eventloom/pull/34)
-  (`OPEN`; GitHub reported `CLEAN` before this checkpoint push)
-- Handoff issue title: `[Lane handoff] judge-review-ai`
+- Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
+- Source checkpoint before this documentation update: `2670afbe6e975a22f78513c58d1a23e5e970bef4`
+- Incorporated `github/main`: `e0bf50188e031c33709bb1585923fdf88d9a2124`
+- Latest main contains the merged PR #31 portal-reminders, PR #40, PR #60
+  public-widgets, and PR #61 export work.
+- PR: `https://github.com/jaeyunha/eventloom/pull/34`
+- Handoff issue: `https://github.com/jaeyunha/eventloom/issues/47`
 
-## Exact revision state at pause
+The documentation commit that adds this file will become the next branch tip.
+After pushing, verify the exact remote tip with:
 
-- Branch `HEAD` before the checkpoint commit:
-  `98af96667c55fd870e5288d23b1de0c8b75fe070`
-- Pending merge parent/effective incorporated base:
-  `e1d91309fbbd4ae22516dd6cdf060feec373d6ee`
-- Latest fetched `github/main`, **not incorporated**:
-  `6467ff1f48c73229c5c45dba6b4716df724a3bdd`
-- Latest main includes merged PR #36 and subsequent main changes through merged
-  PR #42.
-- Before checkpointing, the branch was 1 commit ahead and 13 commits behind the
-  latest fetched `github/main`.
-- The exact pushed checkpoint commit is linked from the handoff issue because a
-  committed document cannot contain the hash of the commit that contains it.
+```sh
+git fetch github main
+git rev-parse HEAD github/main github/judge-review-ai
+gh pr view 34 --repo jaeyunha/eventloom \
+  --json state,mergeStateStatus,baseRefOid,headRefOid,url
+```
 
-## Lane objective and scope
+## Objective and scope
 
-Harden advisory review AI without transferring authority away from the human
-reviewer or D1:
+Make advisory AI review suggestions safe at every authoritative boundary while
+preserving explicit human confirmation and the existing review experience.
 
-1. Validate criterion-complete provider output at the service boundary.
-2. Accept only meaningful, submission-grounded rationales and exact source
-   excerpts.
-3. Keep dropdown values constrained to configured rubric options.
-4. Revoke AI generation, listing, and resolution when reviewer or submission
-   authority is lost.
-5. Keep D1 as the transactional evaluation command authority and Airtable as a
-   non-authoritative projection reader.
-6. Preserve advisory UI labeling, human confirmation, manual review, and
-   secret-safe provider failures.
+In scope:
+
+- exactly one provider candidate for every scoreable criterion;
+- rejection of all-free-text rubrics before provider invocation;
+- deterministic, nontrivial, submission-grounded rationales;
+- exact, case-sensitive title/abstract excerpts bound one-to-one to rationales;
+- prompt-injection-resistant provider interaction;
+- active submitted-only AI generation, listing, and resolution;
+- conflict, abstention, withdrawal, decision, assignment-version, and review-write
+  authority checks;
+- D1 as the transactional command authority and Airtable as a read-only
+  projection;
+- advisory dropdown labels, uncounted pending state, and explicit human
+  confirmation;
+- preservation of organizer `under_review` visibility;
+- preservation of merged export, public-widget, and portal-reminder work.
+
+Out of scope:
+
+- production deployment;
+- merging unrelated branches outside the required `github/main` integration;
+- changing provider credentials or external resources.
 
 ## Completed implementation
 
-- `EvaluationService` requires exactly one candidate for every scoreable
-  criterion and rejects partial, duplicate, unexpected, empty unknown-bucket,
-  and non-scoreable criterion results before persistence.
-- All-free-text rubrics fail locally with a stable domain error before provider
-  invocation.
-- Rationale validation now requires:
-  - submission-token grounding;
-  - an explanatory relation;
-  - a bounded impact pattern;
-  - only controlled explanatory vocabulary outside source terms.
-- The regression that previously accepted
-  `Practical material audience concrete outcome supports banana bicycle.` was
-  repaired; the focused rejection test passes.
-- Workers AI treats rubric/title/abstract fields as untrusted data, rejects
-  embedded instructions, constrains criterion IDs and scores, requires literal
-  title/abstract excerpts, and binds each rationale to its declared excerpt.
-- Only `submitted` material is reviewable. Draft, reopened, withdrawn, unknown,
-  and missing material is blocked before provider invocation and before
-  suggestion reads/writes.
-- Generation, listing, stale marking, and resolution recheck reviewer,
-  conflict, assignment, and submission authority.
-- The D1 suggestion CAS guard now binds the assignment's `submission_id`,
-  requires the authoritative `submissions.id` row to remain `submitted`, and
-  requires no decision in the same atomic batch.
-- Deterministic promise-gated races cover conflict and submission withdrawal
-  during generation, listing, stale marking, and resolution.
-- `AirtableEvaluationProjectionStore` is read-only for evaluations and no
-  longer implements or exposes evaluation command mutations.
-- Dropdown advisory rendering, provenance, uncounted/pending labeling, human
-  overrides, reload behavior, and manual-review fallback remain implemented.
-- PR #30's submitted-review/comment functionality was preserved in the pending
-  base integration.
+- Service normalization rejects missing, duplicate, unexpected, non-scoreable,
+  partial, and extra criterion candidates before persistence.
+- Provider output must include aligned `title:<literal excerpt>` or
+  `abstract:<literal excerpt>` references for every rationale. The service
+  independently checks exact source membership and rationale grounding, so an
+  injected provider cannot bypass the Cloudflare adapter.
+- Generic, one-word, repeated-source, arbitrary-filler, and unsupported
+  rationales are rejected using machine-testable deterministic rules.
+- Rubrics containing only free-text criteria fail locally with the stable
+  `EVALUATION_ADVISORY_UNSUPPORTED` error and never invoke the provider.
+- Untrusted rubric, title, and abstract data are serialized separately from
+  instructions and explicitly treated as data, not commands.
+- Abstained assignments are rejected before AI provider invocation or protected
+  suggestion reads.
+- Client-supplied `origin: "ai"` review scores are rejected. AI-origin scores
+  can only be created by the validated advisory suggestion resolution path.
+- `saveReview`, `confirmAiScores`, and `submitReview` all use the canonical
+  `writeReview` repository command.
+- The in-memory and D1 write boundaries check assignment identity/version/status,
+  conflicts, submitted material, decisions, plan and round revisions, current
+  submission revision, and temporal plan/round authority before mutation.
+- D1 guard, review mutation, score/evidence replacement, and optional assignment
+  transition execute in one atomic batch. A migrated-D1 withdrawal race test
+  verifies no review persists after authority revocation.
+- Local composition supplies the in-memory repository with the authoritative
+  submission source. D1 remains authoritative for deployed command writes.
+- Airtable evaluation storage exposes only `EvaluationProjectionReader`; it has
+  no evaluation suggestion command mutation methods.
+- Dropdown suggestions render configured labels such as `Reject`, remain
+  pending and uncounted until acceptance/edit, and preserve explicit human
+  confirmation.
+- Added the missing `0029_agenda_validation_revision.sql` to the canonical
+  speaker lifecycle test migration list so the merged-main full test gate
+  exercises the agenda schema expected by current code.
+- Kept PR #61 export jobs, organizer results export, migration 0036, and export
+  handoff unchanged from incorporated main. Kept PR #60 public-widget files and
+  PR #31 portal-reminder files unchanged from incorporated main.
 
-## Remaining tasks
+## Verification completed
 
-### Base integration
+Commands and status at the source checkpoint:
 
-- [ ] Fetch `github/main` and confirm whether
-  `6467ff1f48c73229c5c45dba6b4716df724a3bdd` is still current.
-- [ ] Incorporate latest main. The current checkpoint only incorporates
-  `e1d91309fbbd4ae22516dd6cdf060feec373d6ee`.
-- [ ] Resolve only `judge-review-ai` conflicts. PR #36 overlaps
-  `apps/api/src/features/evaluations/service.ts`,
-  `apps/api/src/features/evaluations/service.test.ts`, and review workspace
-  tests.
-- [ ] Recheck open PR #38 (`judge-participant-lifecycle`) before finalizing,
-  because it changes submitted-proposal lifecycle behavior that may affect the
-  submitted-only reviewability contract.
-- [ ] Inspect the final diff against the newly incorporated main and confirm no
-  unrelated lane changes.
+- `git diff --check`: **PASS**
+- `bun run test:unit --` focused AI/review matrix: **PASS**; 257 passed,
+  1 credential-gated test skipped.
+- `make check`: **PASS**; workspace typecheck, lint, and format checks clean.
+- `make test`: **PASS** after the agenda migration-list repair and D1 guard
+  assertion correction; 2267 tests passed, 3 skipped.
+- `make build`: **PASS**
+- Isolated Chromium QA:
 
-### Boundary and review follow-up
+  ```sh
+  PLAYWRIGHT_WEB_PORT=3291 \
+  PLAYWRIGHT_API_PORT=9091 \
+  PLAYWRIGHT_API_INSPECTOR_PORT=9531 \
+  PLAYWRIGHT_REUSE_EXISTING_SERVER=false \
+  AI_PROVIDER=disabled \
+  bun x playwright test tests/e2e/review-ai-advisory.qa.spec.ts --project=chromium
+  ```
 
-- [ ] Rerun the arbitrary-filler, multilingual-rationale, exact-excerpt,
-  candidate-completeness, inactive-material, withdrawal-race, and D1 guard
-  tests after main integration.
-- [ ] Execute or add a real migrated-D1 integration check for the submission
-  lifecycle guard. Current repository coverage validates generated SQL and its
-  real column name but does not execute the guard against a migrated database.
-- [ ] Reassess the controlled explanation vocabulary after main integration.
-  It intentionally fails closed and may reject legitimate new wording or
-  languages; do not broaden it without adversarial regressions.
-- [ ] Repeat the five-way goal, code-quality, security, hands-on QA, and context
-  review. The latest code/security review failure was repaired, but the full
-  review set was not rerun after the final controlled-vocabulary edit because
-  the user paused the lane.
+  **PASS**, one test. Desktop and mobile artifacts were inspected; mobile has
+  no horizontal overflow and the Accept transition becomes human-confirmed
+  and countable.
 
-### Verification still required
+- Final source diagnostics: **PASS** for evaluation features, D1 evaluation
+  repositories, web review workspace, and speaker lifecycle support.
 
-- [ ] Run the complete focused review-AI matrix after latest-main integration.
-- [ ] Run `make check`.
-- [ ] Run `make test` without overlapping it with another heavy gate.
-- [ ] Run `make build`.
-- [ ] Recreate and run isolated Chromium QA on unused ports.
-- [ ] Record new screenshot hashes and local-only evidence.
-- [ ] Update PR #34's body with the final base SHA, final head SHA, final test
-  counts, browser command, and evidence limitations.
-- [ ] Confirm PR #34 is `OPEN` and GitHub reports the final merge state.
-- [ ] Do not merge or deploy from this handoff checkpoint.
+Latest captured local browser evidence:
 
-## Known review findings and unresolved risks
+| Artifact | Dimensions | SHA-256 |
+| --- | ---: | --- |
+| `test-results/review-ai-advisory-desktop.png` | 1440x1000 | `17d0b1efb1ad28fa7730d6d995f861c65d1003be6c0483c397f18590962e2f57` |
+| `test-results/review-ai-advisory-mobile.png` | 390x844 | `d911fd68f872ce9aeabc3354f606f97f217d4a1c7052fbe1eff8d8e7537e0ed9` |
 
-- Latest main `6467ff1` is not incorporated; this is the primary blocker to
-  calling the lane final.
-- The final controlled-vocabulary change repaired the immediate failing test,
-  but full check/test/build/browser gates were not rerun after that last edit.
-- The D1 SQL guard uses the real `submissions.id` column and its focused SQL
-  assertion passes. A real migrated-schema execution test remains recommended.
-- Rationale validation is deterministic and intentionally conservative. The
-  allowlist can cause false negatives for legitimate prose or languages not
-  represented in its regressions.
-- Live provider tests remain credential-gated. No live OpenAI/Workers AI result
-  is release evidence.
-- Browser evidence is local-only, not deployed staging or production evidence.
-- Other open lanes exist. Do not assume a clean merge after any of PRs #31,
-  #32, #33, #37, #38, #39, or #40 changes main.
+These are local route-intercepted QA artifacts with `AI_PROVIDER=disabled`;
+they are not live provider or deployment evidence.
 
-## Verification evidence at pause
+## Final five-review checklist
 
-| Command / check | Status | Evidence |
-| --- | --- | --- |
-| Focused service/provider/D1 suites before the last allowlist edit | **PASS** | 111 passed, 1 live-provider test skipped |
-| Focused complete review-AI matrix before the last allowlist edit | **PASS** | 256 passed, 2 credential-gated tests skipped |
-| `make check` before the last allowlist edit | **PASS** | Typechecks clean; Biome checked 1,250 files |
-| `make test` before the last allowlist edit | **PASS** | Full non-browser repository gate exited 0 |
-| `make build` before the last allowlist edit | **PASS** | Contracts, CLI, Worker, and Next.js build exited 0 |
-| Safe-port Chromium before the last allowlist edit | **PASS** | 1 passed; ports 3285/9085/9525 |
-| Browser screenshot hash | **PASS** | `4c8c03d5e4a13ed8e6f0a68765a88c2ca0ae1f3a923ad59e3eb41c923b19639d` |
-| Final arbitrary-filler regression after the last allowlist edit | **PASS** | 1 passed, 86 skipped |
-| Corrected focused D1 lifecycle guard test | **PASS** | 1 passed, 10 skipped |
-| Initial combined focused selector | **PARTIAL PASS** | Filler test passed; D1 file was skipped because the selector used a stale test title, then the corrected D1 command above passed |
-| `git diff --check` after the final edit | **PASS** | Staged and unstaged diff checks emitted no findings |
-| API typecheck after the final edit | **PASS** | `bun run --cwd=apps/api typecheck` exited 0 |
-| Full gates after the final allowlist edit | **UNRUN** | Paused by user request |
-| Live provider verification | **UNRUN** | Credential-gated; not claimed |
+The final five-review must run on the pushed tip after this handoff update:
 
-## Dirty, generated, and untracked file disposition
+- [ ] Goal/constraint reviewer returns PASS against current `github/main`.
+- [ ] Code-quality reviewer returns PASS, including D1 value ordering and
+      migrated rollback coverage.
+- [ ] Security reviewer returns PASS for provider, review-write, abstention,
+      withdrawal, decision, and revision authority.
+- [ ] Hands-on QA reviewer returns PASS for focused tests and Chromium flow.
+- [ ] Context/dependency reviewer returns PASS for PR #31/#40/#60/#61
+      preservation and current PR/issue metadata.
+- [ ] Resolve every finding before merge; do not waive a release blocker.
 
-- Generated outputs were removed:
-  - `apps/web/.next`
-  - `test-results`
-  - `playwright-report`
-  - `node_modules/.vite-temp`
-  - `apps/api/.wrangler`
-  - `.wrangler`
-- `.debug-journal.md` was deleted and is not part of the checkpoint.
-- `.pr-body.md` is a temporary stale draft and must not be committed. Remove it
-  before final staging.
-- No unrelated stashes were applied, dropped, or modified.
-- Preserve every staged/unstaged lane-owned source and test edit. Do not use
-  destructive Git commands.
+## Remaining delivery tasks
 
-## Precise resume instructions
+- [ ] Push the handoff documentation commit and verify branch/PR head.
+- [ ] Update PR #34 body with base `e0bf501`, final source checkpoint, actual
+      verification results, and the latest screenshot hashes.
+- [ ] Update issue #47 so it no longer says the lane is paused; retain the
+      detailed checklist, dependency order, and resume commands.
+- [ ] Confirm exactly one open issue titled `[Lane handoff] judge-review-ai`.
+- [ ] Merge PR #34 into `main` only after all five final reviewers PASS.
+- [ ] Verify the resulting GitHub main merge commit and that no deployment was
+      performed.
 
-```bash
+## Known risks and assumptions
+
+- The final browser run is mocked/route-intercepted local QA, not live provider
+  evidence.
+- Historical persisted suggestions are not retroactively revalidated; new
+  provider output is validated at the service boundary before persistence.
+- The D1 guard relies on existing evaluation, submission, plan, round, and
+  revision tables; no schema migration is introduced by the review-AI lane.
+- The expected D1 CAS diagnostic may emit `malformed JSON` when the guard
+  intentionally aborts a batch. The relevant tests assert rejection and no
+  persisted state.
+- No production deployment has been performed or claimed.
+
+## Dependency and merge order
+
+1. `e0bf50188e031c33709bb1585923fdf88d9a2124` (`github/main`) is already
+   incorporated into this lane.
+2. Push the documentation update and verify PR #34 is clean/mergeable.
+3. Complete the final five-review on the pushed tip.
+4. Merge PR #34 into `main`.
+5. Do not deploy production as part of this lane.
+
+## Dirty, generated, and untracked disposition
+
+- Only intended source, test, and handoff files may be committed.
+- `.debug-journal.md`, `.pr-body.md`, browser screenshots, `test-results`,
+  `.next`, Wrangler state, build output, and temporary QA files must remain
+  deleted or ignored and unstaged.
+- Before final push:
+
+  ```sh
+  git status --short --branch
+  git diff --check
+  git diff --cached --check
+  ```
+
+- The worktree must be clean after the documentation commit.
+
+## Resume and finalization commands
+
+```sh
 cd /Users/jaeyunha/wt/open-sessionboard/judge-review-ai
-
-git status --short --branch
 git fetch github main
-git rev-parse HEAD github/main
-
-# Inspect this handoff and the handoff issue before changing code.
-git merge --no-commit github/main
-# Resolve only judge-review-ai conflicts; preserve merged PR #36 behavior.
-
-bun run test:unit -- \
-  apps/api/src/features/evaluations/service.test.ts \
-  apps/api/src/integrations/ai/cloudflare.test.ts \
-  apps/api/src/infrastructure/cloudflare/repositories/evaluations.test.ts \
-  apps/api/src/runtime/composition.test.ts \
-  apps/web/src/features/reviews/review-workspace.test.tsx \
-  apps/web/src/features/reviews/workspace/model-validate-suggestion-edit-value.test.ts
-
+git merge --no-edit github/main
+bun run test:unit -- apps/api/src/features/evaluations/service.test.ts \
+  apps/api/src/infrastructure/cloudflare/repositories/evaluations.test.ts
 make check
 make test
 make build
-
-# Choose unused ports before running Playwright.
-for port in 3291 9091 9531; do lsof -nP -iTCP:$port -sTCP:LISTEN; done
-PLAYWRIGHT_WEB_PORT=3291 \
-PLAYWRIGHT_API_PORT=9091 \
-PLAYWRIGHT_API_INSPECTOR_PORT=9531 \
-AI_PROVIDER=disabled \
-bun run test:e2e -- <restored-review-ai-qa-spec>
-
-# Repeat independent review, then update and push PR #34.
-git diff --check
-git status --short --branch
+gh pr view 34 --repo jaeyunha/eventloom
+gh pr merge 34 --repo jaeyunha/eventloom --merge
 ```
 
-The lane is intentionally paused at this handoff by user request.
+Never deploy production from this lane. Merge only after the final five-review
+verdict is PASS and the PR/issue/handoff metadata has been updated.
