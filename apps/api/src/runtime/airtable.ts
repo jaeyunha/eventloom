@@ -2938,6 +2938,12 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         throw new Error("An accepted submission must contain at least one speaker.");
       }
       acceptedSubmission = submission;
+      const session = await this.#ensureCanonicalSession(input, submission).catch(
+        (error: unknown) => {
+          throw new Error("Accepted session projection failed.", { cause: error });
+        },
+      );
+      if (!(await isCurrentDecision())) return { accepted: false };
       const profiles = await Promise.all(
         submission.participants.map(async (participant) => {
           const profile = await this.#ensureProfile(input, participant);
@@ -2947,12 +2953,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       ).catch((error: unknown) => {
         throw new Error("Accepted speaker onboarding failed.", { cause: error });
       });
-      if (!(await isCurrentDecision())) return { accepted: false };
-      const session = await this.#ensureCanonicalSession(input, submission).catch(
-        (error: unknown) => {
-          throw new Error("Accepted session projection failed.", { cause: error });
-        },
-      );
       if (!(await isCurrentDecision())) return { accepted: false };
 
       await Promise.all([

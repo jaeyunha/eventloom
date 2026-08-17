@@ -2841,6 +2841,9 @@ export class EvaluationService {
       round,
       submission: this.#visibleSubmission(plan, round, material),
     };
+    if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
     let result: EvaluationSuggestionProviderResult;
     try {
       result = await producer(providerInput);
