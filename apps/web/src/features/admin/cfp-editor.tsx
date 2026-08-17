@@ -27,6 +27,7 @@ import {
   configurationFromServer,
   createEmptyCfpConfiguration,
   fieldKeyForRuleField,
+  CANONICAL_TITLE_FIELD_KEY,
   fieldKeyFromLabel,
   fieldOptionValues,
   firstRuleCondition,
@@ -34,6 +35,7 @@ import {
   loadCfpEditorConfiguration,
   ORGANIZER_SCROLL_CONTAINER_ID,
   persistCfpConfiguration,
+  removeCfpEditorField,
   resolveCfpEditorStepIndex,
   ruleMatches,
   SECTION_LINKS,
@@ -340,13 +342,18 @@ function useCfpEditorController({
     const id = `custom-field-${Date.now()}`;
     setConfiguration((current) => {
       const label = "New custom field";
+      const generated = `${fieldKeyFromLabel(label)}-${current.fields.length + 1}`;
+      const key =
+        generated === CANONICAL_TITLE_FIELD_KEY
+          ? `custom-field-${current.fields.length + 1}`
+          : generated;
       return {
         ...current,
         fields: [
           ...current.fields,
           {
             id,
-            key: `${fieldKeyFromLabel(label)}-${current.fields.length + 1}`,
+            key,
             label,
             type: "text",
             kind: "text",
@@ -362,10 +369,7 @@ function useCfpEditorController({
   }
 
   function removeField(fieldId: string): void {
-    setConfiguration((current) => ({
-      ...current,
-      fields: current.fields.filter((field) => field.id !== fieldId),
-    }));
+    setConfiguration((current) => removeCfpEditorField(current, fieldId));
     setSaveState("idle");
   }
 

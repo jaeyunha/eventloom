@@ -66,6 +66,43 @@ export interface CfpFormField {
   fileRequest?: NonNullable<ApiCfpFormField["fileRequest"]>;
   config?: Record<string, unknown>;
   description?: string;
+  /** Platform-owned fields that cannot be removed or re-keyed. */
+  system?: boolean;
+  keyLocked?: boolean;
+}
+
+/** Canonical submission title answer key used by submit/review/export. */
+export const CANONICAL_TITLE_FIELD_KEY = "title" as const;
+
+export function fieldStorageKey(field: Pick<CfpFormField, "id" | "key">): string {
+  return field.key ?? field.id;
+}
+
+export function isCanonicalTitleField(field: Pick<CfpFormField, "id" | "key">): boolean {
+  return (
+    field.id === CANONICAL_TITLE_FIELD_KEY ||
+    fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY
+  );
+}
+
+export function isKeyLockedField(
+  field: Pick<CfpFormField, "id" | "key" | "keyLocked" | "system">,
+): boolean {
+  return field.keyLocked === true || isCanonicalTitleField(field);
+}
+
+export function isSystemOwnedField(
+  field: Pick<CfpFormField, "id" | "key" | "system">,
+): boolean {
+  return field.system === true || isCanonicalTitleField(field);
+}
+
+function looksLikeTitleField(field: Pick<CfpFormField, "id" | "key" | "label">): boolean {
+  const key = fieldStorageKey(field).toLocaleLowerCase();
+  const label = field.label.trim().toLocaleLowerCase();
+  if (key === CANONICAL_TITLE_FIELD_KEY || field.id === CANONICAL_TITLE_FIELD_KEY) return true;
+  if (key === "title1" || key.startsWith("title-") || key.endsWith("-title")) return true;
+  return label === "title" || label === "session title" || label.startsWith("session title");
 }
 
 export interface CfpCondition {
@@ -175,13 +212,31 @@ export function updateCfpEditorField(
 ): CfpConfiguration {
   const field = configuration.fields.find((candidate) => candidate.id === fieldId);
   if (field === undefined) return configuration;
-  const currentKey = field.key ?? field.id;
-  const nextKey = patch.key ?? currentKey;
+  const currentKey = fieldStorageKey(field);
+  const requestedKey = patch.key ?? currentKey;
+  const locked = isKeyLockedField(field);
+  // Canonical/system keys cannot be renamed, and no other field may claim `title`.
+  const nextKey = locked
+    ? currentKey
+    : requestedKey === CANONICAL_TITLE_FIELD_KEY
+      ? currentKey
+      : requestedKey;
+  const nextPatch: Partial<CfpFormField> = {
+    ...patch,
+    key: nextKey,
+    ...(locked
+      ? {
+          keyLocked: true,
+          system: field.system === true || isCanonicalTitleField(field),
+          ...(isCanonicalTitleField(field) ? { required: true } : {}),
+        }
+      : {}),
+  };
   const keyChanged = nextKey !== currentKey;
   return {
     ...configuration,
     fields: configuration.fields.map((candidate) =>
-      candidate.id === fieldId ? { ...candidate, ...patch } : candidate,
+      candidate.id === fieldId ? { ...candidate, ...nextPatch } : candidate,
     ),
     ...(keyChanged
       ? {
@@ -205,16 +260,32 @@ export function updateCfpEditorField(
   };
 }
 
+export function removeCfpEditorField(
+  configuration: CfpConfiguration,
+  fieldId: string,
+): CfpConfiguration {
+  const field = configuration.fields.find((candidate) => candidate.id === fieldId);
+  if (field === undefined || isSystemOwnedField(field)) {
+    return configuration;
+  }
+  return {
+    ...configuration,
+    fields: configuration.fields.filter((candidate) => candidate.id !== fieldId),
+  };
+}
+
 const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
   {
     id: "title",
-    key: "title",
+    key: CANONICAL_TITLE_FIELD_KEY,
     label: "Session title",
     type: "text",
     required: true,
     visible: true,
     placeholder: "A clear, specific title",
     options: [],
+    system: true,
+    keyLocked: true,
   },
   {
     id: "abstract",
@@ -238,15 +309,74 @@ const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
   },
 ];
 
-function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
-  const coreKeys = new Set(CORE_PROPOSAL_FIELDS.map((field) => field.key));
-  const fieldsByKey = new Map(fields.map((field) => [field.key ?? field.id, field]));
+function asCanonicalTitleField(
+  field: CfpFormField,
+  fallback: CfpFormField = CORE_PROPOSAL_FIELDS[0]!,
+): CfpFormField {
+  return {
+    ...fallback,
+    ...field,
+    id: field.id || fallback.id,
+    key: CANONICAL_TITLE_FIELD_KEY,
+    type: field.type || fallback.type,
+    required: true,
+    visible: field.visible ?? fallback.visible,
+    label: field.label || fallback.label,
+    placeholder: field.placeholder || fallback.placeholder,
+    options: [...(field.options ?? fallback.options ?? [])],
+    system: true,
+    keyLocked: true,
+  };
+}
+
+/**
+ * Ensures exactly one canonical title field with key `title`, repairing common
+ * mis-keys such as `title1` when the intent is unambiguous.
+ */
+export function repairCanonicalTitleFields(fields: CfpFormField[]): CfpFormField[] {
+  const titleByKey = fields.find((field) => fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY);
+  if (titleByKey) {
+    return fields.map((field) =>
+      field.id === titleByKey.id || fieldStorageKey(field) === CANONICAL_TITLE_FIELD_KEY
+        ? asCanonicalTitleField(field)
+        : field,
+    );
+  }
+
+  const titleById = fields.find((field) => field.id === CANONICAL_TITLE_FIELD_KEY);
+  if (titleById) {
+    return fields.map((field) =>
+      field.id === titleById.id ? asCanonicalTitleField(field) : field,
+    );
+  }
+
+  const titleLike = fields.filter((field) => looksLikeTitleField(field));
+  if (titleLike.length === 1) {
+    const target = titleLike[0]!;
+    return fields.map((field) => (field.id === target.id ? asCanonicalTitleField(field) : field));
+  }
+
+  return [asCanonicalTitleField(CORE_PROPOSAL_FIELDS[0]!), ...fields];
+}
+
+export function withCoreProposalFields(fields: CfpFormField[]): CfpFormField[] {
+  const repaired = repairCanonicalTitleFields(fields);
+  const coreKeys = new Set(CORE_PROPOSAL_FIELDS.map((field) => field.key ?? field.id));
+  const fieldsByKey = new Map(repaired.map((field) => [fieldStorageKey(field), field]));
   return [
     ...CORE_PROPOSAL_FIELDS.map((field) => {
       const existing = fieldsByKey.get(field.key ?? field.id);
-      return existing === undefined ? { ...field, options: [...(field.options ?? [])] } : existing;
+      if (existing === undefined) {
+        return field.key === CANONICAL_TITLE_FIELD_KEY
+          ? asCanonicalTitleField(field)
+          : { ...field, options: [...(field.options ?? [])] };
+      }
+      if ((field.key ?? field.id) === CANONICAL_TITLE_FIELD_KEY) {
+        return asCanonicalTitleField(existing, field);
+      }
+      return existing;
     }),
-    ...fields.filter((field) => !coreKeys.has(field.key ?? field.id)),
+    ...repaired.filter((field) => !coreKeys.has(fieldStorageKey(field))),
   ];
 }
 
