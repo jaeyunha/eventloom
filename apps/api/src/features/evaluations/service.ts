@@ -383,12 +383,19 @@ function requireHumanReviewer(actor: EvaluationActor, assignment: EvaluationAssi
   if (
     actor.kind !== "human" ||
     assignment.status === "superseded" ||
-    assignment.status === "abstained" ||
     actor.userId !== assignment.reviewerId ||
     !hasRole(actor, assignment.eventId, "reviewer")
   ) {
     throw forbidden();
   }
+}
+
+function requireAiSuggestionReviewer(
+  actor: EvaluationActor,
+  assignment: EvaluationAssignment,
+): void {
+  requireHumanReviewer(actor, assignment);
+  if (assignment.status === "abstained") throw forbidden();
 }
 
 function findRound(plan: EvaluationPlan, roundId: string): ReviewRound {
@@ -2509,7 +2516,7 @@ export class EvaluationService {
   ): Promise<EvaluationSuggestion> {
     const assignmentId = typeof input === "string" ? input : input.assignmentId;
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
-    requireHumanReviewer(actor, assignment);
+    requireAiSuggestionReviewer(actor, assignment);
     await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     const { plan, round } = await this.#assignmentContext(assignment);
     if (assignment.status === "submitted") {
@@ -2633,7 +2640,7 @@ export class EvaluationService {
     assignmentId: string,
   ): Promise<readonly EvaluationSuggestion[]> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
-    requireHumanReviewer(actor, assignment);
+    requireAiSuggestionReviewer(actor, assignment);
     await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     const { plan, round } = await this.#assignmentContext(assignment);
     const material = await this.#requireActiveSubmission(plan, assignment.submissionId);
@@ -2651,7 +2658,7 @@ export class EvaluationService {
       revision,
     );
     const currentAssignment = await this.#getAssignment(actor.tenantId, assignment.id);
-    requireHumanReviewer(actor, currentAssignment);
+    requireAiSuggestionReviewer(actor, currentAssignment);
     if (
       currentAssignment.tenantId !== assignment.tenantId ||
       currentAssignment.eventId !== assignment.eventId ||
@@ -2684,7 +2691,7 @@ export class EvaluationService {
     const suggestion = await this.#repository.getSuggestion(actor.tenantId, suggestionId);
     if (suggestion === null) throw notFound("The AI evaluation suggestion was not found.");
     const assignment = await this.#getAssignment(actor.tenantId, suggestion.assignmentId);
-    requireHumanReviewer(actor, assignment);
+    requireAiSuggestionReviewer(actor, assignment);
     await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
     if (suggestion.reviewerId !== actor.userId) throw forbidden();
     const { plan, round } = await this.#assignmentContext(assignment);
