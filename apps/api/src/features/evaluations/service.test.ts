@@ -2674,7 +2674,8 @@ describe("decision outcome projection", () => {
       },
       acceptanceHandoff: {
         accept: async (input) => {
-          onboarded.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          onboarded.push(structuredClone(cloneable));
         },
         reconcileSessionDecision: async (input) => {
           reconciled.push(structuredClone(input));
