@@ -3056,6 +3056,9 @@ export class EvaluationService {
 
     if (action === "accept" || action === "edit") {
       const scopedValues = input.criterionScores ?? input.scores;
+      if (action === "accept" && input.criterionId !== undefined && scopedValues === undefined) {
+        throw invalidInput("A criterion-scoped acceptance must include its score.");
+      }
       const values =
         action === "edit" || (action === "accept" && scopedValues !== undefined)
           ? scopedValues

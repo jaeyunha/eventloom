@@ -480,7 +480,7 @@ function reviewWriteAdmissionGuard(
           AND assignment.round_id = ?
           AND assignment.submission_id = ?
           AND assignment.reviewer_id = ?
-          AND assignment.plan_revision = ?
+           AND assignment.plan_version = ?
           AND assignment.rubric_revision = ?
           AND assignment.round_revision = ?
           AND assignment.submission_revision = ?
@@ -2825,7 +2825,12 @@ export class D1EvaluationRepository implements EvaluationRepository {
             item.actorId,
             item.at,
             item.reason ?? null,
-            item.valueByCriterion === undefined ? null : json(item.valueByCriterion),
+            item.valueByCriterion === undefined && item.criterionId === undefined
+              ? null
+              : json({
+                  ...(item.valueByCriterion ?? {}),
+                  ...(item.criterionId === undefined ? {} : { __criterionId: item.criterionId }),
+                }),
           ],
         ),
       );
@@ -2858,15 +2863,32 @@ export class D1EvaluationRepository implements EvaluationRepository {
         sourceReferences: [],
       }),
     }));
-    const history: EvaluationSuggestionAuditEntry[] = rows(historyResult).map((item) => ({
-      action: item.action as EvaluationSuggestionAuditEntry["action"],
-      actorId: nullableText(item.actor_id),
-      at: text(item.at),
-      ...(item.reason == null ? {} : { reason: text(item.reason) }),
-      ...(item.values_json == null
-        ? {}
-        : { valueByCriterion: parseJson(text(item.values_json), {}) }),
-    }));
+    const history: EvaluationSuggestionAuditEntry[] = rows(historyResult).map((item) => {
+      const values =
+        item.values_json == null
+          ? null
+          : parseJson<Record<string, unknown>>(text(item.values_json), {});
+      const criterionId =
+        values !== null && typeof values.__criterionId === "string"
+          ? values.__criterionId
+          : undefined;
+      const valueByCriterion: Record<string, number> = {};
+      if (values !== null) {
+        for (const [key, value] of Object.entries(values)) {
+          if (key !== "__criterionId" && typeof value === "number") {
+            valueByCriterion[key] = value;
+          }
+        }
+      }
+      return {
+        action: item.action as EvaluationSuggestionAuditEntry["action"],
+        actorId: nullableText(item.actor_id),
+        at: text(item.at),
+        ...(item.reason == null ? {} : { reason: text(item.reason) }),
+        ...(criterionId === undefined ? {} : { criterionId }),
+        ...(Object.keys(valueByCriterion).length === 0 ? {} : { valueByCriterion }),
+      };
+    });
     const byCriterion: Record<string, EvaluationSuggestionCandidate[]> = {};
     for (const candidate of candidates) {
       const existing = byCriterion[candidate.criterionId];
