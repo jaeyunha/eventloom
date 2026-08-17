@@ -2926,8 +2926,10 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const scope = `${input.tenantId}:evaluation-acceptance`;
     const transitionKey = input.idempotencyKey.trim();
     const key = `acceptance:${input.submissionId}:${transitionKey}`;
+    const isCurrentDecision = input.isCurrentDecision ?? (async () => true);
     let acceptedSubmission: Submission | undefined;
     await idempotency.run(scope, key, async () => {
+      if (!(await isCurrentDecision())) return { accepted: false };
       const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
       if (submission === null || submission.eventId !== input.eventId) {
         throw new Error("The accepted submission was not found for the event.");
@@ -2945,11 +2947,13 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       ).catch((error: unknown) => {
         throw new Error("Accepted speaker onboarding failed.", { cause: error });
       });
+      if (!(await isCurrentDecision())) return { accepted: false };
       const session = await this.#ensureCanonicalSession(input, submission).catch(
         (error: unknown) => {
           throw new Error("Accepted session projection failed.", { cause: error });
         },
       );
+      if (!(await isCurrentDecision())) return { accepted: false };
 
       await Promise.all([
         this.#database
@@ -2989,6 +2993,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const submission =
       acceptedSubmission ?? (await this.#cfp.getSubmission(input.tenantId, input.submissionId));
     if (submission === null || submission.eventId !== input.eventId) return;
+    if (!(await isCurrentDecision())) return;
     await this.#ensureSpeakerInvitations(input, submission);
   }
 

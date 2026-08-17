@@ -2797,6 +2797,9 @@ export class EvaluationService {
     const assignmentId = typeof input === "string" ? input : input.assignmentId;
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
+    if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
     const { plan, round } = await this.#assignmentContext(assignment);
     if (assignment.status === "submitted") {
       throw conflict("A submitted review cannot receive AI suggestions.");
@@ -2964,6 +2967,9 @@ export class EvaluationService {
     if (suggestion === null) throw notFound("The AI evaluation suggestion was not found.");
     const assignment = await this.#getAssignment(actor.tenantId, suggestion.assignmentId);
     requireHumanReviewer(actor, assignment);
+    if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
     if (suggestion.reviewerId !== actor.userId) throw forbidden();
     const { plan, round } = await this.#assignmentContext(assignment);
     if (assignment.status === "submitted") {
