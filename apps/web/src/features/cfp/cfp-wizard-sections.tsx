@@ -1,11 +1,10 @@
 "use client";
 
 import { uploadMimeTypeLabels } from "@eventloom/contracts";
-import { CheckCircle2, FileText, MailCheck, Upload } from "lucide-react";
+import { CheckCircle2, FileText, MailCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  type ChangeEvent,
   type FormEvent,
   type ReactNode,
   useEffect,
@@ -15,6 +14,7 @@ import {
 } from "react";
 import { ThemeToggle } from "../../components/product-shell/theme-toggle";
 import { Button } from "../../components/ui/button";
+import { FileUpload } from "../../components/ui/file-upload";
 import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
@@ -966,14 +966,6 @@ function FileRequestControl({
   const errorId = `${field.key}-file-error`;
   const statusId = `${field.key}-file-status`;
   const hasUploadedFile = displayState?.status === "ready";
-  const uploadButtonLabel =
-    displayState?.status === "pending"
-      ? "Uploading…"
-      : hasUploadedFile
-        ? "Replace file"
-        : acceptedTypeLabels.length === 1 && acceptedTypeLabels[0] === "PDF"
-          ? "Choose PDF"
-          : "Choose file";
 
   function mimeTypeAllowed(contentType: string): boolean {
     const normalized = contentType.trim().toLowerCase();
@@ -986,10 +978,8 @@ function FileRequestControl({
     });
   }
 
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
-    const file = event.currentTarget.files?.[0];
+  function handleSelectedFile(file: File | undefined): void {
     const sequence = ++uploadSequenceRef.current;
-    event.currentTarget.value = "";
     if (!file) {
       onChange(undefined);
       onStateChange({ status: "idle" });
@@ -1036,64 +1026,66 @@ function FileRequestControl({
       });
   }
 
+  const selectedFiles =
+    displayState === undefined || displayState.status === "idle"
+      ? []
+      : [
+          {
+            id: displayState.assetId ?? displayState.name ?? field.key,
+            name: displayState.name ?? "Uploaded file",
+            sizeLabel:
+              displayState.status === "pending"
+                ? "Uploading securely…"
+                : displayState.status === "ready"
+                  ? "Uploaded and ready"
+                  : displayState.message ?? "Upload failed",
+            status:
+              displayState.status === "pending"
+                ? ("uploading" as const)
+                : displayState.status === "ready"
+                  ? ("complete" as const)
+                  : ("error" as const),
+            removable: displayState.status !== "pending",
+          },
+        ];
   return (
     <div className={styles.fileRequestControl}>
+      <FileUpload
+        id={id}
+        accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
+        disabled={displayState?.status === "pending"}
+        title={hasUploadedFile ? "Drop a replacement file or browse" : "Drop your files here or browse"}
+        hint={
+          requirementParts.length > 0
+            ? requirementParts.join(" · ")
+            : hasUploadedFile
+              ? "Choose a new file to replace this upload."
+              : "Select a file from your device."
+        }
+        browseLabel={
+          acceptedTypeLabels.length === 1 && acceptedTypeLabels[0] === "PDF"
+            ? "Browse PDF"
+            : "Browse file"
+        }
+        describedBy={[
+          ...(requirementParts.length > 0 ? [helpId] : []),
+          ...(displayState?.status === "error" ? [errorId] : []),
+          ...(displayState?.status === "pending" || displayState?.status === "ready" ? [statusId] : []),
+        ].join(" ") || undefined}
+        invalid={displayState?.status === "error"}
+        files={selectedFiles}
+        onFilesSelected={(files) => handleSelectedFile(files[0])}
+        onRemove={() => handleSelectedFile(undefined)}
+      />
       {requirementParts.length > 0 ? (
-        <p className={styles.fieldHint} id={helpId}>
+        <p className={styles.fieldHint} hidden id={helpId}>
           {requirementParts.join(" · ")}
         </p>
       ) : null}
-      <div className={styles.filePicker}>
-        <input
-          id={id}
-          accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
-          aria-describedby={[
-            ...(requirementParts.length > 0 ? [helpId] : []),
-            ...(displayState?.status === "error" ? [errorId] : []),
-            ...(displayState?.status === "pending" || displayState?.status === "ready"
-              ? [statusId]
-              : []),
-          ].join(" ")}
-          className={styles.fileInput}
-          disabled={displayState?.status === "pending"}
-          onChange={handleFileChange}
-          type="file"
-        />
-        <label
-          aria-disabled={displayState?.status === "pending"}
-          className={styles.fileButton}
-          htmlFor={id}
-        >
-          <Upload aria-hidden="true" size={18} />
-          {uploadButtonLabel}
-        </label>
-        <span className={styles.filePickerHint}>
-          {hasUploadedFile
-            ? "Choose a new file to replace this upload."
-            : "Select a file from your device."}
-        </span>
-      </div>
-      {displayState?.status === "pending" ? (
-        <div aria-live="polite" className={styles.fileStatus} id={statusId}>
-          <FileText aria-hidden="true" size={20} />
-          <div>
-            <strong>{displayState.name}</strong>
-            <span>Uploading securely…</span>
-          </div>
-        </div>
-      ) : null}
-      {displayState?.status === "ready" ? (
-        <div
-          aria-live="polite"
-          className={`${styles.fileStatus} ${styles.fileStatusReady}`}
-          id={statusId}
-        >
-          <CheckCircle2 aria-hidden="true" size={20} />
-          <div>
-            <strong>{displayState.name ?? "Uploaded file"}</strong>
-            <span>Uploaded and ready</span>
-          </div>
-        </div>
+      {displayState?.status === "pending" || displayState?.status === "ready" ? (
+        <p className={styles.srOnly} id={statusId}>
+          {displayState.status === "pending" ? "Uploading securely" : "Uploaded and ready"}
+        </p>
       ) : null}
       {displayState?.status === "error" ? (
         <p className={styles.fieldError} id={errorId} role="alert">

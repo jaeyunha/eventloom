@@ -19,6 +19,7 @@ import {
   CardHeader as UiCardHeader,
   CardTitle as UiCardTitle,
 } from "@/components/ui/card";
+import { FileUpload } from "@/components/ui/file-upload";
 import { Input } from "@/components/ui/input";
 import styles from "./crm-workspace.module.css";
 import {
@@ -925,23 +926,31 @@ function CrmDirectoryImportPanel({
             }
           }}
         >
-          <label className={styles.field}>
+          <div className={styles.field}>
             <span>CSV file</span>
-            <input
-              type="file"
+            <FileUpload
               accept=".csv,text/csv"
-              aria-label="CSV file"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
+              title="Drop a CRM CSV here or browse"
+              hint="Select a .csv file to preview its mapped rows."
+              files={
+                importFileName
+                  ? [
+                      {
+                        id: importFileName,
+                        name: importFileName,
+                        sizeLabel: importPreviewLoading ? "Validating CSV…" : "Selected CSV",
+                        status: importPreviewLoading ? "uploading" : "selected",
+                        removable: false,
+                      },
+                    ]
+                  : []
+              }
+              onFilesSelected={(files) => {
+                const file = files[0];
                 if (file) void readImportFile(file);
               }}
             />
-          </label>
-          {importFileName ? (
-            <p className={styles.importFileName}>
-              Selected <strong>{importFileName}</strong>
-            </p>
-          ) : null}
+          </div>
           <label className={styles.field}>
             <span>CSV contents (optional paste fallback)</span>
             <textarea

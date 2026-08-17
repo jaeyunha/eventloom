@@ -161,7 +161,7 @@ function SpeakerRosterView({
       onRetry: () => void;
       onImageError: () => void;
       onSessionChange: (submissionId: string) => void;
-      onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+      onUpload: (file: File) => void;
       mutationStatus: SpeakerMutationStatus;
       mutationMessage: string | null;
     }>;
