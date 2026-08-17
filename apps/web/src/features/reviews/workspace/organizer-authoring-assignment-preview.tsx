@@ -14,10 +14,22 @@ export function OrganizerAssignmentPreview({
     0,
   );
   return (
-    <div className={styles.fieldHint} role="status" aria-live="polite">
-      <p>Assignments to apply: {preview.desiredAssignments.length}</p>
-      <p>Remaining missing reviewers: {remainingMissingReviewers}</p>
-      <p>Exclusions: {preview.exclusions.length}</p>
+    <div className={styles.assignmentPreview} role="status" aria-live="polite">
+      <p className={styles.mutedLabel}>Assignment preview</p>
+      <div className={styles.assignmentPreviewMetrics}>
+        <div>
+          <strong>{preview.desiredAssignments.length}</strong>
+          <span>To apply</span>
+        </div>
+        <div>
+          <strong>{remainingMissingReviewers}</strong>
+          <span>Slots unfilled</span>
+        </div>
+        <div>
+          <strong>{preview.exclusions.length}</strong>
+          <span>Excluded</span>
+        </div>
+      </div>
     </div>
   );
 }

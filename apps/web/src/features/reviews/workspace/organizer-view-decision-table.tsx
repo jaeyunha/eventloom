@@ -45,7 +45,6 @@ export function OrganizerDecisionTable({
                 <tr key={aggregate.id}>
                   <th scope="row" data-label="Submission">
                     <strong>{aggregate.title}</strong>
-                    <span className={styles.mutedLabel}>{aggregate.reference}</span>
                     {aggregate.participants?.length ? (
                       <span>
                         {aggregate.participants

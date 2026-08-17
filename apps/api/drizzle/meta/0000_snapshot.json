@@ -4432,6 +4432,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "legacy_retired_at": {
+          "name": "legacy_retired_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "time_zone": {
           "name": "time_zone",
           "type": "text",
@@ -4544,11 +4551,6 @@
           "columns": ["organization_id", "slug"],
           "isUnique": true
         },
-        "events_organization_status_updated_idx": {
-          "name": "events_organization_status_updated_idx",
-          "columns": ["organization_id", "status", "updated_at"],
-          "isUnique": false
-        },
         "events_organization_slug_idx": {
           "name": "events_organization_slug_idx",
           "columns": ["organization_id", "slug"],
@@ -4574,13 +4576,13 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
-        "events_status_check": {
-          "name": "events_status_check",
-          "value": "\"events\".\"status\" in ('draft','active','archived')"
-        },
         "events_duration_check": {
           "name": "events_duration_check",
           "value": "\"events\".\"default_duration_minutes\">0"
+        },
+        "events_status_check": {
+          "name": "events_status_check",
+          "value": "\"events\".\"status\" in ('draft','active','archived')"
         },
         "events_version_check": {
           "name": "events_version_check",

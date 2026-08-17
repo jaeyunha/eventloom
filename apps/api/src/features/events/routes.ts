@@ -18,7 +18,6 @@ import {
   eventEmbedOutputFormats,
   eventEmbedThemes,
   eventEmbedWidgetIds,
-  eventStatuses,
   type ProgramPublicationPreviewRequest,
   programPublicationSourceTriggers,
   type UpdateEventInput,
@@ -33,7 +32,7 @@ export interface EventRouteEnvironment {
 
 export type EventRouteService = Pick<
   EventService,
-  "listEvents" | "createEvent" | "getEvent" | "updateEvent" | "archiveEvent"
+  "listEvents" | "createEvent" | "getEvent" | "updateEvent"
 >;
 
 export interface EventRouteDependencies {
@@ -56,6 +55,7 @@ type ApiRouteErrorCode =
 const identifierSchema = z.string().trim().min(1).max(128);
 const instantSchema = z.string().trim().min(1).max(80);
 const expectedVersionSchema = z.number().int().positive();
+const listEventsQuerySchema = z.object({}).strict();
 const settingsInputSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -70,7 +70,6 @@ const calendarSettingsInputSchema = z
     location: z.string().trim().max(2_000).nullable().optional(),
   })
   .strict();
-const eventStatusSchema = z.enum(eventStatuses);
 const scheduleDatesSchema = z
   .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u))
   .max(366)
@@ -100,7 +99,6 @@ const createEventSchema = z
     id: identifierSchema.optional(),
     slug: z.string().trim().min(1).max(80).optional(),
     name: z.string().trim().min(1).max(200),
-    status: eventStatusSchema.optional(),
     timeZone: identifierSchema,
     startsAt: instantSchema,
     endsAt: instantSchema,
@@ -116,7 +114,6 @@ const updateEventSchema = z
     expectedVersion: expectedVersionSchema,
     slug: z.string().trim().min(1).max(80).optional(),
     name: z.string().trim().min(1).max(200).optional(),
-    status: eventStatusSchema.optional(),
     timeZone: identifierSchema.optional(),
     startsAt: instantSchema.optional(),
     endsAt: instantSchema.optional(),
@@ -127,7 +124,6 @@ const updateEventSchema = z
     embedConfigurations: embedConfigurationsSchema,
   })
   .strict();
-const archiveEventSchema = z.object({ expectedVersion: expectedVersionSchema }).strict();
 const programRebuildSchema = z
   .object({
     trigger: z.enum(programPublicationSourceTriggers),
@@ -273,7 +269,6 @@ function createServiceInput(input: CreateEventBody, organizationId: string): Cre
   };
   if (input.id !== undefined) result.id = input.id;
   if (input.slug !== undefined) result.slug = input.slug;
-  if (input.status !== undefined) result.status = input.status;
   if (input.scheduleDates !== undefined) result.scheduleDates = [...input.scheduleDates];
   if (input.venue !== undefined) result.venue = input.venue;
   const cfpSettings = cfpInput(input.cfpSettings);
@@ -299,7 +294,6 @@ function updateServiceInput(
   };
   if (input.slug !== undefined) result.slug = input.slug;
   if (input.name !== undefined) result.name = input.name;
-  if (input.status !== undefined) result.status = input.status;
   if (input.timeZone !== undefined) result.timeZone = input.timeZone;
   if (input.startsAt !== undefined) result.startsAt = input.startsAt;
   if (input.endsAt !== undefined) result.endsAt = input.endsAt;
@@ -409,19 +403,8 @@ export function createEventRoutes(
   routes.get("/", async (context) => {
     const organizationId = routeParam(context, "organizationId");
     const actor = organizer(context, organizationId);
-    const requestedStatus = context.req.query("status");
-    const includeArchived = context.req.query("includeArchived");
-    const eventStatus =
-      requestedStatus === undefined ? undefined : eventStatusSchema.parse(requestedStatus);
-    const includeArchivedValue =
-      includeArchived === undefined
-        ? true
-        : z.enum(["true", "false"]).parse(includeArchived) === "true";
-    const data = await dependencies.service.listEvents(actor, {
-      organizationId,
-      ...(eventStatus === undefined ? {} : { status: eventStatus }),
-      includeArchived: includeArchivedValue,
-    });
+    listEventsQuerySchema.parse(context.req.query());
+    const data = await dependencies.service.listEvents(actor, { organizationId });
     return context.json({ data });
   });
 
@@ -520,20 +503,6 @@ export function createEventRoutes(
   };
   routes.put("/:eventId", update);
   routes.patch("/:eventId", update);
-
-  const archive = async (context: EventContext): Promise<Response> => {
-    const organizationId = routeParam(context, "organizationId");
-    const actor = organizer(context, organizationId);
-    const input = await body(context, archiveEventSchema);
-    const data = await dependencies.service.archiveEvent(actor, {
-      ...input,
-      organizationId,
-      eventId: routeParam(context, "eventId"),
-    });
-    return context.json({ data });
-  };
-  routes.post("/:eventId/archive", archive);
-  routes.delete("/:eventId", archive);
 
   routes.onError((error, context) => {
     if (error instanceof ZodError) {

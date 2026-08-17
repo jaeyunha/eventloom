@@ -5,7 +5,6 @@ export const eventPayloadSchema = z.object({
     id: z.string().min(1),
     organizationId: z.string().min(1),
     name: z.string().trim().min(1),
-    status: z.enum(["draft", "active", "archived"]),
     timeZone: z.string().trim().min(1),
     startsAt: z.iso.datetime({ offset: true }),
     endsAt: z.iso.datetime({ offset: true }),
@@ -70,7 +69,6 @@ export interface EventOverviewEvent {
   readonly id: string;
   readonly organizationId: string;
   readonly name: string;
-  readonly status: "draft" | "active" | "archived";
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;

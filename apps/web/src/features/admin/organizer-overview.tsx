@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,6 @@ import {
   type OrganizerOverviewConfigResult,
   type OrganizerOverviewCoreData,
   type OrganizerOverviewEvent,
-  eventStatusClass as organizerEventStatusClass,
   organizerOverviewCacheKey,
   organizerOverviewCacheTags,
   resolveOrganizerOverviewConfig,
@@ -133,20 +133,6 @@ function formatEventDates(event: OrganizerOverviewEvent): string {
 function formatDueDate(value: string | null): string | null {
   const formatted = formatDate(value);
   return formatted ? `Due ${formatted}` : null;
-}
-
-const organizerEventStatusClasses = {
-  statusLive: styles.statusLive,
-  statusDraft: styles.statusDraft,
-  statusArchived: styles.statusArchived,
-} as const;
-
-function eventStatusClass(status: string | null): string {
-  return organizerEventStatusClasses[organizerEventStatusClass(status)] ?? "";
-}
-
-function eventStatusLabel(status: string | null): string {
-  return status && status.trim().length > 0 ? status : "Status unavailable";
 }
 
 function agendaHref(organizationId: string, eventId: string): string {
@@ -496,11 +482,10 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
     <>
       <div className={`${styles.tableWrap} ${styles.overviewTableWrap}`}>
         <table className={styles.eventsTable}>
-          <caption>Organization events and their current status</caption>
+          <caption>Organization events</caption>
           <thead>
             <tr>
               <th scope="col">Event</th>
-              <th scope="col">Status</th>
               <th scope="col">Event dates</th>
               <th scope="col">
                 <span className={styles.srOnly}>Actions</span>
@@ -513,12 +498,6 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                 <td className={styles.eventNameCell}>
                   <p className={styles.eventName}>{event.name}</p>
                   {event.slug ? <p className={styles.eventSlug}>/{event.slug}</p> : null}
-                </td>
-                <td>
-                  <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
-                    <span className={styles.statusDot} aria-hidden="true" />
-                    {eventStatusLabel(event.status)}
-                  </span>
                 </td>
                 <td className={styles.eventDateCell}>{formatEventDates(event)}</td>
                 <td>
@@ -552,10 +531,6 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                 <h2>{event.name}</h2>
                 {event.slug ? <p className={styles.eventSlug}>/{event.slug}</p> : null}
               </div>
-              <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
-                <span className={styles.statusDot} aria-hidden="true" />
-                {eventStatusLabel(event.status)}
-              </span>
             </div>
             <div className={styles.eventCardMeta}>
               <span>
@@ -1026,7 +1001,6 @@ export type OrganizerEventsViewState =
 export interface OrganizerEventsViewProps {
   readonly state: OrganizerEventsViewState;
   readonly busy?: boolean;
-  readonly notice?: string | null;
   readonly initialEditor?: "create" | undefined;
   readonly onRetry?: (() => void) | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
@@ -1037,7 +1011,6 @@ export interface OrganizerEventsViewProps {
         expectedVersion: number,
       ) => Promise<void>)
     | undefined;
-  readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }
 
 function EventsLoadingState() {
@@ -1104,12 +1077,10 @@ function EventsRefreshState({
 export function OrganizerEventsView({
   state,
   busy = false,
-  notice = null,
   initialEditor,
   onRetry,
   onCreate,
   onUpdate,
-  onArchive,
 }: OrganizerEventsViewProps) {
   if (state.status === "loading" && state.data === undefined) return <EventsLoadingState />;
   if (state.status === "config-error") {
@@ -1140,11 +1111,9 @@ export function OrganizerEventsView({
         key={data.organizationId}
         data={data}
         busy={busy}
-        notice={notice}
         {...(initialEditor === undefined ? {} : { initialEditor })}
         onCreate={authoritative ? onCreate : undefined}
         onUpdate={authoritative ? onUpdate : undefined}
-        onArchive={authoritative ? onArchive : undefined}
       />
     </>
   );
@@ -1205,7 +1174,6 @@ export function OrganizerEvents({
           },
   );
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const generationRef = useRef(0);
   const initialReadCoordinatorRef = useRef<ScopedReadFlightCoordinator<
     object,
@@ -1230,7 +1198,6 @@ export function OrganizerEvents({
           ? { status: "loading" }
           : { status: "loading", data: current.data };
       });
-      setNotice(null);
       try {
         const events = await (initialRead ??
           (navigationCache === null || eventsCacheKey === null
@@ -1331,7 +1298,6 @@ export function OrganizerEvents({
     generationRef.current += 1;
     navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
-    setNotice(null);
     try {
       const event = await api.createEvent(input);
       if (event.organizationId !== config.organizationId) {
@@ -1348,7 +1314,7 @@ export function OrganizerEvents({
             }
           : current,
       );
-      setNotice("Event created.");
+      toast.success("Event created.", { duration: 3_000 });
     } catch (error) {
       throw new Error(organizerEventsErrorMessage(error));
     } finally {
@@ -1365,13 +1331,11 @@ export function OrganizerEvents({
     generationRef.current += 1;
     navigationCache?.invalidate(eventsCacheTags);
     setBusy(true);
-    setNotice(null);
     try {
       const event = await api.updateEvent(eventId, {
         expectedVersion,
         name: input.name,
         ...(input.slug === undefined ? {} : { slug: input.slug }),
-        ...(input.status === undefined ? {} : { status: input.status }),
         timeZone: input.timeZone,
         startsAt: input.startsAt,
         endsAt: input.endsAt,
@@ -1395,39 +1359,7 @@ export function OrganizerEvents({
             }
           : current,
       );
-      setNotice("Event saved.");
-    } catch (error) {
-      throw new Error(organizerEventsErrorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function archive(eventId: string, expectedVersion: number) {
-    if (!api || "error" in config) return;
-    generationRef.current += 1;
-    navigationCache?.invalidate(eventsCacheTags);
-    setBusy(true);
-    setNotice(null);
-    try {
-      const event = await api.archiveEvent(eventId, expectedVersion);
-      if (event.organizationId !== config.organizationId) {
-        throw new Error("The archived event belongs to another organization.");
-      }
-      setState((current) =>
-        current.status === "loaded"
-          ? {
-              ...current,
-              data: {
-                ...current.data,
-                events: current.data.events.map((candidate) =>
-                  candidate.id === event.id ? event : candidate,
-                ),
-              },
-            }
-          : current,
-      );
-      setNotice("Event archived.");
+      toast.success("Event saved.", { duration: 3_000 });
     } catch (error) {
       throw new Error(organizerEventsErrorMessage(error));
     } finally {
@@ -1439,12 +1371,10 @@ export function OrganizerEvents({
     <OrganizerEventsView
       state={state}
       busy={busy}
-      notice={notice}
       {...(initialEditor === undefined ? {} : { initialEditor })}
       onRetry={() => void load(undefined, undefined, true)}
       onCreate={api ? create : undefined}
       onUpdate={api ? update : undefined}
-      onArchive={api ? archive : undefined}
     />
   );
 }

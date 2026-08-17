@@ -5,7 +5,6 @@ import {
   type EventTemporalDependencySource,
 } from "./event-temporal-dependencies";
 import {
-  type ArchiveEventInput,
   type CreateEventInput,
   type Event,
   type EventActor,
@@ -21,13 +20,11 @@ import {
   type EventRepository,
   EventRepositoryConflictError,
   type EventRepositorySeed,
-  type EventStatus,
   eventEmbedDisplayFields,
   eventEmbedLayouts,
   eventEmbedOutputFormats,
   eventEmbedThemes,
   eventEmbedWidgetIds,
-  eventStatuses,
   type ListEventsInput,
   type ProgramPublicationCacheInvalidationPort,
   type ProgramPublicationCompletionInput,
@@ -95,7 +92,6 @@ const CREATE_EVENT_FIELDS = [
   "id",
   "slug",
   "name",
-  "status",
   "timeZone",
   "startsAt",
   "endsAt",
@@ -111,7 +107,6 @@ const UPDATE_EVENT_FIELDS = [
   "expectedVersion",
   "slug",
   "name",
-  "status",
   "timeZone",
   "startsAt",
   "endsAt",
@@ -121,8 +116,7 @@ const UPDATE_EVENT_FIELDS = [
   "defaultCalendarSettings",
   "embedConfigurations",
 ] as const;
-const ARCHIVE_EVENT_FIELDS = ["organizationId", "eventId", "expectedVersion"] as const;
-const LIST_EVENT_FIELDS = ["organizationId", "status", "includeArchived"] as const;
+const LIST_EVENT_FIELDS = ["organizationId"] as const;
 const AUDIT_EVENT_FIELDS = ["organizationId", "eventId"] as const;
 const CFP_SETTINGS_FIELDS = ["enabled", "opensAt", "closesAt"] as const;
 const CALENDAR_SETTINGS_FIELDS = ["durationMinutes", "timeZone", "location"] as const;
@@ -236,12 +230,6 @@ function generatedSlug(name: string): string {
   return result.length > 0 ? result : "event";
 }
 
-function status(value: unknown, field = "status"): EventStatus {
-  if (typeof value !== "string" || !eventStatuses.includes(value as EventStatus)) {
-    throw validation(`${field} must be one of: ${eventStatuses.join(", ")}.`);
-  }
-  return value as EventStatus;
-}
 function embedEnum<T extends string>(value: unknown, values: readonly T[], field: string): T {
   if (typeof value !== "string" || !values.includes(value as T)) {
     throw validation(`${field} must be one of: ${values.join(", ")}.`);
@@ -673,13 +661,9 @@ export class EventService {
     const inputValue = objectValue(input, "event list");
     assertFields(inputValue, "event list", LIST_EVENT_FIELDS);
     const organizationId = organizationFromInput(actor, eventInputOrganization(input));
-    const filter = input.status === undefined ? undefined : status(input.status);
-    const includeArchived = input.includeArchived !== false;
     const events = await this.#repository.listEvents(organizationId);
     return events
       .filter((event) => event.organizationId === organizationId)
-      .filter((event) => includeArchived || event.status !== "archived")
-      .filter((event) => filter === undefined || event.status === filter)
       .sort((left, right) => {
         const updated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
         return updated !== 0 ? updated : left.id.localeCompare(right.id);
@@ -704,7 +688,6 @@ export class EventService {
       endsAt,
       eventTimeZone,
     );
-    const eventStatus = input.status === undefined ? "draft" : status(input.status);
     const id =
       input.id === undefined ? text(this.#generateId(), "event id", 128) : eventId(input.id);
     const venue = optionalText(input.venue, "venue");
@@ -731,7 +714,6 @@ export class EventService {
       organizationId,
       slug: eventSlug,
       name,
-      status: eventStatus,
       timeZone: eventTimeZone,
       startsAt,
       endsAt,
@@ -817,7 +799,6 @@ export class EventService {
     );
     const nextVenue =
       input.venue === undefined ? current.venue : optionalText(input.venue, "venue");
-    const nextStatus = input.status === undefined ? current.status : status(input.status);
     const cfpSettings = normalizeCfpSettings(input.cfpSettings, current.cfpSettings);
     requireCfpBeforeEvent(cfpSettings, nextStartsAt);
     const defaultCalendarSettings = normalizeCalendarSettings(
@@ -857,7 +838,6 @@ export class EventService {
       ...current,
       slug: nextSlug,
       name: nextName,
-      status: nextStatus,
       timeZone: nextTimeZone,
       startsAt: nextStartsAt,
       endsAt: nextEndsAt,
@@ -882,8 +862,7 @@ export class EventService {
       id: this.#auditId(),
       organizationId,
       eventId: updated.id,
-      action:
-        updated.status === "archived" && current.status !== "archived" ? "archived" : "updated",
+      action: "updated",
       version: updated.version,
       actorId: userId,
       occurredAt: now,
@@ -902,48 +881,6 @@ export class EventService {
       throw error;
     }
     return clone(updated);
-  }
-
-  async archiveEvent(actor: EventActor, input: ArchiveEventInput): Promise<Event> {
-    const inputValue = objectValue(input, "event");
-    assertFields(inputValue, "event", ARCHIVE_EVENT_FIELDS);
-    const expectedVersion = version(input.expectedVersion);
-    const organizationId = organizationFromInput(actor, eventInputOrganization(input));
-    const userId = actorUserId(actor);
-    const current = await this.#repository.getEvent(organizationId, eventId(input.eventId));
-    if (current === null || current.organizationId !== organizationId) throw notFound();
-    if (current.version !== expectedVersion) throw versionConflict();
-    const now = this.instant(this.#clock(), "clock");
-    const archived: Event = {
-      ...current,
-      status: "archived",
-      version: current.version + 1,
-      updatedAt: now,
-      updatedBy: userId,
-    };
-    const audit: EventAuditEntry = {
-      id: this.#auditId(),
-      organizationId,
-      eventId: archived.id,
-      action: "archived",
-      version: archived.version,
-      actorId: userId,
-      occurredAt: now,
-      before: clone(current),
-      after: clone(archived),
-    };
-    try {
-      if (this.#repository.commitEvent !== undefined) {
-        await this.#repository.commitEvent({ event: archived, expectedVersion, audit });
-      } else {
-        await this.#repository.saveEvent(archived, expectedVersion);
-        await this.#repository.appendAudit(audit);
-      }
-    } catch (error) {
-      if (repositoryConflict(error)) throw versionConflict();
-      throw error;
-    }
-    return clone(archived);
   }
 
   async listAudit(
