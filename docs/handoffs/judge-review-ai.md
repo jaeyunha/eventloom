@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact pushed head: `7fbef309e4afb366523a25b32b818a59d4effadf`
+- Exact pushed head: `067e7d767b09a19b206f2bdd55e9010ebe19c715`
 - Integrated latest `github/main`: `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
 - Issue: https://github.com/jaeyunha/eventloom/issues/47
@@ -38,9 +38,10 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at 7fbef309
+## Exact-head verification at 067e7d7
 
-- Focused matrix: PASS — 10 files, 312 passed, 1 skipped, plus targeted
+- Focused matrix: pending rerun after the rationale validator fix; the
+  preceding merged-head matrix was 312 passed, 1 skipped.
   rationale, scoped acceptance/rejection, and submission-revision CAS
   regressions.
 - Authority-focused service/D1/composition suites: PASS — merged-head
@@ -51,7 +52,8 @@
 - `make check`: FAIL because it includes the same latest-main web typecheck
   failures; lane-owned formatting and `git diff --check` pass.
 - `make build`: not rerun after latest-main integration.
-- Chromium advisory QA: not rerun after latest-main integration.
+- Chromium advisory QA: the preceding merged-head run passed; rerun after
+  this rationale-only source change is pending.
 - `make test`: FAIL in the unit phase with 1 unrelated latest-main CSS
   contract failure in `apps/web/src/components/workspace/workspace-surface-tokens.test.ts`;
   the lane-owned focused matrix passed. The merged-head unit phase reached
@@ -61,11 +63,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
-- [ ] Code quality — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
-- [ ] Functional/visual QA — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
-- [ ] Context/dependencies — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
-- [ ] Goal/compliance — exact pushed head `7fbef309e4afb366523a25b32b818a59d4effadf`
+- [ ] Security — exact pushed head `067e7d767b09a19b206f2bdd55e9010ebe19c715`
+- [ ] Code quality — exact pushed head `067e7d767b09a19b206f2bdd55e9010ebe19c715`
+- [ ] Functional/visual QA — exact pushed head `067e7d767b09a19b206f2bdd55e9010ebe19c715`
+- [ ] Context/dependencies — exact pushed head `067e7d767b09a19b206f2bdd55e9010ebe19c715`
+- [ ] Goal/compliance — exact pushed head `067e7d767b09a19b206f2bdd55e9010ebe19c715`
 
 ## Remaining tasks
 
