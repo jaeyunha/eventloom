@@ -16,7 +16,7 @@ continues from the pushed head and must not rely on its stale base/head values.
 - Exact current GitHub-main base incorporated:
   `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
 - Exact current pushed head:
-  `199ef8281d1d8d45cb81fe189ac94da8a7bda6d3`
+  `55d7e447f51e75d2adfa8633f41f40e08c1ed238`
 - All current verification in this document is product-scoped and refers to
 this exact head and the `3e236387223e8e95fa9b2ee78d5e5dee1117882f` base.
 
@@ -51,11 +51,11 @@ replacement-lineage continuation. It:
 
 The pushed continuation contains:
 
-- migrations `0041_speaker_asset_uploader.sql`,
-  `0042_speaker_asset_creation_idempotency.sql`,
-  `0043_speaker_task_replacement_baseline.sql`,
-  `0044_private_download_attribution.sql`, and
-  `0045_private_object_cleanup.sql`;
+- migrations `0046_speaker_asset_uploader.sql`,
+  `0047_speaker_asset_creation_idempotency.sql`,
+  `0048_speaker_task_replacement_baseline.sql`,
+  `0049_private_download_attribution.sql`, and
+  `0050_private_object_cleanup.sql`;
 - immutable asset uploader account ID plus upload-time display-label snapshot
   in the domain, D1 schema/repository, local repository, service, organizer
   parser, and file-review context;
