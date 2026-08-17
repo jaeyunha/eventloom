@@ -1416,3 +1416,55 @@ test("reviewers renders a bounded assignment index with one replacement editor",
     (tabListBox?.y ?? 0) + (tabListBox?.height ?? 0) + 4,
   );
 });
+
+test("switching submissions resets decision state before the next human decision", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto(organizerReviewsUrl);
+  await page.getByRole("tab", { name: "Results" }).click();
+
+  const acceptedRow = page.locator("tbody tr").filter({ hasText: "submission_local_184" });
+  const rejectedRow = page.locator("tbody tr").filter({ hasText: "submission_local_188" });
+  await expect(acceptedRow).toBeVisible();
+  await expect(rejectedRow).toBeVisible();
+
+  await acceptedRow.getByRole("button", { name: "Review" }).click();
+  const acceptedEditor = page.locator("#decision-editor-submission_local_184");
+  await acceptedEditor.getByRole("combobox", { name: "Decision" }).selectOption("accepted");
+  await acceptedEditor
+    .getByRole("textbox", { name: /Written reason/u })
+    .fill("Accepted first to reproduce the organizer decision sequence.");
+  await acceptedEditor
+    .getByRole("checkbox", { name: /I confirm this is a human organizer decision/u })
+    .check();
+  await acceptedEditor.getByRole("button", { name: "Confirm human decision" }).click();
+  await expect(acceptedEditor.getByRole("status")).toContainText("Decision saved.");
+
+  await rejectedRow.getByRole("button", { name: "Review" }).click();
+  const rejectedEditor = page.locator("#decision-editor-submission_local_188");
+  await expect(rejectedEditor.getByRole("combobox", { name: "Decision" })).toHaveValue("");
+  await expect(rejectedEditor.getByRole("textbox", { name: /Written reason/u })).toHaveValue("");
+  await expect(
+    rejectedEditor.getByRole("checkbox", {
+      name: /I confirm this is a human organizer decision/u,
+    }),
+  ).not.toBeChecked();
+  await expect(rejectedEditor).not.toContainText("Decision saved.");
+
+  await rejectedEditor.getByRole("combobox", { name: "Decision" }).selectOption("rejected");
+  await rejectedEditor
+    .getByRole("textbox", { name: /Written reason/u })
+    .fill("Rejected second after switching from the accepted proposal.");
+  await rejectedEditor
+    .getByRole("checkbox", { name: /I confirm this is a human organizer decision/u })
+    .check();
+  await rejectedEditor.getByRole("button", { name: "Confirm human decision" }).click();
+  await expect(rejectedEditor.getByRole("status")).toContainText("Decision saved.");
+
+  await page.reload();
+  await page.getByRole("tab", { name: "Results" }).click();
+  await page.getByLabel("Decision status").selectOption("all");
+  await expect(acceptedRow).toContainText("Accepted");
+  await expect(rejectedRow).toContainText("Rejected");
+});

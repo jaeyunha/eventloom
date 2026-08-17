@@ -169,6 +169,7 @@ export function OrganizerDecisionsPanel({
           tabIndex={-1}
         >
           <DecisionEditor
+            key={selectedAggregate.id}
             aggregate={selectedAggregate}
             baseUrl={baseUrl}
             planId={seed.planId}
