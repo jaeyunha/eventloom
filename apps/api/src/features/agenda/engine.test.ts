@@ -587,6 +587,11 @@ describe("agenda concurrency and revisions", () => {
         ]),
       ],
     });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: publishedDraft.version,
+      actorId: "organizer-1",
+    });
     const first = await engine.publish({
       eventId: "event-1",
       expectedVersion: publishedDraft.version,
@@ -671,6 +676,11 @@ describe("agenda concurrency and revisions", () => {
       }),
     ).resolves.toEqual({ status: "stale", revision: null });
 
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: synchronizedDraft.version,
+      actorId: "organizer-1",
+    });
     const schedulePublication = await engine.publish({
       eventId: "event-1",
       expectedVersion: synchronizedDraft.version,
@@ -726,6 +736,11 @@ describe("agenda concurrency and revisions", () => {
       entries: [
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
+    });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
     });
     await engine.publish({
       eventId: "event-1",
@@ -784,6 +799,11 @@ describe("agenda concurrency and revisions", () => {
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
     });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
+    });
     let handoffObserved = false;
     await engine.publish({
       eventId: "event-1",
@@ -818,6 +838,11 @@ describe("agenda concurrency and revisions", () => {
       entries: [
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
+    });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
     });
     let handoffObserved = false;
     rejectRenewal = true;
@@ -858,6 +883,11 @@ describe("agenda concurrency and revisions", () => {
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
     });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: firstDraft.version,
+      actorId: "organizer-1",
+    });
     const firstRevision = await engine.publish({
       eventId: "event-1",
       expectedVersion: firstDraft.version,
@@ -870,6 +900,11 @@ describe("agenda concurrency and revisions", () => {
       entries: [
         entry("entry-1", "session-1", "room-large", "2026-08-10T10:00", "2026-08-10T11:00"),
       ],
+    });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: secondDraft.version,
+      actorId: "organizer-1",
     });
     await engine.publish({
       eventId: "event-1",
@@ -902,6 +937,11 @@ describe("agenda concurrency and revisions", () => {
       entries: [
         entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
+    });
+    await engine.validate({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
     });
     await engine.publish({
       eventId: "event-1",
