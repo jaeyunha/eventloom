@@ -2473,7 +2473,20 @@ function useSpeakerWorkspaceController({
     let expectedLatestVersion: number | undefined;
     if (supersedesAssetId !== undefined) {
       const assets = await api.getAssets(participantId);
-      const predecessor = assets.find((asset) => asset.assetId === supersedesAssetId);
+      const referenced = assets.find((asset) => asset.assetId === supersedesAssetId);
+      const predecessor =
+        referenced === undefined
+          ? undefined
+          : assets
+              .filter(
+                (asset) =>
+                  (asset.versionFamilyId ?? asset.assetId) ===
+                    (referenced.versionFamilyId ?? referenced.assetId) &&
+                  (asset.status === "ready" || asset.status === "rejected") &&
+                  typeof asset.version === "number" &&
+                  asset.version > 0,
+              )
+              .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))[0];
       if (predecessor === undefined) {
         dispatchProfileHeadshotDetails({
           type: "headshot-failed",
