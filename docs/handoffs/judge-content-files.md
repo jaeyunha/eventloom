@@ -14,11 +14,11 @@ continues from the pushed head and must not rely on its stale base/head values.
 - Pull request: https://github.com/jaeyunha/eventloom/pull/39
 - Pull request state: `OPEN`, non-draft, `MERGEABLE`, not merged
 - Exact current GitHub-main base incorporated:
-  `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
+  `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
 - Exact current pushed head:
-  `095c2d1d87fb0a3a1e13369e02ce6ec9abf2983c`
+  `199ef8281d1d8d45cb81fe189ac94da8a7bda6d3`
 - All current verification in this document is product-scoped and refers to
-  this exact head and the `c5fc50256d10be142e1c9e142d1f78f6980ca2e3` base.
+this exact head and the `3e236387223e8e95fa9b2ee78d5e5dee1117882f` base.
 
 ## Lane objective and scope
 
