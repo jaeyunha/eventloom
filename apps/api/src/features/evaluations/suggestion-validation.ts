@@ -147,6 +147,7 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "states",
   "reviewers",
   "scaling",
+  "scale",
   "score",
   "source",
   "specificity",
@@ -221,9 +222,13 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   const explanationTokens = [...rationaleTokens].filter(
     (token) => !sourceTokens.has(token) && !RATIONALE_TEMPLATE_WORDS.has(token),
   );
+  const unrecognizedExplanationTokens = explanationTokens.filter(
+    (token) => !ALLOWED_EXPLANATION_WORDS.has(token),
+  );
   return (
     explanationTokens.length >= 2 &&
-    explanationTokens.some((token) => ALLOWED_EXPLANATION_WORDS.has(token))
+    explanationTokens.some((token) => ALLOWED_EXPLANATION_WORDS.has(token)) &&
+    unrecognizedExplanationTokens.length <= 1
   );
 }
 
