@@ -26,6 +26,7 @@ type CfpStartupStore = ReturnType<typeof useCfpStartupStore>;
 import styles from "./cfp-wizard.module.css";
 import {
   canResumeCfpSubmission,
+  canSaveCfpDraftAtStep,
   cfpConfirmationEmailMessage,
   cfpHttpUrlIsValid,
   cfpSubmissionErrorKey,
@@ -1628,7 +1629,7 @@ function useCfpWizardController({
             },
           });
         }
-      } else if (step !== "welcome") {
+      } else if (step !== "welcome" && !(draftToPersist.receipt && !canSaveCfpDraftAtStep(step))) {
         const completedStep =
           step === "account"
             ? "account"

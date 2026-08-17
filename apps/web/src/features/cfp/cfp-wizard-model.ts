@@ -37,11 +37,9 @@ export function getCfpPortalHandoffHref(
 
 export function canResumeCfpSubmission(
   status: CfpServerSubmission["status"],
-  step: CfpStep,
+  _step: CfpStep,
 ): boolean {
-  return (
-    status === "draft" || status === "reopened" || (status === "submitted" && step === "submission")
-  );
+  return status === "draft" || status === "reopened" || status === "submitted";
 }
 
 export function rotateCfpCompletionIdentity(
