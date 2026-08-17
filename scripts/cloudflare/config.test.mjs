@@ -298,3 +298,11 @@ test("does not inherit local root secrets into staging or production", () => {
   assert.deepEqual(rootEnvironmentForDeployment("production", root), {});
   assert.deepEqual(rootEnvironmentForDeployment("local", root), root);
 });
+
+test("staging and production schedule durable export recovery", () => {
+  assert.match(apiWrangler, /\[env\.staging\.triggers\]\s+crons = \["\*\/5 \* \* \* \*"\]/);
+  assert.match(
+    apiWrangler,
+    /\[env\.production\.triggers\]\s+crons = \["\*\/5 \* \* \* \*", "0 \* \* \* \*"\]/,
+  );
+});

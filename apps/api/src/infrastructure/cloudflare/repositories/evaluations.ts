@@ -864,15 +864,222 @@ export class D1EvaluationRepository implements EvaluationRepository {
     tenantId: string,
     eventId: string,
   ): Promise<OrganizerWorkspaceRecords> {
-    const [assignments, reviews, decisions] = await Promise.all([
+    const [assignments, reviewResult, decisions, scoreResult, evidenceResult] = await Promise.all([
       this.assignmentQuery(
         "organization_id = ? AND event_id = ? AND status <> 'superseded' ORDER BY id",
         [tenantId, eventId],
       ),
-      this.reviewQuery("organization_id = ? AND event_id = ? ORDER BY id", [tenantId, eventId]),
+      statement(
+        this.database,
+        "SELECT * FROM evaluation_reviews WHERE organization_id = ? AND event_id = ? ORDER BY id",
+        [tenantId, eventId],
+      ).all<Row>(),
       this.decisionQuery("organization_id = ? AND event_id = ? ORDER BY id", [tenantId, eventId]),
+      statement(
+        this.database,
+        `SELECT * FROM evaluation_scores
+          WHERE organization_id = ? AND event_id = ?
+          ORDER BY review_id, criterion_id`,
+        [tenantId, eventId],
+      ).all<Row>(),
+      statement(
+        this.database,
+        `SELECT * FROM evaluation_score_evidence
+          WHERE organization_id = ? AND event_id = ?
+          ORDER BY review_id, criterion_id, ordinal`,
+        [tenantId, eventId],
+      ).all<Row>(),
     ]);
+
+    const evidenceByReview = new Map<string, Map<string, string[]>>();
+    for (const evidence of rows(evidenceResult)) {
+      const reviewId = text(evidence.review_id);
+      const criterionId = text(evidence.criterion_id);
+      let byCriterion = evidenceByReview.get(reviewId);
+      if (byCriterion === undefined) {
+        byCriterion = new Map();
+        evidenceByReview.set(reviewId, byCriterion);
+      }
+      const values = byCriterion.get(criterionId);
+      if (values === undefined) byCriterion.set(criterionId, [text(evidence.evidence)]);
+      else values.push(text(evidence.evidence));
+    }
+
+    const scoresByReview = new Map<string, Record<string, RubricScore>>();
+    for (const score of rows(scoreResult)) {
+      const reviewId = text(score.review_id);
+      const criterionId = text(score.criterion_id);
+      let reviewScores = scoresByReview.get(reviewId);
+      if (reviewScores === undefined) {
+        reviewScores = {};
+        scoresByReview.set(reviewId, reviewScores);
+      }
+      reviewScores[criterionId] = this.scoreFromRow(
+        score,
+        evidenceByReview.get(reviewId)?.get(criterionId) ?? [],
+      );
+    }
+
+    const reviews = rows(reviewResult).map((row) =>
+      this.reviewFromRow(row, scoresByReview.get(text(row.id)) ?? {}),
+    );
     return { assignments, reviews, decisions };
+  }
+
+  async listOrganizerExportRecords(
+    tenantId: string,
+    eventId: string,
+    planId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    const session = this.database.withSession("first-primary");
+    const bindings = [tenantId, eventId, planId] as const;
+    const results = await session.batch([
+      session
+        .prepare(
+          `SELECT * FROM review_assignments
+            WHERE organization_id = ? AND event_id = ? AND plan_id = ?
+              AND status <> 'superseded'
+            ORDER BY id`,
+        )
+        .bind(...bindings),
+      session
+        .prepare(
+          `SELECT * FROM evaluation_reviews
+            WHERE organization_id = ? AND event_id = ? AND plan_id = ?
+            ORDER BY id`,
+        )
+        .bind(...bindings),
+      session
+        .prepare(
+          `SELECT * FROM evaluation_decisions
+            WHERE organization_id = ? AND event_id = ? AND plan_id = ?
+            ORDER BY id`,
+        )
+        .bind(...bindings),
+      session
+        .prepare(
+          `SELECT scores.*
+             FROM evaluation_scores AS scores
+             JOIN evaluation_reviews AS reviews
+               ON reviews.organization_id = scores.organization_id
+              AND reviews.event_id = scores.event_id
+              AND reviews.id = scores.review_id
+            WHERE reviews.organization_id = ?
+              AND reviews.event_id = ?
+              AND reviews.plan_id = ?
+            ORDER BY scores.review_id, scores.criterion_id`,
+        )
+        .bind(...bindings),
+      session
+        .prepare(
+          `SELECT evidence.*
+             FROM evaluation_score_evidence AS evidence
+             JOIN evaluation_reviews AS reviews
+               ON reviews.organization_id = evidence.organization_id
+              AND reviews.event_id = evidence.event_id
+              AND reviews.id = evidence.review_id
+            WHERE reviews.organization_id = ?
+              AND reviews.event_id = ?
+              AND reviews.plan_id = ?
+            ORDER BY evidence.review_id, evidence.criterion_id, evidence.ordinal`,
+        )
+        .bind(...bindings),
+      session
+        .prepare(
+          `SELECT transitions.*
+             FROM evaluation_decision_transitions AS transitions
+             JOIN evaluation_decisions AS decisions
+               ON decisions.organization_id = transitions.organization_id
+              AND decisions.event_id = transitions.event_id
+              AND decisions.id = transitions.decision_id
+            WHERE decisions.organization_id = ?
+              AND decisions.event_id = ?
+              AND decisions.plan_id = ?
+            ORDER BY transitions.decision_id, transitions.ordinal`,
+        )
+        .bind(...bindings),
+    ]);
+    const [
+      assignmentResult,
+      reviewResult,
+      decisionResult,
+      scoreResult,
+      evidenceResult,
+      transitionResult,
+    ] = results as unknown as [
+      D1Result<Row>,
+      D1Result<Row>,
+      D1Result<Row>,
+      D1Result<Row>,
+      D1Result<Row>,
+      D1Result<Row>,
+    ];
+    if (
+      assignmentResult === undefined ||
+      reviewResult === undefined ||
+      decisionResult === undefined ||
+      scoreResult === undefined ||
+      evidenceResult === undefined ||
+      transitionResult === undefined
+    ) {
+      throw new Error("Evaluation export snapshot batch returned incomplete D1 results.");
+    }
+
+    const evidenceByReview = new Map<string, Map<string, string[]>>();
+    for (const evidence of rows(evidenceResult)) {
+      const reviewId = text(evidence.review_id);
+      const criterionId = text(evidence.criterion_id);
+      const byCriterion = evidenceByReview.get(reviewId) ?? new Map<string, string[]>();
+      evidenceByReview.set(reviewId, byCriterion);
+      const values = byCriterion.get(criterionId) ?? [];
+      byCriterion.set(criterionId, values);
+      values.push(text(evidence.evidence));
+    }
+    const scoresByReview = new Map<string, Record<string, RubricScore>>();
+    for (const score of rows(scoreResult)) {
+      const reviewId = text(score.review_id);
+      const criterionId = text(score.criterion_id);
+      const reviewScores = scoresByReview.get(reviewId) ?? {};
+      scoresByReview.set(reviewId, reviewScores);
+      reviewScores[criterionId] = this.scoreFromRow(
+        score,
+        evidenceByReview.get(reviewId)?.get(criterionId) ?? [],
+      );
+    }
+    const transitionsByDecision = new Map<string, EvaluationDecisionTransition[]>();
+    for (const item of rows(transitionResult)) {
+      const decisionId = text(item.decision_id);
+      const transitions = transitionsByDecision.get(decisionId) ?? [];
+      transitionsByDecision.set(decisionId, transitions);
+      transitions.push({
+        from:
+          item.from_status == null
+            ? null
+            : (item.from_status as EvaluationDecisionTransition["from"]),
+        to: item.to_status as EvaluationDecisionTransition["to"],
+        reason: text(item.reason),
+        decidedBy: text(item.decided_by),
+        decidedAt: text(item.decided_at),
+        idempotencyKey: text(item.idempotency_key),
+      });
+    }
+    return {
+      assignments: rows(assignmentResult).map(assignmentFromRow),
+      reviews: rows(reviewResult).map((row) =>
+        this.reviewFromRow(row, scoresByReview.get(text(row.id)) ?? {}),
+      ),
+      decisions: rows(decisionResult).map((row) => ({
+        id: text(row.id),
+        tenantId: text(row.organization_id),
+        eventId: text(row.event_id),
+        planId: text(row.plan_id),
+        submissionId: text(row.submission_id),
+        status: row.status as EvaluationDecision["status"],
+        version: numberValue(row.version),
+        history: transitionsByDecision.get(text(row.id)) ?? [],
+        updatedAt: text(row.updated_at),
+      })),
+    };
   }
 
   async putReview(review: EvaluationReview, expectedVersion: number | null) {
@@ -1512,26 +1719,36 @@ export class D1EvaluationRepository implements EvaluationRepository {
         `SELECT evidence FROM evaluation_score_evidence WHERE organization_id = ? AND event_id = ? AND review_id = ? AND criterion_id = ? ORDER BY ordinal`,
         [text(row.organization_id), text(row.event_id), text(row.id), text(score.criterion_id)],
       ).all<Row>();
-      scores[text(score.criterion_id)] = {
-        criterionId: text(score.criterion_id),
-        value:
-          score.value_number == null ? text(score.value_text) : numberValue(score.value_number),
-        origin: score.origin as RubricScore["origin"],
-        evidence: rows(evidenceResult).map((item) => text(item.evidence)),
-        humanConfirmedBy: nullableText(score.human_confirmed_by),
-        ...(score.suggestion_id == null ? {} : { suggestionId: text(score.suggestion_id) }),
-        ...(score.suggestion_status == null
-          ? {}
-          : {
-              suggestionStatus: score.suggestion_status as NonNullable<
-                RubricScore["suggestionStatus"]
-              >,
-            }),
-        rubricRevision: numberValue(score.rubric_revision),
-        submissionRevision: numberValue(score.submission_revision),
-        updatedAt: text(score.updated_at),
-      };
+      scores[text(score.criterion_id)] = this.scoreFromRow(
+        score,
+        rows(evidenceResult).map((item) => text(item.evidence)),
+      );
     }
+    return this.reviewFromRow(row, scores);
+  }
+
+  private scoreFromRow(score: Row, evidence: readonly string[]): RubricScore {
+    return {
+      criterionId: text(score.criterion_id),
+      value: score.value_number == null ? text(score.value_text) : numberValue(score.value_number),
+      origin: score.origin as RubricScore["origin"],
+      evidence,
+      humanConfirmedBy: nullableText(score.human_confirmed_by),
+      ...(score.suggestion_id == null ? {} : { suggestionId: text(score.suggestion_id) }),
+      ...(score.suggestion_status == null
+        ? {}
+        : {
+            suggestionStatus: score.suggestion_status as NonNullable<
+              RubricScore["suggestionStatus"]
+            >,
+          }),
+      rubricRevision: numberValue(score.rubric_revision),
+      submissionRevision: numberValue(score.submission_revision),
+      updatedAt: text(score.updated_at),
+    };
+  }
+
+  private reviewFromRow(row: Row, scores: Record<string, RubricScore>): EvaluationReview {
     return {
       id: text(row.id),
       tenantId: text(row.organization_id),
