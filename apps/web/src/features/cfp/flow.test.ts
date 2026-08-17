@@ -303,7 +303,7 @@ describe("CFP flow", () => {
     ).toBe(false);
     expect(shouldAuthenticateCfpAccount("submission", null)).toBe(false);
   });
-  it("rotates completed submission identity and only resumes editable records", () => {
+  it("keeps submitted hydration separate from per-step draft save permission", () => {
     const identity = { organizationId: "org-1", eventId: "event-1", formId: "form-1" };
     const pointerKey = getCfpSubmissionPointerStorageKey("org-1", "event-1", "form-1");
     const completionKey = getCfpCompletionHandoffStorageKey("org-1", "event-1", "form-1");
@@ -321,8 +321,16 @@ describe("CFP flow", () => {
     expect(sessionValues.get(completionKey)).toBe("submission-1");
     expect(canResumeCfpSubmission("draft", "welcome")).toBe(true);
     expect(canResumeCfpSubmission("reopened", "account")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "welcome")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "account")).toBe(true);
     expect(canResumeCfpSubmission("submitted", "submission")).toBe(true);
-    expect(canResumeCfpSubmission("submitted", "welcome")).toBe(false);
+    expect(canResumeCfpSubmission("submitted", "participants")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "review")).toBe(true);
+    expect(canSaveCfpDraftAtStep("welcome")).toBe(false);
+    expect(canSaveCfpDraftAtStep("account")).toBe(false);
+    expect(canSaveCfpDraftAtStep("submission")).toBe(true);
+    expect(canSaveCfpDraftAtStep("participants")).toBe(true);
+    expect(canSaveCfpDraftAtStep("review")).toBe(true);
   });
   it("reviews the stable audience answer and formats confirmation copy", () => {
     const form = {

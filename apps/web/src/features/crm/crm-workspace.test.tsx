@@ -130,7 +130,6 @@ const event: CrmEvent = {
   organizationId: "org/one",
   name: "Eventloom Summit",
   slug: "eventloom-summit",
-  status: "active",
 };
 
 const analytics: CrmAnalytics = {

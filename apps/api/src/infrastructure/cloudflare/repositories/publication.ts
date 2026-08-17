@@ -38,6 +38,8 @@ function release(row: Row): ProgramPublicationManifest {
       row.rollback_target_revision == null ? null : numeric(row.rollback_target_revision),
     cacheRevision: numeric(row.cache_revision),
     sourceTrigger: row.source_trigger as ProgramPublicationManifest["sourceTrigger"],
+    reservationOwnerId: nullable(row.reservation_owner_id),
+    reservationExpiresAt: nullable(row.reservation_expires_at),
     failureReason: nullable(row.failure_reason),
   };
 }
@@ -98,7 +100,7 @@ export class D1ProgramPublicationRepository implements ProgramPublicationReposit
       throw new ProgramPublicationRepositoryConflictError(
         "Only one program release may be pending.",
       );
-    const token = state.releases.at(-1)?.publishedAt ?? new Date().toISOString();
+    const token = `${new Date().toISOString()}:${crypto.randomUUID()}`;
     const statements: D1PreparedStatement[] = [];
     if (expectedVersion === null) {
       statements.push(
@@ -144,8 +146,8 @@ export class D1ProgramPublicationRepository implements ProgramPublicationReposit
         statements.push(
           bind(
             this.db,
-            `INSERT INTO program_releases (id,organization_id,event_id,revision,lifecycle,agenda_projection_id,agenda_revision_number,agenda_source_hash,speaker_projection_id,speaker_revision_number,speaker_source_hash,approved_content_revision,approved_profile_revision,released_asset_revision,actor_id,published_at,parent_served_revision,rollback_target_revision,cache_revision,source_trigger,failure_reason)
-          SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM program_publication_states WHERE organization_id=? AND event_id=? AND version=? AND updated_at=?)`,
+            `INSERT INTO program_releases (id,organization_id,event_id,revision,lifecycle,agenda_projection_id,agenda_revision_number,agenda_source_hash,speaker_projection_id,speaker_revision_number,speaker_source_hash,approved_content_revision,approved_profile_revision,released_asset_revision,actor_id,published_at,parent_served_revision,rollback_target_revision,cache_revision,source_trigger,reservation_owner_id,reservation_expires_at,failure_reason)
+          SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM program_publication_states WHERE organization_id=? AND event_id=? AND version=? AND updated_at=?)`,
             [
               item.id,
               organizationId,
@@ -167,6 +169,8 @@ export class D1ProgramPublicationRepository implements ProgramPublicationReposit
               item.rollbackTargetRevision,
               item.cacheRevision,
               item.sourceTrigger,
+              item.reservationOwnerId ?? null,
+              item.reservationExpiresAt ?? null,
               item.failureReason,
               organizationId,
               eventId,
@@ -178,18 +182,27 @@ export class D1ProgramPublicationRepository implements ProgramPublicationReposit
       } else if (
         previous.lifecycle !== item.lifecycle ||
         previous.failureReason !== item.failureReason ||
-        previous.publishedAt !== item.publishedAt
+        previous.publishedAt !== item.publishedAt ||
+        previous.reservationOwnerId !== (item.reservationOwnerId ?? null) ||
+        previous.reservationExpiresAt !== (item.reservationExpiresAt ?? null)
       ) {
         const immutable = {
           ...previous,
           lifecycle: item.lifecycle,
           failureReason: item.failureReason,
           publishedAt: item.publishedAt,
+          reservationOwnerId: item.reservationOwnerId ?? null,
+          reservationExpiresAt: item.reservationExpiresAt ?? null,
         };
+        const reservationUpdate =
+          previous.lifecycle === "pending" &&
+          item.lifecycle === "pending" &&
+          previous.failureReason === item.failureReason &&
+          previous.publishedAt === item.publishedAt;
         if (
           JSON.stringify(immutable) !== JSON.stringify(item) ||
           previous.lifecycle !== "pending" ||
-          item.lifecycle === "pending"
+          (item.lifecycle === "pending" && !reservationUpdate)
         ) {
           throw new ProgramPublicationRepositoryConflictError(
             "Program releases are immutable except pending lifecycle completion.",
@@ -198,11 +211,13 @@ export class D1ProgramPublicationRepository implements ProgramPublicationReposit
         statements.push(
           bind(
             this.db,
-            `UPDATE program_releases SET lifecycle=?,failure_reason=?,published_at=? WHERE organization_id=? AND event_id=? AND id=? AND lifecycle='pending' AND EXISTS (SELECT 1 FROM program_publication_states WHERE organization_id=? AND event_id=? AND version=? AND updated_at=?)`,
+            `UPDATE program_releases SET lifecycle=?,failure_reason=?,published_at=?,reservation_owner_id=?,reservation_expires_at=? WHERE organization_id=? AND event_id=? AND id=? AND lifecycle='pending' AND EXISTS (SELECT 1 FROM program_publication_states WHERE organization_id=? AND event_id=? AND version=? AND updated_at=?)`,
             [
               item.lifecycle,
               item.failureReason,
               item.publishedAt,
+              item.reservationOwnerId ?? null,
+              item.reservationExpiresAt ?? null,
               organizationId,
               eventId,
               item.id,

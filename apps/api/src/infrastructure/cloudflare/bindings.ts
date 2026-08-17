@@ -13,6 +13,7 @@ export const cloudflareOutboxTopics = [
   "webhooks",
   "calendar",
   "cache-invalidation",
+  "reports",
 ] as const;
 
 export type CloudflareOutboxTopic = (typeof cloudflareOutboxTopics)[number];
@@ -22,6 +23,11 @@ export interface CloudflareOutboxInvitationTransient {
   readonly recipient: string;
   readonly message: OpenSendMessage;
 }
+export interface CloudflareReportsPayload {
+  readonly kind: "evaluation_review_export";
+  readonly runId: string;
+}
+
 export interface CloudflareOutboxMessage {
   readonly version: 1;
   readonly jobId: string;

@@ -1,12 +1,9 @@
-export type AdminCommandEventStatus = "active" | "archived" | "draft";
-
 export interface AdminCommandEvent {
   readonly endsAt: string;
   readonly id: string;
   readonly name: string;
   readonly slug: string;
   readonly startsAt: string;
-  readonly status: AdminCommandEventStatus;
 }
 
 export interface AdminCommandPage {
@@ -31,7 +28,6 @@ export interface AdminCommandEventResult extends AdminCommandResultBase {
   readonly group: "Events";
   readonly kind: "event";
   readonly startsAt: string;
-  readonly status: AdminCommandEventStatus;
 }
 
 export interface AdminCommandPageResult extends AdminCommandResultBase {
@@ -67,11 +63,6 @@ function requiredString(value: unknown, field: string): string {
   return value.trim();
 }
 
-function eventStatus(value: unknown): AdminCommandEventStatus {
-  if (value === "active" || value === "archived" || value === "draft") return value;
-  throw new TypeError("The command palette event status must be active, archived, or draft.");
-}
-
 function eventDate(value: unknown, field: string): string {
   const date = requiredString(value, field);
   if (!Number.isFinite(Date.parse(date))) {
@@ -94,7 +85,6 @@ export function parseAdminCommandEventsResponse(payload: unknown): readonly Admi
       name: requiredString(value.name, "name"),
       slug: requiredString(value.slug, "slug"),
       startsAt: eventDate(value.startsAt, "startsAt"),
-      status: eventStatus(value.status),
     };
   });
 }
@@ -149,7 +139,7 @@ export function buildAdminCommandResults({
       if (!(index in events)) continue;
       const event = events[index];
       if (event === undefined) continue;
-      if (!matchesQuery(`${event.name} ${event.status} ${event.startsAt} ${event.endsAt}`, query)) {
+      if (!matchesQuery(`${event.name} ${event.startsAt} ${event.endsAt}`, query)) {
         continue;
       }
       eventResults.push({
@@ -161,7 +151,6 @@ export function buildAdminCommandResults({
         kind: "event",
         label: event.name,
         startsAt: event.startsAt,
-        status: event.status,
       });
     }
   }

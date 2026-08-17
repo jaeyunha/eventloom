@@ -6,6 +6,7 @@ import {
   type AgendaEntryInput,
   type AgendaError,
   type AgendaIdGenerator,
+  type AgendaMutationLock,
   type AgendaSuggestionProvider,
   type AgendaTimeZoneError,
   AgendaValidationError,
@@ -65,7 +66,10 @@ function entry(
   return { id, sessionId, roomId, startsAtLocal, endsAtLocal, trackIds };
 }
 
-function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
+function createEngine(
+  provider?: AgendaSuggestionProvider,
+  mutationLock: AgendaMutationLock = new InMemoryAgendaMutationLock(),
+): AgendaEngine {
   let nextId = 0;
   const clock: AgendaClock = { now: () => new Date("2026-08-08T18:00:00.000Z") };
   const idGenerator: AgendaIdGenerator = {
@@ -74,7 +78,7 @@ function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
       return `${prefix}-${nextId}`;
     },
   };
-  return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
+  return new AgendaEngine(new InMemoryAgendaRepository(), mutationLock, {
     clock,
     idGenerator,
     ...(provider === undefined ? {} : { suggestionProvider: provider }),
@@ -456,6 +460,394 @@ describe("agenda concurrency and revisions", () => {
     expect(rollback.entries).toEqual(first.entries);
     expect(await engine.getPublishedAgenda("event-1")).toEqual(rollback);
     expect(await engine.getOutbox("event-1")).toHaveLength(9);
+  });
+
+  it("refreshes approved public metadata without publishing dirty layout state", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const publishedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00", [
+          "track-a",
+        ]),
+        entry("entry-2", "session-2", "room-small", "2026-08-10T10:00", "2026-08-10T11:00", [
+          "track-b",
+        ]),
+      ],
+    });
+    const first = await engine.publish({
+      eventId: "event-1",
+      expectedVersion: publishedDraft.version,
+      actorId: "organizer-1",
+    });
+    const dirtyDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: publishedDraft.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T12:00", "2026-08-10T13:00", [
+          "track-a",
+        ]),
+      ],
+    });
+    const firstCatalogSession = catalog.sessions[0];
+    if (firstCatalogSession === undefined) throw new Error("Expected the opening session.");
+    const approvedCatalog: AgendaCatalog = {
+      sessions: [
+        {
+          ...firstCatalogSession,
+          title: "Opening refreshed",
+          summary: "Approved abstract",
+          format: "Keynote",
+          speakerNames: ["Ada Lovelace"],
+        },
+      ],
+      rooms: catalog.rooms.map((room) =>
+        room.id === "room-large" ? { ...room, name: "Grand hall" } : room,
+      ),
+      tracks: catalog.tracks.map((track) =>
+        track.id === "track-a" ? { ...track, name: "Main stage" } : track,
+      ),
+    };
+    const synchronizedDraft = await engine.updateCatalog({
+      eventId: "event-1",
+      expectedVersion: dirtyDraft.version,
+      minimumTravelMinutes: 15,
+      actorId: "organizer-1",
+      ...approvedCatalog,
+    });
+
+    const refreshed = await engine.refreshPublishedContent({
+      eventId: "event-1",
+      actorId: "organizer-1",
+      expectedCatalogVersion: synchronizedDraft.version,
+      catalog: approvedCatalog,
+    });
+    expect(refreshed.status).toBe("created");
+    expect(refreshed.revision?.revisionNumber).toBe(2);
+    expect(refreshed.revision?.sourceDraftVersion).toBe(first.sourceDraftVersion);
+    expect(
+      refreshed.revision?.entries.map(({ id, roomId, startsAt }) => ({ id, roomId, startsAt })),
+    ).toEqual(first.entries.map(({ id, roomId, startsAt }) => ({ id, roomId, startsAt })));
+    expect(refreshed.revision?.entries[0]?.metadata).toMatchObject({
+      title: "Opening refreshed",
+      summary: "Approved abstract",
+      format: "Keynote",
+      roomName: "Grand hall",
+      trackNames: ["Main stage"],
+    });
+    expect(refreshed.revision?.entries[1]?.metadata?.title).toBe(first.entries[1]?.metadata?.title);
+    expect(await engine.getOutbox("event-1")).toHaveLength(6);
+
+    const repeated = await engine.refreshPublishedContent({
+      eventId: "event-1",
+      actorId: "organizer-1",
+      expectedCatalogVersion: synchronizedDraft.version,
+      catalog: approvedCatalog,
+    });
+    expect(repeated).toMatchObject({
+      status: "unchanged",
+      revision: { id: refreshed.revision?.id },
+    });
+    expect(await engine.getOutbox("event-1")).toHaveLength(6);
+    await expect(
+      engine.refreshPublishedContent({
+        eventId: "event-1",
+        actorId: "organizer-1",
+        expectedCatalogVersion: synchronizedDraft.version - 1,
+        catalog: approvedCatalog,
+      }),
+    ).resolves.toEqual({ status: "stale", revision: null });
+
+    const schedulePublication = await engine.publish({
+      eventId: "event-1",
+      expectedVersion: synchronizedDraft.version,
+      actorId: "organizer-1",
+    });
+    expect(schedulePublication.revisionNumber).toBe(3);
+    expect(schedulePublication.entries[0]?.roomId).toBe("room-large");
+    expect(schedulePublication.entries[0]?.startsAt).not.toBe(first.entries[0]?.startsAt);
+
+    const revertedCatalog: AgendaCatalog = {
+      ...approvedCatalog,
+      sessions: [{ ...firstCatalogSession, title: "Opening" }],
+    };
+    const revertedDraft = await engine.updateCatalog({
+      eventId: "event-1",
+      expectedVersion: synchronizedDraft.version,
+      minimumTravelMinutes: 15,
+      actorId: "organizer-1",
+      ...revertedCatalog,
+    });
+    const corrective = await engine.refreshPublishedContent({
+      eventId: "event-1",
+      actorId: "organizer-1",
+      expectedCatalogVersion: revertedDraft.version,
+      catalog: revertedCatalog,
+    });
+    expect(corrective).toMatchObject({
+      status: "created",
+      revision: { revisionNumber: 4 },
+    });
+    expect(corrective.revision?.entries[0]?.metadata?.title).toBe("Opening");
+  });
+
+  it("keeps approved-content handoffs inside the event mutation lock", async () => {
+    let lockHeld = false;
+    const mutationLock: AgendaMutationLock = {
+      async runExclusive(_eventId, operation) {
+        expect(lockHeld).toBe(false);
+        lockHeld = true;
+        try {
+          return await operation();
+        } finally {
+          lockHeld = false;
+        }
+      },
+    };
+    const engine = createEngine(undefined, mutationLock);
+    await initialize(engine);
+    const draft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
+    });
+    const refreshedCatalog: AgendaCatalog = {
+      ...catalog,
+      sessions: catalog.sessions.map((session) =>
+        session.id === "session-1" ? { ...session, title: "Locked refresh" } : session,
+      ),
+    };
+    const synchronized = await engine.updateCatalog({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      minimumTravelMinutes: 15,
+      actorId: "organizer-1",
+      ...refreshedCatalog,
+    });
+    let handoffObserved = false;
+    await engine.refreshPublishedContent({
+      eventId: "event-1",
+      actorId: "organizer-1",
+      expectedCatalogVersion: synchronized.version,
+      catalog: refreshedCatalog,
+      async afterRefresh(refresh) {
+        expect(lockHeld).toBe(true);
+        expect(refresh.status).toBe("created");
+        handoffObserved = true;
+      },
+    });
+    expect(handoffObserved).toBe(true);
+    expect(lockHeld).toBe(false);
+  });
+
+  it("keeps schedule publication handoffs inside the event mutation lock", async () => {
+    let lockHeld = false;
+    const mutationLock: AgendaMutationLock = {
+      async runExclusive(_eventId, operation) {
+        expect(lockHeld).toBe(false);
+        lockHeld = true;
+        try {
+          return await operation();
+        } finally {
+          lockHeld = false;
+        }
+      },
+    };
+    const engine = createEngine(undefined, mutationLock);
+    await initialize(engine);
+    const draft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    let handoffObserved = false;
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
+      async afterPublish(revision) {
+        expect(lockHeld).toBe(true);
+        expect(revision.revisionNumber).toBe(1);
+        handoffObserved = true;
+      },
+    });
+    expect(handoffObserved).toBe(true);
+    expect(lockHeld).toBe(false);
+  });
+
+  it("does not commit or hand off a publication after losing the mutation lease", async () => {
+    let rejectRenewal = false;
+    const mutationLock: AgendaMutationLock = {
+      async runExclusive(_eventId, operation) {
+        return operation();
+      },
+      async renew() {
+        if (rejectRenewal) throw new Error("lease lost");
+      },
+    };
+    const engine = createEngine(undefined, mutationLock);
+    await initialize(engine);
+    const draft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    let handoffObserved = false;
+    rejectRenewal = true;
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: draft.version,
+        actorId: "organizer-1",
+        async afterPublish() {
+          handoffObserved = true;
+        },
+      }),
+    ).rejects.toThrow("lease lost");
+    await expect(engine.getPublishedAgenda("event-1")).resolves.toBeNull();
+    expect(handoffObserved).toBe(false);
+  });
+
+  it("keeps rollback handoffs inside the event mutation lock", async () => {
+    let lockHeld = false;
+    const mutationLock: AgendaMutationLock = {
+      async runExclusive(_eventId, operation) {
+        expect(lockHeld).toBe(false);
+        lockHeld = true;
+        try {
+          return await operation();
+        } finally {
+          lockHeld = false;
+        }
+      },
+    };
+    const engine = createEngine(undefined, mutationLock);
+    await initialize(engine);
+    const firstDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    const firstRevision = await engine.publish({
+      eventId: "event-1",
+      expectedVersion: firstDraft.version,
+      actorId: "organizer-1",
+    });
+    const secondDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: firstDraft.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T10:00", "2026-08-10T11:00"),
+      ],
+    });
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: secondDraft.version,
+      actorId: "organizer-1",
+    });
+    let handoffObserved = false;
+    await engine.rollback({
+      eventId: "event-1",
+      expectedVersion: secondDraft.version,
+      actorId: "organizer-1",
+      revisionId: firstRevision.id,
+      async afterRollback(revision) {
+        expect(lockHeld).toBe(true);
+        expect(revision.rollbackOfRevisionId).toBe(firstRevision.id);
+        handoffObserved = true;
+      },
+    });
+    expect(handoffObserved).toBe(true);
+    expect(lockHeld).toBe(false);
+  });
+
+  it("refreshes the latest synchronized catalog after an interleaved catalog mutation", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const draft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      actorId: "organizer-1",
+    });
+    const firstCatalog: AgendaCatalog = {
+      ...catalog,
+      sessions: catalog.sessions.map((session) =>
+        session.id === "session-1" ? { ...session, title: "First approved title" } : session,
+      ),
+    };
+    const firstSynchronization = await engine.updateCatalog({
+      eventId: "event-1",
+      expectedVersion: draft.version,
+      minimumTravelMinutes: 15,
+      actorId: "organizer-1",
+      ...firstCatalog,
+    });
+    const latestCatalog: AgendaCatalog = {
+      ...firstCatalog,
+      sessions: firstCatalog.sessions.map((session) =>
+        session.id === "session-1" ? { ...session, title: "Latest approved title" } : session,
+      ),
+    };
+    const latestSynchronization = await engine.updateCatalog({
+      eventId: "event-1",
+      expectedVersion: firstSynchronization.version,
+      minimumTravelMinutes: 15,
+      actorId: "organizer-1",
+      ...latestCatalog,
+    });
+    const stale = await engine.refreshPublishedContent({
+      eventId: "event-1",
+      actorId: "organizer-1",
+      expectedCatalogVersion: firstSynchronization.version,
+      catalog: firstCatalog,
+    });
+    expect(stale).toEqual({ status: "stale", revision: null });
+    const refreshed = await engine.refreshPublishedContent({
+      eventId: "event-1",
+      actorId: "organizer-1",
+      expectedCatalogVersion: latestSynchronization.version,
+      catalog: latestCatalog,
+    });
+    expect(refreshed).toMatchObject({
+      status: "created",
+      revision: {
+        entries: [
+          {
+            metadata: { title: "Latest approved title" },
+          },
+        ],
+      },
+    });
   });
 
   it("blocks a new session on another session's active released speaker commitment", async () => {

@@ -1,13 +1,12 @@
 "use client";
 import { useEffect, useMemo } from "react";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../../components/ui/field";
 import { Input } from "../../../components/ui/input";
 import styles from "../review-workspace.module.css";
-import { assignmentControlFieldStyle } from "./model-assignment-control-field-style";
-import { assignmentControlGridStyle } from "./model-assignment-control-grid-style";
-import { assignmentControlSelectStyle } from "./model-assignment-control-select-style";
+import { submissionSelectOption } from "./model-submission-select-option";
 import { OrganizerAssignmentPreview } from "./organizer-authoring-assignment-preview";
 import type { OrganizerAuthoringController } from "./organizer-authoring-controller";
 import { OrganizerReviewerPoolView } from "./organizer-reviewer-pool-panel";
@@ -54,11 +53,19 @@ export function OrganizerAssignmentCoverage({
     poolReviewerIds.has(member.userId),
   );
   const visiblePoolReviewers = matchingPoolReviewers.slice(0, 8);
+  const assignmentReviewerSelectionLabel =
+    assignmentReviewerIds.length === 1
+      ? "1 assignment reviewer selected"
+      : `${assignmentReviewerIds.length} assignment reviewers selected`;
   const reviewTeamReady =
     !reviewerPool.loading && reviewerPool.error === null && reviewerPool.pool !== null;
   const invitationHref = organizationId
     ? `/admin/organizations/${encodeURIComponent(organizationId)}/members?tab=invite`
     : "/admin/events";
+  const submissionOptions = useMemo(
+    () => seed.aggregates.map(submissionSelectOption),
+    [seed.aggregates],
+  );
 
   useEffect(() => {
     if (!reviewTeamReady) return;
@@ -72,18 +79,18 @@ export function OrganizerAssignmentCoverage({
       <div className={styles.assignmentTaskHeader}>
         <div>
           <p className={styles.sectionEyebrow}>Assignment task</p>
-          <h3 id="assignment-task-heading">Assign reviewers</h3>
+          <h3 id="assignment-task-heading">Create assignments</h3>
         </div>
-        <span className={styles.assignmentSelectionCount} aria-live="polite">
-          {assignmentReviewerIds.length} selected
-        </span>
+        <Badge variant="secondary" aria-live="polite">
+          {assignmentReviewerSelectionLabel}
+        </Badge>
       </div>
-      <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
-        <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+      <div className={styles.assignmentContextGrid}>
+        <fieldset className={styles.assignmentContextField}>
           <label htmlFor="assignment-round-id">Round</label>
           <select
+            className={styles.assignmentRoundSelect}
             id="assignment-round-id"
-            style={assignmentControlSelectStyle}
             value={assignmentRoundId}
             disabled={busy || status !== "open"}
             onChange={(event) => setAssignmentRoundId(event.currentTarget.value)}
@@ -95,13 +102,13 @@ export function OrganizerAssignmentCoverage({
             ))}
           </select>
         </fieldset>
-        <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-          <legend className={styles.cardLabel}>Assignment limit</legend>
-          <span className={styles.fieldHint}>
+        <div className={styles.assignmentPolicy}>
+          <p className={styles.mutedLabel}>Assignment limit</p>
+          <p>
             The plan allows up to {maxAssignmentsPerReviewer} assignments per reviewer. Select
-            eligible reviewers for this submission. Existing assignments remain unchanged.
-          </span>
-        </fieldset>
+            eligible reviewers for this proposal. Existing assignments remain unchanged.
+          </p>
+        </div>
       </div>
       <OrganizerReviewerPoolView
         roundName={selectedRound?.name ?? "Selected round"}
@@ -118,34 +125,32 @@ export function OrganizerAssignmentCoverage({
         onSave={() => void reviewerPool.save()}
         onReload={reviewerPool.reload}
       />
-      <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
-        <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-          <label htmlFor="assignment-submission-id">Submission</label>
+      <div className={styles.assignmentCoverageGrid}>
+        <fieldset className={styles.formField}>
+          <label htmlFor="assignment-submission-id">Proposal</label>
           <select
-            id="assignment-submission-id"
-            style={assignmentControlSelectStyle}
-            value={assignmentSubmissionId}
-            onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
-            disabled={busy || status !== "open" || seed.aggregates.length === 0}
-            required
+            className={styles.assignmentSubmissionSelect ?? ""}
             aria-describedby="assignment-submission-help"
+            disabled={busy || status !== "open" || seed.aggregates.length === 0}
+            id="assignment-submission-id"
+            onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
+            value={assignmentSubmissionId}
           >
-            <option value="">Choose a submission</option>
-            {seed.aggregates.map((aggregate) => (
-              <option value={aggregate.id} key={aggregate.id}>
-                {aggregate.reference} · {aggregate.title}
+            <option value="">Choose a proposal</option>
+            {submissionOptions.map((option) => (
+              <option value={option.value} key={option.value}>
+                {option.description ? `${option.label} · ${option.description}` : option.label}
               </option>
             ))}
           </select>
           <span className={styles.fieldHint} id="assignment-submission-help">
             {seed.aggregates.length === 0
-              ? "No submissions are available."
-              : "Choose a submission for this round. Existing assignments remain unchanged."}
+              ? "No submitted proposals are available."
+              : "Choose a proposal for this round. Existing assignments remain unchanged."}
           </span>
         </fieldset>
         <fieldset
           className={`${styles.formField} ${styles.assignmentReviewerCandidates}`}
-          style={assignmentControlFieldStyle}
           aria-describedby="assignment-reviewer-help"
         >
           <legend className={styles.cardLabel}>Eligible reviewers</legend>
@@ -224,29 +229,30 @@ export function OrganizerAssignmentCoverage({
           </span>
         </fieldset>
       </div>
-      <Button
-        type="button"
-        variant="outline"
-        onClick={previewAssignments}
-        disabled={busy || status !== "open" || !reviewerDirectoryReady || !reviewTeamReady}
-      >
-        Preview assignments
-      </Button>
       <OrganizerAssignmentPreview preview={assignmentPreview} />
-      <Button
-        type="button"
-        variant="outline"
-        onClick={assignReviewers}
-        disabled={
-          busy ||
-          status !== "open" ||
-          !reviewerDirectoryReady ||
-          !reviewTeamReady ||
-          assignmentPreview === null
-        }
-      >
-        Apply assignments
-      </Button>
+      <div className={styles.assignmentActions}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={previewAssignments}
+          disabled={busy || status !== "open" || !reviewerDirectoryReady || !reviewTeamReady}
+        >
+          Preview assignments
+        </Button>
+        <Button
+          type="button"
+          onClick={assignReviewers}
+          disabled={
+            busy ||
+            status !== "open" ||
+            !reviewerDirectoryReady ||
+            !reviewTeamReady ||
+            assignmentPreview === null
+          }
+        >
+          Apply assignments
+        </Button>
+      </div>
     </section>
   );
 }

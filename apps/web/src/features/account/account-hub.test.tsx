@@ -36,7 +36,6 @@ describe("AccountHubView", () => {
               eventId: "event-1",
               name: "Local Event",
               slug: "local-event",
-              status: "draft",
               capabilities: ["submission-edit"],
               submissionIds: ["submission-1"],
               participantIds: [],

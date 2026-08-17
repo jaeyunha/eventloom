@@ -285,14 +285,55 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
     };
   }
 
+  async getPublishedSpeakerHeadshots(
+    eventSlug: string,
+  ): Promise<PublishedSpeakerProjectionRecord["headshots"]> {
+    const event = await this.#eventForSlug(eventSlug);
+    if (event === null) return {};
+    const manifest = (await this.publications.getState(event.organizationId, event.id))
+      ?.servedManifest;
+    if (manifest === null || manifest === undefined) return {};
+    const rows = await this.database
+      .prepare(
+        `SELECT participant_id, avatar_asset_id, avatar_object_key,
+                avatar_content_type, avatar_size_bytes
+           FROM program_speaker_projection_entries
+          WHERE projection_id = ?`,
+      )
+      .bind(manifest.speakerProjectionId)
+      .all<Record<string, unknown>>();
+    const headshots: Record<string, PublishedSpeakerProjectionRecord["headshots"][string]> = {};
+    for (const row of rows.results ?? []) {
+      if (
+        row.avatar_asset_id == null ||
+        row.avatar_object_key == null ||
+        row.avatar_content_type == null ||
+        row.avatar_size_bytes == null
+      ) {
+        continue;
+      }
+      const contentType = publishedHeadshotContentType(String(row.avatar_content_type));
+      const sizeBytes = Number(row.avatar_size_bytes);
+      if (contentType === null || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0) continue;
+      headshots[String(row.participant_id)] = {
+        assetId: String(row.avatar_asset_id),
+        objectKey: String(row.avatar_object_key),
+        contentType,
+        sizeBytes,
+      };
+    }
+    return headshots;
+  }
+
   async listPublishedEventProjections(): Promise<readonly D1PublishedEventProjection[]> {
     const rows = await this.database
       .prepare(
         `SELECT e.organization_id, e.id
            FROM events e
-           INNER JOIN program_publication_states p
+          INNER JOIN program_publication_states p
              ON p.organization_id = e.organization_id AND p.event_id = e.id
-          WHERE p.served_revision IS NOT NULL`,
+          WHERE p.served_revision IS NOT NULL
+            AND e.legacy_retired_at IS NULL`,
       )
       .all<{ organization_id: string; id: string }>();
     const projections: D1PublishedEventProjection[] = [];
@@ -386,7 +427,8 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
     const rows = await this.database
       .prepare(
         `SELECT organization_id, id FROM events
-          WHERE lower(slug) = ? LIMIT 2`,
+          WHERE legacy_retired_at IS NULL
+            AND lower(slug) = ? LIMIT 2`,
       )
       .bind(normalizedSlug)
       .all<{ organization_id: string; id: string }>();

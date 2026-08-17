@@ -78,7 +78,6 @@ export interface SpeakerPortalContext {
   eventId: string;
   name: string;
   slug?: string;
-  status?: string;
   capabilities: readonly SpeakerPortalCapability[];
   submissionIds: readonly string[];
   participantIds: readonly string[];

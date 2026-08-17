@@ -326,7 +326,7 @@ describe("assembled API contract and security", () => {
     const { app, repository } = fixture();
     const injection = "') OR RECORD_ID() != ''";
     const response = await app.request(
-      `/api/v1/organizations/org-1/events?filter.status=${encodeURIComponent(injection)}`,
+      `/api/v1/organizations/org-1/events?filter.slug=${encodeURIComponent(injection)}`,
       { headers: authorizedHeaders },
       environment,
     );
@@ -335,7 +335,7 @@ describe("assembled API contract and security", () => {
     expect(response.status).toBe(200);
     expect(body.data.map((event) => event.id)).toEqual(["event-safe"]);
     expect(repository.lastListInput?.organizationId).toBe("org-1");
-    expect(repository.lastListInput?.filters.status).toBe(injection);
+    expect(repository.lastListInput?.filters.slug).toBe(injection);
   });
 
   it("serves untrusted text only as nosniff JSON with a non-HTML CSP", async () => {
@@ -413,7 +413,6 @@ describe("checked-in OpenAPI contract security", () => {
   const canonicalPaths = [
     "/api/admin/organizations/{organizationId}/events",
     "/api/admin/organizations/{organizationId}/events/{eventId}",
-    "/api/admin/organizations/{organizationId}/events/{eventId}/archive",
     "/api/admin/organizations/{organizationId}/events/{eventId}/sessions",
     "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/settings",
     "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/rooms",

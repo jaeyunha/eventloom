@@ -86,7 +86,6 @@ describe("local fixture event graph", () => {
         body: JSON.stringify({
           name: "Fresh binding event",
           slug: "fresh-binding-event",
-          status: "draft",
           timeZone: "UTC",
           startsAt: "2026-10-02T09:00:00.000Z",
           endsAt: "2026-10-02T17:00:00.000Z",
@@ -132,7 +131,6 @@ describe("local fixture event graph", () => {
         body: JSON.stringify({
           name: "Local persistence event",
           slug: "local-persistence-event",
-          status: "draft",
           timeZone: "UTC",
           startsAt,
           endsAt,
@@ -188,6 +186,239 @@ describe("local fixture event graph", () => {
     ).toBe(true);
     await expect(otherRevision).rejects.toMatchObject({ code: "AGENDA_NOT_FOUND" });
   });
+
+  it("propagates an approved session revision without republishing the agenda", async () => {
+    const runtime = createLocalDependencies();
+    const app = createApp(runtime);
+    const sessionService = runtime.sessions?.service;
+    if (sessionService === undefined) throw new Error("Expected the local session service.");
+
+    const readPublicAgenda = async () => {
+      const response = await app.request(
+        "/api/public/events/demo-event/agenda.json",
+        undefined,
+        environment,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        data: {
+          revision: { number: number };
+          entries: readonly {
+            sessionId: string;
+            title: string;
+            format: string;
+            speakerNames: readonly string[];
+            trackIds: readonly string[];
+            trackNames: readonly string[];
+          }[];
+        };
+      };
+    };
+    const readPublicSpeakers = async () => {
+      const response = await app.request(
+        "/api/public/events/demo-event/speakers",
+        undefined,
+        environment,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        data: {
+          speakers: readonly {
+            id: string;
+            sessionIds: readonly string[];
+            trackNames: readonly string[];
+          }[];
+        };
+      };
+    };
+
+    const before = await readPublicAgenda();
+    const publishedEntry = before.data.entries[0];
+    if (publishedEntry === undefined) throw new Error("Expected a published session.");
+    const sessions = await sessionService.listSessions(organizer, {
+      eventId: "demo-event",
+      limit: 100,
+    });
+    const session = sessions.find(({ id }) => id === publishedEntry.sessionId);
+    if (session === undefined) throw new Error("Expected the published canonical session.");
+    const approvedTitle = `${publishedEntry.title} approved revision`;
+
+    const edited = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: session.version,
+      title: approvedTitle,
+    });
+    expect(edited.contentStatus).toBe("Needs changes");
+    expect((await readPublicAgenda()).data.entries).toContainEqual(
+      expect.objectContaining({ sessionId: session.id, title: publishedEntry.title }),
+    );
+
+    const approved = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: edited.version,
+      contentStatus: "Approved",
+    });
+
+    const refreshedRevision = await runtime.agenda?.engine.getPublishedAgenda("demo-event");
+    expect(refreshedRevision?.revisionNumber).toBeGreaterThan(before.data.revision.number);
+    const servedManifest = await runtime.agenda?.getProgramPublicationManifest?.("demo-event");
+    expect(servedManifest?.agendaRevisionNumber).toBeGreaterThan(before.data.revision.number);
+    const after = await readPublicAgenda();
+    expect(after.data.revision.number).toBeGreaterThan(before.data.revision.number);
+    expect(after.data.entries).toContainEqual(
+      expect.objectContaining({ sessionId: session.id, title: approvedTitle }),
+    );
+    const publicIcal = await app.request(
+      "/api/public/events/demo-event/agenda.ics",
+      undefined,
+      environment,
+    );
+    expect(publicIcal.status).toBe(200);
+    expect(await publicIcal.text()).toContain(`SUMMARY:${approvedTitle}`);
+    const publicSpeakers = await app.request(
+      "/api/public/events/demo-event/speakers",
+      undefined,
+      environment,
+    );
+    expect(publicSpeakers.status).toBe(200);
+    expect(await publicSpeakers.text()).toContain(approvedTitle);
+
+    const repeatedApproval = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: approved.version,
+      contentStatus: "Approved",
+    });
+    expect(repeatedApproval.version).toBe(approved.version);
+    expect((await readPublicAgenda()).data.revision.number).toBe(after.data.revision.number);
+
+    const restored = await sessionService.restoreSessionVersion(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: approved.version,
+      version: session.version,
+    });
+    expect((await readPublicAgenda()).data.revision.number).toBe(after.data.revision.number);
+    const correctiveApproval = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: restored.version,
+      contentStatus: "Approved",
+    });
+    const reverted = await readPublicAgenda();
+    expect(reverted.data.revision.number).toBeGreaterThan(after.data.revision.number);
+    expect(reverted.data.entries).toContainEqual(
+      expect.objectContaining({ sessionId: session.id, title: publishedEntry.title }),
+    );
+
+    const formatId = correctiveApproval.formatId;
+    if (formatId === undefined) throw new Error("Expected the published session format.");
+    const formats = await sessionService.listFormats(organizer, { eventId: "demo-event" });
+    const format = formats.find(({ id }) => id === formatId);
+    if (format === undefined) throw new Error("Expected the canonical session format.");
+    const renamedFormat = "Propagation Keynote";
+    await sessionService.updateFormat(organizer, {
+      eventId: "demo-event",
+      resourceId: formatId,
+      expectedVersion: format.version,
+      name: renamedFormat,
+    });
+    const afterFormat = await readPublicAgenda();
+    expect(afterFormat.data.revision.number).toBeGreaterThan(reverted.data.revision.number);
+    expect(afterFormat.data.entries).toContainEqual(
+      expect.objectContaining({
+        sessionId: session.id,
+        format: renamedFormat,
+      }),
+    );
+
+    const publishedSession = afterFormat.data.entries.find(
+      (entry) => entry.sessionId === session.id,
+    );
+    const trackId = publishedSession?.trackIds[0];
+    if (trackId === undefined) throw new Error("Expected the published session track.");
+    const tracks = await sessionService.listTracks(organizer, { eventId: "demo-event" });
+    const track = tracks.find(({ id }) => id === trackId);
+    if (track === undefined) throw new Error("Expected the canonical session track.");
+    const renamedTrack = "Propagation systems";
+    await sessionService.updateTrack(organizer, {
+      eventId: "demo-event",
+      resourceId: track.id,
+      expectedVersion: track.version,
+      name: renamedTrack,
+    });
+    const afterTrack = await readPublicAgenda();
+    expect(afterTrack.data.revision.number).toBeGreaterThan(afterFormat.data.revision.number);
+    expect(afterTrack.data.entries).toContainEqual(
+      expect.objectContaining({
+        sessionId: session.id,
+        trackNames: [renamedTrack],
+      }),
+    );
+    expect(
+      (await readPublicSpeakers()).data.speakers.find(({ id }) =>
+        correctiveApproval.speakerIds.includes(id),
+      )?.trackNames,
+    ).toContain(renamedTrack);
+
+    const speakerReference = correctiveApproval.speakerRoster[0];
+    if (speakerReference === undefined) throw new Error("Expected the published speaker roster.");
+    const pendingSpeakerName = "Pending private speaker name";
+    const rosterEdit = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: correctiveApproval.version,
+      speakerRoster: correctiveApproval.speakerRoster.map((reference) =>
+        reference.id === speakerReference.id
+          ? { ...reference, displayName: pendingSpeakerName }
+          : reference,
+      ),
+    });
+    expect(rosterEdit.contentStatus).toBe("Needs changes");
+    const afterRosterEdit = await readPublicAgenda();
+    expect(afterRosterEdit.data.revision.number).toBe(afterTrack.data.revision.number);
+    expect(
+      afterRosterEdit.data.entries.find((entry) => entry.sessionId === session.id)?.speakerNames,
+    ).not.toContain(pendingSpeakerName);
+
+    const replacementSpeaker = sessions
+      .filter((candidate) => candidate.id !== session.id)
+      .flatMap((candidate) => candidate.speakerRoster)
+      .find((reference) => !correctiveApproval.speakerIds.includes(reference.id));
+    if (replacementSpeaker?.displayName === undefined) {
+      throw new Error("Expected another canonical speaker with a display name.");
+    }
+    const assignmentEdit = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: rosterEdit.version,
+      speakerRoster: [replacementSpeaker],
+    });
+    expect(assignmentEdit.contentStatus).toBe("Needs changes");
+    const approvedAssignment = await sessionService.updateSession(organizer, {
+      eventId: "demo-event",
+      sessionId: session.id,
+      expectedVersion: assignmentEdit.version,
+      contentStatus: "Approved",
+    });
+    expect(approvedAssignment.contentStatus).toBe("Approved");
+    const afterAssignment = await readPublicAgenda();
+    expect(afterAssignment.data.entries).toContainEqual(
+      expect.objectContaining({
+        sessionId: session.id,
+        speakerNames: [replacementSpeaker.displayName],
+      }),
+    );
+    const assignmentSpeakers = (await readPublicSpeakers()).data.speakers;
+    expect(assignmentSpeakers.find(({ id }) => id === replacementSpeaker.id)?.sessionIds).toContain(
+      session.id,
+    );
+    expect(
+      assignmentSpeakers.find(({ id }) => id === speakerReference.id)?.sessionIds ?? [],
+    ).not.toContain(session.id);
+  }, 45_000);
 
   it("lists only events with a served public release", async () => {
     const app = createApp(dependencies);

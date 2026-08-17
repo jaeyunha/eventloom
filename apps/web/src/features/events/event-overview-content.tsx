@@ -10,7 +10,6 @@ import {
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
-  StatusBadge,
   WorkspaceBreadcrumb,
   WorkspaceHeader,
   WorkspaceMetaItem,
@@ -110,7 +109,6 @@ export function EventOverviewContent({
   eventId: string;
 }>) {
   const base = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`;
-  const eventStatus = data.event.status.charAt(0).toUpperCase() + data.event.status.slice(1);
   return (
     <>
       <WorkspaceHeader
@@ -137,20 +135,12 @@ export function EventOverviewContent({
         eyebrow="Event workspace"
         metadata={
           <>
-            <WorkspaceMetaItem icon={<CheckCircle2 aria-hidden="true" size={14} />}>
-              {eventStatus}
-            </WorkspaceMetaItem>
             <WorkspaceMetaItem icon={<CalendarDays aria-hidden="true" size={14} />}>
               {formatOverviewDateRange(data)}
             </WorkspaceMetaItem>
             <WorkspaceMetaItem>{data.event.timeZone}</WorkspaceMetaItem>
             <WorkspaceMetaItem>{data.event.venue ?? "Venue not set"}</WorkspaceMetaItem>
           </>
-        }
-        status={
-          <StatusBadge tone={data.event.status === "active" ? "success" : "neutral"}>
-            {eventStatus}
-          </StatusBadge>
         }
         title={data.event.name}
       />

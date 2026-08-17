@@ -5,7 +5,19 @@ import type {
   ReminderCandidateSource,
   ReminderCandidateSourceResult,
 } from "../features/communications/types";
+import {
+  EvaluationExportCoordinator,
+  InMemoryEvaluationExportArtifactStore,
+  InMemoryEvaluationExportStore,
+} from "../features/evaluations/export-jobs";
+import { createEvaluationExportGenerator } from "../features/evaluations/routes";
 import type { EvaluationActor } from "../features/evaluations/types";
+import {
+  CloudflareEvaluationExportQueue,
+  D1EvaluationExportStore,
+  dispatchPendingEvaluationExportJobs,
+  R2EvaluationExportArtifactStore,
+} from "../infrastructure/cloudflare/evaluation-export-jobs";
 import {
   consumeOutboxQueue,
   type OutboxConsumerBindings,
@@ -34,6 +46,41 @@ export class RuntimeConfigurationError extends Error {
     super("The API runtime is not configured.");
     this.name = "RuntimeConfigurationError";
   }
+}
+
+function withEvaluationExports(
+  dependencies: ApiDependencies,
+  coordinator: EvaluationExportCoordinator,
+): ApiDependencies {
+  if (dependencies.evaluations === undefined) return dependencies;
+  return {
+    ...dependencies,
+    evaluations: {
+      ...dependencies.evaluations,
+      resultsExports: coordinator,
+    },
+  };
+}
+
+function createLocalEvaluationExports(dependencies: ApiDependencies): ApiDependencies {
+  const evaluationService = dependencies.evaluations?.service;
+  if (evaluationService === undefined) return dependencies;
+  let coordinator: EvaluationExportCoordinator;
+  coordinator = new EvaluationExportCoordinator({
+    store: new InMemoryEvaluationExportStore(),
+    artifacts: new InMemoryEvaluationExportArtifactStore(),
+    queue: {
+      enqueue: async (runId) => {
+        queueMicrotask(() => {
+          void coordinator.process(runId);
+        });
+      },
+    },
+    generator: createEvaluationExportGenerator(evaluationService),
+    clock: () => new Date(),
+    idFactory: () => crypto.randomUUID(),
+  });
+  return withEvaluationExports(dependencies, coordinator);
 }
 
 function requestId(request: Request): string {
@@ -129,7 +176,7 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
     const aiProviders = useOpenAi
       ? createLocalAiProviders(bindings.OPENAI_API_KEY ?? "", bindings)
       : undefined;
-    return createLocalDependencies(aiProviders);
+    return createLocalEvaluationExports(createLocalDependencies(aiProviders));
   }
   if (
     bindings.APP_ENV !== "local" &&
@@ -141,6 +188,15 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
   const inspection = inspectProductionRuntime(bindings);
   if (!inspection.success) throw new RuntimeConfigurationError(inspection.issues);
   const effectiveBindings = runtimeBindingsForEnvironment(bindings);
+  if (
+    effectiveBindings.DB === undefined ||
+    effectiveBindings.PRIVATE_FILES === undefined ||
+    effectiveBindings.OUTBOX_QUEUE === undefined
+  ) {
+    throw new RuntimeConfigurationError([
+      "DB, PRIVATE_FILES, and OUTBOX_QUEUE are required for evaluation exports.",
+    ]);
+  }
   const dependencies = createCloudflareDependencies(effectiveBindings);
   const communicationService = dependencies.communications?.service;
   if (
@@ -158,7 +214,22 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
       outbox: new CloudflareReminderOutbox(bindings.DB, bindings.OUTBOX_QUEUE),
     });
   }
-  return dependencies;
+  const evaluationService = dependencies.evaluations?.service;
+  if (evaluationService === undefined) return dependencies;
+  return withEvaluationExports(
+    dependencies,
+    new EvaluationExportCoordinator({
+      store: new D1EvaluationExportStore(effectiveBindings.DB),
+      artifacts: new R2EvaluationExportArtifactStore(effectiveBindings.PRIVATE_FILES),
+      queue: new CloudflareEvaluationExportQueue(
+        effectiveBindings.DB,
+        effectiveBindings.OUTBOX_QUEUE,
+      ),
+      generator: createEvaluationExportGenerator(evaluationService),
+      clock: () => new Date(),
+      idFactory: () => crypto.randomUUID(),
+    }),
+  );
 }
 type SchedulerMembershipRow = {
   readonly organization_id?: unknown;
@@ -170,6 +241,10 @@ type SchedulerOrganizer = {
   readonly accountId: string;
   readonly organizationId: string;
   readonly role: "owner" | "admin";
+};
+
+type LegacyRetiredEventRow = {
+  readonly id?: unknown;
 };
 
 async function listSchedulerOrganizers(
@@ -196,6 +271,21 @@ async function listSchedulerOrganizers(
     }
   }
   return byOrganization;
+}
+
+async function listLegacyRetiredEventIds(bindings: RuntimeBindings): Promise<ReadonlySet<string>> {
+  if (bindings.DB === undefined) return new Set();
+  const rows = await bindings.DB.prepare(
+    `SELECT id
+       FROM events
+      WHERE legacy_retired_at IS NOT NULL
+      ORDER BY id`,
+  ).all<LegacyRetiredEventRow>();
+  return new Set(
+    rows.results.flatMap((row) =>
+      typeof row.id === "string" && row.id.trim().length > 0 ? [row.id.trim()] : [],
+    ),
+  );
 }
 
 function escapeReminderHtml(value: string): string {
@@ -447,6 +537,13 @@ export class RuntimeReminderCandidateSource implements ReminderCandidateSource {
   }
 }
 
+export const EVALUATION_EXPORT_RECOVERY_CRON = "*/5 * * * *";
+export const AUTOMATIC_REMINDER_CRON = "0 * * * *";
+
+export function shouldRunScheduledReminders(cron: string | undefined): boolean {
+  return cron !== EVALUATION_EXPORT_RECOVERY_CRON;
+}
+
 export async function runScheduledReminders(
   dependencies: ApiDependencies,
   bindings: RuntimeBindings,
@@ -455,7 +552,10 @@ export async function runScheduledReminders(
   const communications = dependencies.communications?.service;
   const events = dependencies.events?.service;
   if (communications === undefined || events === undefined) return;
-  const organizersByOrganization = await listSchedulerOrganizers(bindings);
+  const [organizersByOrganization, legacyRetiredEventIds] = await Promise.all([
+    listSchedulerOrganizers(bindings),
+    listLegacyRetiredEventIds(bindings),
+  ]);
   for (const [organizationId, organizers] of organizersByOrganization) {
     const firstOrganizer = organizers[0];
     if (firstOrganizer === undefined) continue;
@@ -466,10 +566,12 @@ export async function runScheduledReminders(
         role: firstOrganizer.role,
         kind: "human",
       },
-      { organizationId, includeArchived: false },
+      { organizationId },
     );
     const eventIds = eventRecords
-      .filter((event) => event.organizationId === organizationId)
+      .filter(
+        (event) => event.organizationId === organizationId && !legacyRetiredEventIds.has(event.id),
+      )
       .map((event) => event.id)
       .sort((left, right) => left.localeCompare(right));
     for (const eventId of eventIds) {
@@ -635,6 +737,39 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
         effectiveBindings as OutboxConsumerBindings,
         executionContext,
         {
+          adapters: {
+            reports: async (payload, context) => {
+              const coordinator = runtime.dependencies.evaluations?.resultsExports;
+              if (coordinator === undefined) {
+                throw new Error("The evaluation export processor is unavailable.");
+              }
+              if (payload.runId !== context.jobId) {
+                throw new Error("The evaluation export run does not match its reports outbox job.");
+              }
+              try {
+                await coordinator.process(payload.runId, context.attempt);
+              } catch (error) {
+                if (context.attempt < 5) throw error;
+                console.error(
+                  JSON.stringify({
+                    level: "error",
+                    event: "evaluation_export_processing_exhausted",
+                    runId: payload.runId,
+                    attempt: context.attempt,
+                    errorName: error instanceof Error ? error.name : "UnknownError",
+                    errorMessage:
+                      error instanceof Error ? error.message.slice(0, 500) : "Unknown export error",
+                  }),
+                );
+                const terminalized = await coordinator.failProcessing(
+                  payload.runId,
+                  context.attempt,
+                );
+                if (!terminalized) throw error;
+              }
+              return undefined;
+            },
+          },
           statusRecorder: createOutboxDeliveryStatusRecorder(runtime.dependencies),
         },
       );
@@ -648,11 +783,23 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
         throw error;
       }
       const scheduledTime = Number(controller.scheduledTime);
-      await runScheduledReminders(
-        runtime.dependencies,
-        bindings,
-        Number.isFinite(scheduledTime) ? new Date(scheduledTime) : new Date(),
-      );
+      const scheduledAt = Number.isFinite(scheduledTime) ? new Date(scheduledTime) : new Date();
+      if (!(bindings.APP_ENV === "local" && bindings.RUNTIME_PROFILE?.trim() === "fixture")) {
+        const effectiveBindings = runtimeBindingsForEnvironment(bindings);
+        if (effectiveBindings.DB === undefined || effectiveBindings.OUTBOX_QUEUE === undefined) {
+          throw new RuntimeConfigurationError([
+            "DB and OUTBOX_QUEUE are required for evaluation export dispatch.",
+          ]);
+        }
+        await dispatchPendingEvaluationExportJobs(
+          effectiveBindings.DB,
+          effectiveBindings.OUTBOX_QUEUE,
+          { now: () => scheduledAt },
+        );
+      }
+      if (shouldRunScheduledReminders(controller.cron)) {
+        await runScheduledReminders(runtime.dependencies, bindings, scheduledAt);
+      }
     },
   };
 }

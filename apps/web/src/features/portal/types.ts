@@ -126,7 +126,6 @@ export interface PortalContext {
   eventId: string;
   name: string;
   slug?: string;
-  status?: string;
   capabilities: readonly PortalCapability[];
   /** Participant IDs are explicit grants; an empty list is valid for owned submissions. */
   submissionIds: readonly string[];
