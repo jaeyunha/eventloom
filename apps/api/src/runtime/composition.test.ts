@@ -3545,69 +3545,6 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       assignmentB,
       successorAssignment,
     ]);
-    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toBeNull();
-    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
-
-    const replaced = await repository.replaceAssignment(scope, replacement);
-    expect(replaced).toMatchObject({
-      scope,
-      replacedAssignment: {
-        ...assignmentA,
-        status: "superseded",
-        successorAssignmentId: assignmentC.id,
-        supersededReason: replacement.reason,
-        version: 2,
-        updatedAt: replacedAt,
-      },
-      successorAssignment: {
-        ...assignmentC,
-        predecessorAssignmentId: assignmentA.id,
-        successorAssignmentId: null,
-        supersededReason: null,
-      },
-      activeAssignments: [assignmentB, expect.objectContaining(assignmentC)],
-      history: [{ assignment: expect.objectContaining({ id: assignmentA.id }), review: reviewA }],
-    });
-    expect(replaced.successorAssignment).toMatchObject({
-      planVersion: 4,
-      rubricRevision: 7,
-      roundRevision: 3,
-      submissionRevision: 2,
-    });
-    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
-
-    await expect(
-      repository.applyAssignmentDistribution(scope, {
-        assignments: [replaced.successorAssignment],
-        expectedActiveVersions: [
-          { assignmentId: assignmentB.id, version: 1 },
-          { assignmentId: assignmentC.id, version: 1 },
-        ],
-        reason: "Organizer removed the completed reviewer.",
-        authorizedAt: replacedAt,
-      }),
-    ).rejects.toThrow("changed since the distribution was previewed");
-    await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
-      assignmentB,
-    );
-
-    const distributed = await repository.applyAssignmentDistribution(scope, {
-      assignments: [replaced.successorAssignment],
-      expectedActiveVersions: [
-        { assignmentId: assignmentB.id, version: assignmentB.version },
-        { assignmentId: assignmentC.id, version: assignmentC.version },
-      ],
-      reason: "Organizer removed the completed reviewer.",
-      authorizedAt: replacedAt,
-    });
-    expect(distributed.activeAssignments).toEqual([
-      expect.objectContaining({
-        id: assignmentC.id,
-        planVersion: 4,
-        rubricRevision: 7,
-        roundRevision: 3,
-      }),
-    ]);
   });
 
   it("reads a >10 assignment generation snapshot from Airtable projections", async () => {

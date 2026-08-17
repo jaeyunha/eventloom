@@ -1648,11 +1648,7 @@ function evaluationAssignmentMatchesScope(
   );
 }
 
-function assertEvaluationVersion(
-  actual: number,
-  expected: number,
-  label: string,
-): void {
+function assertEvaluationVersion(actual: number, expected: number, label: string): void {
   if (actual !== expected) throw conflict(`${label} changed since it was loaded.`);
 }
 
@@ -2491,10 +2487,7 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     throw conflict("Evaluation review writes require the authoritative D1 runtime.");
   }
 
-  async putDecision(
-    _decision: EvaluationDecision,
-    _expectedVersion: number | null,
-  ): Promise<void> {
+  async putDecision(_decision: EvaluationDecision, _expectedVersion: number | null): Promise<void> {
     throw conflict("Evaluation decision writes require the authoritative D1 runtime.");
   }
 

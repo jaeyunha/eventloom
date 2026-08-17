@@ -1473,9 +1473,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
     admission?: EvaluationReviewWriteAdmission | number,
   ) {
     const expectedAssignmentVersion =
-      typeof admission === "number"
-        ? admission
-        : (admission?.expectedAssignmentVersion ?? 0);
+      typeof admission === "number" ? admission : (admission?.expectedAssignmentVersion ?? 0);
     const commands = [
       suggestionAssignmentGuard(this.database, suggestion, expectedAssignmentVersion),
       ...this.suggestionStatements(suggestion, expectedVersion),

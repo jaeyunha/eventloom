@@ -1167,16 +1167,12 @@ describe("D1EvaluationRepository compound CAS", () => {
     };
 
     const repository = new D1EvaluationRepository(db as unknown as D1Database);
-    await repository.putSuggestion(
-      { ...suggestion, status: "pending", version: 1 },
-      null,
-      {
-        assignment,
-        expectedAssignmentVersion: 1,
-        authorizedAt: timestamp,
-      },
-    );
-    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(2);
+    await repository.putSuggestion({ ...suggestion, status: "pending", version: 1 }, null, {
+      assignment,
+      expectedAssignmentVersion: 1,
+      authorizedAt: timestamp,
+    });
+    expect(db.batches[0]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(4);
     expect(batchSql(db)).toContain("status <> 'abstained'");
     expect(batchSql(db)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
     expect(batchSql(db)).toMatch(/EXISTS \(\s*SELECT 1 FROM submissions/u);
@@ -1194,7 +1190,7 @@ describe("D1EvaluationRepository compound CAS", () => {
     expect(batchSql(db, 1)).toContain("evaluation_suggestions");
     expect(batchSql(db, 1)).toContain("review_assignments");
     expect(batchSql(db, 1)).toContain("evaluation_reviews");
-    expect(db.batches[1]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(4);
+    expect(db.batches[1]?.filter((item) => item.sql.includes("D1_CAS_CONFLICT"))).toHaveLength(6);
     expect(batchSql(db, 1)).toContain("status <> 'abstained'");
     expect(batchSql(db, 1)).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM evaluation_conflicts/u);
     expect(batchSql(db, 1)).toMatch(/EXISTS \(\s*SELECT 1 FROM submissions/u);

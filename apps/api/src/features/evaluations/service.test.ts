@@ -327,6 +327,21 @@ class RacingReviewAdmissionRepository extends InMemoryEvaluationRepository {
     await super.putReview(review, expectedVersion, admission);
   }
 
+  override async writeReview(input: WriteEvaluationReview): Promise<void> {
+    if (this.supersedeBeforeReviewWrite) {
+      this.supersedeBeforeReviewWrite = false;
+      const current = await this.getAssignment(
+        input.authority.tenantId,
+        input.authority.assignmentId,
+      );
+      if (current === null) throw new Error("Expected an assignment race fixture.");
+      await this.putAssignmentsForTesting([
+        { ...current, status: "superseded", version: current.version + 1 },
+      ]);
+    }
+    await super.writeReview(input);
+  }
+
   override async putSuggestion(
     suggestion: EvaluationSuggestion,
     expectedVersion: number | null,
@@ -1063,10 +1078,7 @@ describe("evaluation plans and assignments", () => {
       repository,
       aiSuggestionProvider: {
         suggest: async () => ({
-          candidates: [
-            { criterionId: "quality", value: 4, evidence: ["Submission evidence"] },
-            { criterionId: "relevance", value: 4, evidence: ["Submission evidence"] },
-          ],
+          candidates: validAiCandidates(),
         }),
       },
     });
@@ -2356,11 +2368,7 @@ describe("review drafts, AI assistance, and aggregates", () => {
         },
       },
     };
-    await repository.putReview(draft, baseDraft.version, {
-      assignment,
-      expectedAssignmentVersion: baseDraft.version - 1,
-      authorizedAt: draft.updatedAt,
-    });
+    await repository.putReviewForTesting(draft);
     let releaseWrite!: () => void;
     const writeEntered = new Promise<void>((resolve) => {
       repository.writeEntered = resolve;

@@ -1846,7 +1846,12 @@ export class EvaluationService {
     if (assignedSubmission === null) {
       throw notFound("The submission to assign was not found.");
     }
-    await this.#requireActiveSubmission(plan, assignedSubmission);
+    await this.#requireReviewableSubmission(plan, assignedSubmission);
+    if (
+      (await this.#repository.getDecision(plan.tenantId, plan.id, assignedSubmission.id)) !== null
+    ) {
+      throw conflict("This submission is no longer active for review.");
+    }
     const submissionRevision = await this.#submissionRevision(
       actor.tenantId,
       plan.eventId,
@@ -2529,13 +2534,19 @@ export class EvaluationService {
     if (material === null) {
       throw notFound("The assigned submission was not found.");
     }
-    await this.#requireActiveSubmission(plan, material);
+    const reviewableMaterial = await this.#requireReviewableSubmission(plan, material);
+    if (
+      !isActiveReviewSubmission(reviewableMaterial) ||
+      (await this.#repository.getDecision(plan.tenantId, plan.id, reviewableMaterial.id)) !== null
+    ) {
+      throw notFound("The assigned submission was not found.");
+    }
     const review = await this.#repository.getReview(actor.tenantId, assignment.id);
     const submissionRevision = await this.#submissionRevision(
       actor.tenantId,
       assignment.eventId,
       assignment.submissionId,
-      material.version ?? material.revision,
+      reviewableMaterial.version ?? reviewableMaterial.revision,
     );
     const suggestions = await this.#listSuggestionsForAssignment(
       actor,
@@ -2547,7 +2558,7 @@ export class EvaluationService {
     return {
       assignment: effectiveAssignment(assignment, review ?? undefined),
       round,
-      submission: this.#visibleSubmission(plan, round, material),
+      submission: this.#visibleSubmission(plan, round, reviewableMaterial),
       review,
       rubricRevision: round.rubricRevision ?? gradingRevision(plan),
       submissionRevision,
@@ -4101,7 +4112,17 @@ export class EvaluationService {
     plan: EvaluationPlan,
     submission: string | SubmissionReviewMaterial,
   ): Promise<SubmissionReviewMaterial> {
-    const material = await this.#requireReviewableSubmission(plan, submission);
+    const material =
+      typeof submission === "string"
+        ? await this.#submissions.getSubmissionForReview(plan.tenantId, plan.eventId, submission)
+        : submission;
+    if (
+      material === null ||
+      material.tenantId !== plan.tenantId ||
+      material.eventId !== plan.eventId
+    ) {
+      throw notFound("Submission not found.");
+    }
     const decision = await this.#repository.getDecision(plan.tenantId, plan.id, material.id);
     if (!isActiveReviewSubmission(material) || decision !== null) {
       throw conflict("This submission is no longer active for review.");
