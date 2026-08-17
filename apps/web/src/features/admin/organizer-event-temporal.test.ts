@@ -10,7 +10,6 @@ function values(overrides: Partial<OrganizerEventFormValues> = {}): OrganizerEve
   return {
     name: "DST event",
     slug: "dst-event",
-    status: "draft",
     timeZone: "America/Los_Angeles",
     startsAt: "2026-09-17T09:00",
     endsAt: "2026-09-17T17:00",

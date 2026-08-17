@@ -290,9 +290,10 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
       .prepare(
         `SELECT e.organization_id, e.id
            FROM events e
-           INNER JOIN program_publication_states p
+          INNER JOIN program_publication_states p
              ON p.organization_id = e.organization_id AND p.event_id = e.id
-          WHERE p.served_revision IS NOT NULL`,
+          WHERE p.served_revision IS NOT NULL
+            AND e.legacy_retired_at IS NULL`,
       )
       .all<{ organization_id: string; id: string }>();
     const projections: D1PublishedEventProjection[] = [];
@@ -386,7 +387,8 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
     const rows = await this.database
       .prepare(
         `SELECT organization_id, id FROM events
-          WHERE lower(slug) = ? LIMIT 2`,
+          WHERE legacy_retired_at IS NULL
+            AND lower(slug) = ? LIMIT 2`,
       )
       .bind(normalizedSlug)
       .all<{ organization_id: string; id: string }>();

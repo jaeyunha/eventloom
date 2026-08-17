@@ -1314,7 +1314,6 @@ export function buildSeedRecords(options = {}, fixtureOptions = {}) {
       [APPLICATION_ID_FIELD]: eventId,
       Name: event.name,
       Slug: event.slug,
-      Status: "open",
       Description: event.description,
       "Settings JSON": json(event),
       "Starts At": event.startsAt,

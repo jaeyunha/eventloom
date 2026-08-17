@@ -43,7 +43,7 @@ function syntheticInventory() {
         "Settings JSON": JSON.stringify({
           id: "event-test",
           organizationId: "org-test",
-          status: "published",
+          status: "closed",
           startsAt: "2026-06-01T16:00:00.000Z",
           endsAt: "2026-06-01T23:00:00.000Z",
           cfpSettings: {
@@ -491,7 +491,8 @@ test("synthetic inventory covers representative domain transforms without quaran
     organization_id: "org-test",
     slug: "event-test",
     name: "Test Conference",
-    status: "active",
+    status: "archived",
+    legacy_retired_at: CREATED_AT,
     time_zone: "America/Los_Angeles",
     starts_at: "2026-06-01T16:00:00.000Z",
     ends_at: "2026-06-01T23:00:00.000Z",

@@ -110,9 +110,6 @@ export function portalSubmissionActionTargets(
 ): PortalSubmissionActionTargets | null {
   const formId = submission.formId?.trim();
   if (context === null || formId === undefined || formId.length === 0) return null;
-  const contextStatus = context.status?.trim().toLocaleLowerCase();
-  if (["draft", "closed", "archived", "inactive", "cancelled"].includes(contextStatus ?? ""))
-    return null;
   const closeAt = submission.closeAt?.trim();
   if (closeAt) {
     const closeTime = Date.parse(closeAt);

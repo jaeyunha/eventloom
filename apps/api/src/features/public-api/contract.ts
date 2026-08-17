@@ -172,7 +172,7 @@ export const publicApiV1Contract = {
       filters: {
         parameter: "filter",
         encodings: ["json", "dotted", "bracketed"],
-        fields: ["status", "slug"],
+        fields: ["slug"],
       },
       mutations: {
         create: { idempotencyKey: true },
