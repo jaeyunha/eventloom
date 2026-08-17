@@ -14,11 +14,11 @@ communications, scheduling, publication, and a built-in Speaker CRM into one
 tenant-safe system.
 
 > [!IMPORTANT]
-> Eventloom is in active development. The source and local test suites are
-> substantial, but every product area remains **partial** and no area is
-> **release-verified**. Repository visibility, local fixtures, and configured
-> providers are not production-readiness claims. See the
-> [product contract](spec/eventloom.md) for exact status.
+> Eventloom is in active development. Broad end-to-end workflows are
+> implemented and tested across CFP intake, review, speaker operations,
+> scheduling, publication, reporting, and Speaker CRM. Complete production
+> release verification is still in progress; see the
+> [product contract](spec/eventloom.md) for current evidence and known gaps.
 
 [Quick start](#quick-start) · [Architecture](#architecture) ·
 [Self-hosting](#self-hosting) · [Documentation](#documentation) ·
