@@ -40,7 +40,9 @@ export function canResumeCfpSubmission(
   step: CfpStep,
 ): boolean {
   return (
-    status === "draft" || status === "reopened" || (status === "submitted" && step === "submission")
+    status === "draft" ||
+    status === "reopened" ||
+    (status === "submitted" && canSaveCfpDraftAtStep(step))
   );
 }
 

@@ -322,7 +322,10 @@ describe("CFP flow", () => {
     expect(canResumeCfpSubmission("draft", "welcome")).toBe(true);
     expect(canResumeCfpSubmission("reopened", "account")).toBe(true);
     expect(canResumeCfpSubmission("submitted", "submission")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "participants")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "review")).toBe(true);
     expect(canResumeCfpSubmission("submitted", "welcome")).toBe(false);
+    expect(canResumeCfpSubmission("submitted", "account")).toBe(false);
   });
   it("reviews the stable audience answer and formats confirmation copy", () => {
     const form = {
