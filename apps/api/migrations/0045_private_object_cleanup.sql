@@ -1,4 +1,6 @@
 -- Durable private-object cleanup coordination and queryable upload expiry.
+PRAGMA foreign_keys = ON;
+
 ALTER TABLE private_uploads ADD COLUMN expires_at TEXT;
 
 UPDATE private_uploads

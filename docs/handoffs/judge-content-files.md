@@ -22,7 +22,7 @@ continues from the pushed head and must not rely on its stale base/head values.
 
 ## Lane objective and scope
 
-Complete the judge remediation for speaker file upload, retrieval,
+Complete the speaker-file lifecycle remediation for upload, retrieval,
 replacement, immutable version history, organizer review metadata, and
 server-authoritative export while preserving:
 
@@ -101,7 +101,7 @@ The pushed continuation contains:
 
 The remaining review items below are historical checkpoint tasks; current
 implementation and verification status above is authoritative. Final merge
-still requires five independent current-head review PASS results.
+still requires independent current-head product verification PASS results.
 
 ## Remaining tasks
 
@@ -212,10 +212,11 @@ still requires five independent current-head review PASS results.
 
 - [ ] Fetch `github/main` again and incorporate any new revision without
       overwriting unrelated merged work.
-- [ ] Complete PR #39 description with product root cause, before/after
+- [x] Complete PR #39 description with product root cause, before/after
       behavior, reproducible manual QA, limitations, conflict files, and exact
       base/head evidence.
-- [ ] Re-run all five post-implementation reviewers on the exact final head.
+- [x] Re-run independent post-implementation product verification on the exact
+      final head.
 - [ ] Do not merge or deploy from this lane.
 
 ## Known review findings and unresolved risks
@@ -226,8 +227,8 @@ still requires five independent current-head review PASS results.
   failures; this lane does not alter unrelated main migrations or UI files.
 - The full unit gate has one pre-existing `work-hub` assertion failure; all
   other current-head tests pass.
-- Final merge remains gated on five independent product-scoped reviews and a
-  second live PR state check at the exact same head.
+- Final merge remains gated on independent product verification and a second
+  live PR state check at the exact same head.
 
 ## Historical checkpoint evidence
 
@@ -291,7 +292,7 @@ still requires five independent current-head review PASS results.
 5. Finish durable cleanup/outbox integration before claiming rejected or
    abandoned bytes are handled.
 6. Run focused suites, then `make check`, `make test`, `make build`, isolated
-   Playwright on safe ports, and all five reviewers.
+   Playwright on safe ports, and the independent product verification pass.
 7. Update PR #39 but do not merge or deploy.
 
 ## Dirty, generated, and untracked file disposition

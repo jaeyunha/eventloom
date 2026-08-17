@@ -707,12 +707,13 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
     }
     const canReplace =
       existing.state === "pending" ||
+      (capability.kind === "upload" && existing.state === "deleted") ||
       (capability.kind === "download" && existing.state !== "scanning");
     if (!canReplace) {
       throw new Error("The private asset capability cannot be reauthorized.");
     }
     const statePredicate =
-      capability.kind === "upload" ? "state = 'pending'" : "state <> 'scanning'";
+      capability.kind === "upload" ? "state IN ('pending', 'deleted')" : "state <> 'scanning'";
     const result = await this.#database
       .prepare(
         `UPDATE private_uploads

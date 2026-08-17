@@ -240,7 +240,7 @@ describe("private object deletion authority", () => {
       intentsCreated: 1,
     });
     expect(db.query<{ id: string }>("SELECT id FROM outbox_jobs ORDER BY id")).toEqual([
-      { id: "private-object-delete:private-upload:upload-valid" },
+      { id: "private-object-delete:tenant-1:private-upload:upload-valid" },
     ]);
   });
 });

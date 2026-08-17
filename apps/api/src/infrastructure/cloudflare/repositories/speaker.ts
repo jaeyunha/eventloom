@@ -1800,7 +1800,13 @@ export class D1SpeakerRepository
     ];
     try {
       const result = await this.#db.batch(statements);
-      if ((result[0]?.meta?.changes ?? 0) !== 1) return { ok: false, reason: "version_conflict" };
+      const updateIndex =
+        command.toStatus === "submitted" && command.replacementBaselineAssetId !== undefined
+          ? 1
+          : 0;
+      if ((result[updateIndex]?.meta?.changes ?? 0) !== 1) {
+        return { ok: false, reason: "version_conflict" };
+      }
     } catch {
       return { ok: false, reason: "version_conflict" };
     }

@@ -1150,7 +1150,22 @@ function usePortalProviderValue({
         let finalizedHeadshot: PortalAsset | undefined;
         if (input.headshot && api.uploadFile && api.finalizeAsset) {
           const supersededHeadshot = input.profile.headshotAssetId
-            ? view?.assets?.find((asset) => asset.id === input.profile.headshotAssetId)
+            ? (() => {
+                const referenced = view?.assets?.find(
+                  (asset) => asset.id === input.profile.headshotAssetId,
+                );
+                if (referenced === undefined) return undefined;
+                const familyId = referenced.versionFamilyId ?? referenced.id;
+                return (view?.assets ?? [])
+                  .filter(
+                    (asset) =>
+                      (asset.versionFamilyId ?? asset.id) === familyId &&
+                      (asset.state === "ready" || asset.state === "rejected") &&
+                      Number.isSafeInteger(asset.version) &&
+                      (asset.version ?? 0) > 0,
+                  )
+                  .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))[0];
+              })()
             : undefined;
           asyncDispatch({ type: "profile-mutation-set", phase: "pending" });
           const pending = await api.uploadFile({
@@ -1158,12 +1173,12 @@ function usePortalProviderValue({
             participantId: activeParticipantId,
             kind: "headshot",
             file: input.headshot,
-            ...(input.profile.headshotAssetId
-              ? {
-                  supersedesAssetId: input.profile.headshotAssetId,
-                  expectedLatestVersion: supersededHeadshot?.version ?? 1,
-                  idempotencyKey: crypto.randomUUID(),
-                }
+          ...(supersededHeadshot
+            ? {
+                supersedesAssetId: supersededHeadshot.id,
+                expectedLatestVersion: supersededHeadshot.version,
+                idempotencyKey: crypto.randomUUID(),
+              }
               : {}),
           });
           if (!profileAssetBelongsToPortalContext(pending, targetContext)) {
@@ -1384,7 +1399,7 @@ function usePortalProviderValue({
           (asset) =>
             asset.taskId === task.id &&
             asset.kind === kind &&
-            asset.state === "ready" &&
+            (asset.state === "ready" || asset.state === "rejected") &&
             Number.isSafeInteger(asset.version) &&
             (asset.version ?? 0) > 0,
         )

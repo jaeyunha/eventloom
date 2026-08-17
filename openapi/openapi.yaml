@@ -2729,7 +2729,11 @@ paths:
       security:
         - sessionAuth: []
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Required for successor uploads; omitted for initial family creation.
+          schema: { type: string, minLength: 8, maxLength: 128 }
       requestBody:
         required: true
         content:
@@ -3009,7 +3013,10 @@ paths:
       tags: [Portal]
       operationId: consumeDownloadCapability
       summary: Consume a single-use download capability
-      description: The bearer capability identifier and token are supplied by the path. No account session is required.
+      description: >-
+        The bearer capability identifier and token are supplied by the path. No account session is
+        required. The capability expires two minutes after issuance, is single-use, and the
+        response is private and no-store.
       security: []
       responses:
         "200":
@@ -3017,6 +3024,7 @@ paths:
           headers:
             X-Request-ID: { $ref: "#/components/headers/RequestId" }
             Content-Disposition: { $ref: "#/components/headers/ContentDisposition" }
+            Cache-Control: { $ref: "#/components/headers/PrivateCache" }
           content:
             "*/*": { schema: { type: string, format: binary } }
         "400": { $ref: "#/components/responses/ValidationError" }
