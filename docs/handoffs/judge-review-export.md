@@ -1,23 +1,45 @@
 # Lane handoff: judge-review-export
 
-## Paused state
+## Resumed state
 
-This lane is **paused by user request**. Do not merge, deploy, delete the branch, or
-delete the worktree. Resume only after an explicit user instruction.
+The user resumed this lane after the checkpoint handoff. The historical pause
+record remains below for provenance. Do not merge or deploy without a separate
+explicit user instruction.
+
+## Resume progress
+
+- [x] Incorporated current `github/main`
+      `a9d0019eac57aa90503a6623011e570e22620fcf`.
+- [x] Renumbered the export migration to
+      `0036_evaluation_export_jobs.sql`. Prefix `0035` is reserved by a known
+      parallel lane even though it is not yet present on current main.
+- [x] Fixed the mobile Results toolbar and added deterministic geometry coverage
+      for the complete Review round field against the fixed bottom navigation.
+- [x] Re-ran focused export tests, `make check`, `make test`, the full build, and
+      the isolated durable-export Chromium flow.
+- [x] Reproduced and retained unrelated calendar and redesign-workspace E2E
+      failures without weakening those tests.
+- [x] Complete the refreshed five-lane pre-PR review.
+- [ ] Commit and push the refreshed verification increment.
+- [ ] Open the unmerged PR against current main and record its exact base SHA.
 
 ## Repository and worktree
 
-- GitHub repository: [`jaeyunha/open-sessionboard`](https://github.com/jaeyunha/open-sessionboard)
+- GitHub repository: [`jaeyunha/eventloom`](https://github.com/jaeyunha/eventloom)
 - GitHub remote: `github` (`https://github.com/jaeyunha/open-sessionboard.git`)
 - Branch: `judge-review-export`
 - Worktree:
   `/Users/jaeyunha/wt/open-sessionboard/judge-review-export`
-- Base incorporated before the checkpoint:
+- Current incorporated base:
+  `a9d0019eac57aa90503a6623011e570e22620fcf`
+- Current pre-final-commit `HEAD`:
+  `07fa1000e19fa49025a2479b287536c8f6d40377`
+- Historical base incorporated before the checkpoint:
   `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`
 - Pre-checkpoint `HEAD` inspected for this handoff:
   `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`
-- Current fetched `github/main` at pause time:
-  `6467ff9aa0fe41918b0a010de33f984bac8f43e2`
+- Fetched `github/main` at pause time:
+  `6467ff1f48c73229c5c45dba6b4716df724a3bdd`
 - The pushed checkpoint commit is the commit containing this document. Its exact
   URL is recorded in the GitHub handoff issue.
 - Pull request: none exists at pause time. No PR was opened, merged, or deployed.
@@ -43,7 +65,7 @@ of scope.
 
 ## Completed implementation
 
-- [x] Added migration `0034_evaluation_export_jobs.sql` for durable export runs
+- [x] Added migration `0036_evaluation_export_jobs.sql` for durable export runs
       and the typed `reports` outbox topic.
 - [x] Added D1-backed and in-memory export stores with queued, running, ready,
       and failed states.
@@ -86,14 +108,17 @@ of scope.
 - [x] Completed five independent implementation-review lanes. The final
       security, correctness, goal, context, and focused-QA verdicts were PASS.
 
-## Remaining tasks
+## Historical remaining tasks at pause
+
+This checklist records the checkpoint state and is superseded by the Resume
+progress section above.
 
 - [ ] Fetch and incorporate the latest `github/main`
-      (`6467ff9aa0fe41918b0a010de33f984bac8f43e2` at pause time) before any PR.
+      (`6467ff1f48c73229c5c45dba6b4716df724a3bdd` at pause time) before any PR.
       Resolve only conflicts owned by this lane.
 - [ ] Re-check migration numbering after latest-main integration. Migration
-      `0034_evaluation_export_jobs.sql` was unique on base `7d660196...`, but
-      upstream advanced after the final integration.
+      `0036_evaluation_export_jobs.sql` is reserved after known parallel
+      migration prefix `0035`.
 - [ ] Fix or explicitly redesign the mobile Results layout so the fixed bottom
       navigation does not overlap the `Review round` select. Both independent
       screenshot reviewers marked this as blocking.
@@ -122,16 +147,16 @@ of scope.
 - [ ] Do not merge or deploy from this checkpoint without a new explicit user
       instruction.
 
-## Known review findings and unresolved risks
+## Historical review findings and unresolved risks
 
 ### Blocking
 
 - Mobile visual QA found that the fixed bottom navigation overlaps the lower
   portion of the `Review round` select in the ready-state Results card. The
   desktop screenshot passed.
-- The branch is based on `7d660196...`, while fetched `github/main` advanced to
-  `6467ff9a...` after final implementation review. Compatibility with that newer
-  base is unverified.
+- At pause time the branch was based on `7d660196...`, while fetched
+  `github/main` had advanced to `6467ff1...`. Resume work resolved this by
+  incorporating current main through `a9d0019...`.
 
 ### Verification gaps and non-blocking follow-up
 
@@ -230,7 +255,7 @@ of scope.
 - After the checkpoint commit, the worktree should be clean and remain at this
   path for resume.
 
-## Precise resume instructions
+## Historical resume instructions
 
 ```bash
 cd /Users/jaeyunha/wt/open-sessionboard/judge-review-export

@@ -2,10 +2,10 @@
 -- D1 keeps foreign-key enforcement enabled during migrations, so preserve and rebuild
 -- every table that references outbox_jobs before widening its topic CHECK constraint.
 
-CREATE TABLE `_0034_outbox_jobs` AS SELECT * FROM `outbox_jobs`;
-CREATE TABLE `_0034_delivery_attempts` AS SELECT * FROM `delivery_attempts`;
-CREATE TABLE `_0034_reminder_dispatches` AS SELECT * FROM `reminder_dispatches`;
-CREATE TABLE `_0034_publication_rebuild_receipts` AS SELECT * FROM `publication_rebuild_receipts`;
+CREATE TABLE `_0036_outbox_jobs` AS SELECT * FROM `outbox_jobs`;
+CREATE TABLE `_0036_delivery_attempts` AS SELECT * FROM `delivery_attempts`;
+CREATE TABLE `_0036_reminder_dispatches` AS SELECT * FROM `reminder_dispatches`;
+CREATE TABLE `_0036_publication_rebuild_receipts` AS SELECT * FROM `publication_rebuild_receipts`;
 
 DROP TABLE `delivery_attempts`;
 DROP TABLE `reminder_dispatches`;
@@ -140,15 +140,15 @@ CREATE TABLE `publication_rebuild_receipts` (
   UNIQUE (organization_id, event_id, idempotency_key)
 ) STRICT;
 
-INSERT INTO `outbox_jobs` SELECT * FROM `_0034_outbox_jobs`;
-INSERT INTO `delivery_attempts` SELECT * FROM `_0034_delivery_attempts`;
-INSERT INTO `reminder_dispatches` SELECT * FROM `_0034_reminder_dispatches`;
-INSERT INTO `publication_rebuild_receipts` SELECT * FROM `_0034_publication_rebuild_receipts`;
+INSERT INTO `outbox_jobs` SELECT * FROM `_0036_outbox_jobs`;
+INSERT INTO `delivery_attempts` SELECT * FROM `_0036_delivery_attempts`;
+INSERT INTO `reminder_dispatches` SELECT * FROM `_0036_reminder_dispatches`;
+INSERT INTO `publication_rebuild_receipts` SELECT * FROM `_0036_publication_rebuild_receipts`;
 
-DROP TABLE `_0034_delivery_attempts`;
-DROP TABLE `_0034_reminder_dispatches`;
-DROP TABLE `_0034_publication_rebuild_receipts`;
-DROP TABLE `_0034_outbox_jobs`;
+DROP TABLE `_0036_delivery_attempts`;
+DROP TABLE `_0036_reminder_dispatches`;
+DROP TABLE `_0036_publication_rebuild_receipts`;
+DROP TABLE `_0036_outbox_jobs`;
 
 CREATE INDEX `outbox_jobs_ready_idx` ON `outbox_jobs` (`state`, `available_at`);
 CREATE INDEX `outbox_jobs_tenant_idx` ON `outbox_jobs` (`tenant_id`, `created_at` DESC);

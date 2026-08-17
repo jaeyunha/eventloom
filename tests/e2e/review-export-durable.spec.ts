@@ -85,6 +85,34 @@ test("organizer export retries one run and downloads its durable CSV", async ({
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(downloadLink).toBeVisible();
+  const reviewRound = page.getByRole("combobox", { name: "Review round" });
+  const reviewRoundHint = page.getByText("Uses this round's saved scorecard.", { exact: true });
+  const reviewRoundStatus = page.getByTestId("round-results-status");
+  const mobileNavigation = page.getByRole("navigation", { name: "Mobile navigation" });
+  const [
+    reviewRoundBounds,
+    reviewRoundHintBounds,
+    reviewRoundStatusBounds,
+    mobileNavigationBounds,
+  ] = await Promise.all([
+    reviewRound.boundingBox(),
+    reviewRoundHint.boundingBox(),
+    reviewRoundStatus.boundingBox(),
+    mobileNavigation.boundingBox(),
+  ]);
+  expect(reviewRoundBounds).not.toBeNull();
+  expect(reviewRoundHintBounds).not.toBeNull();
+  expect(reviewRoundStatusBounds).not.toBeNull();
+  expect(mobileNavigationBounds).not.toBeNull();
+  expect((reviewRoundBounds?.y ?? 0) + (reviewRoundBounds?.height ?? 0)).toBeLessThanOrEqual(
+    mobileNavigationBounds?.y ?? 0,
+  );
+  expect(
+    (reviewRoundHintBounds?.y ?? 0) + (reviewRoundHintBounds?.height ?? 0),
+  ).toBeLessThanOrEqual(mobileNavigationBounds?.y ?? 0);
+  expect(
+    (reviewRoundStatusBounds?.y ?? 0) + (reviewRoundStatusBounds?.height ?? 0),
+  ).toBeLessThanOrEqual(mobileNavigationBounds?.y ?? 0);
   const layout = await page.evaluate(() => ({
     bodyWidth: document.body.scrollWidth,
     viewportWidth: document.documentElement.clientWidth,

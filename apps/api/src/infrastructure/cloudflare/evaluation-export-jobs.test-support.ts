@@ -28,7 +28,7 @@ export function databaseBeforeExportMigration(): SqliteD1 {
 
 export function evaluationExportDatabase(): SqliteD1 {
   const database = databaseBeforeExportMigration();
-  database.executeScript(migration("0034_evaluation_export_jobs.sql"));
+  database.executeScript(migration("0036_evaluation_export_jobs.sql"));
   return database;
 }
 

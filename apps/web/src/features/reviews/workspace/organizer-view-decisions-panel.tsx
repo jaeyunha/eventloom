@@ -64,7 +64,7 @@ export function OrganizerDecisionsPanel({
           <p className={styles.sectionEyebrow}>Results</p>
           <h2 id="aggregate-heading">Scores and decisions</h2>
         </div>
-        <div className={styles.viewToolbar}>
+        <div className={`${styles.viewToolbar} ${styles.resultsToolbar}`}>
           <Button
             size="sm"
             type="button"
@@ -84,7 +84,7 @@ export function OrganizerDecisionsPanel({
           />
         </div>
       </div>
-      <div className={styles.formField}>
+      <div className={`${styles.formField} ${styles.resultsRoundField}`}>
         <label htmlFor="organizer-aggregate-round">Review round</label>
         <select
           id="organizer-aggregate-round"
@@ -101,9 +101,7 @@ export function OrganizerDecisionsPanel({
             </option>
           ))}
         </select>
-        <span className={styles.fieldHint}>
-          Scores and decisions use the saved scorecard for this round.
-        </span>
+        <span className={styles.fieldHint}>Uses this round&apos;s saved scorecard.</span>
       </div>
       {aggregateLoading ? (
         <p className={styles.fieldHint} role="status">
@@ -115,8 +113,8 @@ export function OrganizerDecisionsPanel({
           {aggregateError} Existing organizer data remains available.
         </p>
       ) : null}
-      <p className={styles.fieldHint}>
-        Showing scores and decisions for {selectedRound?.name ?? selectedRoundId}.
+      <p className={styles.fieldHint} data-testid="round-results-status">
+        Showing {selectedRound?.name ?? selectedRoundId} results.
       </p>
       <div className={styles.collectionToolbar}>
         <div className={styles.formField}>

@@ -24,7 +24,10 @@ export function OrganizerResultsExportControls({
   const failureMessage = requestError ?? (run?.status === "failed" ? run.error.message : null);
 
   return (
-    <div className={styles.viewToolbar} data-export-state={state}>
+    <div
+      className={`${styles.viewToolbar} ${styles.resultsExportControls}`}
+      data-export-state={state}
+    >
       <Button
         size="sm"
         type="button"

@@ -34,7 +34,7 @@ describe("D1 evaluation export jobs", () => {
               'existing-job','pending','${NOW}','${NOW}');
     `);
 
-    db.executeScript(migration("0034_evaluation_export_jobs.sql"));
+    db.executeScript(migration("0036_evaluation_export_jobs.sql"));
 
     expect(db.query<{ id: string }>("SELECT id FROM outbox_jobs")).toEqual([
       { id: "existing-job" },
