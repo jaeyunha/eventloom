@@ -171,11 +171,6 @@ async function publishHeadshotScenario(input: {
     } as unknown as SessionRepository,
     database,
     queue: { async send() {} } as unknown as Queue,
-    senderAddresses: {
-      auth: "auth@example.test",
-      speakers: "speakers@example.test",
-      calendar: "calendar@example.test",
-    },
   }).accept({
     tenantId: organizationId,
     eventId,
@@ -326,11 +321,6 @@ async function publishHeadshotScenario(input: {
     sessions: businessRepositories.sessions,
     database,
     queue,
-    senderAddresses: {
-      auth: "auth@example.test",
-      speakers: "speakers@example.test",
-      calendar: "calendar@example.test",
-    },
   }).accept({
     tenantId: organizationId,
     eventId,
@@ -1925,11 +1915,6 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
       } as unknown as SessionRepository,
       database,
       queue: { async send() {} } as unknown as Queue,
-      senderAddresses: {
-        auth: "login@example.test",
-        speakers: "speakers@example.test",
-        calendar: "calendar@example.test",
-      },
     });
 
     await handoff.accept({
@@ -1943,6 +1928,12 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
       reason: "Accepted",
       idempotencyKey: "accepted-handoff",
     });
+    expect(
+      fixture.database.query(
+        `SELECT id, payload_json FROM outbox_jobs
+          WHERE tenant_id = '${organizationId}' AND topic = 'communications'`,
+      ),
+    ).toEqual([]);
 
     expect(
       fixture.database.query<{ participant_id: string; user_id: string }>(

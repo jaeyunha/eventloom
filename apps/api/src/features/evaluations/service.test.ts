@@ -397,6 +397,7 @@ const submission: SubmissionReviewMaterial = {
   id: "submission-1",
   tenantId,
   eventId,
+  status: "submitted",
   title: "A useful session",
   abstract: "Practical material for the audience.",
   answers: {
@@ -435,8 +436,8 @@ async function fixture(
   const submissions =
     options.submissions ??
     new InMemorySubmissionReviewSource([
-      options.submissionMaterial ?? submission,
-      { ...submission, id: "submission-2", title: "Another session" },
+      { status: "submitted", ...(options.submissionMaterial ?? submission) },
+      { ...submission, id: "submission-2", status: "submitted", title: "Another session" },
     ]);
   const service = new EvaluationService(
     repository,
@@ -903,7 +904,7 @@ describe("evaluation plans and assignments", () => {
     });
     await expect(
       service.getReviewContext(reviewer("reviewer-2"), withdrawnAssignment.id),
-    ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
+    ).rejects.toMatchObject({ code: "EVALUATION_NOT_FOUND" });
   });
 
   it("blocks reviewer reads and writes while legacy lineage repair is unresolved", async () => {
@@ -1018,7 +1019,7 @@ describe("evaluation plans and assignments", () => {
     ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
   });
 
-  it("allows a historical CFP outcome to enter a new review plan", async () => {
+  it("denies historical terminal CFP outcomes from a new review plan", async () => {
     const submissions = new InMemorySubmissionReviewSource([
       {
         ...submission,
@@ -1027,47 +1028,10 @@ describe("evaluation plans and assignments", () => {
         title: "Accepted in an earlier CFP workflow",
       },
     ]);
-    const { service, plan, repository } = await fixture({
+    const { service, plan } = await fixture({
       submissions,
     });
 
-    const [assignment] = await service.assignReviewers(organizer, {
-      planId: plan.id,
-      roundId: plan.rounds[0]?.id ?? "",
-      submissionId: "submission-accepted",
-      reviewerIds: ["reviewer-1"],
-    });
-    expect(assignment).toMatchObject({
-      submissionId: "submission-accepted",
-      reviewerId: "reviewer-1",
-      status: "assigned",
-    });
-    await repository.putDecision(
-      {
-        id: "decision-historical-plan",
-        tenantId,
-        eventId,
-        planId: "historical-plan",
-        submissionId: "submission-accepted",
-        status: "accepted",
-        version: 1,
-        history: [],
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-      null,
-    );
-
-    await expect(service.getOrganizerWorkspace(organizer, eventId, plan.id)).resolves.toMatchObject(
-      {
-        assignments: [
-          {
-            submissionId: "submission-accepted",
-            reviewerId: "reviewer-1",
-            status: "assigned",
-          },
-        ],
-      },
-    );
     await expect(
       service.assignReviewers(organizer, {
         planId: plan.id,
@@ -1075,13 +1039,14 @@ describe("evaluation plans and assignments", () => {
         submissionId: "submission-accepted",
         reviewerIds: ["reviewer-1"],
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        submissionId: "submission-accepted",
-        reviewerId: "reviewer-1",
-        status: "assigned",
-      }),
-    ]);
+    ).rejects.toMatchObject({ code: "EVALUATION_NOT_FOUND" });
+    await expect(service.getOrganizerWorkspace(organizer, eventId, plan.id)).resolves.toMatchObject(
+      {
+        submissions: [],
+        assignments: [],
+        decisions: {},
+      },
+    );
   });
 
   it("supports an empty replacement and removes organizer and reviewer projections", async () => {
@@ -1664,25 +1629,36 @@ describe("evaluation plans and assignments", () => {
     });
   });
 
-  it("excludes draft and withdrawn submissions from organizer review workspaces", async () => {
+  it("includes only explicitly reviewable submissions in organizer workspaces", async () => {
     const submissions = new WorkspaceBatchSource([
       { ...submission, id: "submission-submitted", status: "submitted" },
       { ...submission, id: "submission-under-review", status: "under_review" },
       { ...submission, id: "submission-draft", status: "draft" },
       { ...submission, id: "submission-withdrawn", status: "withdrawn" },
     ]);
-    const { service } = await fixture({ submissions });
+    const { service, repository } = await fixture({ submissions });
+    await repository.putDecision(
+      {
+        id: "decision-orphan-withdrawn",
+        tenantId,
+        eventId,
+        planId: "plan-1",
+        submissionId: "submission-withdrawn",
+        status: "rejected",
+        version: 1,
+        history: [],
+        updatedAt: nowIso,
+      },
+      null,
+    );
 
     const workspace = await service.getOrganizerWorkspace(organizer, eventId);
 
-    expect(workspace.submissions.map(({ id }) => id)).toEqual(
-      expect.arrayContaining(["submission-submitted", "submission-under-review"]),
-    );
-    expect(workspace.submissions).toHaveLength(2);
-    expect(workspace.aggregates.map(({ submissionId }) => submissionId)).toEqual(
-      expect.arrayContaining(["submission-submitted", "submission-under-review"]),
-    );
-    expect(workspace.aggregates).toHaveLength(2);
+    expect(workspace.submissions.map(({ id }) => id)).toEqual(["submission-submitted"]);
+    expect(workspace.aggregates.map(({ submissionId }) => submissionId)).toEqual([
+      "submission-submitted",
+    ]);
+    expect(workspace.decisions).toEqual({});
   });
 
   it("returns missing-plan deterministically when organizer hydration fails", async () => {
@@ -2441,6 +2417,203 @@ describe("conflicts, progress, and decisions", () => {
   });
 });
 describe("decision outcome projection", () => {
+  it("rechecks the reviewable lifecycle status at the final decision boundary", async () => {
+    const submissions = new (class extends InMemorySubmissionReviewSource {
+      #reads = 0;
+
+      override async getSubmissionForReview() {
+        this.#reads += 1;
+        return {
+          ...submission,
+          status: this.#reads === 1 ? "submitted" : "withdrawn",
+        };
+      }
+    })([submission]);
+    const { service, repository } = await fixture({ submissions });
+
+    await expect(
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "rejected",
+        reason: "The status changed while the organizer was deciding.",
+        idempotencyKey: "final-boundary-status-recheck",
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_NOT_FOUND" });
+    await expect(repository.getDecision(tenantId, "plan-1", submission.id)).resolves.toBeNull();
+  });
+
+  it("does not replay historical projection side effects after a newer decision", async () => {
+    const projected: EvaluationDecisionProjectionInput[] = [];
+    const { service } = await fixture({
+      decisionProjection: {
+        projectDecision: async (input) => {
+          projected.push(structuredClone(input));
+        },
+      },
+    });
+    const acceptedInput = {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted" as const,
+      reason: "Accepted first.",
+      idempotencyKey: "historical-replay-accepted",
+    };
+    const accepted = await service.recordDecision(organizer, acceptedInput);
+    const rejected = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "rejected",
+      reason: "The final program changed.",
+      idempotencyKey: "historical-replay-rejected",
+      expectedVersion: accepted.version,
+    });
+
+    await expect(service.recordDecision(organizer, acceptedInput)).resolves.toEqual(rejected);
+    expect(rejected).toMatchObject({ status: "rejected", version: 2 });
+    expect(projected.map(({ status, decisionVersion }) => ({ status, decisionVersion }))).toEqual([
+      { status: "accepted", decisionVersion: 1 },
+      { status: "rejected", decisionVersion: 2 },
+    ]);
+  });
+
+  it("allows exactly one concurrent amendment for the current version", async () => {
+    const { service } = await fixture();
+    const accepted = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Accepted before concurrent amendments.",
+      idempotencyKey: "concurrent-amendment-initial",
+    });
+    const amendments = await Promise.allSettled([
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "waitlisted",
+        reason: "Concurrent amendment one.",
+        idempotencyKey: "concurrent-amendment-one",
+        expectedVersion: accepted.version,
+      }),
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "rejected",
+        reason: "Concurrent amendment two.",
+        idempotencyKey: "concurrent-amendment-two",
+        expectedVersion: accepted.version,
+      }),
+    ]);
+    const fulfilled = amendments.filter((result) => result.status === "fulfilled");
+    const rejected = amendments.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+
+    expect(fulfilled).toHaveLength(1);
+    if (fulfilled[0]?.status !== "fulfilled") {
+      throw new Error("Expected one concurrent amendment to succeed.");
+    }
+    expect(fulfilled[0].value.version).toBe(2);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.reason).toMatchObject({ code: "EVALUATION_CONFLICT" });
+    await expect(service.getDecision(organizer, "plan-1", submission.id)).resolves.toEqual(
+      fulfilled[0].value,
+    );
+  });
+
+  it("keeps accepted and rejected outcomes version-safe across the production lifecycle", async () => {
+    const projected: EvaluationDecisionProjectionInput[] = [];
+    const schedulableSessions = new Set<string>();
+    const { service } = await fixture({
+      decisionProjection: {
+        projectDecision: async (input) => {
+          projected.push(structuredClone(input));
+        },
+      },
+      acceptanceHandoff: {
+        accept: async (input) => {
+          schedulableSessions.add(input.submissionId);
+        },
+      },
+    });
+
+    const accepted = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Accepted for the final program.",
+      idempotencyKey: "production-decision-a",
+    });
+    const replay = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Accepted for the final program.",
+      idempotencyKey: "production-decision-a",
+    });
+    const rejected = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: "submission-2",
+      status: "rejected",
+      reason: "The proposal does not fit the final program.",
+      idempotencyKey: "production-decision-b",
+    });
+    const staleResults = await Promise.allSettled([
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        reason: "Stale concurrent amendment one.",
+        idempotencyKey: "production-decision-a-stale-1",
+        expectedVersion: 0,
+      }),
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        reason: "Stale concurrent amendment two.",
+        idempotencyKey: "production-decision-a-stale-2",
+        expectedVersion: 0,
+      }),
+    ]);
+
+    expect(replay).toEqual(accepted);
+    expect(accepted).toMatchObject({ status: "accepted", version: 1 });
+    expect(rejected).toMatchObject({ status: "rejected", version: 1 });
+    expect(staleResults.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    for (const result of staleResults) {
+      if (result.status === "fulfilled") throw new Error("Expected the stale decision to fail.");
+      expect(result.reason).toMatchObject({ code: "EVALUATION_CONFLICT" });
+    }
+    await expect(service.getDecision(organizer, "plan-1", submission.id)).resolves.toEqual(
+      accepted,
+    );
+    await expect(service.getDecision(organizer, "plan-1", "submission-2")).resolves.toEqual(
+      rejected,
+    );
+    expect(projected).toHaveLength(2);
+    expect(
+      projected.map(({ submissionId, participantProjection, communication }) => ({
+        submissionId,
+        status: participantProjection.status,
+        templatePurpose: communication.templatePurpose,
+      })),
+    ).toEqual([
+      {
+        submissionId: submission.id,
+        status: "accepted",
+        templatePurpose: "decision_accepted",
+      },
+      {
+        submissionId: "submission-2",
+        status: "rejected",
+        templatePurpose: "decision_rejected",
+      },
+    ]);
+    expect([...schedulableSessions]).toEqual([submission.id]);
+    expect(schedulableSessions.has("submission-2")).toBe(false);
+  });
+
   it("projects every human outcome, onboards only acceptance, and versions handoffs", async () => {
     const projected: EvaluationDecisionProjectionInput[] = [];
     const onboarded: unknown[] = [];
@@ -2494,9 +2667,9 @@ describe("decision outcome projection", () => {
     expect(projected.map((input) => input.decisionVersion)).toEqual([1, 2, 3]);
     expect(projected.map((input) => input.priorStatus)).toEqual([null, "accepted", "waitlisted"]);
     expect(projected.map((input) => input.idempotencyKey)).toEqual([
-      "evaluation-decision:submission-1:v1",
-      "evaluation-decision:submission-1:v2",
-      "evaluation-decision:submission-1:v3",
+      "evaluation-decision:plan-1:submission-1:v1",
+      "evaluation-decision:plan-1:submission-1:v2",
+      "evaluation-decision:plan-1:submission-1:v3",
     ]);
     expect(projected.map((input) => input.communication.templatePurpose)).toEqual([
       "decision_accepted",

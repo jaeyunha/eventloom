@@ -8,7 +8,10 @@ import {
   InMemoryReminderRepository,
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { EvaluationService } from "../features/evaluations/service";
+import {
+  type EvaluationDecisionProjectionInput,
+  EvaluationService,
+} from "../features/evaluations/service";
 import type {
   EventRoleInvitation,
   EventRoleInvitationRepository,
@@ -26,6 +29,7 @@ import {
   AirtableCfpRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
+  AirtableEvaluationDecisionProjection,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
   AirtableEventRepository,
@@ -2633,6 +2637,115 @@ function acceptanceTransport(events: string[]): {
 }
 
 describe("production agenda, portal, acceptance, and reminder boundaries", () => {
+  it("queues exactly one canonical accepted and rejected decision communication", async () => {
+    const events: string[] = [];
+    const { database, outbox } = acceptanceDatabase(events);
+    const queueMessages: CloudflareOutboxMessage[] = [];
+    const submissionFor = (submissionId: string, participantId: string): Submission => ({
+      id: submissionId,
+      tenantId: "organization-1",
+      eventId: "event-1",
+      formId: "form-1",
+      ownerAccountId: `owner-${participantId}`,
+      formVersion: 1,
+      version: 1,
+      status: "submitted",
+      completedSteps: [],
+      answers: { title: `Session ${submissionId}` },
+      participants: [
+        {
+          id: participantId,
+          firstName: "Decision",
+          lastName: participantId,
+          email: `${participantId}@example.test`,
+          role: "primary",
+          biography: "Speaker biography.",
+          answers: {},
+        },
+      ],
+      secondaryContacts: [],
+      createdAt: "2099-08-15T03:00:00.000Z",
+      updatedAt: "2099-08-15T03:00:00.000Z",
+      submittedAt: "2099-08-15T03:00:00.000Z",
+    });
+    const submissions = new Map([
+      ["submission-accepted", submissionFor("submission-accepted", "participant-accepted")],
+      ["submission-rejected", submissionFor("submission-rejected", "participant-rejected")],
+    ]);
+    const projection = new AirtableEvaluationDecisionProjection(
+      {
+        async getSubmission(organizationId: string, submissionId: string) {
+          return organizationId === "organization-1"
+            ? (submissions.get(submissionId) ?? null)
+            : null;
+        },
+      },
+      database,
+      {
+        async send(message: CloudflareOutboxMessage) {
+          queueMessages.push(message);
+        },
+      } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>,
+      undefined,
+      testSenderAddresses,
+    );
+    const decisionInput = (
+      submissionId: string,
+      status: "accepted" | "rejected",
+    ): EvaluationDecisionProjectionInput => ({
+      tenantId: "organization-1",
+      eventId: "event-1",
+      planId: "plan-1",
+      submissionId,
+      decisionId: `decision-${submissionId}`,
+      decisionVersion: 1,
+      status,
+      priorStatus: null,
+      reason: status === "accepted" ? "Accepted." : "Rejected.",
+      decidedByUserId: "organizer-1",
+      decidedAt: "2099-08-15T04:00:00.000Z",
+      idempotencyKey: `evaluation-decision:plan-1:${submissionId}:v1`,
+      participantProjection: {
+        status,
+        reason: status === "accepted" ? "Accepted." : "Rejected.",
+        decisionVersion: 1,
+        decidedAt: "2099-08-15T04:00:00.000Z",
+      },
+      communication: {
+        templatePurpose: status === "accepted" ? "decision_accepted" : "decision_rejected",
+      },
+    });
+    const accepted = decisionInput("submission-accepted", "accepted");
+    const rejected = decisionInput("submission-rejected", "rejected");
+
+    await projection.projectDecision(accepted);
+    await projection.projectDecision(rejected);
+    await projection.projectDecision(accepted);
+
+    expect(
+      [...outbox.values()]
+        .filter((row) => row.topic === "communications")
+        .map((row) => row.payload)
+        .sort((left, right) =>
+          String((left as { readonly status?: string }).status).localeCompare(
+            String((right as { readonly status?: string }).status),
+          ),
+        ),
+    ).toEqual([
+      expect.objectContaining({
+        purpose: "decision",
+        status: "accepted",
+        idempotencyKey: "decision:evaluation-decision:plan-1:submission-accepted:v1",
+      }),
+      expect.objectContaining({
+        purpose: "decision",
+        status: "rejected",
+        idempotencyKey: "decision:evaluation-decision:plan-1:submission-rejected:v1",
+      }),
+    ]);
+    expect(queueMessages).toHaveLength(2);
+  });
+
   it("loads the authoritative agenda workspace with one Airtable request", async () => {
     const eventId = "event-workspace-read";
     const state: AgendaState = {
