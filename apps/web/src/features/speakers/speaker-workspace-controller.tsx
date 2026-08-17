@@ -1937,7 +1937,7 @@ function useSpeakerWorkspaceController({
       dispatchProfileHeadshotDetails({ type: "save-busy-changed", busy: false });
     }
   }
-  async function previewCsv(file: File): Promise<void> {
+  async function previewCsv(file: File, input?: HTMLInputElement): Promise<void> {
     const requestId = importRequestRef.current + 1;
     importRequestRef.current = requestId;
     dispatchImportTaskInvitation({ type: "import-preview-started", fileName: file.name });
@@ -1966,7 +1966,7 @@ function useSpeakerWorkspaceController({
       if (requestId === importRequestRef.current) {
         dispatchImportTaskInvitation({ type: "import-preview-busy-changed", busy: false });
       }
-      if (requestId === importRequestRef.current) input.value = "";
+      if (requestId === importRequestRef.current && input !== undefined) input.value = "";
     }
   }
   async function commitCsv(): Promise<void> {
@@ -2650,7 +2650,7 @@ function useSpeakerWorkspaceController({
             fileName: importFileName,
             preview: importPreview,
             onOpenChange: (open) => dispatchRoster({ type: "csv-dialog-changed", open }),
-            onPreview: (file) => void previewCsv(file),
+            onPreview: (file: File) => void previewCsv(file),
             onCommit: () => void commitCsv(),
           },
           onQueryChange: (nextQuery) => dispatchRoster({ type: "query-changed", query: nextQuery }),

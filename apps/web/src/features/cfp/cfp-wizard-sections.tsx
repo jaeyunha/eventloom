@@ -1052,7 +1052,7 @@ function FileRequestControl({
     <div className={styles.fileRequestControl}>
       <FileUpload
         id={id}
-        accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
+        {...(acceptedTypes.length > 0 ? { accept: acceptedTypes.join(",") } : {})}
         disabled={displayState?.status === "pending"}
         title={hasUploadedFile ? "Drop a replacement file or browse" : "Drop your files here or browse"}
         hint={
@@ -1071,7 +1071,7 @@ function FileRequestControl({
           ...(requirementParts.length > 0 ? [helpId] : []),
           ...(displayState?.status === "error" ? [errorId] : []),
           ...(displayState?.status === "pending" || displayState?.status === "ready" ? [statusId] : []),
-        ].join(" ") || undefined}
+        ].join(" ")}
         invalid={displayState?.status === "error"}
         files={selectedFiles}
         onFilesSelected={(files) => handleSelectedFile(files[0])}

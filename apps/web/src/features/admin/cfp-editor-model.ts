@@ -305,12 +305,6 @@ const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
     options: [],
   },
 ];
-function coreTitleField(): CfpFormField {
-  const field = CORE_PROPOSAL_FIELDS.find((candidate) => candidate.id === "title");
-  if (field === undefined) throw new Error("The core CFP title field is missing.");
-  return field;
-}
-
 function firstCoreProposalField(): CfpFormField {
   const field = CORE_PROPOSAL_FIELDS[0];
   if (field === undefined) {

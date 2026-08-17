@@ -4,7 +4,7 @@ import { CloudUpload, Trash2, X } from "lucide-react";
 import {
   type ChangeEvent,
   type DragEvent,
-  type InputHTMLAttributes,
+  type Ref,
   type ReactNode,
   useId,
   useRef,
@@ -29,7 +29,7 @@ export interface FileUploadItem {
 
 export interface FileUploadProps {
   readonly id?: string;
-  readonly accept?: string;
+  readonly accept?: string | undefined;
   readonly multiple?: boolean;
   readonly required?: boolean;
   readonly disabled?: boolean;
@@ -37,10 +37,10 @@ export interface FileUploadProps {
   readonly title?: string;
   readonly hint?: string;
   readonly browseLabel?: string;
-  readonly describedBy?: string;
+  readonly describedBy?: string | undefined;
   readonly ariaLabel?: string;
   readonly invalid?: boolean;
-  readonly inputRef?: InputHTMLAttributes<HTMLInputElement>["ref"];
+  readonly inputRef?: Ref<HTMLInputElement> | undefined;
   readonly files?: readonly FileUploadItem[];
   readonly emptyState?: ReactNode;
   readonly onFilesSelected: (files: readonly File[]) => void;
