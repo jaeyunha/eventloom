@@ -749,28 +749,14 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
               if (service === undefined) {
                 throw new Error("The evaluation decision processor is unavailable.");
               }
-              await service.recordDecision(
-                {
-                  tenantId: payload.tenantId,
-                  userId: payload.decidedBy,
-                  kind: "human",
-                  grants: [
-                    {
-                      tenantId: payload.tenantId,
-                      eventId: payload.eventId,
-                      role: "organizer",
-                    },
-                  ],
-                },
-                {
-                  planId: payload.planId,
-                  submissionId: payload.submissionId,
-                  status: payload.status,
-                  reason: payload.reason,
-                  idempotencyKey: payload.transitionIdempotencyKey,
-                  expectedVersion: payload.decisionVersion,
-                },
-              );
+              await service.replayPersistedDecisionWork({
+                tenantId: payload.tenantId,
+                planId: payload.planId,
+                submissionId: payload.submissionId,
+                status: payload.status,
+                decisionVersion: payload.decisionVersion,
+                transitionIdempotencyKey: payload.transitionIdempotencyKey,
+              });
               return undefined;
             },
             reports: async (payload, context) => {

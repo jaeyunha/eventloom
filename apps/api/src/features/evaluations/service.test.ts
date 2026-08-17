@@ -2478,6 +2478,53 @@ describe("decision outcome projection", () => {
     ]);
   });
 
+  it("replays persisted decision work after the submission becomes non-reviewable", async () => {
+    const projected: EvaluationDecisionProjectionInput[] = [];
+    const submissions = new InMemorySubmissionReviewSource([submission]);
+    const { service, repository } = await fixture({
+      submissions,
+      decisionProjection: {
+        projectDecision: async (input) => {
+          projected.push(structuredClone(input));
+        },
+      },
+    });
+    const accepted = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Accepted before the submission was withdrawn.",
+      idempotencyKey: "replay-after-withdrawal",
+    });
+    projected.length = 0;
+    submissions.set({ ...submission, status: "withdrawn", version: 2 });
+    const replayedService = new EvaluationService(
+      repository,
+      submissions,
+      evaluationEventSource(),
+      {
+        clock: () => new Date(nowIso),
+        decisionProjection: {
+          projectDecision: async (input) => {
+            projected.push(structuredClone(input));
+          },
+        },
+      },
+    );
+
+    await replayedService.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: accepted.version,
+      transitionIdempotencyKey: "replay-after-withdrawal",
+    });
+
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({ status: "accepted", decisionVersion: 1 });
+  });
+
   it("allows exactly one concurrent amendment for the current version", async () => {
     const { service } = await fixture();
     const accepted = await service.recordDecision(organizer, {
@@ -4158,6 +4205,12 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     await expectEvaluationError(
       service.listAiSuggestions(reviewer("reviewer-1"), assignment.id),
       "EVALUATION_NOT_FOUND",
+    );
+    source.set({ ...submission, status: "submitted", version: 4 });
+    await service.declareConflict(reviewer("reviewer-1"), assignment.id, "Personal conflict");
+    await expectEvaluationError(
+      service.listAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_FORBIDDEN",
     );
   });
 });

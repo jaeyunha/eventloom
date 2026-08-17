@@ -256,6 +256,7 @@ export interface DecisionSessionStatusReconciliationInput {
   readonly sessionId: string;
   readonly status: "waitlisted" | "rejected";
   readonly actorId: string;
+  readonly isCurrentDecision?: (() => Promise<boolean>) | undefined;
 }
 
 export interface CreateSessionInput {
@@ -298,6 +299,8 @@ export interface UpdateSessionInput {
   speakerIds?: readonly string[];
   speakerRoster?: readonly SessionSpeakerReference[];
   resourceIds?: readonly string[];
+  /** Internal lifecycle fence used by trusted decision projections. */
+  beforePersist?: (() => Promise<boolean>) | undefined;
 }
 export interface RestoreSessionInput {
   tenantId?: string;

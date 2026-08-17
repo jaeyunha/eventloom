@@ -2995,12 +2995,33 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   async reconcileSessionDecision(
     input: EvaluationSessionDecisionReconciliationInput,
   ): Promise<void> {
+    const isCurrentDecision = async (): Promise<boolean> => {
+      const current = await this.#database
+        .prepare(
+          `SELECT version, status
+           FROM evaluation_decisions
+           WHERE tenant_id = ?1
+             AND event_id = ?2
+             AND plan_id = ?3
+             AND submission_id = ?4
+           LIMIT 1`,
+        )
+        .bind(input.tenantId, input.eventId, input.planId, input.submissionId)
+        .first<{ version: number; status: string }>();
+      return (
+        current !== null &&
+        current.version === input.decisionVersion &&
+        current.status === input.status
+      );
+    };
+    if (!(await isCurrentDecision())) return;
     await this.#sessionService?.reconcileDecisionSessionStatus({
       tenantId: input.tenantId,
       eventId: input.eventId,
       sessionId: `session-${input.submissionId}`,
       status: input.status,
       actorId: input.decidedBy,
+      isCurrentDecision,
     });
   }
 

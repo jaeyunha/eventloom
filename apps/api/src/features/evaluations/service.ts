@@ -1082,6 +1082,39 @@ export class EvaluationService {
     return plan;
   }
 
+  async replayPersistedDecisionWork(input: {
+    readonly tenantId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly decisionVersion: number;
+    readonly status: EvaluationDecisionStatus;
+    readonly transitionIdempotencyKey: string;
+  }): Promise<void> {
+    const decision = await this.#repository.getDecision(
+      input.tenantId,
+      input.planId,
+      input.submissionId,
+    );
+    if (
+      decision === null ||
+      decision.version !== input.decisionVersion ||
+      decision.status !== input.status
+    ) {
+      return;
+    }
+    const transition = decision.history.find(
+      (candidate) =>
+        candidate.idempotencyKey === input.transitionIdempotencyKey &&
+        candidate.to === input.status,
+    );
+    if (transition === undefined) return;
+    await this.#runDecisionWork({
+      decision,
+      transition,
+      decisionVersion: input.decisionVersion,
+    });
+  }
+
   async getDecision(
     actor: EvaluationActor,
     planId: string,
@@ -2877,6 +2910,9 @@ export class EvaluationService {
   ): Promise<readonly EvaluationSuggestion[]> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
+    if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
     const { plan, round } = await this.#assignmentContext(assignment);
     const material = await this.#submissions.getSubmissionForReview(
       actor.tenantId,

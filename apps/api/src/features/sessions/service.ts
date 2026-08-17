@@ -692,23 +692,25 @@ export class SessionService {
         `The session status ${input.status} is not configured for this event.`,
       );
     }
-    if (sameStatus(current.status, targetStatus)) return current;
-    return this.updateSession(
-      {
-        tenantId: input.tenantId,
-        userId: input.actorId,
-        kind: "user",
-        isOrganizer: true,
-        grants: [{ eventId: input.eventId, role: "organizer" }],
-      },
-      {
-        tenantId: input.tenantId,
-        eventId: input.eventId,
-        sessionId: current.id,
-        expectedVersion: current.version,
-        status: targetStatus,
-      },
-    );
+    const actor: SessionActor = {
+      tenantId: input.tenantId,
+      userId: input.actorId,
+      kind: "user",
+      isOrganizer: true,
+      grants: [{ eventId: input.eventId, role: "organizer" }],
+    };
+    if (sameStatus(current.status, targetStatus)) {
+      await this.synchronizeAgenda(actor, input.eventId);
+      return current;
+    }
+    return this.updateSession(actor, {
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      sessionId: current.id,
+      expectedVersion: current.version,
+      status: targetStatus,
+      beforePersist: input.isCurrentDecision,
+    });
   }
 
   async createSession(actor: SessionActor, input: CreateSessionInput): Promise<Session> {
@@ -1192,6 +1194,9 @@ export class SessionService {
       current,
       next,
     );
+    if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+      return sessionProjection(current);
+    }
     try {
       if (this.#repository.commit !== undefined) {
         await this.#repository.commit({
