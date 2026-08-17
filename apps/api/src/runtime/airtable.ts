@@ -113,6 +113,7 @@ import {
   type EventAuditEntry,
   type EventRepository,
   EventRepositoryConflictError,
+  type ProgramPublicationManifest,
 } from "../features/events/types";
 import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
@@ -220,6 +221,7 @@ import type {
   WebhookSubscriptionRecord,
 } from "../integrations/webhooks/types";
 import { WebhookRepositoryError } from "../integrations/webhooks/types";
+import { invalidatePublishedAgendaCache } from "../routes/agenda";
 import type {
   OrganizerOverviewActionItem,
   OrganizerOverviewActivityData,
@@ -3774,9 +3776,25 @@ function compareNullableDates(left: string | null, right: string | null): number
 export class CloudflareAgendaMutationLock implements DurableObjectAgendaCoordinator {
   readonly #namespace: DurableObjectNamespace;
   readonly #tails = new Map<string, Promise<void>>();
+  readonly #activeOperations = new Map<
+    string,
+    { readonly operationId: string; readonly renew: () => Promise<void> }
+  >();
 
   constructor(namespace: DurableObjectNamespace) {
     this.#namespace = namespace;
+  }
+
+  currentOperationId(eventId: string): string {
+    const active = this.#activeOperations.get(eventId);
+    if (active === undefined) throw new AgendaRepositoryConflictError(eventId);
+    return active.operationId;
+  }
+
+  async renew(eventId: string): Promise<void> {
+    const active = this.#activeOperations.get(eventId);
+    if (active === undefined) throw new AgendaRepositoryConflictError(eventId);
+    await active.renew();
   }
 
   async runExclusive<T>(eventId: string, operation: () => Promise<T>): Promise<T> {
@@ -3789,27 +3807,108 @@ export class CloudflareAgendaMutationLock implements DurableObjectAgendaCoordina
     await previous;
     try {
       const stub = this.#namespace.get(this.#namespace.idFromName(eventId));
-      const revisionResponse = await stub.fetch(new Request("https://agenda/revision"));
-      const revisionBody: unknown = await revisionResponse.json();
-      const revision =
-        isRecord(revisionBody) && typeof revisionBody.revision === "number"
-          ? revisionBody.revision
-          : null;
-      if (!revisionResponse.ok || revision === null) {
-        throw new AgendaRepositoryConflictError(eventId);
-      }
-      const admission = await stub.fetch(
-        new Request("https://agenda/mutations", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            operationId: `agenda:${eventId}:${crypto.randomUUID()}`,
-            expectedRevision: revision,
+      const operationId = `agenda:${eventId}:${crypto.randomUUID()}`;
+      for (;;) {
+        const revisionResponse = await stub.fetch(new Request("https://agenda/revision"));
+        const revisionBody: unknown = await revisionResponse.json();
+        const revision =
+          isRecord(revisionBody) && typeof revisionBody.revision === "number"
+            ? revisionBody.revision
+            : null;
+        if (!revisionResponse.ok || revision === null) {
+          throw new AgendaRepositoryConflictError(eventId);
+        }
+        const admission = await stub.fetch(
+          new Request("https://agenda/mutations", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              operationId,
+              expectedRevision: revision,
+            }),
           }),
-        }),
-      );
-      if (!admission.ok) throw new AgendaRepositoryConflictError(eventId);
-      return await operation();
+        );
+        if (admission.ok) break;
+        if (admission.status !== 409) throw new AgendaRepositoryConflictError(eventId);
+      }
+      const renew = async () => {
+        const response = await stub.fetch(
+          new Request("https://agenda/mutations", {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ operationId }),
+          }),
+        );
+        if (!response.ok) throw new AgendaRepositoryConflictError(eventId);
+      };
+      this.#activeOperations.set(eventId, { operationId, renew });
+      let renewalFailure: Error | null = null;
+      let renewalInFlight: Promise<void> | null = null;
+      const renewLease = () => {
+        if (renewalInFlight !== null || renewalFailure !== null) return;
+        const activeRenewal = renew()
+          .catch((error: unknown) => {
+            renewalFailure =
+              error instanceof Error
+                ? error
+                : new Error(`Agenda coordinator renewal failed for ${eventId}.`);
+          })
+          .finally(() => {
+            if (renewalInFlight === activeRenewal) renewalInFlight = null;
+          });
+        renewalInFlight = activeRenewal;
+      };
+      const renewalTimer = setInterval(renewLease, 30_000);
+      const outcome = await (async () => {
+        try {
+          return { ok: true as const, value: await operation() };
+        } catch (error) {
+          return { ok: false as const, error };
+        }
+      })();
+      clearInterval(renewalTimer);
+      if (renewalInFlight !== null) await renewalInFlight;
+      let releaseError: Error | null = null;
+      try {
+        const releaseResponse = await stub.fetch(
+          new Request("https://agenda/mutations", {
+            method: "DELETE",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ operationId }),
+          }),
+        );
+        if (!releaseResponse.ok) releaseError = new AgendaRepositoryConflictError(eventId);
+      } catch (error) {
+        releaseError =
+          error instanceof Error
+            ? error
+            : new Error(`Agenda coordinator release failed for ${eventId}.`);
+      }
+      this.#activeOperations.delete(eventId);
+      if (renewalFailure !== null) {
+        if (!outcome.ok || releaseError !== null) {
+          throw new AggregateError(
+            [
+              renewalFailure,
+              ...(!outcome.ok ? [outcome.error] : []),
+              ...(releaseError === null ? [] : [releaseError]),
+            ],
+            `Agenda mutation lease failed for ${eventId}.`,
+          );
+        }
+        throw renewalFailure;
+      }
+      if (!outcome.ok) {
+        if (releaseError !== null) {
+          throw new AggregateError(
+            [outcome.error, releaseError],
+            `Agenda mutation and coordinator release failed for ${eventId}.`,
+          );
+        }
+        throw outcome.error;
+      }
+      if (releaseError !== null) throw releaseError;
+      return outcome.value;
     } finally {
       release();
       if (this.#tails.get(eventId) === current) this.#tails.delete(eventId);
@@ -6424,6 +6523,37 @@ async function enqueueCloudflareOutbox(input: {
   readonly payload: unknown;
   readonly now?: string;
 }): Promise<{ readonly inserted: boolean; readonly queued: boolean }> {
+  const staged = await stageCloudflareOutbox(input);
+  if (staged.state !== "pending") return { inserted: staged.inserted, queued: false };
+  await input.queue.send({
+    version: 1,
+    jobId: staged.jobId,
+    tenantId: input.tenantId,
+    topic: input.topic,
+    enqueuedAt: staged.now,
+  });
+  await input.database
+    .prepare(
+      "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
+    )
+    .bind(staged.now, staged.jobId)
+    .run();
+  return { inserted: staged.inserted, queued: true };
+}
+
+async function stageCloudflareOutbox(input: {
+  readonly database: D1Database;
+  readonly tenantId: string;
+  readonly topic: CloudflareOutboxMessage["topic"];
+  readonly deduplicationKey: string;
+  readonly payload: unknown;
+  readonly now?: string;
+}): Promise<{
+  readonly jobId: string;
+  readonly inserted: boolean;
+  readonly now: string;
+  readonly state: string | undefined;
+}> {
   const now = input.now ?? new Date().toISOString();
   const jobId = `runtime:${input.tenantId}:${input.topic}:${input.deduplicationKey}`;
   const result = await input.database
@@ -6455,21 +6585,7 @@ async function enqueueCloudflareOutbox(input: {
           .bind(jobId)
           .first<{ state: string }>()
       )?.state;
-  if (state !== "pending") return { inserted, queued: false };
-  await input.queue.send({
-    version: 1,
-    jobId,
-    tenantId: input.tenantId,
-    topic: input.topic,
-    enqueuedAt: now,
-  });
-  await input.database
-    .prepare(
-      "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
-    )
-    .bind(now, jobId)
-    .run();
-  return { inserted, queued: true };
+  return { jobId, inserted, now, state };
 }
 
 async function enqueueCommunicationDeliveryOutbox(input: {
@@ -7913,14 +8029,50 @@ export function createD1ApplicationDependencies(
       async enqueue(input) {
         const state = await publicationRepository.getState(input.organizationId, input.eventId);
         if (state === null) throw new Error("The pending program publication was not stored.");
+        const reservationOwnerId = state.releases.find(
+          (release) => release.id === input.releaseId && release.revision === input.revision,
+        )?.reservationOwnerId;
+        if (reservationOwnerId === null || reservationOwnerId === undefined) {
+          throw new Error("The pending program publication is missing reservation ownership.");
+        }
         await publicationService.completeRebuild({
           ...input,
           expectedPublicationVersion: state.version,
+          reservationOwnerId,
         });
         return { id: input.releaseId };
       },
     },
-    cacheInvalidation: { async invalidate() {} },
+    cacheInvalidation: {
+      async invalidate(input) {
+        const [event, state] = await Promise.all([
+          eventRepository.getEvent(input.organizationId, input.eventId),
+          publicationRepository.getState(input.organizationId, input.eventId),
+        ]);
+        const pendingRelease = state?.releases.find(
+          (release) =>
+            release.revision === input.revision &&
+            release.cacheRevision === input.cacheRevision &&
+            release.lifecycle === "pending",
+        );
+        if (event === null || pendingRelease === undefined) {
+          throw new Error("The pending publication cache invalidation could not be resolved.");
+        }
+        await stageCloudflareOutbox({
+          database: options.database,
+          tenantId: input.organizationId,
+          topic: "cache-invalidation",
+          deduplicationKey: `program-publication:${input.eventId}:release:${pendingRelease.id}`,
+          payload: {
+            eventId: event.slug,
+            revisionId: pendingRelease.agendaProjectionId,
+            revisionNumber: pendingRelease.agendaRevisionNumber,
+            programRevision: pendingRelease.revision,
+          },
+          now: pendingRelease.publishedAt,
+        });
+      },
+    },
   });
   const cfpIdempotency = new D1IdempotencyStore(options.database);
   const crmRepository = options.businessRepositories.crm;
@@ -8013,37 +8165,37 @@ export function createD1ApplicationDependencies(
   const sessionRepository = options.businessRepositories.sessions;
   let sessionService!: SessionService;
   const agendaRepository = options.businessRepositories.agenda;
-  const agendaEngine = new AgendaEngine(
-    agendaRepository,
-    new CloudflareAgendaMutationLock(options.agendaCoordinator),
-    {
-      ...(options.aiProviders?.agenda === undefined
-        ? {}
-        : { suggestionProvider: options.aiProviders.agenda }),
-      async eventScheduleForEvent(eventId) {
-        const row = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
-          .bind(eventId)
-          .first<{ organization_id: string }>();
-        if (row === null) return null;
-        const event = await eventRepository.getEvent(row.organization_id, eventId);
-        return event === null
-          ? null
-          : {
-              startsAt: event.startsAt,
-              endsAt: event.endsAt,
-              timeZone: event.timeZone,
-              ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
-            };
-      },
+  const agendaMutationLock = new CloudflareAgendaMutationLock(options.agendaCoordinator);
+  const agendaEngine = new AgendaEngine(agendaRepository, agendaMutationLock, {
+    ...(options.aiProviders?.agenda === undefined
+      ? {}
+      : { suggestionProvider: options.aiProviders.agenda }),
+    async eventScheduleForEvent(eventId) {
+      const row = await options.database
+        .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
+        .bind(eventId)
+        .first<{ organization_id: string }>();
+      if (row === null) return null;
+      const event = await eventRepository.getEvent(row.organization_id, eventId);
+      return event === null
+        ? null
+        : {
+            startsAt: event.startsAt,
+            endsAt: event.endsAt,
+            timeZone: event.timeZone,
+            ...(event.scheduleDates === undefined ? {} : { scheduleDates: event.scheduleDates }),
+          };
     },
-  );
+  });
   const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
     engine: agendaEngine,
     catalogReader: {
       getAgendaCatalog: (tenantId, eventId) => sessionService.getAgendaCatalog(tenantId, eventId),
     },
   });
+  let completeApprovedRevision:
+    | ((eventId: string, revision: PublishedAgendaRevision) => Promise<void>)
+    | undefined;
   const cacheInvalidatingAgendaCatalogSynchronizer = {
     ensureInitialized: agendaCatalogSynchronizer.ensureInitialized.bind(agendaCatalogSynchronizer),
     async synchronize(input: {
@@ -8053,20 +8205,41 @@ export function createD1ApplicationDependencies(
       readonly timeZone?: string;
       readonly minimumTravelMinutes?: number;
     }) {
-      const draft = await agendaCatalogSynchronizer.synchronize(input);
-      await enqueueCloudflareOutbox({
-        database: options.database,
-        queue: options.outboxQueue,
-        tenantId: input.tenantId,
-        topic: "cache-invalidation",
-        deduplicationKey: `agenda-catalog:${input.eventId}:draft:${draft.version}`,
-        payload: {
-          eventId: input.eventId,
-          draftVersion: draft.version,
+      const synchronized = await agendaCatalogSynchronizer.synchronizePublishedContent(
+        input,
+        async (current) => {
+          const refresh = await agendaEngine.refreshPublishedContent({
+            eventId: input.eventId,
+            actorId: input.actorId ?? "system:agenda-catalog-sync",
+            expectedCatalogVersion: current.draft.version,
+            catalog: current.catalog,
+            async afterRefresh(result) {
+              if (result.revision === null) return;
+              if (completeApprovedRevision === undefined) {
+                throw new Error("Approved public revision handoff is not initialized.");
+              }
+              await completeApprovedRevision(input.eventId, result.revision);
+            },
+          });
+          if (refresh.status === "stale") return refresh;
+          if (refresh.revision === null) {
+            await enqueueCloudflareOutbox({
+              database: options.database,
+              queue: options.outboxQueue,
+              tenantId: input.tenantId,
+              topic: "cache-invalidation",
+              deduplicationKey: `agenda-catalog:${input.eventId}:draft:${current.draft.version}`,
+              payload: {
+                eventId: input.eventId,
+                draftVersion: current.draft.version,
+              },
+              now: current.draft.updatedAt,
+            });
+          }
+          return refresh;
         },
-        now: draft.updatedAt,
-      });
-      return draft;
+      );
+      return synchronized.draft;
     },
   };
   sessionService = new SessionService(sessionRepository, {
@@ -8225,7 +8398,7 @@ export function createD1ApplicationDependencies(
         };
   };
 
-  return {
+  const dependencies = {
     access: {
       async listOrganizationsForUser(principal) {
         return listProductionOrganizationsForUser(options.database, principal.userId);
@@ -8391,7 +8564,15 @@ export function createD1ApplicationDependencies(
       getProgramPublicationManifest: publishedSpeakerProjections.getProgramPublicationManifest.bind(
         publishedSpeakerProjections,
       ),
-      async afterPublish(eventId, revision) {
+      async afterPublish(
+        eventId: string,
+        revision: PublishedAgendaRevision,
+        sourceTrigger:
+          | "approved-content-change"
+          | "released-schedule-change" = "released-schedule-change",
+      ) {
+        const currentAgenda = await agendaEngine.getPublishedAgenda(eventId);
+        if (currentAgenda === null || currentAgenda.id !== revision.id) return;
         const organizationRows = await options.database
           .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
@@ -8409,6 +8590,49 @@ export function createD1ApplicationDependencies(
         if (event === null || agendaState === null) {
           throw new Error("The published event projection could not be loaded.");
         }
+        const currentPublication = await publicationService.getState(
+          {
+            organizationId,
+            userId: revision.publishedBy,
+            role: "owner",
+            kind: "human",
+          },
+          { organizationId, eventId },
+        );
+        const enqueuePublicationCacheInvalidation = (manifest: ProgramPublicationManifest) =>
+          enqueueCloudflareOutbox({
+            database: options.database,
+            queue: options.outboxQueue,
+            tenantId: organizationId,
+            topic: "cache-invalidation",
+            deduplicationKey: `program-publication:${eventId}:release:${manifest.id}`,
+            payload: {
+              eventId: event.slug,
+              revisionId: manifest.agendaProjectionId,
+              revisionNumber: manifest.agendaRevisionNumber,
+              programRevision: manifest.revision,
+            },
+            now: manifest.publishedAt,
+          });
+        const servedAgendaRevision = currentPublication?.servedManifest?.agendaRevisionNumber;
+        if (servedAgendaRevision !== undefined && servedAgendaRevision > revision.revisionNumber)
+          return;
+        const alreadyServed = servedAgendaRevision === revision.revisionNumber;
+        const servedSpeakerSnapshot =
+          sourceTrigger === "approved-content-change"
+            ? await Promise.all([
+                publishedSpeakerProjections.getPublishedSpeakers(event.slug),
+                publishedSpeakerProjections.getPublishedSpeakerHeadshots(event.slug),
+              ])
+            : null;
+        const servedSpeakerProjection = servedSpeakerSnapshot?.[0] ?? null;
+        const servedSpeakerHeadshots = servedSpeakerSnapshot?.[1] ?? null;
+        if (
+          sourceTrigger === "approved-content-change" &&
+          (servedSpeakerProjection === null || servedSpeakerHeadshots === null)
+        ) {
+          throw new Error("The served speaker projection could not be loaded.");
+        }
 
         const trackNameById = new Map(agendaState.tracks.map((track) => [track.id, track.name]));
         const publishedSessionIds = new Set(revision.entries.map((entry) => entry.sessionId));
@@ -8420,16 +8644,6 @@ export function createD1ApplicationDependencies(
           speakerRepository.listProfiles(eventId, participantIds),
           speakerRepository.listAssets(eventId, participantIds),
         ]);
-        await reconcilePublishedAgendaCalendarInvitations({
-          database: options.database,
-          queue: options.outboxQueue,
-          organizationId,
-          eventId,
-          revision,
-          agendaState,
-          profiles,
-          integrationOptions: options.calendarIntegrationOptions,
-        });
         const entriesBySessionId = new Map(
           revision.entries.map((entry) => [entry.sessionId, entry]),
         );
@@ -8437,6 +8651,7 @@ export function createD1ApplicationDependencies(
           string,
           Array<{ id: string; title: string; trackNames: readonly string[] }>
         >();
+        const approvedSpeakerNameById = new Map<string, string>();
         for (const session of sessions) {
           const entry = entriesBySessionId.get(session.id);
           if (entry === undefined) continue;
@@ -8444,10 +8659,14 @@ export function createD1ApplicationDependencies(
             const name = trackNameById.get(trackId);
             return name === undefined ? [] : [name];
           });
-          for (const participantId of session.participantIds) {
+          for (const [speakerIndex, participantId] of session.participantIds.entries()) {
             const values = sessionsByParticipantId.get(participantId) ?? [];
             values.push({ id: session.id, title: session.title, trackNames });
             sessionsByParticipantId.set(participantId, values);
+            const approvedSpeakerName = entry.metadata?.speakerNames[speakerIndex];
+            if (approvedSpeakerName !== undefined) {
+              approvedSpeakerNameById.set(participantId, approvedSpeakerName);
+            }
           }
         }
 
@@ -8489,29 +8708,66 @@ export function createD1ApplicationDependencies(
           });
         }
 
-        const speakers = profiles
-          .map((profile) => {
-            const speakerSessions = sessionsByParticipantId.get(profile.participantId) ?? [];
+        const servedSpeakerById = new Map(
+          (servedSpeakerProjection?.speakers ?? []).map((speaker) => [speaker.id, speaker]),
+        );
+        const profileById = new Map(profiles.map((profile) => [profile.participantId, profile]));
+        const speakers = [...sessionsByParticipantId.entries()]
+          .map(([participantId, speakerSessions]) => {
+            const sessionIds = speakerSessions.map((session) => session.id);
+            const sessionTitles = speakerSessions.map((session) => session.title);
+            const trackNames = [
+              ...new Set(speakerSessions.flatMap((session) => session.trackNames)),
+            ].sort();
+            const servedSpeaker = servedSpeakerById.get(participantId);
+            if (sourceTrigger === "approved-content-change") {
+              return servedSpeaker === undefined
+                ? {
+                    id: participantId,
+                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    pronouns: null,
+                    jobTitle: null,
+                    organization: null,
+                    biography: "",
+                    photoUrl: null,
+                    sessionIds,
+                    sessionTitles,
+                    trackNames,
+                  }
+                : {
+                    ...servedSpeaker,
+                    sessionIds,
+                    sessionTitles,
+                    trackNames,
+                  };
+            }
+            const profile = profileById.get(participantId);
             return {
-              id: profile.participantId,
-              displayName: profile.displayName,
+              id: participantId,
+              displayName:
+                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
               pronouns: null,
-              jobTitle: profile.jobTitle ?? null,
-              organization: profile.company ?? null,
-              biography: profile.biography,
-              photoUrl: publishedHeadshots.has(profile.participantId)
-                ? publishedSpeakerPhotoPath(event.slug, profile.participantId)
+              jobTitle: profile?.jobTitle ?? null,
+              organization: profile?.company ?? null,
+              biography: profile?.biography ?? "",
+              photoUrl: publishedHeadshots.has(participantId)
+                ? publishedSpeakerPhotoPath(event.slug, participantId)
                 : null,
-              sessionIds: speakerSessions.map((session) => session.id),
-              sessionTitles: speakerSessions.map((session) => session.title),
-              trackNames: [
-                ...new Set(speakerSessions.flatMap((session) => session.trackNames)),
-              ].sort(),
+              sessionIds,
+              sessionTitles,
+              trackNames,
             };
           })
           .sort((left, right) => left.displayName.localeCompare(right.displayName));
         const agendaHash = await publicationSourceHash(revision);
-        const headshots = Object.fromEntries(publishedHeadshots);
+        const headshots =
+          sourceTrigger === "approved-content-change" && servedSpeakerHeadshots !== null
+            ? Object.fromEntries(
+                Object.entries(servedSpeakerHeadshots).filter(([participantId]) =>
+                  sessionsByParticipantId.has(participantId),
+                ),
+              )
+            : Object.fromEntries(publishedHeadshots);
         const speakerHash = await publicationSourceHash({ speakers, headshots });
         const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
           id: revision.id,
@@ -8534,57 +8790,139 @@ export function createD1ApplicationDependencies(
           headshots,
           sourceHash: speakerHash,
         };
-        await publishedSpeakerProjections.putPublishedSpeakers(
-          publishedSpeakerProjection,
-          revision,
-          agendaHash,
-        );
-        const currentPublication = await publicationRepository.getState(organizationId, eventId);
-        await publicationService.requestRebuild(
-          {
-            organizationId,
-            userId: revision.publishedBy,
-            role: "owner",
-            kind: "human",
-          },
-          {
+        const actor = {
+          organizationId,
+          userId: revision.publishedBy,
+          role: "owner" as const,
+          kind: "human" as const,
+        };
+        await agendaMutationLock.renew(eventId);
+        const latestAgenda = await agendaEngine.getPublishedAgenda(eventId);
+        if (latestAgenda === null || latestAgenda.id !== revision.id) return;
+        if (alreadyServed) {
+          await reconcilePublishedAgendaCalendarInvitations({
+            database: options.database,
+            queue: options.outboxQueue,
             organizationId,
             eventId,
-            trigger:
-              currentPublication?.servedManifest === null || currentPublication === null
-                ? "initial-publication"
-                : "released-schedule-change",
-            agendaProjectionId: revision.id,
-            agendaRevisionNumber: revision.revisionNumber,
-            agendaSourceHash: agendaHash,
-            speakerProjectionId: revision.id,
-            speakerRevisionNumber: revision.revisionNumber,
-            speakerSourceHash: speakerHash,
-            approvedContentRevision: revision.revisionNumber,
-            approvedProfileRevision: revision.revisionNumber,
-            releasedAssetRevision: revision.revisionNumber,
-            parentServedRevision: currentPublication?.servedRevision ?? null,
-          },
-        );
+            revision,
+            agendaState,
+            profiles,
+            integrationOptions: options.calendarIntegrationOptions,
+          });
+          const servedManifest = currentPublication?.servedManifest;
+          if (servedManifest !== null && servedManifest !== undefined) {
+            await enqueuePublicationCacheInvalidation(servedManifest);
+          }
+          return;
+        }
+        const pending = await publicationService.reserveRebuild(actor, {
+          organizationId,
+          eventId,
+          trigger:
+            currentPublication?.servedManifest === null || currentPublication === null
+              ? "initial-publication"
+              : sourceTrigger,
+          agendaProjectionId: revision.id,
+          agendaRevisionNumber: revision.revisionNumber,
+          agendaSourceHash: agendaHash,
+          speakerProjectionId: publishedSpeakerProjection.id,
+          speakerRevisionNumber: publishedSpeakerProjection.revision.number,
+          speakerSourceHash: publishedSpeakerProjection.sourceHash ?? publishedSpeakerProjection.id,
+          approvedContentRevision: revision.revisionNumber,
+          approvedProfileRevision:
+            sourceTrigger === "approved-content-change"
+              ? (currentPublication?.servedManifest?.approvedProfileRevision ??
+                revision.revisionNumber)
+              : revision.revisionNumber,
+          releasedAssetRevision:
+            sourceTrigger === "approved-content-change"
+              ? (currentPublication?.servedManifest?.releasedAssetRevision ??
+                revision.revisionNumber)
+              : revision.revisionNumber,
+          parentServedRevision: currentPublication?.servedRevision ?? null,
+          reservationOwnerId: agendaMutationLock.currentOperationId(eventId),
+        });
+        const reservationOwnerId = agendaMutationLock.currentOperationId(eventId);
+        const releaseId = pending.pendingReleaseId;
+        const pendingRevision = pending.pendingRevision;
+        if (releaseId === null || pendingRevision === null) {
+          throw new Error("The reserved D1 publication is missing pending release metadata.");
+        }
+        try {
+          await agendaMutationLock.renew(eventId);
+          await publishedSpeakerProjections.putPublishedSpeakers(
+            publishedSpeakerProjection,
+            revision,
+            agendaHash,
+          );
+          const pendingManifest = pending.releases.find(
+            (release) => release.id === releaseId && release.revision === pendingRevision,
+          );
+          if (pendingManifest === undefined) {
+            throw new Error("The reserved D1 publication manifest could not be resolved.");
+          }
+          await invalidatePublishedSpeakerCache(
+            publishedSpeakerProjections,
+            event.slug,
+            pendingRevision,
+            pendingManifest.cacheRevision,
+          );
+          await invalidatePublishedAgendaCache(agendaEngine, eventId, revision);
+          await agendaMutationLock.renew(eventId);
+          await publicationService.completeRebuild({
+            organizationId,
+            eventId,
+            releaseId,
+            revision: pendingRevision,
+            expectedPublicationVersion: pending.version,
+            reservationOwnerId,
+          });
+        } catch (error) {
+          try {
+            await publicationService.failRebuild({
+              organizationId,
+              eventId,
+              releaseId,
+              revision: pendingRevision,
+              expectedPublicationVersion: pending.version,
+              reservationOwnerId,
+              reason: error instanceof Error ? error.message : "D1 publication handoff failed.",
+            });
+          } catch (failure) {
+            throw new AggregateError([error, failure], "D1 publication handoff cleanup failed.");
+          }
+          throw error;
+        }
+        await agendaMutationLock.renew(eventId);
         const served = await publicationRepository.getState(organizationId, eventId);
-        await invalidatePublishedSpeakerCache(
-          publishedSpeakerProjections,
-          event.slug,
-          served?.servedRevision ?? undefined,
-          served?.servedManifest?.cacheRevision,
-        );
-        await enqueueCloudflareOutbox({
+        const servedManifest = served?.servedManifest;
+        if (servedManifest === null || servedManifest === undefined) {
+          throw new Error("The served D1 publication manifest could not be resolved.");
+        }
+        try {
+          await enqueuePublicationCacheInvalidation(servedManifest);
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "program_publication_cache_dispatch_failed",
+              eventId,
+              releaseId: servedManifest.id,
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            }),
+          );
+        }
+        await agendaMutationLock.renew(eventId);
+        await reconcilePublishedAgendaCalendarInvitations({
           database: options.database,
           queue: options.outboxQueue,
-          tenantId: organizationId,
-          topic: "cache-invalidation",
-          deduplicationKey: `agenda-publish:${eventId}:revision:${revision.id}`,
-          payload: {
-            eventId,
-            revisionId: revision.id,
-            revisionNumber: revision.revisionNumber,
-          },
-          now: revision.publishedAt,
+          organizationId,
+          eventId,
+          revision,
+          agendaState,
+          profiles,
+          integrationOptions: options.calendarIntegrationOptions,
         });
       },
     },
@@ -8601,5 +8939,9 @@ export function createD1ApplicationDependencies(
     },
     webhooks,
     cfp: { service: cfpService },
+  } satisfies ApiDependencies;
+  completeApprovedRevision = async (eventId, revision) => {
+    await dependencies.agenda.afterPublish(eventId, revision, "approved-content-change");
   };
+  return dependencies;
 }

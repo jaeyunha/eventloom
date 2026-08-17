@@ -85,6 +85,10 @@ describe("D1PublishedSpeakerProjectionStore", () => {
                     company: null,
                     bio: "",
                     avatar_url: photoPath,
+                    avatar_asset_id: "asset-published",
+                    avatar_object_key: "headshots/published.png",
+                    avatar_content_type: "image/png",
+                    avatar_size_bytes: pinnedBytes.byteLength,
                   },
                 ],
               };
@@ -140,6 +144,14 @@ describe("D1PublishedSpeakerProjectionStore", () => {
 
     const published = await store.getPublishedSpeakerHeadshot(eventSlug, participantId);
     expect(new TextDecoder().decode(published?.body)).toBe("published-headshot");
+    await expect(store.getPublishedSpeakerHeadshots(eventSlug)).resolves.toEqual({
+      [participantId]: {
+        assetId: "asset-published",
+        objectKey: "headshots/published.png",
+        contentType: "image/png",
+        sizeBytes: pinnedBytes.byteLength,
+      },
+    });
 
     currentAssets = [
       {
