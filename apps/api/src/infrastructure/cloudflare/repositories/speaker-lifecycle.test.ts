@@ -442,6 +442,11 @@ async function publishHeadshotScenario(input: {
       },
     ],
   });
+  await agenda.engine.validate({
+    eventId,
+    expectedVersion: 2,
+    actorId: organizerAccountId,
+  });
   await agenda.engine.publish({
     eventId,
     expectedVersion: 2,
