@@ -14,9 +14,9 @@ continues from the pushed head and must not rely on its stale base/head values.
 - Pull request: https://github.com/jaeyunha/eventloom/pull/39
 - Pull request state: `OPEN`, non-draft, `MERGEABLE`, not merged
 - Exact current GitHub-main base incorporated:
-  `6a36bb5330c6a4bc09bf2801ccda5cd4adc11cc2`
+  `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
 - Exact current pushed head:
-  `372d6bc66a20305cc5c72393acc257302456d0eb`
+  `5938f0c6`
 - The earlier `7d6601...` base and `20b3b7b...` head below are historical
   checkpoint evidence only and are not current verification evidence.
 
@@ -51,10 +51,11 @@ replacement-lineage continuation. It:
 
 The pushed continuation contains:
 
-- migrations `0038_speaker_asset_uploader.sql`,
-  `0039_speaker_asset_creation_idempotency.sql`,
-  `0040_speaker_task_replacement_baseline.sql`, and
-  `0041_private_download_attribution.sql`;
+- migrations `0041_speaker_asset_uploader.sql`,
+  `0042_speaker_asset_creation_idempotency.sql`,
+  `0043_speaker_task_replacement_baseline.sql`,
+  `0044_private_download_attribution.sql`, and
+  `0045_private_object_cleanup.sql`;
 - immutable asset uploader account ID plus upload-time display-label snapshot
   in the domain, D1 schema/repository, local repository, service, organizer
   parser, and file-review context;
@@ -73,9 +74,34 @@ The pushed continuation contains:
 - replacement-baseline enforcement for `needs_changes` task submission;
 - local HTTP same-key replay and stale-head conflict coverage;
 - requester-bound download capability persistence and audit attribution.
+- local download issuance/consumption audit parity;
+- deterministic local and D1 review CAS rollback regressions;
+- D1-authoritative rejected-object cleanup, typed `file-scan` outbox work,
+  ready-history protection, expiry quarantine, and bounded reconciliation.
 
-The remaining review items below are not release claims until the final five
-reviews and current-head gates pass.
+## Current verification on the pushed head
+
+- `make check`: **FAIL, pre-existing main-only formatting errors** in
+  `apps/web/src/features/admin/cfp-editor-model.ts`,
+  `apps/web/src/features/admin/cfp-editor-sections.tsx`, and
+  `apps/web/src/features/cfp/cfp-wizard.tsx`; no lane file is implicated.
+- `make test`: **FAIL, one unrelated main-only test**:
+  `apps/web/src/features/work/work-hub.test.tsx`; 2,319 tests passed and 3
+  were skipped.
+- API/web typechecks: **PASS**.
+- API/web builds: **PASS**.
+- Focused speaker, D1, local runtime, cleanup, outbox, CFP, composition,
+  OpenAPI, and web client suites: **PASS**.
+- Isolated Playwright scenario
+  `tests/e2e/content-collection-detail.spec.ts`: **PASS**.
+- Migration validator: **FAIL on pre-existing main ordinal collisions**
+  (`0034`, `0035`, `0037`); lane migrations are uniquely renumbered to
+  `0041`-`0045`.
+- No production deployment performed.
+
+The remaining review items below are historical checkpoint tasks; current
+implementation and verification status above is authoritative. Final merge
+still requires five independent current-head review PASS results.
 
 ## Remaining tasks
 
