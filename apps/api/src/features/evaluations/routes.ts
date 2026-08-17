@@ -1158,13 +1158,6 @@ export function createEvaluationRoutes(
       201,
     );
   });
-  routes.post("/suggestions/:suggestionId/resolve", async (context) => {
-    const body = resolveSuggestionSchema.parse(await context.req.json());
-    return context.json(
-      await service.resolveAiSuggestion(actor(context), context.req.param("suggestionId"), body),
-    );
-  });
-
   routes.put("/assignments/:assignmentId/review", async (context) => {
     const body = saveReviewSchema.parse(await context.req.json());
     return context.json(

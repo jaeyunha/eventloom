@@ -3059,6 +3059,12 @@ export class EvaluationService {
       if (action === "accept" && input.criterionId !== undefined && scopedValues === undefined) {
         throw invalidInput("A criterion-scoped acceptance must include its score.");
       }
+      if (action === "accept" && input.criterionId !== undefined && scopedValues !== undefined) {
+        const scopedCriterionIds = Object.keys(scopedValues);
+        if (scopedCriterionIds.length !== 1 || scopedCriterionIds[0] !== input.criterionId) {
+          throw invalidInput("A criterion-scoped acceptance must contain only its criterion.");
+        }
+      }
       const values =
         action === "edit" || (action === "accept" && scopedValues !== undefined)
           ? scopedValues
@@ -3210,6 +3216,9 @@ export class EvaluationService {
       }
     }
     if (action === "reject" && input.criterionId !== undefined) {
+      if (suggestion.candidates[input.criterionId] === undefined) {
+        throw invalidInput("The rejected criterion is not part of this suggestion.");
+      }
       editedCriterionIds.add(input.criterionId);
     }
     const allCandidatesResolved = Object.keys(suggestion.candidates).every((criterionId) =>

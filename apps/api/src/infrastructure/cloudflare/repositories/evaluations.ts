@@ -2827,10 +2827,16 @@ export class D1EvaluationRepository implements EvaluationRepository {
             item.reason ?? null,
             item.valueByCriterion === undefined && item.criterionId === undefined
               ? null
-              : json({
-                  ...(item.valueByCriterion ?? {}),
-                  ...(item.criterionId === undefined ? {} : { __criterionId: item.criterionId }),
-                }),
+              : json(
+                  item.criterionId === undefined
+                    ? item.valueByCriterion
+                    : {
+                        __eventloomScope: {
+                          criterionId: item.criterionId,
+                          valueByCriterion: item.valueByCriterion ?? {},
+                        },
+                      },
+                ),
           ],
         ),
       );
@@ -2868,14 +2874,24 @@ export class D1EvaluationRepository implements EvaluationRepository {
         item.values_json == null
           ? null
           : parseJson<Record<string, unknown>>(text(item.values_json), {});
+      const scopedValues =
+        values !== null &&
+        typeof values.__eventloomScope === "object" &&
+        values.__eventloomScope !== null
+          ? (values.__eventloomScope as { criterionId?: unknown; valueByCriterion?: unknown })
+          : null;
       const criterionId =
-        values !== null && typeof values.__criterionId === "string"
-          ? values.__criterionId
+        scopedValues !== null && typeof scopedValues.criterionId === "string"
+          ? scopedValues.criterionId
           : undefined;
+      const storedValues =
+        scopedValues !== null && typeof scopedValues.valueByCriterion === "object"
+          ? (scopedValues.valueByCriterion as Record<string, unknown>)
+          : values;
       const valueByCriterion: Record<string, number> = {};
-      if (values !== null) {
-        for (const [key, value] of Object.entries(values)) {
-          if (key !== "__criterionId" && typeof value === "number") {
+      if (storedValues !== null && storedValues !== undefined) {
+        for (const [key, value] of Object.entries(storedValues)) {
+          if (typeof value === "number") {
             valueByCriterion[key] = value;
           }
         }

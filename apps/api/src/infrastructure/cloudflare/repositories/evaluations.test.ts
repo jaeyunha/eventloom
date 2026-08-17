@@ -1313,14 +1313,34 @@ describe("D1EvaluationRepository migrated lifecycle CAS", () => {
     try {
       seedMigratedEvaluationAssignment(fixture.database);
       const repository = new D1EvaluationRepository(fixture.database as unknown as D1Database);
+      const scopedSuggestion = {
+        ...migratedSuggestion,
+        history: [
+          {
+            action: "reject" as const,
+            actorId: "reviewer-migrated-1",
+            at: timestamp,
+            criterionId: "__criterionId",
+          },
+        ],
+        audit: [
+          {
+            action: "reject" as const,
+            actorId: "reviewer-migrated-1",
+            at: timestamp,
+            criterionId: "__criterionId",
+          },
+        ],
+      };
 
-      await repository.putSuggestion(migratedSuggestion, null, 1);
+      await repository.putSuggestion(scopedSuggestion, null, 1);
 
       await expect(
         repository.getSuggestion(migratedSuggestion.tenantId, migratedSuggestion.id),
       ).resolves.toMatchObject({
         id: migratedSuggestion.id,
         status: "pending",
+        history: [{ criterionId: "__criterionId" }],
       });
     } finally {
       fixture.dispose();
