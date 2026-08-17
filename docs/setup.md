@@ -100,36 +100,38 @@ is not the hosted-production default.
 `DEPLOYMENT_MODE` is independent from `APP_ENV`:
 
 - `self-hosted` can expose the first-organization bootstrap route when
-  `ORGANIZATION_PROVISIONING_TOKEN` is configured.
-- `managed` and `self-hosted` both keep organization creation outside existing
-  organization workspaces. A control plane or self-hosting operator provisions
-  additional organizations through the authenticated internal route.
+  `ORGANIZATION_BOOTSTRAP_TOKEN` is configured.
+- Both modes keep organization creation outside existing organization
+  workspaces. Operators provision organizations through the authenticated
+  internal route using `ORGANIZATION_PROVISIONING_TOKEN`.
 
-`/work` is the account-level workspace chooser. A person who belongs to
-multiple organizations sees each authorized workspace there; creating another
-organization never happens from inside an existing organization’s Settings.
+`/work` is the account-level workspace chooser. A person who belongs to multiple
+organizations sees each authorized organization there with its own destination
+action. Creating another organization never happens from inside an existing
+organization Settings page.
 
-The backend-only provisioning token is never exposed through a
-`NEXT_PUBLIC_*` variable. In self-hosted mode, an authenticated verified user
-with no memberships can bootstrap the first organization by sending the token
-in `X-Eventloom-Bootstrap-Token` to
-`POST /api/setup/organizations/bootstrap`. In managed mode, the control plane
-uses `Authorization: Bearer <token>` with
-`POST /api/internal/organizations`; its request supplies the stable owner user
-ID and a provider-neutral organization entitlement. Self-hosting operators can
-use the same route with an unrestricted entitlement. Reusing the same
-`Idempotency-Key` with the same payload returns the original organization.
+Use separate backend-only credentials:
+
+- `ORGANIZATION_BOOTSTRAP_TOKEN` authorizes only
+  `POST /api/setup/organizations/bootstrap` via `X-Eventloom-Bootstrap-Token`
+  for an authenticated verified user without memberships.
+- `ORGANIZATION_PROVISIONING_TOKEN` authorizes
+  `POST /api/internal/organizations` and
+  `PUT /api/internal/organizations/:organizationId/entitlement` via
+  `Authorization: Bearer <token>`. The request supplies the stable owner user ID
+  and a provider-neutral organization entitlement. Reusing the same
+  `Idempotency-Key` with the same payload returns the original result.
 
 Local development defaults to `self-hosted`. Staging and production Wrangler
-configuration defaults to `managed`. Leaving the provisioning token unset
-keeps both provisioning routes unmounted.
+configuration defaults to `managed`. Leaving a token unset keeps the matching
+routes unmounted. Install the secrets with the Cloudflare Worker secret sync for
+any environment that must provision organizations.
 
-Apply local D1 migrations and start both services from the repository root:
+Managed multi-organization hosting for third parties is a licensor/hosted-service
+concern under Elastic License 2.0. Self-hosters may run Eventloom for their own
+organizations; using managed mode to offer Eventloom as a hosted service to
+third parties is outside the permitted licensee use.
 
-```bash
-bunx wrangler d1 migrations apply DB --cwd apps/api --local
-make dev
-```
 
 ### Integrated local accounts
 

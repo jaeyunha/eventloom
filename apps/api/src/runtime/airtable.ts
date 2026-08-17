@@ -3949,11 +3949,17 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         scope,
         key,
         fingerprint,
+        ...(claim.leaseId === undefined ? {} : { leaseId: claim.leaseId }),
         response: { status: 200, body: value },
       });
       return value;
     } catch (error) {
-      await this.release({ scope, key, fingerprint });
+      await this.release({
+        scope,
+        key,
+        fingerprint,
+        ...(claim.leaseId === undefined ? {} : { leaseId: claim.leaseId }),
+      });
       throw error;
     }
   }

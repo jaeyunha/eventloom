@@ -13,6 +13,7 @@ import {
   validateReleaseConfiguration,
   verifyCloudflare,
   verifyForgePrivacy,
+  assertOrganizationProvisioningConfiguration,
 } from "./preflight-lib.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));

@@ -152,6 +152,10 @@ describe("internal organization provisioning routes", () => {
   function provisioningApp(input: {
     readonly authenticate: (request: Request) => boolean | Promise<boolean>;
     readonly provisionOrganization: ProvisionOrganization;
+    readonly entitlements?: {
+      getEntitlement: (organizationId: string) => Promise<unknown>;
+      putEntitlement: (...args: never[]) => Promise<unknown>;
+    };
   }): Hono<MemberRouteEnvironment> {
     const app = new Hono<MemberRouteEnvironment>();
     app.use("*", async (context, next) => {
@@ -163,8 +167,16 @@ describe("internal organization provisioning routes", () => {
       "/api/internal/organizations",
       createOrganizationProvisioningRoutes({
         service: { provisionOrganization: input.provisionOrganization },
+        entitlements: input.entitlements ?? {
+          async getEntitlement() {
+            return null;
+          },
+          async putEntitlement(entitlement: never) {
+            return entitlement;
+          },
+        },
         authenticate: input.authenticate,
-      }),
+      } as never),
     );
     return app;
   }
@@ -232,6 +244,82 @@ describe("internal organization provisioning routes", () => {
           limits: { activeEvents: 1 },
         }),
       }),
+    );
+  });
+  it("requires the internal credential before updating an entitlement", async () => {
+    const putEntitlement = vi.fn();
+    const response = await provisioningApp({
+      authenticate: () => false,
+      provisionOrganization: vi.fn(),
+      entitlements: {
+        async getEntitlement() {
+          return null;
+        },
+        putEntitlement,
+      },
+    }).request(
+      new Request("http://localhost/api/internal/organizations/org-enterprise/entitlement", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "entitlement-1",
+        },
+        body: JSON.stringify({
+          expectedRevision: 1,
+          entitlement: {
+            schemaVersion: 1,
+            organizationId: "org-enterprise",
+            revision: 2,
+            state: "restricted",
+            capabilities: [],
+            limits: { activeEvents: 0 },
+            notBefore: "2026-08-17T12:00:00.000Z",
+            expiresAt: null,
+          },
+        }),
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect(putEntitlement).not.toHaveBeenCalled();
+  });
+
+  it("forwards a revisioned entitlement update to the command repository", async () => {
+    const entitlement = {
+      schemaVersion: 1 as const,
+      organizationId: "org-enterprise",
+      revision: 2,
+      state: "restricted" as const,
+      capabilities: [] as string[],
+      limits: { activeEvents: 0 },
+      notBefore: "2026-08-17T12:00:00.000Z",
+      expiresAt: null,
+    };
+    const putEntitlement = vi.fn(async () => entitlement);
+    const response = await provisioningApp({
+      authenticate: (request) =>
+        request.headers.get("authorization") === "Bearer control-plane-token",
+      provisionOrganization: vi.fn(),
+      entitlements: {
+        async getEntitlement() {
+          return null;
+        },
+        putEntitlement,
+      },
+    }).request(
+      new Request("http://localhost/api/internal/organizations/org-enterprise/entitlement", {
+        method: "PUT",
+        headers: {
+          authorization: "Bearer control-plane-token",
+          "content-type": "application/json",
+          "idempotency-key": "entitlement-1",
+        },
+        body: JSON.stringify({ expectedRevision: 1, entitlement }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(putEntitlement).toHaveBeenCalledWith(
+      entitlement,
+      expect.objectContaining({ expectedRevision: 1 }),
     );
   });
 });

@@ -87,4 +87,31 @@ describe("organization policy", () => {
       code: scenario.expectedCode,
     } satisfies Partial<OrganizationPolicyError>);
   });
+
+  it("accepts monotonic entitlement revisions and rejects stale updates", async () => {
+    const repository = new InMemoryOrganizationEntitlementRepository([
+      entitlement({ revision: 1 }),
+    ]);
+    const next = entitlement({
+      revision: 2,
+      state: "restricted",
+      limits: { activeEvents: 0 },
+    });
+    await expect(
+      repository.putEntitlement(next, {
+        id: "audit-1",
+        traceId: "trace-1",
+        occurredAt: "2026-08-17T13:00:00.000Z",
+        expectedRevision: 1,
+      }),
+    ).resolves.toEqual(next);
+    await expect(
+      repository.putEntitlement(entitlement({ revision: 2, state: "active" }), {
+        id: "audit-2",
+        traceId: "trace-2",
+        occurredAt: "2026-08-17T13:01:00.000Z",
+        expectedRevision: 1,
+      }),
+    ).rejects.toMatchObject({ name: "OrganizationEntitlementConflictError" });
+  });
 });
