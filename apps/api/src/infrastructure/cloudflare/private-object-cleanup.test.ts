@@ -207,20 +207,12 @@ describe("private object deletion authority", () => {
       objectKey: "private/scanning.pdf",
       expiresAt: "2026-08-09T11:00:00.000Z",
     };
-    await privateObjectCleanupOutboxStatement(
-      db,
-      payload,
-      "2026-08-09T12:00:00.000Z",
-    ).run();
+    await privateObjectCleanupOutboxStatement(db, payload, "2026-08-09T12:00:00.000Z").run();
     db.executeScript(
       "UPDATE outbox_jobs SET state = 'delivered', completed_at = updated_at WHERE id LIKE 'private-object-delete:%';",
     );
 
-    await privateObjectCleanupOutboxStatement(
-      db,
-      payload,
-      "2026-08-09T13:00:00.000Z",
-    ).run();
+    await privateObjectCleanupOutboxStatement(db, payload, "2026-08-09T13:00:00.000Z").run();
 
     expect(
       db.query<{ state: string; completed_at: string | null }>(

@@ -67,7 +67,11 @@ const organizerHeadshotUploadSchema = z
     kind: z.literal("headshot"),
     fileName: z.string().trim().min(1).max(120),
     contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
-    sizeBytes: z.number().int().positive().max(5 * 1024 * 1024),
+    sizeBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(5 * 1024 * 1024),
     supersedesAssetId: z.string().trim().min(1).max(200).optional(),
     expectedLatestVersion: z.number().int().positive().optional(),
   })

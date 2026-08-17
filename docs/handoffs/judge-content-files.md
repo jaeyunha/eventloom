@@ -15,8 +15,8 @@ continues from the pushed head and must not rely on its stale base/head values.
 - Pull request state: `OPEN`, non-draft, `MERGEABLE`, not merged
 - Exact current GitHub-main base incorporated:
   `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
-- Exact current pushed head:
-  `1fc725d3aca46c557ef2ad34a1a28d110c02e9d9`
+- Exact behavior head verified by this handoff:
+  `754e4efee7dc4a12eeb431dc87b738eb19f3d127`
 - All current verification in this document is product-scoped and refers to
 this exact head and the `3e236387223e8e95fa9b2ee78d5e5dee1117882f` base.
 
