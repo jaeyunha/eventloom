@@ -252,7 +252,7 @@
 
 .details {
   display: grid;
-  align-content: start;
+  align-content: stretch;
   gap: 1rem;
   padding: 1rem 1.15rem 1.15rem;
   border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -327,7 +327,9 @@
 
 .scheduleFooter {
   display: grid;
+  align-content: end;
   gap: 0.75rem;
+  min-height: 0;
   margin-top: 0.75rem;
 }
 .timeHint {
