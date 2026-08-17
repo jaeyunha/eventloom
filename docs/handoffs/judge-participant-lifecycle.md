@@ -19,7 +19,7 @@ or delete the worktree until the lane is explicitly resumed.
 - PR state at checkpoint preparation: open, non-draft, held for quality
   re-review
 - Current GitHub main/base:
-  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0`
+  `a9d0019eac57aa90503a6623011e570e22620fcf`
 - Local pre-checkpoint HEAD:
   `d0eaafde195ba94650249e4c723fb836bab0885f`
 - Pushed PR head before this checkpoint:
@@ -58,7 +58,7 @@ at:
 
 - Rebased the local lane during implementation and then merged the newly
   advanced GitHub main
-  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0` without rewriting pushed
+  `a9d0019eac57aa90503a6623011e570e22620fcf` without rewriting pushed
   history.
 - Kept the PR diff free of the rejected roster implementation.
 - Changed submitted-proposal resumability so hydration is not gated by the
@@ -118,7 +118,7 @@ for these narrow findings:
 - Main advanced after the initial checkpoint push and introduced substantial
   agenda/publication changes. The final focused/full/browser gates must be
   rerun on the merge containing
-  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0` before the final push.
+  `a9d0019eac57aa90503a6623011e570e22620fcf` before the final push.
 
 ## Verification ledger
 
@@ -188,7 +188,7 @@ Update this ledger before pushing the checkpoint.
 - [x] Push the initial checkpoint to `judge-participant-lifecycle` on the
   `github` remote without force.
 - [x] Merge the newly advanced GitHub main
-  `a9d0019edcd8dc5f7bb19dd2c2e81539987f6ef0` without conflicts.
+  `a9d0019eac57aa90503a6623011e570e22620fcf` without conflicts.
 - [x] Rerun focused, full, and isolated browser gates after that final main
   merge.
   - Focused, runtime, `make check`, and `make test` passed.
