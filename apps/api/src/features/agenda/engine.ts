@@ -79,6 +79,10 @@ export class AgendaValidationError extends AgendaError {
   }
 }
 
+export type AgendaPublishedContentRefresh =
+  | { readonly status: "not-published" | "stale"; readonly revision: null }
+  | { readonly status: "created" | "unchanged"; readonly revision: PublishedAgendaRevision };
+
 export type AgendaEntryTemporalIssueCode =
   | "after_event_end"
   | "ambiguous_local_time"
@@ -973,7 +977,11 @@ export class AgendaEngine {
     });
   }
 
-  async publish(input: PublishAgendaInput): Promise<PublishedAgendaRevision> {
+  async publish(
+    input: PublishAgendaInput & {
+      afterPublish?: (revision: PublishedAgendaRevision) => Promise<void>;
+    },
+  ): Promise<PublishedAgendaRevision> {
     return this.mutate(input.eventId, async (state) => {
       assertDraftVersion(state, input.expectedVersion);
       requireNonEmpty(input.actorId, "actorId");
@@ -992,7 +1000,12 @@ export class AgendaEngine {
       }
       const current = currentRevision(state);
       if (current?.sourceDraftVersion === state.draft.version) {
-        return { state, result: current, changed: false };
+        return {
+          state,
+          result: current,
+          changed: false,
+          ...(input.afterPublish === undefined ? {} : { afterCommit: input.afterPublish }),
+        };
       }
 
       const preview = this.previewState(state);
@@ -1026,11 +1039,87 @@ export class AgendaEngine {
           ],
         },
         result: revision,
+        ...(input.afterPublish === undefined ? {} : { afterCommit: input.afterPublish }),
       };
     });
   }
 
-  async rollback(input: RollbackAgendaInput): Promise<PublishedAgendaRevision> {
+  async refreshPublishedContent(input: {
+    eventId: string;
+    actorId: string;
+    expectedCatalogVersion: number;
+    catalog: AgendaCatalog;
+    afterRefresh?: (refresh: AgendaPublishedContentRefresh) => Promise<void>;
+  }): Promise<AgendaPublishedContentRefresh> {
+    return this.mutate<AgendaPublishedContentRefresh>(input.eventId, async (state) => {
+      requireNonEmpty(input.actorId, "actorId");
+      if (state.draft.version !== input.expectedCatalogVersion) {
+        return {
+          state,
+          result: { status: "stale" as const, revision: null },
+          changed: false,
+        };
+      }
+      const current = currentRevision(state);
+      if (current === null) {
+        return {
+          state,
+          result: { status: "not-published" as const, revision: null },
+          changed: false,
+        };
+      }
+      const entries = refreshPublishedEntries(input.catalog, current.entries);
+      if (publishedEntriesEqual(entries, current.entries)) {
+        const result = { status: "unchanged" as const, revision: current };
+        return {
+          state,
+          result,
+          changed: false,
+          ...(input.afterRefresh === undefined ? {} : { afterCommit: input.afterRefresh }),
+        };
+      }
+
+      const now = this.now();
+      const revision: PublishedAgendaRevision = {
+        id: this.#idGenerator.nextId("revision"),
+        eventId: state.eventId,
+        revisionNumber: state.revisions.length + 1,
+        sourceDraftVersion: current.sourceDraftVersion,
+        timeZone: state.timeZone,
+        entries,
+        warningOverrides: structuredClone(current.warningOverrides),
+        publishedAt: now,
+        publishedBy: input.actorId,
+        rollbackOfRevisionId: null,
+      };
+      const outbox = this.outbox(state.eventId, revision.id, now);
+      const result = { status: "created" as const, revision };
+      return {
+        state: {
+          ...state,
+          stateVersion: state.stateVersion + 1,
+          revisions: [...state.revisions, revision],
+          currentPublishedRevisionId: revision.id,
+          outbox: [...state.outbox, ...outbox],
+          audit: [
+            ...state.audit,
+            this.audit(state.eventId, input.actorId, "agenda.content-refreshed", now, {
+              previousRevisionId: current.id,
+              revisionId: revision.id,
+            }),
+          ],
+        },
+        result,
+        ...(input.afterRefresh === undefined ? {} : { afterCommit: input.afterRefresh }),
+      };
+    });
+  }
+
+  async rollback(
+    input: RollbackAgendaInput & {
+      afterRollback?: (revision: PublishedAgendaRevision) => Promise<void>;
+    },
+  ): Promise<PublishedAgendaRevision> {
     return this.mutate(input.eventId, async (state) => {
       assertDraftVersion(state, input.expectedVersion);
       requireNonEmpty(input.actorId, "actorId");
@@ -1042,7 +1131,12 @@ export class AgendaEngine {
         );
       }
       if (state.currentPublishedRevisionId === target.id) {
-        return { state, result: target, changed: false };
+        return {
+          state,
+          result: target,
+          changed: false,
+          ...(input.afterRollback === undefined ? {} : { afterCommit: input.afterRollback }),
+        };
       }
 
       validateStoredEntries(target.entries, state);
@@ -1094,6 +1188,7 @@ export class AgendaEngine {
           ],
         },
         result: revision,
+        ...(input.afterRollback === undefined ? {} : { afterCommit: input.afterRollback }),
       };
     });
   }
@@ -1181,9 +1276,12 @@ export class AgendaEngine {
   }
   private async mutate<T>(
     eventId: string,
-    operation: (
-      state: AgendaState,
-    ) => Promise<{ state: AgendaState; result: T; changed?: boolean }>,
+    operation: (state: AgendaState) => Promise<{
+      state: AgendaState;
+      result: T;
+      changed?: boolean;
+      afterCommit?: (result: T) => Promise<void>;
+    }>,
   ): Promise<T> {
     return this.mutationLock.runExclusive(eventId, async () => {
       const eventSchedule = await this.requireEventSchedule(eventId);
@@ -1191,7 +1289,10 @@ export class AgendaEngine {
       const authoritative = alignAgendaTimeZone(current, eventSchedule.timeZone);
       const change = await operation(authoritative.state);
       if (change.changed === false && !authoritative.changed) {
-        return structuredClone(change.result);
+        const result = structuredClone(change.result);
+        await this.mutationLock.renew?.(eventId);
+        await change.afterCommit?.(result);
+        return result;
       }
       const nextState =
         change.changed === false
@@ -1205,6 +1306,7 @@ export class AgendaEngine {
       if (published !== undefined) {
         validateStoredAgendaEntriesWithinEvent(published.entries, eventSchedule);
       }
+      await this.mutationLock.renew?.(eventId);
       try {
         await this.repository.compareAndSwap(eventId, current.stateVersion, nextState);
       } catch (error) {
@@ -1216,7 +1318,10 @@ export class AgendaEngine {
         }
         throw error;
       }
-      return structuredClone(change.result);
+      const result = structuredClone(change.result);
+      await this.mutationLock.renew?.(eventId);
+      await change.afterCommit?.(result);
+      return result;
     });
   }
 
@@ -2060,6 +2165,80 @@ function currentRevision(
   return (
     state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ?? null
   );
+}
+
+interface PublishedEntryMetadata {
+  readonly title: string;
+  readonly summary: string;
+  readonly format: string;
+  readonly speakerNames: readonly string[];
+  readonly roomName: string;
+  readonly trackNames: readonly string[];
+}
+
+function publishedEntryMetadata(entry: AgendaEntry): PublishedEntryMetadata {
+  const metadata = entry.metadata;
+  return {
+    title: metadata?.title ?? entry.sessionId,
+    summary: metadata?.summary ?? "",
+    format: metadata?.format ?? "Session",
+    speakerNames: metadata?.speakerNames ?? [],
+    roomName: metadata?.roomName ?? entry.roomId,
+    trackNames: metadata?.trackNames ?? [],
+  };
+}
+
+function refreshPublishedEntries(
+  catalog: AgendaCatalog,
+  entries: readonly AgendaEntry[],
+): readonly AgendaEntry[] {
+  const sessions = new Map(catalog.sessions.map((session) => [session.id, session]));
+  const rooms = new Map(catalog.rooms.map((room) => [room.id, room]));
+  const tracks = new Map(catalog.tracks.map((track) => [track.id, track]));
+  return entries.map((entry) => {
+    const current = publishedEntryMetadata(entry);
+    const session = sessions.get(entry.sessionId);
+    const resolvedTrackNames = entry.trackIds.flatMap((trackId) => {
+      const track = tracks.get(trackId);
+      return track === undefined ? [] : [track.name];
+    });
+    return {
+      ...structuredClone(entry),
+      metadata: {
+        title: session?.title ?? current.title,
+        summary: session === undefined ? current.summary : (session.summary?.trim() ?? ""),
+        format: session === undefined ? current.format : session.format?.trim() || "Session",
+        speakerNames:
+          session === undefined ? [...current.speakerNames] : [...(session.speakerNames ?? [])],
+        roomName: rooms.get(entry.roomId)?.name ?? current.roomName,
+        trackNames:
+          resolvedTrackNames.length === entry.trackIds.length
+            ? resolvedTrackNames
+            : [...current.trackNames],
+      },
+    };
+  });
+}
+
+function publishedEntriesEqual(
+  left: readonly AgendaEntry[],
+  right: readonly AgendaEntry[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    if (other === undefined || entry.id !== other.id || !entriesEqual(entry, other)) return false;
+    const leftMetadata = publishedEntryMetadata(entry);
+    const rightMetadata = publishedEntryMetadata(other);
+    return (
+      leftMetadata.title === rightMetadata.title &&
+      leftMetadata.summary === rightMetadata.summary &&
+      leftMetadata.format === rightMetadata.format &&
+      leftMetadata.speakerNames.join("\u0000") === rightMetadata.speakerNames.join("\u0000") &&
+      leftMetadata.roomName === rightMetadata.roomName &&
+      leftMetadata.trackNames.join("\u0000") === rightMetadata.trackNames.join("\u0000")
+    );
+  });
 }
 
 function diffEntries(

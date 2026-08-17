@@ -1060,6 +1060,13 @@ function releaseForCompletion(
   ) {
     throw conflict("The pending program release is no longer current.");
   }
+  if (
+    release.reservationOwnerId === null ||
+    release.reservationOwnerId === undefined ||
+    release.reservationOwnerId !== input.reservationOwnerId
+  ) {
+    throw conflict("The pending program release reservation is no longer owned by this operation.");
+  }
   return release;
 }
 
@@ -1070,6 +1077,7 @@ export class ProgramPublicationService {
   readonly #eventRepository: Pick<EventRepository, "getEvent">;
   readonly #clock: () => Date;
   readonly #generateId: () => string;
+  readonly #reservationTtlMs: number;
 
   constructor(
     repository: ProgramPublicationRepository,
@@ -1082,6 +1090,7 @@ export class ProgramPublicationService {
     this.#eventRepository = dependencies.eventRepository;
     this.#clock = options.clock ?? (() => new Date());
     this.#generateId = options.generateId ?? (() => crypto.randomUUID());
+    this.#reservationTtlMs = options.reservationTtlMs ?? 300_000;
   }
 
   async getState(
@@ -1098,6 +1107,43 @@ export class ProgramPublicationService {
     actor: EventActor,
     input: ProgramPublicationRebuildRequest,
   ): Promise<ProgramPublicationState> {
+    const pending = await this.reserveRebuild(actor, input);
+    const releaseId = pending.pendingReleaseId;
+    const revision = pending.pendingRevision;
+    if (releaseId === null || revision === null) {
+      throw new Error("The reserved publication rebuild is missing pending release metadata.");
+    }
+    const reservationOwnerId = pending.releases.find(
+      (release) => release.id === releaseId && release.revision === revision,
+    )?.reservationOwnerId;
+    if (reservationOwnerId === null || reservationOwnerId === undefined) {
+      throw new Error("The reserved publication rebuild is missing reservation ownership.");
+    }
+    try {
+      await this.#enqueue.enqueue({
+        organizationId: pending.organizationId,
+        eventId: pending.eventId,
+        releaseId,
+        revision,
+      });
+      return pending;
+    } catch (error) {
+      return this.failRebuild({
+        organizationId: pending.organizationId,
+        eventId: pending.eventId,
+        releaseId,
+        revision,
+        expectedPublicationVersion: pending.version,
+        reservationOwnerId,
+        reason: error instanceof Error ? error.message : "Publication rebuild enqueue failed.",
+      });
+    }
+  }
+
+  async reserveRebuild(
+    actor: EventActor,
+    input: ProgramPublicationRebuildRequest,
+  ): Promise<ProgramPublicationState> {
     const organizationId = organizationFromInput(actor, input.organizationId);
     const scopedEventId = eventId(input.eventId);
     const actorId = actorUserId(actor);
@@ -1105,10 +1151,94 @@ export class ProgramPublicationService {
     if (!programPublicationSourceTriggers.includes(input.trigger)) {
       throw validation("trigger is not an approved program publication source transition.");
     }
+    const reservationStartedAt = this.#clock();
+    const reservationOwnerId = text(
+      input.reservationOwnerId ??
+        `publication:${organizationId}:${scopedEventId}:${input.trigger}:${input.agendaProjectionId}:${input.speakerProjectionId}`,
+      "reservationOwnerId",
+      256,
+    );
+    const reservationExpiresAt = instant(
+      input.reservationExpiresAt ??
+        new Date(reservationStartedAt.getTime() + this.#reservationTtlMs).toISOString(),
+      "reservationExpiresAt",
+    );
+    if (Date.parse(reservationExpiresAt) <= reservationStartedAt.getTime()) {
+      throw validation("reservationExpiresAt must be later than the reservation start.");
+    }
 
-    const current = await this.#repository.getState(organizationId, scopedEventId);
+    const storedCurrent = await this.#repository.getState(organizationId, scopedEventId);
+    let current = storedCurrent;
     if (current?.pendingRevision !== null && current?.pendingRevision !== undefined) {
-      throw conflict("A program publication rebuild is already pending.");
+      const pendingRelease = current.releases.find(
+        (release) =>
+          release.id === current?.pendingReleaseId && release.revision === current.pendingRevision,
+      );
+      if (pendingRelease === undefined) {
+        throw conflict("The pending program publication release could not be resolved.");
+      }
+      const requestedParentRevision =
+        input.parentServedRevision === undefined
+          ? (current.servedRevision ?? null)
+          : input.parentServedRevision;
+      const identicalReservation =
+        pendingRelease.sourceTrigger === input.trigger &&
+        pendingRelease.agendaProjectionId === input.agendaProjectionId &&
+        pendingRelease.agendaRevisionNumber === input.agendaRevisionNumber &&
+        pendingRelease.agendaSourceHash === input.agendaSourceHash &&
+        pendingRelease.speakerProjectionId === input.speakerProjectionId &&
+        pendingRelease.speakerRevisionNumber === input.speakerRevisionNumber &&
+        pendingRelease.speakerSourceHash === input.speakerSourceHash &&
+        pendingRelease.approvedContentRevision === input.approvedContentRevision &&
+        pendingRelease.approvedProfileRevision === input.approvedProfileRevision &&
+        pendingRelease.releasedAssetRevision === input.releasedAssetRevision &&
+        pendingRelease.parentServedRevision === requestedParentRevision;
+      const reservationOwned = pendingRelease.reservationOwnerId === reservationOwnerId;
+      const reservationExpired =
+        Date.parse(
+          pendingRelease.reservationExpiresAt ??
+            new Date(Date.parse(pendingRelease.publishedAt) + this.#reservationTtlMs).toISOString(),
+        ) <= reservationStartedAt.getTime();
+      if (identicalReservation) {
+        if (reservationOwned && !reservationExpired) return clone(current);
+        if (reservationExpired) {
+          const reassigned: ProgramPublicationState = {
+            ...current,
+            version: current.version + 1,
+            releases: current.releases.map((release) =>
+              release.id === pendingRelease.id
+                ? {
+                    ...release,
+                    reservationOwnerId,
+                    reservationExpiresAt,
+                  }
+                : release,
+            ),
+          };
+          await this.#savePublication(current, reassigned);
+          return clone(reassigned);
+        }
+        throw conflict("A program publication rebuild is already active.");
+      }
+      if (!reservationOwned && !reservationExpired) {
+        throw conflict("A program publication rebuild is already active.");
+      }
+      current = {
+        ...current,
+        pendingRevision: null,
+        pendingReleaseId: null,
+        releases: current.releases.map((release) =>
+          release.id === pendingRelease.id
+            ? {
+                ...release,
+                lifecycle: "failed",
+                reservationOwnerId: null,
+                reservationExpiresAt: null,
+                failureReason: "Superseded by a newer publication reservation.",
+              }
+            : release,
+        ),
+      };
     }
     if (
       input.trigger === "initial-publication" &&
@@ -1134,7 +1264,7 @@ export class ProgramPublicationService {
 
     const revision = (current?.releases.at(-1)?.revision ?? 0) + 1;
     const releaseId = text(this.#generateId(), "release id", 128);
-    const now = instant(this.#clock().toISOString(), "publishedAt");
+    const now = instant(reservationStartedAt.toISOString(), "publishedAt");
     const manifest: ProgramPublicationManifest = {
       id: releaseId,
       organizationId,
@@ -1162,6 +1292,8 @@ export class ProgramPublicationService {
       rollbackTargetRevision: null,
       cacheRevision: (current?.releases.at(-1)?.cacheRevision ?? 0) + 1,
       sourceTrigger: input.trigger,
+      reservationOwnerId,
+      reservationExpiresAt,
       failureReason: null,
     };
     const pending: ProgramPublicationState = {
@@ -1178,7 +1310,7 @@ export class ProgramPublicationService {
       await this.#repository.compareAndSwap(
         organizationId,
         scopedEventId,
-        current?.version ?? null,
+        storedCurrent?.version ?? null,
         pending,
       );
     } catch (error) {
@@ -1188,19 +1320,7 @@ export class ProgramPublicationService {
       throw error;
     }
 
-    try {
-      await this.#enqueue.enqueue({ organizationId, eventId: scopedEventId, releaseId, revision });
-      return clone(pending);
-    } catch (error) {
-      return this.failRebuild({
-        organizationId,
-        eventId: scopedEventId,
-        releaseId,
-        revision,
-        expectedPublicationVersion: pending.version,
-        reason: error instanceof Error ? error.message : "Publication rebuild enqueue failed.",
-      });
-    }
+    return clone(pending);
   }
 
   async completeRebuild(
@@ -1211,10 +1331,19 @@ export class ProgramPublicationService {
     const current = await this.#repository.getState(organizationId, scopedEventId);
     if (current === null) throw notFound();
     const pendingRelease = releaseForCompletion(current, input);
+    if (
+      pendingRelease.reservationExpiresAt === null ||
+      pendingRelease.reservationExpiresAt === undefined ||
+      Date.parse(pendingRelease.reservationExpiresAt) <= this.#clock().getTime()
+    ) {
+      throw conflict("The pending program release reservation has expired.");
+    }
     const servedRelease: ProgramPublicationManifest = {
       ...pendingRelease,
       lifecycle: "served",
       publishedAt: instant(this.#clock().toISOString(), "publishedAt"),
+      reservationOwnerId: null,
+      reservationExpiresAt: null,
       failureReason: null,
     };
     const next: ProgramPublicationState = {
@@ -1228,13 +1357,13 @@ export class ProgramPublicationService {
         release.id === servedRelease.id ? servedRelease : release,
       ),
     };
-    await this.#savePublication(current, next);
     await this.#cacheInvalidation.invalidate({
       organizationId,
       eventId: scopedEventId,
       revision: servedRelease.revision,
       cacheRevision: servedRelease.cacheRevision,
     });
+    await this.#savePublication(current, next);
     return clone(next);
   }
 
@@ -1247,6 +1376,8 @@ export class ProgramPublicationService {
     const failedRelease: ProgramPublicationManifest = {
       ...pendingRelease,
       lifecycle: "failed",
+      reservationOwnerId: null,
+      reservationExpiresAt: null,
       failureReason: text(input.reason, "reason", 2_000),
     };
     const next: ProgramPublicationState = {
@@ -1296,6 +1427,8 @@ export class ProgramPublicationService {
       lifecycle: "served",
       actorId,
       publishedAt: instant(this.#clock().toISOString(), "publishedAt"),
+      reservationOwnerId: null,
+      reservationExpiresAt: null,
       parentServedRevision: current.servedRevision,
       rollbackTargetRevision: target.revision,
       cacheRevision: (current.releases.at(-1)?.cacheRevision ?? 0) + 1,

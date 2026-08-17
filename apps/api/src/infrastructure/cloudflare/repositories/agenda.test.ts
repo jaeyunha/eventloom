@@ -213,7 +213,7 @@ describe("D1 agenda repository commands", () => {
 
     const speakerProjection = findStatement(db, "speaker_names_json");
     expect(speakerProjection?.bound.query).toContain(
-      "COALESCE(NULLIF(TRIM(display_name),''),'Speaker')",
+      "CASE WHEN NULLIF(TRIM(display_name),'') IS NULL OR TRIM(display_name)=speaker_id THEN 'Speaker' ELSE display_name END",
     );
     expect(speakerProjection?.bound.query).not.toContain("COALESCE(display_name,speaker_id)");
   });

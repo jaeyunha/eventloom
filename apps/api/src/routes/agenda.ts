@@ -904,8 +904,8 @@ export function createAgendaAdminRoutes(
       eventId,
       actorId: principal.userId,
       ...input,
+      afterPublish: (revision) => completePublicationHandoff(dependencies, eventId, revision),
     });
-    await completePublicationHandoff(dependencies, eventId, data);
     return context.json({ data });
   });
 
@@ -926,8 +926,8 @@ export function createAgendaAdminRoutes(
       eventId,
       actorId: principal.userId,
       ...input,
+      afterRollback: (revision) => completePublicationHandoff(dependencies, eventId, revision),
     });
-    await completePublicationHandoff(dependencies, eventId, data);
     return context.json({ data });
   });
 
@@ -1139,6 +1139,7 @@ function publishedEntryView(entry: PublishedAgendaRevision["entries"][number]) {
     format: firstTextValue(metadata, ["format"]) ?? "Session",
     speakerNames: firstSpeakerNamesValue(metadata, ["speakerNames"]) ?? [],
     roomName: firstTextValue(metadata, ["roomName"]) ?? "",
+    trackIds: [...entry.trackIds],
     trackNames: firstStringArrayValue(metadata, ["trackNames"]) ?? [],
     startsAt: entry.startsAt,
     endsAt: entry.endsAt,
@@ -1407,7 +1408,7 @@ function writeAgendaCacheResponse(
   scheduleAgendaCachePut(context, state, workerCache, path, entry, generation);
 }
 
-async function invalidatePublishedAgendaCache(
+export async function invalidatePublishedAgendaCache(
   engine: AgendaEngine,
   eventId: string,
   revision: PublishedAgendaRevision,
