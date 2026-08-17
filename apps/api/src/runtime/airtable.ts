@@ -3236,6 +3236,9 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       return this.#sessionService.upsertAcceptedSession({
         session: base,
         actorId: input.decidedBy,
+        ...(input.isCurrentDecision === undefined
+          ? {}
+          : { beforePersist: input.isCurrentDecision }),
         decisionFence: input.decisionFence,
       });
     }

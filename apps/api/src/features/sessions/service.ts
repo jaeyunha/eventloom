@@ -66,6 +66,7 @@ export interface AcceptedSessionProjectionInput {
   readonly session: Session;
   readonly actorId: string;
   readonly decisionFence?: DecisionVersionFence | undefined;
+  readonly beforePersist?: () => Promise<boolean>;
 }
 type SessionListItem = Omit<Session, "history">;
 type SessionListPageProjection = Omit<SessionListPage, "items"> & {
@@ -605,6 +606,9 @@ export class SessionService {
         history: current === null ? [] : orderedSessionHistory(current.history),
       };
       if (current !== null && acceptedSessionFieldsEqual(current, desired)) {
+        if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+          throw conflict("accepted session decision");
+        }
         await this.synchronizeAgenda(projectionActor, eventId);
         return sessionProjection(current);
       }
@@ -650,6 +654,9 @@ export class SessionService {
         next,
       );
       try {
+        if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+          throw conflict("accepted session decision");
+        }
         if (this.#repository.commit !== undefined) {
           await this.#repository.commit({
             operation: "putSession",
@@ -659,6 +666,9 @@ export class SessionService {
             ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
           });
         } else {
+          if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+            throw conflict("accepted session decision");
+          }
           await this.#repository.putSession(next, current?.version ?? null, input.decisionFence);
           await this.recordAudit(audit);
         }

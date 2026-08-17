@@ -2993,6 +2993,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       if (!(await isCurrentDecision())) return;
       await sessionService.upsertAcceptedSession({
         actorId: input.decidedBy,
+        ...(input.isCurrentDecision === undefined
+          ? {}
+          : { beforePersist: input.isCurrentDecision }),
         decisionFence: input.decisionFence,
         session: {
           id: `session-${material.id}`,
