@@ -101,3 +101,5 @@ tests for the new put path may still need expansion before delivery.
 
 - Added `apps/api/migrations/0035_idempotency_lease_fencing.sql` for idempotency lease fencing.
 - Migration number `0035` collides with active speaker-asset renumbering on `judge-content-files`; reconcile numbering before merge.
+
+- Corrected migration target table/column names to `idempotency_records.lease_id` and `state = processing`.
