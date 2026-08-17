@@ -318,6 +318,7 @@ function healthBadgeVariant(
 export interface AirtableIntegrationProps {
   readonly organizationId: string;
   readonly organizationName?: string;
+  readonly embedded?: boolean;
   readonly initialSnapshot?: AirtableIntegrationSnapshot;
   readonly api?: AirtableIntegrationApi;
 }
@@ -325,6 +326,7 @@ export interface AirtableIntegrationProps {
 export function AirtableIntegration({
   organizationId,
   organizationName,
+  embedded = false,
   initialSnapshot,
   api: injectedApi,
 }: AirtableIntegrationProps) {
@@ -506,24 +508,28 @@ export function AirtableIntegration({
     : false;
 
   return (
-    <div className={styles.integrationPage}>
-      <a className={styles.skipLink} href="#airtable-content">
-        Skip to Airtable settings
-      </a>
-      <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-        <a href="/admin">Organizations</a>
-        <span aria-hidden="true">/</span>
-        <a href={`/admin/organizations/${encodeURIComponent(organizationId)}`}>
-          {organizationName ?? "Organization"}
-        </a>
-        <span aria-hidden="true">/</span>
-        <span>Airtable</span>
-      </nav>
-      <PageHeader
-        eyebrow={<span className={styles.eyebrow}>Organizer workspace</span>}
-        title="Airtable"
-        description="Link an Airtable base, monitor projection health, and resolve conflicts between D1 and Airtable records."
-      />
+    <div className={embedded ? styles.integrationEmbedded : styles.integrationPage}>
+      {embedded ? null : (
+        <>
+          <a className={styles.skipLink} href="#airtable-content">
+            Skip to Airtable settings
+          </a>
+          <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
+            <a href="/admin">Organizations</a>
+            <span aria-hidden="true">/</span>
+            <a href={`/admin/organizations/${encodeURIComponent(organizationId)}`}>
+              {organizationName ?? "Organization"}
+            </a>
+            <span aria-hidden="true">/</span>
+            <span>Airtable</span>
+          </nav>
+          <PageHeader
+            eyebrow={<span className={styles.eyebrow}>Organizer workspace</span>}
+            title="Airtable"
+            description="Link an Airtable base, monitor projection health, and resolve conflicts between D1 and Airtable records."
+          />
+        </>
+      )}
 
       <div
         id="airtable-content"
@@ -639,7 +645,7 @@ export function AirtableIntegration({
                     </div>
                   ) : null}
                   {showDisconnect ? (
-                    <div className={styles.confirmation}>
+                    <label className={styles.confirmation} htmlFor="airtable-confirm-disconnect">
                       <input
                         id="airtable-confirm-disconnect"
                         type="checkbox"
@@ -650,7 +656,7 @@ export function AirtableIntegration({
                         I understand projection will stop and existing Airtable tables will keep
                         their last values until I reconnect.
                       </span>
-                    </div>
+                    </label>
                   ) : null}
                   {showDisconnect ? (
                     <div className={styles.actionRow}>

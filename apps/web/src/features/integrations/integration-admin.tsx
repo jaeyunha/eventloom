@@ -282,6 +282,7 @@ export function IntegrationAdmin({
         wide
         navigation={
           <nav className={styles.settingsNavigation} aria-label="Integration settings">
+            <p className={styles.settingsNavigationTitle}>Event</p>
             {tabs.map((tab) => (
               <a
                 key={tab.section}
