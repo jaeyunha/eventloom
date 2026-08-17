@@ -464,7 +464,7 @@ describe("durable speaker communications", () => {
       data: { portal_url: "https://event.example.test/login?next=/work" },
       protectedRecipientDataKeys: ["portal_url"],
     });
-    await durable.service.sendGroup(communicationActor, {
+    const historicalSend = await durable.service.sendGroup(communicationActor, {
       eventId: ids.eventId,
       previewId: historicalPreview.id,
       idempotencyKey: "welcome-once",
@@ -493,6 +493,12 @@ describe("durable speaker communications", () => {
       templateId: "ignored-client-template",
       idempotencyKey: "welcome-once",
     } as const;
+    await lifecycle.database
+      .prepare(
+        "DELETE FROM communication_recipients WHERE organization_id=? AND event_id=? AND id=?",
+      )
+      .bind(ids.organizationId, ids.eventId, "participant-priya")
+      .run();
     const first = await service.sendOrganizerSpeakerInvitations(input);
     const replay = await service.sendOrganizerSpeakerInvitations(input);
     expect(first.recipients).toHaveLength(1);
@@ -507,6 +513,24 @@ describe("durable speaker communications", () => {
     expect(delivered[0]?.text).toContain("review and accept your speaker invitation");
     expect(delivered[0]?.text).toContain("https://event.example.test/login?next=/work");
     expect(JSON.stringify(delivered)).not.toMatch(/grant|token|secret/iu);
+
+    await lifecycle.database
+      .prepare(
+        "UPDATE communication_send_recipients SET data_json=? WHERE send_id=? AND recipient_id=?",
+      )
+      .bind(
+        JSON.stringify({ portal_url: "https://attacker.example/work-hub" }),
+        historicalSend.id,
+        "participant-priya",
+      )
+      .run();
+    await expect(service.sendOrganizerSpeakerInvitations(input)).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof SpeakerServiceError &&
+        error.code === "VERSION_CONFLICT" &&
+        error.status === 409,
+    );
+    expect(delivered).toHaveLength(1);
 
     await expect(
       service.sendOrganizerSpeakerInvitations({

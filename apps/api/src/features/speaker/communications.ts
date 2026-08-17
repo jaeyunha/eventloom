@@ -175,7 +175,7 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
     }));
   }
 
-  async sendInvitations(input: Parameters<SpeakerCommunications["sendInvitations"]>[0]) {
+  async findInvitationReplay(input: Parameters<SpeakerCommunications["findInvitationReplay"]>[0]) {
     const actor = speakerCommunicationActor(input.organizationId, input.eventId, input.accountId);
     const prior = (await this.communications.listSends(actor, input.eventId)).find(
       (send) => send.idempotencyKey === input.idempotencyKey,
@@ -192,10 +192,14 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
         .map((recipient) => recipient.id)
         .sort((a, b) => a.localeCompare(b));
       const requestedRecipients = [...input.participantIds].sort((a, b) => a.localeCompare(b));
+      const trustedRenderData =
+        prior.data.portal_url === this.workHubUrl() &&
+        prior.recipients.every((recipient) => recipient.data.portal_url === undefined);
       if (
         prior.purpose !== "organizer_group_email" ||
         prior.audience !== "all_participants" ||
         !trustedTemplate ||
+        !trustedRenderData ||
         priorRecipients.length !== requestedRecipients.length ||
         priorRecipients.some((participantId, index) => participantId !== requestedRecipients[index])
       ) {
@@ -223,6 +227,12 @@ export class CommunicationSpeakerCommunications implements SpeakerCommunications
         recipients,
       };
     }
+    return null;
+  }
+
+  async sendInvitations(input: Parameters<SpeakerCommunications["sendInvitations"]>[0]) {
+    const replay = await this.findInvitationReplay(input);
+    if (replay !== null) return replay;
     const template = await this.ensureWelcomeTemplate(input);
     const preview = await this.preview({
       ...input,

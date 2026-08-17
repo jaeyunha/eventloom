@@ -7191,6 +7191,15 @@ export class SpeakerService {
         "The invitation idempotency key",
         300,
       );
+      const replay = await communications.findInvitationReplay({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        accountId: input.accountId,
+        participantIds,
+        idempotencyKey,
+      });
+      if (replay !== null) return replay;
+
       const recipients = await communications.previewInvitations({
         organizationId: input.organizationId,
         eventId: input.eventId,

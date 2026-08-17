@@ -1,491 +1,268 @@
 # Judge Speaker Email Lane Handoff
 
-## Status
+## Current Status
 
-**PAUSED BY USER REQUEST.**
+**RETIRED BY USER DIRECTION.**
 
-Do not resume feature work, run gates, start reviewers, commit, push, open a PR, or
-merge this lane until the user explicitly resumes it. The user requested that all
-lane-owned tests, builds, reviewers, child tasks, and development servers be stopped
-while every lane-owned worktree edit is preserved.
+The lane retirement boundary superseded the remaining PR-delivery objective. The final
+allowed work was limited to the historical replay security correction, focused/exact
+verification, coherent organizer-surface screenshot correction, handoff update,
+checkpoint commit/push, and one detailed GitHub handoff issue.
 
-At pause time:
+Do not resume feature work, open a PR, merge, deploy, or recreate this worktree unless
+the user explicitly starts a new task.
 
-- No lane-owned test, build, Playwright, Next.js, Wrangler, Workerd, reviewer, or child
-  task remained active.
-- No lane commit, push, PR, merge, or deployment had occurred.
-- The dirty worktree was intentionally preserved.
+## Repository and Git State
 
-Checkpoint hardening was performed on 2026-08-17 at the user's request without
-resuming feature scope. No TypeScript source edit was required: the API and web
-typechecks passed, the narrow five-file regression suite passed, generated artifacts
-were removed, and the handoff was updated with the resulting evidence.
-Those checkpoint commands reported no unrelated or pre-existing test/typecheck failure.
-The separately reported Airtable review risks remain recorded below and were not
-retested or expanded into this checkpoint.
-
-## Repository, Branch, and Worktree
-
-| Item | Exact value |
+| Item | Current value |
 | --- | --- |
-| Repository | `open-sessionboard` / Eventloom |
-| GitHub remote | `https://github.com/jaeyunha/open-sessionboard.git` |
-| Forge remote | `https://forge.smol.ai/jaeyunha/open-sessionboard.git` |
+| Repository | [`jaeyunha/eventloom`](https://github.com/jaeyunha/eventloom) |
 | Local branch | `judge-speaker-email` |
-| Upstream | None configured |
 | Worktree | `/Users/jaeyunha/wt/open-sessionboard/judge-speaker-email` |
-| Lane HEAD | `7d6601961367e3eefb87ddbc1cd3236332cc7ee3` |
-| Lane implementation base | `7d6601961367e3eefb87ddbc1cd3236332cc7ee3` |
-| Current local `main` | `6467ff1f48c73229c5c45dba6b4716df724a3bdd` |
-| Current local `github/main` | `6467ff1f48c73229c5c45dba6b4716df724a3bdd` |
-| Current GitHub `main` from `git ls-remote` | `6467ff1f48c73229c5c45dba6b4716df724a3bdd` |
-| Merge base of HEAD and `github/main` | `7d6601961367e3eefb87ddbc1cd3236332cc7ee3` |
-| Committed divergence | Lane is 0 commits ahead and 2 commits behind `github/main` |
+| Pre-retirement committed HEAD | `214ea50056bd4c3ab9b02b5d37ab0bfdfc08ac4c` |
+| Integrated `github/main` | `a9d0019eac57aa90503a6623011e570e22620fcf` |
+| Merge base | `a9d0019eac57aa90503a6623011e570e22620fcf` |
+| Remote branch before retirement push | `272b6044e9eda4c4243f0b06162168dd4eb61e28` |
+| Upstream | `github/judge-speaker-email` |
+| Pull request | None; intentionally not created under the retirement boundary |
+| GitHub handoff issue | [#53](https://github.com/jaeyunha/eventloom/issues/53) |
 
-The two commits now on `main` but not on this lane are:
+`214ea500` is the local merge of exact `github/main` into the pushed checkpoint. The
+retirement commit adds the final replay-security source/tests and this handoff. The
+exact pushed retirement SHA is recorded in GitHub issue #53 and is the final branch
+HEAD.
 
-1. `6823643` — `fix(agenda): make public propagation atomic`
-2. `6467ff1` — `Merge pull request #42 from jaeyunha/judge-embed-propagation`
+## Objective and Scope
 
-As of this handoff, those two commits do not change any path in the current
-speaker-email lane diff. They do change `apps/api/src/runtime/airtable.ts`, so the
-pre-existing Airtable review findings recorded below must be rechecked after the lane
-is synchronized with current `main`.
+SPK-13 fixes speaker bulk-email body divergence by making plaintext the canonical
+organizer-controlled draft across save, exact-version preview, generated HTML, raw
+multipart MIME, provider delivery, and idempotent replay.
 
-## Pull Request State
+In scope:
 
-- PR URL: **None**
-- PR state: **No PR exists**
-- Remote branch `github/judge-speaker-email`: **Does not exist**
-- Local branch upstream: **Not configured**
-- Merge state: **No merge is in progress and no lane merge has occurred**
+- Save dirty existing drafts before preview.
+- Bind preview/send to the exact newly saved version.
+- Generate escaped semantic HTML from canonical plaintext.
+- Keep generated HTML read-only and omit browser-supplied HTML.
+- Continue accepting legacy API `html` input while discarding its value.
+- Resolve merge variables in both MIME parts with no literal output token.
+- Protect the server-controlled `portal_url`.
+- Preserve retry and historical invitation idempotency.
+- Reject same-key/different-payload races.
+- Exercise API, browser, raw-MIME, and real organizer surfaces.
 
-The command below returned an empty array:
+Out of scope:
 
-```bash
-gh pr list --head judge-speaker-email --state all \
-  --json number,url,state,title,isDraft,headRefName,baseRefName
-```
-
-## Lane Objective and Scope
-
-### Objective
-
-Complete SPK-13 so the speaker bulk-email editor, preview, persisted template version,
-generated MIME, provider delivery, and idempotent replay all use one current canonical
-draft. Plaintext is the organizer-controlled canonical body; HTML is generated by the
-server from that exact plaintext instead of accepting an independently stale or hostile
-HTML body.
-
-### In scope
-
-- Speaker organizer-group email templates and invitation sends.
-- Saving the latest dirty existing template before preview.
-- Binding preview and send to one exact approved template version.
-- Generating escaped semantic HTML from canonical plaintext.
-- Keeping generated HTML read-only in the browser.
-- Continuing to accept legacy API `html` fields for compatibility while discarding
-  their value.
-- Preserving the trusted historical invitation bytes and historical idempotent replay.
-- Protecting the server-controlled `portal_url` merge value from recipient metadata.
-- Rejecting same-key communication races whose canonical payloads differ.
-- Raw local `multipart/alternative` MIME assertions.
-- Focused API, web, and Playwright regressions for the supported speaker workflow.
-
-### Explicitly out of scope
-
-- Deploying or claiming release/provider verification.
-- Social OAuth or unrelated event-platform integrations.
-- Reworking the optional Airtable communication repository.
-- Merging this branch.
-- Treating local Nodemailer stream output as deployed OpenSend evidence.
-
-Product truth and architecture remain governed by `spec/eventloom.md`,
-`ARCHITECTURE.md`, the repository `AGENTS.md`, and the operational runbooks. The
-competition-specific `COMMON.md` and `speaker-email.md` references are private external
-inputs and must not be copied into the repository.
+- Airtable repository redesign.
+- Deployed OpenSend/provider verification.
+- Deployment or release claims.
+- Merging the PR.
 
 ## Completed Implementation
 
-### Canonical body and template behavior
+### Canonical body and exact draft binding
 
-- Added `apps/api/src/features/speaker/email-body.ts`.
-  - Converts canonical plaintext into escaped semantic HTML paragraphs and `<br>`
-    breaks.
-  - Prevents stale caller HTML, active tags, forms, pixels, and spoofed reserved IDs
-    from bypassing the body-integrity boundary.
-- Added `apps/api/src/features/speaker/email-body.test.ts`.
-  - Covers HTML escaping and paragraph/line-break generation.
-- Updated the speaker communication facade so organizer-supplied HTML is ignored and
-  regenerated from plaintext for create, update, preview, and send paths.
-- Preserved the byte-for-byte historical trusted welcome template so existing
-  invitation sends remain replay-compatible.
-- Kept legacy request-schema `html` input optional for API compatibility while removing
-  it from browser request payloads.
+- `apps/api/src/features/speaker/email-body.ts` converts normalized plaintext into
+  escaped paragraph/line-break HTML.
+- Speaker template creation/versioning ignores independent caller HTML and regenerates
+  HTML from `text`.
+- The browser persists a dirty existing draft before preview and passes the exact saved
+  template ID/version into preview.
+- Subject/body edits invalidate stale previews.
+- Browser save requests omit `html`; legacy API input remains accepted but discarded.
+- Generated HTML is presented as read-only source.
 
-### Current-draft browser binding
+### Merge and delivery integrity
 
-- Updated the speaker email editor to persist a dirty existing draft before requesting
-  preview.
-- Bound preview to the newly persisted exact template version instead of implicitly
-  resolving the previous approved version.
-- Continued invalidating a stale preview whenever the subject or plaintext body changes.
-- Removed the browser-side editable HTML submission field.
-- Kept generated HTML visible but read-only.
-- Added `tests/e2e/speaker-email-current-draft.spec.ts` to cover:
-  - no browser `html` request property;
-  - unsaved v2 edits being saved and previewed instead of stale v1;
-  - generated HTML being read-only.
-
-### Delivery integrity and merge data
-
-- Added raw Nodemailer stream-transport checks for `multipart/alternative`.
-- Asserted that resolved `text/plain` and `text/html` contain the same current semantic
-  body and no literal merge tokens.
-- Added a protected recipient-data-key contract and made `portal_url` server
-  authoritative for speaker email preview and delivery.
-- Added hostile recipient-metadata coverage proving neither attacker HTTPS values nor
-  `javascript:` values reach rendered output.
+- Preview and delivery use the same canonical template snapshot.
+- Raw Nodemailer stream tests inspect `multipart/alternative`.
+- Text and HTML MIME parts contain the same resolved current body.
+- Literal `{{...}}` tokens do not reach rendered preview or raw MIME output.
+- Recipient `portal_url` metadata is stripped and replaced with the authoritative
+  server work-hub URL.
 
 ### Idempotency and historical replay
 
-- Reused canonical payload comparison after a repository save conflict so a concurrent
-  same-key/different-payload loser receives `COMMUNICATION_CONFLICT` rather than the
-  winner's send.
-- Added a deterministic promise-barrier regression with:
-  - one fulfilled send;
-  - one `409 COMMUNICATION_CONFLICT`;
-  - exactly one provider request.
-- Added historical invitation replay coverage.
-- Added the final superseded-version regression:
-  - v1 is historically sent;
-  - an identical trusted approved v2 is later created;
-  - replay of the original key must return the persisted v1 send;
-  - no second delivery occurs;
-  - using the same key for another speaker still conflicts.
-- Updated `sendInvitations` to inspect scoped raw send history before selecting the
-  current welcome version. It validates the persisted purpose, audience, exact trusted
-  template bytes/ID, and recipient set, then returns the historical send directly.
+- Post-save-conflict recovery compares purpose, audience, template ID/version,
+  recipient IDs, and render data before returning an existing send.
+- A deterministic promise barrier proves one success, one 409 conflict, and exactly one
+  provider request for concurrent same-key/different-payload calls.
+- Historical invitation replay returns the persisted trusted send even when an
+  equivalent approved welcome v2 exists.
+- Replay now validates:
+  - trusted welcome ID and byte-exact subject/HTML/text;
+  - invitation purpose and audience;
+  - exact recipient IDs;
+  - send-level `portal_url` equal to the current authoritative work-hub URL;
+  - absence of recipient-level `portal_url` in every persisted snapshot.
+- Replay lookup now occurs before mutable current-recipient preview and pending
+  role-invitation creation. A deleted current communication recipient therefore does
+  not break an otherwise valid historical replay or create new invitation side effects.
+- The historical regression also poisons persisted recipient render data and requires a
+  409 `VERSION_CONFLICT` without another delivery.
 
-## Remaining Tasks
+## Final Verification Evidence
 
-The following checklist includes every carried-forward open task from the lane plus the
-newly discovered main-sync and final-gate work. Do not start any item until the user
-resumes the lane.
+All commands below were run after integrating `github/main` and again after the final
+historical-replay review fixes.
 
-### Resume and synchronize
+### Formatting and typechecking
 
-- [ ] **Confirm explicit user resume.** Do not infer resume from a status request or
-  another lane's activity.
-- [ ] **Synchronize from current GitHub main.** The branch HEAD is
-  `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`, while `github/main` is currently
-  `6467ff1f48c73229c5c45dba6b4716df724a3bdd`. Preserve all tracked and untracked lane
-  files, fast-forward to the newly fetched exact main, and reapply the lane without
-  destructive Git commands.
-- [ ] **Resolve only lane-owned synchronization conflicts.** There was no path overlap
-  as of this handoff, but recheck after fetching because main may advance again.
-- [ ] **Recheck the Airtable findings against the synchronized main.** PR #42 changed
-  `apps/api/src/runtime/airtable.ts`; do not assume the old line numbers or conclusions
-  remain exact.
+| Command | Result |
+| --- | --- |
+| `git diff --check` | PASS |
+| Biome on all changed SPK-13 TypeScript/TSX files | PASS |
+| `bun run --filter @eventloom/api typecheck` | PASS |
+| `bun run --filter @eventloom/web typecheck` | PASS |
+| `make check` | PASS |
 
-### Carried-forward review tasks
+Raw final log: `/tmp/spk13-final-check.log`.
 
-- [ ] **Repeat five-lane review on final diff.** This original open task was not
-  completed after the final historical replay implementation.
-- [ ] **Repeat reviews after binding fix.** Confirm the existing-template v2
-  save-before-preview flow and browser omission of `html`.
-- [ ] **Repeat reviews after portal fix.** Confirm recipient metadata cannot override
-  trusted `portal_url` in preview, persisted snapshots, retry, or delivery.
-- [ ] **Repeat reviews after concurrency fix.** Confirm conflict recovery compares the
-  full canonical payload and issues no second provider request.
-- [ ] **Complete five-lane implementation review.** Run the consolidated final
-  goal/constraint, code-quality, security, QA, and context review against the
-  synchronized, gate-clean diff. Treat any final source edit as invalidating prior
-  review verdicts.
+### Focused behavior
 
-### Verification and manual QA
+```bash
+bunx vitest run \
+  apps/api/src/features/communications/service.test.ts \
+  apps/api/src/features/speaker/email-body.test.ts \
+  apps/api/src/features/speaker/communications.test.ts \
+  apps/api/src/features/speaker/speaker.test.ts \
+  scripts/dev/mailpit-opensend-bridge.test.ts \
+  --maxWorkers=1 \
+  -t 'rejects a concurrent same-key send|generates escaped HTML paragraphs|persists versions, exact previews|replays one canonical invitation|persists logistics, exposes reminder eligibility|generates multipart MIME'
+```
 
-- [x] **Rerun the interrupted final focused suite.** The checkpoint run passed all five
-  files and all six selected tests in one invocation.
-- [ ] **Rerun current-diff formatting and diagnostics.** API and web TypeScript
-  typechecks passed during checkpoint hardening. Biome remains unrun after the final
-  formatting correction, and the exact full `make check` gate remains required after
-  synchronization.
-- [ ] **Run exact `make check` on the synchronized final diff.**
-- [ ] **Run exact `make test` on the synchronized final diff.** Do not accept timeout
-  luck or disk-exhaustion failures as a passing result; isolate a failure only to
-  classify it, then rerun the exact gate.
-- [ ] **Run exact `make build` on the synchronized final diff.**
-- [ ] **Run affected Playwright coverage on safe dynamically allocated ports.** Do not
-  use the judge-reserved ports `3115` or `8887`.
-- [ ] **Exercise the real local browser workflow.** Create/select a speaker email,
-  edit an existing draft without manually saving, preview v2, verify read-only generated
-  HTML and matching plaintext, confirm send, inspect the response, and verify no merge
-  token remains.
-- [ ] **Capture delivered-commit QA screenshot evidence.** The retained screenshot is
-  stale and must not be used. Capture evidence from the exact final commit candidate,
-  upload it through the approved GitHub PR attachment flow, and remove the local image.
+Result: **5 files passed, 6 selected tests passed, 107 skipped by filter**.
 
-### Delivery
+The historical replay test was run red before both final fixes:
 
-- [x] **Clean current lane-generated outputs.** The stale Playwright cache, stale QA
-  image/directory, build output, Wrangler state, test results, coverage output, and
-  TypeScript build-info files were removed. Repeat cleanup after future gates because
-  those commands may regenerate outputs.
-- [ ] **Commit verified lane changes atomically.** Include intended source/tests and this
-  handoff; exclude generated output and the local debug journal unless repository policy
-  explicitly requires it.
-- [ ] **Push lane branch to GitHub.** Create `github/judge-speaker-email` and configure
-  the intended upstream without pushing to Forge by accident.
-- [ ] **Open pull request against main.** Keep it unmerged, include exact verification
-  evidence and limitations, and attach the authentic final-candidate screenshot.
-- [ ] **Do not merge or deploy.** Wait for the explicit human decision required by the
-  lane instructions.
+1. Poisoned persisted recipient `portal_url` was incorrectly accepted.
+2. Deleting the current communication recipient caused replay preflight to fail.
 
-## Known Review Findings and Unresolved Risks
+After the minimal implementation changes, the same regression passes while still
+rejecting a different recipient under the reused key.
 
-### Findings addressed in the current dirty diff
+Raw final log: `/tmp/spk13-final-focused.log`.
 
-- **Stale independent HTML body:** addressed by canonical plaintext and generated escaped
-  HTML.
-- **Existing draft previewed old version:** addressed by save-before-preview and explicit
-  exact-version preview.
-- **Hostile recipient `portal_url`:** addressed by protected recipient-data keys and
-  authoritative server merge data.
-- **Concurrent same-key/different-payload recovery:** addressed by post-conflict canonical
-  payload comparison.
-- **Historical invitation replay after equivalent v2 creation:** addressed by direct
-  persisted-send replay. Its focused regression passed after implementation, but the
-  complete final gate/review wave was interrupted and remains required.
+### Exact repository gates
 
-### Unresolved or not-finally-verified risks
+| Command | Result |
+| --- | --- |
+| `make check` | PASS |
+| `make test` | PASS |
+| `make build` | PASS |
 
-- **Airtable non-atomic send claim, reported HIGH:** the reviewer found a read-before-create
-  idempotency race in `apps/api/src/runtime/airtable.ts` that could permit duplicate
-  provider sends. This file was outside the lane diff at the time. Current main has since
-  changed the file, so revalidate the finding after synchronization and fix it in a
-  separate scoped lane if it still exists.
-- **Airtable participant tenant scope, reported HIGH:** the reviewer found participant
-  records queried by event ID without a tenant-scope check before recipient conversion.
-  This was also pre-existing/out of scope and must be revalidated on current main.
-- **D1 concurrency integration gap:** the deterministic race test uses the in-memory
-  repository. D1 has an atomic unique-key guard in source, but there is no deterministic
-  concurrent D1 integration test of the recovery branch.
-- **Provider evidence gap:** MIME checks use local Nodemailer stream transport, not a
-  deployed OpenSend/provider observation.
-- **Final reviewer staleness:** goal/context reviewers found the superseded-template
-  replay bug before it was fixed. No consolidated five-lane review has evaluated the
-  final fix.
-- **Current-main drift:** all implementation remains uncommitted on a HEAD two commits
-  behind current `github/main`.
-- **Full-gate status:** the earlier `ENOSPC` focused-suite interruption is resolved; the
-  checkpoint rerun passed. Exact full `make check`, `make test`, and `make build` remain
-  unrun on the current replay-fixed diff.
-- **No current visual evidence:** the stale
-  `qa-artifacts/speaker-email-current-draft.png` was removed. Exact final-candidate
-  screenshot evidence still must be captured after synchronization and final gates.
-- **Whitespace semantics:** `speakerEmailHtmlFromText` trims lines. This preserves the
-  intended semantic email body but does not preserve preformatted indentation.
-- **Shared-host contention:** prior exact test runs encountered unrelated timeouts and
-  disk exhaustion while other worktrees were running heavy suites. Final evidence must
-  come from a quiet, adequately provisioned run.
+Final logs:
 
-## Verification Record
+- `/tmp/spk13-final-check.log`
+- `/tmp/spk13-final-test.log`
+- `/tmp/spk13-final-build.log`
 
-Statuses below distinguish the exact current dirty diff from predecessor states. A
-predecessor pass is not a final current-diff pass.
+### Affected Playwright
 
-| Command or check | Exact status | Evidence |
-| --- | --- | --- |
-| `bunx vitest run apps/api/src/features/speaker/communications.test.ts --maxWorkers=1 -t 'replays one canonical invitation'` | **PASS on current final replay fix** | 1 passed, 3 skipped. The test includes the later identical approved v2 and same-key/different-speaker conflict. |
-| `bunx vitest run apps/api/src/features/communications/service.test.ts apps/api/src/features/speaker/email-body.test.ts apps/api/src/features/speaker/communications.test.ts apps/api/src/features/speaker/speaker.test.ts scripts/dev/mailpit-opensend-bridge.test.ts --maxWorkers=1 -t 'rejects a concurrent same-key send\|generates escaped HTML paragraphs\|persists versions, exact previews\|replays one canonical invitation\|persists logistics, exposes reminder eligibility\|generates multipart MIME'` | **PASS on the current checkpoint** | 5 files passed; 6 selected tests passed; 107 tests skipped by the focused filter. Duration 3.81 seconds. |
-| `bun run --filter @eventloom/api typecheck` | **PASS on the current checkpoint** | Exited with code 0. |
-| `bun run --filter @eventloom/web typecheck` | **PASS on the current checkpoint** | Exited with code 0. |
-| `bunx biome check apps/api/src/features/speaker/communications.ts apps/api/src/features/speaker/communications.test.ts` | **UNRUN after final formatting correction** | The prior invocation failed on formatting, the file was corrected, and Biome was not rerun before pause. |
-| `git diff --check` | **PASS on the current checkpoint, including this handoff** | Rerun after main sync and all subsequent edits. |
-| `make check` | **PASS on predecessor; UNRUN on current final replay diff** | Passed after the concurrency fix, before the superseded-version replay implementation. |
-| `make test` | **PASS on predecessor; UNRUN on current final replay diff** | Passed after the concurrency fix, before the superseded-version replay implementation. |
-| `make build` | **PASS on predecessor; UNRUN on current final replay diff** | Passed after the concurrency fix, before the superseded-version replay implementation. |
-| `bunx playwright test tests/e2e/speaker-email-current-draft.spec.ts` | **PASS on predecessor; UNRUN on current final replay diff** | Earlier isolated current-draft coverage passed. The final API-only replay edit still requires a clean final candidate rerun because delivery evidence must be exact. |
-| Manual browser preview/send workflow | **PASS on predecessor; stale for current final candidate** | Prior QA observed v2 preview, matching generated HTML/plaintext, no browser `html`, read-only HTML, and accepted send. Retained screenshot is not final evidence. |
-| Five-lane final review | **FAIL/stale and incomplete** | Security QA had passes, but goal/context found the historical replay bug; code review also reported pre-existing Airtable findings. The replay bug was then fixed and was not reviewed by a fresh consolidated wave. |
-| Deployed OpenSend/provider verification | **UNRUN** | Local MIME serialization is not deployed provider evidence. |
-| Deployment/release verification | **UNRUN and out of scope** | No deployment occurred and no release claim should be made. |
+```bash
+node scripts/run-isolated-playwright.mjs \
+  tests/e2e/speaker-email-current-draft.spec.ts \
+  tests/e2e/speaker-portal-redesign-qa.spec.ts
+```
 
-## Dependencies and Merge Order
+Result: **4/4 passed** on dynamically allocated non-reserved ports.
 
-1. **Remain paused until explicit user resume.**
-2. Fetch current GitHub main and record its exact SHA.
-3. Preserve the complete dirty lane, including untracked source/test files and this
-   handoff.
-4. Fast-forward the branch from its old base to current `github/main`, then restore the
-   lane diff. Do not use destructive reset/checkout commands.
-5. Resolve only genuine speaker-email conflicts. As of this handoff, current main has no
-   path overlap with the lane diff.
-6. Revalidate the Airtable findings because current main changed
-   `apps/api/src/runtime/airtable.ts`; keep any Airtable remediation out of SPK-13 unless
-   the user explicitly expands scope.
-7. Run focused tests, exact checks/tests/build, affected Playwright, and manual QA in
-   that order.
-8. Run the consolidated five-lane review only after every gate is clean and the visual
-   evidence comes from the exact commit candidate.
-9. Commit and push the speaker-email lane.
-10. Open an unmerged PR against `main`.
-11. Do not merge or deploy without explicit authorization.
+Raw final log: `/tmp/spk13-final-playwright.log`.
 
-There is no known PR dependency beyond integrating the current `main`, which already
-contains PR #42. If an Airtable follow-up is created, keep it as a separate change. If it
-lands before SPK-13, rerun the communication and invitation suites after incorporating
-it.
+### Real organizer-surface QA
 
-## Dirty, Generated, and Untracked File Disposition
+Observed through the actual isolated local browser surface:
 
-### Modified tracked files — preserve and include in the eventual lane commits
+- Selected one speaker.
+- Saved template v1.
+- Edited the existing draft to v2 without manually saving again.
+- Preview auto-saved and returned exact template version 2.
+- Server-rendered text and escaped HTML contained the same current body.
+- Rendered output contained no literal merge token.
+- HTML source had `readonly`.
+- Confirmed send returned version 2 and status `sent`.
+- UI reported `Speaker email sent for 1 recipient.`
 
-- `apps/api/src/features/communications/service.test.ts`
-- `apps/api/src/features/communications/service.ts`
-- `apps/api/src/features/speaker/communications-types.ts`
-- `apps/api/src/features/speaker/communications.test.ts`
-- `apps/api/src/features/speaker/communications.ts`
-- `apps/api/src/features/speaker/routes.ts`
-- `apps/api/src/features/speaker/service.ts`
-- `apps/api/src/features/speaker/speaker.test.ts`
-- `apps/web/src/features/speakers/api.ts`
-- `apps/web/src/features/speakers/speaker-workspace-controller.tsx`
-- `apps/web/src/features/speakers/speaker-workspace-sections.tsx`
-- `scripts/dev/mailpit-opensend-bridge.test.ts`
+Screenshot:
 
-Current tracked diff summary before this handoff: 12 files, 400 insertions, 76 deletions.
+- Local path: `qa-artifacts/speaker-email-final-candidate.png`
+- SHA-256:
+  `d845e461d73ad7e3a14dc5e952f8f694de365f0ac5248b356a7f7cb5f2f2892d`
+- Dimensions: `1102 × 714`
+- Capture command result: 1/1 isolated Playwright test passed on ports
+  `58870–58872`
+- Raw capture log: `/tmp/spk13-final-screenshot.log`
 
-### Untracked intended source/test files — preserve and include
+The corrected artifact is a bounded screenshot of the complete `Speaker email` card:
+the **HTML source** tab is visibly active, the HTML field is shown, the preview repeats
+exact template version 2, resolved text/HTML agree, the full heading/instructions and
+action footer are visible, and no viewport edge clips the component.
 
-- `apps/api/src/features/speaker/email-body.ts`
-- `apps/api/src/features/speaker/email-body.test.ts`
-- `tests/e2e/speaker-email-current-draft.spec.ts`
-- `docs/handoffs/judge-speaker-email.md`
+The screenshot is local evidence and must be attached to the final GitHub PR without
+committing the PNG.
 
-### Untracked local diagnostic file — preserve for resume, normally exclude from PR
+## Review Findings
 
-- `.debug-journal.md`
+### Resolved final-review blockers
 
-This journal contains useful investigation and gate history. Do not delete it while the
-lane is paused. Unless repository policy explicitly requires debug journals in source
-control, leave it out of the final product commit.
+- Rejected historical replay when persisted recipient data contains a protected
+  `portal_url`.
+- Required the persisted send-level `portal_url` to match the current authoritative
+  work-hub URL.
+- Moved replay detection ahead of mutable recipient preview and pending role-invitation
+  creation.
+- Added regressions for poisoned historical render data and deleted current recipients.
+- Replaced the clipped/incoherent screenshot with a complete coherent component capture.
+- Re-ran focused tests, exact gates, affected Playwright, and screenshot QA afterward.
+- Both visual review lanes passed the corrected screenshot with no blocker.
 
-### Generated artifact disposition
+The remaining five-lane reviewers were cancelled when the user retired the lane. Their
+earlier findings drove the replay-security fixes above, but a final consolidated PASS
+was intentionally not pursued after the retirement directive.
 
-Checkpoint cleanup removed:
+### Residual limitations
 
-- `apps/web/.next*`, including the stale `.next-playwright-3039` cache;
-- `apps/api/dist`, `apps/api/.wrangler`, and `packages/*/dist`;
-- `coverage`, `playwright-report`, and `test-results`;
-- application/package TypeScript build-info files;
-- the ignored `qa-artifacts/` directory, including the stale screenshot and local
-  placeholder.
+- The deterministic same-key race test uses the in-memory repository; there is no
+  deterministic concurrent D1 integration test for the exact recovery branch.
+- MIME evidence uses local Nodemailer stream transport, not deployed OpenSend delivery.
+- Local browser evidence is not deployed-provider or release evidence.
+- `speakerEmailHtmlFromText` preserves semantic body content but trims line edges and
+  does not preserve preformatted indentation.
+- Generic non-speaker communication templates continue to permit independent HTML by
+  design; the canonical-plaintext guarantee belongs to the speaker facade.
 
-The post-test artifact inventory reported none of those paths. Installed
-`node_modules`, local environment files, and Next's ignored `next-env.d.ts` were not
-treated as lane-generated build/browser output and were preserved.
+### Pre-existing out-of-scope Airtable findings
 
-## Precise Resume Instructions
+These findings are unchanged outside the SPK-13 diff and require a separate lane:
 
-Run these steps only after the user explicitly resumes this lane.
+- Participant lookup can be scoped by event ID without an explicit tenant check before
+  recipient conversion.
+- Send idempotency uses a non-atomic read-before-create sequence and can permit duplicate
+  creates under concurrency.
 
-1. Enter the preserved worktree:
+D1 remains the authoritative supported product path.
 
-   ```bash
-   cd /Users/jaeyunha/wt/open-sessionboard/judge-speaker-email
-   ```
+## Generated and Local Files
 
-2. Re-read:
+- `.debug-journal.md` remains untracked and must not be committed unless repository
+  policy explicitly changes.
+- `qa-artifacts/speaker-email-final-candidate.png` is ignored local evidence. Attach it
+  to the PR, then remove it.
+- Build, Next, Wrangler, coverage, Playwright report, test-result, and TypeScript
+  build-info artifacts were cleaned after final verification.
 
-   - `AGENTS.md`
-   - `spec/eventloom.md`
-   - `ARCHITECTURE.md`
-   - `.debug-journal.md`
-   - the private external `COMMON.md` and `speaker-email.md`, if supplied by the
-     operator
+## Retirement Completion Record
 
-3. Confirm no stale lane process is running and inspect the dirty state:
+- Replay-security regression and implementation corrections are included in the
+  retirement checkpoint.
+- Focused tests, typechecks, `make check`, `make test`, affected Playwright, and
+  `make build` passed after those corrections.
+- Corrected visual evidence passed both visual review lanes.
+- Generated QA/browser/build artifacts are removed before the retirement commit.
+- `.debug-journal.md` remains intentionally untracked.
+- GitHub issue #53 is the durable detailed retirement record.
+- No PR was opened.
+- No merge to `main` or deployment occurred.
 
-   ```bash
-   git status --short --branch --untracked-files=all
-   git branch --show-current
-   git rev-parse HEAD
-   git ls-remote github refs/heads/main refs/heads/judge-speaker-email
-   ```
-
-4. Preserve the dirty tracked and untracked files before main synchronization. One
-   non-destructive option is:
-
-   ```bash
-   git stash push -u -m "judge-speaker-email pre-main-sync"
-   git fetch github main
-   git merge --ff-only github/main
-   git stash pop
-   ```
-
-   Before stashing, record the full status. After popping, verify that every modified
-   and untracked file listed above returned. Do not use `reset --hard`, `checkout --`,
-   or any command that discards lane edits.
-
-5. Recheck main drift and path overlap:
-
-   ```bash
-   git rev-list --left-right --count HEAD...github/main
-   git diff --name-only HEAD..github/main
-   git diff --check
-   ```
-
-6. Verify generated output is still absent before running gates. After any gate or
-   browser run, clean only lane-owned generated output:
-
-   ```bash
-   make clean
-   rm -rf qa-artifacts
-   ```
-
-7. Run the exact focused current-diff suite:
-
-   ```bash
-   bunx vitest run \
-     apps/api/src/features/communications/service.test.ts \
-     apps/api/src/features/speaker/email-body.test.ts \
-     apps/api/src/features/speaker/communications.test.ts \
-     apps/api/src/features/speaker/speaker.test.ts \
-     scripts/dev/mailpit-opensend-bridge.test.ts \
-     --maxWorkers=1 \
-     -t 'rejects a concurrent same-key send|generates escaped HTML paragraphs|persists versions, exact previews|replays one canonical invitation|persists logistics, exposes reminder eligibility|generates multipart MIME'
-   ```
-
-8. Run final source gates:
-
-   ```bash
-   make check
-   make test
-   make build
-   ```
-
-9. Run the affected Playwright spec with the repository's dynamic safe-port allocator:
-
-   ```bash
-   bunx playwright test tests/e2e/speaker-email-current-draft.spec.ts
-   ```
-
-   Confirm ports `3115` and `8887` are not used.
-
-10. Perform the manual browser flow described in the remaining-task checklist. Capture
-    a new screenshot only after the exact commit candidate works.
-
-11. Run the consolidated five-lane review. If any source changes, repeat focused gates,
-    exact gates, browser QA, screenshot capture, and review.
-
-12. Remove generated output, stage only intended files, and inspect the staged diff
-    before committing. Keep `.debug-journal.md`, stale screenshots, Playwright caches,
-    build output, Wrangler state, and test results out of the product commit.
-
-13. Commit atomically using the repository's existing message convention, push
-    `judge-speaker-email` to GitHub, and open an **unmerged** PR against `main`.
-
-14. Record the PR URL, exact commit SHA, final gate results, attached screenshot, and
-    remaining limitations in this handoff or the PR body. Do not merge or deploy.
+There are no active lane tasks. The branch and worktree are safe for the operator to
+archive or remove after verifying the pushed SHA and issue.
