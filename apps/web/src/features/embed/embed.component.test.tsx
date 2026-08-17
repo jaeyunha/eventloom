@@ -72,6 +72,7 @@ const agenda: PublishedAgenda = {
       format: "Keynote",
       speakerNames: ["Morgan Lee"],
       roomName: "Main hall",
+      trackIds: ["track-main"],
       trackNames: ["Main stage"],
       startsAt: "2026-09-18T16:00:00.000Z",
       endsAt: "2026-09-18T16:45:00.000Z",
@@ -297,6 +298,21 @@ describe("public embeds", () => {
     expect(markup).toContain("agenda.ics");
     expect(markup).toContain('href="/api/public/events/open-systems/agenda.json"');
     expect(markup).toContain('href="/api/public/events/open-systems/agenda.ics"');
+
+    const stableTrackMarkup = renderToStaticMarkup(
+      createElement(PublicAgendaView, {
+        program: { agenda, speakers: gallery },
+        tracks: ["track-main"],
+      }),
+    );
+    expect(stableTrackMarkup).toContain("Systems that stay understandable");
+    const wrongTrackMarkup = renderToStaticMarkup(
+      createElement(PublicAgendaView, {
+        program: { agenda, speakers: gallery },
+        tracks: ["Main stage"],
+      }),
+    );
+    expect(wrongTrackMarkup).not.toContain("Systems that stay understandable");
   });
   it("allows distinct child revisions selected by one served program release", () => {
     const independentlyVersionedGallery: PublishedSpeakerGallery = {

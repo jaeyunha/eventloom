@@ -831,25 +831,16 @@ export function createAgendaAdminRoutes(
     const input = await body(context, versionSchema);
     const eventId = routeParam(context, "eventId");
     const state = await dependencies.engine.repository.load(eventId);
-    const current =
-      state?.currentPublishedRevisionId === null || state?.currentPublishedRevisionId === undefined
-        ? null
-        : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
-          null);
     validateAgendaEntryDates(
       await agendaEventMetadata(dependencies, eventId),
       state?.draft.entries ?? [],
     );
-    if (current?.sourceDraftVersion === input.expectedVersion) {
-      await completePublicationHandoff(dependencies, eventId, current);
-      return context.json({ data: current });
-    }
     const data = await dependencies.engine.publish({
       eventId,
       actorId: principal.userId,
       ...input,
+      afterPublish: (revision) => completePublicationHandoff(dependencies, eventId, revision),
     });
-    await completePublicationHandoff(dependencies, eventId, data);
     return context.json({ data });
   });
 
@@ -870,8 +861,8 @@ export function createAgendaAdminRoutes(
       eventId,
       actorId: principal.userId,
       ...input,
+      afterRollback: (revision) => completePublicationHandoff(dependencies, eventId, revision),
     });
-    await completePublicationHandoff(dependencies, eventId, data);
     return context.json({ data });
   });
 
@@ -1083,6 +1074,7 @@ function publishedEntryView(entry: PublishedAgendaRevision["entries"][number]) {
     format: firstTextValue(metadata, ["format"]) ?? "Session",
     speakerNames: firstSpeakerNamesValue(metadata, ["speakerNames"]) ?? [],
     roomName: firstTextValue(metadata, ["roomName"]) ?? "",
+    trackIds: [...entry.trackIds],
     trackNames: firstStringArrayValue(metadata, ["trackNames"]) ?? [],
     startsAt: entry.startsAt,
     endsAt: entry.endsAt,
@@ -1351,7 +1343,7 @@ function writeAgendaCacheResponse(
   scheduleAgendaCachePut(context, state, workerCache, path, entry, generation);
 }
 
-async function invalidatePublishedAgendaCache(
+export async function invalidatePublishedAgendaCache(
   engine: AgendaEngine,
   eventId: string,
   revision: PublishedAgendaRevision,
