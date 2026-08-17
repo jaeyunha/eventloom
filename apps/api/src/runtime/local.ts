@@ -540,7 +540,7 @@ function localAuthRoutes(personas: LocalPersona[]): {
   };
 }
 
-class LocalSpeakerRepository
+export class LocalSpeakerRepository
   implements SpeakerAccountWorkloadRepository, SpeakerOrganizerLifecycleRepository
 {
   readonly #submissions = new Map<string, SpeakerSubmission[]>();
@@ -564,6 +564,7 @@ class LocalSpeakerRepository
     private readonly invitationRecipientForEmail: (
       email: string,
     ) => { userId: string; normalizedEmail: string } | null,
+    private readonly beforeReviewCommit?: (tasks: Map<string, SpeakerTask[]>) => void,
   ) {}
 
   async resolveVerifiedInvitationRecipient(email: string) {
@@ -1419,6 +1420,19 @@ class LocalSpeakerRepository
       ) {
         return { ok: false, reason: "version_conflict" };
       }
+    }
+    this.beforeReviewCommit?.(this.#tasks);
+    const currentReturnTask =
+      command.returnTask === undefined
+        ? undefined
+        : this.#tasks.get(command.eventId)?.find(({ id }) => id === command.returnTask?.taskId);
+    if (
+      command.returnTask !== undefined &&
+      (currentReturnTask === undefined ||
+        currentReturnTask.version !== command.returnTask.expectedVersion ||
+        currentReturnTask.status !== command.returnTask.fromStatus)
+    ) {
+      return { ok: false, reason: "version_conflict" };
     }
     const versionFamilyId = asset.versionFamilyId ?? asset.id;
     const approvedVersionId =
