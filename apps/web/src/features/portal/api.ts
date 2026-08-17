@@ -124,6 +124,9 @@ export interface PortalApi {
     taskId: string;
     kind: "headshot" | "slides" | "supporting_file";
     file: File;
+    supersedesAssetId?: string;
+    expectedLatestVersion?: number;
+    idempotencyKey?: string;
   }): Promise<{ assetId: string }>;
 
   getRoster?(
@@ -180,6 +183,8 @@ export interface PortalApi {
     kind: "headshot" | "slides" | "supporting_file";
     file: File;
     supersedesAssetId?: string;
+    expectedLatestVersion?: number;
+    idempotencyKey?: string;
   }): Promise<PortalAsset>;
   retryAssetUpload?(input: { eventId: string; assetId: string; file: File }): Promise<PortalAsset>;
   finalizeAsset?(input: {
@@ -340,12 +345,19 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
     kind: "headshot" | "slides" | "supporting_file";
     file: File;
     supersedesAssetId?: string;
+    expectedLatestVersion?: number;
+    idempotencyKey?: string;
   }): Promise<PortalAsset> {
     const authorization = await request<PortalUploadAuthorization>(
       `/events/${routeSegment(input.eventId)}/uploads`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(input.idempotencyKey === undefined
+            ? {}
+            : { "idempotency-key": input.idempotencyKey }),
+        },
         body: JSON.stringify({
           participantId: input.participantId,
           ...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
@@ -356,7 +368,12 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
           sizeBytes: input.file.size,
           ...(input.supersedesAssetId === undefined
             ? {}
-            : { supersedesAssetId: input.supersedesAssetId }),
+            : {
+                supersedesAssetId: input.supersedesAssetId,
+                ...(input.expectedLatestVersion === undefined
+                  ? {}
+                  : { expectedLatestVersion: input.expectedLatestVersion }),
+              }),
         }),
       },
     );

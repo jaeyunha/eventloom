@@ -115,6 +115,30 @@ test("content collection file review stays aligned in light and dark themes", as
       secure: false,
     },
   ]);
+  await page.route("**/api/speaker/events/demo-event/organizer/deliverables**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (
+      route.request().method() !== "GET" ||
+      requestUrl.pathname !== "/api/speaker/events/demo-event/organizer/deliverables"
+    ) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const body = (await response.json()) as {
+      data?: {
+        items?: Array<{
+          assets?: Array<Record<string, unknown>>;
+          currentAsset?: Record<string, unknown>;
+        }>;
+      };
+    };
+    for (const item of body.data?.items ?? []) {
+      for (const asset of item.assets ?? []) asset.uploaderLabel = "Local Organizer";
+      if (item.currentAsset !== undefined) item.currentAsset.uploaderLabel = "Local Organizer";
+    }
+    await route.fulfill({ response, json: body });
+  });
   await page.goto(`${eventPath}/deliverables`);
   await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
 
@@ -162,8 +186,11 @@ test("content collection file review stays aligned in light and dark themes", as
   await expect(fileReviewDialog.getByRole("tab", { name: "Overview" })).toBeVisible();
   await expect(fileReviewDialog.getByRole("tab", { name: /Comments/u })).toBeVisible();
   await expect(fileReviewDialog.getByRole("tab", { name: /Versions/u })).toBeVisible();
+  const speakerField = fileReviewDialog.getByText("Speaker", { exact: true }).locator("..");
+  await expect(speakerField).toContainText("Alex Rivera");
   const uploaderField = fileReviewDialog.getByText("Uploader", { exact: true }).locator("..");
-  await expect(uploaderField).toContainText("Alex Rivera");
+  await expect(uploaderField).toContainText("Local Organizer");
+  await expect(uploaderField).not.toContainText("Alex Rivera");
   await expect(fileReviewDialog.getByText("Authoritative pointers", { exact: true })).toHaveCount(
     0,
   );

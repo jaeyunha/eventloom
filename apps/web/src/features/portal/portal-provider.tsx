@@ -1097,6 +1097,9 @@ function usePortalProviderValue({
       try {
         let finalizedHeadshot: PortalAsset | undefined;
         if (input.headshot && api.uploadFile && api.finalizeAsset) {
+          const supersededHeadshot = input.profile.headshotAssetId
+            ? view?.assets?.find((asset) => asset.id === input.profile.headshotAssetId)
+            : undefined;
           asyncDispatch({ type: "profile-mutation-set", phase: "pending" });
           const pending = await api.uploadFile({
             eventId: targetContext.eventId,
@@ -1104,7 +1107,11 @@ function usePortalProviderValue({
             kind: "headshot",
             file: input.headshot,
             ...(input.profile.headshotAssetId
-              ? { supersedesAssetId: input.profile.headshotAssetId }
+              ? {
+                  supersedesAssetId: input.profile.headshotAssetId,
+                  expectedLatestVersion: supersededHeadshot?.version ?? 1,
+                  idempotencyKey: crypto.randomUUID(),
+                }
               : {}),
           });
           if (!profileAssetBelongsToPortalContext(pending, targetContext)) {
@@ -1208,7 +1215,7 @@ function usePortalProviderValue({
         }
       }
     },
-    [api, can, context, contexts, hydrate, selectedParticipantId],
+    [api, can, context, contexts, hydrate, selectedParticipantId, view],
   );
 
   const transitionTask = useCallback(
@@ -1320,6 +1327,16 @@ function usePortalProviderValue({
       }
       const targetContext = context;
       const generation = loadGeneration.current;
+      const predecessor = (view?.assets ?? [])
+        .filter(
+          (asset) =>
+            asset.taskId === task.id &&
+            asset.kind === kind &&
+            asset.state === "ready" &&
+            Number.isSafeInteger(asset.version) &&
+            (asset.version ?? 0) > 0,
+        )
+        .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))[0];
       asyncDispatch({ type: "task-busy-set", taskId: task.id, busy: true });
       asyncDispatch({ type: "mutation-error-set", error: null });
       try {
@@ -1329,6 +1346,13 @@ function usePortalProviderValue({
           taskId: task.id,
           kind,
           file,
+          ...(predecessor === undefined
+            ? {}
+            : {
+                supersedesAssetId: predecessor.id,
+                expectedLatestVersion: predecessor.version ?? 1,
+                idempotencyKey: crypto.randomUUID(),
+              }),
         });
         const finalized = await api.finalizeAsset({
           eventId: targetContext.eventId,
@@ -1680,6 +1704,12 @@ function usePortalProviderValue({
           eventId: targetContext.eventId,
           ...input,
           submissionId: uploadSubmissionId,
+          ...(input.supersedesAssetId === undefined
+            ? {}
+            : {
+                expectedLatestVersion: supersededAsset?.version ?? 1,
+                idempotencyKey: crypto.randomUUID(),
+              }),
         });
         if (
           pendingAsset.state !== "pending_upload" ||

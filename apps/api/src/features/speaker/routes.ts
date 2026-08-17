@@ -57,6 +57,7 @@ const uploadSchema = z.object({
   contentType: z.string().trim().min(1),
   sizeBytes: z.number().int().positive(),
   supersedesAssetId: z.string().trim().min(1).optional(),
+  expectedLatestVersion: z.number().int().positive().optional(),
 });
 
 const finalizeAssetSchema = z.object({
@@ -626,6 +627,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
+    const idempotencyKey = context.req.header("idempotency-key");
     const result = await dependencies.service.issueOrganizerUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
@@ -633,7 +635,13 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
       ...(body.supersedesAssetId === undefined
         ? {}
-        : { supersedesAssetId: body.supersedesAssetId }),
+        : {
+            supersedesAssetId: body.supersedesAssetId,
+            ...(body.expectedLatestVersion === undefined
+              ? {}
+              : { expectedLatestVersion: body.expectedLatestVersion }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }),
       kind: "headshot",
       fileName: body.fileName,
       contentType: body.contentType,
@@ -1135,6 +1143,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
+    const idempotencyKey = context.req.header("idempotency-key");
     const result = await dependencies.service.issueUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
@@ -1143,7 +1152,13 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       ...(body.submissionId === undefined ? {} : { submissionId: body.submissionId }),
       ...(body.supersedesAssetId === undefined
         ? {}
-        : { supersedesAssetId: body.supersedesAssetId }),
+        : {
+            supersedesAssetId: body.supersedesAssetId,
+            ...(body.expectedLatestVersion === undefined
+              ? {}
+              : { expectedLatestVersion: body.expectedLatestVersion }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }),
       kind: "headshot",
       fileName: body.fileName,
       contentType: body.contentType,
@@ -1247,6 +1262,7 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         400,
       );
     }
+    const idempotencyKey = context.req.header("idempotency-key");
     const data = await dependencies.service.issueUploadGrant({
       eventId: context.req.param("eventId"),
       accountId: context.get("speakerAccountId"),
@@ -1259,7 +1275,13 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
       sizeBytes: body.sizeBytes,
       ...(body.supersedesAssetId === undefined
         ? {}
-        : { supersedesAssetId: body.supersedesAssetId }),
+        : {
+            supersedesAssetId: body.supersedesAssetId,
+            ...(body.expectedLatestVersion === undefined
+              ? {}
+              : { expectedLatestVersion: body.expectedLatestVersion }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }),
     });
     return context.json({ data: { ...data, asset: speakerAsset(data.asset) } }, 201);
   });

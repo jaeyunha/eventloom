@@ -365,6 +365,7 @@ export const speakerTasks = sqliteTable(
     allowedMimeTypesJson: j("allowed_mime_types_json"),
     maxBytes: integer("max_bytes"),
     acceptedAssetKindsJson: j("accepted_asset_kinds_json"),
+    replacementBaselineAssetId: text("replacement_baseline_asset_id"),
     version: integer().notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -389,6 +390,11 @@ export const speakerTasks = sqliteTable(
       t.dueAt,
     ),
     index("speaker_tasks_submission_idx").on(t.organizationId, t.eventId, t.submissionId),
+    index("speaker_tasks_replacement_baseline_idx").on(
+      t.organizationId,
+      t.eventId,
+      t.replacementBaselineAssetId,
+    ),
     check("speaker_tasks_type_check", sql`${t.type} in('form','upload','action')`),
     check("speaker_tasks_owner_check", sql`${t.owner} in('speaker','organizer')`),
     check(

@@ -14,6 +14,7 @@ import type {
   FinalizeSpeakerAssetCommand,
   PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
+  PrivateDownloadCapabilityBinding,
   PrivateDownloadGrant,
   PrivateDownloadObject,
   PrivateUploadGrant,
@@ -290,6 +291,8 @@ export interface IssueUploadGrantInput {
   contentType: string;
   sizeBytes: number;
   supersedesAssetId?: string;
+  expectedLatestVersion?: number;
+  idempotencyKey?: string;
   organizer?: boolean;
 }
 
@@ -3546,7 +3549,7 @@ export class SpeakerService {
       asset.submissionId ??
       (await this.resolveSubmissionId(input.eventId, scope, asset.participantId, undefined));
     const expiresAt = new Date(this.now().getTime() + downloadGrantLifetimeMs).toISOString();
-    const binding: PrivateAssetCapabilityBinding = {
+    const binding: PrivateDownloadCapabilityBinding = {
       capabilityId: asset.id,
       tenantId: asset.tenantId ?? scope.tenantId,
       eventId: input.eventId,
@@ -3558,6 +3561,9 @@ export class SpeakerService {
       sizeBytes: asset.sizeBytes,
       fileName: asset.fileName,
       expiresAt,
+      requesterAccountId: input.accountId,
+      requesterKind: "organizer",
+      assetVersion: asset.version ?? 1,
     };
     return this.assetGateway.registerDownloadCapability === undefined
       ? await this.assetGateway.createDownloadGrant({
@@ -3634,14 +3640,20 @@ export class SpeakerService {
             asset.submissionId !== undefined &&
             sameSpeakerSubmission(subject.submissionId, asset.submissionId);
       if (
-        task !== null &&
-        subject !== undefined &&
-        task.type === "upload" &&
-        task.owner === "speaker" &&
-        task.participantId === asset.participantId &&
-        subjectMatchesAsset &&
-        task.status === "submitted"
+        task === null ||
+        subject === undefined ||
+        task.type !== "upload" ||
+        task.owner !== "speaker" ||
+        task.participantId !== asset.participantId ||
+        !subjectMatchesAsset
       ) {
+        throw new SpeakerServiceError(
+          "VALIDATION_ERROR",
+          400,
+          "The reviewed asset is not linked to a valid speaker upload task.",
+        );
+      }
+      if (task !== null) {
         returnTaskExpectation = { id: task.id, version: task.version + 1 };
         returnTask = {
           eventId: input.eventId,
@@ -3649,17 +3661,22 @@ export class SpeakerService {
           expectedVersion: task.version,
           fromStatus: task.status,
           toStatus: "needs_changes",
-          transition: {
-            id: this.generateId(),
-            eventId: input.eventId,
-            taskId: task.id,
-            participantId: task.participantId,
-            actorAccountId: input.accountId,
-            fromStatus: task.status,
-            toStatus: "needs_changes",
-            ...(note === undefined ? {} : { note }),
-            occurredAt: reviewedAt,
-          },
+          baselineAssetId: asset.id,
+          ...(task.status === "needs_changes"
+            ? {}
+            : {
+                transition: {
+                  id: this.generateId(),
+                  eventId: input.eventId,
+                  taskId: task.id,
+                  participantId: task.participantId,
+                  actorAccountId: input.accountId,
+                  fromStatus: task.status,
+                  toStatus: "needs_changes",
+                  ...(note === undefined ? {} : { note }),
+                  occurredAt: reviewedAt,
+                },
+              }),
         };
       }
     }
@@ -5046,6 +5063,9 @@ export class SpeakerService {
       expectedVersion: input.expectedVersion,
       fromStatus: task.status,
       toStatus: input.toStatus,
+      ...(input.toStatus === "submitted" && task.replacementBaselineAssetId !== undefined
+        ? { replacementBaselineAssetId: task.replacementBaselineAssetId }
+        : {}),
       transition: {
         id: transitionId,
         eventId: input.eventId,
@@ -5104,7 +5124,23 @@ export class SpeakerService {
     }
 
     let task: SpeakerTask | null = null;
-    let existing = input.supersedesAssetId
+    const replacementIdempotencyKey = input.idempotencyKey?.trim();
+    if (
+      input.supersedesAssetId === undefined
+        ? input.expectedLatestVersion !== undefined || input.idempotencyKey !== undefined
+        : !Number.isSafeInteger(input.expectedLatestVersion) ||
+          (input.expectedLatestVersion ?? 0) <= 0 ||
+          replacementIdempotencyKey === undefined ||
+          replacementIdempotencyKey.length === 0 ||
+          replacementIdempotencyKey.length > 300
+    ) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "Replacement uploads require an expected asset version and idempotency key.",
+      );
+    }
+    const existing = input.supersedesAssetId
       ? await this.repository.getAsset(input.eventId, input.supersedesAssetId)
       : null;
     if (input.supersedesAssetId !== undefined && existing === null) {
@@ -5194,29 +5230,6 @@ export class SpeakerService {
     const now = this.now();
     const assetId = this.generateId();
     const fileName = normalizeFileName(input.fileName);
-    if (taskId !== undefined && input.supersedesAssetId === undefined) {
-      const existingAssets = (
-        await this.assetsForParticipants(input.eventId, [input.participantId])
-      ).filter(
-        (candidate) =>
-          candidate.taskId === taskId &&
-          candidate.kind === input.kind &&
-          (candidate.tenantId === undefined ||
-            scope.tenantId === undefined ||
-            candidate.tenantId === scope.tenantId),
-      );
-      const families = [...assetFamilies(existingAssets).values()]
-        .map(assetFamilyPointers)
-        .filter((value): value is SpeakerAssetFamilyPointers => value !== undefined);
-      if (families.length > 1) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "Select the asset family to version.",
-        );
-      }
-      existing = families[0]?.latest ?? null;
-    }
     if (task?.status === "submitted" && existing === null) {
       throw new SpeakerServiceError(
         "UPLOAD_POLICY_VIOLATION",
@@ -5246,6 +5259,13 @@ export class SpeakerService {
         "Only a finalized asset can be superseded by a new immutable version.",
       );
     }
+    if (existing !== null && (existing.version ?? 1) !== input.expectedLatestVersion) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The selected asset version is stale. Reload the file before uploading.",
+      );
+    }
     let previousPointers: SpeakerAssetFamilyPointers | undefined;
     if (existing !== null) {
       const familyAssets = (
@@ -5259,18 +5279,23 @@ export class SpeakerService {
             candidate.tenantId === scope.tenantId),
       );
       previousPointers = assetFamilyPointers(familyAssets);
-      if (previousPointers === undefined || previousPointers.latest.id !== existing.id) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "The selected asset version is stale. Reload the file before uploading.",
-        );
-      }
     }
     const resolvedUploaderLabel = await this.repository.getAccountDisplayName?.(input.accountId);
     const uploaderLabel =
       resolvedUploaderLabel?.trim() ||
       (organizerScope === null ? "Participant uploader" : "Organizer uploader");
+    const successorVersion = input.expectedLatestVersion;
+    let assetVersion = 1;
+    if (existing !== null) {
+      if (successorVersion === undefined) {
+        throw new SpeakerServiceError(
+          "VALIDATION_ERROR",
+          400,
+          "Replacement uploads require an expected asset version.",
+        );
+      }
+      assetVersion = successorVersion + 1;
+    }
     const versionFamilyId = existing?.versionFamilyId ?? existing?.id ?? `asset-family:${assetId}`;
     const asset: SpeakerAsset = {
       id: assetId,
@@ -5305,18 +5330,63 @@ export class SpeakerService {
         ? {}
         : { releasedVersionId: previousPointers.released.id }),
       createdAt: now.toISOString(),
-      version: (existing?.version ?? 0) + 1,
+      version: assetVersion,
       versionFamilyId,
       ...(existing === null ? {} : { supersedesAssetId: existing.id }),
       commentThreadId: `asset-comments:${versionFamilyId}`,
       versionId: assetId,
     };
-    await this.repository.createPendingAsset(asset);
-    const storedAsset = await this.repository.getAsset(input.eventId, assetId);
+    let storedAsset: SpeakerAsset | null;
+    if (existing === null) {
+      await this.repository.createPendingAsset(asset);
+      storedAsset = await this.repository.getAsset(input.eventId, assetId);
+    } else {
+      if (
+        this.repository.createPendingAssetVersion === undefined ||
+        replacementIdempotencyKey === undefined ||
+        input.expectedLatestVersion === undefined
+      ) {
+        throw new Error("The speaker repository does not support atomic replacement creation.");
+      }
+      const requestDigest = await speakerSourceDigest(
+        JSON.stringify({
+          accountId: input.accountId,
+          eventId: input.eventId,
+          participantId: input.participantId,
+          submissionId: submissionId ?? null,
+          taskId: taskId ?? null,
+          kind: input.kind,
+          fileName,
+          contentType,
+          sizeBytes: input.sizeBytes,
+          expectedLatestAssetId: existing.id,
+          expectedLatestVersion: input.expectedLatestVersion,
+        }),
+      );
+      const result = await this.repository.createPendingAssetVersion({
+        asset,
+        expectedLatestAssetId: existing.id,
+        expectedLatestVersion: input.expectedLatestVersion,
+        idempotencyKey: replacementIdempotencyKey,
+        requestDigest,
+      });
+      if (!result.ok) {
+        if (result.reason === "version_conflict" || result.reason === "invalid_state") {
+          throw new SpeakerServiceError(
+            "VERSION_CONFLICT",
+            409,
+            "The selected asset version is stale. Reload the file before uploading.",
+          );
+        }
+        throw notFound();
+      }
+      storedAsset = result.value;
+    }
     if (
       storedAsset === null ||
-      storedAsset.latestVersionId !== assetId ||
-      storedAsset.versionId !== assetId
+      storedAsset.state !== "pending_upload" ||
+      storedAsset.latestVersionId !== storedAsset.id ||
+      storedAsset.versionId !== storedAsset.id
     ) {
       throw new SpeakerServiceError(
         "VERSION_CONFLICT",
@@ -5330,21 +5400,21 @@ export class SpeakerService {
       capabilityId: storedAsset.id,
       tenantId: storedAsset.tenantId ?? input.eventId,
       eventId: input.eventId,
-      ...(submissionId === undefined ? {} : { submissionId }),
-      participantId: input.participantId,
-      ...(taskId === undefined ? {} : { taskId }),
+      ...(storedAsset.submissionId === undefined ? {} : { submissionId: storedAsset.submissionId }),
+      participantId: storedAsset.participantId,
+      ...(storedAsset.taskId === undefined ? {} : { taskId: storedAsset.taskId }),
       objectKey: storedAsset.objectKey,
-      contentType,
-      sizeBytes: input.sizeBytes,
-      fileName,
+      contentType: storedAsset.contentType,
+      sizeBytes: storedAsset.sizeBytes,
+      fileName: storedAsset.fileName,
       expiresAt,
     };
     const grant =
       this.assetGateway.registerUploadCapability === undefined
         ? await this.assetGateway.createUploadGrant({
             objectKey: storedAsset.objectKey,
-            contentType,
-            sizeBytes: input.sizeBytes,
+            contentType: storedAsset.contentType,
+            sizeBytes: storedAsset.sizeBytes,
             expiresAt,
             private: true,
             requireMalwareScan: true,
@@ -5444,7 +5514,7 @@ export class SpeakerService {
     const submissionId =
       asset.submissionId ??
       (await this.resolveSubmissionId(input.eventId, scope, primaryParticipantId, undefined));
-    const binding: PrivateAssetCapabilityBinding = {
+    const binding: PrivateDownloadCapabilityBinding = {
       capabilityId: asset.id,
       tenantId: asset.tenantId ?? scope.tenantId ?? input.eventId,
       eventId: input.eventId,
@@ -5456,6 +5526,9 @@ export class SpeakerService {
       sizeBytes: asset.sizeBytes,
       fileName: asset.fileName,
       expiresAt,
+      requesterAccountId: input.accountId,
+      requesterKind: "speaker",
+      assetVersion: asset.version ?? 1,
     };
     return this.assetGateway.registerDownloadCapability === undefined
       ? await this.assetGateway.createDownloadGrant({
@@ -6378,6 +6451,39 @@ export class SpeakerService {
       const family = assetsByFamily.get(familyId);
       if (family === undefined) assetsByFamily.set(familyId, [asset]);
       else family.push(asset);
+    }
+    if (task.replacementBaselineAssetId !== undefined) {
+      const baseline = assets.find((asset) => asset.id === task.replacementBaselineAssetId);
+      const baselineFamilyId =
+        baseline === undefined ? undefined : (baseline.versionFamilyId ?? baseline.id);
+      const replacementReady =
+        baseline === undefined || baselineFamilyId === undefined
+          ? false
+          : [...assetsByFamily.values()]
+            .filter((family) =>
+              family.some((asset) => (asset.versionFamilyId ?? asset.id) === baselineFamilyId),
+            )
+            .map((family) => ({
+              baseline,
+              current: assetFamilyPointers(family)?.current,
+            }))
+            .some(
+              ({ baseline: returned, current }) =>
+                current !== undefined &&
+                current.state === "ready" &&
+                current.id !== returned.id &&
+                (current.version ?? 0) > (returned.version ?? 0) &&
+                (task.acceptedAssetKinds === undefined ||
+                  task.acceptedAssetKinds.includes(current.kind)),
+            );
+      if (!replacementReady) {
+        throw new SpeakerServiceError(
+          "TASK_ASSET_NOT_READY",
+          409,
+          "Finalize a newer accepted replacement before submitting this task.",
+        );
+      }
+      return;
     }
     const ready = [...assetsByFamily.values()]
       .map((family) => assetFamilyPointers(family)?.current)

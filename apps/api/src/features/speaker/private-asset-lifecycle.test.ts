@@ -4,7 +4,9 @@ import { createSpeakerRoutes } from "./routes";
 import { SpeakerService } from "./service";
 import { withTestSpeakerOrganizerLifecycle } from "./test-lifecycle-adapter";
 import type {
+  CreatePendingSpeakerAssetVersionCommand,
   PrivateAssetCapabilityBinding,
+  PrivateDownloadCapabilityBinding,
   PrivateAssetGateway,
   PrivateDownloadGrant,
   PrivateDownloadObject,
@@ -78,6 +80,10 @@ class LifecycleRepository implements SpeakerRepository {
     },
   ];
   readonly assets: SpeakerAsset[] = [];
+  readonly assetVersionCreations = new Map<
+    string,
+    { requestDigest: string; assetId: string }
+  >();
   readonly roster: SpeakerRosterEntry[] = [];
   readonly forms: SpeakerTaskFormDefinition[] = [
     {
@@ -293,9 +299,11 @@ class LifecycleRepository implements SpeakerRepository {
       if (returnTask === undefined) return Promise.resolve({ ok: false, reason: "not_found" });
       if (
         command.returnTask.eventId !== command.eventId ||
-        command.returnTask.transition.eventId !== command.eventId ||
-        command.returnTask.transition.taskId !== command.returnTask.taskId ||
-        command.returnTask.transition.participantId !== returnTask.participantId
+        command.returnTask.baselineAssetId !== command.assetId ||
+        (command.returnTask.transition !== undefined &&
+          (command.returnTask.transition.eventId !== command.eventId ||
+            command.returnTask.transition.taskId !== command.returnTask.taskId ||
+            command.returnTask.transition.participantId !== returnTask.participantId))
       ) {
         return Promise.resolve({ ok: false, reason: "invalid_state" });
       }
@@ -316,8 +324,9 @@ class LifecycleRepository implements SpeakerRepository {
     if (command.release) asset.releasedVersionId = asset.id;
     if (command.returnTask !== undefined && returnTask !== undefined) {
       returnTask.status = command.returnTask.toStatus;
+      returnTask.replacementBaselineAssetId = command.returnTask.baselineAssetId;
       returnTask.version = command.returnTask.expectedVersion + 1;
-      returnTask.updatedAt = command.returnTask.transition.occurredAt;
+      returnTask.updatedAt = command.returnTask.transition?.occurredAt ?? command.reviewedAt;
     }
     return Promise.resolve({ ok: true, value: asset });
   }
@@ -350,12 +359,51 @@ class LifecycleRepository implements SpeakerRepository {
     if (task.version !== command.expectedVersion)
       return Promise.resolve({ ok: false, reason: "version_conflict" });
     task.status = command.toStatus;
+    if (command.toStatus === "submitted") delete task.replacementBaselineAssetId;
     task.version += 1;
     return Promise.resolve({ ok: true, value: { task, transition: command.transition } });
   }
   createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset> {
     this.assets.push(asset);
     return Promise.resolve(asset);
+  }
+  createPendingAssetVersion(
+    command: CreatePendingSpeakerAssetVersionCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const key = `${command.asset.eventId}:${command.idempotencyKey}`;
+    const replay = this.assetVersionCreations.get(key);
+    if (replay !== undefined) {
+      const asset = this.assets.find((candidate) => candidate.id === replay.assetId);
+      return Promise.resolve(
+        replay.requestDigest === command.requestDigest &&
+          asset !== undefined &&
+          asset.supersedesAssetId === command.expectedLatestAssetId
+          ? { ok: true, value: asset }
+          : { ok: false, reason: "version_conflict" },
+      );
+    }
+    const familyId = command.asset.versionFamilyId ?? command.asset.id;
+    const family = this.assets.filter(
+      (candidate) => (candidate.versionFamilyId ?? candidate.id) === familyId,
+    );
+    const expected = family.find(
+      (candidate) =>
+        candidate.id === command.expectedLatestAssetId &&
+        candidate.version === command.expectedLatestVersion &&
+        candidate.state === "ready",
+    );
+    const hasNewerVersion = family.some(
+      (candidate) => (candidate.version ?? 1) > command.expectedLatestVersion,
+    );
+    if (expected === undefined || hasNewerVersion) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    this.assets.push(command.asset);
+    this.assetVersionCreations.set(key, {
+      requestDigest: command.requestDigest,
+      assetId: command.asset.id,
+    });
+    return Promise.resolve({ ok: true, value: command.asset });
   }
   getAsset(eventId: string, id: string): Promise<SpeakerAsset | null> {
     return Promise.resolve(
@@ -622,6 +670,18 @@ function binding(
     sizeBytes: 3,
     fileName: "slides.pdf",
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    ...overrides,
+  };
+}
+
+function downloadBinding(
+  overrides: Partial<PrivateDownloadCapabilityBinding> = {},
+): PrivateDownloadCapabilityBinding {
+  return {
+    ...binding(),
+    requesterAccountId: "account-1",
+    requesterKind: "speaker",
+    assetVersion: 1,
     ...overrides,
   };
 }
@@ -943,6 +1003,8 @@ describe("private speaker asset lifecycle", () => {
       accountId: "account-1",
       participantId: "participant-1",
       supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: "immutable-lineage-replacement",
       kind: "slides",
       fileName: "slides-v2.pdf",
       contentType: "application/pdf",
@@ -965,6 +1027,116 @@ describe("private speaker asset lifecycle", () => {
     });
     expect(firstDownload.url).not.toBe(secondDownload.url);
     expect(gateway.downloadBindings).toHaveLength(2);
+  });
+  it("authorizes exactly one concurrent replacement for an expected family head", async () => {
+    const repository = new LifecycleRepository();
+    const gateway = new CapabilityGateway();
+    const ids = [
+      "asset-v1",
+      "asset-v2-a",
+      "asset-v2-b",
+      "asset-v2-replay",
+      "asset-v2-mismatch",
+    ];
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+      speakerSender,
+      now: () => new Date(now),
+      generateId: () => ids.shift() ?? "unexpected-asset",
+    });
+    const first = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    gateway.uploaded.add(first.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: first.asset.id,
+      state: "ready",
+    });
+
+    const outcomes = await Promise.allSettled([
+      service.issueUploadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        kind: "slides",
+        fileName: "slides-v2-a.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        supersedesAssetId: first.asset.id,
+        expectedLatestVersion: 1,
+        idempotencyKey: "replacement-a",
+      }),
+      service.issueUploadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        kind: "slides",
+        fileName: "slides-v2-b.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        supersedesAssetId: first.asset.id,
+        expectedLatestVersion: 1,
+        idempotencyKey: "replacement-b",
+      }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ code: "VERSION_CONFLICT", status: 409 }),
+      }),
+    ]);
+    expect(repository.assets.filter((asset) => asset.version === 2)).toHaveLength(1);
+    expect(gateway.uploadBindings).toHaveLength(2);
+
+    const winner = outcomes.find((outcome) => outcome.status === "fulfilled");
+    if (winner?.status !== "fulfilled") throw new Error("Expected one replacement winner.");
+    const winningRequest =
+      winner.value.asset.fileName === "slides-v2-a.pdf"
+        ? {
+            fileName: "slides-v2-a.pdf",
+            idempotencyKey: "replacement-a",
+          }
+        : {
+            fileName: "slides-v2-b.pdf",
+            idempotencyKey: "replacement-b",
+          };
+    const replay = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      kind: "slides",
+      fileName: winningRequest.fileName,
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: winningRequest.idempotencyKey,
+    });
+    expect(replay.asset.id).toBe(winner.value.asset.id);
+    await expect(
+      service.issueUploadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        kind: "slides",
+        fileName: "changed-on-replay.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        supersedesAssetId: first.asset.id,
+        expectedLatestVersion: 1,
+        idempotencyKey: winningRequest.idempotencyKey,
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT", status: 409 });
+    expect(repository.assets.filter((asset) => asset.version === 2)).toHaveLength(1);
+    expect(gateway.uploadBindings).toHaveLength(3);
   });
   it("submits a newly assigned upload task after its first file is finalized", async () => {
     const repository = new LifecycleRepository();
@@ -1185,6 +1357,9 @@ describe("private speaker asset lifecycle", () => {
       fileName: "slides-v2.pdf",
       contentType: "application/pdf",
       sizeBytes: 3,
+      supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: "task-reupload-v2",
     });
     expect(second.asset).toMatchObject({
       version: 2,
@@ -1215,6 +1390,104 @@ describe("private speaker asset lifecycle", () => {
       expect.objectContaining({ id: first.asset.id, state: "ready" }),
       expect.objectContaining({ id: second.asset.id, state: "ready" }),
     ]);
+  });
+
+  it("requires a newer ready family version after a needs-changes review", async () => {
+    const repository = new LifecycleRepository();
+    repository.organizerScopes.set("event-1:organizer", {
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      role: "owner",
+    });
+    const gateway = new CapabilityGateway();
+    const ids = ["baseline-v1", "baseline-v2"];
+    const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
+      speakerSender,
+      now: () => new Date(now),
+      generateId: () => ids.shift() ?? "generated-id",
+    });
+    const first = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      fileName: "baseline-v1.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    gateway.uploaded.add(first.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: first.asset.id,
+      state: "ready",
+    });
+    const submitted = await service.transitionTask({
+      eventId: "event-1",
+      accountId: "account-1",
+      taskId: "upload-task",
+      toStatus: "submitted",
+      expectedVersion: 1,
+    });
+    const reviewed = await service.reviewAsset({
+      eventId: "event-1",
+      accountId: "organizer",
+      assetId: first.asset.id,
+      state: "needs_changes",
+      expectedVersion: 0,
+    });
+    expect(reviewed.reviewState).toBe("needs_changes");
+    const returnedTask = repository.tasks.find((task) => task.id === "upload-task");
+    expect(returnedTask).toMatchObject({
+      status: "needs_changes",
+      replacementBaselineAssetId: first.asset.id,
+      version: 3,
+    });
+    await expect(
+      service.transitionTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: "upload-task",
+        toStatus: "submitted",
+        expectedVersion: returnedTask?.version ?? -1,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_ASSET_NOT_READY", status: 409 });
+
+    const replacement = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      fileName: "baseline-v2.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: "baseline-v2",
+    });
+    gateway.uploaded.add(replacement.asset.objectKey);
+    await service.finalizeAsset({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: replacement.asset.id,
+      state: "ready",
+    });
+    await expect(
+      service.transitionTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: "upload-task",
+        toStatus: "submitted",
+        expectedVersion: returnedTask?.version ?? -1,
+      }),
+    ).resolves.toMatchObject({ task: { status: "submitted" } });
+    expect(repository.tasks.find((task) => task.id === "upload-task")).not.toHaveProperty(
+      "replacementBaselineAssetId",
+    );
   });
 
   it("persists private bytes and enforces MIME, size, expiry, and replay at the R2 boundary", async () => {
@@ -1266,8 +1539,8 @@ describe("private speaker asset lifecycle", () => {
     ).rejects.toThrow();
     expect(await bucket.head(binding().objectKey)).toMatchObject({ size: 3 });
 
-    const firstDownload = await gateway.registerDownloadCapability(binding());
-    const secondDownload = await gateway.registerDownloadCapability(binding());
+    const firstDownload = await gateway.registerDownloadCapability(downloadBinding());
+    const secondDownload = await gateway.registerDownloadCapability(downloadBinding());
     expect(firstDownload.url).not.toBe(secondDownload.url);
 
     const firstDownloadCapability = downloadCapabilityParts(firstDownload.url);
@@ -1297,14 +1570,14 @@ describe("private speaker asset lifecycle", () => {
     ).rejects.toThrow();
 
     const recentlyExpiredDownload = await gateway.registerDownloadCapability(
-      binding({
+      downloadBinding({
         capabilityId: "recently-expired-download",
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       }),
     );
     const recentlyExpiredCapability = downloadCapabilityParts(recentlyExpiredDownload.url);
     await gateway.registerDownloadCapability(
-      binding({ capabilityId: "download-after-recent-expiry" }),
+      downloadBinding({ capabilityId: "download-after-recent-expiry" }),
     );
     await expect(
       gateway.consumeDownloadCapability(
@@ -1411,19 +1684,40 @@ describe("private speaker asset lifecycle", () => {
     );
   });
 
-  it("does not expose object keys from transfer responses", async () => {
+  it("redacts private and reviewer fields from every speaker asset response", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
+    const generatedIds = ["headshot-asset", "slides-asset"];
     const service = new SpeakerService(withTestSpeakerOrganizerLifecycle(repository), gateway, {
       speakerSender,
       now: () => new Date(now),
-      generateId: () => "asset-1",
+      generateId: () => generatedIds.shift() ?? "unexpected-asset",
     });
     const routes = createSpeakerRoutes({
       service,
       authenticate: async () => ({ accountId: "account-1" }),
     });
-    const response = await routes.request("/events/event-1/uploads", {
+
+    const headshotResponse = await routes.request(
+      "/events/event-1/profiles/participant-1/headshot",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          participantId: "participant-1",
+          kind: "headshot",
+          fileName: "headshot.png",
+          contentType: "image/png",
+          sizeBytes: 3,
+        }),
+      },
+    );
+    const headshotBody = (await headshotResponse.json()) as {
+      data: { asset: Record<string, unknown> };
+    };
+    expect(headshotResponse.status).toBe(201);
+
+    const uploadResponse = await routes.request("/events/event-1/uploads", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1434,14 +1728,78 @@ describe("private speaker asset lifecycle", () => {
         sizeBytes: 3,
       }),
     });
-    expect(response.status).toBe(201);
-    expect(await response.text()).not.toContain("objectKey");
+    const uploadBody = (await uploadResponse.json()) as {
+      data: { asset: Record<string, unknown> };
+    };
+    expect(uploadResponse.status).toBe(201);
+
+    for (const asset of repository.assets) asset.reviewedBy = "organizer";
+
+    const retryResponse = await routes.request(
+      "/events/event-1/assets/headshot-asset/upload-authorization",
+      { method: "POST" },
+    );
+    const retryBody = (await retryResponse.json()) as {
+      data: { asset: Record<string, unknown> };
+    };
+    expect(retryResponse.status).toBe(200);
+
     expect(
-      await routes.request("/assets/capabilities/upload/asset-1/opaque-token", {
+      await routes.request("/assets/capabilities/upload/slides-asset/opaque-token", {
         method: "PUT",
         body: "x",
       }),
     ).toHaveProperty("status", 201);
+    const slidesObjectKey = repository.assets.find((asset) => asset.id === "slides-asset")?.objectKey;
+    if (slidesObjectKey === undefined) throw new Error("Expected the pending slides asset.");
+    gateway.uploaded.add(slidesObjectKey);
+
+    const finalizeResponse = await routes.request("/events/event-1/assets/slides-asset/finalize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ state: "ready" }),
+    });
+    const finalizeBody = (await finalizeResponse.json()) as {
+      data: Record<string, unknown>;
+    };
+    expect(finalizeResponse.status).toBe(200);
+
+    const listResponse = await routes.request("/events/event-1/assets");
+    const listBody = (await listResponse.json()) as {
+      data: Record<string, unknown>[];
+    };
+    expect(listResponse.status).toBe(200);
+
+    const historyResponse = await routes.request(
+      "/events/event-1/assets/slides-asset/history",
+    );
+    const historyBody = (await historyResponse.json()) as {
+      data: Record<string, unknown>[];
+    };
+    expect(historyResponse.status).toBe(200);
+
+    const portalResponse = await routes.request("/events/event-1/portal");
+    const portalBody = (await portalResponse.json()) as {
+      data: { assets?: Record<string, unknown>[] };
+    };
+    expect(portalResponse.status).toBe(200);
+
+    const returnedAssets = [
+      headshotBody.data.asset,
+      uploadBody.data.asset,
+      retryBody.data.asset,
+      finalizeBody.data,
+      ...listBody.data,
+      ...historyBody.data,
+      ...(portalBody.data.assets ?? []),
+    ];
+    expect(returnedAssets.length).toBeGreaterThanOrEqual(7);
+    for (const asset of returnedAssets) {
+      expect(asset).not.toHaveProperty("objectKey");
+      expect(asset).not.toHaveProperty("tenantId");
+      expect(asset).not.toHaveProperty("uploaderAccountId");
+      expect(asset).not.toHaveProperty("reviewedBy");
+    }
   });
 
   it("routes pending-upload re-authorization without accepting replacement metadata", async () => {
@@ -1647,6 +2005,8 @@ describe("speaker participant workspace authorization and projections", () => {
       contentType: "application/pdf",
       sizeBytes: 3,
       supersedesAssetId: first.asset.id,
+      expectedLatestVersion: 1,
+      idempotencyKey: "history-replacement-v2",
     });
     await expect(
       service.listAssetHistory("event-1", "account-1", second.asset.id),

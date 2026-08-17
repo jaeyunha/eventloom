@@ -52,7 +52,7 @@ is already pushed and present in PR #39. It:
 
 The paused, not-yet-pushed follow-up patch currently contains:
 
-- migration `0034_speaker_asset_uploader.sql`;
+- migration `0035_speaker_asset_uploader.sql`;
 - immutable asset uploader account ID plus upload-time display-label snapshot
   in the domain, D1 schema/repository, local repository, service, organizer
   parser, and file-review context;
@@ -60,7 +60,7 @@ The paused, not-yet-pushed follow-up patch currently contains:
   speaker and a web model regression for the same distinction;
 - speaker-facing asset serialization that removes `reviewedBy` and
   `uploaderAccountId`, while organizer audit storage remains intact;
-- migration `0035_speaker_asset_creation_idempotency.sql`;
+- migration `0036_speaker_asset_creation_idempotency.sql`;
 - typed `CreatePendingSpeakerAssetVersionCommand`;
 - partial D1 and local repository implementations for optimistic/idempotent
   pending replacement creation;
@@ -258,8 +258,8 @@ checkpoint, not claimed as completed behavior.
 1. Fetch and compare latest `github/main` before editing. Merge current main
    into this checkpoint branch normally; do not force-push.
 2. Keep migration order stable:
-   - `0034_speaker_asset_uploader.sql`
-   - `0035_speaker_asset_creation_idempotency.sql`
+   - `0035_speaker_asset_uploader.sql`
+   - `0036_speaker_asset_creation_idempotency.sql`
    - future replacement-baseline migration
    - future download-attribution migration
    - future private-cleanup migration

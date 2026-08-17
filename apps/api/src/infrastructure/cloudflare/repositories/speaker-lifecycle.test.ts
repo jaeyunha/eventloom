@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Submission } from "../../../features/cfp/model";
 import type { CfpRepository } from "../../../features/cfp/service";
 import type { Session, SessionRepository } from "../../../features/sessions/types";
+import type { SpeakerAsset } from "../../../features/speaker/types";
 import { AirtableEvaluationAcceptanceHandoff } from "../../../runtime/airtable";
 import { D1BetterAuthGateway } from "../../../runtime/cloudflare";
 import {
@@ -141,6 +142,188 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         }),
       ],
     });
+  });
+
+  it("persists organizer uploader provenance independently from the asset speaker", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+
+    const created = await fixture.createPhase().service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Distinct Asset Speaker",
+      email: "distinct-asset-speaker@example.test",
+      jobTitle: "Speaker",
+      company: "Eventloom",
+      biography: "Speaker whose organizer uploads a headshot.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "create-distinct-asset-speaker",
+    });
+    const participantId = created.speakers.find(
+      (speaker) => speaker.email === "distinct-asset-speaker@example.test",
+    )?.participantId;
+    if (participantId === undefined) throw new Error("Expected the created asset speaker.");
+
+    const authorization = await fixture.createPhase().service.issueOrganizerUploadGrant({
+      eventId,
+      accountId: organizerAccountId,
+      participantId,
+      kind: "headshot",
+      fileName: "organizer-uploaded-headshot.png",
+      contentType: "image/png",
+      sizeBytes: 21,
+    });
+    expect(authorization.asset).toMatchObject({
+      participantId,
+      uploaderAccountId: organizerAccountId,
+      uploaderLabel: "Organizer",
+    });
+
+    const reloaded = fixture.createPhase();
+    await expect(reloaded.repository.getAsset(eventId, authorization.asset.id)).resolves.toMatchObject(
+      {
+        participantId,
+        uploaderAccountId: organizerAccountId,
+        uploaderLabel: "Organizer",
+      },
+    );
+    await expect(
+      reloaded.service.listOrganizerAssets(eventId, organizerAccountId, participantId),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: authorization.asset.id,
+        participantId,
+        participantName: "Distinct Asset Speaker",
+        uploaderAccountId: organizerAccountId,
+        uploaderLabel: "Organizer",
+      }),
+    ]);
+  });
+
+  it("replays one canonical pending replacement from an event-scoped idempotency key", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+
+    const created = await fixture.createPhase().service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Replacement Replay Speaker",
+      email: "replacement-replay@example.test",
+      jobTitle: "Speaker",
+      company: "Eventloom",
+      biography: "Speaker for replacement replay coverage.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "create-replacement-replay-speaker",
+    });
+    const participantId = created.speakers.find(
+      (speaker) => speaker.email === "replacement-replay@example.test",
+    )?.participantId;
+    if (participantId === undefined) throw new Error("Expected the replacement replay speaker.");
+
+    const service = fixture.createPhase().service;
+    const authorization = await service.issueOrganizerUploadGrant({
+      eventId,
+      accountId: organizerAccountId,
+      participantId,
+      kind: "headshot",
+      fileName: "headshot-v1.png",
+      contentType: "image/png",
+      sizeBytes: 3,
+    });
+    const upload = privateCapabilityParts(authorization.grant.url);
+    await service.consumeUploadCapability(
+      upload.capabilityId,
+      upload.token,
+      new Request("https://api.example.test/private-upload", {
+        method: "PUT",
+        headers: {
+          "content-type": "image/png",
+          "content-length": "3",
+        },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+    );
+    const ready = await service.finalizeAsset({
+      eventId,
+      accountId: organizerAccountId,
+      assetId: authorization.asset.id,
+      state: "ready",
+      organizer: true,
+    });
+    if (ready.version === undefined) throw new Error("Expected a versioned ready asset.");
+    const readyVersion = ready.version;
+
+    const candidate = (id: string): SpeakerAsset => ({
+      id,
+      eventId,
+      participantId,
+      kind: ready.kind,
+      objectKey: `events/${eventId}/participants/${participantId}/headshot/${id}`,
+      fileName: "headshot-v2.png",
+      contentType: ready.contentType,
+      sizeBytes: ready.sizeBytes,
+      state: "pending_upload",
+      version: readyVersion + 1,
+      versionFamilyId: ready.versionFamilyId ?? ready.id,
+      supersedesAssetId: ready.id,
+      versionId: id,
+      latestVersionId: id,
+      currentVersionId: ready.id,
+      createdAt: "2099-08-15T06:00:00.000Z",
+      tenantId: organizationId,
+      uploaderAccountId: organizerAccountId,
+      uploaderLabel: "Organizer",
+    });
+    const repository = fixture.createPhase().repository;
+    const first = await repository.createPendingAssetVersion({
+      asset: candidate("asset-replacement-a"),
+      expectedLatestAssetId: ready.id,
+      expectedLatestVersion: readyVersion,
+      idempotencyKey: "replacement-replay-key",
+      requestDigest: "replacement-replay-digest",
+    });
+    const replay = await repository.createPendingAssetVersion({
+      asset: candidate("asset-replacement-b"),
+      expectedLatestAssetId: ready.id,
+      expectedLatestVersion: readyVersion,
+      idempotencyKey: "replacement-replay-key",
+      requestDigest: "replacement-replay-digest",
+    });
+    const mismatchedReplay = await repository.createPendingAssetVersion({
+      asset: candidate("asset-replacement-c"),
+      expectedLatestAssetId: ready.id,
+      expectedLatestVersion: readyVersion,
+      idempotencyKey: "replacement-replay-key",
+      requestDigest: "changed-request-digest",
+    });
+    const losingKey = await repository.createPendingAssetVersion({
+      asset: candidate("asset-replacement-d"),
+      expectedLatestAssetId: ready.id,
+      expectedLatestVersion: readyVersion,
+      idempotencyKey: "different-replacement-key",
+      requestDigest: "different-replacement-digest",
+    });
+
+    expect(first).toMatchObject({ ok: true, value: { id: "asset-replacement-a" } });
+    expect(replay).toMatchObject({ ok: true, value: { id: "asset-replacement-a" } });
+    expect(mismatchedReplay).toEqual({ ok: false, reason: "version_conflict" });
+    expect(losingKey).toEqual({ ok: false, reason: "version_conflict" });
+    const family = await repository.listAssets(eventId, [participantId]);
+    expect(family).toHaveLength(2);
+    expect(family).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: ready.id, version: 1 }),
+        expect.objectContaining({
+          id: "asset-replacement-a",
+          version: 2,
+          supersedesAssetId: ready.id,
+        }),
+      ]),
+    );
   });
 
   it("roundtrips organizer, participant, task, profile, and private-headshot state", async () => {
@@ -768,12 +951,16 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
         participantId,
         taskId,
         kind: "slides",
-        fileName: input.fileName,
-        contentType: "application/pdf",
-        sizeBytes: input.bytes.byteLength,
-        ...(input.supersedesAssetId === undefined
-          ? {}
-          : { supersedesAssetId: input.supersedesAssetId }),
+      fileName: input.fileName,
+      contentType: "application/pdf",
+      sizeBytes: input.bytes.byteLength,
+      ...(input.supersedesAssetId === undefined
+        ? {}
+        : {
+            supersedesAssetId: input.supersedesAssetId,
+            expectedLatestVersion: 1,
+            idempotencyKey: `content-roundtrip-replacement-${input.fileName}`,
+          }),
       });
       const capability = privateCapabilityParts(authorization.grant.url);
       await service.consumeUploadCapability(
@@ -1002,6 +1189,21 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
       latestVersionId: authorization.asset.id,
       currentVersionId: authorization.asset.id,
     });
+    const returnedTask = await fixture.createPhase().repository.getTask(eventId, task.id);
+    expect(returnedTask).toMatchObject({
+      status: "needs_changes",
+      replacementBaselineAssetId: authorization.asset.id,
+    });
+    if (returnedTask === null) throw new Error("Expected the returned task.");
+    await expect(
+      fixture.createPhase().service.transitionTask({
+        eventId,
+        accountId: priyaAccountId,
+        taskId: task.id,
+        toStatus: "submitted",
+        expectedVersion: returnedTask.version,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_ASSET_NOT_READY", status: 409 });
     expect(
       fixture.database.query(
         `SELECT task_id, participant_id, actor_account_id, from_status, to_status, note

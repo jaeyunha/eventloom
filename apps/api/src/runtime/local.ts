@@ -111,6 +111,7 @@ import type {
   SpeakerAccessScope,
   SpeakerAccountWorkloadRepository,
   SpeakerAsset,
+  SpeakerAssetAuditEntry,
   SpeakerAssetComment,
   SpeakerAssetReviewCommand,
   SpeakerContentHistoryEntry,
@@ -124,6 +125,7 @@ import type {
   SpeakerRosterEntry,
   SpeakerSubmission,
   SpeakerTask,
+  SpeakerTaskTransition,
   SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
@@ -538,6 +540,8 @@ class LocalSpeakerRepository
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
   readonly #assetComments = new Map<string, SpeakerAssetComment[]>();
+  readonly #assetAudit = new Map<string, SpeakerAssetAuditEntry[]>();
+  readonly #taskTransitions = new Map<string, SpeakerTaskTransition[]>();
   readonly #assetVersionCreations = new Map<string, { requestDigest: string; assetId: string }>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
@@ -577,6 +581,8 @@ class LocalSpeakerRepository
     if (!this.#tasks.has(eventId)) this.#tasks.set(eventId, []);
     if (!this.#assets.has(eventId)) this.#assets.set(eventId, []);
     if (!this.#assetComments.has(eventId)) this.#assetComments.set(eventId, []);
+    if (!this.#assetAudit.has(eventId)) this.#assetAudit.set(eventId, []);
+    if (!this.#taskTransitions.has(eventId)) this.#taskTransitions.set(eventId, []);
   }
 
   listStoredSubmissions(eventId: string): SpeakerSubmission[] {
@@ -1206,13 +1212,58 @@ class LocalSpeakerRepository
     if (task.version !== command.expectedVersion || task.status !== command.fromStatus) {
       return { ok: false, reason: "version_conflict" } as const;
     }
-    const updated: SpeakerTask = {
-      ...task,
-      status: command.toStatus,
-      version: task.version + 1,
-      updatedAt: command.transition.occurredAt,
-    };
+    if (command.toStatus === "submitted" && task.replacementBaselineAssetId !== undefined) {
+      const assets = (this.#assets.get(command.eventId) ?? []).filter(
+        (asset) => asset.taskId === task.id,
+      );
+      const baseline = assets.find(
+        (asset) => asset.id === task.replacementBaselineAssetId,
+      );
+      const family = baseline === undefined
+        ? []
+        : assets.filter(
+            (asset) =>
+              (asset.versionFamilyId ?? asset.id) ===
+              (baseline.versionFamilyId ?? baseline.id),
+          );
+      const current =
+        family.find((asset) => asset.currentVersionId === asset.id) ??
+        [...family].sort((left, right) => (right.version ?? 0) - (left.version ?? 0))[0];
+      if (
+        baseline === undefined ||
+        current === undefined ||
+        current.state !== "ready" ||
+        current.id === baseline.id ||
+        (current.version ?? 0) <= (baseline.version ?? 0) ||
+        (task.acceptedAssetKinds !== undefined &&
+          !task.acceptedAssetKinds.includes(current.kind))
+      ) {
+        return { ok: false, reason: "invalid_state" } as const;
+      }
+    }
+    const { replacementBaselineAssetId: _baseline, ...taskWithoutBaseline } = task;
+    const updated: SpeakerTask =
+      command.toStatus === "submitted"
+        ? {
+            ...taskWithoutBaseline,
+            status: command.toStatus,
+            version: task.version + 1,
+            updatedAt: command.transition.occurredAt,
+          }
+        : {
+            ...task,
+            status: command.toStatus,
+            version: task.version + 1,
+            updatedAt: command.transition.occurredAt,
+          };
     tasks[index] = updated;
+    const transitions = this.#taskTransitions.get(command.eventId) ?? [];
+    if (!transitions.some((transition) => transition.id === command.transition.id)) {
+      this.#taskTransitions.set(command.eventId, [
+        ...transitions,
+        clone(command.transition),
+      ]);
+    }
     return {
       ok: true,
       value: { task: clone(updated), transition: clone(command.transition) },
@@ -1332,9 +1383,11 @@ class LocalSpeakerRepository
       if (returnTask === undefined) return { ok: false, reason: "not_found" };
       if (
         command.returnTask.eventId !== command.eventId ||
-        command.returnTask.transition.eventId !== command.eventId ||
-        command.returnTask.transition.taskId !== command.returnTask.taskId ||
-        command.returnTask.transition.participantId !== returnTask.participantId
+        command.returnTask.baselineAssetId !== command.assetId ||
+        (command.returnTask.transition !== undefined &&
+          (command.returnTask.transition.eventId !== command.eventId ||
+            command.returnTask.transition.taskId !== command.returnTask.taskId ||
+            command.returnTask.transition.participantId !== returnTask.participantId))
       ) {
         return { ok: false, reason: "invalid_state" };
       }
@@ -1378,15 +1431,36 @@ class LocalSpeakerRepository
     if (releasedVersionId === undefined) delete reviewed.releasedVersionId;
     if (command.note === undefined) delete reviewed.reviewNote;
     assets[index] = reviewed;
+    if (command.audit !== undefined) {
+      const entries = this.#assetAudit.get(command.eventId) ?? [];
+      if (!entries.some((entry) => entry.id === command.audit?.id)) {
+        this.#assetAudit.set(command.eventId, [...entries, clone(command.audit)]);
+      }
+    }
     if (command.returnTask !== undefined && returnTask !== undefined) {
       tasks[returnTaskIndex] = {
         ...returnTask,
         status: command.returnTask.toStatus,
+        replacementBaselineAssetId: command.returnTask.baselineAssetId,
         version: command.returnTask.expectedVersion + 1,
-        updatedAt: command.returnTask.transition.occurredAt,
+        updatedAt: command.returnTask.transition?.occurredAt ?? command.reviewedAt,
       };
     }
     return { ok: true, value: clone(reviewed) };
+  }
+
+  async appendAssetAudit(entry: SpeakerAssetAuditEntry): Promise<void> {
+    this.#ensureEvent(entry.eventId);
+    const entries = this.#assetAudit.get(entry.eventId) ?? [];
+    if (entries.some((candidate) => candidate.id === entry.id)) return;
+    this.#assetAudit.set(entry.eventId, [...entries, clone(entry)]);
+  }
+
+  async listAssetAudit(eventId: string, assetId: string): Promise<SpeakerAssetAuditEntry[]> {
+    this.#ensureEvent(eventId);
+    return clone(
+      (this.#assetAudit.get(eventId) ?? []).filter((entry) => entry.assetId === assetId),
+    );
   }
 
   async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {

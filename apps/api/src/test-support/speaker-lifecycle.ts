@@ -49,8 +49,11 @@ const migrationNames = [
   "0027_event_role_invitations.sql",
   "0028_remove_event_status.sql",
   "0033_private_download_capabilities.sql",
-  "0034_speaker_asset_uploader.sql",
-  "0035_speaker_asset_creation_idempotency.sql",
+  "0034_program_publication_reservations.sql",
+  "0037_speaker_asset_uploader.sql",
+  "0038_speaker_asset_creation_idempotency.sql",
+  "0039_speaker_task_replacement_baseline.sql",
+  "0040_private_download_attribution.sql",
 ] as const;
 
 class FakeR2Bucket {

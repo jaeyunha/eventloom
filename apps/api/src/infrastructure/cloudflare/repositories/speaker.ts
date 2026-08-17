@@ -1711,11 +1711,56 @@ export class D1SpeakerRepository
     const scope = await this.#eventScope(command.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
     const statements = [
+      ...(command.toStatus === "submitted" && command.replacementBaselineAssetId !== undefined
+        ? [
+            guard(
+              this.#db,
+              `EXISTS (
+                SELECT 1
+                  FROM speaker_tasks AS task
+                  JOIN speaker_assets AS baseline
+                    ON baseline.organization_id = task.organization_id
+                   AND baseline.event_id = task.event_id
+                   AND baseline.id = task.replacement_baseline_asset_id
+                  JOIN speaker_assets AS current
+                    ON current.organization_id = baseline.organization_id
+                   AND current.event_id = baseline.event_id
+                   AND current.version_family_id = baseline.version_family_id
+                   AND current.id = current.current_version_id
+                 WHERE task.organization_id = ?
+                   AND task.event_id = ?
+                   AND task.id = ?
+                   AND task.version = ?
+                   AND task.status = ?
+                   AND task.replacement_baseline_asset_id = ?
+                   AND current.state = 'ready'
+                   AND current.version > baseline.version
+                   AND (
+                     task.accepted_asset_kinds_json = '[]'
+                     OR EXISTS (
+                       SELECT 1
+                         FROM json_each(task.accepted_asset_kinds_json)
+                        WHERE value = current.kind
+                     )
+                   )
+              )`,
+              [
+                scope.organizationId,
+                command.eventId,
+                command.taskId,
+                command.expectedVersion,
+                command.fromStatus,
+                command.replacementBaselineAssetId,
+              ],
+            ),
+          ]
+        : []),
       this.#db
         .prepare(
-          "UPDATE speaker_tasks SET status = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          "UPDATE speaker_tasks SET status = ?, replacement_baseline_asset_id = CASE WHEN ? = 'submitted' THEN NULL ELSE replacement_baseline_asset_id END, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
         )
         .bind(
+          command.toStatus,
           command.toStatus,
           command.transition.occurredAt,
           scope.organizationId,
@@ -1726,7 +1771,13 @@ export class D1SpeakerRepository
         ),
       this.#db
         .prepare(
-          "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          `INSERT INTO speaker_task_transitions
+             (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM speaker_tasks
+               WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?
+            )`,
         )
         .bind(
           command.transition.id,
@@ -1739,6 +1790,11 @@ export class D1SpeakerRepository
           command.toStatus,
           command.transition.note ?? null,
           command.transition.occurredAt,
+          scope.organizationId,
+          command.eventId,
+          command.taskId,
+          command.expectedVersion + 1,
+          command.toStatus,
         ),
     ];
     try {
@@ -2111,9 +2167,11 @@ export class D1SpeakerRepository
       if (task === null) return { ok: false, reason: "not_found" };
       if (
         command.returnTask.eventId !== command.eventId ||
-        command.returnTask.transition.eventId !== command.eventId ||
-        command.returnTask.transition.taskId !== command.returnTask.taskId ||
-        command.returnTask.transition.participantId !== task.participantId
+        command.returnTask.baselineAssetId !== command.assetId ||
+        (command.returnTask.transition !== undefined &&
+          (command.returnTask.transition.eventId !== command.eventId ||
+            command.returnTask.transition.taskId !== command.returnTask.taskId ||
+            command.returnTask.transition.participantId !== task.participantId))
       ) {
         return { ok: false, reason: "invalid_state" };
       }
@@ -2208,18 +2266,21 @@ export class D1SpeakerRepository
         ),
         this.#db
           .prepare(
-            "UPDATE speaker_tasks SET status = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
+          "UPDATE speaker_tasks SET status = ?, replacement_baseline_asset_id = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ? AND status = ?",
           )
           .bind(
             command.returnTask.toStatus,
-            command.returnTask.transition.occurredAt,
+            command.returnTask.baselineAssetId,
+            command.returnTask.transition?.occurredAt ?? command.reviewedAt,
             scope.organizationId,
             command.eventId,
             command.returnTask.taskId,
             command.returnTask.expectedVersion,
             command.returnTask.fromStatus,
           ),
-        this.#db
+        ...(command.returnTask.transition === undefined
+          ? []
+          : [this.#db
           .prepare(
             "INSERT INTO speaker_task_transitions (id, organization_id, event_id, task_id, participant_id, actor_account_id, from_status, to_status, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           )
@@ -2234,7 +2295,7 @@ export class D1SpeakerRepository
             command.returnTask.toStatus,
             command.returnTask.transition.note ?? null,
             command.returnTask.transition.occurredAt,
-          ),
+          )]),
       );
     }
     if (command.audit !== undefined) statements.push(this.#auditStatement(command.audit));
@@ -2421,8 +2482,8 @@ export class D1SpeakerRepository
       statements.push(
         this.#db
           .prepare(
-            `INSERT INTO speaker_tasks (id, organization_id, event_id, submission_id, participant_id, type, owner, title, description, instructions, status, due_at, allowed_mime_types_json, max_bytes, accepted_asset_kinds_json, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO speaker_tasks (id, organization_id, event_id, submission_id, participant_id, type, owner, title, description, instructions, status, due_at, allowed_mime_types_json, max_bytes, accepted_asset_kinds_json, replacement_baseline_asset_id, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             task.id,
@@ -2440,6 +2501,7 @@ export class D1SpeakerRepository
             json(task.allowedMimeTypes ?? []),
             task.maxBytes ?? task.maxSizeBytes ?? null,
             json(task.acceptedAssetKinds ?? []),
+            task.replacementBaselineAssetId ?? null,
             task.version,
             task.updatedAt,
             task.updatedAt,
@@ -2449,7 +2511,7 @@ export class D1SpeakerRepository
       statements.push(
         this.#db
           .prepare(
-            `UPDATE speaker_tasks SET submission_id = ?, participant_id = ?, type = ?, owner = ?, title = ?, description = ?, instructions = ?, status = ?, due_at = ?, allowed_mime_types_json = ?, max_bytes = ?, accepted_asset_kinds_json = ?, version = ?, updated_at = ?
+            `UPDATE speaker_tasks SET submission_id = ?, participant_id = ?, type = ?, owner = ?, title = ?, description = ?, instructions = ?, status = ?, due_at = ?, allowed_mime_types_json = ?, max_bytes = ?, accepted_asset_kinds_json = ?, replacement_baseline_asset_id = ?, version = ?, updated_at = ?
          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
           )
           .bind(
@@ -2465,6 +2527,7 @@ export class D1SpeakerRepository
             json(task.allowedMimeTypes ?? []),
             task.maxBytes ?? task.maxSizeBytes ?? null,
             json(task.acceptedAssetKinds ?? []),
+            task.replacementBaselineAssetId ?? null,
             task.version,
             task.updatedAt,
             scope.organizationId,
@@ -2565,6 +2628,9 @@ export class D1SpeakerRepository
       allowedMimeTypes: row.allowedMimeTypesJson as string[],
       ...(row.maxBytes === null ? {} : { maxBytes: row.maxBytes, maxSizeBytes: row.maxBytes }),
       acceptedAssetKinds: row.acceptedAssetKindsJson as SpeakerTask["acceptedAssetKinds"],
+      ...(row.replacementBaselineAssetId === null
+        ? {}
+        : { replacementBaselineAssetId: row.replacementBaselineAssetId }),
       version: row.version,
       updatedAt: row.updatedAt,
     } as SpeakerTask;

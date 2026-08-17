@@ -4702,6 +4702,7 @@ components:
         fileName: { type: string, maxLength: 512 }
         contentType: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 0 }
+        uploaderLabel: { type: string, maxLength: 200 }
         state: { type: string, enum: [pending, ready, rejected] }
         version: { $ref: "#/components/schemas/Version" }
         createdAt: { $ref: "#/components/schemas/Timestamp" }

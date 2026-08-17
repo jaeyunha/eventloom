@@ -318,6 +318,8 @@ export interface DeliverableHeadshotReplacementInput {
   readonly file: File;
   readonly expectedVersion: number;
   readonly supersedesAssetId?: string;
+  readonly expectedLatestVersion?: number;
+  readonly idempotencyKey?: string;
 }
 
 export interface DeliverableHeadshotReplacement {
@@ -1533,11 +1535,24 @@ export function createDeliverablesApi(
     input: DeliverableHeadshotReplacementInput,
   ): Promise<DeliverableHeadshotReplacement> {
     const contentType = input.file.type.trim() || "application/octet-stream";
+    const expectedLatestVersion =
+      input.supersedesAssetId === undefined ? undefined : (input.expectedLatestVersion ?? 1);
+    if (
+      input.supersedesAssetId !== undefined &&
+      (!Number.isSafeInteger(expectedLatestVersion) || (expectedLatestVersion ?? 0) <= 0)
+    ) {
+      throw new Error("The current headshot version could not be resolved.");
+    }
+    const idempotencyKey =
+      input.supersedesAssetId === undefined
+        ? undefined
+        : (input.idempotencyKey ?? crypto.randomUUID());
     const authorization = normalizeUploadAuthorization(
       await speakerRequest<unknown>(
         `/organizer/profiles/${segment(input.participantId, "participant ID")}/headshot`,
         {
           method: "POST",
+          headers: idempotencyKey === undefined ? {} : { "idempotency-key": idempotencyKey },
           body: JSON.stringify({
             participantId: input.participantId,
             submissionId: input.submissionId,
@@ -1547,7 +1562,10 @@ export function createDeliverablesApi(
             sizeBytes: input.file.size,
             ...(input.supersedesAssetId === undefined
               ? {}
-              : { supersedesAssetId: input.supersedesAssetId }),
+              : {
+                  supersedesAssetId: input.supersedesAssetId,
+                  expectedLatestVersion,
+                }),
           }),
         },
       ),

@@ -213,6 +213,7 @@ export interface SpeakerTask {
   dependencyIds: readonly string[];
   reminderOffsetsMinutes: readonly number[];
   acceptedAssetKinds?: readonly SpeakerAssetKind[];
+  replacementBaselineAssetId?: string;
   version: number;
   updatedAt: string;
 }
@@ -646,6 +647,16 @@ export interface SpeakerAssetReviewInput {
   release?: boolean;
 }
 
+export interface ReviewLinkedUploadTaskCommand {
+  eventId: string;
+  taskId: string;
+  expectedVersion: number;
+  fromStatus: SpeakerTaskStatus;
+  toStatus: "needs_changes";
+  baselineAssetId: string;
+  transition?: SpeakerTaskTransition;
+}
+
 export interface SpeakerAssetReviewCommand {
   eventId: string;
   assetId: string;
@@ -658,7 +669,7 @@ export interface SpeakerAssetReviewCommand {
   /** Persisted atomically with the review by repositories that support transactional audit. */
   audit?: SpeakerAssetAuditEntry;
   /** Optional task return persisted atomically with the exact-version review. */
-  returnTask?: TransitionSpeakerTaskCommand;
+  returnTask?: ReviewLinkedUploadTaskCommand;
 }
 
 export interface CreatePendingSpeakerAssetVersionCommand {
@@ -674,11 +685,20 @@ export interface SpeakerAssetAuditEntry {
   organizationId: string;
   eventId: string;
   assetId: string;
-  action: "approved" | "needs_changes" | "commented" | "downloaded" | "exported";
+  action:
+    | "approved"
+    | "needs_changes"
+    | "commented"
+    | "download_authorized"
+    | "downloaded"
+    | "exported";
   actorAccountId: string;
   note?: string;
   occurredAt: string;
   version: number;
+  requesterKind?: PrivateDownloadRequesterKind;
+  capabilityId?: string;
+  attributionBasis?: "authenticated_requester" | "issuance_principal";
 }
 
 export interface SpeakerOrganizerProfileInput {
@@ -965,6 +985,8 @@ export interface TransitionSpeakerTaskCommand {
   expectedVersion: number;
   fromStatus: SpeakerTaskStatus;
   toStatus: SpeakerTaskStatus;
+  /** Repository-only requirement for a returned upload replacement. */
+  replacementBaselineAssetId?: string;
   transition: SpeakerTaskTransition;
 }
 
@@ -1261,6 +1283,14 @@ export interface PrivateAssetCapabilityBinding {
   expiresAt: string;
 }
 
+export type PrivateDownloadRequesterKind = "speaker" | "organizer";
+
+export interface PrivateDownloadCapabilityBinding extends PrivateAssetCapabilityBinding {
+  requesterAccountId: string;
+  requesterKind: PrivateDownloadRequesterKind;
+  assetVersion: number;
+}
+
 export interface PrivateUploadGrant {
   method: "PUT";
   url: string;
@@ -1301,7 +1331,7 @@ export interface PrivateAssetGateway {
   }): Promise<PrivateDownloadGrant>;
   registerUploadCapability?(command: PrivateAssetCapabilityBinding): Promise<PrivateUploadGrant>;
   registerDownloadCapability?(
-    command: PrivateAssetCapabilityBinding,
+    command: PrivateDownloadCapabilityBinding,
   ): Promise<PrivateDownloadGrant>;
   consumeUploadCapability?(
     capabilityId: string,
