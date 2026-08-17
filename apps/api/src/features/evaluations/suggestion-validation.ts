@@ -251,10 +251,7 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   const unrecognizedExplanationTokens = explanationTokens.filter(
     (token) => !ALLOWED_EXPLANATION_WORDS.has(token),
   );
-  return (
-    explanationTokens.length >= 2 &&
-    unrecognizedExplanationTokens.length === 0
-  );
+  return explanationTokens.length >= 2 && unrecognizedExplanationTokens.length === 0;
 }
 
 export function canonicalSubmissionExcerpt(value: string, source: string): string | null {
