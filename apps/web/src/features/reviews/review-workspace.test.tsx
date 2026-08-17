@@ -416,6 +416,9 @@ describe("review workspace", () => {
       ]),
     ).toBe("Sam Whitfield");
   });
+  it("does not expose a raw reviewer ID when directory identity is unavailable", () => {
+    expect(reviewerDisplayLabel("reviewer_01JRAWIDENTIFIER", [])).toBe("Reviewer unavailable");
+  });
   it("keeps reviewer navigation disabled until the autosave queue is idle", async () => {
     const pendingStates: boolean[] = [];
     let resolveSave: (() => void) | undefined;
@@ -2327,12 +2330,8 @@ describe("review workspace", () => {
         (props) => props.id === "assignment-submission-id",
       );
       const assignmentSubmissionProps = assignmentSubmission.props as Record<string, unknown>;
-      expect(assignmentSubmissionProps.style).toMatchObject({
-        display: "block",
-        width: "100%",
-        maxWidth: "100%",
-        minWidth: 0,
-      });
+      expect(assignmentSubmissionProps.style).toBeUndefined();
+      expect(assignmentSubmissionProps.className).toEqual(expect.any(String));
       const assignmentSubmissionLabels = hostElements(tree).filter(
         (element) =>
           (element.props as Record<string, unknown>).htmlFor === "assignment-submission-id",
@@ -2369,8 +2368,8 @@ describe("review workspace", () => {
         hostElements(tree).some((element) => {
           const children = (element.props as Record<string, unknown>).children;
           return Array.isArray(children)
-            ? children.join("") === "1 selected"
-            : children === "1 selected";
+            ? children.join("") === "1 assignment reviewer selected"
+            : children === "1 assignment reviewer selected";
         }),
       ).toBe(true);
       expect(

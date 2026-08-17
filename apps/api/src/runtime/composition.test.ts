@@ -1706,7 +1706,6 @@ describe("fixture local runtime composition", () => {
                 id: "event-1",
                 name: "Event",
                 slug: null,
-                status: "active",
                 startsAt: null,
                 endsAt: null,
               },
@@ -2317,15 +2316,18 @@ describe("fixture local runtime composition", () => {
       scheduled({ scheduledTime: Date.now() } as never, bindings, {} as ExecutionContext),
     ).resolves.toBeUndefined();
   });
-  it("records a failed automatic run when scheduled reminder delivery is misconfigured", async () => {
+  it("skips retired legacy events before recording automatic reminder runs", async () => {
     const reminders = new InMemoryReminderRepository();
     const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
       reminders: { repository: reminders },
     });
     const database = {
-      prepare() {
+      prepare(query: string) {
         return {
           async all() {
+            if (query.includes("legacy_retired_at")) {
+              return { results: [{ id: "event-retired" }] };
+            }
             return {
               results: [
                 {
@@ -2347,7 +2349,10 @@ describe("fixture local runtime composition", () => {
       events: {
         service: {
           async listEvents() {
-            return [{ id: "event-reminders", organizationId: "organization-reminders" }];
+            return [
+              { id: "event-reminders", organizationId: "organization-reminders" },
+              { id: "event-retired", organizationId: "organization-reminders" },
+            ];
           },
         },
       },
@@ -2372,6 +2377,9 @@ describe("fixture local runtime composition", () => {
         configurationFailure: "The reminder candidate source is not configured.",
       },
     ]);
+    await expect(reminders.listRuns("organization-reminders", "event-retired")).resolves.toEqual(
+      [],
+    );
   });
 
   it("exposes the production outbox queue consumer and retries when bindings fail closed", async () => {
@@ -2657,7 +2665,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     ).toEqual([{ method: "GET", table: "Agenda Versions" }]);
   });
 
-  it("preserves Airtable open/closed physical status during embed-only event updates", async () => {
+  it("does not project an event lifecycle status during embed-only updates", async () => {
     const transport = new FakeAirtableTransport();
     const eventId = "event-embed-status";
     transport.seed({
@@ -2665,14 +2673,12 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       table: "Events",
       fields: {
         "Application ID": eventId,
-        Status: "open",
         Version: 1,
         "Settings JSON": JSON.stringify({
           id: eventId,
           organizationId: LOCAL_ORGANIZATION_ID,
           slug: eventId,
           name: "Embed status event",
-          status: "active",
           timeZone: "UTC",
           startsAt: "2027-05-12T00:00:00.000Z",
           endsAt: "2027-05-13T00:00:00.000Z",
@@ -2719,7 +2725,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const update = transport.requests.find(
       (request) => request.method === "PATCH" && request.table === "Events",
     );
-    expect(update?.body).toMatchObject({ fields: { Status: "open" } });
+    expect(update?.body).not.toHaveProperty("fields.Status");
   });
 
   it("restricts remix speaker visibility and application to the event tenant", async () => {

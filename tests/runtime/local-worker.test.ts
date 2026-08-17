@@ -414,9 +414,7 @@ describe.sequential("composed local Worker", () => {
     const events = await jsonData<Array<Record<string, unknown>>>(eventResponse);
     expect(eventResponse.status).toBe(200);
     expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: eventId, status: "active", slug: eventId }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ id: eventId, slug: eventId })]),
     );
 
     const eventDetailResponse = await runtimeRequest(
@@ -427,7 +425,6 @@ describe.sequential("composed local Worker", () => {
     expect(eventDetailResponse.status).toBe(200);
     expect(eventDetail).toMatchObject({
       id: eventId,
-      status: "active",
       cfpSettings: { enabled: true },
       embedConfigurations: [expect.objectContaining({ enabled: true, widgetId: "agenda" })],
     });

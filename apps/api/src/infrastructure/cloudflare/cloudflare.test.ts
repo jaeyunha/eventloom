@@ -30,6 +30,10 @@ class FakeDurableObjectStorage {
     this.values.set(key, value);
   }
 
+  async delete(key: string): Promise<boolean> {
+    return this.values.delete(key);
+  }
+
   async transaction<T>(closure: (transaction: DurableObjectTransaction) => Promise<T>): Promise<T> {
     return closure(this as unknown as DurableObjectTransaction);
   }
@@ -50,6 +54,15 @@ async function mutate(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ operationId, expectedRevision }),
+    }),
+  );
+}
+
+async function release(coordinator: AgendaCoordinator, operationId: string): Promise<Response> {
+  return coordinator.fetch(
+    new Request("https://agenda.invalid/mutations", {
+      method: "DELETE",
+      body: JSON.stringify({ operationId }),
     }),
   );
 }
@@ -128,6 +141,7 @@ describe("AgendaCoordinator", () => {
       currentRevision: 1,
     });
 
+    expect((await release(coordinator, "publish:revision-1")).status).toBe(204);
     const committed = await mutate(coordinator, "publish:revision-2", 1);
     expect(committed.status).toBe(201);
     expect(await committed.json()).toMatchObject({ revision: 2, replayed: false });

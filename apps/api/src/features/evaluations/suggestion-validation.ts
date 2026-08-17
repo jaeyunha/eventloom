@@ -147,6 +147,7 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "จริง",
   "งาน",
   "นำ",
+  "แนวทาง",
   "ไป",
   "โดยตรง",
   "สามารถ",

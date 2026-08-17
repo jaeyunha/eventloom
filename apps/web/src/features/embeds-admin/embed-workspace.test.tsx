@@ -67,7 +67,6 @@ const eventRecord: EmbedEventRecord = {
   organizationId: "org-1",
   slug: "summit-2026",
   name: "Summit 2026",
-  status: "active",
   timeZone: "UTC",
   startsAt: "2026-09-17T00:00:00.000Z",
   endsAt: "2026-09-18T00:00:00.000Z",

@@ -94,9 +94,6 @@ paths:
       summary: List events in an organization
       security:
         - sessionAuth: []
-      parameters:
-        - $ref: "#/components/parameters/EventStatus"
-        - $ref: "#/components/parameters/IncludeArchived"
       responses:
         "200":
           description: Events visible to the authenticated organization membership.
@@ -197,41 +194,6 @@ paths:
         "409": { $ref: "#/components/responses/ConflictError" }
         "412": { $ref: "#/components/responses/PreconditionError" }
         "500": { $ref: "#/components/responses/InternalError" }
-  /api/admin/organizations/{organizationId}/events/{eventId}/archive:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationId"
-      - $ref: "#/components/parameters/EventId"
-    post:
-      tags: [Events]
-      operationId: archiveEvent
-      summary: Archive an event with optimistic concurrency
-      security:
-        - sessionAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/EventArchive" }
-      responses:
-        "200":
-          description: Event archived.
-          headers:
-            X-Request-ID: { $ref: "#/components/headers/RequestId" }
-            ETag: { $ref: "#/components/headers/ETag" }
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/EventResponse" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-
   /api/admin/organizations/{organizationId}/events/{eventId}/sessions:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
@@ -3324,7 +3286,7 @@ components:
       name: filter
       in: query
       required: false
-      description: "JSON object filter, or dotted (filter.field) / bracketed (filter[field]) encoding. Only these resource-specific fields are documented and accepted: events (status, slug), speakers (eventId, displayName), agenda (revision), and sessions (eventId, status). Unsupported filter fields and unrelated query parameters are rejected."
+      description: "JSON object filter, or dotted (filter.field) / bracketed (filter[field]) encoding. Only these resource-specific fields are documented and accepted: events (slug), speakers (eventId, displayName), agenda (revision), and sessions (eventId, status). Unsupported filter fields and unrelated query parameters are rejected."
       schema: { type: string }
     EventId:
       name: eventId
@@ -3509,16 +3471,6 @@ components:
           offset: { type: integer, minimum: 0 }
           agendaEligible: { type: boolean }
         additionalProperties: false
-    EventStatus:
-      name: status
-      in: query
-      required: false
-      schema: { type: string, enum: [draft, active, archived] }
-    IncludeArchived:
-      name: includeArchived
-      in: query
-      required: false
-      schema: { type: boolean, default: true }
     RemixSourceType:
       name: sourceType
       in: query
@@ -3739,13 +3691,12 @@ components:
       additionalProperties: false
     Event:
       type: object
-      required: [id, organizationId, slug, name, status, timeZone, startsAt, endsAt, version]
+      required: [id, organizationId, slug, name, timeZone, startsAt, endsAt, version]
       properties:
         id: { $ref: "#/components/schemas/Identifier" }
         organizationId: { $ref: "#/components/schemas/Identifier" }
         slug: { type: string, minLength: 1, maxLength: 80 }
         name: { type: string, minLength: 1, maxLength: 200 }
-        status: { type: string, enum: [draft, active, archived] }
         timeZone: { type: string, minLength: 1, maxLength: 128 }
         startsAt: { $ref: "#/components/schemas/Timestamp" }
         endsAt: { $ref: "#/components/schemas/Timestamp" }
@@ -3761,7 +3712,6 @@ components:
         id: { $ref: "#/components/schemas/Identifier" }
         slug: { type: string, minLength: 1, maxLength: 80 }
         name: { type: string, minLength: 1, maxLength: 200 }
-        status: { type: string, enum: [draft, active, archived] }
         timeZone: { type: string, minLength: 1, maxLength: 128 }
         startsAt: { $ref: "#/components/schemas/Timestamp" }
         endsAt: { $ref: "#/components/schemas/Timestamp" }
@@ -3775,16 +3725,12 @@ components:
       properties:
         slug: { type: string, minLength: 1, maxLength: 80 }
         name: { type: string, minLength: 1, maxLength: 200 }
-        status: { type: string, enum: [draft, active, archived] }
         timeZone: { type: string, minLength: 1, maxLength: 128 }
         startsAt: { $ref: "#/components/schemas/Timestamp" }
         endsAt: { $ref: "#/components/schemas/Timestamp" }
         venue: { type: [string, "null"], maxLength: 2_000 }
         cfpSettings: { $ref: "#/components/schemas/EventCfpSettings" }
         defaultCalendarSettings: { $ref: "#/components/schemas/CalendarSettings" }
-      additionalProperties: false
-    EventArchive:
-      type: object
       additionalProperties: false
     EventCfpSettings:
       type: object

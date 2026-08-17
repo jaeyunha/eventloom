@@ -941,7 +941,15 @@ function isReviewForRoundRevision(
   );
 }
 
-function isReviewableSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
+function isOrganizerWorkspaceSubmission(
+  submission: Readonly<{ status?: string | undefined }>,
+): boolean {
+  return submission.status === "submitted" || submission.status === "under_review";
+}
+
+function isActiveReviewSubmission(
+  submission: Readonly<{ status?: string | undefined }>,
+): boolean {
   return submission.status === "submitted";
 }
 
@@ -1134,7 +1142,9 @@ export class EvaluationService {
         listedSubmissions
           .filter(
             (submission) =>
-              submission.tenantId === actor.tenantId && submission.eventId === normalizedEventId,
+              submission.tenantId === actor.tenantId &&
+              submission.eventId === normalizedEventId &&
+              isOrganizerWorkspaceSubmission(submission),
           )
           .map((submission) => [submission.id, submission] as const),
       ).values(),
@@ -1157,9 +1167,9 @@ export class EvaluationService {
         decision.eventId === normalizedEventId &&
         decision.planId === plan.id,
     );
-    const activeSubmissions = [...submissions]
-      .filter((submission) => submission.status !== "withdrawn")
-      .sort((left, right) => left.id.localeCompare(right.id));
+    const activeSubmissions = [...submissions].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
     const activeSubmissionIdSet = new Set(activeSubmissions.map((submission) => submission.id));
     const effectiveAssignments = effectiveAssignmentsForPlan(plan, assignments, reviews).filter(
       (assignment) => activeSubmissionIdSet.has(assignment.submissionId),
@@ -2014,7 +2024,7 @@ export class EvaluationService {
     const currentCandidates = candidates.filter(({ assignment }, index) => {
       const material = materialByKey.get(`${assignment.eventId}\u0000${assignment.submissionId}`);
       return (
-        material === undefined || (isReviewableSubmission(material) && decisions[index] === null)
+        material === undefined || (isActiveReviewSubmission(material) && decisions[index] === null)
       );
     });
 
@@ -3161,7 +3171,7 @@ export class EvaluationService {
       if (material === undefined) {
         throw notFound(`Submission ${submissionId} was not found for reviewer distribution.`);
       }
-      if (!isReviewableSubmission(material) || decisions[index] !== null) {
+      if (!isActiveReviewSubmission(material) || decisions[index] !== null) {
         throw conflict(`Submission ${submissionId} is no longer active for reviewer distribution.`);
       }
     }
@@ -3674,7 +3684,9 @@ export class EvaluationService {
       submissionIds.filter((submissionId, index) => {
         const material = materialById.get(submissionId);
         return (
-          material !== undefined && isReviewableSubmission(material) && decisions[index] === null
+          material !== undefined &&
+          isActiveReviewSubmission(material) &&
+          decisions[index] === null
         );
       }),
     );
@@ -3696,7 +3708,7 @@ export class EvaluationService {
       throw notFound("The assigned submission was not found.");
     }
     const decision = await this.#repository.getDecision(plan.tenantId, plan.id, material.id);
-    if (!isReviewableSubmission(material) || decision !== null) {
+    if (!isActiveReviewSubmission(material) || decision !== null) {
       throw conflict("This submission is no longer active for review.");
     }
     return material;

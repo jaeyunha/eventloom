@@ -1481,6 +1481,27 @@ describe("evaluation plans and assignments", () => {
     });
   });
 
+  it("excludes draft and withdrawn submissions from organizer review workspaces", async () => {
+    const submissions = new WorkspaceBatchSource([
+      { ...submission, id: "submission-submitted", status: "submitted" },
+      { ...submission, id: "submission-under-review", status: "under_review" },
+      { ...submission, id: "submission-draft", status: "draft" },
+      { ...submission, id: "submission-withdrawn", status: "withdrawn" },
+    ]);
+    const { service } = await fixture({ submissions });
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+
+    expect(workspace.submissions.map(({ id }) => id)).toEqual(
+      expect.arrayContaining(["submission-submitted", "submission-under-review"]),
+    );
+    expect(workspace.submissions).toHaveLength(2);
+    expect(workspace.aggregates.map(({ submissionId }) => submissionId)).toEqual(
+      expect.arrayContaining(["submission-submitted", "submission-under-review"]),
+    );
+    expect(workspace.aggregates).toHaveLength(2);
+  });
+
   it("returns missing-plan deterministically when organizer hydration fails", async () => {
     const repository = new WorkspaceBatchRepository();
     repository.organizerWorkspaceFailure = new Error("Decision row could not be decoded.");

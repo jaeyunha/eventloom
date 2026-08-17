@@ -1498,6 +1498,7 @@ describe("anonymous published agenda feeds", () => {
       roomName: "Main hall, level 2",
       speakerNames: ["Morgan Lee", "Avery Kim"],
     });
+    expect(body.data.entries[0]?.trackIds).toEqual(publicRevision().entries[0]?.trackIds);
     expect(body.data.event).not.toHaveProperty("organizationId");
     expect(body.data.event).not.toHaveProperty("privateNote");
     expect(body.data.revision).not.toHaveProperty("publishedBy");

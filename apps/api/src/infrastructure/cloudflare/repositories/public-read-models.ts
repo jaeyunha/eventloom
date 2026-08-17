@@ -78,7 +78,7 @@ export class D1OrganizerOverviewReadModel implements OrganizerOverviewRouteDepen
   async getOverviewCore(organizationId: string): Promise<OrganizerOverviewCoreData> {
     const result = await this.database
       .prepare(
-        `SELECT id, name, slug, status, starts_at, ends_at
+        `SELECT id, name, slug, starts_at, ends_at
            FROM events
           WHERE organization_id = ?
           ORDER BY id`,
@@ -89,7 +89,6 @@ export class D1OrganizerOverviewReadModel implements OrganizerOverviewRouteDepen
       id: text(row.id),
       name: text(row.name),
       slug: nullableText(row.slug),
-      status: nullableText(row.status),
       startsAt: nullableText(row.starts_at),
       endsAt: nullableText(row.ends_at),
     }));
@@ -319,7 +318,6 @@ const SERVED_PUBLICATION_SQL = `SELECT releases.id AS release_id,
        events.starts_at,
        events.ends_at,
        events.venue,
-       events.status AS event_status,
        events.cfp_enabled,
        events.cfp_opens_at,
        events.cfp_closes_at,
@@ -401,8 +399,8 @@ export class D1PublishedProgramReadModel implements PublishedSpeakerRouteDepende
            FROM events
            JOIN organizations
              ON organizations.organization_id = events.organization_id
-          WHERE events.status = 'active'
-            AND (
+           WHERE events.legacy_retired_at IS NULL
+             AND (
               EXISTS (
                 SELECT 1
                   FROM cfp_forms
@@ -503,7 +501,9 @@ export class D1PublishedProgramReadModel implements PublishedSpeakerRouteDepende
     eventSlug: string,
   ): Promise<ProgramPublicationManifest | null> {
     const row = await this.database
-      .prepare(`${SERVED_PUBLICATION_SQL} WHERE events.slug = ? COLLATE NOCASE LIMIT 2`)
+      .prepare(
+        `${SERVED_PUBLICATION_SQL} WHERE events.legacy_retired_at IS NULL AND events.slug = ? COLLATE NOCASE LIMIT 2`,
+      )
       .bind(eventSlug.trim())
       .all<Row>();
     return row.results.length === 1 && row.results[0] !== undefined
@@ -517,7 +517,9 @@ export class D1PublishedProgramReadModel implements PublishedSpeakerRouteDepende
     speakerRevisionNumber?: number,
   ): Promise<PublishedSpeakerProjection | null> {
     const publication = await this.database
-      .prepare(`${SERVED_PUBLICATION_SQL} WHERE events.slug = ? COLLATE NOCASE LIMIT 2`)
+      .prepare(
+        `${SERVED_PUBLICATION_SQL} WHERE events.legacy_retired_at IS NULL AND events.slug = ? COLLATE NOCASE LIMIT 2`,
+      )
       .bind(eventSlug.trim())
       .all<Row>();
     if (publication.results.length !== 1 || publication.results[0] === undefined) return null;
@@ -600,7 +602,9 @@ export class D1PublishedProgramReadModel implements PublishedSpeakerRouteDepende
     }[]
   > {
     const result = await this.database
-      .prepare(`${SERVED_PUBLICATION_SQL} WHERE events.status = 'active' ORDER BY events.slug`)
+      .prepare(
+        `${SERVED_PUBLICATION_SQL} WHERE events.legacy_retired_at IS NULL ORDER BY events.slug`,
+      )
       .all<Row>();
     return (result.results ?? []).map((row) => ({
       organizationId: text(row.organization_id),
@@ -629,7 +633,9 @@ export class D1PublishedProgramReadModel implements PublishedSpeakerRouteDepende
     speakerRevisionNumber?: number,
   ): Promise<PublishedSpeakerHeadshot | null> {
     const publication = await this.database
-      .prepare(`${SERVED_PUBLICATION_SQL} WHERE events.slug = ? COLLATE NOCASE LIMIT 2`)
+      .prepare(
+        `${SERVED_PUBLICATION_SQL} WHERE events.legacy_retired_at IS NULL AND events.slug = ? COLLATE NOCASE LIMIT 2`,
+      )
       .bind(eventSlug.trim())
       .all<Row>();
     if (publication.results.length !== 1 || publication.results[0] === undefined) return null;
