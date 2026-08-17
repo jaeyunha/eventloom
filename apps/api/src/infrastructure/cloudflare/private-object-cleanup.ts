@@ -61,7 +61,7 @@ export class D1PrivateObjectDeletionGateway {
     if (authoritative === null || authoritative.object_key !== payload.objectKey) return;
 
     if (payload.source === "private-upload") {
-      if (!["pending", "uploaded", "scanning", "quarantined"].includes(authoritative.state)) {
+      if (!["pending", "uploaded", "quarantined"].includes(authoritative.state)) {
         return;
       }
       if (Date.parse(payload.expiresAt) > this.now().getTime()) return;
@@ -93,7 +93,7 @@ export class D1PrivateObjectDeletionGateway {
           `UPDATE private_uploads
               SET state = 'quarantined', updated_at = ?
             WHERE tenant_id = ? AND id = ? AND object_key = ? AND expires_at = ?
-              AND state IN ('pending', 'uploaded', 'scanning')
+              AND state IN ('pending', 'uploaded')
               AND NOT EXISTS (
                 SELECT 1 FROM speaker_assets
                  WHERE organization_id = ? AND object_key = ? AND state = 'ready'

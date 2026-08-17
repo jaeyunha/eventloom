@@ -162,6 +162,39 @@ describe("private object deletion authority", () => {
     expect(bucket.objects.has(objectKey)).toBe(true);
   });
 
+  it("does not delete a queued private-upload job while the upload is scanning", async () => {
+    const db = database();
+    const bucket = new RecordingBucket();
+    const objectKey = "private/scanning.pdf";
+    bucket.objects.add(objectKey);
+    db.executeScript(`
+      INSERT INTO private_uploads VALUES
+        ('upload-scanning','tenant-1','${objectKey}','scanning',
+         '2026-08-09T11:00:00.000Z','2026-08-09T10:00:00.000Z');
+    `);
+    const gateway = new D1PrivateObjectDeletionGateway(
+      db,
+      bucket as unknown as R2Bucket,
+      () => new Date("2026-08-09T12:00:00.000Z"),
+    );
+
+    await gateway.deleteIfAuthorized({
+      kind: "private_object_delete",
+      source: "private-upload",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      assetId: "upload-scanning",
+      objectKey,
+      expiresAt: "2026-08-09T11:00:00.000Z",
+    });
+
+    expect(bucket.deleted).toEqual([]);
+    expect(bucket.objects.has(objectKey)).toBe(true);
+    expect(db.query<{ state: string }>("SELECT state FROM private_uploads")).toEqual([
+      { state: "scanning" },
+    ]);
+  });
+
   it("reconciles expired uploads and retries queue publication without losing the intent", async () => {
     const db = database();
     db.executeScript(`
