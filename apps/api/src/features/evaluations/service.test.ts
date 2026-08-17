@@ -24,8 +24,8 @@ import type {
   EvaluationPlan,
   EvaluationReview,
   EvaluationReviewerProjection,
-  EvaluationSuggestionProviderCandidate,
   EvaluationSuggestion,
+  EvaluationSuggestionProviderCandidate,
   ReviewRound,
   SubmissionReviewMaterial,
 } from "./types";

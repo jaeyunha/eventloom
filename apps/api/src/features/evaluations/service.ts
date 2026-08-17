@@ -14,12 +14,12 @@ import type {
   OrganizerWorkspaceRecords,
   SubmissionReviewSource,
 } from "./repository";
+import { MAX_REVISION_DEPTH, revisionScheduleSnapshot } from "./revision-schedule-sync";
 import {
   isMeaningfulSuggestionRationale,
   parseSubmissionExcerptReference,
   scoreableRubricCriteria,
 } from "./suggestion-validation";
-import { MAX_REVISION_DEPTH, revisionScheduleSnapshot } from "./revision-schedule-sync";
 import type {
   EvaluationActor,
   EvaluationAggregate,
@@ -3120,10 +3120,7 @@ export class EvaluationService {
             );
       for (const candidate of candidatesToReject) {
         const score = scores[candidate.criterionId];
-        if (
-          score?.suggestionId === suggestion.id &&
-          score.humanConfirmedBy === null
-        ) {
+        if (score?.suggestionId === suggestion.id && score.humanConfirmedBy === null) {
           scores[candidate.criterionId] = {
             ...score,
             origin: "ai",
