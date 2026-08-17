@@ -69,7 +69,8 @@ at:
 - Added failing-first model coverage for hydration versus per-step save
   permission.
 - Added a composed local-Worker regression that performs submitted proposal
-  `PATCH`, participant `PUT`, exact-key retries, draft reload, and review.
+  `PATCH`, participant `PUT`, participants/review reloads, resubmission, final
+  reconciliation, and exact-key retries for every consequential operation.
 - Added a fixture participant custom field so the real Worker regression
   verifies participant custom-answer persistence.
 - Added reserved-character route coverage and encoded both route segments with
@@ -130,7 +131,9 @@ Update this ledger before pushing the checkpoint.
   - Passed: 89 tests.
 - [x] Real composed-Worker participant lifecycle:
   `bunx vitest run --config tests/runtime/vitest.config.ts tests/runtime/local-worker.test.ts --maxWorkers=1`
-  - Passed: 10 tests, including submitted PATCH/PUT/replay/reload/review.
+  - Passed: 10 tests, including submitted PATCH/PUT, participants and review
+    reloads, review/resubmit replay, lifecycle preservation, and final
+    reconciliation.
 - [x] Typecheck/Biome before the final callback repair:
   `make check`
   - Passed after formatting corrections.
