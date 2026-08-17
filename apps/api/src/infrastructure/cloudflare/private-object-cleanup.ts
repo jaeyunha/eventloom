@@ -220,7 +220,7 @@ export async function reconcilePrivateObjectCleanup(
     .prepare(
       `SELECT id, tenant_id, object_key, expires_at, scan_result_code
          FROM private_uploads
-        WHERE state IN ('pending', 'uploaded', 'scanning')
+        WHERE state IN ('pending', 'uploaded')
           AND expires_at IS NOT NULL AND expires_at <= ?
           AND json_valid(scan_result_code) = 1
           AND json_type(scan_result_code, '$.eventId') = 'text'

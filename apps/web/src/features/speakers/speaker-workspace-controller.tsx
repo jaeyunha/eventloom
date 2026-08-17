@@ -2523,7 +2523,6 @@ function useSpeakerWorkspaceController({
             : {
                 supersedesAssetId,
                 expectedLatestVersion: expectedLatestVersion as number,
-                idempotencyKey: crypto.randomUUID(),
               }),
         }),
         eventId,

@@ -33,6 +33,7 @@ export class PortalApiError extends Error {
     this.traceId = traceId;
   }
 }
+
 export interface PortalProfileDetails {
   email?: string;
   jobTitle?: string;
@@ -348,15 +349,34 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
     expectedLatestVersion?: number;
     idempotencyKey?: string;
   }): Promise<PortalAsset> {
+    const idempotencyKey =
+      input.supersedesAssetId === undefined
+        ? undefined
+        : (input.idempotencyKey ??
+          [
+            "replacement",
+            input.eventId,
+            input.participantId,
+            input.submissionId ?? "",
+            input.taskId ?? "",
+            input.kind,
+            input.supersedesAssetId,
+            input.expectedLatestVersion ?? "",
+            input.file.name,
+            input.file.type,
+            input.file.size,
+            input.file.lastModified,
+          ]
+            .map((part) => encodeURIComponent(String(part)))
+            .join(":")
+            .slice(0, 128));
     const authorization = await request<PortalUploadAuthorization>(
       `/events/${routeSegment(input.eventId)}/uploads`,
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          ...(input.idempotencyKey === undefined
-            ? {}
-            : { "idempotency-key": input.idempotencyKey }),
+          ...(idempotencyKey === undefined ? {} : { "idempotency-key": idempotencyKey }),
         },
         body: JSON.stringify({
           participantId: input.participantId,

@@ -1664,7 +1664,6 @@ function useDeliverablesWorkspaceController({
           ? {}
           : {
               expectedLatestVersion: predecessor.version,
-              idempotencyKey: crypto.randomUUID(),
             }),
       });
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;

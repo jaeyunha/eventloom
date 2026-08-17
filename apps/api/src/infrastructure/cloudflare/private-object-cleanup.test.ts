@@ -243,4 +243,29 @@ describe("private object deletion authority", () => {
       { id: "private-object-delete:tenant-1:private-upload:upload-valid" },
     ]);
   });
+
+  it("does not delete an upload capability while an object write is scanning", async () => {
+    const db = database();
+    db.executeScript(`
+      ALTER TABLE private_uploads ADD COLUMN scan_result_code TEXT;
+      ALTER TABLE private_uploads ADD COLUMN created_at TEXT;
+      INSERT INTO private_uploads
+        (id,tenant_id,object_key,state,expires_at,updated_at,scan_result_code,created_at)
+      VALUES
+        ('upload-scanning','tenant-1','private/scanning.pdf','scanning',
+         '2026-08-09T11:00:00.000Z','2026-08-09T10:00:00.000Z',
+         '{"eventId":"event-1"}','2026-08-09T10:00:00.000Z');
+    `);
+    const queue = { async send() {} } as unknown as Queue<CloudflareOutboxMessage>;
+
+    await expect(
+      reconcilePrivateObjectCleanup(db, queue, {
+        limit: 1,
+        now: () => new Date("2026-08-09T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({ expiredSelected: 0, intentsCreated: 0 });
+    expect(db.query<{ state: string }>("SELECT state FROM private_uploads")).toEqual([
+      { state: "scanning" },
+    ]);
+  });
 });

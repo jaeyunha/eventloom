@@ -1,4 +1,5 @@
 "use client";
+
 import { useSearchParams } from "next/navigation";
 
 import {
@@ -19,6 +20,7 @@ import {
   scopePortalContextToAuthorizedParticipants,
   scopePortalViewToAuthorizedParticipants,
 } from "./model";
+import type { ParticipantSafeGuideFailure, PortalPrefetchResult } from "./portal-provider-model";
 import {
   acceptedSubmissionId,
   assetBelongsToPortalContext,
@@ -32,8 +34,6 @@ import {
   messageFrom,
   normalizeCapabilities,
   participantSafeGuideFailure,
-  type ParticipantSafeGuideFailure,
-  type PortalPrefetchResult,
   portalContextResponseForTarget,
   portalViewAfterLoadFailure,
   portalViewMatchesSelection,
@@ -1173,12 +1173,11 @@ function usePortalProviderValue({
             participantId: activeParticipantId,
             kind: "headshot",
             file: input.headshot,
-          ...(supersededHeadshot
-            ? {
-                supersedesAssetId: supersededHeadshot.id,
-                expectedLatestVersion: supersededHeadshot.version,
-                idempotencyKey: crypto.randomUUID(),
-              }
+            ...(supersededHeadshot
+              ? {
+                  supersedesAssetId: supersededHeadshot.id,
+                  expectedLatestVersion: supersededHeadshot.version,
+                }
               : {}),
           });
           if (!profileAssetBelongsToPortalContext(pending, targetContext)) {
@@ -1418,7 +1417,6 @@ function usePortalProviderValue({
             : {
                 supersedesAssetId: predecessor.id,
                 expectedLatestVersion: predecessor.version ?? 1,
-                idempotencyKey: crypto.randomUUID(),
               }),
         });
         const finalized = await api.finalizeAsset({
@@ -1775,7 +1773,6 @@ function usePortalProviderValue({
             ? {}
             : {
                 expectedLatestVersion: supersededAsset?.version ?? 1,
-                idempotencyKey: crypto.randomUUID(),
               }),
         });
         if (

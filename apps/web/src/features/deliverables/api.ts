@@ -1543,7 +1543,24 @@ export function createDeliverablesApi(
     ) {
       throw new Error("The current headshot version could not be resolved.");
     }
-    const idempotencyKey = input.supersedesAssetId === undefined ? undefined : input.idempotencyKey;
+    const idempotencyKey =
+      input.supersedesAssetId === undefined
+        ? undefined
+        : (input.idempotencyKey ??
+          [
+            "headshot-replacement",
+            input.participantId,
+            input.submissionId ?? "",
+            input.supersedesAssetId,
+            expectedLatestVersion ?? "",
+            input.file.name,
+            contentType,
+            input.file.size,
+            input.file.lastModified,
+          ]
+            .map((part) => encodeURIComponent(String(part)))
+            .join(":")
+            .slice(0, 128));
     const authorization = normalizeUploadAuthorization(
       await speakerRequest<unknown>(
         `/organizer/profiles/${segment(input.participantId, "participant ID")}/headshot`,
