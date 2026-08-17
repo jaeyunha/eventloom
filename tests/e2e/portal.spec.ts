@@ -378,3 +378,35 @@ test("published resources and wiki stay event-scoped and cross-event portal acce
   expect(JSON.stringify(api.payloads)).not.toContain("objectKey");
   expect(JSON.stringify(api.payloads)).not.toContain("privateNote");
 });
+
+test("optional resource failure stays local while accepted session data remains usable", async ({
+  authSession,
+  page,
+}) => {
+  const sensitiveMessage =
+    "Storage bucket speaker-private-prod denied access with credential token secret-value.";
+  await installPortalApi(page, authSession, {
+    unavailableResource: "resources",
+    unavailableResourceMessage: sensitiveMessage,
+  });
+
+  await page.goto("/portal?workspace=co-speakers");
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Designing calm incident response" }),
+  ).toBeVisible();
+  await expect(page.getByText("Workspace data unavailable", { exact: true })).toHaveCount(0);
+
+  await page.goto("/portal?workspace=resources");
+  await expect(page.getByRole("heading", { level: 1, name: "Event guide" })).toBeVisible();
+  const guideFailure = page.getByRole("alert").filter({ hasText: "Event resources unavailable" });
+  await expect(guideFailure).toContainText(
+    "Published event resources are not available for this event.",
+  );
+  await expect(guideFailure).toContainText("Support ID: e2e-portal-trace.");
+  await expect(page.getByText(sensitiveMessage, { exact: true })).toHaveCount(0);
+  await expect(page.getByText("secret-value", { exact: false })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Welcome to Evaluator Summit" }),
+  ).toBeVisible();
+});

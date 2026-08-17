@@ -5,7 +5,13 @@
 }
 
 .errorState {
-  border-color: var(--border);
+  border-color: color-mix(in srgb, var(--failure) 28%, var(--border));
+  background: var(--failure-surface);
+  color: var(--failure);
+}
+
+.errorState [data-slot="alert-description"] {
+  color: var(--failure);
 }
 
 .stateAction,

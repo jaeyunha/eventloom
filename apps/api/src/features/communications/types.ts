@@ -434,6 +434,10 @@ export interface ReminderOutboxEnqueueInput {
 
 export interface ReminderOutboxDelivery {
   enqueue(input: ReminderOutboxEnqueueInput): Promise<{ outboxJobId: string }>;
+  requeuePending(input: {
+    organizationId: string;
+    eventId?: string;
+  }): Promise<{ requeued: number }>;
 }
 
 export interface ReminderRuntime {
