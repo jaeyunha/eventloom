@@ -853,6 +853,57 @@ export const evaluationDecisions = sqliteTable(
   ],
 );
 
+export const evaluationExportRuns = sqliteTable(
+  "evaluation_export_runs",
+  {
+    id: text("id").primaryKey().notNull(),
+    tenantId: text("tenant_id").notNull(),
+    eventId: text("event_id").notNull(),
+    planId: text("plan_id").notNull(),
+    planVersion: integer("plan_version").notNull(),
+    requestedBy: text("requested_by").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    fileName: text("file_name").notNull(),
+    status: text("status", { enum: ["queued", "running", "ready", "failed"] }).notNull(),
+    requestedAt: text("requested_at").notNull(),
+    startedAt: text("started_at"),
+    processorAttempt: integer("processor_attempt"),
+    completedAt: text("completed_at"),
+    artifactKey: text("artifact_key"),
+    rowCount: integer("row_count"),
+    errorCode: text("error_code", {
+      enum: ["EVALUATION_EXPORT_GENERATION_FAILED", "EVALUATION_EXPORT_PROCESSING_EXHAUSTED"],
+    }),
+    errorMessage: text("error_message"),
+    errorRetryable: integer("error_retryable", { mode: "boolean" }),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    unique("evaluation_export_runs_tenant_idempotency_unique").on(
+      table.tenantId,
+      table.idempotencyKey,
+    ),
+    index("evaluation_export_runs_scope_idx").on(
+      table.tenantId,
+      table.eventId,
+      table.planId,
+      table.requestedAt,
+    ),
+    index("evaluation_export_runs_status_idx").on(table.status, table.updatedAt),
+    check("evaluation_export_runs_plan_version_check", sql`${table.planVersion} > 0`),
+    check(
+      "evaluation_export_runs_row_count_check",
+      sql`${table.rowCount} IS NULL OR ${table.rowCount} >= 0`,
+    ),
+    check(
+      "evaluation_export_runs_state_check",
+      sql`(${table.status} = 'queued' AND ${table.startedAt} IS NULL AND ${table.processorAttempt} IS NULL AND ${table.completedAt} IS NULL AND ${table.artifactKey} IS NULL AND ${table.rowCount} IS NULL AND ${table.errorCode} IS NULL AND ${table.errorMessage} IS NULL AND ${table.errorRetryable} IS NULL) OR (${table.status} = 'running' AND ${table.startedAt} IS NOT NULL AND ${table.processorAttempt} IS NOT NULL AND ${table.completedAt} IS NULL AND ${table.artifactKey} IS NULL AND ${table.rowCount} IS NULL AND ${table.errorCode} IS NULL AND ${table.errorMessage} IS NULL AND ${table.errorRetryable} IS NULL) OR (${table.status} = 'ready' AND ${table.startedAt} IS NOT NULL AND ${table.processorAttempt} IS NOT NULL AND ${table.completedAt} IS NOT NULL AND ${table.artifactKey} IS NOT NULL AND ${table.rowCount} IS NOT NULL AND ${table.errorCode} IS NULL AND ${table.errorMessage} IS NULL AND ${table.errorRetryable} IS NULL) OR (${table.status} = 'failed' AND ${table.startedAt} IS NOT NULL AND ${table.processorAttempt} IS NOT NULL AND ${table.completedAt} IS NOT NULL AND ${table.artifactKey} IS NULL AND ${table.rowCount} IS NULL AND ${table.errorCode} IN ('EVALUATION_EXPORT_GENERATION_FAILED', 'EVALUATION_EXPORT_PROCESSING_EXHAUSTED') AND ${table.errorMessage} IS NOT NULL AND ${table.errorRetryable} = 1)`,
+    ),
+  ],
+);
+
 export const evaluationDecisionTransitions = sqliteTable(
   "evaluation_decision_transitions",
   {

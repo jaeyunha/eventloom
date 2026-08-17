@@ -16,6 +16,7 @@ import {
   type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
   type CloudflareOutboxTopic,
+  type CloudflareReportsPayload,
   cloudflareOutboxTopics,
 } from "./bindings";
 
@@ -36,18 +37,20 @@ export interface OutboxJob {
   readonly state: "pending" | "queued" | "processing" | "delivered" | "failed" | "dead-letter";
   readonly attemptCount: number;
   readonly availableAt: Date;
+  readonly leaseOwner: string | null;
   readonly leaseExpiresAt: Date | null;
 }
 
 export type OutboxJobClaim =
   | { readonly outcome: "claimed"; readonly job: OutboxJob }
-  | { readonly outcome: "missing" | "completed" | "dead_lettered" | "busy" | "not_due" };
+  | { readonly outcome: "busy" | "not_due"; readonly retryAt: Date }
+  | { readonly outcome: "missing" | "completed" | "dead_lettered" };
 
 export interface OutboxJobRepository {
   claim(jobId: string, now: Date, leaseMs: number, leaseOwner: string): Promise<OutboxJobClaim>;
-  markDelivered(jobId: string, completedAt: Date): Promise<void>;
-  markRetry(jobId: string, availableAt: Date, errorCode: string): Promise<void>;
-  markFailed(jobId: string, errorCode: string, deadLetter: boolean): Promise<void>;
+  markDelivered(job: OutboxJob, completedAt: Date): Promise<void>;
+  markRetry(job: OutboxJob, availableAt: Date, errorCode: string): Promise<void>;
+  markFailed(job: OutboxJob, errorCode: string, deadLetter: boolean): Promise<void>;
 }
 
 interface OutboxJobRow {
@@ -59,6 +62,7 @@ interface OutboxJobRow {
   readonly state: string;
   readonly attempt_count: number;
   readonly available_at: string;
+  readonly lease_owner: string | null;
   readonly lease_expires_at: string | null;
 }
 
@@ -126,6 +130,7 @@ function rowToJob(row: OutboxJobRow): OutboxJob | null {
     state: row.state as OutboxJob["state"],
     attemptCount: row.attempt_count,
     availableAt,
+    leaseOwner: row.lease_owner,
     leaseExpiresAt,
   };
 }
@@ -143,7 +148,7 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
     const row = await this.database
       .prepare(
         `SELECT id, deduplication_key, tenant_id, topic, payload_json, state, attempt_count,
-                available_at, lease_expires_at
+                available_at, lease_owner, lease_expires_at
            FROM outbox_jobs
           WHERE id = ?
           LIMIT 1`,
@@ -160,12 +165,15 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
       return { outcome: "dead_lettered" };
     }
     if (job.state === "pending" || job.state === "queued") {
-      if (job.availableAt.getTime() > now.getTime()) return { outcome: "not_due" };
+      if (job.availableAt.getTime() > now.getTime()) {
+        return { outcome: "not_due", retryAt: job.availableAt };
+      }
     } else if (
       job.state === "processing" &&
-      (job.leaseExpiresAt === null || job.leaseExpiresAt.getTime() > now.getTime())
+      job.leaseExpiresAt !== null &&
+      job.leaseExpiresAt.getTime() > now.getTime()
     ) {
-      return { outcome: "busy" };
+      return { outcome: "busy", retryAt: job.leaseExpiresAt };
     }
 
     const leaseExpiresAt = new Date(now.getTime() + leaseMs).toISOString();
@@ -180,7 +188,7 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
           WHERE id = ?
             AND (
               (state IN ('pending', 'queued') AND available_at <= ?)
-              OR (state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+              OR (state = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
             )`,
       )
       .bind(
@@ -192,7 +200,9 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
         now.toISOString(),
       )
       .run();
-    if ((result.meta.changes ?? 0) !== 1) return { outcome: "busy" };
+    if ((result.meta.changes ?? 0) !== 1) {
+      return { outcome: "busy", retryAt: new Date(now.getTime() + leaseMs) };
+    }
 
     return {
       outcome: "claimed",
@@ -200,12 +210,13 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
         ...job,
         state: "processing",
         attemptCount: job.attemptCount + 1,
+        leaseOwner,
         leaseExpiresAt: new Date(leaseExpiresAt),
       },
     };
   }
 
-  async markDelivered(jobId: string, completedAt: Date): Promise<void> {
+  async markDelivered(job: OutboxJob, completedAt: Date): Promise<void> {
     const result = await this.database
       .prepare(
         `UPDATE outbox_jobs
@@ -214,16 +225,23 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
                 lease_expires_at = NULL,
                 completed_at = ?,
                 updated_at = ?
-          WHERE id = ? AND state = 'processing'`,
+          WHERE id = ? AND state = 'processing'
+            AND attempt_count = ? AND lease_owner = ?`,
       )
-      .bind(completedAt.toISOString(), completedAt.toISOString(), jobId)
+      .bind(
+        completedAt.toISOString(),
+        completedAt.toISOString(),
+        job.id,
+        job.attemptCount,
+        job.leaseOwner,
+      )
       .run();
     if ((result.meta.changes ?? 0) !== 1) {
       throw new Error("Outbox delivery state could not be persisted.");
     }
   }
 
-  async markRetry(jobId: string, availableAt: Date, errorCode: string): Promise<void> {
+  async markRetry(job: OutboxJob, availableAt: Date, errorCode: string): Promise<void> {
     const result = await this.database
       .prepare(
         `UPDATE outbox_jobs
@@ -233,16 +251,24 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
                 lease_expires_at = NULL,
                 last_error_code = ?,
                 updated_at = ?
-          WHERE id = ? AND state = 'processing'`,
+          WHERE id = ? AND state = 'processing'
+            AND attempt_count = ? AND lease_owner = ?`,
       )
-      .bind(availableAt.toISOString(), safeCode(errorCode), availableAt.toISOString(), jobId)
+      .bind(
+        availableAt.toISOString(),
+        safeCode(errorCode),
+        availableAt.toISOString(),
+        job.id,
+        job.attemptCount,
+        job.leaseOwner,
+      )
       .run();
     if ((result.meta.changes ?? 0) !== 1) {
       throw new Error("Outbox retry state could not be persisted.");
     }
   }
 
-  async markFailed(jobId: string, errorCode: string, deadLetter: boolean): Promise<void> {
+  async markFailed(job: OutboxJob, errorCode: string, deadLetter: boolean): Promise<void> {
     const result = await this.database
       .prepare(
         `UPDATE outbox_jobs
@@ -251,13 +277,16 @@ export class D1OutboxJobRepository implements OutboxJobRepository {
                 lease_expires_at = NULL,
                 last_error_code = ?,
                 updated_at = ?
-          WHERE id = ? AND state = 'processing'`,
+          WHERE id = ? AND state = 'processing'
+            AND attempt_count = ? AND lease_owner = ?`,
       )
       .bind(
         deadLetter ? "dead-letter" : "failed",
         safeCode(errorCode),
         new Date().toISOString(),
-        jobId,
+        job.id,
+        job.attemptCount,
+        job.leaseOwner,
       )
       .run();
     if ((result.meta.changes ?? 0) !== 1) {
@@ -283,7 +312,12 @@ export class InMemoryOutboxJobRepository implements OutboxJobRepository {
     return job === undefined ? undefined : { ...job };
   }
 
-  async claim(jobId: string, now: Date, leaseMs: number): Promise<OutboxJobClaim> {
+  async claim(
+    jobId: string,
+    now: Date,
+    leaseMs: number,
+    leaseOwner: string,
+  ): Promise<OutboxJobClaim> {
     const job = this.#jobs.get(jobId);
     if (job === undefined) return { outcome: "missing" };
     if (job.state === "delivered" || job.state === "failed") {
@@ -292,44 +326,55 @@ export class InMemoryOutboxJobRepository implements OutboxJobRepository {
     if (job.state === "dead-letter") {
       return { outcome: "dead_lettered" };
     }
-    if (job.availableAt.getTime() > now.getTime()) return { outcome: "not_due" };
+    if (job.availableAt.getTime() > now.getTime()) {
+      return { outcome: "not_due", retryAt: job.availableAt };
+    }
     if (
       job.state === "processing" &&
-      (job.leaseExpiresAt === null || job.leaseExpiresAt.getTime() > now.getTime())
+      job.leaseExpiresAt !== null &&
+      job.leaseExpiresAt.getTime() > now.getTime()
     ) {
-      return { outcome: "busy" };
+      return { outcome: "busy", retryAt: job.leaseExpiresAt };
     }
     const claimed: OutboxJob = {
       ...job,
       state: "processing",
       attemptCount: job.attemptCount + 1,
+      leaseOwner,
       leaseExpiresAt: new Date(now.getTime() + leaseMs),
     };
     this.#jobs.set(jobId, claimed);
     return { outcome: "claimed", job: { ...claimed } };
   }
 
-  async markDelivered(jobId: string): Promise<void> {
-    const job = this.require(jobId);
-    this.#jobs.set(jobId, { ...job, state: "delivered", leaseExpiresAt: null });
+  async markDelivered(claimed: OutboxJob, _completedAt: Date): Promise<void> {
+    const job = this.requireClaim(claimed, "Outbox delivery state could not be persisted.");
+    this.#jobs.set(job.id, {
+      ...job,
+      state: "delivered",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
   }
 
-  async markRetry(jobId: string, availableAt: Date, errorCode: string): Promise<void> {
-    const job = this.require(jobId);
-    this.#jobs.set(jobId, {
+  async markRetry(claimed: OutboxJob, availableAt: Date, errorCode: string): Promise<void> {
+    const job = this.requireClaim(claimed, "Outbox retry state could not be persisted.");
+    this.#jobs.set(job.id, {
       ...job,
       state: "queued",
       availableAt,
+      leaseOwner: null,
       leaseExpiresAt: null,
     });
     void errorCode;
   }
 
-  async markFailed(jobId: string, _errorCode: string, deadLetter: boolean): Promise<void> {
-    const job = this.require(jobId);
-    this.#jobs.set(jobId, {
+  async markFailed(claimed: OutboxJob, _errorCode: string, deadLetter: boolean): Promise<void> {
+    const job = this.requireClaim(claimed, "Outbox failure state could not be persisted.");
+    this.#jobs.set(job.id, {
       ...job,
       state: deadLetter ? "dead-letter" : "failed",
+      leaseOwner: null,
       leaseExpiresAt: null,
     });
   }
@@ -338,6 +383,18 @@ export class InMemoryOutboxJobRepository implements OutboxJobRepository {
     const job = this.#jobs.get(jobId);
     if (job === undefined) throw new Error("Outbox job is missing.");
     return job;
+  }
+
+  private requireClaim(claimed: OutboxJob, message: string): OutboxJob {
+    const current = this.require(claimed.id);
+    if (
+      current.state !== "processing" ||
+      current.attemptCount !== claimed.attemptCount ||
+      current.leaseOwner !== claimed.leaseOwner
+    ) {
+      throw new Error(message);
+    }
+    return current;
   }
 }
 
@@ -371,6 +428,8 @@ export interface OutboxDeliveryContext {
   readonly topic: CloudflareOutboxTopic;
   readonly attempt: number;
   readonly idempotencyKey: string;
+  readonly leaseOwner: string;
+  readonly leaseExpiresAt: Date;
 }
 export interface OutboxDeliveryReceipt {
   readonly providerMessageId?: string;
@@ -424,6 +483,7 @@ export interface OutboxAdapters {
   readonly calendar?: TopicAdapter<CalendarInvitationPayload>;
   readonly "cache-invalidation"?: TopicAdapter<{ readonly eventId: string }>;
   readonly cacheInvalidation?: TopicAdapter<{ readonly eventId: string }>;
+  readonly reports?: TopicAdapter<CloudflareReportsPayload>;
 }
 
 export interface OutboxConsumerBindings extends CloudflareBindings {
@@ -777,6 +837,21 @@ function parseCachePayload(value: unknown): { readonly eventId: string } {
   return { eventId };
 }
 
+const reportsPayloadKeys = new Set(["kind", "runId"]);
+
+function parseReportsPayload(value: unknown): CloudflareReportsPayload {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, reportsPayloadKeys) ||
+    value.kind !== "evaluation_review_export" ||
+    typeof value.runId !== "string" ||
+    value.runId.trim().length === 0
+  ) {
+    malformedPayload("reports");
+  }
+  return { kind: "evaluation_review_export", runId: value.runId };
+}
+
 function normalizeFailure(cause: unknown): OutboxDeliveryError {
   if (cause instanceof OutboxDeliveryError) return cause;
   if (cause instanceof OpenSendError) {
@@ -1089,15 +1164,7 @@ export class OutboxConsumer {
       return this.retryForMessage(message, undefined, "dead_lettered", true);
     }
     if (claim.outcome === "busy" || claim.outcome === "not_due") {
-      const delay = claim.outcome === "not_due" ? Math.max(1, 1_000) : DEFAULT_BASE_RETRY_DELAY_MS;
-      if (queueAttempts + 1 >= this.#maxAttempts) {
-        log(this.#logger, "error", "outbox delivery exhausted before claim", {
-          topic: queueMessage.topic,
-          jobId: queueMessage.jobId,
-          reason: claim.outcome === "busy" ? "LEASE_BUSY" : "NOT_DUE",
-        });
-        return { action: "retry", delayMs: delay, reason: "claim_exhausted" };
-      }
+      const delay = Math.max(1_000, claim.retryAt.getTime() - this.#now().getTime());
       return { action: "retry", delayMs: delay, reason: claim.outcome };
     }
     if (claim.outcome !== "claimed") {
@@ -1111,7 +1178,7 @@ export class OutboxConsumer {
       (queueMessage.transient !== undefined && queueMessage.topic !== "communications")
     ) {
       try {
-        await this.#repository.markFailed(job.id, "MESSAGE_MISMATCH", true);
+        await this.#repository.markFailed(job, "MESSAGE_MISMATCH", true);
       } catch (cause) {
         const failure = normalizeFailure(cause);
         log(this.#logger, "error", "outbox message mismatch could not be persisted", {
@@ -1133,6 +1200,8 @@ export class OutboxConsumer {
       topic: job.topic,
       attempt: job.attemptCount,
       idempotencyKey: job.deduplicationKey ?? `${job.tenantId}:${job.id}`,
+      leaseOwner: job.leaseOwner ?? this.#leaseOwner,
+      leaseExpiresAt: job.leaseExpiresAt ?? new Date(this.#now().getTime() + this.#leaseMs),
     };
     try {
       const receipt = await this.dispatch(job, context, queueMessage.transient);
@@ -1145,7 +1214,7 @@ export class OutboxConsumer {
           ? {}
           : { providerMessageId: receipt.providerMessageId }),
       });
-      await this.#repository.markDelivered(job.id, this.#now());
+      await this.#repository.markDelivered(job, this.#now());
       log(this.#logger, "info", "outbox side effect delivered", {
         topic: job.topic,
         jobId: job.id,
@@ -1161,7 +1230,7 @@ export class OutboxConsumer {
             status: "failed",
             reason: failure.code,
           });
-          await this.#repository.markFailed(job.id, failure.code, failure.retryable);
+          await this.#repository.markFailed(job, failure.code, failure.retryable);
         } catch (markCause) {
           const markFailure = normalizeFailure(markCause);
           log(this.#logger, "error", "outbox terminal state could not be persisted", {
@@ -1198,7 +1267,7 @@ export class OutboxConsumer {
       );
       try {
         await this.#repository.markRetry(
-          job.id,
+          job,
           new Date(this.#now().getTime() + delayMs),
           failure.code,
         );
@@ -1304,6 +1373,13 @@ export class OutboxConsumer {
       case "cache-invalidation": {
         const payload = parseCachePayload(job.payload);
         const adapter = this.#adapters["cache-invalidation"] ?? this.#adapters.cacheInvalidation;
+        if (adapter === undefined) throw adapterError(job.topic);
+        await adapter(payload, context);
+        return;
+      }
+      case "reports": {
+        const payload = parseReportsPayload(job.payload);
+        const adapter = this.#adapters.reports;
         if (adapter === undefined) throw adapterError(job.topic);
         await adapter(payload, context);
         return;
