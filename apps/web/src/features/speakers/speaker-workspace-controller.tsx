@@ -1244,6 +1244,7 @@ function useSpeakerWorkspaceController({
       api === null ||
       roster === null ||
       loading ||
+      roster.speakers.length === 0 ||
       !progressSectionVisible ||
       roster.organizationId !== organizationId ||
       roster.eventId !== eventId
