@@ -1686,6 +1686,11 @@ function sameUploadBinding(
   );
 }
 
+function localCapabilityExpired(expiresAt: string): boolean {
+  const expiration = Date.parse(expiresAt);
+  return !Number.isFinite(expiration) || expiration <= Date.now();
+}
+
 class LocalPrivateAssetGateway implements PrivateAssetGateway {
   readonly #capabilities = new Map<string, LocalPrivateAssetRecord>();
   readonly #objects = new Map<string, LocalPrivateAssetObject>();
@@ -1726,6 +1731,9 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
         },
         expiresAt: binding.expiresAt,
       };
+    }
+    if (existing?.kind === "upload" && existing.state === "uploaded") {
+      throw new Error("The upload capability cannot be reauthorized.");
     }
     this.#capabilities.set(binding.capabilityId, {
       binding: { ...binding },
@@ -1886,6 +1894,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       capability !== undefined &&
       capability.kind === "upload" &&
       capability.state === "uploaded" &&
+      !localCapabilityExpired(capability.binding.expiresAt) &&
       this.sameBinding(capability.binding, binding)
     );
   }
@@ -1896,6 +1905,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
       capability === undefined ||
       capability.kind !== "upload" ||
       capability.state === "consumed" ||
+      localCapabilityExpired(capability.binding.expiresAt) ||
       !this.sameBinding(capability.binding, binding)
     ) {
       throw new Error("The upload capability cannot be invalidated.");
