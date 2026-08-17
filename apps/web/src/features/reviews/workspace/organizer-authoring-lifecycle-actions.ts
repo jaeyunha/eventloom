@@ -3,6 +3,11 @@
 import type { ApiPlan } from "./api-api-plan";
 import { evaluationRequest } from "./model-evaluation-request";
 import type { OrganizerAssignmentActions } from "./organizer-authoring-assignment-actions";
+import {
+  clearRetainedRevisionSync,
+  readRetainedRevisionSync,
+  retainRevisionSync,
+} from "./organizer-revision-sync-token";
 import { reviseEvaluationPlan } from "./organizer-revise-evaluation-plan";
 
 export function useOrganizerLifecycleActions(scope: OrganizerAssignmentActions) {
@@ -24,22 +29,57 @@ export function useOrganizerLifecycleActions(scope: OrganizerAssignmentActions) 
     setStatus,
     setBusy,
   } = scope;
+
+  function applyPlan(updated: ApiPlan): void {
+    setRounds(updated.rounds);
+    setBlindReview(updated.blindReview);
+    setPlanClosesAt(updated.closesAt ?? "");
+    setVersion(updated.version);
+    setStatus(updated.status);
+    onAuthoritativePlan?.(updated);
+  }
+
   async function transition(action: "open" | "close"): Promise<void> {
     setBusy(true);
     setMessage(null);
     try {
+      let currentVersion = version;
+      let retained = readRetainedRevisionSync(seed);
+      if (retained !== null && currentVersion === retained.expectedVersion + 1) {
+        const recovered = await evaluationRequest<ApiPlan>(
+          baseUrl,
+          `/plans/${encodeURIComponent(seed.planId)}/reconcile-revision-family`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              expectedVersion: currentVersion,
+              revisionSyncToken: retained.token,
+            }),
+          },
+        );
+        clearRetainedRevisionSync(seed);
+        applyPlan(recovered);
+        currentVersion = recovered.version;
+        retained = null;
+        const targetStatus = action === "close" ? "closed" : "open";
+        if (recovered.status === targetStatus) {
+          setMessage("Plan status updated.");
+          return;
+        }
+      }
+      const revisionSyncToken = retained?.token ?? crypto.randomUUID();
+      retainRevisionSync(seed, { expectedVersion: currentVersion, token: revisionSyncToken });
       const updated = await evaluationRequest<ApiPlan>(
         baseUrl,
         `/plans/${encodeURIComponent(seed.planId)}/${action}`,
-        { method: "POST", body: JSON.stringify({ expectedVersion: version }) },
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedVersion: currentVersion, revisionSyncToken }),
+        },
       );
+      clearRetainedRevisionSync(seed);
       setMessage("Plan status updated.");
-      setRounds(updated.rounds);
-      setBlindReview(updated.blindReview);
-      setPlanClosesAt(updated.closesAt ?? "");
-      setVersion(updated.version);
-      setStatus(updated.status);
-      onAuthoritativePlan?.(updated);
+      applyPlan(updated);
     } catch (reason: unknown) {
       setMessage(
         reason instanceof Error ? reason.message : "The plan status could not be changed.",
