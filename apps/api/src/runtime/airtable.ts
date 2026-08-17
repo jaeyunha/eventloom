@@ -2947,6 +2947,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       const profiles = await Promise.all(
         submission.participants.map(async (participant) => {
           const profile = await this.#ensureProfile(input, participant);
+          if (!(await isCurrentDecision())) return profile.id;
           await this.#ensureProfileTask(input, participant.id);
           return profile.id;
         }),
@@ -3291,6 +3292,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         if ((users.results ?? []).length !== 1) return;
         const user = users.results[0];
         if (user === undefined) return;
+        if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
         await this.#invitationCreator.create({
           id: `event-role-invitation:speaker:${input.eventId}:${participant.id}`,
           organizationId: input.tenantId,
