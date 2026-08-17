@@ -21,6 +21,11 @@ export interface AgendaCatalogSyncInput {
   readonly minimumTravelMinutes?: number;
 }
 
+export interface AgendaCatalogSynchronizationResult {
+  readonly draft: AgendaDraft;
+  readonly catalog: AgendaCatalog;
+}
+
 export interface AgendaCatalogSynchronizerContract {
   ensureInitialized(input: AgendaCatalogSyncInput): Promise<AgendaDraft | undefined>;
   synchronize(input: AgendaCatalogSyncInput): Promise<AgendaDraft | undefined>;
@@ -151,6 +156,12 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
     positionalActorId?: string,
   ): Promise<AgendaDraft> {
     const input = normalizeInput(inputOrTenantId, positionalEventId, positionalActorId);
+    return (await this.synchronizeWithCatalog(input)).draft;
+  }
+
+  async synchronizeWithCatalog(
+    input: AgendaCatalogSyncInput,
+  ): Promise<AgendaCatalogSynchronizationResult> {
     const initialized = await this.initialize(input);
     let draft = initialized.draft;
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
@@ -161,16 +172,17 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
         initialized.createdFromCatalog !== null &&
         catalogsEqual(initialized.createdFromCatalog, catalog)
       ) {
-        return draft;
+        return { draft, catalog };
       }
       try {
-        return await this.#engine.updateCatalog({
+        const synchronizedDraft = await this.#engine.updateCatalog({
           eventId: input.eventId,
           expectedVersion: draft.version,
           minimumTravelMinutes: this.resolveMinimumTravelMinutes(input),
           actorId: this.resolveActorId(input),
           ...catalog,
         });
+        return { draft: synchronizedDraft, catalog };
       } catch (error) {
         if (!isAgendaCode(error, "CONCURRENT_MODIFICATION") || attempt >= this.#maxRetries) {
           throw error;
@@ -185,6 +197,24 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
       `Agenda changed while synchronizing event ${input.eventId}`,
     );
   }
+
+  async synchronizePublishedContent(
+    input: AgendaCatalogSyncInput,
+    refresh: (
+      synchronized: AgendaCatalogSynchronizationResult,
+    ) => Promise<{ readonly status: string }>,
+  ): Promise<AgendaCatalogSynchronizationResult> {
+    for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
+      const synchronized = await this.synchronizeWithCatalog(input);
+      const result = await refresh(synchronized);
+      if (result.status !== "stale") return synchronized;
+    }
+    throw new AgendaError(
+      "CONCURRENT_MODIFICATION",
+      `Approved agenda content changed while refreshing event ${input.eventId}`,
+    );
+  }
+
   private async initialize(input: AgendaCatalogSyncInput): Promise<{
     draft: AgendaDraft;
     createdFromCatalog: AgendaCatalog | null;
