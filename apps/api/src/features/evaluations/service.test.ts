@@ -14,6 +14,7 @@ import { MAX_REVISION_RECONCILIATION_ROUNDS } from "./revision-schedule-sync";
 import {
   type EvaluationDecisionProjectionInput,
   type EvaluationEventMetadataSource,
+  type EvaluationSessionDecisionReconciliationInput,
   EvaluationService,
   type EvaluationServiceOptions,
 } from "./service";
@@ -2512,7 +2513,8 @@ describe("decision outcome projection", () => {
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
     });
@@ -2539,6 +2541,55 @@ describe("decision outcome projection", () => {
       { status: "accepted", decisionVersion: 1 },
       { status: "rejected", decisionVersion: 2 },
     ]);
+  });
+
+  it("replays persisted decision work after the submission becomes non-reviewable", async () => {
+    const projected: EvaluationDecisionProjectionInput[] = [];
+    const submissions = new InMemorySubmissionReviewSource([submission]);
+    const { service, repository } = await fixture({
+      submissions,
+      decisionProjection: {
+        projectDecision: async (input) => {
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
+        },
+      },
+    });
+    const accepted = await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Accepted before the submission was withdrawn.",
+      idempotencyKey: "replay-after-withdrawal",
+    });
+    projected.length = 0;
+    submissions.set({ ...submission, status: "withdrawn", version: 2 });
+    const replayedService = new EvaluationService(
+      repository,
+      submissions,
+      evaluationEventSource(),
+      {
+        clock: () => new Date(nowIso),
+        decisionProjection: {
+          projectDecision: async (input) => {
+            const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+            projected.push(structuredClone(cloneable));
+          },
+        },
+      },
+    );
+
+    await replayedService.replayPersistedDecisionWork({
+      tenantId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      decisionVersion: accepted.version,
+      transitionIdempotencyKey: "replay-after-withdrawal",
+    });
+
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({ status: "accepted", decisionVersion: 1 });
   });
 
   it("allows exactly one concurrent amendment for the current version", async () => {
@@ -2591,7 +2642,8 @@ describe("decision outcome projection", () => {
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
       acceptanceHandoff: {
@@ -2681,15 +2733,22 @@ describe("decision outcome projection", () => {
   it("projects every human outcome, onboards only acceptance, and versions handoffs", async () => {
     const projected: EvaluationDecisionProjectionInput[] = [];
     const onboarded: unknown[] = [];
+    const reconciled: EvaluationSessionDecisionReconciliationInput[] = [];
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
       acceptanceHandoff: {
         accept: async (input) => {
-          onboarded.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          onboarded.push(structuredClone(cloneable));
+        },
+        reconcileSessionDecision: async (input) => {
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          reconciled.push(structuredClone(cloneable));
         },
       },
     });
@@ -2747,6 +2806,16 @@ describe("decision outcome projection", () => {
       decidedAt: nowIso,
     });
     expect(onboarded).toHaveLength(1);
+    expect(
+      reconciled.map(({ status, decisionVersion, submissionId }) => ({
+        status,
+        decisionVersion,
+        submissionId,
+      })),
+    ).toEqual([
+      { status: "waitlisted", decisionVersion: 2, submissionId: submission.id },
+      { status: "rejected", decisionVersion: 3, submissionId: submission.id },
+    ]);
   });
   it("runs acceptance onboarding alongside the durable decision projection", async () => {
     const started = new Set<string>();
@@ -2784,14 +2853,10 @@ describe("decision outcome projection", () => {
       reason: "Committee consensus",
       idempotencyKey: "decision-concurrent-effects",
     });
-    const concurrent = await Promise.race([
-      bothStarted.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
-    ]);
+    await bothStarted;
     releaseWork?.();
 
     await expect(pending).resolves.toMatchObject({ status: "accepted" });
-    expect(concurrent).toBe(true);
   });
   it("returns after durable projection while scheduled acceptance onboarding continues", async () => {
     let markAcceptanceStarted: (() => void) | undefined;
@@ -4231,6 +4296,17 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         expectedVersion: suggestion.version,
       }),
       "EVALUATION_CONFLICT",
+    );
+    source.set({ ...submission, status: "withdrawn", version: 3 });
+    await expectEvaluationError(
+      service.listAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_NOT_FOUND",
+    );
+    source.set({ ...submission, status: "submitted", version: 4 });
+    await service.declareConflict(reviewer("reviewer-1"), assignment.id, "Personal conflict");
+    await expectEvaluationError(
+      service.listAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_FORBIDDEN",
     );
   });
 });

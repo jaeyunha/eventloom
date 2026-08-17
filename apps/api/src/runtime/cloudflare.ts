@@ -2796,7 +2796,10 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           : "better-auth.session_token",
     },
   );
-  const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
+  const businessRepositories = createD1RuntimeDependencies({
+    DB: bindings.DB,
+    OUTBOX_QUEUE: bindings.OUTBOX_QUEUE,
+  });
   const eventRoleInvitationAdapters = createRuntimeEventRoleInvitationAdapters(
     businessRepositories.eventRoleInvitations,
   );

@@ -1293,4 +1293,161 @@ describe("organizer session settings domain", () => {
       data: [{ id: "room-retry" }],
     });
   });
+
+  it("demotes an accepted canonical session without changing its identity", async () => {
+    const { service } = setup();
+    const accepted = await service.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-1",
+      title: "Reliable systems",
+      description: "A practical session.",
+      status: "Accepted",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+
+    const stale = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+      isCurrentDecision: async () => false,
+    });
+    expect(stale).toMatchObject({ id: accepted.id, status: "Accepted", version: 1 });
+
+    const rejected = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+    });
+    expect(rejected).toMatchObject({
+      id: accepted.id,
+      status: "Rejected",
+      version: 2,
+    });
+    expect(rejected?.history.at(-1)).toMatchObject({
+      priorStatus: "Accepted",
+      newStatus: "Rejected",
+    });
+
+    const replay = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+    });
+    expect(replay).toMatchObject({ id: accepted.id, status: "Rejected", version: 2 });
+  });
+
+  it("retries agenda synchronization after a persisted demotion", async () => {
+    let synchronizeCalls = 0;
+    const repository = new InMemorySessionRepository();
+    const initialService = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+    });
+    const accepted = await initialService.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-2",
+      title: "Retryable agenda",
+      description: "A retryable session.",
+      status: "Accepted",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+    await repository.putSession(
+      {
+        ...accepted,
+        status: "Rejected",
+        version: 2,
+        updatedAt: accepted.updatedAt,
+      },
+      accepted.version,
+    );
+
+    let failNextSynchronization = true;
+    const service = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+      agendaCatalogSynchronizer: {
+        ensureInitialized: async () => undefined,
+        synchronize: async () => {
+          synchronizeCalls += 1;
+          if (failNextSynchronization) {
+            failNextSynchronization = false;
+            throw new Error("agenda unavailable");
+          }
+          return undefined;
+        },
+      },
+    });
+
+    await expect(
+      service.reconcileDecisionSessionStatus({
+        tenantId: "tenant-a",
+        eventId: "event-a",
+        sessionId: accepted.id,
+        status: "rejected",
+        actorId: "organizer-1",
+      }),
+    ).rejects.toThrow();
+    expect(await repository.getSession("tenant-a", "event-a", accepted.id)).toMatchObject({
+      status: "Rejected",
+      version: 2,
+    });
+
+    await expect(
+      service.reconcileDecisionSessionStatus({
+        tenantId: "tenant-a",
+        eventId: "event-a",
+        sessionId: accepted.id,
+        status: "rejected",
+        actorId: "organizer-1",
+      }),
+    ).resolves.toMatchObject({ status: "Rejected", version: 2 });
+    expect(synchronizeCalls).toBe(2);
+  });
+
+  it("does not synchronize an already-demoted session for stale decision work", async () => {
+    let synchronizeCalls = 0;
+    const repository = new InMemorySessionRepository();
+    const initialService = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+    });
+    await initialService.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-3",
+      title: "Already rejected",
+      description: "An already rejected session.",
+      status: "Rejected",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+    const service = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+      agendaCatalogSynchronizer: {
+        ensureInitialized: async () => undefined,
+        synchronize: async () => {
+          synchronizeCalls += 1;
+          return undefined;
+        },
+      },
+    });
+
+    await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: "session-submission-3",
+      status: "rejected",
+      actorId: "organizer-1",
+      isCurrentDecision: async () => false,
+    });
+    expect(synchronizeCalls).toBe(0);
+  });
 });

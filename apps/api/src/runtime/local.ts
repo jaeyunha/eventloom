@@ -100,7 +100,7 @@ import type {
 import { InMemoryReportRepository, ReportService } from "../features/reports/service";
 import type { ReportProgramRecord } from "../features/reports/types";
 import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
-import type { Session } from "../features/sessions/types";
+import type { DecisionVersionFence, Session } from "../features/sessions/types";
 import { CommunicationSpeakerCommunications } from "../features/speaker/communications";
 import { SpeakerService } from "../features/speaker/service";
 import type {
@@ -565,6 +565,7 @@ export class LocalSpeakerRepository
       email: string,
     ) => { userId: string; normalizedEmail: string } | null,
     private readonly beforeReviewCommit?: (tasks: Map<string, SpeakerTask[]>) => void,
+    private readonly decisionFenceChecker?: (fence: DecisionVersionFence) => Promise<boolean>,
   ) {}
 
   async resolveVerifiedInvitationRecipient(email: string) {
@@ -1100,8 +1101,16 @@ export class LocalSpeakerRepository
     task: SpeakerTask;
     expectedVersion: number | null;
     actorAccountId: string;
+    decisionFence?: DecisionVersionFence;
   }): Promise<RepositoryResult<SpeakerTask>> {
     this.#ensureEvent(command.task.eventId);
+    if (
+      command.decisionFence !== undefined &&
+      this.decisionFenceChecker !== undefined &&
+      !(await this.decisionFenceChecker(command.decisionFence))
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
     const tasks = this.#tasks.get(command.task.eventId) ?? [];
     if (command.expectedVersion !== null || tasks.some(({ id }) => id === command.task.id)) {
       return { ok: false, reason: "version_conflict" };
@@ -1647,8 +1656,11 @@ export class LocalSpeakerRepository
 }
 
 class LocalSessionRepository extends InMemorySessionRepository {
-  constructor(private readonly speakerRepository: LocalSpeakerRepository) {
-    super();
+  constructor(
+    private readonly speakerRepository: LocalSpeakerRepository,
+    decisionFenceChecker: (fence: DecisionVersionFence) => Promise<boolean>,
+  ) {
+    super({}, decisionFenceChecker);
   }
 
   override listSpeakerIds(tenantId: string, eventId: string): Promise<readonly string[]> {
@@ -2870,15 +2882,21 @@ function localCfpEvent(event: Event): EventCfp {
 
 export function createLocalDependencies(aiProviders?: CloudflareAiProviders): ApiDependencies {
   const personas = [...LOCAL_PERSONAS];
-  const speakerRepository = new LocalSpeakerRepository((email) => {
-    const recipients = personas.filter(
-      (persona) => persona.email.trim().toLowerCase() === email.trim().toLowerCase(),
-    );
-    const recipient = recipients.length === 1 ? recipients[0] : undefined;
-    return recipient === undefined
-      ? null
-      : { userId: recipient.userId, normalizedEmail: recipient.email.trim().toLowerCase() };
-  });
+  let localDecisionFenceChecker: (fence: DecisionVersionFence) => Promise<boolean> = async () =>
+    true;
+  const speakerRepository = new LocalSpeakerRepository(
+    (email) => {
+      const recipients = personas.filter(
+        (persona) => persona.email.trim().toLowerCase() === email.trim().toLowerCase(),
+      );
+      const recipient = recipients.length === 1 ? recipients[0] : undefined;
+      return recipient === undefined
+        ? null
+        : { userId: recipient.userId, normalizedEmail: recipient.email.trim().toLowerCase() };
+    },
+    undefined,
+    (fence) => localDecisionFenceChecker(fence),
+  );
   const localEventInvitationSeed: EventRoleInvitation[] = [
     ...LOCAL_REVIEW_SCENARIO_REVIEWERS.map(
       (reviewer): EventRoleInvitation => ({
@@ -3061,8 +3079,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       })(),
     },
   );
-  const sessionRepository = new LocalSessionRepository(speakerRepository);
-
+  const sessionRepository = new LocalSessionRepository(speakerRepository, (fence) =>
+    localDecisionFenceChecker(fence),
+  );
   const deterministicAgendaSuggestions = new DeterministicAgendaSuggestionProvider();
   const agendaMutationLock = new InMemoryAgendaMutationLock();
   const agendaEngine = localAgendaEngine(
@@ -3220,6 +3239,19 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const evaluationRepository = new InMemoryEvaluationRepository();
+  localDecisionFenceChecker = async (fence) => {
+    const decision = await evaluationRepository.getDecision(
+      fence.tenantId,
+      fence.planId,
+      fence.submissionId,
+    );
+    return (
+      decision !== null &&
+      decision.eventId === fence.eventId &&
+      decision.version === fence.version &&
+      decision.status === fence.status
+    );
+  };
   const localEvaluationPlan: EvaluationPlan = {
     id: "local-evaluation-plan",
     tenantId: LOCAL_ORGANIZATION_ID,
@@ -3291,6 +3323,8 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const localReviewMaterials = new Map<string, SubmissionReviewMaterial>();
   const localAcceptanceHandoff: EvaluationAcceptanceHandoff = {
     async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {
+      const isCurrentDecision = input.isCurrentDecision ?? (async () => true);
+      if (!(await isCurrentDecision())) return;
       const material = localReviewMaterials.get(input.submissionId);
       if (
         material === undefined ||
@@ -3299,9 +3333,12 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       ) {
         throw new Error("The accepted local submission was not found in the event review graph.");
       }
+      if (!(await isCurrentDecision())) return;
       speakerRepository.acceptSubmission(input.eventId, input.submissionId, input.decidedAt);
+      if (!(await isCurrentDecision())) return;
       await Promise.all(
         material.participants.map(async (participant) => {
+          if (!(await isCurrentDecision())) return;
           const email = participant.email.trim().toLowerCase();
           const recipients = personas.filter(
             (persona) => persona.email.trim().toLowerCase() === email,
@@ -3309,6 +3346,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           if (email.length === 0 || recipients.length !== 1) return;
           const recipient = recipients[0];
           if (recipient === undefined) return;
+          if (!(await isCurrentDecision())) return;
           const existing = (
             await eventInvitationRepository.listForVerifiedAccount(recipient.userId, email)
           ).find(
@@ -3327,6 +3365,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             }
             return;
           }
+          if (!(await isCurrentDecision())) return;
           await eventRoleInvitationAdapters.speakerCreator.create({
             id: `local-speaker-invitation:${input.eventId}:${participant.id}`,
             organizationId: input.tenantId,
@@ -3339,6 +3378,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             invitedByActorType: "user",
             invitedByActorId: input.decidedBy,
             invitedAt: input.decidedAt,
+            ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
           });
         }),
       );
@@ -3347,8 +3387,13 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         throw new Error("An accepted local submission must include a speaker.");
       }
       const featured = material.title === "Designing reliable community systems";
+      if (!(await isCurrentDecision())) return;
       await sessionService.upsertAcceptedSession({
         actorId: input.decidedBy,
+        ...(input.isCurrentDecision === undefined
+          ? {}
+          : { beforePersist: input.isCurrentDecision }),
+        decisionFence: input.decisionFence,
         session: {
           id: `session-${material.id}`,
           tenantId: input.tenantId,
@@ -3379,6 +3424,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           history: [],
         },
       });
+      if (!(await isCurrentDecision())) return;
       await speakerService.createOrganizerTask({
         eventId: input.eventId,
         accountId: input.decidedBy,
@@ -3400,6 +3446,18 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           participantId: participant.id,
           submissionId: material.id,
         })),
+        ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
+      });
+    },
+    async reconcileSessionDecision(input) {
+      await sessionService.reconcileDecisionSessionStatus({
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        sessionId: `session-${input.submissionId}`,
+        status: input.status,
+        actorId: input.decidedBy,
+        isCurrentDecision: input.isCurrentDecision,
+        decisionFence: input.decisionFence,
       });
     },
   };

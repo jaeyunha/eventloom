@@ -159,12 +159,13 @@ export interface D1BusinessRepositoryBundle {
 export function createD1BusinessRepositories(input: {
   database: D1Database;
   webhookSecretCipher: WebhookSecretCipher;
+  outboxQueue?: Queue<CloudflareOutboxMessage>;
 }): D1BusinessRepositoryBundle {
   const { database } = input;
   return {
     events: new D1EventRepository(database),
     cfp: new D1CfpRepository(database),
-    evaluations: new D1EvaluationRepository(database),
+    evaluations: new D1EvaluationRepository(database, input.outboxQueue),
     sessions: new D1SessionRepository(database),
     speaker: new D1SpeakerRepository(database),
     agendaForOrganization: (organizationId) => new D1AgendaRepository(database, organizationId),
@@ -254,7 +255,10 @@ export interface D1RuntimeCompositionOptions {
 }
 
 export function createD1RuntimeComposition(options: D1RuntimeCompositionOptions) {
-  const repositories = createD1RuntimeDependencies({ DB: options.database });
+  const repositories = createD1RuntimeDependencies({
+    DB: options.database,
+    OUTBOX_QUEUE: options.outboxQueue as Queue<CloudflareOutboxMessage>,
+  });
   return {
     repositories: {
       events: repositories.events,
@@ -299,11 +303,12 @@ const identityWebhookSecretCipher: WebhookSecretCipher = {
 };
 
 export function createD1RuntimeDependencies(
-  bindings: Pick<CloudflareBindings, "DB">,
+  bindings: Pick<CloudflareBindings, "DB"> & Partial<Pick<CloudflareBindings, "OUTBOX_QUEUE">>,
 ): D1RuntimeDependencies {
   const repositories = createD1BusinessRepositories({
     database: bindings.DB,
     webhookSecretCipher: identityWebhookSecretCipher,
+    ...(bindings.OUTBOX_QUEUE === undefined ? {} : { outboxQueue: bindings.OUTBOX_QUEUE }),
   });
   return {
     events: repositories.events,

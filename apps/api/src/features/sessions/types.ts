@@ -250,6 +250,25 @@ export interface SessionSettings {
   history: readonly SessionHistoryEntry[];
 }
 
+export interface DecisionSessionStatusReconciliationInput {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly sessionId: string;
+  readonly status: "waitlisted" | "rejected";
+  readonly actorId: string;
+  readonly isCurrentDecision?: (() => Promise<boolean>) | undefined;
+  readonly decisionFence?: DecisionVersionFence | undefined;
+}
+
+export interface DecisionVersionFence {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly version: number;
+  readonly status: "accepted" | "waitlisted" | "rejected";
+}
+
 export interface CreateSessionInput {
   tenantId?: string;
   eventId: string;
@@ -290,6 +309,9 @@ export interface UpdateSessionInput {
   speakerIds?: readonly string[];
   speakerRoster?: readonly SessionSpeakerReference[];
   resourceIds?: readonly string[];
+  /** Internal lifecycle fence used by trusted decision projections. */
+  beforePersist?: (() => Promise<boolean>) | undefined;
+  decisionFence?: DecisionVersionFence | undefined;
 }
 export interface RestoreSessionInput {
   tenantId?: string;
@@ -376,6 +398,7 @@ export type SessionRepositoryCommand =
       value: Session;
       expectedVersion: number | null;
       audit: SessionAuditEntry;
+      decisionFence?: DecisionVersionFence;
     }
   | {
       operation: "deleteSession";
@@ -457,7 +480,11 @@ export interface SessionRepository {
   commit?(command: SessionRepositoryCommand): Promise<void>;
   getSession(tenantId: string, eventId: string, sessionId: string): Promise<Session | null>;
   listSessions(tenantId: string, eventId: string): Promise<readonly Session[]>;
-  putSession(session: Session, expectedVersion: number | null): Promise<void>;
+  putSession(
+    session: Session,
+    expectedVersion: number | null,
+    decisionFence?: DecisionVersionFence,
+  ): Promise<void>;
   deleteSession(
     tenantId: string,
     eventId: string,
