@@ -1627,13 +1627,18 @@
 .eventScheduleTimezone select {
   min-height: 2.5rem;
   padding: 0.35rem 2.25rem 0.35rem 0.75rem;
-  border: 1px solid var(--border-strong);
+  border: 1px solid color-mix(in srgb, var(--foreground) 24%, var(--border));
   border-radius: var(--radius-md);
   background: var(--background);
   color: var(--foreground);
   font: inherit;
   font-size: 0.85rem;
   font-weight: 650;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--background) 80%, transparent);
+}
+.eventScheduleTimezone select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .eventFieldLabel {
   color: var(--foreground);
