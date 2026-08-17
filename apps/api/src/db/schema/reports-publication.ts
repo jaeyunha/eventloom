@@ -457,6 +457,8 @@ export const programReleases = sqliteTable(
     rollbackTargetRevision: integer("rollback_target_revision"),
     cacheRevision: integer("cache_revision").notNull(),
     sourceTrigger: text("source_trigger").notNull(),
+    reservationOwnerId: text("reservation_owner_id"),
+    reservationExpiresAt: text("reservation_expires_at"),
     failureReason: text("failure_reason"),
   },
   (t) => [
