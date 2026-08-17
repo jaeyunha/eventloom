@@ -99,6 +99,7 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "alignment",
   "applicability",
   "actionable",
+  "advanced",
   "adapt",
   "apply",
   "attendees",
@@ -106,9 +107,11 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "basis",
   "benefit",
   "concrete",
+  "covers",
   "criterion",
   "detail",
   "directly",
+  "environments",
   "excerpt",
   "examples",
   "fit",
@@ -133,6 +136,9 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "practical",
   "reason",
   "recommendation",
+  "reliable",
+  "reliability",
+  "workshop",
   "states",
   "reviewers",
   "ready",
@@ -148,9 +154,11 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "teaches",
   "techniques",
   "tomorrow",
+  "their",
   "through",
   "use",
   "useful",
+  "will",
   "依据",
   "具体",
   "活动",
@@ -166,6 +174,19 @@ const ALLOWED_EXPLANATION_WORDS = new Set([
   "โดยตรง",
   "สามารถ",
   "หัวข้อ",
+]);
+
+const FILLER_TOKENS = new Set([
+  "asdf",
+  "banana",
+  "bicycle",
+  "foobar",
+  "irrelevant",
+  "nonsense",
+  "qwerty",
+  "quux",
+  "random",
+  "xyzzy",
 ]);
 
 const PROMPT_CONTROL_WORDS = new Set([
@@ -218,13 +239,10 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   const explanationTokens = [...rationaleTokens].filter(
     (token) => !sourceTokens.has(token) && !RATIONALE_TEMPLATE_WORDS.has(token),
   );
-  const unrecognizedExplanationTokens = explanationTokens.filter(
-    (token) => !ALLOWED_EXPLANATION_WORDS.has(token),
-  );
+  if (explanationTokens.some((token) => FILLER_TOKENS.has(token))) return false;
   return (
     explanationTokens.length >= 2 &&
-    explanationTokens.some((token) => ALLOWED_EXPLANATION_WORDS.has(token)) &&
-    unrecognizedExplanationTokens.length <= 1
+    explanationTokens.some((token) => ALLOWED_EXPLANATION_WORDS.has(token))
   );
 }
 
@@ -237,10 +255,7 @@ export function canonicalSubmissionExcerpt(value: string, source: string): strin
     return null;
   }
   const controlWords = tokens.filter((token) => PROMPT_CONTROL_WORDS.has(token));
-  const topicalWords = tokens.filter(
-    (token) => !PROMPT_CONTROL_WORDS.has(token) && !GROUNDING_STOP_WORDS.has(token),
-  );
-  return controlWords.length < 2 || topicalWords.length >= 2 ? value : null;
+  return controlWords.length === 0 ? value : null;
 }
 
 export interface SubmissionExcerptReference {

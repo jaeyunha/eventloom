@@ -107,6 +107,7 @@ export interface EvaluationProjectionReader {
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
   getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
+  getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null>;
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
   getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null>;
   listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]>;
@@ -522,8 +523,10 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     revisionSyncPending = false,
     revisionSyncToken?: string,
   ): Promise<void> {
+    const current = this.#plans.get(storageKey(plan.tenantId, plan.id));
+    if (current === undefined) throw conflict("Evaluation plan changed since it was loaded.");
     await this.putPlanState(
-      plan,
+      applyScheduleState(current, planScheduleState(plan)),
       expectedVersion,
       scheduleSyncs,
       revisionSyncPending,
@@ -1011,6 +1014,9 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     const suggestion = this.#suggestions.get(storageKey(tenantId, suggestionId));
     return suggestion === undefined ? null : clone(suggestion);
   }
+  async getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
+    return this.#suggestions.get(storageKey(tenantId, suggestionId))?.assignmentId ?? null;
+  }
 
   async listSuggestions(
     tenantId: string,
@@ -1035,7 +1041,13 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
           this.#assignments.get(storageKey(suggestion.tenantId, suggestion.assignmentId))
             ?.version ??
           0);
-    await this.#assertSuggestionAssignmentWritable(suggestion, expectedAssignmentVersion);
+    await this.#assertSuggestionAssignmentWritable(
+      suggestion,
+      expectedAssignmentVersion,
+      typeof admission === "object"
+        ? (admission.expectedSubmissionRevision ?? suggestion.submissionRevision)
+        : suggestion.submissionRevision,
+    );
     const key = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(this.#suggestions.get(key)?.version ?? null, expectedVersion, "Suggestion");
     this.#suggestions.set(key, clone(suggestion));
@@ -1056,6 +1068,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     await this.#assertSuggestionAssignmentWritable(
       suggestion,
       expectedAssignmentVersion ?? assignment?.version ?? 0,
+      admission.expectedSubmissionRevision ?? suggestion.submissionRevision,
     );
     const suggestionKey = storageKey(suggestion.tenantId, suggestion.id);
     assertVersion(
@@ -1112,6 +1125,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   async #assertSuggestionAssignmentWritable(
     suggestion: EvaluationSuggestion,
     expectedAssignmentVersion: number,
+    expectedSubmissionRevision: number,
   ): Promise<void> {
     const assignmentKey = storageKey(suggestion.tenantId, suggestion.assignmentId);
     const assignment = this.#assignments.get(assignmentKey);
@@ -1145,10 +1159,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
         throw conflict("This submission is no longer available for review.");
       }
       const submissionRevision = submission.version ?? submission.revision;
-      if (
-        submissionRevision !== undefined &&
-        submissionRevision !== suggestion.submissionRevision
-      ) {
+      if (submissionRevision !== undefined && submissionRevision !== expectedSubmissionRevision) {
         throw conflict("The AI evaluation suggestion is stale.");
       }
     }

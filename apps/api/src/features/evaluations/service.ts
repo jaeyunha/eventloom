@@ -2969,12 +2969,26 @@ export class EvaluationService {
     actor: EvaluationActor,
     suggestionId: string,
     input: ResolveEvaluationSuggestionInput,
+    expectedAssignmentId?: string,
   ): Promise<EvaluationSuggestionResolution> {
-    const suggestion = await this.#repository.getSuggestion(actor.tenantId, suggestionId);
-    if (suggestion === null) throw notFound("The AI evaluation suggestion was not found.");
-    const assignment = await this.#getAssignment(actor.tenantId, suggestion.assignmentId);
+    const suggestionAssignmentId = await this.#repository.getSuggestionAssignmentId(
+      actor.tenantId,
+      suggestionId,
+    );
+    if (
+      suggestionAssignmentId === null ||
+      (expectedAssignmentId !== undefined && suggestionAssignmentId !== expectedAssignmentId)
+    ) {
+      throw notFound("The AI evaluation suggestion was not found.");
+    }
+    const assignment = await this.#getAssignment(actor.tenantId, suggestionAssignmentId);
     requireAiSuggestionReviewer(actor, assignment);
     await this.#requireNoAssignmentConflict(actor.tenantId, assignment.id);
+    const suggestion = await this.#repository.getSuggestion(actor.tenantId, suggestionId);
+    if (suggestion === null) throw notFound("The AI evaluation suggestion was not found.");
+    if (suggestion.assignmentId !== assignment.id) {
+      throw conflict("The AI suggestion assignment changed while it was being loaded.");
+    }
     if (suggestion.reviewerId !== actor.userId) throw forbidden();
     const { plan, round } = await this.#assignmentContext(assignment);
     if (assignment.status === "submitted") {
@@ -3001,7 +3015,12 @@ export class EvaluationService {
         this.#clock().toISOString(),
       );
       await this.#requireActiveSubmission(plan, assignment.submissionId);
-      await this.#repository.putSuggestion(staleSuggestion, suggestion.version, assignment.version);
+      await this.#repository.putSuggestion(staleSuggestion, suggestion.version, {
+        assignment,
+        expectedAssignmentVersion: assignment.version,
+        authorizedAt: this.#clock().toISOString(),
+        expectedSubmissionRevision: submissionRevision,
+      });
       throw conflict("The AI evaluation suggestion is stale and must be regenerated.");
     }
     if (suggestion.status !== "pending") {
@@ -3020,6 +3039,20 @@ export class EvaluationService {
     const currentReview = await this.#repository.getReview(actor.tenantId, assignment.id);
     let review: EvaluationReview | null = currentReview;
     let assignmentUpdate: EvaluationAssignment | null = null;
+    const resolvedCriterionIds = new Set(
+      suggestion.history.flatMap((entry) => {
+        if (
+          (entry.action === "edit" || entry.action === "accept") &&
+          entry.valueByCriterion !== undefined
+        ) {
+          return Object.keys(entry.valueByCriterion);
+        }
+        if (entry.action === "reject" && entry.criterionId !== undefined) {
+          return [entry.criterionId];
+        }
+        return [];
+      }),
+    );
 
     if (action === "accept" || action === "edit") {
       const scopedValues = input.criterionScores ?? input.scores;
@@ -3027,10 +3060,9 @@ export class EvaluationService {
         action === "edit" || (action === "accept" && scopedValues !== undefined)
           ? scopedValues
           : Object.fromEntries(
-              Object.entries(suggestion.candidates).map(([criterionId, candidates]) => [
-                criterionId,
-                candidates[0]?.value,
-              ]),
+              Object.entries(suggestion.candidates)
+                .filter(([criterionId]) => !resolvedCriterionIds.has(criterionId))
+                .map(([criterionId, candidates]) => [criterionId, candidates[0]?.value]),
             );
       if (values === undefined || Object.keys(values).length === 0) {
         throw invalidInput("Provide at least one edited rubric score.");
@@ -3056,6 +3088,9 @@ export class EvaluationService {
             ? normalizeDropdownValue(criterion, inputValue)
             : inputValue;
         const candidate = suggestion.candidates[criterionId]?.[0];
+        if (resolvedCriterionIds.has(criterionId)) {
+          throw conflict("This suggestion criterion was already resolved.");
+        }
         if (
           action === "accept" &&
           scopedValues !== undefined &&
@@ -3923,7 +3958,12 @@ export class EvaluationService {
       ) {
         current = this.#markSuggestionStale(current, actor.userId, this.#clock().toISOString());
         await this.#requireActiveSubmission(plan, assignment.submissionId);
-        await this.#repository.putSuggestion(current, suggestion.version, assignment.version);
+        await this.#repository.putSuggestion(current, suggestion.version, {
+          assignment,
+          expectedAssignmentVersion: assignment.version,
+          authorizedAt: this.#clock().toISOString(),
+          expectedSubmissionRevision: submissionRevision,
+        });
       }
       currentSuggestions.push(current);
     }

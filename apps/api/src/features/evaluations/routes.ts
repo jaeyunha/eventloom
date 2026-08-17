@@ -1141,7 +1141,12 @@ export function createEvaluationRoutes(
   routes.post("/assignments/:assignmentId/suggestions/:suggestionId/resolve", async (context) => {
     const body = resolveSuggestionSchema.parse(await context.req.json());
     return context.json(
-      await service.resolveAiSuggestion(actor(context), context.req.param("suggestionId"), body),
+      await service.resolveAiSuggestion(
+        actor(context),
+        context.req.param("suggestionId"),
+        body,
+        context.req.param("assignmentId"),
+      ),
     );
   });
   routes.post("/assignments/:assignmentId/suggestions", async (context) => {

@@ -72,10 +72,10 @@ import type {
 } from "../features/crm/types";
 import { conflict } from "../features/evaluations/errors";
 import type {
+  EvaluationPlanScheduleState,
+  EvaluationPlanScheduleSync,
   EvaluationProjectionReader,
   EvaluationReminderPlanSource,
-  EvaluationPlanScheduleSync,
-  EvaluationPlanScheduleState,
   EvaluationRepository,
   EvaluationReviewWriteAdmission,
   OrganizerWorkspaceRecords,
@@ -97,7 +97,6 @@ import type {
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
 import { EvaluationService } from "../features/evaluations/service";
-import type { OrganizationPolicy } from "../features/organizations/policy";
 import type {
   EvaluationActor,
   EvaluationAssignment,
@@ -106,11 +105,11 @@ import type {
   EvaluationAssignmentReplacementInput,
   EvaluationAssignmentReplacementResult,
   EvaluationAssignmentScope,
-  EvaluationReviewHistory,
   EvaluationConflictDeclaration,
   EvaluationDecision,
   EvaluationPlan,
   EvaluationReview,
+  EvaluationReviewHistory,
   EvaluationSuggestion,
   EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
@@ -123,6 +122,7 @@ import {
   EventRepositoryConflictError,
   type ProgramPublicationManifest,
 } from "../features/events/types";
+import type { OrganizationPolicy } from "../features/organizations/policy";
 import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
   IdempotencyBeginResult,
@@ -2211,6 +2211,14 @@ class AirtableEvaluationDataStore implements EvaluationRepository {
       ? untagged(suggestion)
       : null;
   }
+  async getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
+    const suggestion = await this.#suggestions.find(suggestionId);
+    return suggestion !== undefined &&
+      isEvaluationSuggestionRecord(suggestion) &&
+      suggestion.tenantId === tenantId
+      ? suggestion.assignmentId
+      : null;
+  }
 
   async listSuggestions(
     tenantId: string,
@@ -2558,6 +2566,9 @@ export class AirtableEvaluationProjectionStore implements EvaluationProjectionRe
   }
   getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null> {
     return this.#repository.getSuggestion(tenantId, suggestionId);
+  }
+  getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
+    return this.#repository.getSuggestionAssignmentId(tenantId, suggestionId);
   }
   listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]> {
     return this.#repository.listSuggestions(tenantId, planId);

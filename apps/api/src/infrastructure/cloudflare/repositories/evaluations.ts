@@ -1478,6 +1478,14 @@ export class D1EvaluationRepository implements EvaluationRepository {
     ).first<Row>();
     return row === null ? null : this.hydrateSuggestion(row);
   }
+  async getSuggestionAssignmentId(tenantId: string, suggestionId: string): Promise<string | null> {
+    const row = await statement(
+      this.database,
+      "SELECT assignment_id FROM evaluation_suggestions WHERE organization_id = ? AND id = ?",
+      [tenantId, suggestionId],
+    ).first<Row>();
+    return row === null ? null : String(row.assignment_id);
+  }
 
   async listSuggestions(tenantId: string, planId: string) {
     const result = await statement(
