@@ -134,6 +134,8 @@ describe("sessions workspace presentation", () => {
     expect(markup).toContain("Avery Kim");
     expect(markup).toContain("Primary");
     expect(markup).toContain("Morgan Lee");
+    expect(markup).toContain("Add or edit speakers");
+    expect(markup).toContain('href="/admin/organizations/org-1/events/event-1/speakers"');
     expect(markup).toContain("Save speaker assignments");
     expect(markup).toContain('role="checkbox"');
     expect(markup).toContain("Change history");

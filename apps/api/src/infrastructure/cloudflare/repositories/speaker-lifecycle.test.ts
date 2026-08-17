@@ -1330,4 +1330,278 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     ).toEqual([{ participant_id: participantId, user_id: accountId }]);
     expect(participantRecordCounts(participantId)).toEqual(beforeAcceptance);
   });
+
+  it("persists accepted-session co-speaker roster mutations with identity reuse and scoped grants", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const { repository, service } = fixture.createPhase();
+    const portalSubmissionId = `speaker-submission:${acceptedSubmissionId}`;
+
+    await service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Accepted Speaker",
+      email: "accepted@example.test",
+      jobTitle: "Staff Engineer",
+      company: "Example Co",
+      biography: "Accepted session owner.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "accepted-session-owner-profile",
+    });
+    const existingSpeaker = await service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Marcus Chen",
+      email: "marcus@example.test",
+      jobTitle: "Principal Engineer",
+      company: "Example Co",
+      biography: "Co-speaker for the accepted session.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "existing-co-speaker-profile",
+    });
+    const existingParticipantId = existingSpeaker.speakers.find(
+      (speaker) => speaker.email === "marcus@example.test",
+    )?.participantId;
+    if (existingParticipantId === undefined) throw new Error("Expected a canonical co-speaker.");
+    await expect(
+      service.resolveEventParticipant({
+        organizationId,
+        eventId,
+        sourceType: "manual",
+        sourceId: `roster:${portalSubmissionId}:marcus@example.test`,
+        normalizedEmail: "marcus@example.test",
+      }),
+    ).resolves.toMatchObject({
+      state: "resolved",
+      participantId: existingParticipantId,
+      created: false,
+    });
+    await createAndAcceptSpeakerInvitation({
+      database: fixture.database as unknown as D1Database,
+      invitationId: `event-role-invitation:speaker:${eventId}:${acceptedParticipantId}`,
+      creationIdempotencyKey: `accepted-session-roster:${acceptedSubmissionId}`,
+      participantId: acceptedParticipantId,
+      accountId: acceptedAccountId,
+      email: "accepted@example.test",
+      invitedAt: "2099-08-15T04:00:00.000Z",
+      acceptedAt: "2099-08-15T04:01:00.000Z",
+    });
+    await expect(
+      repository.ensureVerifiedParticipantGrant({
+        organizationId,
+        eventId,
+        participantId: acceptedParticipantId,
+        email: "accepted@example.test",
+        createdAt: "2099-08-15T04:01:00.000Z",
+      }),
+    ).resolves.toBe(true);
+    const portalContext = await service.getPortalContext(eventId, acceptedAccountId);
+    expect(portalContext.capabilities).toContain("roster-manage");
+    expect(portalContext.submissionIds).toContain(acceptedSubmissionId);
+    const profileSnapshot = () =>
+      fixture.database.query<{
+        display_name: string;
+        email: string;
+        job_title: string;
+        company: string;
+        status: string;
+        biography: string;
+        social_links_json: string;
+        headshot_asset_id: string | null;
+        source_type: string;
+        source_id: string;
+        version: number;
+        updated_at: string;
+      }>(
+        `SELECT display_name, email, job_title, company, status, biography, social_links_json,
+                headshot_asset_id, source_type, source_id, version, updated_at
+           FROM speaker_profiles
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${existingParticipantId}'`,
+      );
+    const profileBeforeRosterReuse = profileSnapshot();
+
+    const added = await service.addRosterEntry({
+      eventId,
+      accountId: acceptedAccountId,
+      submissionId: portalSubmissionId,
+      displayName: "Marcus Chen",
+      email: "marcus@example.test",
+    });
+    expect(
+      fixture.database.query<{
+        participant_id: string;
+        role: string;
+        status: string;
+        submission_id: string;
+        version: number;
+      }>(
+        `SELECT participant_id, role, status, submission_id, version
+           FROM speaker_roster
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${existingParticipantId}'`,
+      ),
+    ).toEqual([
+      {
+        participant_id: existingParticipantId,
+        role: "co_speaker",
+        status: "pending",
+        submission_id: acceptedSubmissionId,
+        version: 1,
+      },
+    ]);
+    expect(
+      (await repository.listRoster(eventId, acceptedSubmissionId))
+        .filter((member) => member.participantId === existingParticipantId)
+        .map((member) => ({
+          id: member.id,
+          role: member.role,
+          status: member.status,
+          submissionId: member.submissionId,
+          version: member.version,
+        })),
+    ).toEqual([
+      {
+        id: `roster:${eventId}:${portalSubmissionId}:${existingParticipantId}`,
+        role: "co_speaker",
+        status: "pending",
+        submissionId: acceptedSubmissionId,
+        version: 1,
+      },
+    ]);
+    expect(added.members.find((member) => member.email === "marcus@example.test")).toMatchObject({
+      participantId: existingParticipantId,
+      displayName: "Marcus Chen",
+      email: "marcus@example.test",
+      role: "co_speaker",
+      status: "pending",
+    });
+    expect(
+      fixture.database.query<{ id: string }>(
+        `SELECT id FROM participants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND normalized_email = 'marcus@example.test'
+          ORDER BY id`,
+      ),
+    ).toEqual([{ id: existingParticipantId }]);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${existingParticipantId}' AND revoked_at IS NULL`,
+      )[0]?.count,
+    ).toBe(0);
+    expect(profileSnapshot()).toEqual(profileBeforeRosterReuse);
+    const coSpeakerAccountId = fixture.database.query<{ id: string }>(
+      "SELECT id FROM auth_users WHERE email = 'marcus@example.test'",
+    )[0]?.id;
+    if (coSpeakerAccountId === undefined)
+      throw new Error("Expected a verified co-speaker account.");
+    await createAndAcceptSpeakerInvitation({
+      database: fixture.database as unknown as D1Database,
+      invitationId: `event-role-invitation:speaker:${eventId}:${existingParticipantId}`,
+      creationIdempotencyKey: `accepted-session-roster:${existingParticipantId}`,
+      participantId: existingParticipantId,
+      accountId: coSpeakerAccountId,
+      email: "marcus@example.test",
+      invitedAt: "2099-08-15T04:02:00.000Z",
+      acceptedAt: "2099-08-15T04:03:00.000Z",
+    });
+    await expect(
+      repository.ensureVerifiedParticipantGrant({
+        organizationId,
+        eventId,
+        participantId: existingParticipantId,
+        email: "marcus@example.test",
+        createdAt: "2099-08-15T04:03:00.000Z",
+      }),
+    ).resolves.toBe(true);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${existingParticipantId}' AND revoked_at IS NULL`,
+      )[0]?.count,
+    ).toBe(1);
+    fixture.database.executeScript(`
+      UPDATE submission_participants
+         SET answers_json = '{"customAnswer":"keep me"}'
+       WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+         AND submission_id = '${acceptedSubmissionId}'
+         AND participant_id = '${existingParticipantId}';
+    `);
+
+    const updated = await service.updateRosterEntry({
+      eventId,
+      accountId: acceptedAccountId,
+      submissionId: portalSubmissionId,
+      participantId: existingParticipantId,
+      displayName: "Marcus C.",
+      expectedVersion: 1,
+    });
+    expect(
+      updated.members.find((member) => member.participantId === existingParticipantId),
+    ).toMatchObject({
+      participantId: existingParticipantId,
+      displayName: "Marcus C.",
+      status: "pending",
+    });
+    expect(
+      fixture.database.query<{ display_name: string; version: number }>(
+        `SELECT display_name, version FROM speaker_roster
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND submission_id = '${acceptedSubmissionId}'
+            AND participant_id = '${existingParticipantId}'`,
+      ),
+    ).toEqual([{ display_name: "Marcus C.", version: 2 }]);
+    expect(
+      fixture.database.query<{ answers_json: string }>(
+        `SELECT answers_json FROM submission_participants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND submission_id = '${acceptedSubmissionId}'
+            AND participant_id = '${existingParticipantId}'`,
+      ),
+    ).toEqual([{ answers_json: '{"customAnswer":"keep me"}' }]);
+    expect(profileSnapshot()).toEqual(profileBeforeRosterReuse);
+
+    await service.removeRosterEntry({
+      eventId,
+      accountId: acceptedAccountId,
+      submissionId: portalSubmissionId,
+      participantId: existingParticipantId,
+      expectedVersion: 2,
+    });
+    expect(
+      fixture.database.query<{ status: string; version: number }>(
+        `SELECT status, version FROM speaker_roster
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND submission_id = '${acceptedSubmissionId}'
+            AND participant_id = '${existingParticipantId}'`,
+      ),
+    ).toEqual([{ status: "revoked", version: 3 }]);
+    expect(
+      fixture.database.query<{ status: string; version: number; revoked_at: string | null }>(
+        `SELECT status, version, revoked_at FROM event_role_invitations
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${existingParticipantId}'`,
+      ),
+    ).toEqual([
+      {
+        status: "revoked",
+        version: 3,
+        revoked_at: "2099-08-15T04:00:00.000Z",
+      },
+    ]);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM participant_grants
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND participant_id = '${existingParticipantId}' AND revoked_at IS NULL`,
+      )[0]?.count,
+    ).toBe(0);
+  });
 });
