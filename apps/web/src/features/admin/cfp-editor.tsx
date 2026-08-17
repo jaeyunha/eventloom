@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { type CfpEventConfiguration, type CfpFormConfiguration, createCfpApi } from "../cfp/api";
+import { createEventSettingsApi } from "../settings/api";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 import { CfpEditorMasthead, CfpSectionNavigation, CfpStepActions } from "./cfp-editor-chrome";
@@ -54,6 +55,7 @@ export { CfpEventIdentityFields, CfpPastCloseConfirmation };
 type CfpSectionId = (typeof SECTION_LINKS)[number]["id"];
 type CfpSaveState = "idle" | "saving" | "saved" | "error";
 type CfpTaxonomyKey = "formats" | "levels" | "tags" | "tracks";
+type CfpCanonicalTaxonomy = Readonly<Record<CfpTaxonomyKey, readonly string[]>>;
 type CfpPreviewSelectionKey = "format" | "track" | "level";
 
 interface CfpPreviewSelections {
@@ -82,6 +84,8 @@ interface CfpEditorController {
   readonly previewView: "application" | "confirmation";
   readonly configurationLoadState: "loading" | "ready" | "error";
   readonly resolvedOrganizationId: string;
+  readonly canonicalTaxonomy: CfpCanonicalTaxonomy | null;
+  readonly taxonomyManageHref: string;
   readonly minimumCfpDate: string;
   readonly maximumCfpDate: string | undefined;
   readonly dateValidationError: string | null;
@@ -166,6 +170,7 @@ function useCfpEditorController({
   const [configurationLoadState, setConfigurationLoadState] = useState<
     "loading" | "ready" | "error"
   >("loading");
+  const [canonicalTaxonomy, setCanonicalTaxonomy] = useState<CfpCanonicalTaxonomy | null>(null);
 
   const resolvedOrganizationId = organizationId.trim();
   const requestedFormId = formId?.trim() || undefined;
@@ -257,6 +262,53 @@ function useCfpEditorController({
       active = false;
     };
   }, [api, eventId, requestedFormId, resolvedOrganizationId]);
+  useEffect(() => {
+    if (!resolvedOrganizationId) return;
+    let active = true;
+    const settingsApi = createEventSettingsApi("", resolvedOrganizationId);
+    void settingsApi
+      .getWorkspace(eventId)
+      .then((data) => {
+        if (!active) return;
+        const next: CfpCanonicalTaxonomy = {
+          tracks: data.tracks.map(({ name }) => name),
+          formats: data.formats.map(({ name }) => name),
+          levels: data.levels.map(({ name }) => name),
+          tags: data.tags.map(({ name }) => name),
+        };
+        setCanonicalTaxonomy(next);
+        setConfiguration((current) => ({
+          ...current,
+          tracks: current.tracks.length === 0 ? [...next.tracks] : current.tracks,
+          formats: current.formats.length === 0 ? [...next.formats] : current.formats,
+          levels: current.levels.length === 0 ? [...next.levels] : current.levels,
+          tags: current.tags.length === 0 ? [...next.tags] : current.tags,
+        }));
+      })
+      .catch(() => {
+        if (active) setCanonicalTaxonomy(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [eventId, resolvedOrganizationId]);
+  useEffect(() => {
+    if (configurationLoadState !== "ready" || canonicalTaxonomy === null) return;
+    setConfiguration((current) => {
+      const next = {
+        tracks: current.tracks.length === 0 ? [...canonicalTaxonomy.tracks] : current.tracks,
+        formats: current.formats.length === 0 ? [...canonicalTaxonomy.formats] : current.formats,
+        levels: current.levels.length === 0 ? [...canonicalTaxonomy.levels] : current.levels,
+        tags: current.tags.length === 0 ? [...canonicalTaxonomy.tags] : current.tags,
+      };
+      return next.tracks === current.tracks &&
+        next.formats === current.formats &&
+        next.levels === current.levels &&
+        next.tags === current.tags
+        ? current
+        : { ...current, ...next };
+    });
+  }, [canonicalTaxonomy, configurationLoadState]);
 
   function updateConfiguration<K extends keyof CfpConfiguration>(
     key: K,
@@ -705,6 +757,8 @@ function useCfpEditorController({
     previewView,
     configurationLoadState,
     resolvedOrganizationId,
+    canonicalTaxonomy,
+    taxonomyManageHref: `/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/events/${encodeURIComponent(eventId)}/settings/classification`,
     minimumCfpDate,
     maximumCfpDate,
     dateValidationError,
@@ -850,6 +904,8 @@ export function CfpEditor(props: CfpEditorProps) {
       <CfpEditorSections
         activeSection={controller.activeSection}
         closeDatePast={controller.closeDatePast}
+        canonicalTaxonomy={controller.canonicalTaxonomy}
+        taxonomyManageHref={controller.taxonomyManageHref}
         configuration={controller.configuration}
         dateValidationError={controller.dateValidationError}
         effectiveClosed={controller.effectiveClosed}

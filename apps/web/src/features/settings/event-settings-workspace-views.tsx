@@ -325,15 +325,24 @@ export function EventSettingsWorkspaceView({
         <WorkspaceBreadcrumb>
           <Link href="/admin/events">Events</Link>
           <span aria-hidden="true">/</span>
-          <span>{eventIdentity?.name ?? "Event settings"}</span>
+          <span>{eventIdentity?.name ?? "Program settings"}</span>
           <span aria-hidden="true">/</span>
-          <span>Settings</span>
+          <span>Program settings</span>
         </WorkspaceBreadcrumb>
       }
       title={sectionDefinition.label}
       description={sectionDefinition.description}
       metadata={
         <WorkspaceMetaItem>{contextLabel(organizationId, eventIdentity)}</WorkspaceMetaItem>
+      }
+      actions={
+        <Button asChild variant="outline">
+          <Link
+            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events?edit=${encodeURIComponent(eventId)}`}
+          >
+            Edit event dates
+          </Link>
+        </Button>
       }
     />
   );
@@ -345,7 +354,7 @@ export function EventSettingsWorkspaceView({
           {header}
           <Card className={styles.fullWidthState} role="alert">
             <CardHeader>
-              <CardTitle>Event settings unavailable</CardTitle>
+              <CardTitle>Program settings unavailable</CardTitle>
               <CardDescription>{state.message}</CardDescription>
             </CardHeader>
             <CardContent className={styles.stateActions}>

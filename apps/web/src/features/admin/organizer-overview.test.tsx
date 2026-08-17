@@ -489,6 +489,10 @@ describe("organizer overview", () => {
     expect(output).toContain('name="name"');
     expect(output).toContain('aria-controls="organizer-event-editor"');
     expect(output).toContain('aria-expanded="true"');
+    expect(output).toContain("Program setup checklist");
+    expect(output).toContain("Session workflow");
+    expect(output).toContain("Rooms and venues");
+    expect(output).toContain("Session classification");
   });
 
   it("retains event records after refresh failure and disables stale mutations", () => {

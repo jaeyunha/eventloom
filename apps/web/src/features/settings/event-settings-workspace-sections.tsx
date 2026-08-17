@@ -136,9 +136,9 @@ export function SettingsSectionNavigation({
 
   return (
     <div className={styles.navigationWrapper}>
-      <aside className={styles.desktopNavigation} aria-label="Event settings sections">
+      <aside className={styles.desktopNavigation} aria-label="Program settings sections">
         <div className={styles.navigationHeader}>
-          <p className={styles.navigationEyebrow}>Event settings</p>
+          <p className={styles.navigationEyebrow}>Program settings</p>
           <h2 className={styles.navigationTitle}>Configure this event</h2>
         </div>
         {groups.map(([group, items]) => (
@@ -167,9 +167,9 @@ export function SettingsSectionNavigation({
             className={styles.mobileNavigationTrigger}
             variant="ghost"
             type="button"
-            aria-label="Choose event settings section"
+            aria-label="Choose Program settings section"
           >
-            <span className={styles.mobileNavigationLabel}>Event settings</span>
+            <span className={styles.mobileNavigationLabel}>Program settings</span>
             <strong>{active.shortLabel}</strong>
             <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
           </Button>

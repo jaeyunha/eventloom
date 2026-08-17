@@ -1001,7 +1001,7 @@ export type OrganizerEventsViewState =
 export interface OrganizerEventsViewProps {
   readonly state: OrganizerEventsViewState;
   readonly busy?: boolean;
-  readonly initialEditor?: "create" | undefined;
+  readonly initialEditor?: string | undefined;
   readonly onRetry?: (() => void) | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
@@ -1134,7 +1134,7 @@ export function OrganizerEvents({
 }: Readonly<{
   readonly api?: OrganizerEventsApi;
   readonly config?: OrganizerOverviewConfigResult;
-  readonly initialEditor?: "create" | undefined;
+  readonly initialEditor?: string | undefined;
 }> = {}) {
   const authenticatedOrganizationId = useOrganizerOrganizationId();
   const config = useMemo(
