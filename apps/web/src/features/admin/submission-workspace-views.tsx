@@ -1493,7 +1493,12 @@ function SubmissionDetailPrimary({
         </ol>
       </section>
 
-      <DecisionControl submission={submission} baseUrl={baseUrl} onSaved={onDecisionSaved} />
+      <DecisionControl
+        key={`${submission.id}:${submission.decision?.version ?? 0}`}
+        submission={submission}
+        baseUrl={baseUrl}
+        onSaved={onDecisionSaved}
+      />
       <AcceptedHandoffSummary submission={submission} />
       <ReopenControl submission={submission} baseUrl={baseUrl} />
     </div>
@@ -1703,7 +1708,9 @@ function DecisionControl({
           ? "rejected"
           : "accepted");
   const [status, setStatus] = useState<EvaluationDecisionStatus>(initialStatus);
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(
+    submission.decision?.history.at(-1)?.reason ?? "",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notificationState, setNotificationState] = useState<"idle" | "queued" | "confirmed">(

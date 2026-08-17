@@ -2902,7 +2902,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   readonly #sessions: SessionRepository;
   readonly #sessionService: SessionService | undefined;
   readonly #queue: Queue<CloudflareOutboxMessage>;
-  readonly #senderAddresses: OpenSendSenderAddresses;
   readonly #invitationCreator: RuntimeEventRoleInvitationAdapters["speakerCreator"];
 
   constructor(options: {
@@ -2912,7 +2911,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     readonly database: D1Database;
     readonly sessionService?: SessionService;
     readonly queue: Queue<CloudflareOutboxMessage>;
-    readonly senderAddresses: OpenSendSenderAddresses;
     readonly invitationCreator?: RuntimeEventRoleInvitationAdapters["speakerCreator"];
   }) {
     this.#cfp = options.cfp;
@@ -2921,7 +2919,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     this.#queue = options.queue;
     this.#sessions = options.sessions;
     this.#sessionService = options.sessionService;
-    this.#senderAddresses = options.senderAddresses;
     this.#invitationCreator =
       options.invitationCreator ??
       createRuntimeEventRoleInvitationAdapters(
@@ -2959,9 +2956,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         },
       );
 
-      const recipients = submission.participants
-        .map((participant) => participant.email.trim())
-        .filter((email) => email.length > 0);
       await Promise.all([
         this.#database
           .prepare(
@@ -2987,24 +2981,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             input.decidedAt,
           )
           .run(),
-        ...(recipients.length > 0
-          ? [
-              this.#enqueue(
-                input,
-                "communications",
-                `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-                {
-                  from: this.#senderAddresses.speakers,
-                  senderPurpose: "speakers",
-                  to: recipients,
-                  subject: "Your session was accepted",
-                  html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
-                  text: "Your session was accepted. Sign in to complete your speaker profile.",
-                  idempotencyKey: `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-                },
-              ),
-            ]
-          : []),
         this.#enqueue(
           input,
           "cache-invalidation",
@@ -8086,7 +8062,6 @@ export function createD1ApplicationDependencies(
     sessionService,
     database: options.database,
     queue: options.outboxQueue,
-    senderAddresses: options.senderAddresses,
     invitationCreator: options.eventRoleInvitationAdapters.speakerCreator,
   });
   const evaluationService = new EvaluationService(

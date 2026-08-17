@@ -178,11 +178,12 @@ export function OrganizerDecisionsPanel({
             reviewerMembers={reviewerMembers}
           />
           <DecisionEditor
-            key={selectedAggregate.id}
+            key={`${selectedAggregate.id}:${seed.decisionBySubmission[selectedAggregate.id]?.version ?? 0}`}
             aggregate={selectedAggregate}
             baseUrl={baseUrl}
             planId={seed.planId}
             decision={seed.decisionBySubmission[selectedAggregate.id]}
+            onSaved={(decision) => controller.recordDecision(selectedAggregate.id, decision)}
           />
         </div>
       ) : (
