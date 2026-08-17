@@ -28,7 +28,7 @@ and makes `/work` the explicit multi-organization chooser.
 Important paths:
 
 - `packages/contracts/src/domain/entitlements.ts`
-- `apps/api/migrations/0034_organization_entitlements.sql`
+- `apps/api/migrations/0041_organization_entitlements.sql`
 - `apps/api/src/features/organizations/`
 - `apps/api/src/infrastructure/cloudflare/repositories/organization-entitlements.ts`
 - `apps/api/src/features/events/service.ts`
@@ -49,21 +49,19 @@ A focused test run passed:
 No full `make check`, full test suite, build, migration application, or live
 Cloudflare/D1 workflow was run for this retirement checkpoint.
 
-## Known risks and unfinished decisions
+## Remaining delivery checks
 
-1. `organizerSeats` is modeled but not enforced.
-2. Capability names are modeled but are not individually enforced.
-3. The active-event capacity query currently counts all organization events;
-   confirm which lifecycle states should consume capacity.
-4. D1 batch failure classification needs validation against real D1 behavior.
-5. Internal provisioning currently uses a shared bearer token; review rotation,
-   auditability, and provider-bound authorization.
-6. Apply migration `0034` against an isolated local D1 database and verify
-   backfill, atomic provisioning, and cascade behavior.
-7. Exercise bootstrap and internal provisioning through the assembled API,
+1. Apply migration `0034` against an isolated local D1 database and verify
+   backfill, atomic provisioning, and cascade behavior after migration numbering
+   is reconciled with current `main`.
+2. Exercise bootstrap and internal provisioning through the assembled API,
    including authentication, verification, replay, and mismatch cases.
-8. Run full source gates and real browser QA for `/work` and organization
+3. Run full source gates and real browser QA for `/work` and organization
    settings before opening or merging a delivery PR.
+
+Managed event creation now requires the `events.create` entitlement capability,
+counts only non-retired events, and enforces `organizerSeats` across active
+owner/admin memberships and pending owner/admin invitations.
 
 ## Resume procedure
 
@@ -99,7 +97,7 @@ tests for the new put path may still need expansion before delivery.
 
 ## Additional residue preserved 2026-08-17T06:59Z
 
-- Added `apps/api/migrations/0035_idempotency_lease_fencing.sql` for idempotency lease fencing.
-- Migration number `0035` collides with active speaker-asset renumbering on `judge-content-files`; reconcile numbering before merge.
+- Added `apps/api/migrations/0042_idempotency_lease_fencing.sql` for idempotency lease fencing.
+- Migration numbers `0041` and `0042` collides with active speaker-asset renumbering on `judge-content-files`; reconcile numbering before merge.
 
 - Corrected migration target table/column names to `idempotency_records.lease_id` and `state = processing`.

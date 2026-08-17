@@ -101,6 +101,10 @@ const workspaceStyles = readFileSync(
   fileURLToPath(new URL("./review-workspace.module.css", import.meta.url)),
   "utf8",
 );
+const reviewerQueueStyles = readFileSync(
+  fileURLToPath(new URL("./workspace/reviewer-queue.module.css", import.meta.url)),
+  "utf8",
+);
 
 const testCriteria: readonly RubricCriterion[] = [
   {
@@ -463,6 +467,13 @@ describe("review workspace", () => {
     expect(workspaceStyles).toMatch(
       /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
     );
+  });
+  it("keeps the reviewer drawer full-page control on one aligned baseline", () => {
+    expect(reviewerQueueStyles).toMatch(
+      /\.sheetNavigation\s*\[[^\]]*data-slot="button"[^\]]*\]\s*\{[^}]*align-items:\s*center/u,
+    );
+    expect(reviewerQueueStyles).toMatch(/\.sheetFullPageIcon\s*\{[^}]*display:\s*block/u);
+    expect(reviewerQueueStyles).toMatch(/\.sheetFullPageLabel\s*\{[^}]*align-items:\s*center/u);
   });
   it("makes the default overview a submission-centric review operations surface", () => {
     const plan = testPlan("summit-2026");

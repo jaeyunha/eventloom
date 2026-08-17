@@ -183,6 +183,7 @@ import type {
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
   SpeakerReminderDeliveryReceipt,
+  SpeakerReminderTask,
   SpeakerRepository,
   SpeakerTask,
   UpdateBiographyCommand,
@@ -3892,6 +3893,13 @@ export class CloudflareAgendaMutationLock implements DurableObjectAgendaCoordina
   }
 }
 
+export class IdempotencyLeaseLostError extends Error {
+  constructor() {
+    super("The idempotency lease was lost before the operation completed.");
+    this.name = "IdempotencyLeaseLostError";
+  }
+}
+
 export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoordinator {
   readonly #database: D1Database;
   readonly #leaseMs: number;
@@ -3910,7 +3918,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     const now = new Date();
     const existing = await this.#database
       .prepare(
-        `SELECT request_digest, state, response_status, response_json, expires_at
+        `SELECT request_digest, state, response_status, response_json, expires_at, lease_id
            FROM idempotency_records
           WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?`,
       )
@@ -3921,6 +3929,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         response_status: number | null;
         response_json: string | null;
         expires_at: string;
+        lease_id: string | null;
       }>();
     if (existing !== null && Date.parse(existing.expires_at) > now.getTime()) {
       if (existing.request_digest !== input.fingerprint) return { status: "conflict" };
@@ -3944,9 +3953,10 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       await this.#database
         .prepare(
           `DELETE FROM idempotency_records
-            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?`,
+            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+              AND expires_at <= ?`,
         )
-        .bind(tenantId, input.scope, input.key)
+        .bind(tenantId, input.scope, input.key, now.toISOString())
         .run();
     }
     const leaseId = crypto.randomUUID();
@@ -3954,26 +3964,21 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       await this.#database
         .prepare(
           `INSERT INTO idempotency_records
-             (tenant_id, scope, idempotency_key, request_digest, state, created_at, expires_at)
-           VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+             (tenant_id, scope, idempotency_key, request_digest, state, lease_id, created_at, expires_at)
+           VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)`,
         )
         .bind(
           tenantId,
           input.scope,
           input.key,
           input.fingerprint,
+          leaseId,
           now.toISOString(),
           new Date(now.getTime() + this.#leaseMs).toISOString(),
         )
         .run();
     } catch {
       const raced = await this.begin(input);
-      if (raced.status === "acquired") {
-        return {
-          status: "pending",
-          wait: () => this.waitForCompletion(tenantId, input),
-        };
-      }
       return raced;
     }
     return { status: "acquired", leaseId };
@@ -3987,11 +3992,12 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     response: IdempotencyStoredResponse;
   }): Promise<void> {
     const tenantId = tenantFromScope(input.scope);
-    await this.#database
+    const result = await this.#database
       .prepare(
         `UPDATE idempotency_records
             SET state = 'completed', response_status = ?, response_json = ?, expires_at = ?
-          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+            AND request_digest = ? AND lease_id = ?`,
       )
       .bind(
         input.response.status,
@@ -4001,8 +4007,12 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         input.scope,
         input.key,
         input.fingerprint,
+        input.leaseId ?? "",
       )
       .run();
+    if (Number(result.meta?.changes ?? 0) !== 1) {
+      throw new IdempotencyLeaseLostError();
+    }
   }
 
   async release(input: {
@@ -4014,9 +4024,16 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     await this.#database
       .prepare(
         `DELETE FROM idempotency_records
-          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+            AND request_digest = ? AND lease_id = ?`,
       )
-      .bind(tenantFromScope(input.scope), input.scope, input.key, input.fingerprint)
+      .bind(
+        tenantFromScope(input.scope),
+        input.scope,
+        input.key,
+        input.fingerprint,
+        input.leaseId ?? "",
+      )
       .run();
   }
 
@@ -6504,9 +6521,21 @@ async function enqueueCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
-}): Promise<{ readonly inserted: boolean; readonly queued: boolean }> {
+}): Promise<{
+  readonly jobId: string;
+  readonly inserted: boolean;
+  readonly queued: boolean;
+  readonly state: string | undefined;
+}> {
   const staged = await stageCloudflareOutbox(input);
-  if (staged.state !== "pending") return { inserted: staged.inserted, queued: false };
+  if (staged.state !== "pending") {
+    return {
+      jobId: staged.jobId,
+      inserted: staged.inserted,
+      queued: false,
+      state: staged.state,
+    };
+  }
   await input.queue.send({
     version: 1,
     jobId: staged.jobId,
@@ -6520,7 +6549,12 @@ async function enqueueCloudflareOutbox(input: {
     )
     .bind(staged.now, staged.jobId)
     .run();
-  return { inserted: staged.inserted, queued: true };
+  return {
+    jobId: staged.jobId,
+    inserted: staged.inserted,
+    queued: true,
+    state: "queued",
+  };
 }
 
 async function stageCloudflareOutbox(input: {
@@ -6700,6 +6734,12 @@ async function speakerDeliveryKey(
   );
 }
 
+function reminderTaskSummary(task: SpeakerReminderTask): string {
+  const title = task.title.trim();
+  const dueAt = task.dueAt?.trim() ?? "";
+  return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
+}
+
 export class CloudflareSpeakerDeliveryAdapter
   implements SpeakerReminderDelivery, SpeakerEmailDelivery
 {
@@ -6820,7 +6860,10 @@ export class CloudflareSpeakerDeliveryAdapter
     input: SpeakerReminderDeliveryInput,
   ): Promise<SpeakerReminderDeliveryReceipt> {
     const recipientEmail = await this.verifiedRecipientEmail(input.recipient.email);
-    if (recipientEmail === null) return { queued: false, duplicate: true };
+    if (recipientEmail === null) return { status: "failed", queued: false, duplicate: false };
+    if (await this.matchesScheduledReminder(input, recipientEmail)) {
+      return { queued: false, duplicate: true };
+    }
     const deliveryKey = await speakerDeliveryKey(
       "reminder",
       input.organizationId,
@@ -6829,12 +6872,7 @@ export class CloudflareSpeakerDeliveryAdapter
       input.recipient.participantId,
     );
     const taskSummaries = input.recipient.tasks
-      .map((task) => {
-        const title = task.title.trim();
-        if (title.length === 0) return "";
-        const dueAt = task.dueAt?.trim() ?? "";
-        return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
-      })
+      .map(reminderTaskSummary)
       .filter((summary) => summary.length > 0);
     const taskSummary =
       taskSummaries.length === 0 ? "your outstanding speaker tasks" : taskSummaries.join(", ");
@@ -6859,10 +6897,70 @@ export class CloudflareSpeakerDeliveryAdapter
         actorAccountId: input.actorAccountId,
       },
     });
+    if (result.queued) {
+      return { id: result.jobId, queued: true, duplicate: false };
+    }
+    if (["queued", "processing", "delivered"].includes(result.state ?? "")) {
+      return { id: result.jobId, queued: false, duplicate: true };
+    }
     return {
-      queued: result.queued,
-      duplicate: !result.inserted,
+      id: result.jobId,
+      status: "failed",
+      queued: false,
+      duplicate: false,
     };
+  }
+
+  private async matchesScheduledReminder(
+    input: SpeakerReminderDeliveryInput,
+    recipientEmail: string,
+  ): Promise<boolean> {
+    const task = input.recipient.tasks.length === 1 ? input.recipient.tasks[0] : undefined;
+    const cadenceWindow = task?.cadenceWindow?.trim() ?? "";
+    if (task === undefined || cadenceWindow.length === 0) return false;
+    const deduplicationKey = [
+      "reminder",
+      input.organizationId,
+      input.eventId,
+      "scheduled",
+      `task:${task.taskId}`,
+      task.participantId,
+      cadenceWindow,
+    ].join(":");
+    const row = await this.database
+      .prepare(
+        "SELECT state, payload_json FROM outbox_jobs WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ? LIMIT 1",
+      )
+      .bind(input.organizationId, deduplicationKey)
+      .first<{ state?: unknown; payload_json?: unknown }>();
+    if (row === null || row === undefined) return false;
+    const state = typeof row.state === "string" ? row.state : "";
+    if (!["pending", "queued", "processing", "delivered"].includes(state)) return false;
+    if (typeof row.payload_json !== "string") return false;
+    try {
+      const parsed: unknown = JSON.parse(row.payload_json);
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        !("payload" in parsed) ||
+        parsed.payload === null ||
+        typeof parsed.payload !== "object"
+      ) {
+        return false;
+      }
+      const payload = parsed.payload as Record<string, unknown>;
+      const summary = reminderTaskSummary(task);
+      const recipients = payload.to;
+      return (
+        payload.subject === `Reminder: ${summary}` &&
+        payload.text === `Please complete ${summary}.` &&
+        Array.isArray(recipients) &&
+        recipients.length === 1 &&
+        recipients[0] === recipientEmail
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async verifiedRecipientEmail(candidate: string | undefined): Promise<string | null> {

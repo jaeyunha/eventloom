@@ -3375,7 +3375,7 @@
 }
 
 .authoringDeadlineEditor input,
-.authoringDeadlineEditor [data-slot="button"],
+.authoringDeadlineEditor [data-slot="button"]:not(.clearDate),
 .authoringAsideActions [data-slot="button"] {
   width: 100%;
   min-height: 2.75rem;

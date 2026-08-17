@@ -196,7 +196,7 @@ export function AirtableConnectionSection({
           </div>
         ) : null}
         {showDisconnect ? (
-          <label className={styles.confirmation}>
+          <label className={styles.confirmation} htmlFor="airtable-confirm-disconnect">
             <input
               id="airtable-confirm-disconnect"
               type="checkbox"

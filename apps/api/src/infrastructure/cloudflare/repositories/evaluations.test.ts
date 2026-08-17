@@ -417,6 +417,18 @@ describe("D1EvaluationRepository consistency", () => {
     expect(sql).not.toContain("INSERT INTO review_rounds");
   });
 
+  it("materializes a new immutable round revision before scheduling it", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+    const plan = operationalPlan("plan-1", 3, "round-1", 2);
+
+    await repository.putPlanState(plan, 2, [], false, "11111111-1111-4111-8111-111111111111");
+
+    const sql = batchSql(database);
+    expect(sql).toContain("INSERT OR IGNORE INTO review_rubrics");
+    expect(sql).toContain("INSERT OR IGNORE INTO review_rounds");
+  });
+
   it("deletes reviewer pool children before rebuilding draft rounds", async () => {
     const database = new RecordingD1();
     const repository = new D1EvaluationRepository(database as unknown as D1Database);

@@ -34,6 +34,7 @@ export const organizationEntitlements = sqliteTable(
     state: text("state", { enum: ["active", "restricted"] }).notNull(),
     capabilitiesJson: text("capabilities_json").notNull(),
     activeEventLimit: integer("active_event_limit"),
+    organizerSeatLimit: integer("organizer_seat_limit"),
     notBefore: text("not_before").notNull(),
     expiresAt: text("expires_at"),
     createdAt: text("created_at").notNull(),

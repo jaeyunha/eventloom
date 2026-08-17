@@ -122,7 +122,7 @@ test("content request due dates use the shared calendar", async ({ page }, testI
 
 test("organization API key expiration uses the shared calendar", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(`/admin/organizations/${ORGANIZATION_ID}/integrations`);
+  await page.goto(`/admin/organizations/${ORGANIZATION_ID}/integrations/api-keys`);
 
   const picker = page.locator('[data-temporal-picker="single"]').first();
   await expect(picker).toBeVisible({ timeout: 30_000 });

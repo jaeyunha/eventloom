@@ -13,6 +13,7 @@ const entitlement = {
   capabilities: ["api", "webhooks"],
   limits: {
     activeEvents: 12,
+    organizerSeats: 5,
   },
   notBefore: "2026-08-17T00:00:00.000Z",
   expiresAt: "2027-08-17T00:00:00.000Z",
@@ -37,10 +38,10 @@ describe("organization entitlements", () => {
     expect(
       organizationEntitlementSchema.parse({
         ...entitlement,
-        limits: { activeEvents: null },
+        limits: { activeEvents: null, organizerSeats: null },
         expiresAt: null,
       }).limits,
-    ).toEqual({ activeEvents: null });
+    ).toEqual({ activeEvents: null, organizerSeats: null });
   });
 
   it("rejects billing-provider data and invalid entitlement windows", () => {

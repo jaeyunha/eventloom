@@ -13,6 +13,15 @@ const identityMigration = readFileSync(
   fileURLToPath(new URL("../../migrations/0001_identity_and_access.sql", import.meta.url)),
   "utf8",
 );
+const entitlementMigration = readFileSync(
+  fileURLToPath(new URL("../../migrations/0041_organization_entitlements.sql", import.meta.url)),
+  "utf8",
+);
+const organizationMigration = readFileSync(
+  fileURLToPath(new URL("../../migrations/0004_organizations.sql", import.meta.url)),
+  "utf8",
+);
+const testMigration = `${identityMigration}\n${organizationMigration}\n${entitlementMigration}`;
 
 function invitation(): MemberInvitation {
   return {
@@ -34,7 +43,7 @@ function invitation(): MemberInvitation {
 
 describe("D1 member activation credential protection", () => {
   it("stores an expensive verifier, rejects a different retry, and clears it on finalization", async () => {
-    const database = new SqliteD1("eventloom-member-activation-", identityMigration);
+    const database = new SqliteD1("eventloom-member-activation-", testMigration);
     try {
       const d1 = database as unknown as D1Database;
       const identity = new D1MemberIdentityRepository(d1);
@@ -97,7 +106,7 @@ describe("D1 member activation credential protection", () => {
   });
 
   it("upgrades a matching legacy activation digest before resuming activation", async () => {
-    const database = new SqliteD1("eventloom-member-activation-legacy-", identityMigration);
+    const database = new SqliteD1("eventloom-member-activation-legacy-", testMigration);
     try {
       const d1 = database as unknown as D1Database;
       const identity = new D1MemberIdentityRepository(d1);

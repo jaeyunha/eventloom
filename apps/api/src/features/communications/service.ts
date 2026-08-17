@@ -2192,6 +2192,7 @@ export class CommunicationService {
         }
       }
     }
+
     run = await runtime.repository.updateRun({
       ...run,
       state: "running",

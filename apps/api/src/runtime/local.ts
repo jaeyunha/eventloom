@@ -2698,6 +2698,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
+
   const deterministicAgendaSuggestions = new DeterministicAgendaSuggestionProvider();
   const agendaMutationLock = new InMemoryAgendaMutationLock();
   const agendaEngine = localAgendaEngine(

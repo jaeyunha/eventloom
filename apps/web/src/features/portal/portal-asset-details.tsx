@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useSyncExternalStore } from "react";
-import { Button, Input } from "@/components/ui";
+import { Button, FileUpload } from "@/components/ui";
 import { MetadataList, MetadataRow, StatusBadge } from "@/components/workspace";
 import {
   assetPointerLabels,
@@ -137,19 +137,20 @@ export function AssetDetails({
             Choose the same file to retry a failed or expired transfer. A successful retry is
             finalized automatically; event-team approval happens separately.
           </p>
-          <label className={styles.field} htmlFor={retryInputId}>
+          <div className={styles.field}>
             <span>Retry file upload</span>
-            <Input
+            <FileUpload
               id={retryInputId}
-              type="file"
+              ariaLabel="Retry file upload"
               disabled={busy}
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
+              title="Drop the same file here or browse"
+              hint="Choose the same file to retry a failed or expired transfer."
+              onFilesSelected={(files) => {
+                const file = files[0];
                 if (file) onRetryUpload(file);
-                event.currentTarget.value = "";
               }}
             />
-          </label>
+          </div>
           <div>
             <Button type="button" disabled={busy} onClick={onCompleteUpload}>
               Mark upload complete

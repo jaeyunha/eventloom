@@ -58,6 +58,7 @@ const entitlement: OrganizationEntitlement = {
   capabilities: ["api"],
   limits: {
     activeEvents: 1,
+    organizerSeats: null,
   },
   notBefore: now,
   expiresAt: null,

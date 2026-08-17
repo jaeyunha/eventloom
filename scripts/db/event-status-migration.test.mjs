@@ -113,7 +113,7 @@ test("preserves rollback columns while quarantining formerly archived events", (
     WHERE id = 'event-gap-reactivate';
   `);
   database.exec(
-    readFileSync(resolve(migrationDirectory, "0035_event_retirement_compatibility.sql"), "utf8"),
+    readFileSync(resolve(migrationDirectory, "0044_event_retirement_compatibility.sql"), "utf8"),
   );
 
   const eventColumns = database.prepare("PRAGMA table_info(events)").all();

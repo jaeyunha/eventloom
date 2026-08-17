@@ -937,13 +937,14 @@ describe("CFP editor", () => {
       required: true,
     });
     expect(title?.id).toBeTruthy();
+    if (title === undefined) throw new Error("The test CFP title field is missing.");
 
-    const renamed = updateCfpEditorField(base, title!.id, {
+    const renamed = updateCfpEditorField(base, title.id, {
       key: "title1",
       label: "Session title 1",
       required: false,
     });
-    const renamedTitle = renamed.fields.find((field) => field.id === title!.id);
+    const renamedTitle = renamed.fields.find((field) => field.id === title.id);
     expect(renamedTitle).toMatchObject({
       key: "title",
       label: "Session title 1",
@@ -952,7 +953,7 @@ describe("CFP editor", () => {
       keyLocked: true,
     });
 
-    const withoutTitle = removeCfpEditorField(renamed, title!.id);
+    const withoutTitle = removeCfpEditorField(renamed, title.id);
     expect(withoutTitle.fields.some((field) => field.key === "title")).toBe(true);
 
     const customClaim = updateCfpEditorField(renamed, "abstract", { key: "title" });

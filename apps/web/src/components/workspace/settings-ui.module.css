@@ -37,6 +37,12 @@
   min-width: 0;
 }
 
+.navigation {
+  position: sticky;
+  top: var(--admin-sticky-offset);
+  align-self: start;
+}
+
 .content {
   display: grid;
   width: 100%;
@@ -159,9 +165,8 @@
   }
 
   .navigation {
-    position: sticky;
-    z-index: 20;
-    top: var(--admin-sticky-offset);
+    position: static;
+    margin-bottom: var(--admin-space-4);
   }
 }
 

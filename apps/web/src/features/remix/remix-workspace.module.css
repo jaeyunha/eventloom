@@ -296,7 +296,7 @@
 }
 
 .candidateRow[data-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--primary);
+  background: var(--muted);
 }
 
 .candidateRow > span:first-child {

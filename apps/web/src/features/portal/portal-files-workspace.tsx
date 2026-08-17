@@ -8,7 +8,7 @@ import {
   standardUploadMaximumBytes,
 } from "@eventloom/contracts";
 import { type FormEvent, useMemo, useState } from "react";
-import { Button, Input } from "@/components/ui";
+import { Button, FileUpload, formatFileUploadSize } from "@/components/ui";
 import {
   MetadataList,
   MetadataRow,
@@ -226,21 +226,32 @@ export function FilesWorkspaceView({
                 </select>
               </label>
             </div>
-            <label className={styles.field} htmlFor={uploadInputId}>
+            <div className={styles.field}>
               <span>Choose file</span>
-              <Input
+              <FileUpload
                 key={`${uploadFamilyId}:${uploadKind}`}
                 id={uploadInputId}
                 required
-                type="file"
+                ariaLabel="Choose file"
                 accept={uploadPolicy.mimeTypes.join(",")}
-                onChange={(event) => updateDraft({ file: event.currentTarget.files?.[0] ?? null })}
+                title="Drop your files here or browse"
+                hint={`Accepted: ${formatUploadMimeTypes(uploadPolicy.mimeTypes)}. Maximum ${formatBytes(uploadPolicy.maxBytes)}.`}
+                files={
+                  file
+                    ? [
+                        {
+                          id: file.name,
+                          name: file.name,
+                          sizeLabel: formatFileUploadSize(file.size),
+                          status: "selected",
+                        },
+                      ]
+                    : []
+                }
+                onFilesSelected={(files) => updateDraft({ file: files[0] ?? null })}
+                onRemove={() => updateDraft({ file: null })}
               />
-              <small>
-                Accepted: {formatUploadMimeTypes(uploadPolicy.mimeTypes)}. Maximum{" "}
-                {formatBytes(uploadPolicy.maxBytes)}.
-              </small>
-            </label>
+            </div>
             {uploadFamily && !uploadResolution?.current ? (
               <p className={styles.notice}>
                 Authoritative current-version metadata is unavailable. Uploading a replacement is

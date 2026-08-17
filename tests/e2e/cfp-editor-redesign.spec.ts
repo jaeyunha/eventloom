@@ -74,7 +74,7 @@ test("CFP editor keeps preview, field builder, and taxonomy focused on desktop",
   });
 
   await page.getByRole("button", { name: "Taxonomy & links" }).click();
-  await expect(page.getByLabel("Tracks")).toBeVisible();
+  await expect(page.getByText("Tracks", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Remove /u }).first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({

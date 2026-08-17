@@ -991,6 +991,9 @@ export class D1EvaluationRepository implements EvaluationRepository {
         ],
       ),
     ];
+    for (const round of plan.rounds) {
+      this.addRoundStatements(commands, plan, round, true);
+    }
     for (const scheduleSync of scheduleSyncs) {
       this.addScheduleStatements(commands, scheduleSync);
     }
@@ -2296,18 +2299,20 @@ export class D1EvaluationRepository implements EvaluationRepository {
     commands: D1PreparedStatement[],
     plan: EvaluationPlan,
     round: ReviewRound,
+    ignoreExisting = false,
   ) {
     const roundRevision = round.revision ?? 1;
     const rubricRevision = round.rubricRevision ?? roundRevision;
+    const insert = ignoreExisting ? "INSERT OR IGNORE" : "INSERT";
     commands.push(
       statement(
         this.database,
-        `INSERT INTO review_rubrics (id, organization_id, event_id, plan_id, revision, name) VALUES (?, ?, ?, ?, ?, ?)`,
+        `${insert} INTO review_rubrics (id, organization_id, event_id, plan_id, revision, name) VALUES (?, ?, ?, ?, ?, ?)`,
         [round.rubric.id, plan.tenantId, plan.eventId, plan.id, rubricRevision, round.rubric.name],
       ),
       statement(
         this.database,
-        `INSERT INTO review_rounds
+        `${insert} INTO review_rounds
         (id, organization_id, event_id, plan_id, predecessor_round_id, name, sequence, revision, rubric_id, rubric_revision, opens_at, closes_at, blind_review, anonymization, track_filter)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -2333,7 +2338,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
       commands.push(
         statement(
           this.database,
-          `INSERT INTO review_criteria
+          `${insert} INTO review_criteria
         (organization_id, event_id, plan_id, rubric_id, rubric_revision, id, label, description, minimum, maximum, weight, required, input_type, sort_order)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
@@ -2358,7 +2363,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
         commands.push(
           statement(
             this.database,
-            `INSERT INTO review_criterion_options
+            `${insert} INTO review_criterion_options
         (organization_id, event_id, plan_id, rubric_id, rubric_revision, criterion_id, id, label, value, sort_order)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
@@ -2382,7 +2387,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
       commands.push(
         statement(
           this.database,
-          `INSERT INTO reviewer_pools
+          `${insert} INTO reviewer_pools
         (id, organization_id, event_id, round_id, round_revision, name, version, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
           [
@@ -2401,7 +2406,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
         commands.push(
           statement(
             this.database,
-            `INSERT INTO reviewer_pool_members (organization_id, event_id, pool_id, reviewer_id) VALUES (?, ?, ?, ?)`,
+            `${insert} INTO reviewer_pool_members (organization_id, event_id, pool_id, reviewer_id) VALUES (?, ?, ?, ?)`,
             [plan.tenantId, plan.eventId, poolId, reviewerId],
           ),
         );

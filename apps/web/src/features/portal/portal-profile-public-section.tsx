@@ -13,6 +13,7 @@ import {
   FieldGroup,
   FieldLabel,
 } from "../../components/ui/field";
+import { FileUpload, formatFileUploadSize } from "../../components/ui/file-upload";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
 import styles from "./portal-profile.module.css";
@@ -155,22 +156,35 @@ export function PublicProfileSection({
             </div>
             <Field data-invalid={Boolean(errors.headshot)}>
               <FieldLabel htmlFor="profile-headshot">Headshot</FieldLabel>
-              <Input
-                ref={fieldRefs.headshot as RefCallback<HTMLInputElement>}
+              <FileUpload
+                inputRef={fieldRefs.headshot as RefCallback<HTMLInputElement>}
                 id="profile-headshot"
-                type="file"
+                ariaLabel="Headshot"
                 accept="image/jpeg,image/png,image/webp"
                 disabled={disabled}
-                aria-invalid={errors.headshot ? true : undefined}
-                aria-describedby={errors.headshot ? "profile-headshot-error" : undefined}
-                onChange={(event) => onHeadshotChange(event.currentTarget.files?.[0] ?? null)}
+                invalid={Boolean(errors.headshot)}
+                describedBy={errors.headshot ? "profile-headshot-error" : undefined}
+                title="Drop a headshot here or browse"
+                hint={
+                  profile.headshotAssetId
+                    ? "JPEG, PNG, or WebP up to 5 MiB. A new file creates an immutable replacement version."
+                    : "JPEG, PNG, or WebP up to 5 MiB."
+                }
+                files={
+                  selectedHeadshot
+                    ? [
+                        {
+                          id: selectedHeadshot.name,
+                          name: selectedHeadshot.name,
+                          sizeLabel: formatFileUploadSize(selectedHeadshot.size),
+                          status: "selected",
+                        },
+                      ]
+                    : []
+                }
+                onFilesSelected={(files) => onHeadshotChange(files[0] ?? null)}
+                onRemove={() => onHeadshotChange(null)}
               />
-              <FieldDescription>
-                {selectedHeadshot?.name ??
-                  (profile.headshotAssetId
-                    ? "Choose a replacement to create a new immutable version."
-                    : "JPEG, PNG, or WebP up to 5 MiB.")}
-              </FieldDescription>
               <ErrorMessage field="headshot" errors={errors} />
             </Field>
           </FieldGroup>

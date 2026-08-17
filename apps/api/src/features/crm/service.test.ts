@@ -1,8 +1,18 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { type CrmRouteEnvironment, createCrmRoutes } from "./routes";
-import { CrmService, InMemoryCrmRepository } from "./service";
-import type { CrmActor, CrmContact } from "./types";
+import {
+  CrmRepositoryConflictError,
+  CrmService,
+  CrmServiceError,
+  InMemoryCrmRepository,
+} from "./service";
+import type {
+  CrmActor,
+  CrmContact,
+  CrmContactTransitionAudit,
+  UpdateCrmPipelineInput,
+} from "./types";
 
 const actor: CrmActor = { kind: "user", organizationId: "org-a", userId: "owner-a", role: "owner" };
 const otherActor: CrmActor = {
@@ -152,6 +162,376 @@ class CountingDelayedCrmRepository extends InMemoryCrmRepository {
 }
 
 describe("CrmService", () => {
+  it("serializes competing contact updates and returns authoritative conflict state", async () => {
+    class BundledRepositoryConflictError extends Error {
+      override readonly name = "CrmRepositoryConflictError";
+
+      constructor(readonly current: CrmContact | undefined) {
+        super("The CRM record already exists or changed.");
+      }
+    }
+
+    class BarrierCrmRepository extends InMemoryCrmRepository {
+      private arrivals = 0;
+      private release!: () => void;
+      private readonly barrier = new Promise<void>((resolve) => {
+        this.release = resolve;
+      });
+
+      override async saveContact(
+        contact: CrmContact,
+        expectedVersion: number | null,
+      ): Promise<CrmContact> {
+        if (expectedVersion !== null) {
+          this.arrivals += 1;
+          if (this.arrivals === 2) this.release();
+          await this.barrier;
+        }
+        try {
+          return await super.saveContact(contact, expectedVersion);
+        } catch (error) {
+          if (error instanceof CrmRepositoryConflictError) {
+            throw new BundledRepositoryConflictError(error.current);
+          }
+          throw error;
+        }
+      }
+    }
+
+    const repository = new BarrierCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const created = await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Ada Lovelace",
+      email: "ada@example.test",
+    });
+
+    const results = await Promise.allSettled([
+      crm.updateContact(actor, {
+        organizationId: actor.organizationId,
+        contactId: created.id,
+        expectedVersion: created.version,
+        company: "Analytical Engines",
+      }),
+      crm.updateContact(actor, {
+        organizationId: actor.organizationId,
+        contactId: created.id,
+        expectedVersion: created.version,
+        title: "Principal Engineer",
+      }),
+    ]);
+    const winners = results.filter(
+      (result): result is PromiseFulfilledResult<CrmContact> => result.status === "fulfilled",
+    );
+    const conflicts = results.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+
+    expect(winners).toHaveLength(1);
+    expect(winners[0]?.value.version).toBe(2);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]?.reason).toBeInstanceOf(CrmServiceError);
+    expect(conflicts[0]?.reason).toMatchObject({
+      code: "CRM_CONFLICT",
+      details: { current: winners[0]?.value },
+    });
+
+    const conflict = conflicts[0]?.reason as CrmServiceError;
+    const current = (conflict.details as { current: CrmContact }).current;
+    const retried = await crm.updateContact(actor, {
+      organizationId: actor.organizationId,
+      contactId: created.id,
+      expectedVersion: current.version,
+      title: "Principal Engineer",
+    });
+    expect(retried).toMatchObject({
+      version: 3,
+      title: "Principal Engineer",
+    });
+  });
+
+  it("does not translate repository storage failures into optimistic conflicts", async () => {
+    const failure = new Error("deliberate late history failure");
+    class LateFailureRepository extends InMemoryCrmRepository {
+      override async saveContact(
+        contact: CrmContact,
+        expectedVersion: number | null,
+        transitionAudit?: CrmContactTransitionAudit,
+      ): Promise<CrmContact> {
+        if (expectedVersion !== null) throw failure;
+        return super.saveContact(contact, expectedVersion, transitionAudit);
+      }
+    }
+    const crm = new CrmService(
+      { repository: new LateFailureRepository() },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-late-failure`,
+      },
+    );
+    const created = await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Late Failure",
+    });
+
+    await expect(
+      crm.updateContact(actor, {
+        organizationId: actor.organizationId,
+        contactId: created.id,
+        expectedVersion: created.version,
+        company: "Must roll back",
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it("persists pipeline scoring and one human-readable transition audit", async () => {
+    const crm = service();
+    const namedActor = { ...actor, actorName: "Owner Ada" } as CrmActor;
+    const contact = await crm.createContact(namedActor, {
+      organizationId: actor.organizationId,
+      displayName: "Grace Hopper",
+      email: "grace@example.test",
+    });
+
+    const progressed = await crm.setPipelineStage(namedActor, {
+      organizationId: actor.organizationId,
+      contactId: contact.id,
+      expectedVersion: contact.version,
+      stage: "qualified",
+      score: 85,
+      rationale: "Strong platform-engineering track record.",
+      note: "Invite to the infrastructure track.",
+    });
+
+    expect(progressed).toMatchObject({
+      version: 2,
+      pipelineStage: "qualified",
+      customFields: {
+        pipelineScore: 85,
+        pipelineRationale: "Strong platform-engineering track record.",
+      },
+    });
+    await expect(
+      crm.listPipelineHistory(namedActor, actor.organizationId, contact.id),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        fromStage: "new",
+        toStage: "qualified",
+        actorId: actor.userId,
+        actorName: "Owner Ada",
+        note: "Invite to the infrastructure track.",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ]);
+  });
+
+  it.each([undefined, 0, -1, 1.5])(
+    "rejects invalid pipeline expectedVersion %s at the service boundary",
+    async (expectedVersion) => {
+      const crm = service();
+      const contact = await crm.createContact(actor, {
+        organizationId: actor.organizationId,
+        displayName: "Runtime Version Guard",
+      });
+      const input = {
+        organizationId: actor.organizationId,
+        contactId: contact.id,
+        stage: "qualified",
+        ...(expectedVersion === undefined ? {} : { expectedVersion }),
+      } as unknown as UpdateCrmPipelineInput;
+
+      await expect(crm.setPipelineStage(actor, input)).rejects.toMatchObject({
+        name: "CrmServiceError",
+        code: "CRM_INVALID_INPUT",
+        message: "expectedVersion must be a positive integer.",
+      });
+      await expect(crm.getContact(actor, actor.organizationId, contact.id)).resolves.toMatchObject({
+        pipelineStage: "new",
+        version: contact.version,
+      });
+    },
+  );
+
+  it("keeps pipeline state and audit unchanged when the atomic save fails", async () => {
+    class FailingTransitionRepository extends InMemoryCrmRepository {
+      override async saveContact(
+        contact: CrmContact,
+        expectedVersion: number | null,
+        transitionAudit?: CrmContactTransitionAudit,
+      ): Promise<CrmContact> {
+        if (transitionAudit !== undefined) throw new Error("Injected transition batch failure.");
+        return super.saveContact(contact, expectedVersion);
+      }
+    }
+
+    const repository = new FailingTransitionRepository();
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-atomic`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Atomic Pipeline Contact",
+      email: "atomic-pipeline@example.test",
+    });
+
+    await expect(
+      crm.setPipelineStage(actor, {
+        organizationId: actor.organizationId,
+        contactId: contact.id,
+        expectedVersion: contact.version,
+        stage: "qualified",
+        note: "This transition must be all-or-nothing.",
+      }),
+    ).rejects.toThrow("Injected transition batch failure.");
+
+    await expect(crm.getContact(actor, actor.organizationId, contact.id)).resolves.toMatchObject({
+      version: 1,
+      pipelineStage: "new",
+    });
+    await expect(crm.listPipelineHistory(actor, actor.organizationId, contact.id)).resolves.toEqual(
+      [],
+    );
+    await expect(crm.getContactHistory(actor, actor.organizationId, contact.id)).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("accepts route pipeline retries and keeps one transition for same-stage scoring", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-route-pipeline-${++sequence}`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Route Pipeline Contact",
+      email: "route-pipeline@example.test",
+    });
+    const app = crmRouteApp(crm);
+    const path = `/api/admin/organizations/org-a/crm/contacts/${contact.id}/pipeline`;
+
+    const progressed = await app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: contact.version,
+        stage: "qualified",
+        score: 85,
+        rationale: "Strong platform-engineering track record.",
+        note: "Invite to the infrastructure track.",
+      }),
+    });
+    expect(progressed.status).toBe(200);
+    await expect(progressed.json()).resolves.toMatchObject({
+      data: {
+        version: 2,
+        pipelineStage: "qualified",
+        customFields: {
+          pipelineScore: 85,
+          pipelineRationale: "Strong platform-engineering track record.",
+        },
+      },
+    });
+
+    const stale = await app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: contact.version,
+        stage: "won",
+      }),
+    });
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: { current: { id: contact.id, version: 2, pipelineStage: "qualified" } },
+      },
+    });
+
+    const rescored = await app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 2,
+        stage: "qualified",
+        score: 90,
+        rationale: "Updated after organizer review.",
+      }),
+    });
+    expect(rescored.status).toBe(200);
+    await expect(rescored.json()).resolves.toMatchObject({
+      data: {
+        version: 3,
+        customFields: {
+          pipelineScore: 90,
+          pipelineRationale: "Updated after organizer review.",
+        },
+      },
+    });
+    await expect(repository.listPipelineHistory(actor.organizationId, contact.id)).resolves.toEqual(
+      [
+        expect.objectContaining({
+          actorId: actor.userId,
+          actorName: "owner@example.test",
+          fromStage: "new",
+          toStage: "qualified",
+        }),
+      ],
+    );
+  });
+
+  it("filters contact search by event participant-link membership through the route", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-event-filter-${++sequence}`,
+      },
+    );
+    const linked = await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Linked Contact",
+      email: "linked@example.test",
+    });
+    await crm.createContact(actor, {
+      organizationId: actor.organizationId,
+      displayName: "Unlinked Contact",
+      email: "unlinked@example.test",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: actor.organizationId,
+      contactId: linked.id,
+      eventId: "event-filter",
+      idempotencyKey: "event-filter-link",
+    });
+
+    const response = await crmRouteApp(crm).request(
+      "/api/admin/organizations/org-a/crm/contacts?eventId=event-filter",
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: [{ id: linked.id }],
+    });
+  });
+
   it("keeps contacts tenant isolated while supporting search, custom fields, and tags", async () => {
     const crm = service();
     const contact = await crm.createContact(actor, {
@@ -517,6 +897,7 @@ describe("CrmService", () => {
     const progressed = await crm.setPipelineStage(actor, {
       organizationId: "org-a",
       contactId: contact.id,
+      expectedVersion: contact.version,
       stage: "qualified",
       note: "Strong fit",
     });
@@ -1132,6 +1513,7 @@ describe("CrmService", () => {
     await crm.setPipelineStage(actor, {
       organizationId: "org-a",
       contactId: retired.id,
+      expectedVersion: retired.version,
       stage: "qualified",
     });
     const projection = await crm.addContactToEvent(actor, {

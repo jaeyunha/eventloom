@@ -9,6 +9,11 @@ import {
   type ReviewerPool,
 } from "../../members/api";
 import { browserSameOrigin } from "./model-browser-same-origin";
+import {
+  reviewerPoolScopeKey,
+  type ScopedReviewerPoolValue,
+  scopedReviewerPoolValue,
+} from "./model-reviewer-pool-scope";
 import { buildReviewerPoolInput, type ReviewerPoolDraft } from "./organizer-reviewer-pool-model";
 
 interface OrganizerReviewerPoolOptions {
@@ -49,6 +54,11 @@ export function useOrganizerReviewerPool({
   onSaved,
 }: OrganizerReviewerPoolOptions) {
   const resolvedOrganizationId = organizationId?.trim() ?? "";
+  const resolvedEventId = eventId.trim();
+  const resolvedRoundId = roundId.trim();
+  const scopeKey = reviewerPoolScopeKey(resolvedOrganizationId, resolvedEventId, resolvedRoundId);
+  const currentScopeRef = useRef(scopeKey);
+  currentScopeRef.current = scopeKey;
   const memberApi = useMemo<MemberApi | null>(() => {
     if (!resolvedOrganizationId) return null;
     try {
@@ -57,42 +67,75 @@ export function useOrganizerReviewerPool({
       return null;
     }
   }, [baseUrl, resolvedOrganizationId]);
-  const [pool, setPool] = useState<ReviewerPool | null>(null);
-  const [draft, setDraft] = useState<ReviewerPoolDraft>({});
+  const [poolState, setPoolState] = useState<ScopedReviewerPoolValue<ReviewerPool | null>>({
+    scopeKey: "",
+    value: null,
+  });
+  const [draftState, setDraftState] = useState<ScopedReviewerPoolValue<ReviewerPoolDraft>>({
+    scopeKey: "",
+    value: {},
+  });
+  const pool = scopedReviewerPoolValue(scopeKey, poolState, null);
+  const draft = scopedReviewerPoolValue(scopeKey, draftState, {});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
   const saveSequenceRef = useRef(0);
+  const setDraft = useCallback(
+    (update: ReviewerPoolDraft | ((current: ReviewerPoolDraft) => ReviewerPoolDraft)): void => {
+      setDraftState((current) => {
+        const currentValue = scopedReviewerPoolValue(scopeKey, current, {});
+        return {
+          scopeKey,
+          value: typeof update === "function" ? update(currentValue) : update,
+        };
+      });
+    },
+    [scopeKey],
+  );
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
+      const requestedScope = scopeKey;
       const sequence = loadSequenceRef.current + 1;
       loadSequenceRef.current = sequence;
       setLoading(true);
       try {
-        if (memberApi === null || !eventId.trim() || !roundId.trim()) {
-          setPool(null);
-          setDraft({});
+        if (memberApi === null || !resolvedEventId || !resolvedRoundId) {
+          setPoolState({ scopeKey: requestedScope, value: null });
+          setDraftState({ scopeKey: requestedScope, value: {} });
           setError("The organization review-team service is not configured.");
           return;
         }
         setError(null);
         setMessage(null);
-        setPool(null);
-        setDraft({});
-        const nextPool = await memberApi.getReviewerPool(eventId, roundId, signal);
-        if (signal?.aborted) return;
-        setPool(nextPool);
-        setDraft(poolDraft(nextPool));
+        setPoolState({ scopeKey: requestedScope, value: null });
+        setDraftState({ scopeKey: requestedScope, value: {} });
+        const nextPool = await memberApi.getReviewerPool(resolvedEventId, resolvedRoundId, signal);
+        if (
+          signal?.aborted ||
+          loadSequenceRef.current !== sequence ||
+          currentScopeRef.current !== requestedScope
+        ) {
+          return;
+        }
+        setPoolState({ scopeKey: requestedScope, value: nextPool });
+        setDraftState({ scopeKey: requestedScope, value: poolDraft(nextPool) });
       } catch (reason: unknown) {
-        if (!signal?.aborted) setError(reviewerPoolError(reason));
+        if (
+          !signal?.aborted &&
+          loadSequenceRef.current === sequence &&
+          currentScopeRef.current === requestedScope
+        ) {
+          setError(reviewerPoolError(reason));
+        }
       } finally {
         setLoading((current) => (loadSequenceRef.current === sequence ? false : current));
       }
     },
-    [eventId, memberApi, roundId],
+    [memberApi, resolvedEventId, resolvedRoundId, scopeKey],
   );
 
   useEffect(() => {
@@ -126,27 +169,33 @@ export function useOrganizerReviewerPool({
   }
 
   async function save(): Promise<void> {
-    if (memberApi === null || !eventId.trim() || !roundId.trim()) {
+    if (memberApi === null || !resolvedEventId || !resolvedRoundId) {
       setError("The organization review-team service is not configured.");
       return;
     }
     const sequence = saveSequenceRef.current + 1;
+    const requestedScope = scopeKey;
     saveSequenceRef.current = sequence;
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
       const nextPool = await memberApi.setReviewerPool(
-        eventId,
-        roundId,
+        resolvedEventId,
+        resolvedRoundId,
         buildReviewerPoolInput(draft, pool?.version),
       );
-      setPool(nextPool);
-      setDraft(poolDraft(nextPool));
+      if (saveSequenceRef.current !== sequence || currentScopeRef.current !== requestedScope) {
+        return;
+      }
+      setPoolState({ scopeKey: requestedScope, value: nextPool });
+      setDraftState({ scopeKey: requestedScope, value: poolDraft(nextPool) });
       setMessage("Review team saved. Assignment candidates now match this round.");
       await onSaved?.();
     } catch (reason: unknown) {
-      setError(reviewerPoolError(reason));
+      if (saveSequenceRef.current === sequence && currentScopeRef.current === requestedScope) {
+        setError(reviewerPoolError(reason));
+      }
     } finally {
       setSaving((current) => (saveSequenceRef.current === sequence ? false : current));
     }

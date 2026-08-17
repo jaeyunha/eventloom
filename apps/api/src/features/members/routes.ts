@@ -220,6 +220,7 @@ function serviceErrorCode(code: MemberServiceErrorCode): ApiRouteErrorCode {
     case "LAST_OWNER":
     case "REVIEWER_NOT_ACTIVE":
     case "ASSIGNMENT_CAP_REACHED":
+    case "ORGANIZER_SEAT_LIMIT":
       return "CONFLICT";
   }
 }
