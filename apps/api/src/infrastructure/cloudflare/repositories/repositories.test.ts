@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-
+import { CrmRepositoryConflictError } from "../../../features/crm/service";
+import type {
+  CrmContact,
+  CrmContactTransitionAudit,
+  CrmPipelineEntry,
+} from "../../../features/crm/types";
 import type { Event, EventAuditEntry } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
 import type { Session, SessionAuditEntry, SessionSettings } from "../../../features/sessions/types";
 import { SessionRepositoryConflictError } from "../../../features/sessions/types";
+import { SqliteD1 } from "../../../test-support/sqlite-d1";
+import { D1CrmRepository } from "./crm";
 import { D1EventRepository } from "./events";
 import { D1SessionRepository } from "./sessions";
+import { consequentialAuditId } from "./shared";
 
 function statement(query: string) {
   const bound = { query, values: [] as unknown[] };
@@ -112,6 +120,202 @@ const sessionAudit: SessionAuditEntry = {
   after: session,
 };
 
+const crmContact: CrmContact = {
+  id: "contact-1",
+  organizationId: "org-1",
+  firstName: "Ada",
+  lastName: "Lovelace",
+  displayName: "Ada Lovelace",
+  email: "ada@example.test",
+  phone: null,
+  company: null,
+  title: null,
+  website: null,
+  linkedinUrl: null,
+  notes: null,
+  tags: [],
+  customFields: {},
+  source: "manual",
+  status: "active",
+  mergedIntoId: null,
+  pipelineStage: "qualified",
+  version: 2,
+  createdAt: now,
+  updatedAt: now,
+};
+const crmTransitionAudit: CrmContactTransitionAudit = {
+  pipeline: {
+    id: "pipeline-1",
+    organizationId: crmContact.organizationId,
+    contactId: crmContact.id,
+    fromStage: "new",
+    toStage: "qualified",
+    note: "Strong fit",
+    actorId: "user-1",
+    actorName: "owner@example.test",
+    createdAt: now,
+  },
+  history: {
+    id: "history-1",
+    organizationId: crmContact.organizationId,
+    contactId: crmContact.id,
+    kind: "pipeline",
+    eventId: null,
+    sessionId: null,
+    title: "Pipeline stage changed",
+    detail: "new to qualified",
+    occurredAt: now,
+    metadata: { pipelineEntryId: "pipeline-1" },
+  },
+};
+
+const crmSqliteSchema = `
+CREATE TABLE crm_contacts (
+  organization_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  first_name TEXT,
+  last_name TEXT,
+  display_name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  company TEXT,
+  title TEXT,
+  website TEXT,
+  linkedin_url TEXT,
+  notes TEXT,
+  custom_fields_json TEXT NOT NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  merged_into_id TEXT,
+  merge_audit_id TEXT,
+  merged_at TEXT,
+  merge_source_ids_json TEXT NOT NULL,
+  pipeline_stage TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (organization_id, id)
+);
+CREATE TABLE crm_contact_tags (
+  organization_id TEXT NOT NULL,
+  contact_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (organization_id, contact_id, tag)
+);
+CREATE TABLE crm_pipeline_history (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  contact_id TEXT NOT NULL,
+  source_crm_contact_id TEXT NOT NULL,
+  merge_audit_id TEXT,
+  from_stage TEXT NOT NULL,
+  to_stage TEXT NOT NULL,
+  note TEXT,
+  actor_id TEXT,
+  actor_name TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE crm_history (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  contact_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  event_id TEXT,
+  session_id TEXT,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL
+);
+CREATE TABLE audit_events (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  trace_id TEXT,
+  details_json TEXT NOT NULL,
+  occurred_at TEXT NOT NULL
+);
+CREATE TABLE airtable_projection_configs (
+  organization_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  enabled INTEGER NOT NULL,
+  connection_id TEXT NOT NULL,
+  PRIMARY KEY (organization_id, entity_type)
+);
+CREATE TABLE airtable_connections (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  connection_version INTEGER NOT NULL,
+  status TEXT NOT NULL
+);
+CREATE TABLE airtable_sync_jobs (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  connection_version INTEGER NOT NULL,
+  entity_type TEXT NOT NULL,
+  application_id TEXT,
+  source_version INTEGER NOT NULL,
+  operation TEXT NOT NULL,
+  state TEXT NOT NULL,
+  deduplication_key TEXT NOT NULL UNIQUE,
+  attempt_count INTEGER NOT NULL,
+  available_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+function crmSqliteDatabase(): SqliteD1 {
+  const database = new SqliteD1("eventloom-crm-repository-", crmSqliteSchema);
+  database.executeScript(`
+    INSERT INTO crm_contacts (
+      organization_id,id,first_name,last_name,display_name,email,phone,company,title,
+      website,linkedin_url,notes,custom_fields_json,source,status,merged_into_id,
+      merge_audit_id,merged_at,merge_source_ids_json,pipeline_stage,version,created_at,updated_at
+    ) VALUES (
+      'org-1','contact-1','Ada','Lovelace','Ada Lovelace','ada@example.com',NULL,
+      'Initial Company',NULL,NULL,NULL,NULL,'{}','manual','active',NULL,NULL,NULL,'[]',
+      'new',1,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z'
+    );
+    INSERT INTO crm_contact_tags (organization_id,contact_id,tag)
+    VALUES ('org-1','contact-1','initial');
+  `);
+  return database;
+}
+
+function crmSqliteState(database: SqliteD1) {
+  return {
+    contacts: database.query<{
+      company: string | null;
+      pipeline_stage: string;
+      version: number;
+    }>("SELECT company,pipeline_stage,version FROM crm_contacts ORDER BY organization_id,id"),
+    tags: database.query<{ tag: string }>(
+      "SELECT tag FROM crm_contact_tags ORDER BY organization_id,contact_id,tag",
+    ),
+    pipelineHistory: database.query<{ id: string }>(
+      "SELECT id FROM crm_pipeline_history ORDER BY id",
+    ),
+    history: database.query<{ id: string }>("SELECT id FROM crm_history ORDER BY id"),
+    audit: database.query<{
+      action: string;
+      id: string;
+      resource_id: string;
+      resource_type: string;
+      tenant_id: string;
+    }>(
+      "SELECT action,id,resource_id,resource_type,tenant_id FROM audit_events ORDER BY tenant_id,id",
+    ),
+  };
+}
+
 describe("D1 event repository commands", () => {
   it("batches tenant-scoped CAS, audit, and sync-job persistence", async () => {
     const db = database();
@@ -205,6 +409,150 @@ describe("D1 event repository commands", () => {
         audit: eventAudit,
       }),
     ).rejects.toBeInstanceOf(EventRepositoryConflictError);
+  });
+});
+
+describe("D1 CRM repository commands", () => {
+  it("aligns contact writes to the next expected version", async () => {
+    const db = database();
+    await new D1CrmRepository(db).saveContact(crmContact, 1);
+    expect(db.batch).toHaveBeenCalledOnce();
+    await expect(
+      new D1CrmRepository(database()).saveContact({ ...crmContact, version: 1 }, 1),
+    ).rejects.toMatchObject({
+      name: "CrmRepositoryConflictError",
+      message: "The contact version is invalid.",
+    });
+  });
+
+  it("leaves all CRM state unchanged when the real SQLite CAS is stale", async () => {
+    const database = crmSqliteDatabase();
+    const repository = new D1CrmRepository(database as never);
+    try {
+      await repository.saveContact(crmContact, 1, crmTransitionAudit);
+      const before = crmSqliteState(database);
+      expect(before.audit.every((entry) => entry.action !== "crm.contact.cas_guard")).toBe(true);
+      const staleAudit: CrmContactTransitionAudit = {
+        pipeline: {
+          ...crmTransitionAudit.pipeline,
+          id: "pipeline-stale",
+          note: "Stale retry",
+        },
+        history: {
+          ...crmTransitionAudit.history,
+          id: "history-stale",
+          metadata: { pipelineEntryId: "pipeline-stale" },
+        },
+      };
+      await expect(
+        repository.saveContact(
+          {
+            ...crmContact,
+            company: "Stale Company",
+            tags: ["stale"],
+          },
+          1,
+          staleAudit,
+        ),
+      ).rejects.toBeInstanceOf(CrmRepositoryConflictError);
+
+      expect(crmSqliteState(database)).toEqual(before);
+    } finally {
+      database.dispose();
+    }
+  });
+
+  it("does not authorize a CRM write from a cross-tenant guard collision", async () => {
+    const database = crmSqliteDatabase();
+    const repository = new D1CrmRepository(database as never);
+    const attemptId = "00000000-0000-4000-8000-000000000001";
+    const probeAttemptId = "00000000-0000-4000-8000-000000000002";
+    const resourceId = `${crmContact.id}:${attemptId}`;
+    const guardId = consequentialAuditId({
+      tenantId: crmContact.organizationId,
+      action: "crm.contact.cas_guard",
+      resourceType: "crm_contact_write_guard",
+      resourceId,
+      resourceVersion: crmContact.version,
+      occurredAt: crmContact.updatedAt,
+    });
+    const randomUuid = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce(attemptId)
+      .mockReturnValueOnce(probeAttemptId);
+    database.executeScript(`
+      INSERT INTO audit_events (
+        id,tenant_id,actor_type,actor_id,action,resource_type,resource_id,
+        trace_id,details_json,occurred_at
+      ) VALUES (
+        '${guardId}','other-organization','system',NULL,'crm.contact.cas_guard',
+        'crm_contact_write_guard','${resourceId}',NULL,'{}','${crmContact.updatedAt}'
+      );
+    `);
+    const before = crmSqliteState(database);
+    try {
+      const failure = repository.saveContact(crmContact, 1, crmTransitionAudit);
+      await expect(failure).rejects.not.toBeInstanceOf(CrmRepositoryConflictError);
+      await expect(failure).rejects.toThrow("The CRM contact CAS guard could not be acquired.");
+      expect(crmSqliteState(database)).toEqual(before);
+    } finally {
+      randomUuid.mockRestore();
+      database.dispose();
+    }
+  });
+
+  it("rolls back every real SQLite statement and preserves a late history failure", async () => {
+    const database = crmSqliteDatabase();
+    const repository = new D1CrmRepository(database as never);
+    database.executeScript(`
+      CREATE TRIGGER fail_late_crm_history
+      BEFORE INSERT ON crm_history
+      WHEN NEW.id = 'history-1'
+      BEGIN
+        SELECT RAISE(ABORT, 'deliberate late history failure');
+      END;
+    `);
+    const before = crmSqliteState(database);
+    try {
+      const failure = repository.saveContact(crmContact, 1, crmTransitionAudit);
+      await expect(failure).rejects.not.toBeInstanceOf(CrmRepositoryConflictError);
+      await expect(failure).rejects.toThrow("deliberate late history failure");
+
+      expect(crmSqliteState(database)).toEqual(before);
+    } finally {
+      database.dispose();
+    }
+  });
+
+  it("filters contacts through event participant-link membership", async () => {
+    const db = database();
+    await new D1CrmRepository(db).listContacts("org-1", { eventId: "event-1" });
+    const query = db.statements.at(-1)?.bound;
+    expect(query?.query).toContain("FROM crm_participant_links link");
+    expect(query?.query).toContain("link.crm_contact_id=contact.id AND link.event_id=?");
+    expect(query?.values).toEqual(["org-1", "event-1", 500]);
+  });
+
+  it("persists pipeline actor names alongside immutable actor IDs", async () => {
+    const db = database();
+    const entry: CrmPipelineEntry = {
+      id: "pipeline-1",
+      organizationId: "org-1",
+      contactId: crmContact.id,
+      fromStage: "new",
+      toStage: "qualified",
+      note: "Strong fit",
+      actorId: "user-1",
+      actorName: "owner@example.test",
+      createdAt: now,
+    };
+    await new D1CrmRepository(db).appendPipeline(entry);
+    const insert = db.statements.find((item) =>
+      item.bound.query.startsWith("INSERT INTO crm_pipeline_history"),
+    )?.bound;
+    expect(insert?.query).toContain("actor_id,actor_name,created_at");
+    expect(insert?.values).toContain("user-1");
+    expect(insert?.values).toContain("owner@example.test");
   });
 });
 

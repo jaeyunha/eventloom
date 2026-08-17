@@ -2243,11 +2243,11 @@ export function CrmWorkspaceContactOperationsSection({
             {pipelineHistory.map((entry) => (
               <li key={entry.id}>
                 <strong>
-                  {entry.fromStage ?? "—"} → {entry.toStage}
+                  Previous stage: {entry.fromStage ?? "—"} → New stage: {entry.toStage}
                 </strong>
                 <small>
-                  <ClientFormattedDate value={entry.createdAt} />
-                  {entry.note ? ` · ${entry.note}` : ""}
+                  {entry.actorName} · <ClientFormattedDate value={entry.createdAt} />
+                  {entry.note ? ` · Note: ${entry.note}` : ""}
                 </small>
               </li>
             ))}

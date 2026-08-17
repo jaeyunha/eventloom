@@ -87,7 +87,16 @@ export interface CrmPipelineEntry {
   readonly toStage: CrmPipelineStage;
   readonly note: string | null;
   readonly actorId: string;
+  readonly actorName: string;
   readonly createdAt: string;
+}
+
+export interface CrmPipelineUpdateInput {
+  readonly stage: CrmPipelineStage;
+  readonly expectedVersion: number;
+  readonly score?: number | null;
+  readonly rationale?: string | null;
+  readonly note?: string;
 }
 
 export interface CrmNote {
@@ -302,6 +311,7 @@ export interface CrmApi {
     readonly pipelineStage?: CrmPipelineStage | "";
     readonly status?: CrmContactStatus | "";
     readonly tags?: string;
+    readonly eventId?: string;
   }): Promise<readonly CrmContact[]>;
   getContact(contactId: string): Promise<CrmContact>;
   createContact(input: Record<string, unknown>): Promise<CrmContact>;
@@ -329,7 +339,7 @@ export interface CrmApi {
   ): Promise<CrmMergeResult>;
   getContactHistory(contactId: string): Promise<readonly CrmHistoryEntry[]>;
   getPipelineHistory(contactId: string): Promise<readonly CrmPipelineEntry[]>;
-  updatePipeline(contactId: string, stage: CrmPipelineStage, note?: string): Promise<CrmContact>;
+  updatePipeline(contactId: string, input: CrmPipelineUpdateInput): Promise<CrmContact>;
   listNotes(contactId: string): Promise<readonly CrmNote[]>;
   addNote(contactId: string, body: string): Promise<CrmNote>;
   addContactToEvent(
@@ -394,8 +404,12 @@ const CRM_WORKSPACE_READ_KINDS: readonly CrmWorkspaceReadKind[] = [
   "analytics",
 ];
 
+type CrmContactCollectionUpdate =
+  | readonly CrmContact[]
+  | ((current: readonly CrmContact[]) => readonly CrmContact[]);
+
 interface CrmWorkspaceReadHandlers {
-  readonly setContacts: (contacts: readonly CrmContact[]) => void;
+  readonly setContacts: (update: CrmContactCollectionUpdate) => void;
   readonly setSegments: (segments: readonly CrmSegment[]) => void;
   readonly setEvents: (events: readonly CrmEvent[]) => void;
   readonly setAnalytics: (analytics: CrmAnalytics) => void;
@@ -406,6 +420,23 @@ interface CrmWorkspaceReadHandlers {
   readonly setError: (error: string | null) => void;
 }
 
+export function preferNewerCrmContact(
+  current: CrmContact | undefined,
+  candidate: CrmContact,
+): CrmContact {
+  return current?.id === candidate.id && current.version > candidate.version ? current : candidate;
+}
+
+function mergeContactCollection(
+  current: readonly CrmContact[],
+  candidates: readonly CrmContact[],
+): readonly CrmContact[] {
+  const currentById = new Map(current.map((contact) => [contact.id, contact]));
+  return candidates.map((candidate) =>
+    preferNewerCrmContact(currentById.get(candidate.id), candidate),
+  );
+}
+
 export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWorkspaceReadHandlers) {
   const generations: Record<CrmWorkspaceReadKind, number> = {
     contacts: 0,
@@ -413,6 +444,7 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     events: 0,
     analytics: 0,
   };
+  let contactMutationGeneration = 0;
   let disposed = false;
   const errors: Record<CrmWorkspaceReadKind, string | null> = {
     contacts: null,
@@ -436,11 +468,14 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
 
   async function loadContacts(filter: CrmWorkspaceContactFilter): Promise<void> {
     const generation = ++generations.contacts;
+    const mutationGeneration = contactMutationGeneration;
     handlers.setContactsLoading(true);
     setReadError("contacts", null);
     try {
       const nextContacts = await api.listContacts(filter);
-      if (isCurrent("contacts", generation)) handlers.setContacts(nextContacts);
+      if (!isCurrent("contacts", generation)) return;
+      if (contactMutationGeneration !== mutationGeneration) return loadContacts(filter);
+      handlers.setContacts((current) => mergeContactCollection(current, nextContacts));
     } catch (reason) {
       if (isCurrent("contacts", generation)) setReadError("contacts", messageFromError(reason));
     } finally {
@@ -500,6 +535,9 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     loadEvents,
     loadAnalytics,
     refresh,
+    markContactMutation() {
+      contactMutationGeneration += 1;
+    },
     activate() {
       disposed = false;
     },
@@ -515,6 +553,16 @@ export async function refreshCrmAnalyticsAfterContactSave(
 ): Promise<void> {
   if (existingContact === undefined) await loadAnalytics();
 }
+
+export async function refreshCrmEventMembershipAfterSave(
+  loadHistory: () => Promise<readonly CrmHistoryEntry[]>,
+  loadAnalytics: () => Promise<void>,
+  loadContacts: () => Promise<void>,
+): Promise<readonly CrmHistoryEntry[]> {
+  const [history] = await Promise.all([loadHistory(), loadAnalytics(), loadContacts()]);
+  return history;
+}
+
 function contactIdentityChanged(previous: CrmContact, next: CrmContact): boolean {
   return (
     previous.firstName !== next.firstName ||
@@ -933,3 +981,16 @@ export function parseCsvPreview(csv: string): {
   };
 }
 export type CsvPreview = ReturnType<typeof parseCsvPreview>;
+export async function refreshSelectedContactAfterCollectionReload(input: {
+  readonly contactId: string | undefined;
+  readonly expectedSelectionGeneration: number;
+  readonly currentSelectionGeneration: () => number;
+  readonly getContact: (contactId: string) => Promise<CrmContact>;
+  readonly applyContact: (contact: CrmContact) => void;
+}): Promise<void> {
+  if (input.contactId === undefined) return;
+  const contact = await input.getContact(input.contactId);
+  if (input.currentSelectionGeneration() === input.expectedSelectionGeneration) {
+    input.applyContact(contact);
+  }
+}

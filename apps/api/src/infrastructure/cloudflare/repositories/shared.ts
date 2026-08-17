@@ -1,5 +1,10 @@
 export type D1Value = ArrayBuffer | ArrayBufferView | string | number | null;
 
+export interface D1StatementCondition {
+  readonly sql: string;
+  readonly values: readonly D1Value[];
+}
+
 export interface ConsequentialWrite {
   readonly tenantId: string;
   readonly eventId?: string | null;
@@ -10,6 +15,7 @@ export interface ConsequentialWrite {
   readonly occurredAt: string;
   readonly before?: unknown;
   readonly after?: unknown;
+  readonly condition?: D1StatementCondition;
   readonly sync?: {
     readonly entityType: string;
     readonly applicationId?: string;
@@ -148,13 +154,7 @@ export function airtableSyncStatement(
   );
 }
 
-function auditStatement(database: D1Database, write: ConsequentialWrite): D1PreparedStatement {
-  const details = {
-    ...(write.eventId === undefined ? {} : { eventId: write.eventId }),
-    resourceVersion: write.resourceVersion,
-    ...(write.before === undefined ? {} : { before: write.before }),
-    ...(write.after === undefined ? {} : { after: write.after }),
-  };
+export function consequentialAuditId(write: ConsequentialWrite): string {
   const identity = [
     write.tenantId,
     write.resourceType,
@@ -163,21 +163,34 @@ function auditStatement(database: D1Database, write: ConsequentialWrite): D1Prep
     write.resourceVersion,
     write.occurredAt,
   ].join(":");
+  return `audit:${hash(identity)}:${write.resourceId}`;
+}
+
+function auditStatement(database: D1Database, write: ConsequentialWrite): D1PreparedStatement {
+  const details = {
+    ...(write.eventId === undefined ? {} : { eventId: write.eventId }),
+    resourceVersion: write.resourceVersion,
+    ...(write.before === undefined ? {} : { before: write.before }),
+    ...(write.after === undefined ? {} : { after: write.after }),
+  };
+  const condition = write.condition ?? { sql: "1 = 1", values: [] };
   return statement(
     database,
     `INSERT INTO audit_events
        (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
         trace_id, details_json, occurred_at)
-     VALUES (?, ?, 'system', NULL, ?, ?, ?, NULL, ?, ?)
+     SELECT ?, ?, 'system', NULL, ?, ?, ?, NULL, ?, ?
+      WHERE (${condition.sql})
      ON CONFLICT (id) DO NOTHING`,
     [
-      `audit:${hash(identity)}:${write.resourceId}`,
+      consequentialAuditId(write),
       write.tenantId,
       write.action,
       write.resourceType,
       write.resourceId,
       json(details),
       write.occurredAt,
+      ...condition.values,
     ],
   );
 }
@@ -187,6 +200,7 @@ function syncStatement(
   write: ConsequentialWrite,
 ): D1PreparedStatement | null {
   if (write.sync === undefined) return null;
+  const condition = write.condition ?? { sql: "1 = 1", values: [] };
   const operation = write.sync.operation ?? "upsert";
   const applicationId = write.sync.applicationId ?? write.resourceId;
   const payload = json(
@@ -215,6 +229,7 @@ function syncStatement(
         AND config.entity_type = ?
         AND config.enabled = 1
         AND connection.status = 'connected'
+        AND (${condition.sql})
      ON CONFLICT (deduplication_key) DO NOTHING`,
     [
       hash(suffix),
@@ -230,6 +245,7 @@ function syncStatement(
       write.occurredAt,
       write.tenantId,
       write.sync.entityType,
+      ...condition.values,
     ],
   );
 }
@@ -237,7 +253,7 @@ function syncStatement(
 export function consequentialStatements(
   database: D1Database,
   write: ConsequentialWrite,
-): readonly D1PreparedStatement[] {
+): readonly [D1PreparedStatement] | readonly [D1PreparedStatement, D1PreparedStatement] {
   const sync = syncStatement(database, write);
   return sync === null
     ? [auditStatement(database, write)]
