@@ -350,7 +350,10 @@ test("keeps capability-derived account workspaces usable on desktop and mobile",
 test("keeps submission content legible in dark mode", async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("theme", "dark"));
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(submissionDetailUrl);
+  await page.goto(submissionsUrl);
+  const firstSubmission = page.locator(`a[href^="${submissionsUrl}/"]`).first();
+  await expect(firstSubmission).toBeVisible();
+  await Promise.all([page.waitForURL(/\/submissions\/[^/]+$/u), firstSubmission.click()]);
 
   const readableSubmissionText = [
     page.getByText("Submission content", { exact: true }),
