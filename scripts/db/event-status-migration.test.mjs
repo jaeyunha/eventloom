@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
-import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const migrationDirectory = resolve(repositoryRoot, "apps/api/migrations");
 
 test("preserves rollback columns while quarantining formerly archived events", () => {
   const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA recursive_triggers = ON");
   const migrations = readdirSync(migrationDirectory)
     .filter((name) => /^\d{4}_.+\.sql$/.test(name) && name < "0028_remove_event_status.sql")
     .sort();
@@ -112,7 +113,7 @@ test("preserves rollback columns while quarantining formerly archived events", (
     WHERE id = 'event-gap-reactivate';
   `);
   database.exec(
-    readFileSync(resolve(migrationDirectory, "0034_event_retirement_compatibility.sql"), "utf8"),
+    readFileSync(resolve(migrationDirectory, "0035_event_retirement_compatibility.sql"), "utf8"),
   );
 
   const eventColumns = database.prepare("PRAGMA table_info(events)").all();

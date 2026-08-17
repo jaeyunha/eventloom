@@ -77,3 +77,56 @@ test("public sessions filter by title and speaker and restore the full program",
     fullPage: true,
   });
 });
+
+test("public agenda and itinerary remain usable on mobile", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/embed/demo-event/agenda");
+
+  await expect(page.getByRole("heading", { level: 2, name: "Agenda" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      level: 4,
+      name: "Designing reliable community systems",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      level: 4,
+      name: "Developer platforms that teams trust under pressure in practice",
+    }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+          document.body.scrollWidth <= document.body.clientWidth,
+      ),
+    )
+    .toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("public-agenda-mobile.png"),
+    fullPage: true,
+  });
+
+  await page.goto("/embed/demo-event/itinerary");
+  await expect(page.getByRole("heading", { level: 2, name: "Itinerary" })).toBeVisible();
+  const addToSchedule = page.getByRole("button", { name: "Add to my schedule" }).first();
+  await expect(addToSchedule).toBeVisible();
+  await addToSchedule.click();
+  await expect(page.getByRole("button", { name: "Remove from my schedule" })).toBeVisible();
+  await page.getByRole("button", { name: "My schedule (1)" }).click();
+  await expect(page.getByRole("button", { name: "Remove from my schedule" })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+          document.body.scrollWidth <= document.body.clientWidth,
+      ),
+    )
+    .toBe(true);
+  await page.getByRole("main").screenshot({
+    path: testInfo.outputPath("public-itinerary-mobile.png"),
+  });
+});

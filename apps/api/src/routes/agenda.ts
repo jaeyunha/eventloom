@@ -1132,6 +1132,9 @@ const PUBLIC_AGENDA_CACHE_TTL_MS = 60_000;
 const PUBLIC_AGENDA_CACHE_MAX_ENTRIES = 128;
 const PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES = 256;
 const PUBLIC_AGENDA_CACHE_PATH_PREFIX = "/api/public/events/";
+const PUBLIC_AGENDA_REVISION_HEADER = "x-sessionboard-agenda-revision";
+const PUBLIC_PROGRAM_REVISION_HEADER = "x-sessionboard-program-revision";
+const PUBLIC_CACHE_REVISION_HEADER = "x-sessionboard-cache-revision";
 
 interface PublicResponseCache {
   match(request: Request): Promise<Response | undefined>;
@@ -1143,13 +1146,15 @@ interface AgendaCachedResponse {
   readonly body: string;
   readonly contentType: string;
   readonly etag: string;
+  readonly revisionNumber: number;
+  readonly programRevision: number;
+  readonly cacheRevision: number;
 }
 
 interface AgendaCacheEntry extends AgendaCachedResponse {
   readonly eventId: string;
   readonly eventSlug: string;
   readonly expiresAt: number;
-  readonly revisionNumber: number;
 }
 
 interface AgendaCacheState {
@@ -1214,6 +1219,9 @@ function agendaCacheResponseHeaders(entry: AgendaCachedResponse): Headers {
     "cache-control": PUBLIC_AGENDA_CACHE_CONTROL,
     "content-type": entry.contentType,
     etag: entry.etag,
+    [PUBLIC_AGENDA_REVISION_HEADER]: String(entry.revisionNumber),
+    [PUBLIC_PROGRAM_REVISION_HEADER]: String(entry.programRevision),
+    [PUBLIC_CACHE_REVISION_HEADER]: String(entry.cacheRevision),
   });
 }
 
@@ -1248,9 +1256,28 @@ function rememberAgendaCacheEntry(
   }
 }
 
+function agendaCacheRevision(headers: Headers, name: string): number | null {
+  const raw = headers.get(name);
+  if (raw === null) return null;
+  const revision = Number(raw);
+  return Number.isSafeInteger(revision) && revision > 0 ? revision : null;
+}
+
+function agendaCacheMatchesManifest(
+  entry: AgendaCachedResponse,
+  manifest: ProgramPublicationManifest,
+): boolean {
+  return (
+    entry.revisionNumber === manifest.agendaRevisionNumber &&
+    entry.programRevision === manifest.revision &&
+    entry.cacheRevision === manifest.cacheRevision
+  );
+}
+
 async function readAgendaCacheResponse(
   state: AgendaCacheState,
   path: string,
+  servedManifest?: ProgramPublicationManifest,
 ): Promise<AgendaCachedResponse | null> {
   if (state.bypassed.has(path)) {
     removeExpiredAgendaEntries(state);
@@ -1258,21 +1285,44 @@ async function readAgendaCacheResponse(
   }
   removeExpiredAgendaEntries(state);
   const memoryEntry = state.entries.get(path);
-  if (memoryEntry !== undefined) return memoryEntry;
+  if (memoryEntry !== undefined) {
+    if (servedManifest === undefined || agendaCacheMatchesManifest(memoryEntry, servedManifest)) {
+      return memoryEntry;
+    }
+    state.entries.delete(path);
+    agendaCacheIndex.delete(path);
+  }
   const workerCache = workerResponseCache();
   if (workerCache !== null) {
     try {
-      const cached = await workerCache.match(publicCacheRequest(path));
+      const cacheRequest = publicCacheRequest(path);
+      const cached = await workerCache.match(cacheRequest);
       if (cached !== undefined && cached.status === 200) {
         const etag = cached.headers.get("etag");
         const contentType = cached.headers.get("content-type");
-        if (etag !== null && contentType !== null) {
-          return {
+        const revisionNumber = agendaCacheRevision(cached.headers, PUBLIC_AGENDA_REVISION_HEADER);
+        const programRevision = agendaCacheRevision(cached.headers, PUBLIC_PROGRAM_REVISION_HEADER);
+        const cacheRevision = agendaCacheRevision(cached.headers, PUBLIC_CACHE_REVISION_HEADER);
+        if (
+          etag !== null &&
+          contentType !== null &&
+          revisionNumber !== null &&
+          programRevision !== null &&
+          cacheRevision !== null
+        ) {
+          const entry: AgendaCachedResponse = {
             body: await cached.clone().text(),
             contentType,
             etag,
+            revisionNumber,
+            programRevision,
+            cacheRevision,
           };
+          if (servedManifest === undefined || agendaCacheMatchesManifest(entry, servedManifest)) {
+            return entry;
+          }
         }
+        await workerCache.delete(cacheRequest);
       }
     } catch {
       // Cache API failures must never turn a public read into an error.
@@ -1708,7 +1758,7 @@ export function createPublishedAgendaRoutes(
       servedManifest = manifest;
     }
     if (cacheable) {
-      const cached = await readAgendaCacheResponse(cacheState, path);
+      const cached = await readAgendaCacheResponse(cacheState, path, servedManifest);
       if (cached !== null)
         return feedResponse(context, cached.body, cached.contentType, cached.etag);
     }
@@ -1726,6 +1776,8 @@ export function createPublishedAgendaRoutes(
         eventId: result.eventId,
         eventSlug: result.eventSlug,
         revisionNumber: result.revisionNumber,
+        programRevision: servedManifest?.revision ?? result.revisionNumber,
+        cacheRevision: servedManifest?.cacheRevision ?? result.revisionNumber,
         expiresAt: Date.now() + PUBLIC_AGENDA_CACHE_TTL_MS,
       });
     }

@@ -93,6 +93,7 @@ async function createAndAcceptSpeakerInvitation(input: {
 async function publishHeadshotScenario(input: {
   readonly workflow: "profile" | "task";
   readonly release: boolean;
+  readonly seedOrphanProjection?: boolean;
 }) {
   const fixture = createSpeakerLifecycleFixture();
   fixtures.push(fixture);
@@ -440,12 +441,36 @@ async function publishHeadshotScenario(input: {
       },
     ],
   });
-  const revision = await agenda.engine.publish({
+  await agenda.engine.publish({
     eventId,
     expectedVersion: 2,
     actorId: organizerAccountId,
+    afterPublish: async (published) => {
+      if (input.seedOrphanProjection === true) {
+        await database
+          .prepare(
+            `INSERT INTO program_speaker_projections (
+              id,
+              organization_id,
+              event_id,
+              revision_number,
+              source_hash,
+              created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            `${published.id}:orphaned-speaker-snapshot`,
+            organizationId,
+            eventId,
+            published.revisionNumber,
+            "orphaned-speaker-source-hash",
+            published.publishedAt,
+          )
+          .run();
+      }
+      await agenda.afterPublish?.(eventId, published);
+    },
   });
-  await agenda.afterPublish?.(eventId, revision);
 
   return {
     app: createApp(dependencies),
@@ -1741,6 +1766,32 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     expect(headshotResponse.status).toBe(200);
     expect(headshotResponse.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await headshotResponse.arrayBuffer())).toEqual(bytes);
+  }, 60_000);
+
+  it("recovers beside an orphaned speaker snapshot for the same agenda revision", async () => {
+    const { app, bindings, participantId, photoUrl } = await publishHeadshotScenario({
+      workflow: "task",
+      release: true,
+      seedOrphanProjection: true,
+    });
+
+    const speakersResponse = await app.request(
+      "/api/public/events/lifecycle-event/speakers",
+      undefined,
+      bindings,
+    );
+    expect(speakersResponse.status).toBe(200);
+    expect(await speakersResponse.json()).toMatchObject({
+      data: {
+        speakers: [
+          expect.objectContaining({
+            id: participantId,
+            photoUrl,
+          }),
+        ],
+      },
+    });
+    expect((await app.request(photoUrl, undefined, bindings)).status).toBe(200);
   }, 60_000);
 
   it("keeps an approved headshot private until its selected version is released", async () => {

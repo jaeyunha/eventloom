@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type AgendaCatalog,
   type AgendaDraft,
@@ -15,6 +15,10 @@ import type { AuthPrincipal } from "../features/auth/types";
 import type { ProgramPublicationManifest } from "../features/events/types";
 import type { AgendaRouteDependencies, AgendaRouteEnvironment } from "./agenda";
 import { createAgendaAdminRoutes, createPublishedAgendaRoutes } from "./agenda";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const traceId = "00000000-0000-4000-8000-000000000001";
 const calendarUidDomain = "calendar.example.test";
@@ -1684,9 +1688,11 @@ describe("anonymous published agenda feeds", () => {
       const revision = publicRevision();
       const manifest = servedManifest(revision);
       const cacheEntries = new Map<string, Response>();
+      const cachePut = deferred<void>();
       const match = vi.fn(async (request: Request) => cacheEntries.get(request.url)?.clone());
       const put = vi.fn(async (request: Request, response: Response) => {
         cacheEntries.set(request.url, response.clone());
+        cachePut.resolve();
       });
       const deleteCache = vi.fn(async () => true);
       vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
@@ -1716,7 +1722,8 @@ describe("anonymous published agenda feeds", () => {
       );
       const first = await firstRoute.request(`/api/public/events/open-systems/${suffix}`);
       expect(first.status).toBe(200);
-      await expect.poll(() => cacheEntries.size).toBe(1);
+      await cachePut.promise;
+      expect(cacheEntries.size).toBe(1);
 
       const manifestLookup = vi.fn(async () => null);
       const retiredRoute = publicAppFor(
@@ -1735,6 +1742,128 @@ describe("anonymous published agenda feeds", () => {
       expect(retired.status).toBe(404);
       expect(retired.headers.get("cache-control")).toBe("no-store");
       expect(manifestLookup).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "rejects a primed isolate-memory %s entry after the served manifest advances",
+    async (suffix) => {
+      const revisionFour = publicRevision();
+      const revisionFive = {
+        ...revisionFour,
+        id: "revision-public-5",
+        revisionNumber: 5,
+        publishedAt: "2026-08-09T12:00:00.000Z",
+      };
+      let manifest = servedManifest(revisionFour);
+      const getPublishedAgendaRevision = vi.fn(async (_eventId: string, revisionNumber: number) =>
+        revisionNumber === revisionFive.revisionNumber ? revisionFive : revisionFour,
+      );
+      const app = publicAppFor(
+        { getPublishedAgendaRevision } as unknown as AgendaEngine,
+        async () => ({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revisionFour.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        }),
+        undefined,
+        async () => manifest,
+        async () => revisionFour.eventId,
+      );
+
+      const first = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      const firstEtag = first.headers.get("etag");
+      manifest = {
+        ...servedManifest(revisionFive),
+        id: "program-publication-5",
+        revision: 5,
+        cacheRevision: 5,
+      };
+
+      const second = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(second.status).toBe(200);
+      expect(second.headers.get("etag")).not.toBe(firstEtag);
+      expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(2);
+    },
+  );
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "rejects a primed Cache API %s entry in a new isolate after the served manifest advances",
+    async (suffix) => {
+      const revisionFour = publicRevision();
+      const revisionFive = {
+        ...revisionFour,
+        id: "revision-public-5",
+        revisionNumber: 5,
+        publishedAt: "2026-08-09T12:00:00.000Z",
+      };
+      const manifestFour = servedManifest(revisionFour);
+      const manifestFive = {
+        ...servedManifest(revisionFive),
+        id: "program-publication-5",
+        revision: 5,
+        cacheRevision: 5,
+      };
+      const cacheEntries = new Map<string, Response>();
+      const cachePut = deferred<void>();
+      vi.stubGlobal("caches", {
+        default: {
+          match: vi.fn(async (request: Request) => cacheEntries.get(request.url)?.clone()),
+          put: vi.fn(async (request: Request, response: Response) => {
+            cacheEntries.set(request.url, response.clone());
+            cachePut.resolve();
+          }),
+          delete: vi.fn(async () => true),
+        },
+      });
+      const eventMetadata = async () =>
+        Promise.resolve({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revisionFour.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        });
+
+      const firstRoute = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            return revisionFour;
+          },
+        } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        async () => manifestFour,
+        async () => revisionFour.eventId,
+      );
+      const first = await firstRoute.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      const firstEtag = first.headers.get("etag");
+      await cachePut.promise;
+      expect(cacheEntries.size).toBe(1);
+
+      const getPublishedAgendaRevision = vi.fn(async () => revisionFive);
+      const secondRoute = publicAppFor(
+        { getPublishedAgendaRevision } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        async () => manifestFive,
+        async () => revisionFive.eventId,
+      );
+      const second = await secondRoute.request(`/api/public/events/open-systems/${suffix}`);
+
+      expect(second.status).toBe(200);
+      expect(second.headers.get("etag")).not.toBe(firstEtag);
+      expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(1);
     },
   );
   it("prefers an unexpired isolate-memory agenda entry before consulting Cache API", async () => {

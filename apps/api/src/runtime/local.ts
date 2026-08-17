@@ -3644,7 +3644,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     async getPublishedSpeakerHeadshot(eventSlug: string, speakerId: string) {
       const binding = speakerHeadshots.get(eventSlug)?.get(speakerId);
       if (binding === undefined) return null;
-      const published = await privateAssetGateway.readPublishedObject(binding);
+      const published = privateAssetGateway.readPublishedObject(binding);
       if (published === null) return null;
       let contentType: "image/jpeg" | "image/png" | "image/webp";
       switch (published.contentType) {

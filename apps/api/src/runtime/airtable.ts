@@ -8754,8 +8754,9 @@ export function createD1ApplicationDependencies(
               )
             : Object.fromEntries(publishedHeadshots);
         const speakerHash = await publicationSourceHash({ speakers, headshots });
+        const speakerProjectionId = `${revision.id}:${speakerHash}`;
         const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
-          id: revision.id,
+          id: speakerProjectionId,
           organizationId,
           eventId,
           event: {
@@ -8801,6 +8802,12 @@ export function createD1ApplicationDependencies(
           }
           return;
         }
+        await agendaMutationLock.renew(eventId);
+        await publishedSpeakerProjections.putPublishedSpeakers(
+          publishedSpeakerProjection,
+          revision,
+          agendaHash,
+        );
         const pending = await publicationService.reserveRebuild(actor, {
           organizationId,
           eventId,
@@ -8836,11 +8843,6 @@ export function createD1ApplicationDependencies(
         }
         try {
           await agendaMutationLock.renew(eventId);
-          await publishedSpeakerProjections.putPublishedSpeakers(
-            publishedSpeakerProjection,
-            revision,
-            agendaHash,
-          );
           const pendingManifest = pending.releases.find(
             (release) => release.id === releaseId && release.revision === pendingRevision,
           );
