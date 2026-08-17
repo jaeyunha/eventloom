@@ -3000,7 +3000,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         .prepare(
           `SELECT version, status
            FROM evaluation_decisions
-           WHERE tenant_id = ?1
+           WHERE organization_id = ?1
              AND event_id = ?2
              AND plan_id = ?3
              AND submission_id = ?4
@@ -3022,6 +3022,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       status: input.status,
       actorId: input.decidedBy,
       isCurrentDecision,
+      decisionFence: input.decisionFence,
     });
   }
 
@@ -3107,6 +3108,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   ): Promise<Session> {
     const id = `session-${submission.id}`;
     const current = await this.#sessions.getSession(input.tenantId, input.eventId, id);
+    const isCurrentDecision = input.isCurrentDecision ?? (async () => true);
     const formatIds = submissionAnswerIds(submission, "formatId");
     const formatLabels = submissionAnswerIds(submission, "format");
     const trackIdsFromAnswers = submissionAnswerIds(submission, "trackIds", "trackId");
@@ -3185,10 +3187,12 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       updatedBy: current?.updatedBy ?? input.decidedBy,
       history: [...(current?.history ?? [])],
     };
+    if (!(await isCurrentDecision())) return current ?? base;
     if (this.#sessionService !== undefined) {
       return this.#sessionService.upsertAcceptedSession({
         session: base,
         actorId: input.decidedBy,
+        decisionFence: input.decisionFence,
       });
     }
     if (current === null) {

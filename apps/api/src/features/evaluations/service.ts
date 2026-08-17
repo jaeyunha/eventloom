@@ -107,6 +107,16 @@ export interface EvaluationAcceptanceHandoffInput {
   readonly decidedAt: string;
   readonly reason: string;
   readonly idempotencyKey: string;
+  readonly decisionVersion?: number;
+  readonly isCurrentDecision?: () => Promise<boolean>;
+  readonly decisionFence?: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: "accepted";
+  };
 }
 export interface EvaluationSessionDecisionReconciliationInput {
   readonly tenantId: string;
@@ -120,6 +130,14 @@ export interface EvaluationSessionDecisionReconciliationInput {
   readonly decidedAt: string;
   readonly reason: string;
   readonly idempotencyKey: string;
+  readonly decisionFence: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: "waitlisted" | "rejected";
+  };
 }
 export interface EvaluationDecisionProjectionInput extends EvaluationDecisionProjectionData {
   readonly tenantId: string;
@@ -4292,6 +4310,14 @@ export class EvaluationService {
         decidedAt: input.transition.decidedAt,
         reason: input.transition.reason,
         idempotencyKey: input.transition.idempotencyKey,
+        decisionFence: {
+          tenantId: input.decision.tenantId,
+          eventId: input.decision.eventId,
+          planId: input.decision.planId,
+          submissionId: input.decision.submissionId,
+          version: input.decisionVersion,
+          status,
+        },
       });
       this.#reconciledSessionDecisionKeys.add(deliveryKey);
     })();
@@ -4325,6 +4351,23 @@ export class EvaluationService {
       return;
     }
     const handoff = (async () => {
+      const isCurrentDecision = async (): Promise<boolean> => {
+        const current = await this.#repository.getDecision(
+          input.decision.tenantId,
+          input.decision.planId,
+          input.decision.submissionId,
+        );
+        return (
+          current !== null &&
+          current.version === input.decisionVersion &&
+          current.status === "accepted" &&
+          current.history.some(
+            (transition) =>
+              transition.idempotencyKey === input.transition.idempotencyKey &&
+              transition.to === "accepted",
+          )
+        );
+      };
       await acceptanceHandoff.accept({
         tenantId: input.decision.tenantId,
         eventId: input.decision.eventId,
@@ -4335,6 +4378,16 @@ export class EvaluationService {
         decidedAt: input.transition.decidedAt,
         reason: input.transition.reason,
         idempotencyKey: input.transition.idempotencyKey,
+        decisionVersion: input.decisionVersion,
+        isCurrentDecision,
+        decisionFence: {
+          tenantId: input.decision.tenantId,
+          eventId: input.decision.eventId,
+          planId: input.decision.planId,
+          submissionId: input.decision.submissionId,
+          version: input.decisionVersion,
+          status: "accepted",
+        },
       });
       this.#acceptedHandoffKeys.add(deliveryKey);
     })();

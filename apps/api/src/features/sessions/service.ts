@@ -4,6 +4,7 @@ import type {
   CreateSessionInput,
   CreateTaxonomyInput,
   DecisionSessionStatusReconciliationInput,
+  DecisionVersionFence,
   Format,
   Level,
   PublishedSessionContentHandoff,
@@ -64,6 +65,7 @@ export interface SessionServiceOptions {
 export interface AcceptedSessionProjectionInput {
   readonly session: Session;
   readonly actorId: string;
+  readonly decisionFence?: DecisionVersionFence | undefined;
 }
 type SessionListItem = Omit<Session, "history">;
 type SessionListPageProjection = Omit<SessionListPage, "items"> & {
@@ -654,9 +656,10 @@ export class SessionService {
             value: next,
             expectedVersion: current?.version ?? null,
             audit,
+            ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
           });
         } else {
-          await this.#repository.putSession(next, current?.version ?? null);
+          await this.#repository.putSession(next, current?.version ?? null, input.decisionFence);
           await this.recordAudit(audit);
         }
       } catch (error) {
@@ -710,6 +713,7 @@ export class SessionService {
       expectedVersion: current.version,
       status: targetStatus,
       beforePersist: input.isCurrentDecision,
+      decisionFence: input.decisionFence,
     });
   }
 
@@ -1204,6 +1208,7 @@ export class SessionService {
           value: next,
           expectedVersion: expected,
           audit,
+          ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
         });
       } else {
         await this.#repository.putSession(next, expected);
