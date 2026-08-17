@@ -1493,6 +1493,14 @@ function useSpeakerWorkspaceController({
   }, []);
   const allVisibleSelected =
     filteredSpeakers.length > 0 && selectedVisibleSpeakerIds.length === filteredSpeakers.length;
+  const selectedEmailTemplate =
+    emailTemplates.find(
+      (template) => template.id === emailTemplateId && template.version === emailTemplateVersion,
+    ) ?? null;
+  const emailDraftDirty =
+    selectedEmailTemplate === null ||
+    selectedEmailTemplate.subject !== emailSubject ||
+    selectedEmailTemplate.text !== emailText;
   const emailPreviewCurrent =
     emailPreview !== null &&
     emailPreview.organizationId === organizationId &&
@@ -2164,7 +2172,6 @@ function useSpeakerWorkspaceController({
                 {
                   templateId: emailTemplateId,
                   subject: emailSubject,
-                  html: emailHtml,
                   text: emailText,
                 },
                 signal,
@@ -2178,7 +2185,6 @@ function useSpeakerWorkspaceController({
                   templateId: newTemplateId,
                   name: emailTemplateName,
                   subject: emailSubject,
-                  html: emailHtml,
                   text: emailText,
                 },
                 signal,
@@ -2214,37 +2220,20 @@ function useSpeakerWorkspaceController({
       });
       return;
     }
+    let templateId = emailTemplateId;
+    let templateVersion = emailTemplateVersion;
+    if (emailDraftDirty) {
+      const saved = await saveEmailTemplate();
+      if (saved === null) return;
+      templateId = saved.id;
+      templateVersion = saved.version;
+    }
     invalidateEmailPreview();
     const requestId = emailPreviewRequestRef.current;
     dispatchEmail({ type: "email-preview-started" });
     dispatchEmail({ type: "email-notice-set", message: null });
     try {
       const recipientIds = [...selectedSpeakerIds];
-      let templateId = emailTemplateId;
-      let templateVersion = emailTemplateVersion;
-      const newTemplateId =
-        emailCreateTemplateIdRef.current ?? `speaker-email-draft:${crypto.randomUUID()}`;
-      if (templateId.length === 0) emailCreateTemplateIdRef.current = newTemplateId;
-      if (templateId.length === 0) {
-        const created = await withTimeout(
-          (signal) =>
-            api.createEmailTemplate(
-              {
-                templateId: newTemplateId,
-                name: emailTemplateName,
-                subject: emailSubject,
-                html: emailHtml,
-                text: emailText,
-              },
-              signal,
-            ),
-          "Email template preparation",
-        );
-        if (requestId !== emailPreviewRequestRef.current) return;
-        templateId = created.id;
-        templateVersion = created.version;
-        dispatchEmail({ type: "email-template-created", template: created });
-      }
       const preview = await withTimeout(
         (signal) =>
           api.previewEmails(

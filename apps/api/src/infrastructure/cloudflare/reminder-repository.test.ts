@@ -24,6 +24,18 @@ class ReminderOutboxD1 {
   prepare(query: string) {
     return {
       bind: (...values: unknown[]) => {
+        if (query.includes("json_extract(payload_json, '$.effect')")) {
+          return {
+            all: async () => {
+              if (this.row?.state !== "pending") return { results: [] };
+              const eventId = values[1];
+              const payload = JSON.parse(this.row.payloadJson) as { eventId?: unknown };
+              return eventId === null || payload.eventId === eventId
+                ? { results: [{ id: this.row.id }] }
+                : { results: [] };
+            },
+          };
+        }
         if (query.includes("INSERT INTO outbox_jobs")) {
           return {
             run: async () => {
@@ -127,6 +139,54 @@ describe("Cloudflare reminder outbox", () => {
     expect(database.row?.payloadJson).toBe(originalPayload);
     expect(database.row?.state).toBe("queued");
     expect(successfulWakeups).toHaveLength(1);
+  });
+
+  it("requeues pending reminder rows without candidate rediscovery", async () => {
+    const database = new ReminderOutboxD1();
+    const queued: CloudflareOutboxMessage[] = [];
+    let fail = true;
+    const outbox = new CloudflareReminderOutbox(
+      database as unknown as D1Database,
+      {
+        async send(message: CloudflareOutboxMessage) {
+          if (fail) throw new Error("queue unavailable");
+          queued.push(message);
+        },
+      } as unknown as Queue<CloudflareOutboxMessage>,
+    );
+    const input = {
+      dispatchId: "dispatch-pending",
+      runId: "run-original",
+      organizationId: "org-1",
+      eventId: "event-1",
+      recipient: "recipient@example.com",
+      from: "speakers@sessionboard.namuh.co" as const,
+      senderPurpose: "speakers" as const,
+      subject: "Reminder",
+      html: "<p>Reminder</p>",
+      text: "Reminder",
+      idempotencyKey: "reminder-pending-1",
+    };
+    await expect(outbox.enqueue(input)).rejects.toThrow("queue unavailable");
+    fail = false;
+
+    await expect(
+      outbox.requeuePending({ organizationId: "org-1", eventId: "other-event" }),
+    ).resolves.toEqual({ requeued: 0 });
+    await expect(
+      outbox.requeuePending({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toEqual({ requeued: 1 });
+    await expect(
+      outbox.requeuePending({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toEqual({ requeued: 0 });
+
+    expect(database.row?.state).toBe("queued");
+    expect(queued).toEqual([
+      expect.objectContaining({
+        jobId: "reminder-outbox:dispatch-pending",
+        tenantId: "org-1",
+      }),
+    ]);
   });
 
   it("persists the reminder purpose and rotates only the delivery envelope sender", async () => {

@@ -44,6 +44,9 @@ export type CommunicationErrorCode =
   | "COMMUNICATION_CONFLICT"
   | "COMMUNICATION_UNAVAILABLE";
 
+export const COMMUNICATION_OPERATION_MARKER = "__eventloom_speaker_operation";
+type CommunicationPreviewOperation = "generic" | "speaker_invitation";
+
 export class CommunicationError extends Error {
   readonly code: CommunicationErrorCode;
   readonly status: 400 | 403 | 404 | 409 | 503;
@@ -85,6 +88,7 @@ export interface CommunicationPreviewInput {
   audience: CommunicationAudience;
   recipientIds?: readonly string[];
   data?: CommunicationRenderData;
+  protectedRecipientDataKeys?: readonly string[];
 }
 
 export interface SendGroupCommunicationInput {
@@ -169,6 +173,7 @@ export interface ReminderFactsInput {
 export interface RecordReminderDispatchStatusInput {
   organizationId?: string;
   eventId: string;
+  runId?: string;
   dispatchId?: string;
   providerMessageId?: string;
   status: ReminderDispatchStatus;
@@ -331,6 +336,16 @@ function cloneRecipient(recipient: CommunicationRecipient): CommunicationRecipie
     audiences: [...recipient.audiences],
     data: cloneData(recipient.data),
   };
+}
+
+function withoutRecipientDataKeys(
+  recipient: CommunicationRecipientSnapshot,
+  protectedDataKeys: readonly string[] | undefined,
+): CommunicationRecipientSnapshot {
+  if (protectedDataKeys === undefined || protectedDataKeys.length === 0) return recipient;
+  const data = { ...recipient.data };
+  for (const key of protectedDataKeys) delete data[key];
+  return { ...recipient, data };
 }
 
 function templateSnapshot(template: CommunicationTemplate): CommunicationTemplateSnapshot {
@@ -935,6 +950,21 @@ export class CommunicationService {
     actor: CommunicationActor,
     input: CommunicationPreviewInput,
   ): Promise<CommunicationPreview> {
+    return this.previewGroupSendInternal(actor, input, "generic");
+  }
+
+  async previewInvitationGroupSend(
+    actor: CommunicationActor,
+    input: CommunicationPreviewInput,
+  ): Promise<CommunicationPreview> {
+    return this.previewGroupSendInternal(actor, input, "speaker_invitation");
+  }
+
+  private async previewGroupSendInternal(
+    actor: CommunicationActor,
+    input: CommunicationPreviewInput,
+    operation: CommunicationPreviewOperation,
+  ): Promise<CommunicationPreview> {
     requireOrganizer(actor, input.eventId);
     if (input.purpose !== "organizer_group_email" && input.purpose !== "decision") {
       throw invalidInput(
@@ -972,7 +1002,10 @@ export class CommunicationService {
       throw notFound("One or more preview recipients were not found for this event.");
     }
     const snapshots = recipients.map((recipient) => {
-      const snapshot = this.assertRecipientScope(recipient, actor, input.eventId);
+      const snapshot = withoutRecipientDataKeys(
+        this.assertRecipientScope(recipient, actor, input.eventId),
+        input.protectedRecipientDataKeys,
+      );
       if (
         recipientIds !== undefined &&
         snapshot.audiences.length > 0 &&
@@ -982,7 +1015,11 @@ export class CommunicationService {
       }
       return snapshot;
     });
-    const data = cloneData(input.data);
+    const data = {
+      ...cloneData(input.data),
+      [COMMUNICATION_OPERATION_MARKER]:
+        operation === "speaker_invitation" ? "speaker_invitation" : "generic",
+    };
     const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
       const renderedRecipient = renderCommunicationTemplate(
         template,
@@ -1650,6 +1687,20 @@ export class CommunicationService {
           input.idempotencyKey,
         );
         if (existing !== undefined) {
+          if (
+            !sendMatchesPayload(existing, {
+              purpose: input.purpose,
+              audience: input.audience,
+              templateId: input.template.id,
+              templateVersion: input.template.version,
+              recipientIds: input.recipients.map((recipient) => recipient.id),
+              data: input.data,
+            })
+          ) {
+            throw conflict(
+              "The idempotency key was already used with a different communication payload.",
+            );
+          }
           return { send: existing, created: false };
         }
       }
@@ -1951,6 +2002,17 @@ export class CommunicationService {
     };
   }
 
+  async requeuePendingReminders(
+    actor: CommunicationActor,
+    input: { organizationId?: string; eventId: string },
+  ): Promise<{ requeued: number }> {
+    requireAutomationDelivery(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const outbox = this.reminders?.outbox;
+    if (outbox === undefined) return { requeued: 0 };
+    return outbox.requeuePending(scope);
+  }
+
   async recordReminderDispatchStatus(
     actor: CommunicationActor,
     input: RecordReminderDispatchStatusInput,
@@ -1979,6 +2041,14 @@ export class CommunicationService {
     if (dispatch === undefined) {
       throw notFound("The reminder dispatch was not found.");
     }
+    const runId = input.runId === undefined ? undefined : requireText(input.runId, "Run id", 500);
+    if (
+      dispatch.organizationId !== scope.organizationId ||
+      dispatch.eventId !== scope.eventId ||
+      (runId !== undefined && dispatch.runId !== runId)
+    ) {
+      throw conflict("The reminder dispatch ownership does not match the delivery target.");
+    }
     if (
       providerMessageId !== undefined &&
       dispatch.providerMessageId !== null &&
@@ -2005,9 +2075,14 @@ export class CommunicationService {
       throw invalidInput("A provider message id is required for this reminder status.");
     }
     const currentProviderMessageId = providerMessageId ?? dispatch.providerMessageId;
+    const recoverableEnqueueFailure =
+      dispatch.status === "failed" &&
+      dispatch.providerMessageId === null &&
+      dispatch.failureMetadata?.stage === "enqueue";
     const validTransition =
       (dispatch.status === "queued" &&
         (input.status === "provider_accepted" || input.status === "failed")) ||
+      (recoverableEnqueueFailure && input.status === "provider_accepted") ||
       (dispatch.status === "provider_accepted" &&
         (input.status === "delivered" ||
           input.status === "failed" ||
@@ -2074,38 +2149,50 @@ export class CommunicationService {
         ? requireText(input.idempotencyKey ?? "", "Idempotency key", 300)
         : reminderHourWindow(input.scheduledAt);
     const id = reminderRunId(scope.organizationId, scope.eventId, input.triggerType, runKey);
-    const existing = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
-    if (existing !== undefined) {
-      return copyReminderRun(existing);
+    if (input.triggerType === "automatic" && runtime.outbox !== undefined) {
+      try {
+        await runtime.outbox.requeuePending(scope);
+      } catch {
+        // Candidate recovery below must still run when a queue wakeup remains unavailable.
+      }
     }
-    const now = this.clock().toISOString();
-    let run: ReminderRun = {
-      id,
-      organizationId: scope.organizationId,
-      eventId: scope.eventId,
-      triggerType: input.triggerType,
-      audienceType: "combined",
-      audienceRevision: input.expectedAudienceRevision ?? "",
-      candidateCount: 0,
-      eligibleCount: 0,
-      queuedCount: 0,
-      skippedCount: 0,
-      failedCount: 0,
-      state: "pending",
-      configurationFailure: null,
-      actorId: actor.userId,
-      startedAt: now,
-      completedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    try {
-      run = await runtime.repository.insertRun(run);
-    } catch (error) {
-      const concurrent = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
-      if (concurrent !== undefined) return copyReminderRun(concurrent);
-      throw error;
+    let run = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
+    if (run?.state === "completed" || run?.state === "failed") {
+      return copyReminderRun(run);
     }
+    if (run === undefined) {
+      const now = this.clock().toISOString();
+      const pending: ReminderRun = {
+        id,
+        organizationId: scope.organizationId,
+        eventId: scope.eventId,
+        triggerType: input.triggerType,
+        audienceType: "combined",
+        audienceRevision: input.expectedAudienceRevision ?? "",
+        candidateCount: 0,
+        eligibleCount: 0,
+        queuedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        state: "pending",
+        configurationFailure: null,
+        actorId: actor.userId,
+        startedAt: now,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      try {
+        run = await runtime.repository.insertRun(pending);
+      } catch (error) {
+        run = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
+        if (run === undefined) throw error;
+        if (run.state === "completed" || run.state === "failed") {
+          return copyReminderRun(run);
+        }
+      }
+    }
+
     run = await runtime.repository.updateRun({
       ...run,
       state: "running",
@@ -2151,7 +2238,6 @@ export class CommunicationService {
       );
       throw conflict(failed.configurationFailure ?? "The reminder audience revision is stale.");
     }
-    const ownedDispatches: ReminderDispatch[] = [];
     for (const candidate of sourceResult.candidates) {
       const idempotencyKey = reminderIdempotencyKey(
         scope.organizationId,
@@ -2164,7 +2250,7 @@ export class CommunicationService {
         scope.eventId,
         idempotencyKey,
       );
-      let ownedByCurrentRun = false;
+      let ownedByCurrentRun = dispatch?.runId === run.id;
       if (dispatch !== undefined) {
         const recoverableEnqueueFailure =
           dispatch.status === "failed" &&
@@ -2227,6 +2313,7 @@ export class CommunicationService {
             continue;
           }
           dispatch = duplicate;
+          ownedByCurrentRun = dispatch.runId === run.id;
         }
       }
       if (dispatch.status === "candidate") {
@@ -2240,8 +2327,9 @@ export class CommunicationService {
             completedAt: skippedAt,
             updatedAt: skippedAt,
           });
-          if (ownedByCurrentRun) ownedDispatches.push(dispatch);
-          else await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+          if (!ownedByCurrentRun) {
+            await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+          }
           continue;
         }
         if (!candidate.eligible) {
@@ -2254,8 +2342,9 @@ export class CommunicationService {
             completedAt: skippedAt,
             updatedAt: skippedAt,
           });
-          if (ownedByCurrentRun) ownedDispatches.push(dispatch);
-          else await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+          if (!ownedByCurrentRun) {
+            await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+          }
           continue;
         }
         const eligibleAt = this.clock().toISOString();
@@ -2309,10 +2398,16 @@ export class CommunicationService {
           updatedAt: failedAt,
         });
       }
-      if (ownedByCurrentRun) ownedDispatches.push(dispatch);
-      else await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+      if (!ownedByCurrentRun) {
+        await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+      }
     }
     const finishedAt = this.clock().toISOString();
+    const ownedDispatches = await runtime.repository.listDispatches(
+      scope.organizationId,
+      scope.eventId,
+      run.id,
+    );
     const counts = ownedDispatches.reduce(
       (summary, dispatch) => {
         const count = reminderCountStatus(dispatch.status);

@@ -382,7 +382,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
         predecessor.eventId !== plan.eventId ||
         predecessor.version !== revisionPrecondition.expectedVersion ||
         predecessor.status === "draft" ||
-        predecessor.gradingLockedAt == null ||
+        predecessor.gradingLockedAt === null ||
         this.#revisionSyncTokens.has(
           storageKey(plan.tenantId, revisionPrecondition.predecessorPlanId),
         ) ||

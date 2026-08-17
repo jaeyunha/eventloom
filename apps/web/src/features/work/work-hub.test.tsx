@@ -38,6 +38,32 @@ const fullModel: WorkHubModel = {
 };
 
 describe("WorkHubView", () => {
+  it("shows a hosted organization-request message only for managed empty accounts", () => {
+    const emptyModel: WorkHubModel = {
+      identity: { id: "user-1", email: "casey@example.com", name: "Casey Morgan" },
+      organizer: null,
+      reviewer: null,
+      participant: null,
+    };
+
+    const managed = renderToStaticMarkup(
+      createElement(WorkHubView, {
+        model: emptyModel,
+        organizationRequest: { contactUrl: "mailto:hello@eventloom.example" },
+      }),
+    );
+    const selfHosted = renderToStaticMarkup(createElement(WorkHubView, { model: emptyModel }));
+
+    expect(managed).toContain("No organization workspace yet");
+    expect(managed).toContain("Contact Eventloom");
+    expect(managed).toContain("mailto:hello@eventloom.example");
+    expect(managed).not.toContain("deployment operator");
+
+    expect(selfHosted).toContain("No assigned work yet");
+    expect(selfHosted).toContain("deployment operator");
+    expect(selfHosted).not.toContain("Contact Eventloom");
+  });
+
   it("renders every authorized workspace with destination-specific calls to action", () => {
     const markup = renderToStaticMarkup(createElement(WorkHubView, { model: fullModel }));
 

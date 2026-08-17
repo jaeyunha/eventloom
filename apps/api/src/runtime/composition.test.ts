@@ -8,7 +8,10 @@ import {
   InMemoryReminderRepository,
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { EvaluationService } from "../features/evaluations/service";
+import {
+  type EvaluationDecisionProjectionInput,
+  EvaluationService,
+} from "../features/evaluations/service";
 import type {
   EventRoleInvitation,
   EventRoleInvitationRepository,
@@ -26,6 +29,7 @@ import {
   AirtableCfpRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
+  AirtableEvaluationDecisionProjection,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
   AirtableEventRepository,
@@ -2662,6 +2666,115 @@ function acceptanceTransport(events: string[]): {
 }
 
 describe("production agenda, portal, acceptance, and reminder boundaries", () => {
+  it("queues exactly one canonical accepted and rejected decision communication", async () => {
+    const events: string[] = [];
+    const { database, outbox } = acceptanceDatabase(events);
+    const queueMessages: CloudflareOutboxMessage[] = [];
+    const submissionFor = (submissionId: string, participantId: string): Submission => ({
+      id: submissionId,
+      tenantId: "organization-1",
+      eventId: "event-1",
+      formId: "form-1",
+      ownerAccountId: `owner-${participantId}`,
+      formVersion: 1,
+      version: 1,
+      status: "submitted",
+      completedSteps: [],
+      answers: { title: `Session ${submissionId}` },
+      participants: [
+        {
+          id: participantId,
+          firstName: "Decision",
+          lastName: participantId,
+          email: `${participantId}@example.test`,
+          role: "primary",
+          biography: "Speaker biography.",
+          answers: {},
+        },
+      ],
+      secondaryContacts: [],
+      createdAt: "2099-08-15T03:00:00.000Z",
+      updatedAt: "2099-08-15T03:00:00.000Z",
+      submittedAt: "2099-08-15T03:00:00.000Z",
+    });
+    const submissions = new Map([
+      ["submission-accepted", submissionFor("submission-accepted", "participant-accepted")],
+      ["submission-rejected", submissionFor("submission-rejected", "participant-rejected")],
+    ]);
+    const projection = new AirtableEvaluationDecisionProjection(
+      {
+        async getSubmission(organizationId: string, submissionId: string) {
+          return organizationId === "organization-1"
+            ? (submissions.get(submissionId) ?? null)
+            : null;
+        },
+      },
+      database,
+      {
+        async send(message: CloudflareOutboxMessage) {
+          queueMessages.push(message);
+        },
+      } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>,
+      undefined,
+      testSenderAddresses,
+    );
+    const decisionInput = (
+      submissionId: string,
+      status: "accepted" | "rejected",
+    ): EvaluationDecisionProjectionInput => ({
+      tenantId: "organization-1",
+      eventId: "event-1",
+      planId: "plan-1",
+      submissionId,
+      decisionId: `decision-${submissionId}`,
+      decisionVersion: 1,
+      status,
+      priorStatus: null,
+      reason: status === "accepted" ? "Accepted." : "Rejected.",
+      decidedByUserId: "organizer-1",
+      decidedAt: "2099-08-15T04:00:00.000Z",
+      idempotencyKey: `evaluation-decision:plan-1:${submissionId}:v1`,
+      participantProjection: {
+        status,
+        reason: status === "accepted" ? "Accepted." : "Rejected.",
+        decisionVersion: 1,
+        decidedAt: "2099-08-15T04:00:00.000Z",
+      },
+      communication: {
+        templatePurpose: status === "accepted" ? "decision_accepted" : "decision_rejected",
+      },
+    });
+    const accepted = decisionInput("submission-accepted", "accepted");
+    const rejected = decisionInput("submission-rejected", "rejected");
+
+    await projection.projectDecision(accepted);
+    await projection.projectDecision(rejected);
+    await projection.projectDecision(accepted);
+
+    expect(
+      [...outbox.values()]
+        .filter((row) => row.topic === "communications")
+        .map((row) => row.payload)
+        .sort((left, right) =>
+          String((left as { readonly status?: string }).status).localeCompare(
+            String((right as { readonly status?: string }).status),
+          ),
+        ),
+    ).toEqual([
+      expect.objectContaining({
+        purpose: "decision",
+        status: "accepted",
+        idempotencyKey: "decision:evaluation-decision:plan-1:submission-accepted:v1",
+      }),
+      expect.objectContaining({
+        purpose: "decision",
+        status: "rejected",
+        idempotencyKey: "decision:evaluation-decision:plan-1:submission-rejected:v1",
+      }),
+    ]);
+    expect(queueMessages).toHaveLength(2);
+  });
+
   it("loads the authoritative agenda workspace with one Airtable request", async () => {
     const eventId = "event-workspace-read";
     const state: AgendaState = {
@@ -3377,7 +3490,14 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       blindReview: false,
       closesAt: null,
       assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 10 },
-      rounds: [{ id: roundId, sequence: 1, opensAt: now, closesAt: null }],
+      rounds: [
+        {
+          id: roundId,
+          sequence: 1,
+          opensAt: now,
+          closesAt: "2026-08-10T13:00:00.000Z",
+        },
+      ],
       version: 4,
       createdAt: now,
       updatedAt: now,
@@ -3406,6 +3526,32 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         },
       });
     }
+
+    const expiredRepository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport,
+    });
+    await expect(
+      expiredRepository.applyAssignmentDistribution(
+        {
+          tenantId,
+          eventId,
+          planId,
+          roundId,
+          submissionId,
+          planVersion: assignmentA.planVersion,
+        },
+        {
+          assignments: [assignmentA, assignmentB],
+          expectedActiveVersions: [
+            { assignmentId: assignmentA.id, version: assignmentA.version },
+            { assignmentId: assignmentB.id, version: assignmentB.version },
+          ],
+          reason: "Organizer applied reviewer distribution.",
+          authorizedAt: "2026-08-10T14:00:00.000Z",
+        },
+      ),
+    ).rejects.toThrow("closed");
 
     let rejectNextMutation = true;
     const mutationTransport: AirtableTransport = {
@@ -3767,7 +3913,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     expect(storedPlan.assignmentGenerationSnapshot?.assignments).toHaveLength(11);
   });
 
-  it("persists tenant-scoped Airtable suggestions with atomic CAS resolution", async () => {
+  it("rejects operational Airtable review writes without transport mutations", async () => {
     const tenantId = "tenant-suggestion";
     const eventId = "event-suggestion";
     const planId = "plan-suggestion";
@@ -3866,11 +4012,88 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       baseId: "base-test",
       transport,
     });
+    const requestCountBeforeWrites = transport.requests.length;
 
-    await expect(repository.putSuggestion(suggestion, null)).rejects.toThrow(
+    const resolvedSuggestion = {
+      ...suggestion,
+      status: "accepted" as const,
+      version: 2,
+      history: [
+        ...suggestion.history,
+        { action: "accept" as const, actorId: reviewerId, at: later },
+      ],
+      audit: [...suggestion.audit, { action: "accept" as const, actorId: reviewerId, at: later }],
+      updatedAt: later,
+    };
+    const resolvedAssignment = {
+      ...assignment,
+      status: "in_progress" as const,
+      version: 2,
+      updatedAt: later,
+    };
+    const review = {
+      id: `review:${assignmentId}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId,
+      submissionId,
+      reviewerId,
+      scores: {
+        quality: {
+          criterionId: "quality",
+          value: 4,
+          origin: "ai" as const,
+          evidence: candidate.evidence,
+          humanConfirmedBy: reviewerId,
+          suggestionId: suggestion.id,
+          suggestionStatus: "accepted" as const,
+          rubricRevision: 7,
+          submissionRevision: 2,
+          updatedAt: later,
+        },
+      },
+      comment: "",
+      submittedAt: null,
+      version: 1,
+      planRevision: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      createdAt: later,
+      updatedAt: later,
+    };
+
+    const admission = {
+      assignment,
+      expectedAssignmentVersion: assignment.version,
+      authorizedAt: now,
+    };
+    await expect(repository.putSuggestion(suggestion, null, admission)).rejects.toThrow(
       "Evaluation review writes require the authoritative D1 runtime.",
     );
-    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toBeNull();
+    await expect(
+      repository.resolveSuggestion(
+        resolvedSuggestion,
+        suggestion.version,
+        resolvedAssignment,
+        assignment.version,
+        review,
+        null,
+        admission,
+      ),
+    ).rejects.toThrow("Evaluation review writes require the authoritative D1 runtime.");
+    await expect(repository.putReview(review, null, admission)).rejects.toThrow(
+      "Evaluation review writes require the authoritative D1 runtime.",
+    );
+    await expect(
+      repository.saveReviewDraft(assignment, assignment.version, review, null, now),
+    ).rejects.toThrow("Evaluation review writes require the authoritative D1 runtime.");
+    await expect(
+      repository.submitReview(resolvedAssignment, assignment.version, review, review.version, now),
+    ).rejects.toThrow("Evaluation review writes require the authoritative D1 runtime.");
+    expect(transport.requests).toHaveLength(requestCountBeforeWrites);
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();

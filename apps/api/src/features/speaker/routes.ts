@@ -100,7 +100,18 @@ const organizerTaskCreateSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
-  reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
+  reminderOffsetsMinutes: z
+    .array(
+      z
+        .number()
+        .int()
+        .nonnegative()
+        .refine(Number.isSafeInteger)
+        .refine((value) => value % 60 === 0)
+        .refine((value) => value <= 365 * 24 * 60),
+    )
+    .max(24)
+    .optional(),
   assignments: z
     .array(
       z.object({
@@ -115,12 +126,14 @@ const reminderOffsetSchema = z
   .number()
   .int()
   .nonnegative()
-  .refine(Number.isSafeInteger, "Expected a safe integer.");
+  .refine(Number.isSafeInteger, "Expected a safe integer.")
+  .refine((value) => value % 60 === 0, "Expected a whole-hour increment in minutes.")
+  .refine((value) => value <= 365 * 24 * 60, "Expected an offset within one year.");
 
 const organizerTaskReminderOffsetsSchema = z
   .object({
     expectedVersion: z.number().int().nonnegative().refine(Number.isSafeInteger),
-    reminderOffsetsMinutes: z.array(reminderOffsetSchema),
+    reminderOffsetsMinutes: z.array(reminderOffsetSchema).max(24),
   })
   .strict()
   .superRefine((value, context) => {
@@ -144,7 +157,7 @@ const organizerTaskUpdateSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
-  reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
+  // Reminder offsets mutate only through the dedicated reminder-offsets command.
   status: z.enum(speakerTaskStatuses).optional(),
   expectedVersion: z.number().int().nonnegative(),
 });
@@ -211,7 +224,7 @@ const speakerEmailTemplateSchema = z.object({
   templateId: z.string().trim().min(1).max(200).optional(),
   name: z.string().trim().min(1).max(200),
   subject: z.string().trim().min(1).max(500),
-  html: z.string().trim().min(1).max(100_000),
+  html: z.string().trim().max(100_000).optional(),
   text: z.string().trim().min(1).max(100_000),
   status: z.enum(["draft", "approved"]).optional(),
 });
@@ -441,9 +454,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data: task });
@@ -826,9 +836,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data: task });
@@ -1556,7 +1563,7 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       ...(body.templateId === undefined ? {} : { templateId: body.templateId }),
       name: body.name,
       subject: body.subject,
-      html: body.html,
+      ...(body.html === undefined ? {} : { html: body.html }),
       text: body.text,
       ...(body.status === undefined ? {} : { status: body.status }),
     });
@@ -1577,7 +1584,7 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       accountId: accountId(context),
       templateId: requiredSpeakerParam(context, "templateId"),
       subject: body.subject,
-      html: body.html,
+      ...(body.html === undefined ? {} : { html: body.html }),
       text: body.text,
       ...(body.status === undefined ? {} : { status: body.status }),
     });
@@ -1940,9 +1947,6 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data });

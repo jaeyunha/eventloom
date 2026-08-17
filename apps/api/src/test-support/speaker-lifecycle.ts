@@ -48,9 +48,20 @@ const migrationNames = [
   "0026_cfp_url_field_kind.sql",
   "0027_event_role_invitations.sql",
   "0028_remove_event_status.sql",
+  "0028_remove_event_status.sql",
   "0033_private_download_capabilities.sql",
+  "0034_program_publication_reservations.sql",
+  "0035_review_plan_revision_lineage.sql",
+  "0036_evaluation_export_jobs.sql",
+  "0037_review_plan_lineage_repairs.sql",
+  "0038_review_plan_lineage_repair_triggers.sql",
+  "0039_review_plan_revision_sync_lock.sql",
+  "0040_review_plan_revision_sync_token.sql",
   "0041_organization_entitlements.sql",
   "0042_idempotency_lease_fencing.sql",
+  "0043_crm_pipeline_actor_name.sql",
+  "0044_event_retirement_compatibility.sql",
+  "0045_immutable_speaker_projection_snapshots.sql",
 ] as const;
 
 class FakeR2Bucket {
@@ -77,15 +88,19 @@ class FakeR2Bucket {
   async get(key: string) {
     const object = this.objects.get(key);
     if (object === undefined) return null;
+    const body = object.body.slice();
     return {
-      size: object.body.byteLength,
+      size: body.byteLength,
       httpMetadata: { contentType: object.contentType },
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(object.body);
+          controller.enqueue(body);
           controller.close();
         },
       }),
+      async arrayBuffer() {
+        return body.slice().buffer;
+      },
     };
   }
 }
@@ -131,6 +146,7 @@ function seedDatabase(database: SqliteD1): void {
 
 export interface SpeakerLifecycleFixture {
   readonly database: SqliteD1;
+  readonly privateFiles: R2Bucket;
   createPhase(options?: Pick<SpeakerServiceOptions, "eventTemporalSource" | "now">): {
     repository: D1SpeakerRepository;
     assets: R2PrivateAssetGateway;
@@ -146,6 +162,7 @@ export function createSpeakerLifecycleFixture(): SpeakerLifecycleFixture {
   seedDatabase(database);
   return {
     database,
+    privateFiles: bucket as unknown as R2Bucket,
     createPhase(options) {
       const repository = new D1SpeakerRepository(database as unknown as D1Database);
       const assets = new R2PrivateAssetGateway(

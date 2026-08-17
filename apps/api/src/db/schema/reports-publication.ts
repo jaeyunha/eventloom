@@ -386,16 +386,6 @@ export const programSpeakerProjections = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (t) => [
-    uniqueIndex("program_speaker_projections_revision_uidx").on(
-      t.organizationId,
-      t.eventId,
-      t.revisionNumber,
-    ),
-    uniqueIndex("program_speaker_projections_hash_uidx").on(
-      t.organizationId,
-      t.eventId,
-      t.sourceHash,
-    ),
     check("program_speaker_projections_revision_check", sql`${t.revisionNumber}>0`),
     index("program_speaker_projections_event_idx").on(
       t.organizationId,

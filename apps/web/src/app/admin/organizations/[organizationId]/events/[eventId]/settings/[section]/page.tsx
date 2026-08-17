@@ -4,7 +4,7 @@ import { resolveEventSettingsSection } from "@/features/settings/event-settings-
 import { EventSettingsWorkspace } from "@/features/settings/event-settings-workspace";
 
 export const metadata: Metadata = {
-  title: "Event settings",
+  title: "Program settings",
   description: "Configure event-scoped workflow, rooms, classification, and change history.",
 };
 

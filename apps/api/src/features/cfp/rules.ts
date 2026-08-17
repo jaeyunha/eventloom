@@ -179,6 +179,21 @@ export function validateCfpForm(
     }
   }
 
+  const submissionTitleFields = form.submissionFields.filter((field) => field.key === "title");
+  if (submissionTitleFields.length === 0) {
+    issues.push({
+      path: "submissionFields",
+      code: "missing_builtin",
+      message: 'Every CFP form must include exactly one session title field with key "title".',
+    });
+  } else if (submissionTitleFields.length > 1) {
+    issues.push({
+      path: "submissionFields",
+      code: "duplicate",
+      message: 'Every CFP form must include exactly one session title field with key "title".',
+    });
+  }
+
   const builtins = new Map(form.participantFields.map((field) => [field.key, field]));
   const requiredBuiltins: Array<[string, FormField["kind"]]> = [
     ["firstName", "text"],

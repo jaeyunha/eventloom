@@ -1781,7 +1781,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
           WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ?
           LIMIT 1`,
       )
-      .bind(tenantId, `decision:evaluation-decision:${submissionId}:v${decision.version}`)
+      .bind(tenantId, `decision:evaluation-decision:${planId}:${submissionId}:v${decision.version}`)
       .first<{
         state: "pending" | "processing" | "delivered" | "failed";
         completed_at: string | null;
