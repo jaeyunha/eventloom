@@ -164,6 +164,35 @@ export function mailpitOpenSendToken(
   return environment.OPENSEND_API_KEY?.trim() || DEFAULT_TOKEN;
 }
 
+function environmentPort(
+  environment: Readonly<Record<string, string | undefined>>,
+  key: "MAILPIT_SMTP_PORT" | "OPENSEND_BRIDGE_PORT",
+  fallback: number,
+): number {
+  const configured = environment[key]?.trim();
+  if (configured === undefined || configured.length === 0) return fallback;
+  if (!/^\d{1,5}$/u.test(configured)) {
+    throw new Error(`${key} must be a valid TCP port.`);
+  }
+  const port = Number(configured);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${key} must be a valid TCP port.`);
+  }
+  return port;
+}
+
+export function mailpitBridgeConfiguration(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): {
+  readonly bridgePort: number;
+  readonly smtpPort: number;
+} {
+  return {
+    bridgePort: environmentPort(environment, "OPENSEND_BRIDGE_PORT", 8026),
+    smtpPort: environmentPort(environment, "MAILPIT_SMTP_PORT", 1025),
+  };
+}
+
 export function createMailpitOpenSendHandler(options: {
   readonly transport: MailTransport;
   readonly token?: string;
@@ -250,9 +279,10 @@ async function writeResponse(response: ServerResponse, result: Response): Promis
 }
 
 export function startMailpitOpenSendBridge(): void {
+  const configuration = mailpitBridgeConfiguration();
   const transport = nodemailer.createTransport({
     host: "127.0.0.1",
-    port: 1025,
+    port: configuration.smtpPort,
     secure: false,
   });
   const handler = createMailpitOpenSendHandler({
@@ -279,11 +309,14 @@ export function startMailpitOpenSendBridge(): void {
   const server = createServer(async (incoming, outgoing) => {
     try {
       const body = await readRequestBody(incoming);
-      const request = new Request(`http://127.0.0.1:8026${incoming.url ?? "/"}`, {
-        method: incoming.method,
-        headers: incoming.headers as HeadersInit,
-        ...(body.length === 0 ? {} : { body: Uint8Array.from(body).buffer }),
-      });
+      const request = new Request(
+        `http://127.0.0.1:${configuration.bridgePort}${incoming.url ?? "/"}`,
+        {
+          method: incoming.method,
+          headers: incoming.headers as HeadersInit,
+          ...(body.length === 0 ? {} : { body: Uint8Array.from(body).buffer }),
+        },
+      );
       await writeResponse(outgoing, await handler(request));
     } catch (error) {
       const status = error instanceof Error && error.message === "REQUEST_TOO_LARGE" ? 413 : 400;
@@ -293,8 +326,10 @@ export function startMailpitOpenSendBridge(): void {
       );
     }
   });
-  server.listen(8026, "127.0.0.1", () => {
-    process.stdout.write("Local email bridge listening on http://127.0.0.1:8026\n");
+  server.listen(configuration.bridgePort, "127.0.0.1", () => {
+    process.stdout.write(
+      `Local email bridge listening on http://127.0.0.1:${configuration.bridgePort}\n`,
+    );
   });
 }
 

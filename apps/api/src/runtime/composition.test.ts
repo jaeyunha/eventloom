@@ -789,7 +789,7 @@ describe("integrated local runtime composition", () => {
       APP_ENV: "local",
       RUNTIME_PROFILE: "integrated",
       WEB_ORIGIN: "http://127.0.0.1:3015",
-      API_ORIGIN: "https://production-origin-must-be-ignored.example",
+      API_ORIGIN: "http://127.0.0.1:8787",
       AIRTABLE_BASE_ID: "production-base-must-not-be-used",
       AIRTABLE_BASE_DEV_ID: "development-base",
       BETTER_AUTH_SECRET: "production-secret-must-not-be-used",
@@ -814,6 +814,35 @@ describe("integrated local runtime composition", () => {
       CALENDAR_FROM_EMAIL: "schedule@local.example.test",
       CALENDAR_UID_DOMAIN: "calendar.local.example.test",
     });
+  });
+
+  it("accepts isolated loopback origins and derives their cache invalidation target", () => {
+    const webOrigin = "http://product-evaluation-loop.localhost:3045";
+    const apiOrigin = "http://127.0.0.1:8987";
+    const { CACHE_INVALIDATION_URL: _cacheInvalidationUrl, ...baseBindings } = bindingsFor(
+      new FakeAirtableTransport(),
+    );
+    const bindings = {
+      ...baseBindings,
+      WEB_ORIGIN: webOrigin,
+      API_ORIGIN: apiOrigin,
+    };
+
+    expect(runtimeBindingsForEnvironment(bindings)).toMatchObject({
+      WEB_ORIGIN: webOrigin,
+      API_ORIGIN: apiOrigin,
+      CACHE_INVALIDATION_URL: `${webOrigin}/api/internal/cache-invalidation`,
+    });
+    expect(inspectProductionRuntime(bindings)).toEqual({
+      success: true,
+      issues: [],
+    });
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        WEB_ORIGIN: "https://not-local.example.test",
+      }).success,
+    ).toBe(false);
   });
 
   it("boots local D1 authority without AIRTABLE_BASE_DEV_ID", () => {

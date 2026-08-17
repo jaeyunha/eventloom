@@ -5,11 +5,12 @@
   "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --env-file ../../.env --ip 127.0.0.1 --port 8787",
+    "dev": "bun --env-file=../../.env ../../scripts/dev/run-local-service.ts api-dev",
     "dev:fixture": "node ../../scripts/dev/run-fixture-api.mjs",
     "build": "wrangler deploy --dry-run --env='' --outdir dist",
     "db:check": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "bun --env-file=../../.env ../../scripts/dev/run-local-service.ts api-migrate",
     "db:pull": "drizzle-kit pull --config=drizzle.remote.config.ts",
     "db:studio": "drizzle-kit studio --config=drizzle.remote.config.ts",
     "typecheck": "tsc --noEmit"

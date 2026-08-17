@@ -42,6 +42,7 @@ const fixtureEnvironment = [
 );
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "eventloom-fixture-"));
 const environmentPath = join(temporaryDirectory, "runtime.env");
+const persistenceDirectory = join(temporaryDirectory, "wrangler-state");
 writeFileSync(environmentPath, fixtureEnvironment, { mode: 0o600 });
 
 const child = spawn(
@@ -57,6 +58,8 @@ const child = spawn(
     port,
     "--inspector-port",
     inspectorPort,
+    "--persist-to",
+    persistenceDirectory,
   ],
   { cwd: apiDirectory, env: process.env, stdio: "inherit" },
 );
