@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ReminderDispatch,
   ReminderOutboxDelivery,
@@ -7,6 +8,11 @@ import type {
   ReminderSubject,
 } from "../../features/communications/types";
 import type { CloudflareOutboxMessage } from "./bindings";
+
+function providerIdempotencyKey(domainKey: string): string {
+  if (domainKey.length <= 128) return domainKey;
+  return `rmd:${createHash("sha256").update(domainKey).digest("hex")}`;
+}
 
 type ReminderRunRow = {
   id: string;
@@ -442,7 +448,8 @@ export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
             subject: input.subject,
             html: input.html,
             text: input.text,
-            idempotencyKey: input.idempotencyKey,
+            // OpenSend caps provider keys at 128 chars; keep the full domain key as D1 dedupe.
+            idempotencyKey: providerIdempotencyKey(input.idempotencyKey),
           },
         }),
         now,

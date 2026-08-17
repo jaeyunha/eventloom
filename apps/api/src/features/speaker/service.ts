@@ -467,15 +467,25 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+const MAX_REMINDER_OFFSET_COUNT = 24;
+const MAX_REMINDER_OFFSET_MINUTES = 365 * 24 * 60;
+
 function normalizeReminderOffsets(values: readonly number[]): number[] {
   if (
-    values.some((value) => !Number.isSafeInteger(value) || value < 0 || value % 60 !== 0) ||
+    values.length > MAX_REMINDER_OFFSET_COUNT ||
+    values.some(
+      (value) =>
+        !Number.isSafeInteger(value) ||
+        value < 0 ||
+        value % 60 !== 0 ||
+        value > MAX_REMINDER_OFFSET_MINUTES,
+    ) ||
     new Set(values).size !== values.length
   ) {
     throw new SpeakerServiceError(
       "VALIDATION_ERROR",
       400,
-      "Reminder offsets must be unique non-negative safe integers in whole-hour increments (multiples of 60 minutes).",
+      "Reminder offsets must be unique whole-hour increments (multiples of 60 minutes), at most 24 values, each within one year.",
     );
   }
   return [...values].sort((left, right) => left - right);
@@ -1900,13 +1910,19 @@ export class SpeakerService {
       this.repository.listEventResources === undefined
         ? Promise.resolve(undefined)
         : contextCapabilityAllows(scope, "resource-read", resourceParticipants)
-          ? this.repository.listEventResources(eventId)
+          ? this.repository.listEventResources(eventId).then(
+              (value) => value,
+              () => undefined,
+            )
           : Promise.resolve(undefined);
     const wikiPromise: Promise<readonly SpeakerWikiPage[] | undefined> =
       this.repository.listWikiPages === undefined
         ? Promise.resolve(undefined)
         : contextCapabilityAllows(scope, "resource-read", resourceParticipants)
-          ? this.repository.listWikiPages(eventId)
+          ? this.repository.listWikiPages(eventId).then(
+              (value) => value,
+              () => undefined,
+            )
           : Promise.resolve(undefined);
 
     const [
@@ -4299,7 +4315,8 @@ export class SpeakerService {
           dueAt,
           deadlineAt: deadline?.instant ?? null,
           reminderOffsetsMinutes: offsets,
-          eligible: !complete && Number.isFinite(dueTime) && (due || inWindow),
+          eligible:
+            !complete && offsets.length > 0 && Number.isFinite(dueTime) && (due || inWindow),
           reason,
         };
       })

@@ -100,7 +100,18 @@ const organizerTaskCreateSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
-  reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
+  reminderOffsetsMinutes: z
+    .array(
+      z
+        .number()
+        .int()
+        .nonnegative()
+        .refine(Number.isSafeInteger)
+        .refine((value) => value % 60 === 0)
+        .refine((value) => value <= 365 * 24 * 60),
+    )
+    .max(24)
+    .optional(),
   assignments: z
     .array(
       z.object({
@@ -116,12 +127,13 @@ const reminderOffsetSchema = z
   .int()
   .nonnegative()
   .refine(Number.isSafeInteger, "Expected a safe integer.")
-  .refine((value) => value % 60 === 0, "Expected a whole-hour increment in minutes.");
+  .refine((value) => value % 60 === 0, "Expected a whole-hour increment in minutes.")
+  .refine((value) => value <= 365 * 24 * 60, "Expected an offset within one year.");
 
 const organizerTaskReminderOffsetsSchema = z
   .object({
     expectedVersion: z.number().int().nonnegative().refine(Number.isSafeInteger),
-    reminderOffsetsMinutes: z.array(reminderOffsetSchema),
+    reminderOffsetsMinutes: z.array(reminderOffsetSchema).max(24),
   })
   .strict()
   .superRefine((value, context) => {
@@ -145,7 +157,7 @@ const organizerTaskUpdateSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
   acceptedAssetKinds: z.array(z.enum(["headshot", "slides", "supporting_file"])).optional(),
   dependencyIds: z.array(z.string().trim().min(1)).optional(),
-  reminderOffsetsMinutes: z.array(z.number().int().nonnegative()).optional(),
+  // Reminder offsets mutate only through the dedicated reminder-offsets command.
   status: z.enum(speakerTaskStatuses).optional(),
   expectedVersion: z.number().int().nonnegative(),
 });
@@ -442,9 +454,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data: task });
@@ -827,9 +836,6 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data: task });
@@ -1941,9 +1947,6 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
         ? {}
         : { acceptedAssetKinds: body.acceptedAssetKinds }),
       ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
-      ...(body.reminderOffsetsMinutes === undefined
-        ? {}
-        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
       ...(body.status === undefined ? {} : { status: body.status }),
     });
     return context.json({ data });

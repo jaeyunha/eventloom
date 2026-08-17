@@ -305,13 +305,14 @@ function taskCadence(
   if (!Number.isFinite(dueTime)) {
     return { cadenceWindow: "unscheduled", nextEligibleAt: null };
   }
+  const normalizedOffsets = offsets.filter(
+    (offset) => Number.isSafeInteger(offset) && offset >= 0 && offset % 60 === 0,
+  );
+  if (normalizedOffsets.length === 0) {
+    return { cadenceWindow: "disabled", nextEligibleAt: null };
+  }
   const thresholds = [
-    ...new Set([
-      dueTime,
-      ...offsets
-        .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
-        .map((offset) => dueTime - offset * 60_000),
-    ]),
+    ...new Set(normalizedOffsets.map((offset) => dueTime - offset * 60_000)),
   ].sort((left, right) => left - right);
   const active = thresholds.filter((threshold) => threshold <= scheduledAt.getTime()).at(-1);
   const next = thresholds.find((threshold) => threshold > scheduledAt.getTime());
