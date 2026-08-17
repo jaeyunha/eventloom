@@ -1783,6 +1783,160 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     ]);
   }, 120_000);
 
+  it("rolls back a needs-changes review when the linked task CAS loses", async () => {
+    const fixture = createSpeakerLifecycleFixture();
+    fixtures.push(fixture);
+    const service = fixture.createPhase().service;
+    const admitted = await service.createOrganizerSpeaker({
+      organizationId,
+      eventId,
+      accountId: organizerAccountId,
+      displayName: "Stale review speaker",
+      email: "priya@example.test",
+      jobTitle: "Engineer",
+      company: "Example",
+      biography: "A stale review regression speaker.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "stale-review-speaker",
+    });
+    const participantId = admitted.speakers[0]?.participantId;
+    if (participantId === undefined) throw new Error("Expected the stale review speaker.");
+    await createAndAcceptSpeakerInvitation({
+      database: fixture.database as unknown as D1Database,
+      invitationId: "event-invitation:stale-review",
+      creationIdempotencyKey: "event-invitation:stale-review",
+      participantId,
+      accountId: priyaAccountId,
+      email: "priya@example.test",
+      invitedAt: "2099-08-15T04:01:00.000Z",
+      acceptedAt: "2099-08-15T04:02:00.000Z",
+    });
+    const [task] = await service.createOrganizerTask({
+      eventId,
+      accountId: organizerAccountId,
+      type: "upload",
+      title: "Stale review deck",
+      acceptedAssetKinds: ["slides"],
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 100_000,
+      assignments: [{ participantId, submissionId: null }],
+    });
+    if (task === undefined) throw new Error("Expected the stale review task.");
+    const bytes = new TextEncoder().encode("stale-review-deck");
+    const participantService = fixture.createPhase().service;
+    const authorization = await participantService.issueUploadGrant({
+      eventId,
+      accountId: priyaAccountId,
+      participantId,
+      taskId: task.id,
+      kind: "slides",
+      fileName: "stale-review.pdf",
+      contentType: "application/pdf",
+      sizeBytes: bytes.byteLength,
+    });
+    const capability = privateCapabilityParts(authorization.grant.url);
+    await participantService.consumeUploadCapability(
+      capability.capabilityId,
+      capability.token,
+      new Request("https://api.example.test/private-upload", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/pdf",
+          "content-length": String(bytes.byteLength),
+        },
+        body: bytes,
+      }),
+    );
+    await participantService.finalizeUpload({
+      eventId,
+      accountId: priyaAccountId,
+      assetId: authorization.asset.id,
+      state: "ready",
+    });
+    const submitted = await fixture.createPhase().service.transitionTask({
+      eventId,
+      accountId: priyaAccountId,
+      taskId: task.id,
+      toStatus: "submitted",
+      expectedVersion: task.version,
+    });
+    const beforeAuditCount =
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM speaker_asset_comments
+          WHERE asset_id = '${authorization.asset.id}' AND author_label = '__speaker_asset_audit__'`,
+      )[0]?.count ?? 0;
+    const beforeTaskVersion = submitted.task.version;
+    fixture.database.beforeNextBatch(() => {
+      fixture.database.run(
+        `UPDATE speaker_tasks
+            SET version = version + 1, updated_at = '2099-08-15T05:30:00.000Z'
+          WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+            AND id = '${task.id}' AND version = ${beforeTaskVersion}`,
+      );
+    });
+
+    await expect(
+      fixture.createPhase().service.reviewAsset({
+        eventId,
+        accountId: organizerAccountId,
+        assetId: authorization.asset.id,
+        state: "needs_changes",
+        note: "This review must lose its stale task CAS.",
+        expectedVersion: 0,
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT", status: 409 });
+
+    expect(
+      fixture.database.query<{
+        state: string;
+        review_state: string | null;
+        review_version: number | null;
+        current_version_id: string | null;
+      }>(
+        `SELECT state, review_state, review_version, current_version_id
+           FROM speaker_assets
+          WHERE id = '${authorization.asset.id}'`,
+      ),
+    ).toEqual([
+      {
+        state: "ready",
+        review_state: null,
+        review_version: 0,
+        current_version_id: authorization.asset.id,
+      },
+    ]);
+    expect(
+      fixture.database.query<{
+        status: string;
+        version: number;
+        replacement_baseline_asset_id: string | null;
+      }>(
+        `SELECT status, version, replacement_baseline_asset_id
+           FROM speaker_tasks
+          WHERE id = '${task.id}'`,
+      ),
+    ).toEqual([
+      {
+        status: "submitted",
+        version: beforeTaskVersion + 1,
+        replacement_baseline_asset_id: null,
+      },
+    ]);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM speaker_asset_comments
+          WHERE asset_id = '${authorization.asset.id}' AND author_label = '__speaker_asset_audit__'`,
+      )[0]?.count,
+    ).toBe(beforeAuditCount);
+    expect(
+      fixture.database.query<{ count: number }>(
+        `SELECT count(*) AS count FROM speaker_task_transitions
+          WHERE task_id = '${task.id}' AND to_status = 'needs_changes'`,
+      )[0]?.count,
+    ).toBe(0);
+  }, 120_000);
+
   it("accepts a persisted profile CAS when remote batch metadata reports zero changes", async () => {
     const fixture = createSpeakerLifecycleFixture();
     fixtures.push(fixture);
