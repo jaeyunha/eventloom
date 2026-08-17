@@ -176,6 +176,7 @@ import type {
   SpeakerAccountWorkloadRepository,
   SpeakerInvitationDeliveryInput,
   SpeakerInvitationDeliveryReceipt,
+  SpeakerDecisionWriteFence,
   SpeakerOrganizerLifecycleRepository,
   SpeakerProfile,
   SpeakerReminderDelivery,
@@ -2876,12 +2877,15 @@ function sessionsDiffer(left: Session, right: Session): boolean {
   );
 }
 interface EvaluationAcceptanceSpeakerRepository extends SpeakerRepository {
-  ensureProfile?(input: {
-    readonly eventId: string;
-    readonly participant: SubmissionParticipant;
-    readonly updatedAt: string;
-    readonly organizationId?: string;
-  }): Promise<SpeakerProfile>;
+  ensureProfile?(
+    input: {
+      readonly eventId: string;
+      readonly participant: SubmissionParticipant;
+      readonly updatedAt: string;
+      readonly organizationId?: string;
+    },
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): Promise<SpeakerProfile>;
   ensureProfileTask?(input: {
     readonly eventId: string;
     readonly submissionId: string;
@@ -3038,12 +3042,16 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   ): Promise<SpeakerProfile> {
     const ensureProfile = this.#speakers.ensureProfile;
     if (ensureProfile !== undefined) {
-      return ensureProfile.call(this.#speakers, {
-        eventId: input.eventId,
-        participant,
-        organizationId: input.tenantId,
-        updatedAt: input.decidedAt,
-      });
+      return ensureProfile.call(
+        this.#speakers,
+        {
+          eventId: input.eventId,
+          participant,
+          organizationId: input.tenantId,
+          updatedAt: input.decidedAt,
+        },
+        input.decisionFence,
+      );
     }
     const existing = await this.#speakers.getProfile(input.eventId, participant.id);
     if (existing !== null) return existing;
@@ -3060,7 +3068,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       version: 1,
       updatedAt: input.decidedAt,
     };
-    const created = await this.#speakers.createProfile?.(profile);
+    const created = await this.#speakers.createProfile?.(profile, input.decisionFence);
     if (created?.ok === true) return created.value;
     throw new Error("The accepted speaker profile could not be persisted.");
   }

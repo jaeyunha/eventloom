@@ -1069,7 +1069,10 @@ export interface SpeakerRepository {
   ): Promise<SpeakerOrganizerReadModel | null>;
   getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null>;
   listProfiles(eventId: string, participantIds: readonly string[]): Promise<SpeakerProfile[]>;
-  createProfile?(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>>;
+  createProfile?(
+    profile: SpeakerProfile,
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): Promise<RepositoryResult<SpeakerProfile>>;
   getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null>;
   updateBiography(command: UpdateBiographyCommand): Promise<RepositoryResult<SpeakerProfile>>;
   updateProfile?(command: UpdateSpeakerProfileCommand): Promise<RepositoryResult<SpeakerProfile>>;
@@ -1185,6 +1188,15 @@ export interface SpeakerRepository {
   ): Promise<RepositoryResult<SpeakerContentRecord>>;
   getReminder?(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null>;
   saveReminder?(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord>;
+}
+
+export interface SpeakerDecisionWriteFence {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly version: number;
+  readonly status: "accepted";
 }
 
 /**

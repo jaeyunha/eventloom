@@ -37,6 +37,7 @@ import type {
   SpeakerPortalContext,
   SpeakerPortalContextScopeProjection,
   SpeakerProfile,
+  SpeakerDecisionWriteFence,
   SpeakerSubmission,
   SpeakerTask,
   SpeakerTaskFormDefinition,
@@ -1372,58 +1373,106 @@ export class D1SpeakerRepository
     return rows.map((row) => this.#profile(row));
   }
 
-  async createProfile(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>> {
+  async createProfile(
+    profile: SpeakerProfile,
+    decisionFence?: SpeakerDecisionWriteFence,
+  ): Promise<RepositoryResult<SpeakerProfile>> {
     const scope = await this.#eventScope(profile.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
     try {
       const email = profile.email?.trim() ?? "";
-      await this.#db.batch([
-        this.#db
-          .prepare(
-            `INSERT INTO speaker_profiles
-               (id, organization_id, event_id, participant_id, display_name, email, job_title,
-                company, status, biography, social_links_json, travel_required, arrival_at,
-                departure_at, accommodation, dietary_requirements, accessibility_needs,
-                travel_notes, headshot_asset_id, source_type, source_id, version, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            profile.id,
-            scope.organizationId,
-            profile.eventId,
-            profile.participantId,
-            profile.displayName,
-            email.length === 0 ? null : email,
-            profile.jobTitle ?? "",
-            profile.company ?? "",
-            profile.status ?? "",
-            profile.biography,
-            json(profile.socialLinks ?? {}),
-            profile.travelLogistics?.travelRequired ? 1 : 0,
-            profile.travelLogistics?.arrivalAt ?? null,
-            profile.travelLogistics?.departureAt ?? null,
-            profile.travelLogistics?.accommodation ?? "",
-            profile.travelLogistics?.dietaryRequirements ?? "",
-            profile.travelLogistics?.accessibilityNeeds ?? "",
-            profile.travelLogistics?.travelNotes ?? "",
-            profile.headshotAssetId ?? null,
-            profile.sourceType ?? null,
-            profile.sourceId ?? null,
-            profile.version,
-            profile.updatedAt,
-            profile.updatedAt,
-          ),
-        ...(email.length === 0
-          ? []
-          : this.#communicationRecipientStatements({
+      const profileValues = [
+        profile.id,
+        scope.organizationId,
+        profile.eventId,
+        profile.participantId,
+        profile.displayName,
+        email.length === 0 ? null : email,
+        profile.jobTitle ?? "",
+        profile.company ?? "",
+        profile.status ?? "",
+        profile.biography,
+        json(profile.socialLinks ?? {}),
+        profile.travelLogistics?.travelRequired ? 1 : 0,
+        profile.travelLogistics?.arrivalAt ?? null,
+        profile.travelLogistics?.departureAt ?? null,
+        profile.travelLogistics?.accommodation ?? "",
+        profile.travelLogistics?.dietaryRequirements ?? "",
+        profile.travelLogistics?.accessibilityNeeds ?? "",
+        profile.travelLogistics?.travelNotes ?? "",
+        profile.headshotAssetId ?? null,
+        profile.sourceType ?? null,
+        profile.sourceId ?? null,
+        profile.version,
+        profile.updatedAt,
+        profile.updatedAt,
+      ];
+      const profileStatement = this.#db
+        .prepare(
+          `INSERT INTO speaker_profiles
+             (id, organization_id, event_id, participant_id, display_name, email, job_title,
+              company, status, biography, social_links_json, travel_required, arrival_at,
+              departure_at, accommodation, dietary_requirements, accessibility_needs,
+              travel_notes, headshot_asset_id, source_type, source_id, version, created_at, updated_at)
+           ${
+             decisionFence === undefined
+               ? "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+               : `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                  WHERE EXISTS (
+                    SELECT 1
+                    FROM evaluation_decisions
+                    WHERE organization_id = ?
+                      AND event_id = ?
+                      AND plan_id = ?
+                      AND submission_id = ?
+                      AND version = ?
+                      AND status = ?
+                  )`
+}`,
+        )
+        .bind(
+          ...profileValues,
+          ...(decisionFence === undefined
+            ? []
+            : [
+                decisionFence.tenantId,
+                decisionFence.eventId,
+                decisionFence.planId,
+                decisionFence.submissionId,
+                decisionFence.version,
+                decisionFence.status,
+              ]),
+        );
+      if (decisionFence === undefined) {
+        await this.#db.batch([
+          profileStatement,
+          ...(email.length === 0
+            ? []
+            : this.#communicationRecipientStatements({
+                organizationId: scope.organizationId,
+                eventId: profile.eventId,
+                participantId: profile.participantId,
+                displayName: profile.displayName,
+                email,
+                updatedAt: profile.updatedAt,
+              })),
+        ]);
+      } else {
+        const [result] = await this.#db.batch([profileStatement]);
+        if (result?.meta.changes !== 1) return { ok: false, reason: "version_conflict" };
+        if (email.length !== 0) {
+          await this.#db.batch(
+            this.#communicationRecipientStatements({
               organizationId: scope.organizationId,
               eventId: profile.eventId,
               participantId: profile.participantId,
               displayName: profile.displayName,
               email,
               updatedAt: profile.updatedAt,
-            })),
-      ]);
+            }),
+          );
+        }
+      }
     } catch {
       return { ok: false, reason: "version_conflict" };
     }

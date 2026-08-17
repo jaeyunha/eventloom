@@ -2926,6 +2926,8 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const localReviewMaterials = new Map<string, SubmissionReviewMaterial>();
   const localAcceptanceHandoff: EvaluationAcceptanceHandoff = {
     async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {
+      const isCurrentDecision = input.isCurrentDecision ?? (async () => true);
+      if (!(await isCurrentDecision())) return;
       const material = localReviewMaterials.get(input.submissionId);
       if (
         material === undefined ||
@@ -2934,7 +2936,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       ) {
         throw new Error("The accepted local submission was not found in the event review graph.");
       }
+      if (!(await isCurrentDecision())) return;
       speakerRepository.acceptSubmission(input.eventId, input.submissionId, input.decidedAt);
+      if (!(await isCurrentDecision())) return;
       await Promise.all(
         material.participants.map(async (participant) => {
           const email = participant.email.trim().toLowerCase();
@@ -2982,8 +2986,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         throw new Error("An accepted local submission must include a speaker.");
       }
       const featured = material.title === "Designing reliable community systems";
+      if (!(await isCurrentDecision())) return;
       await sessionService.upsertAcceptedSession({
         actorId: input.decidedBy,
+        decisionFence: input.decisionFence,
         session: {
           id: `session-${material.id}`,
           tenantId: input.tenantId,
