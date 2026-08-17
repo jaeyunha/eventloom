@@ -524,7 +524,13 @@ describe.sequential("composed local Worker", () => {
       }),
     );
     expect(filesResponse.status).toBe(200);
-    expect(files).toEqual([]);
+    expect(files).toContainEqual(
+      expect.objectContaining({
+        kind: "headshot",
+        state: "ready",
+        reviewState: "approved",
+      }),
+    );
 
     const advertisedEventFilesResponse = await runtimeRequest(
       "/api/speaker/events/open-sessionboard-conf/organizer/assets",
@@ -673,6 +679,12 @@ describe.sequential("composed local Worker", () => {
       jsonRequest("PUT", { expectedVersion: draft.version, entries: [] }, organizerHeaders),
     );
     await errorResponse(staleResponse, 409, "CONFLICT");
+
+    const validateResponse = await runtimeRequest(
+      `${adminBase}/validate`,
+      jsonRequest("POST", { expectedVersion: updated.version }, organizerHeaders),
+    );
+    expect(validateResponse.status).toBe(200);
 
     const publishResponse = await runtimeRequest(
       `${adminBase}/publish`,

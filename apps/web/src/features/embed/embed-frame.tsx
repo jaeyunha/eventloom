@@ -68,7 +68,6 @@ export function EmbedFrame({
           "--pub-ink": textColor,
           "--pub-ink-secondary": `color-mix(in srgb, ${textColor} 82%, transparent)`,
           "--pub-muted": `color-mix(in srgb, ${textColor} 68%, transparent)`,
-          "--pub-subtle": `color-mix(in srgb, ${textColor} 52%, transparent)`,
         }
       : {}),
   } as CSSProperties;
@@ -87,7 +86,7 @@ export function EmbedFrame({
             <span className={styles.embedBrandName}>Eventloom</span>
             <span className={styles.embedBrandSmall}>Published program</span>
           </span>
-          <nav aria-label="Published event views">
+          <nav aria-label="Published event views" className={styles.embedNav}>
             {embedViews.map(([path, label]) => (
               <a
                 key={path}

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type AgendaCatalog,
   type AgendaDraft,
@@ -12,8 +12,13 @@ import {
 } from "../features/agenda";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { AuthPrincipal } from "../features/auth/types";
+import type { ProgramPublicationManifest } from "../features/events/types";
 import type { AgendaRouteDependencies, AgendaRouteEnvironment } from "./agenda";
 import { createAgendaAdminRoutes, createPublishedAgendaRoutes } from "./agenda";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const traceId = "00000000-0000-4000-8000-000000000001";
 const calendarUidDomain = "calendar.example.test";
@@ -201,6 +206,8 @@ function publicAppFor(
   engine: AgendaEngine,
   eventMetadataForEvent?: AgendaRouteDependencies["eventMetadataForEvent"],
   publicRevisionNumberForEventSlug?: AgendaRouteDependencies["publicRevisionNumberForEventSlug"],
+  getProgramPublicationManifest?: AgendaRouteDependencies["getProgramPublicationManifest"],
+  eventIdForSlug?: AgendaRouteDependencies["eventIdForSlug"],
 ): Hono<AgendaRouteEnvironment> {
   const app = new Hono<AgendaRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -217,6 +224,8 @@ function publicAppFor(
       ...(publicRevisionNumberForEventSlug === undefined
         ? {}
         : { publicRevisionNumberForEventSlug }),
+      ...(getProgramPublicationManifest === undefined ? {} : { getProgramPublicationManifest }),
+      ...(eventIdForSlug === undefined ? {} : { eventIdForSlug }),
     }),
   );
   return app;
@@ -269,6 +278,32 @@ function publicEngine(revision: PublishedAgendaRevision | null): AgendaEngine {
     getPublishedAgenda: async (eventSlug: string) =>
       eventSlug === "open-systems" ? revision : null,
   } as unknown as AgendaEngine;
+}
+
+function servedManifest(revision: PublishedAgendaRevision): ProgramPublicationManifest {
+  return {
+    id: "program-publication-4",
+    organizationId: "tenant-private",
+    eventId: revision.eventId,
+    revision: 4,
+    lifecycle: "served",
+    agendaProjectionId: revision.id,
+    agendaRevisionNumber: revision.revisionNumber,
+    agendaSourceHash: "agenda-source-hash",
+    speakerProjectionId: "speaker-projection-4",
+    speakerRevisionNumber: 4,
+    speakerSourceHash: "speaker-source-hash",
+    approvedContentRevision: 4,
+    approvedProfileRevision: 4,
+    releasedAssetRevision: 4,
+    actorId: "organizer-private",
+    publishedAt: revision.publishedAt,
+    parentServedRevision: null,
+    rollbackTargetRevision: null,
+    cacheRevision: 4,
+    sourceTrigger: "initial-publication",
+    failureReason: null,
+  };
 }
 
 async function postSuggestion(
@@ -571,6 +606,11 @@ describe("canonical agenda draft routes", () => {
     expect(legacyWrite.status).toBe(200);
 
     const guardedApp = appFor(legacyEngine, principal(), "org-a", undefined, metadata);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const publish = await guardedApp.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -699,14 +739,48 @@ describe("canonical agenda draft routes", () => {
         conflicts: readonly unknown[];
         warnings: readonly unknown[];
         diff: { added: number; changed: number; removed: number };
-        validatedAt: string;
+        validatedAt: string | null;
       }>(preview),
     ).toMatchObject({
       draftVersion: 2,
       conflicts: [],
       warnings: [],
       diff: { added: 1, changed: 0, removed: 0 },
+      validatedAt: null,
+    });
+    const previewedWorkspace = await app.request(root);
+    expect(previewedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(previewedWorkspace),
+    ).toMatchObject({
+      draft: { version: 2 },
+      validation: null,
+    });
+    const validation = await app.request(`${root}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(validation.status).toBe(200);
+    expect(
+      await responseData<{ draftVersion: number; validatedAt: string | null }>(validation),
+    ).toMatchObject({
+      draftVersion: 2,
       validatedAt: expect.any(String),
+    });
+    const validatedWorkspace = await app.request(root);
+    expect(validatedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(validatedWorkspace),
+    ).toMatchObject({
+      draft: { version: 2 },
+      validation: { draftVersion: 2, validatedAt: expect.any(String) },
     });
     const previewAlias = await app.request(`${root}/preview`, { method: "POST" });
     expect(previewAlias.status).toBe(404);
@@ -721,6 +795,17 @@ describe("canonical agenda draft routes", () => {
       version: 3,
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
+    const invalidatedWorkspace = await app.request(root);
+    expect(invalidatedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(invalidatedWorkspace),
+    ).toMatchObject({
+      draft: { version: 3 },
+      validation: { draftVersion: 2, validatedAt: expect.any(String) },
+    });
     const unchanged = await app.request(`${root}/draft`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -732,6 +817,28 @@ describe("canonical agenda draft routes", () => {
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
 
+    const unvalidatedPublish = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3 }),
+    });
+    expect(unvalidatedPublish.status).toBe(409);
+    expect(await responseError(unvalidatedPublish)).toMatchObject({
+      code: "CONFLICT",
+      message: "Validate the exact current agenda draft before publishing.",
+    });
+    const staleValidation = await app.request(`${root}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(staleValidation.status).toBe(409);
+    const revalidated = await app.request(`${root}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3 }),
+    });
+    expect(revalidated.status).toBe(200);
     const published = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -745,6 +852,17 @@ describe("canonical agenda draft routes", () => {
       "event-a",
       expect.objectContaining({ eventId: "event-a", revisionNumber: 1 }),
     );
+    const publishedWorkspace = await app.request(root);
+    expect(publishedWorkspace.status).toBe(200);
+    expect(
+      await responseData<{
+        draft: { version: number };
+        validation: { draftVersion: number; validatedAt: string } | null;
+      }>(publishedWorkspace),
+    ).toMatchObject({
+      draft: { version: 3 },
+      validation: { draftVersion: 3, validatedAt: expect.any(String) },
+    });
 
     const removed = await app.request(`${root}/draft`, {
       method: "PUT",
@@ -815,6 +933,11 @@ describe("canonical agenda draft routes", () => {
       });
 
     expect((await update(1, [firstEntry])).status).toBe(200);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const firstPublish = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -833,6 +956,11 @@ describe("canonical agenda draft routes", () => {
       (await responseData<{ revision: { number: number } }>(cachedOldPublic)).revision.number,
     ).toBe(1);
 
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 3,
+      actorId: "organizer-a",
+    });
     const secondPublish = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -874,6 +1002,11 @@ describe("canonical agenda draft routes", () => {
       }),
     });
     expect(draft.status).toBe(200);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const published = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -935,6 +1068,11 @@ describe("canonical agenda draft routes", () => {
     });
     expect(updated.status).toBe(200);
 
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const published = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -945,6 +1083,29 @@ describe("canonical agenda draft routes", () => {
       code: "INTEGRATION_UNAVAILABLE",
     });
     expect((await engine.getPublishedAgenda("event-a"))?.revisionNumber).toBe(1);
+    const persisted = await engine.repository.load("event-a");
+    if (persisted === null) throw new Error("Expected persisted agenda state.");
+    const {
+      validatedDraftVersion: _validatedDraftVersion,
+      validatedAt: _validatedAt,
+      ...withoutValidation
+    } = persisted;
+    await engine.repository.compareAndSwap("event-a", persisted.stateVersion, {
+      ...withoutValidation,
+      stateVersion: persisted.stateVersion + 1,
+    });
+    const blockedRetry = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(blockedRetry.status).toBe(409);
+    expect(afterPublish).toHaveBeenCalledTimes(1);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     const retried = await app.request(`${root}/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -982,6 +1143,11 @@ describe("canonical agenda draft routes", () => {
         })
       ).status,
     ).toBe(200);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
+    });
     expect(
       (
         await app.request(`${root}/publish`, {
@@ -1019,6 +1185,11 @@ describe("canonical agenda draft routes", () => {
     ).toMatchObject({
       conflicts: [],
       releaseConflicts: [{ kind: "participant", entryIds: ["entry-3", "entry-1"] }],
+    });
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 3,
+      actorId: "organizer-a",
     });
     const blocked = await app.request(`${root}/publish`, {
       method: "POST",
@@ -1061,9 +1232,28 @@ describe("canonical agenda draft routes", () => {
       },
     );
     expect(response.status).toBe(409);
-    expect(await responseError(response)).toMatchObject({
-      code: "CONFLICT",
-      details: [{ message: expect.stringContaining("overlap") }],
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: [{ message: expect.stringContaining("overlap") }],
+      },
+      data: {
+        candidateDiagnostics: {
+          evaluated: true,
+          report: {
+            conflicts: [
+              expect.objectContaining({
+                kind: "room",
+                entryIds: ["entry-1", "entry-2"],
+              }),
+            ],
+          },
+        },
+        authoritativeSavedPreview: {
+          draftVersion: 1,
+          conflicts: [],
+        },
+      },
     });
     expect((await engine.getDraft("event-a")).version).toBe(1);
   });
@@ -1190,7 +1380,7 @@ describe("canonical agenda draft routes", () => {
         title: "Deep dive",
         durationMinutes: 30,
         format: "Session",
-        speakerNames: ["participant-3"],
+        speakerNames: ["Speaker"],
         capacityRequired: 40,
         trackIds: [],
         trackNames: [],
@@ -1204,6 +1394,11 @@ describe("canonical agenda draft routes", () => {
       sessions: state.sessions.map((session) =>
         session.id === "session-1" ? { ...session, status: "ineligible" } : session,
       ),
+    });
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: 2,
+      actorId: "organizer-a",
     });
     const blockedPublish = await app.request(`${root}/publish`, {
       method: "POST",
@@ -1605,6 +1800,282 @@ describe("anonymous published agenda feeds", () => {
     expect(second.status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(1);
   });
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "denies a primed isolate-memory %s entry after event retirement",
+    async (suffix) => {
+      const revision = publicRevision();
+      const manifest = servedManifest(revision);
+      let retired = false;
+      let agendaReads = 0;
+      const manifestLookup = vi.fn(async () => (retired ? null : manifest));
+      const app = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            agendaReads += 1;
+            return revision;
+          },
+        } as unknown as AgendaEngine,
+        async () => ({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revision.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        }),
+        undefined,
+        manifestLookup,
+        async () => revision.eventId,
+      );
+
+      const first = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      retired = true;
+
+      const second = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(second.status).toBe(404);
+      expect(second.headers.get("cache-control")).toBe("no-store");
+      expect(agendaReads).toBe(1);
+      expect(manifestLookup).toHaveBeenCalledTimes(2);
+    },
+  );
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "denies a primed Cache API %s entry in a new isolate after event retirement",
+    async (suffix) => {
+      const revision = publicRevision();
+      const manifest = servedManifest(revision);
+      const cacheEntries = new Map<string, Response>();
+      const cachePut = deferred<void>();
+      const match = vi.fn(async (request: Request) => cacheEntries.get(request.url)?.clone());
+      const put = vi.fn(async (request: Request, response: Response) => {
+        cacheEntries.set(request.url, response.clone());
+        cachePut.resolve();
+      });
+      const deleteCache = vi.fn(async () => true);
+      vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+      const eventMetadata = async () =>
+        Promise.resolve({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revision.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        });
+
+      const firstRoute = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            return revision;
+          },
+        } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        async () => manifest,
+        async () => revision.eventId,
+      );
+      const first = await firstRoute.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      await cachePut.promise;
+      expect(cacheEntries.size).toBe(1);
+
+      const manifestLookup = vi.fn(async () => null);
+      const retiredRoute = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            throw new Error("Retired cache reads must not load an agenda revision.");
+          },
+        } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        manifestLookup,
+        async () => revision.eventId,
+      );
+      const retired = await retiredRoute.request(`/api/public/events/open-systems/${suffix}`);
+
+      expect(retired.status).toBe(404);
+      expect(retired.headers.get("cache-control")).toBe("no-store");
+      expect(manifestLookup).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "rejects a primed isolate-memory %s entry after the served manifest advances",
+    async (suffix) => {
+      const revisionFour = publicRevision();
+      const revisionFive = {
+        ...revisionFour,
+        id: "revision-public-5",
+        revisionNumber: 5,
+        publishedAt: "2026-08-09T12:00:00.000Z",
+      };
+      let manifest = servedManifest(revisionFour);
+      const getPublishedAgendaRevision = vi.fn(async (_eventId: string, revisionNumber: number) =>
+        revisionNumber === revisionFive.revisionNumber ? revisionFive : revisionFour,
+      );
+      const app = publicAppFor(
+        { getPublishedAgendaRevision } as unknown as AgendaEngine,
+        async () => ({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revisionFour.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        }),
+        undefined,
+        async () => manifest,
+        async () => revisionFour.eventId,
+      );
+
+      const first = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      const firstEtag = first.headers.get("etag");
+      manifest = {
+        ...servedManifest(revisionFive),
+        id: "program-publication-5",
+        revision: 5,
+        cacheRevision: 5,
+      };
+
+      const second = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(second.status).toBe(200);
+      expect(second.headers.get("etag")).not.toBe(firstEtag);
+      expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("repopulates agenda cache after rollback selects a lower child revision", async () => {
+    const revisionFour = publicRevision();
+    const revisionFive = {
+      ...revisionFour,
+      id: "revision-public-5",
+      revisionNumber: 5,
+      publishedAt: "2026-08-09T12:00:00.000Z",
+    };
+    let manifest = {
+      ...servedManifest(revisionFive),
+      id: "program-publication-5",
+      revision: 5,
+      cacheRevision: 5,
+    };
+    const getPublishedAgendaRevision = vi.fn(async (_eventId: string, revisionNumber: number) =>
+      revisionNumber === revisionFive.revisionNumber ? revisionFive : revisionFour,
+    );
+    const app = publicAppFor(
+      { getPublishedAgendaRevision } as unknown as AgendaEngine,
+      async () => ({
+        slug: "open-systems",
+        name: "Open Systems Summit",
+        timeZone: revisionFour.timeZone,
+        startsAt: "2026-09-18T16:00:00.000Z",
+        endsAt: "2026-09-18T23:00:00.000Z",
+        startsOn: "2026-09-18",
+        endsOn: "2026-09-18",
+        scheduleDates: ["2026-09-18"],
+        venueName: "Pier 27",
+      }),
+      undefined,
+      async () => manifest,
+      async () => revisionFour.eventId,
+    );
+
+    const first = await app.request("/api/public/events/open-systems/agenda.json");
+    expect(first.status).toBe(200);
+    manifest = {
+      ...servedManifest(revisionFour),
+      id: "program-publication-6",
+      revision: 6,
+      cacheRevision: 6,
+    };
+
+    const rollback = await app.request("/api/public/events/open-systems/agenda.json");
+    expect(rollback.status).toBe(200);
+    const cachedRollback = await app.request("/api/public/events/open-systems/agenda.json");
+    expect(cachedRollback.status).toBe(200);
+    expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(2);
+  });
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "rejects a primed Cache API %s entry in a new isolate after the served manifest advances",
+    async (suffix) => {
+      const revisionFour = publicRevision();
+      const revisionFive = {
+        ...revisionFour,
+        id: "revision-public-5",
+        revisionNumber: 5,
+        publishedAt: "2026-08-09T12:00:00.000Z",
+      };
+      const manifestFour = servedManifest(revisionFour);
+      const manifestFive = {
+        ...servedManifest(revisionFive),
+        id: "program-publication-5",
+        revision: 5,
+        cacheRevision: 5,
+      };
+      const cacheEntries = new Map<string, Response>();
+      const cachePut = deferred<void>();
+      vi.stubGlobal("caches", {
+        default: {
+          match: vi.fn(async (request: Request) => cacheEntries.get(request.url)?.clone()),
+          put: vi.fn(async (request: Request, response: Response) => {
+            cacheEntries.set(request.url, response.clone());
+            cachePut.resolve();
+          }),
+          delete: vi.fn(async () => true),
+        },
+      });
+      const eventMetadata = async () =>
+        Promise.resolve({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revisionFour.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        });
+
+      const firstRoute = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            return revisionFour;
+          },
+        } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        async () => manifestFour,
+        async () => revisionFour.eventId,
+      );
+      const first = await firstRoute.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      const firstEtag = first.headers.get("etag");
+      await cachePut.promise;
+      expect(cacheEntries.size).toBe(1);
+
+      const getPublishedAgendaRevision = vi.fn(async () => revisionFive);
+      const secondRoute = publicAppFor(
+        { getPublishedAgendaRevision } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        async () => manifestFive,
+        async () => revisionFive.eventId,
+      );
+      const second = await secondRoute.request(`/api/public/events/open-systems/${suffix}`);
+
+      expect(second.status).toBe(200);
+      expect(second.headers.get("etag")).not.toBe(firstEtag);
+      expect(getPublishedAgendaRevision).toHaveBeenCalledTimes(1);
+    },
+  );
   it("prefers an unexpired isolate-memory agenda entry before consulting Cache API", async () => {
     const match = vi.fn(async () => undefined as Response | undefined);
     const put = vi.fn(async () => undefined);
@@ -1711,11 +2182,21 @@ describe("anonymous published agenda feeds", () => {
         });
 
       expect((await update(1, "room-large")).status).toBe(200);
+      await engine.validate({
+        eventId: "event-a",
+        expectedVersion: 2,
+        actorId: "organizer-a",
+      });
       expect((await publish(2)).status).toBe(200);
       expect((await publicApp.request(publicPath)).status).toBe(200);
       await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
 
       expect((await update(2, "room-small")).status).toBe(200);
+      await engine.validate({
+        eventId: "event-a",
+        expectedVersion: 3,
+        actorId: "organizer-a",
+      });
       expect((await publish(3)).status).toBe(200);
       expect(cachedResponse).toBeUndefined();
       const deletesBeforeOldPutSettles = deleteCache.mock.calls.length;

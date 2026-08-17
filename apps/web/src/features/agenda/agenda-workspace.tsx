@@ -8,7 +8,11 @@ export type {
   AgendaBusyOperation,
   AgendaSuggestionRunView,
 } from "./agenda-workspace-model";
-export { AgendaBoard, AgendaSuggestionPanel } from "./agenda-workspace-sections";
+export {
+  AgendaBoard,
+  AgendaSuggestionPanel,
+  previewFromPlacementFailure,
+} from "./agenda-workspace-sections";
 /*
  * Agenda rendering and async boundaries are defined in agenda-workspace-sections.tsx.
  * Keep these source-shape markers beside the public entry point while those boundaries stay

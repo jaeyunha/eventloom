@@ -94,6 +94,7 @@ import {
   agendaDays,
   conflictsForEntry,
   eventDates,
+  eventScheduleDates,
   formatLocalTime,
   formatRevisionTimestamp,
   publicationReadiness,
@@ -107,6 +108,15 @@ import type {
   AgendaPreview,
   AgendaWorkspaceData,
 } from "./types";
+
+export function previewFromPlacementFailure(error: AgendaApiError): AgendaPreview | null {
+  const failure = error.candidateDiagnostics;
+  if (failure?.evaluated !== true || failure.report === null) return null;
+  return {
+    ...failure.authoritativeSavedPreview,
+    conflicts: failure.report.conflicts,
+  };
+}
 
 type AgendaEntryFormProps = EntryFormProps & {
   readonly event: AgendaWorkspaceData["event"];
@@ -708,6 +718,7 @@ function AgendaReleaseCenter({
   isBusyFor,
 }: AgendaReleaseCenterProps) {
   const hasRooms = data.rooms.length > 0;
+  const validationIsCurrent = data.validation?.draftVersion === data.draft.version;
   return (
     <section
       className={styles.releaseCenter}
@@ -739,14 +750,8 @@ function AgendaReleaseCenter({
               <p className={styles.eyebrow}>Required check</p>
               <h3 id="validation-heading">Validate draft</h3>
             </div>
-            <span
-              className={
-                preview?.draftVersion === data.draft.version
-                  ? styles.validatedBadge
-                  : styles.draftBadge
-              }
-            >
-              {preview?.draftVersion === data.draft.version ? "Validated" : "Needs validation"}
+            <span className={validationIsCurrent ? styles.validatedBadge : styles.draftBadge}>
+              {validationIsCurrent ? "Validated" : "Needs validation"}
             </span>
           </div>
           <p>Check conflicts and release rules for draft v{data.draft.version}.</p>
@@ -2005,9 +2010,13 @@ function useScopedAgendaWorkspace({
         if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
           throw new Error("The agenda response belongs to another event.");
         }
+        const loadedPreview =
+          loaded.data.validation?.draftVersion === loaded.data.draft.version
+            ? await loaded.api.preview(eventId)
+            : null;
         if (!loadIsCurrent()) return;
         setSnapshot({ scopeKey, api: loaded.api, data: loaded.data });
-        setPreview(null);
+        setPreview(loadedPreview);
         setSuggestionRun(null);
         setStatusMessage(null);
       } catch (loadError) {
@@ -2090,14 +2099,17 @@ function useScopedAgendaWorkspace({
               }
             : current,
         );
-        const recovered = await Promise.all([
-          currentSnapshot.api.getWorkspace(eventId),
-          currentSnapshot.api.preview(eventId),
-        ]);
-        if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recovered[0], eventId)) {
-          setSnapshot({ ...currentSnapshot, data: recovered[0] });
-          setPreview(recovered[1]);
-          cache?.write(workspaceCacheKey, recovered[0], workspaceCacheTags);
+        const recoveredData = await currentSnapshot.api.getWorkspace(eventId);
+        const candidatePreview = previewFromPlacementFailure(mutationError);
+        const recoveredPreview =
+          candidatePreview ??
+          (recoveredData.validation?.draftVersion === recoveredData.draft.version
+            ? await currentSnapshot.api.preview(eventId)
+            : null);
+        if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recoveredData, eventId)) {
+          setSnapshot({ ...currentSnapshot, data: recoveredData });
+          setPreview(recoveredPreview);
+          cache?.write(workspaceCacheKey, recoveredData, workspaceCacheTags);
         }
       }
       return false;
@@ -2122,10 +2134,7 @@ function useScopedAgendaWorkspace({
       if (!currentSuggestionApi) {
         throw new Error("Private suggestion generation is unavailable for this agenda.");
       }
-      const dates = eventDates(
-        currentSnapshot.data.event.startsOn,
-        currentSnapshot.data.event.endsOn,
-      );
+      const dates = eventScheduleDates(currentSnapshot.data.event);
       const run = await currentSuggestionApi.generateSuggestion({
         eventId,
         baseDraftVersion: currentSnapshot.data.draft.version,
@@ -2277,8 +2286,23 @@ function useScopedAgendaWorkspace({
     const token = beginOperation("validate");
     if (token === null) return;
     try {
-      const result = await currentSnapshot.api.preview(eventId);
+      const result = await currentSnapshot.api.validate({
+        eventId,
+        expectedVersion: currentSnapshot.data.draft.version,
+      });
       if (!operationIsCurrent(token)) return;
+      if (result.validatedAt === null) {
+        throw new Error("Agenda validation did not return an authoritative timestamp.");
+      }
+      const nextData: AgendaWorkspaceData = {
+        ...currentSnapshot.data,
+        validation: {
+          draftVersion: result.draftVersion,
+          validatedAt: result.validatedAt,
+        },
+      };
+      setSnapshot({ ...currentSnapshot, data: nextData });
+      cache?.write(workspaceCacheKey, nextData, workspaceCacheTags);
       setPreview(result);
       setStatusMessage(
         result.conflicts.length === 0
@@ -2392,7 +2416,7 @@ export function ScopedAgendaWorkspace(props: Readonly<ScopedAgendaWorkspaceProps
               entry,
             }),
           "Session saved to the private agenda draft.",
-          true,
+          false,
           "save",
         )
       }
@@ -2405,7 +2429,7 @@ export function ScopedAgendaWorkspace(props: Readonly<ScopedAgendaWorkspaceProps
               expectedVersion: current.draft.version,
             }),
           "Session removed from the private agenda draft.",
-          true,
+          false,
           "remove",
         )
       }
@@ -2429,7 +2453,7 @@ export function ScopedAgendaWorkspace(props: Readonly<ScopedAgendaWorkspaceProps
           (activeApi, current) =>
             activeApi.publish({ eventId, expectedVersion: current.draft.version }),
           "Agenda revision published. Public projections are being refreshed.",
-          false,
+          true,
           "publish",
         )
       }

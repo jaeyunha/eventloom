@@ -37,6 +37,7 @@ function createDatabase(): SqliteD1 {
         cfp_enabled INTEGER NOT NULL,
         cfp_opens_at TEXT,
         cfp_closes_at TEXT,
+        legacy_retired_at TEXT,
         default_duration_minutes INTEGER NOT NULL,
         default_calendar_time_zone TEXT NOT NULL,
         default_calendar_location TEXT,
@@ -197,5 +198,19 @@ describe("D1 CFP authoritative event bounds", () => {
         version: 1,
       },
     ]);
+  });
+
+  it("hides legacy-retired events from public slug resolution without hiding organizer reads", async () => {
+    const database = createDatabase();
+    database.run(
+      "UPDATE events SET legacy_retired_at = '2026-08-17T00:00:00.000Z' WHERE organization_id = 'organization-1' AND id = 'event-1'",
+    );
+    const repository = new D1CfpRepository(database as unknown as D1Database);
+
+    await expect(repository.getEventBySlug("organization-1", "future-conf")).resolves.toBeNull();
+    await expect(repository.getEvent("organization-1", "event-1")).resolves.toMatchObject({
+      id: "event-1",
+      slug: "future-conf",
+    });
   });
 });
