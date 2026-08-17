@@ -2233,24 +2233,16 @@ export function CfpComplete({
           Check your speaker status dashboard for the submission and any tasks that need to be
           completed.
         </p>
-        {completionIdentity?.canEdit ? (
-          <Button
-            className={styles.textButton}
-            onClick={editSubmission}
-            type="button"
-            variant="ghost"
-          >
-            Edit submission
+        <div className={styles.completionActions}>
+          {completionIdentity?.canEdit ? (
+            <Button onClick={editSubmission} type="button" variant="outline">
+              Edit submission
+            </Button>
+          ) : null}
+          <Button onClick={submitAnotherSession} type="button" variant="outline">
+            Submit another session
           </Button>
-        ) : null}
-        <Button
-          className={styles.textButton}
-          onClick={submitAnotherSession}
-          type="button"
-          variant="ghost"
-        >
-          Submit another session
-        </Button>
+        </div>
         <Button
           className={styles.primaryButton}
           onClick={() =>
@@ -2258,7 +2250,7 @@ export function CfpComplete({
           }
           type="button"
         >
-          View submission status dashboard
+          View submission
         </Button>
       </div>
     </PublicCfpShell>

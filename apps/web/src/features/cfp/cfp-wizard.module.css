@@ -1253,11 +1253,19 @@
   background: var(--color-canvas);
 }
 
-.completeContent .textButton {
-  width: min(100%, 20rem);
-  min-height: 2.5rem;
-  margin-top: 0;
-  padding-inline: 0;
+.completionActions {
+  display: flex;
+  width: min(100%, 42rem);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.completionActions > button {
+  flex: 1 1 12rem;
+  width: auto;
+  min-height: 2.75rem;
+  margin: 0;
 }
 
 .completeContent .primaryButton {
