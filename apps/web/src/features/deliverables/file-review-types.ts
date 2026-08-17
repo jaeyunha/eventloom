@@ -14,6 +14,7 @@ export interface FileReviewContext {
   readonly family: FileFamilyProjection;
   readonly versions: readonly DeliverableAsset[];
   readonly speakerLabel: string;
+  readonly uploaderLabel: string;
   readonly sessionLabel: string;
   readonly taskLabel: string;
 }

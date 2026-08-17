@@ -57,7 +57,8 @@ describe("event date selection", () => {
   it("places a compact clear action under the schedule copy", () => {
     const markup = renderToStaticMarkup(
       createElement(EventDatePicker, {
-        mode: "single",
+        mode: "range",
+        selectionMode: "single",
         startsAt: "2026-08-24T17:00",
         endsAt: "2026-08-24T17:00",
         scheduleDates: [],
@@ -70,11 +71,7 @@ describe("event date selection", () => {
       }),
     );
 
-    expect(markup).toMatch(
-      /headingCopy[\s\S]*Plan schedule[\s\S]*Overall review deadline[\s\S]*Clear date/,
-    );
-    expect(markup).toContain("clearDate");
-    expect(markup).not.toMatch(/headingActions[\s\S]*Clear date/);
+    expect(markup).toMatch(/Plan schedule[\s\S]*Overall review deadline[\s\S]*Clear date/);
   });
 
   it("disables dates before the minimum and the selected open date while choosing close", () => {

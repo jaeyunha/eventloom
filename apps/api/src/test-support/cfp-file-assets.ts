@@ -50,12 +50,15 @@ export class RecordingPrivateAssets {
   readonly registered: PrivateAssetCapabilityBinding[] = [];
   readonly verifiedBindings: PrivateAssetCapabilityBinding[] = [];
   readonly invalidated: PrivateAssetCapabilityBinding[] = [];
+  readonly capabilityStates = new Map<string, "uploaded" | "deleted">();
   verified = false;
+  cleanupAfterVerification = false;
 
   async registerUploadCapability(
     binding: PrivateAssetCapabilityBinding,
   ): Promise<PrivateUploadGrant> {
     this.registered.push(binding);
+    this.capabilityStates.set(binding.capabilityId, "uploaded");
     return {
       method: "PUT",
       url: `/upload/${binding.capabilityId}`,
@@ -66,10 +69,19 @@ export class RecordingPrivateAssets {
 
   async verifyUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<boolean> {
     this.verifiedBindings.push(binding);
-    return this.verified;
+    const verified =
+      this.verified && this.capabilityStates.get(binding.capabilityId) === "uploaded";
+    if (verified && this.cleanupAfterVerification) {
+      this.capabilityStates.set(binding.capabilityId, "deleted");
+    }
+    return verified;
   }
 
   async invalidateUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<void> {
+    if (this.capabilityStates.get(binding.capabilityId) !== "uploaded") {
+      throw new Error("The upload capability cannot be invalidated.");
+    }
+    this.capabilityStates.set(binding.capabilityId, "deleted");
     this.invalidated.push(binding);
   }
 }
