@@ -652,31 +652,12 @@ function aggregateForSubmission(
 ): EvaluationAggregate {
   const roundRevision = round.revision ?? gradingRevision(plan);
   const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
-  const submissionAssignments = assignments.filter(
-    (assignment) =>
-      assignment.eventId === plan.eventId &&
-      assignment.roundId === round.id &&
-      assignment.submissionId === submissionId &&
-      isActionableAssignment(assignment) &&
-      (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
-      (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
-        roundRevision,
+  const submissionAssignments = assignments.filter((assignment) =>
+    isCountedAssignmentForRound(plan, round, submissionId, assignment),
   );
   const reviewByAssignment = new Map(
     reviews
-      .filter(
-        (review) =>
-          review.roundId === round.id &&
-          (review.rubricRevision ??
-            review.rubricVersion ??
-            review.planRevision ??
-            review.planVersion) === rubricRevision &&
-          (review.roundRevision ??
-            review.rubricRevision ??
-            review.rubricVersion ??
-            review.planRevision ??
-            review.planVersion) === roundRevision,
-      )
+      .filter((review) => isReviewForRoundRevision(plan, round, review))
       .map((review) => [review.assignmentId, review]),
   );
   const submittedReviews = submissionAssignments
@@ -913,6 +894,44 @@ function isActionableAssignment(assignment: EvaluationAssignment): boolean {
   return assignment.status !== "abstained" && assignment.status !== "superseded";
 }
 
+function isCountedAssignmentForRound(
+  plan: EvaluationPlan,
+  round: ReviewRound,
+  submissionId: string,
+  assignment: EvaluationAssignment,
+): boolean {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+  return (
+    assignment.eventId === plan.eventId &&
+    assignment.roundId === round.id &&
+    assignment.submissionId === submissionId &&
+    isActionableAssignment(assignment) &&
+    (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
+    (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
+      roundRevision
+  );
+}
+
+function isReviewForRoundRevision(
+  plan: EvaluationPlan,
+  round: ReviewRound,
+  review: EvaluationReview,
+): boolean {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+  return (
+    review.roundId === round.id &&
+    (review.rubricRevision ?? review.rubricVersion ?? review.planRevision ?? review.planVersion) ===
+      rubricRevision &&
+    (review.roundRevision ??
+      review.rubricRevision ??
+      review.rubricVersion ??
+      review.planRevision ??
+      review.planVersion) === roundRevision
+  );
+}
+
 function isReviewableSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
   return submission.status !== "withdrawn";
 }
@@ -1146,10 +1165,21 @@ export class EvaluationService {
     const decisions = Object.fromEntries(
       planDecisions.map((decision) => [decision.submissionId, decision] as const),
     );
-    const effectiveAssignmentIds = new Set(effectiveAssignments.map((assignment) => assignment.id));
+    const effectiveAssignmentById = new Map(
+      effectiveAssignments.map((assignment) => [assignment.id, assignment] as const),
+    );
+    const roundById = new Map(plan.rounds.map((candidate) => [candidate.id, candidate] as const));
     const submittedReviews = reviews
       .flatMap((review): readonly EvaluationOrganizerSubmittedReview[] => {
-        if (review.submittedAt === null || !effectiveAssignmentIds.has(review.assignmentId)) {
+        const assignment = effectiveAssignmentById.get(review.assignmentId);
+        const reviewRound = roundById.get(review.roundId);
+        if (
+          review.submittedAt === null ||
+          assignment === undefined ||
+          reviewRound === undefined ||
+          !isCountedAssignmentForRound(plan, reviewRound, review.submissionId, assignment) ||
+          !isReviewForRoundRevision(plan, reviewRound, review)
+        ) {
           return [];
         }
         return [
@@ -2872,21 +2902,20 @@ export class EvaluationService {
   ): Promise<readonly EvaluationReview[]> {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
-    findRound(plan, roundId);
+    const round = findRound(plan, roundId);
     const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
     const assignmentIds = new Set(
       assignments
-        .filter(
-          (assignment) =>
-            assignment.eventId === plan.eventId &&
-            assignment.roundId === roundId &&
-            assignment.submissionId === submissionId &&
-            isActionableAssignment(assignment),
-        )
+        .filter((assignment) => isCountedAssignmentForRound(plan, round, submissionId, assignment))
         .map((assignment) => assignment.id),
     );
     return (await this.#repository.listReviews(actor.tenantId, plan.id))
-      .filter((review) => assignmentIds.has(review.assignmentId) && review.submittedAt !== null)
+      .filter(
+        (review) =>
+          assignmentIds.has(review.assignmentId) &&
+          review.submittedAt !== null &&
+          isReviewForRoundRevision(plan, round, review),
+      )
       .map((review) => ({
         ...review,
         scores: Object.fromEntries(

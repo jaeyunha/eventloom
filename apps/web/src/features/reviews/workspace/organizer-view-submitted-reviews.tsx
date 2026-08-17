@@ -7,7 +7,7 @@ import type { ApiSubmittedReview } from "./api-api-submitted-review";
 
 function reviewerLabel(reviewerId: string, reviewerMembers: readonly OrganizationMember[]): string {
   const reviewer = reviewerMembers.find((member) => member.userId === reviewerId);
-  return reviewer?.name?.trim() || reviewer?.email || `Reviewer account ${reviewerId}`;
+  return reviewer?.name?.trim() || reviewer?.email || "Reviewer unavailable";
 }
 
 export function OrganizerSubmittedReviews({

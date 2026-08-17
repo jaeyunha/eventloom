@@ -415,6 +415,45 @@ describe("evaluation plans and assignments", () => {
     });
   });
 
+  it("removes submitted comments and counted scores after a reviewer declares conflict", async () => {
+    const { service } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const actor = reviewer(assignment.reviewerId);
+    const draft = await service.saveReview(actor, assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+      comment: "Submitted before conflict declaration.",
+    });
+    const submitted = await service.submitReview(actor, assignment.id, draft.version);
+    expect(submitted.submittedAt).not.toBeNull();
+
+    await service.declareConflict(actor, assignment.id, "I collaborated with the submitter.");
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+    const aggregate = workspace.aggregates.find(
+      (candidate) => candidate.roundId === round.id && candidate.submissionId === submission.id,
+    );
+
+    expect(aggregate).toMatchObject({
+      roundId: round.id,
+      submissionId: submission.id,
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
+    expect(workspace.submittedReviews).toEqual([]);
+    await expect(
+      service.listSubmittedReviews(organizer, "plan-1", round.id, submission.id),
+    ).resolves.toEqual([]);
+    await expect(
+      service.getAggregate(organizer, "plan-1", round.id, submission.id),
+    ).resolves.toMatchObject({
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
+  });
+
   it("loads reviewer work across every granted organization scope", async () => {
     const repository = new MultiTenantWorkspaceRepository();
     const service = new EvaluationService(
