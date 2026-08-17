@@ -1270,6 +1270,23 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
         throw conflict("This submission is no longer available for review.");
       }
     }
+    this.#assertReviewWriteAdmission({
+      assignment: {
+        ...currentAssignment,
+        planVersion:
+          review.planVersion ?? review.planRevision ?? currentAssignment.planVersion ?? 1,
+        roundRevision:
+          review.roundRevision ?? review.rubricRevision ?? currentAssignment.roundRevision ?? 1,
+        rubricRevision: review.rubricRevision ?? currentAssignment.rubricRevision ?? 1,
+        submissionRevision:
+          review.submissionRevision ??
+          review.submissionVersion ??
+          currentAssignment.submissionRevision ??
+          1,
+      },
+      expectedAssignmentVersion: authority.expectedAssignmentVersion,
+      authorizedAt: review.updatedAt,
+    });
     assertVersion(
       this.#reviews.get(storageKey(review.tenantId, review.assignmentId))?.version ?? null,
       input.expectedReviewVersion,
@@ -1349,6 +1366,23 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     if (this.#conflicts.has(conflictStorageKey)) {
       throw conflict("A conflict has already been declared for this assignment.");
     }
+    if (this.submissionSource !== undefined) {
+      const submission = await this.submissionSource.getSubmissionForReview(
+        assignment.tenantId,
+        assignment.eventId,
+        assignment.submissionId,
+      );
+      if (submission?.status !== "submitted") {
+        throw conflict("This submission is no longer available for review.");
+      }
+    }
+    if (
+      this.#decisions.has(
+        decisionKey(assignment.tenantId, assignment.planId, assignment.submissionId),
+      )
+    ) {
+      throw conflict("A decision already exists for this submission.");
+    }
     this.#assignments.set(assignmentStorageKey, clone(assignment));
     this.#conflicts.set(conflictStorageKey, clone(declaration));
   }
@@ -1391,9 +1425,26 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   }
 
   async putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void> {
+    if (this.submissionSource !== undefined) {
+      const submission = await this.submissionSource.getSubmissionForReview(
+        decision.tenantId,
+        decision.eventId,
+        decision.submissionId,
+      );
+      if (submission?.status !== "submitted") {
+        throw conflict("This submission is no longer available for review.");
+      }
+    }
     const key = decisionKey(decision.tenantId, decision.planId, decision.submissionId);
     assertVersion(this.#decisions.get(key)?.version ?? null, expectedVersion, "Decision");
     this.#decisions.set(key, clone(decision));
+  }
+
+  async putDecisionForTesting(decision: EvaluationDecision): Promise<void> {
+    this.#decisions.set(
+      decisionKey(decision.tenantId, decision.planId, decision.submissionId),
+      clone(decision),
+    );
   }
 }
 

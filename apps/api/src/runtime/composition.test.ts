@@ -19,7 +19,6 @@ import type {
 
 import {
   type AirtableRequest,
-  type AirtableResponse,
   type AirtableTransport,
   FakeAirtableTransport,
 } from "../infrastructure/airtable";
@@ -29,7 +28,6 @@ import {
   AirtableCommunicationRepository,
   AirtableCrmRepository,
   AirtableEvaluationDecisionProjection,
-  AirtableEvaluationRepository,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationProjectionStore,
   AirtableEventRepository,
@@ -3471,68 +3469,6 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       baseId: "base-test",
       transport,
     });
-    const expiredRepository = new AirtableEvaluationRepository({
-      baseId: "base-test",
-      transport,
-    });
-    await expect(
-      expiredRepository.applyAssignmentDistribution(
-        {
-          tenantId,
-          eventId,
-          planId,
-          roundId,
-          submissionId,
-          planVersion: assignmentA.planVersion,
-        },
-        {
-          assignments: [assignmentA, assignmentB],
-          expectedActiveVersions: [
-            { assignmentId: assignmentA.id, version: assignmentA.version },
-            { assignmentId: assignmentB.id, version: assignmentB.version },
-          ],
-          reason: "Organizer applied reviewer distribution.",
-          authorizedAt: "2026-08-10T14:00:00.000Z",
-        },
-      ),
-    ).rejects.toThrow("closed");
-
-    let rejectNextMutation = true;
-    const mutationTransport: AirtableTransport = {
-      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
-        if (
-          rejectNextMutation &&
-          request.method === "PATCH" &&
-          request.table === "Review Plans" &&
-          request.recordId === "rec00000000000100"
-        ) {
-          rejectNextMutation = false;
-          return { status: 503, headers: {}, body: {} as TBody };
-        }
-        return transport.request<TBody>(request);
-      },
-    };
-    const repository = new AirtableEvaluationRepository({
-      baseId: "base-test",
-      transport,
-    });
-    const scope = {
-      tenantId,
-      eventId,
-      planId,
-      roundId,
-      submissionId,
-      planVersion: assignmentA.planVersion,
-    };
-    const replacement = {
-      oldAssignmentId: assignmentA.id,
-      replacementReviewerId: assignmentC.reviewerId,
-      successorAssignment: assignmentC,
-      expectedAssignmentVersion: assignmentA.version,
-      reason: "Reviewer conflict disclosed after assignment.",
-      authorizedAt: replacedAt,
-    };
-
     await expect(projection.getAssignment(tenantId, assignmentA.id)).resolves.toEqual(
       supersededAssignment,
     );

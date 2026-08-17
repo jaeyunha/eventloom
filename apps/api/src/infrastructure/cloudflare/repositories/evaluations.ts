@@ -101,7 +101,7 @@ function suggestionAssignmentGuard(
     `EXISTS (
       SELECT 1 FROM review_assignments
       WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ? AND id = ?
-        AND reviewer_id = ? AND version = ? AND status <> 'abstained'
+        AND reviewer_id = ? AND version = ? AND status IN ('assigned', 'in_progress')
     )
     AND NOT EXISTS (
       SELECT 1 FROM evaluation_conflicts
@@ -1893,8 +1893,23 @@ export class D1EvaluationRepository implements EvaluationRepository {
       [
         guard(
           this.database,
-          `EXISTS (SELECT 1 FROM review_assignments WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?)
-          AND NOT EXISTS (SELECT 1 FROM evaluation_conflicts WHERE organization_id = ? AND event_id = ? AND assignment_id = ?)`,
+          `EXISTS (
+            SELECT 1 FROM review_assignments
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?
+              AND status IN ('assigned', 'in_progress')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM evaluation_conflicts
+            WHERE organization_id = ? AND event_id = ? AND assignment_id = ?
+          )
+          AND EXISTS (
+            SELECT 1 FROM submissions
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND status = 'submitted'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM evaluation_decisions
+            WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND submission_id = ?
+          )`,
           [
             assignment.tenantId,
             assignment.eventId,
@@ -1903,6 +1918,13 @@ export class D1EvaluationRepository implements EvaluationRepository {
             declaration.tenantId,
             declaration.eventId,
             declaration.assignmentId,
+            assignment.tenantId,
+            assignment.eventId,
+            assignment.submissionId,
+            assignment.tenantId,
+            assignment.eventId,
+            assignment.planId,
+            assignment.submissionId,
           ],
         ),
         updateAssignment(this.database, assignment),
@@ -1992,6 +2014,14 @@ export class D1EvaluationRepository implements EvaluationRepository {
 
   async putDecision(decision: EvaluationDecision, expectedVersion: number | null) {
     const commands: D1PreparedStatement[] = [
+      guard(
+        this.database,
+        `EXISTS (
+          SELECT 1 FROM submissions
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND status = 'submitted'
+        )`,
+        [decision.tenantId, decision.eventId, decision.submissionId],
+      ),
       expectedVersion === null
         ? insertGuard(
             this.database,

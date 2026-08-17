@@ -1660,7 +1660,7 @@ function evaluationReviewHistory(
   return review === undefined ? [] : [{ assignment: clone(assignment), review: clone(review) }];
 }
 
-export class AirtableEvaluationRepository implements EvaluationRepository {
+class AirtableEvaluationDataStore implements EvaluationRepository {
   readonly supportsAtomicPlanRevisionSync = false;
   readonly authority = "transactional" as const;
   readonly #plans: AirtableJsonStore<AirtableEvaluationPlanRecord>;
@@ -2519,10 +2519,10 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
 }
 
 export class AirtableEvaluationProjectionStore implements EvaluationProjectionReader {
-  readonly #repository: AirtableEvaluationRepository;
+  readonly #repository: AirtableEvaluationDataStore;
 
   constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
-    this.#repository = new AirtableEvaluationRepository(options);
+    this.#repository = new AirtableEvaluationDataStore(options);
   }
 
   getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {

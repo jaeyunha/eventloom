@@ -1633,20 +1633,17 @@ describe("evaluation plans and assignments", () => {
       ],
     });
     await service.submitReview(reviewer("reviewer-1"), assignment.id, draft.version);
-    await repository.putDecision(
-      {
-        id: "decision-1",
-        tenantId,
-        eventId,
-        planId: "plan-1",
-        submissionId: submission.id,
-        status: "accepted",
-        version: 1,
-        history: [],
-        updatedAt: nowIso,
-      },
-      null,
-    );
+    await repository.putDecisionForTesting({
+      id: "decision-1",
+      tenantId,
+      eventId,
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      version: 1,
+      history: [],
+      updatedAt: nowIso,
+    });
     await repository.putAssignmentsForTesting([
       { ...assignment, id: "assignment-other-event", eventId: "event-2" },
       { ...assignment, id: "assignment-other-tenant", tenantId: "tenant-2" },
@@ -1760,20 +1757,17 @@ describe("evaluation plans and assignments", () => {
       { ...submission, id: "submission-withdrawn", status: "withdrawn" },
     ]);
     const { service, repository } = await fixture({ submissions });
-    await repository.putDecision(
-      {
-        id: "decision-orphan-withdrawn",
-        tenantId,
-        eventId,
-        planId: "plan-1",
-        submissionId: "submission-withdrawn",
-        status: "rejected",
-        version: 1,
-        history: [],
-        updatedAt: nowIso,
-      },
-      null,
-    );
+    await repository.putDecisionForTesting({
+      id: "decision-orphan-withdrawn",
+      tenantId,
+      eventId,
+      planId: "plan-1",
+      submissionId: "submission-withdrawn",
+      status: "rejected",
+      version: 1,
+      history: [],
+      updatedAt: nowIso,
+    });
 
     const workspace = await service.getOrganizerWorkspace(organizer, eventId);
 
