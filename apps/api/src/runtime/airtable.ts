@@ -201,6 +201,7 @@ import {
   D1PublishedSpeakerProjectionStore,
   type PublishedSpeakerProjectionRecord,
   publishedHeadshotContentType,
+  selectReleasedSpeakerHeadshot,
 } from "../infrastructure/cloudflare/repositories/published-speakers";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import {
@@ -8667,17 +8668,14 @@ export function createD1ApplicationDependencies(
           }
         >();
         for (const profile of profiles) {
-          if (profile.headshotAssetId === undefined) continue;
-          const asset = assets.find(
-            (candidate) =>
-              candidate.id === profile.headshotAssetId &&
-              candidate.tenantId === organizationId &&
-              candidate.eventId === eventId &&
-              candidate.participantId === profile.participantId &&
-              candidate.kind === "headshot" &&
-              candidate.state === "ready" &&
-              candidate.reviewState === "approved",
-          );
+          const asset = selectReleasedSpeakerHeadshot(assets, {
+            tenantId: organizationId,
+            eventId,
+            participantId: profile.participantId,
+            ...(profile.headshotAssetId === undefined
+              ? {}
+              : { selectedAssetId: profile.headshotAssetId }),
+          });
           if (asset === undefined) continue;
           const contentType = publishedHeadshotContentType(asset.contentType);
           if (

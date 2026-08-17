@@ -87,7 +87,7 @@ export function EmbedFrame({
             <span className={styles.embedBrandName}>Eventloom</span>
             <span className={styles.embedBrandSmall}>Published program</span>
           </span>
-          <nav aria-label="Published event views">
+          <nav aria-label="Published event views" className={styles.embedNav}>
             {embedViews.map(([path, label]) => (
               <a
                 key={path}

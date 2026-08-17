@@ -52,6 +52,36 @@ test("preserves rollback columns while quarantining formerly archived events", (
       "owner",
     );
   }
+  insertEvent.run(
+    "event-gap-archive",
+    "org-1",
+    "gap-archive",
+    "Gap archive",
+    "active",
+    "UTC",
+    "2027-05-12T00:00:00.000Z",
+    "2027-05-13T00:00:00.000Z",
+    "UTC",
+    "2026-08-17T00:00:00.000Z",
+    "2026-08-17T00:00:00.000Z",
+    "owner",
+    "owner",
+  );
+  insertEvent.run(
+    "event-gap-reactivate",
+    "org-1",
+    "gap-reactivate",
+    "Gap reactivate",
+    "archived",
+    "UTC",
+    "2027-05-12T00:00:00.000Z",
+    "2027-05-13T00:00:00.000Z",
+    "UTC",
+    "2026-08-17T00:00:00.000Z",
+    "2026-08-17T00:00:00.000Z",
+    "owner",
+    "owner",
+  );
 
   database.exec(`
     INSERT INTO airtable_connections (
@@ -72,11 +102,25 @@ test("preserves rollback columns while quarantining formerly archived events", (
   `);
 
   database.exec(readFileSync(resolve(migrationDirectory, "0028_remove_event_status.sql"), "utf8"));
+  database.exec(`
+    UPDATE events
+    SET status = 'archived',
+        updated_at = '2026-02-05T00:00:00.000Z'
+    WHERE id = 'event-gap-archive';
+    UPDATE events
+    SET status = 'active'
+    WHERE id = 'event-gap-reactivate';
+  `);
+  database.exec(
+    readFileSync(resolve(migrationDirectory, "0034_event_retirement_compatibility.sql"), "utf8"),
+  );
 
   const eventColumns = database.prepare("PRAGMA table_info(events)").all();
   const portalContextColumns = database.prepare("PRAGMA table_info(portal_contexts)").all();
   const events = database
-    .prepare("SELECT id, name, status, legacy_retired_at FROM events ORDER BY id")
+    .prepare(
+      "SELECT id, name, status, legacy_retired_at FROM events WHERE id IN ('event-active', 'event-archived', 'event-draft') ORDER BY id",
+    )
     .all()
     .map(({ id, name, status, legacy_retired_at }) => ({
       id,
@@ -125,6 +169,112 @@ test("preserves rollback columns while quarantining formerly archived events", (
     { id: "job-archive", state: "cancelled", last_error_code: "event_status_removed" },
     { id: "job-upsert", state: "pending", last_error_code: null },
   ]);
+  const lifecycleFor = (eventId) => ({
+    ...database.prepare("SELECT status, legacy_retired_at FROM events WHERE id = ?").get(eventId),
+  });
+  assert.deepEqual(lifecycleFor("event-gap-archive"), {
+    status: "archived",
+    legacy_retired_at: "2026-02-05T00:00:00.000Z",
+  });
+  assert.deepEqual(lifecycleFor("event-gap-reactivate"), {
+    status: "active",
+    legacy_retired_at: null,
+  });
+
+  database.exec(`
+    BEGIN IMMEDIATE;
+    UPDATE events
+    SET status = 'archived',
+        updated_at = '2026-02-01T00:00:00.000Z'
+    WHERE id = 'event-active';
+    ROLLBACK;
+  `);
+  assert.deepEqual(lifecycleFor("event-active"), { status: "active", legacy_retired_at: null });
+
+  database.exec(`
+    UPDATE events
+    SET status = 'archived',
+        updated_at = '2026-02-02T00:00:00.000Z'
+    WHERE id = 'event-active';
+  `);
+  assert.deepEqual(lifecycleFor("event-active"), {
+    status: "archived",
+    legacy_retired_at: "2026-02-02T00:00:00.000Z",
+  });
+
+  database.exec(`
+    BEGIN IMMEDIATE;
+    UPDATE events SET status = 'active' WHERE id = 'event-active';
+    ROLLBACK;
+  `);
+  assert.deepEqual(lifecycleFor("event-active"), {
+    status: "archived",
+    legacy_retired_at: "2026-02-02T00:00:00.000Z",
+  });
+
+  database.exec("UPDATE events SET status = 'active' WHERE id = 'event-active'");
+  assert.deepEqual(lifecycleFor("event-active"), { status: "active", legacy_retired_at: null });
+
+  database.exec(`
+    UPDATE events
+    SET legacy_retired_at = '2026-02-03T00:00:00.000Z'
+    WHERE id = 'event-draft';
+  `);
+  assert.deepEqual(lifecycleFor("event-draft"), {
+    status: "archived",
+    legacy_retired_at: "2026-02-03T00:00:00.000Z",
+  });
+
+  database.exec("UPDATE events SET legacy_retired_at = NULL WHERE id = 'event-draft'");
+  assert.deepEqual(lifecycleFor("event-draft"), { status: "active", legacy_retired_at: null });
+
+  database.exec(`
+    INSERT INTO events (
+      organization_id,
+      id,
+      slug,
+      name,
+      status,
+      time_zone,
+      starts_at,
+      ends_at,
+      schedule_dates_json,
+      venue,
+      cfp_enabled,
+      default_duration_minutes,
+      default_calendar_time_zone,
+      default_calendar_location,
+      version,
+      created_at,
+      updated_at,
+      created_by,
+      updated_by
+    ) VALUES (
+      'org-1',
+      'event-created-archived',
+      'created-archived',
+      'Created archived',
+      'archived',
+      'UTC',
+      '2026-08-21T09:00:00.000Z',
+      '2026-08-21T17:00:00.000Z',
+      '["2026-08-21"]',
+      'Main Hall',
+      0,
+      30,
+      'UTC',
+      'Main Hall',
+      1,
+      '2026-02-04T00:00:00.000Z',
+      '2026-02-04T00:00:00.000Z',
+      'user-1',
+      'user-1'
+    )
+  `);
+  assert.deepEqual(lifecycleFor("event-created-archived"), {
+    status: "archived",
+    legacy_retired_at: "2026-02-04T00:00:00.000Z",
+  });
 
   database.close();
 });

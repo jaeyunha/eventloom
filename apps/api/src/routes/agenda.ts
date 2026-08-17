@@ -1616,12 +1616,14 @@ async function publishedProjection(
     | "getProgramPublicationManifest"
     | "publicRevisionNumberForEventSlug"
   >,
+  servedManifest?: ProgramPublicationManifest,
 ): Promise<PublishedAgendaProjectionValue | null> {
   const eventSlug = publicEventSlug(context);
   if (eventSlug === null) return null;
   let revision: PublishedAgendaRevision | null;
   if (dependencies.getProgramPublicationManifest !== undefined) {
-    const manifest = await dependencies.getProgramPublicationManifest(eventSlug);
+    const manifest =
+      servedManifest ?? (await dependencies.getProgramPublicationManifest(eventSlug));
     if (manifest === null || manifest.lifecycle !== "served") return null;
     const eventId =
       dependencies.eventIdForSlug === undefined
@@ -1677,7 +1679,14 @@ export function createPublishedAgendaRoutes(
   const cacheState = agendaCacheState(dependencies.engine);
   const projectionForRequest = (
     context: AgendaContext,
-  ): Promise<PublishedAgendaProjectionValue | null> => publishedProjection(context, dependencies);
+    servedManifest?: ProgramPublicationManifest,
+  ): Promise<PublishedAgendaProjectionValue | null> =>
+    publishedProjection(context, dependencies, servedManifest);
+  const publicNotFound = (context: AgendaContext): Response => {
+    const response = errorResponse(context, 404, "NOT_FOUND", "A published agenda was not found.");
+    response.headers.set("cache-control", "no-store");
+    return response;
+  };
 
   const cachedFeed = async (
     context: AgendaContext,
@@ -1686,14 +1695,26 @@ export function createPublishedAgendaRoutes(
   ): Promise<Response> => {
     const cacheable = anonymousAgendaRequest(context);
     const path = publicCachePath(context);
+    let servedManifest: ProgramPublicationManifest | undefined;
+    if (dependencies.getProgramPublicationManifest !== undefined) {
+      const eventSlug = publicEventSlug(context);
+      if (eventSlug === null) {
+        return publicNotFound(context);
+      }
+      const manifest = await dependencies.getProgramPublicationManifest(eventSlug);
+      if (manifest === null || manifest.lifecycle !== "served") {
+        return publicNotFound(context);
+      }
+      servedManifest = manifest;
+    }
     if (cacheable) {
       const cached = await readAgendaCacheResponse(cacheState, path);
       if (cached !== null)
         return feedResponse(context, cached.body, cached.contentType, cached.etag);
     }
-    const result = await projectionForRequest(context);
+    const result = await projectionForRequest(context, servedManifest);
     if (result === null) {
-      return errorResponse(context, 404, "NOT_FOUND", "A published agenda was not found.");
+      return publicNotFound(context);
     }
     const body = render(result);
     const etag = await feedEtag(body);

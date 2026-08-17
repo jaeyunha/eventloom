@@ -1,16 +1,25 @@
-import type { D1Database, Queue } from "@cloudflare/workers-types";
+import type { D1Database, DurableObjectNamespace, Queue } from "@cloudflare/workers-types";
 import { afterEach, describe, expect, it } from "vitest";
+import { createApp } from "../../../app";
 import type { Submission } from "../../../features/cfp/model";
 import type { CfpRepository } from "../../../features/cfp/service";
 import type { Session, SessionRepository } from "../../../features/sessions/types";
-import { AirtableEvaluationAcceptanceHandoff } from "../../../runtime/airtable";
+import {
+  AirtableEvaluationAcceptanceHandoff,
+  createD1ApplicationDependencies,
+} from "../../../runtime/airtable";
 import { D1BetterAuthGateway } from "../../../runtime/cloudflare";
+import {
+  createD1RuntimeDependencies,
+  createRuntimeEventRoleInvitationAdapters,
+} from "../../../runtime/d1";
 import {
   createSpeakerLifecycleFixture,
   privateCapabilityParts,
   type SpeakerLifecycleFixture,
   speakerLifecycleIds,
 } from "../../../test-support/speaker-lifecycle";
+import type { CloudflareOutboxMessage } from "../bindings";
 import { D1CfpRepository } from "./cfp";
 import { D1EventRoleInvitationRepository } from "./event-role-invitations";
 import { D1SpeakerRepository } from "./speaker";
@@ -79,6 +88,377 @@ async function createAndAcceptSpeakerInvitation(input: {
     status: "accepted",
     version: invitation.version + 1,
   });
+}
+
+async function publishHeadshotScenario(input: {
+  readonly workflow: "profile" | "task";
+  readonly release: boolean;
+}) {
+  const fixture = createSpeakerLifecycleFixture();
+  fixtures.push(fixture);
+  const database = fixture.database as unknown as D1Database;
+  const organizerService = fixture.createPhase().service;
+  const participantId = acceptedParticipantId;
+  const participantAccountId = acceptedAccountId;
+  fixture.database.executeScript(`
+    UPDATE auth_users SET email = 'accepted@example.com' WHERE id = '${participantAccountId}';
+    UPDATE participants
+       SET email = 'accepted@example.com', normalized_email = 'accepted@example.com'
+     WHERE organization_id = '${organizationId}' AND event_id = '${eventId}'
+       AND id = '${participantId}';
+    INSERT INTO session_statuses
+      (id,organization_id,event_id,value,name,description,agenda_eligible,sort_order,active,version,created_at,updated_at)
+    VALUES
+      ('status-accepted','${organizationId}','${eventId}','Accepted','Accepted','',1,0,1,1,
+       '2099-08-15T04:00:00.000Z','2099-08-15T04:00:00.000Z');
+  `);
+  const grantSubmission: Submission = {
+    id: acceptedSubmissionId,
+    tenantId: organizationId,
+    eventId,
+    formId: "accepted-form",
+    ownerAccountId: participantAccountId,
+    formVersion: 1,
+    version: 1,
+    status: "submitted",
+    completedSteps: [],
+    answers: { title: "Public headshot session" },
+    participants: [
+      {
+        id: participantId,
+        firstName: "Accepted",
+        lastName: "Speaker",
+        email: "accepted@example.com",
+        role: "primary",
+        biography: "Accepted speaker biography.",
+        answers: {},
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2099-08-15T04:00:00.000Z",
+    updatedAt: "2099-08-15T04:00:00.000Z",
+    submittedAt: "2099-08-15T04:00:00.000Z",
+  };
+  await new AirtableEvaluationAcceptanceHandoff({
+    cfp: {
+      async getSubmission() {
+        return grantSubmission;
+      },
+    } as unknown as CfpRepository,
+    speakers: new D1SpeakerRepository(database),
+    sessions: {
+      async getSession() {
+        return null;
+      },
+      async listTracks() {
+        return [];
+      },
+      async listFormats() {
+        return [];
+      },
+      async listTags() {
+        return [];
+      },
+      async listLevels() {
+        return [];
+      },
+      async putSession(session: Session) {
+        return session;
+      },
+      async appendAudit() {},
+    } as unknown as SessionRepository,
+    database,
+    queue: { async send() {} } as unknown as Queue,
+    senderAddresses: {
+      auth: "auth@example.test",
+      speakers: "speakers@example.test",
+      calendar: "calendar@example.test",
+    },
+  }).accept({
+    tenantId: organizationId,
+    eventId,
+    planId: "accepted-plan",
+    submissionId: acceptedSubmissionId,
+    decisionId: "accepted-decision",
+    decidedBy: organizerAccountId,
+    decidedAt: "2099-08-15T04:00:00.000Z",
+    reason: "Accepted before granting speaker access.",
+    idempotencyKey: `grant-public-headshot-${input.workflow}-${input.release}`,
+  });
+  await createAndAcceptSpeakerInvitation({
+    database,
+    invitationId: `event-role-invitation:speaker:${eventId}:${participantId}`,
+    creationIdempotencyKey: `evaluation-acceptance:${acceptedSubmissionId}:${participantId}`,
+    participantId,
+    accountId: participantAccountId,
+    email: "accepted@example.com",
+    invitedAt: "2099-08-15T04:01:00.000Z",
+    acceptedAt: "2099-08-15T04:02:00.000Z",
+  });
+
+  const participantService = fixture.createPhase().service;
+  let taskId: string | undefined;
+  if (input.workflow === "task") {
+    const assigned = await organizerService.createOrganizerTask({
+      eventId,
+      accountId: organizerAccountId,
+      type: "upload",
+      title: "Upload headshot",
+      description: "Upload the headshot for the public speaker gallery.",
+      acceptedAssetKinds: ["headshot"],
+      allowedMimeTypes: ["image/png"],
+      maxBytes: 100_000,
+      assignments: [{ participantId, submissionId: null }],
+    });
+    taskId = assigned[0]?.id;
+    expect(taskId).toBeDefined();
+  }
+
+  const bytes = new TextEncoder().encode(`published-${input.workflow}-headshot`);
+  const authorization = await participantService.issueUploadGrant({
+    eventId,
+    accountId: participantAccountId,
+    participantId,
+    ...(taskId === undefined ? {} : { taskId }),
+    kind: "headshot",
+    fileName: "priya.png",
+    contentType: "image/png",
+    sizeBytes: bytes.byteLength,
+  });
+  const capability = privateCapabilityParts(authorization.grant.url);
+  await participantService.consumeUploadCapability(
+    capability.capabilityId,
+    capability.token,
+    new Request("https://api.example.test/private-upload", {
+      method: "PUT",
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(bytes.byteLength),
+      },
+      body: bytes,
+    }),
+  );
+  const asset = await participantService.finalizeUpload({
+    eventId,
+    accountId: participantAccountId,
+    assetId: authorization.asset.id,
+    state: "ready",
+  });
+
+  if (taskId === undefined) {
+    const profile = (await participantService.listProfiles(eventId, participantAccountId)).find(
+      (candidate) => candidate.participantId === participantId,
+    );
+    if (profile === undefined) throw new Error("Expected the admitted speaker profile.");
+    await participantService.updateProfile({
+      eventId,
+      accountId: participantAccountId,
+      participantId,
+      headshotAssetId: asset.id,
+      expectedVersion: profile.version,
+    });
+  } else {
+    const task = (await participantService.listTasks(eventId, participantAccountId)).find(
+      (candidate) => candidate.id === taskId,
+    );
+    if (task === undefined) throw new Error("Expected the assigned headshot task.");
+    await participantService.transitionTask({
+      eventId,
+      accountId: participantAccountId,
+      taskId,
+      toStatus: "submitted",
+      expectedVersion: task.version,
+      note: "Uploaded priya.png",
+    });
+  }
+
+  await fixture.createPhase().service.reviewAsset({
+    eventId,
+    accountId: organizerAccountId,
+    assetId: asset.id,
+    state: "approved",
+    release: input.release,
+    expectedVersion: 0,
+  });
+
+  const businessRepositories = createD1RuntimeDependencies({ DB: database });
+  const profile = await businessRepositories.speaker.getProfile(eventId, participantId);
+  const submission: Submission = {
+    id: acceptedSubmissionId,
+    tenantId: organizationId,
+    eventId,
+    formId: "accepted-form",
+    ownerAccountId: participantAccountId,
+    formVersion: 1,
+    version: 1,
+    status: "submitted",
+    completedSteps: [],
+    answers: { title: "Public headshot session" },
+    participants: [
+      {
+        id: participantId,
+        firstName: "Accepted",
+        lastName: "Speaker",
+        email: "accepted@example.com",
+        role: "primary",
+        biography: "Accepted speaker biography.",
+        answers: {},
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2099-08-15T04:00:00.000Z",
+    updatedAt: "2099-08-15T04:00:00.000Z",
+    submittedAt: "2099-08-15T04:00:00.000Z",
+  };
+  const queue = { async send(_message: CloudflareOutboxMessage) {} } as unknown as Queue;
+  await new AirtableEvaluationAcceptanceHandoff({
+    cfp: {
+      async getSubmission(requestedOrganizationId: string, requestedSubmissionId: string) {
+        return requestedOrganizationId === organizationId &&
+          requestedSubmissionId === acceptedSubmissionId
+          ? submission
+          : null;
+      },
+    } as unknown as CfpRepository,
+    speakers: businessRepositories.speaker,
+    sessions: businessRepositories.sessions,
+    database,
+    queue,
+    senderAddresses: {
+      auth: "auth@example.test",
+      speakers: "speakers@example.test",
+      calendar: "calendar@example.test",
+    },
+  }).accept({
+    tenantId: organizationId,
+    eventId,
+    planId: "accepted-plan",
+    submissionId: acceptedSubmissionId,
+    decisionId: "accepted-decision",
+    decidedBy: organizerAccountId,
+    decidedAt: "2099-08-15T04:03:00.000Z",
+    reason: "Accepted for the public headshot test.",
+    idempotencyKey: `accepted-public-headshot-${input.workflow}-${input.release}`,
+  });
+  const session = (await businessRepositories.sessions.listSessions(organizationId, eventId)).find(
+    (candidate) => candidate.speakerIds.includes(participantId),
+  );
+  if (session === undefined) throw new Error("Expected the accepted public headshot session.");
+  try {
+    await businessRepositories.sessions.putRoom(
+      {
+        id: "room-main",
+        tenantId: organizationId,
+        eventId,
+        name: "Main room",
+        capacity: 100,
+        resources: [],
+        resourceIds: [],
+        version: 1,
+        createdAt: "2099-08-15T04:03:00.000Z",
+        updatedAt: "2099-08-15T04:03:00.000Z",
+        createdBy: organizerAccountId,
+        updatedBy: organizerAccountId,
+        history: [],
+      },
+      null,
+    );
+  } catch (error) {
+    throw new Error("Failed to persist the public headshot room.", { cause: error });
+  }
+  const dependencies = createD1ApplicationDependencies({
+    authenticator: {
+      async authenticate() {
+        return null;
+      },
+    },
+    database,
+    agendaCoordinator: {
+      idFromName(name: string) {
+        return name;
+      },
+      get() {
+        return {
+          async fetch() {
+            return Response.json({ revision: 0 });
+          },
+        };
+      },
+    } as unknown as DurableObjectNamespace,
+    privateFiles: fixture.privateFiles,
+    outboxQueue: {
+      async send(_message: CloudflareOutboxMessage) {},
+    } as unknown as Queue<CloudflareOutboxMessage>,
+    webOrigin: "https://web.example.test",
+    businessRepositories,
+    eventRoleInvitationAdapters: createRuntimeEventRoleInvitationAdapters(
+      businessRepositories.eventRoleInvitations,
+    ),
+    senderAddresses: {
+      auth: "auth@example.test",
+      speakers: "speakers@example.test",
+      calendar: "calendar@example.test",
+    },
+    calendarIntegrationOptions: {
+      organizer: "calendar@example.test",
+      uidDomain: "calendar.example.test",
+    },
+  });
+  const agenda = dependencies.agenda;
+  if (agenda === undefined) throw new Error("Expected the D1 agenda dependencies.");
+
+  await agenda.engine.createAgenda({
+    eventId,
+    actorId: organizerAccountId,
+    minimumTravelMinutes: 0,
+    sessions: [
+      {
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        participantIds: session.speakerIds,
+        resourceIds: session.resourceIds,
+        capacityRequired: session.capacityRequired,
+        durationMinutes: session.durationMinutes,
+      },
+    ],
+    rooms: [{ id: "room-main", name: "Main room", capacity: 100 }],
+    tracks: [],
+  });
+  await agenda.engine.updateDraft({
+    eventId,
+    expectedVersion: 1,
+    actorId: organizerAccountId,
+    entries: [
+      {
+        id: "entry-public-headshot",
+        sessionId: session.id,
+        roomId: "room-main",
+        trackIds: [],
+        startsAtLocal: "2100-01-10T09:00",
+        endsAtLocal: "2100-01-10T09:30",
+      },
+    ],
+  });
+  const revision = await agenda.engine.publish({
+    eventId,
+    expectedVersion: 2,
+    actorId: organizerAccountId,
+  });
+  await agenda.afterPublish?.(eventId, revision);
+
+  return {
+    app: createApp(dependencies),
+    asset,
+    bindings: {
+      APP_ENV: "test",
+      WEB_ORIGIN: "https://web.example.test",
+    } as never,
+    bytes,
+    participantId,
+    photoUrl: `/api/public/events/lifecycle-event/speakers/${encodeURIComponent(participantId)}/headshot`,
+    profile,
+  };
 }
 
 afterEach(() => {
@@ -1330,4 +1710,64 @@ describe("Airtable-free speaker lifecycle on canonical D1", () => {
     ).toEqual([{ participant_id: participantId, user_id: accountId }]);
     expect(participantRecordCounts(participantId)).toEqual(beforeAcceptance);
   });
+
+  it("publishes a released headshot from a speaker upload task without a profile mutation", async () => {
+    const { app, bindings, bytes, participantId, photoUrl, profile } =
+      await publishHeadshotScenario({
+        workflow: "task",
+        release: true,
+      });
+    expect(profile?.headshotAssetId).toBeUndefined();
+
+    const speakersResponse = await app.request(
+      "/api/public/events/lifecycle-event/speakers",
+      undefined,
+      bindings,
+    );
+    const speakersBody = await speakersResponse.json();
+    expect(speakersResponse.status, JSON.stringify(speakersBody)).toBe(200);
+    expect(speakersBody).toMatchObject({
+      data: {
+        speakers: [
+          expect.objectContaining({
+            id: participantId,
+            photoUrl,
+          }),
+        ],
+      },
+    });
+
+    const headshotResponse = await app.request(photoUrl, undefined, bindings);
+    expect(headshotResponse.status).toBe(200);
+    expect(headshotResponse.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await headshotResponse.arrayBuffer())).toEqual(bytes);
+  }, 60_000);
+
+  it("keeps an approved headshot private until its selected version is released", async () => {
+    const { app, asset, bindings, participantId, photoUrl, profile } =
+      await publishHeadshotScenario({
+        workflow: "profile",
+        release: false,
+      });
+    expect(profile?.headshotAssetId).toBe(asset.id);
+
+    const speakersResponse = await app.request(
+      "/api/public/events/lifecycle-event/speakers",
+      undefined,
+      bindings,
+    );
+    expect(speakersResponse.status).toBe(200);
+    const speakersBody = (await speakersResponse.json()) as {
+      data: { speakers: Array<{ id: string; photoUrl: string | null }> };
+    };
+    expect(speakersBody.data.speakers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: participantId,
+          photoUrl: null,
+        }),
+      ]),
+    );
+    expect((await app.request(photoUrl, undefined, bindings)).status).toBe(404);
+  }, 60_000);
 });

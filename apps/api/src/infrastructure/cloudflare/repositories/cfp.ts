@@ -1,5 +1,5 @@
 import type { D1Database, D1PreparedStatement } from "@cloudflare/workers-types";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import { createDatabase, type OpenSessionboardDatabase } from "../../../db/client";
 import {
@@ -93,7 +93,13 @@ export class D1CfpRepository implements CfpRepository {
     const rows = await this.#orm
       .select()
       .from(events)
-      .where(and(eq(events.organizationId, tenantId), eq(events.slug, eventSlug)))
+      .where(
+        and(
+          eq(events.organizationId, tenantId),
+          eq(events.slug, eventSlug),
+          isNull(events.legacyRetiredAt),
+        ),
+      )
       .limit(1);
     return rows[0] === undefined ? null : this.#event(rows[0]);
   }

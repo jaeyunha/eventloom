@@ -75,15 +75,19 @@ class FakeR2Bucket {
   async get(key: string) {
     const object = this.objects.get(key);
     if (object === undefined) return null;
+    const body = object.body.slice();
     return {
-      size: object.body.byteLength,
+      size: body.byteLength,
       httpMetadata: { contentType: object.contentType },
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(object.body);
+          controller.enqueue(body);
           controller.close();
         },
       }),
+      async arrayBuffer() {
+        return body.slice().buffer;
+      },
     };
   }
 }
@@ -129,6 +133,7 @@ function seedDatabase(database: SqliteD1): void {
 
 export interface SpeakerLifecycleFixture {
   readonly database: SqliteD1;
+  readonly privateFiles: R2Bucket;
   createPhase(options?: Pick<SpeakerServiceOptions, "eventTemporalSource" | "now">): {
     repository: D1SpeakerRepository;
     assets: R2PrivateAssetGateway;
@@ -144,6 +149,7 @@ export function createSpeakerLifecycleFixture(): SpeakerLifecycleFixture {
   seedDatabase(database);
   return {
     database,
+    privateFiles: bucket as unknown as R2Bucket,
     createPhase(options) {
       const repository = new D1SpeakerRepository(database as unknown as D1Database);
       const assets = new R2PrivateAssetGateway(

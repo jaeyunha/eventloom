@@ -12,6 +12,7 @@ import {
 } from "../features/agenda";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { AuthPrincipal } from "../features/auth/types";
+import type { ProgramPublicationManifest } from "../features/events/types";
 import type { AgendaRouteDependencies, AgendaRouteEnvironment } from "./agenda";
 import { createAgendaAdminRoutes, createPublishedAgendaRoutes } from "./agenda";
 
@@ -201,6 +202,8 @@ function publicAppFor(
   engine: AgendaEngine,
   eventMetadataForEvent?: AgendaRouteDependencies["eventMetadataForEvent"],
   publicRevisionNumberForEventSlug?: AgendaRouteDependencies["publicRevisionNumberForEventSlug"],
+  getProgramPublicationManifest?: AgendaRouteDependencies["getProgramPublicationManifest"],
+  eventIdForSlug?: AgendaRouteDependencies["eventIdForSlug"],
 ): Hono<AgendaRouteEnvironment> {
   const app = new Hono<AgendaRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -217,6 +220,8 @@ function publicAppFor(
       ...(publicRevisionNumberForEventSlug === undefined
         ? {}
         : { publicRevisionNumberForEventSlug }),
+      ...(getProgramPublicationManifest === undefined ? {} : { getProgramPublicationManifest }),
+      ...(eventIdForSlug === undefined ? {} : { eventIdForSlug }),
     }),
   );
   return app;
@@ -269,6 +274,32 @@ function publicEngine(revision: PublishedAgendaRevision | null): AgendaEngine {
     getPublishedAgenda: async (eventSlug: string) =>
       eventSlug === "open-systems" ? revision : null,
   } as unknown as AgendaEngine;
+}
+
+function servedManifest(revision: PublishedAgendaRevision): ProgramPublicationManifest {
+  return {
+    id: "program-publication-4",
+    organizationId: "tenant-private",
+    eventId: revision.eventId,
+    revision: 4,
+    lifecycle: "served",
+    agendaProjectionId: revision.id,
+    agendaRevisionNumber: revision.revisionNumber,
+    agendaSourceHash: "agenda-source-hash",
+    speakerProjectionId: "speaker-projection-4",
+    speakerRevisionNumber: 4,
+    speakerSourceHash: "speaker-source-hash",
+    approvedContentRevision: 4,
+    approvedProfileRevision: 4,
+    releasedAssetRevision: 4,
+    actorId: "organizer-private",
+    publishedAt: revision.publishedAt,
+    parentServedRevision: null,
+    rollbackTargetRevision: null,
+    cacheRevision: 4,
+    sourceTrigger: "initial-publication",
+    failureReason: null,
+  };
 }
 
 async function postSuggestion(
@@ -1605,6 +1636,107 @@ describe("anonymous published agenda feeds", () => {
     expect(second.status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(1);
   });
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "denies a primed isolate-memory %s entry after event retirement",
+    async (suffix) => {
+      const revision = publicRevision();
+      const manifest = servedManifest(revision);
+      let retired = false;
+      let agendaReads = 0;
+      const manifestLookup = vi.fn(async () => (retired ? null : manifest));
+      const app = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            agendaReads += 1;
+            return revision;
+          },
+        } as unknown as AgendaEngine,
+        async () => ({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revision.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        }),
+        undefined,
+        manifestLookup,
+        async () => revision.eventId,
+      );
+
+      const first = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      retired = true;
+
+      const second = await app.request(`/api/public/events/open-systems/${suffix}`);
+      expect(second.status).toBe(404);
+      expect(second.headers.get("cache-control")).toBe("no-store");
+      expect(agendaReads).toBe(1);
+      expect(manifestLookup).toHaveBeenCalledTimes(2);
+    },
+  );
+  it.each(["agenda", "agenda.json", "agenda.ics"])(
+    "denies a primed Cache API %s entry in a new isolate after event retirement",
+    async (suffix) => {
+      const revision = publicRevision();
+      const manifest = servedManifest(revision);
+      const cacheEntries = new Map<string, Response>();
+      const match = vi.fn(async (request: Request) => cacheEntries.get(request.url)?.clone());
+      const put = vi.fn(async (request: Request, response: Response) => {
+        cacheEntries.set(request.url, response.clone());
+      });
+      const deleteCache = vi.fn(async () => true);
+      vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+      const eventMetadata = async () =>
+        Promise.resolve({
+          slug: "open-systems",
+          name: "Open Systems Summit",
+          timeZone: revision.timeZone,
+          startsAt: "2026-09-18T16:00:00.000Z",
+          endsAt: "2026-09-18T23:00:00.000Z",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          scheduleDates: ["2026-09-18"],
+          venueName: "Pier 27",
+        });
+
+      const firstRoute = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            return revision;
+          },
+        } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        async () => manifest,
+        async () => revision.eventId,
+      );
+      const first = await firstRoute.request(`/api/public/events/open-systems/${suffix}`);
+      expect(first.status).toBe(200);
+      await expect.poll(() => cacheEntries.size).toBe(1);
+
+      const manifestLookup = vi.fn(async () => null);
+      const retiredRoute = publicAppFor(
+        {
+          async getPublishedAgendaRevision() {
+            throw new Error("Retired cache reads must not load an agenda revision.");
+          },
+        } as unknown as AgendaEngine,
+        eventMetadata,
+        undefined,
+        manifestLookup,
+        async () => revision.eventId,
+      );
+      const retired = await retiredRoute.request(`/api/public/events/open-systems/${suffix}`);
+
+      expect(retired.status).toBe(404);
+      expect(retired.headers.get("cache-control")).toBe("no-store");
+      expect(manifestLookup).toHaveBeenCalledTimes(1);
+    },
+  );
   it("prefers an unexpired isolate-memory agenda entry before consulting Cache API", async () => {
     const match = vi.fn(async () => undefined as Response | undefined);
     const put = vi.fn(async () => undefined);

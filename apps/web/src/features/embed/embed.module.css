@@ -951,7 +951,7 @@ ul.publicSessionList > li:last-child .speakerCard {
 }
 
 .speakerCopy strong {
-  color: var(--pub-subtle);
+  color: var(--pub-ink-secondary);
   font-weight: 620;
 }
 
@@ -974,7 +974,7 @@ ul.publicSessionList > li:last-child .speakerCard {
 
 .speakerSessions h4 {
   margin: 0 0 var(--pub-space-2);
-  color: var(--pub-subtle);
+  color: var(--pub-muted);
   font-size: 0.62rem;
   font-weight: 590;
   letter-spacing: 0.09em;
@@ -1623,6 +1623,15 @@ ul.publicSessionList > li:last-child .speakerCard {
 
   .speakerGrid {
     grid-template-columns: 1fr;
+  }
+
+  .speakerDetail {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--pub-space-3);
+  }
+
+  .speakerDetail .speakerPhoto {
+    width: 100%;
   }
 
   .publicSessionCard {
