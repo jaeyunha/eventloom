@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { D1Database } from "@cloudflare/workers-types";
 import type { CloudflareOutboxInvitationTransient } from "./bindings";
 import {
   consumeOutboxQueue,
@@ -144,6 +145,69 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.acked).toBe(true);
     expect(queueMessage.retries).toEqual([]);
     expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("drops a decision communication whose authoritative version is stale", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          from: "auth@sessionboard.namuh.co",
+          to: ["recipient@example.com"],
+          subject: "Decision",
+          html: "<p>Decision</p>",
+          text: "Decision",
+          idempotencyKey: "idem-job-1",
+          purpose: "decision",
+          status: "accepted",
+          decisionFence: {
+            eventId: "event-1",
+            planId: "plan-1",
+            submissionId: "submission-1",
+            version: 1,
+            status: "accepted",
+          },
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => undefined);
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn(async () => ({ version: 2, status: "rejected" })),
+        })),
+      })),
+    } as unknown as D1Database;
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings({ DB: database }));
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("fails closed for malformed decision communication fence metadata", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          from: "auth@sessionboard.namuh.co",
+          to: ["recipient@example.com"],
+          subject: "Decision",
+          html: "<p>Decision</p>",
+          text: "Decision",
+          idempotencyKey: "idem-job-1",
+          decisionFence: { version: "1" },
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => undefined);
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("dead-letter");
   });
 
   it("retries a live lease at its expiry instead of exhausting Queue retries", async () => {

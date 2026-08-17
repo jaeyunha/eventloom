@@ -1466,17 +1466,27 @@ export class OutboxConsumer {
     switch (job.topic) {
       case "communications": {
         const payloadRecord = isRecord(job.payload) ? job.payload : null;
+        const hasFence = payloadRecord !== null && "decisionFence" in payloadRecord;
         const fence = isRecord(payloadRecord?.decisionFence) ? payloadRecord.decisionFence : null;
-        if (
-          this.#database !== undefined &&
+        const validFence =
           fence !== null &&
           typeof fence.eventId === "string" &&
           typeof fence.planId === "string" &&
           typeof fence.submissionId === "string" &&
-          typeof fence.version === "number" &&
-          typeof fence.status === "string"
-        ) {
-          const current = await this.#database
+          Number.isSafeInteger(fence.version) &&
+          (fence.status === "accepted" ||
+            fence.status === "waitlisted" ||
+            fence.status === "rejected");
+        if (hasFence && (this.#database === undefined || !validFence)) {
+          throw new OutboxDeliveryError(
+            "MALFORMED_PAYLOAD",
+            "The decision communication fence is invalid.",
+            { retryable: false },
+          );
+        }
+        const database = this.#database;
+        if (validFence && database !== undefined) {
+          const current = await database
             .prepare(
               `SELECT version, status
                  FROM evaluation_decisions
