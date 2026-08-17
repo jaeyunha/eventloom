@@ -254,7 +254,7 @@ export class D1EventRepository implements EventRepository {
                       FROM events existing_event
                      WHERE existing_event.organization_id = ?
                        AND existing_event.legacy_retired_at IS NULL
-                  ) <= entitlement.active_event_limit
+                  ) < entitlement.active_event_limit
                 )
            )`,
           [

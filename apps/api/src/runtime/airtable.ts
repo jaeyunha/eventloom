@@ -3913,7 +3913,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     const now = new Date();
     const existing = await this.#database
       .prepare(
-        `SELECT request_digest, state, response_status, response_json, expires_at
+        `SELECT request_digest, state, response_status, response_json, expires_at, lease_id
            FROM idempotency_records
           WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?`,
       )
@@ -3924,6 +3924,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         response_status: number | null;
         response_json: string | null;
         expires_at: string;
+        lease_id: string | null;
       }>();
     if (existing !== null && Date.parse(existing.expires_at) > now.getTime()) {
       if (existing.request_digest !== input.fingerprint) return { status: "conflict" };
@@ -3947,9 +3948,10 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       await this.#database
         .prepare(
           `DELETE FROM idempotency_records
-            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?`,
+            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+              AND expires_at <= ?`,
         )
-        .bind(tenantId, input.scope, input.key)
+        .bind(tenantId, input.scope, input.key, now.toISOString())
         .run();
     }
     const leaseId = crypto.randomUUID();
@@ -3957,26 +3959,21 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       await this.#database
         .prepare(
           `INSERT INTO idempotency_records
-             (tenant_id, scope, idempotency_key, request_digest, state, created_at, expires_at)
-           VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+             (tenant_id, scope, idempotency_key, request_digest, state, lease_id, created_at, expires_at)
+           VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)`,
         )
         .bind(
           tenantId,
           input.scope,
           input.key,
           input.fingerprint,
+          leaseId,
           now.toISOString(),
           new Date(now.getTime() + this.#leaseMs).toISOString(),
         )
         .run();
     } catch {
       const raced = await this.begin(input);
-      if (raced.status === "acquired") {
-        return {
-          status: "pending",
-          wait: () => this.waitForCompletion(tenantId, input),
-        };
-      }
       return raced;
     }
     return { status: "acquired", leaseId };
@@ -3994,7 +3991,8 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
       .prepare(
         `UPDATE idempotency_records
             SET state = 'completed', response_status = ?, response_json = ?, expires_at = ?
-          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+            AND request_digest = ? AND lease_id = ?`,
       )
       .bind(
         input.response.status,
@@ -4004,6 +4002,7 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
         input.scope,
         input.key,
         input.fingerprint,
+        input.leaseId ?? "",
       )
       .run();
   }
@@ -4017,9 +4016,16 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     await this.#database
       .prepare(
         `DELETE FROM idempotency_records
-          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
+            AND request_digest = ? AND lease_id = ?`,
       )
-      .bind(tenantFromScope(input.scope), input.scope, input.key, input.fingerprint)
+      .bind(
+        tenantFromScope(input.scope),
+        input.scope,
+        input.key,
+        input.fingerprint,
+        input.leaseId ?? "",
+      )
       .run();
   }
 

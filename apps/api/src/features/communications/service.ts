@@ -2099,7 +2099,13 @@ export class CommunicationService {
       createdAt: now,
       updatedAt: now,
     };
-    run = await runtime.repository.insertRun(run);
+    try {
+      run = await runtime.repository.insertRun(run);
+    } catch (error) {
+      const concurrent = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
+      if (concurrent !== undefined) return copyReminderRun(concurrent);
+      throw error;
+    }
     run = await runtime.repository.updateRun({
       ...run,
       state: "running",
