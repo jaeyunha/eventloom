@@ -48,7 +48,7 @@ function decision(version = 1): EvaluationDecision {
 
 function decisionDatabase() {
   const database = evaluationExportDatabase();
-  database.executeScript(migration("0046_evaluation_decision_outbox.sql"));
+  database.executeScript(migration("0051_evaluation_decision_outbox.sql"));
   database.executeScript(`
     CREATE TABLE organizations (organization_id TEXT PRIMARY KEY NOT NULL);
     CREATE TABLE events (
@@ -110,7 +110,7 @@ describe("evaluation decision outbox", () => {
          'queued',0,'${NOW}','${NOW}','${NOW}');
     `);
 
-    database.executeScript(migration("0046_evaluation_decision_outbox.sql"));
+    database.executeScript(migration("0051_evaluation_decision_outbox.sql"));
 
     expect(database.query("SELECT id,topic,state FROM outbox_jobs")).toEqual([
       { id: "existing-report", topic: "reports", state: "queued" },

@@ -2852,6 +2852,25 @@ export class EvaluationService {
     } catch {
       throw advisoryUnavailable();
     }
+    if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
+      throw forbidden("A conflict declaration removes access to this submission.");
+    }
+    const latestMaterial = await this.#submissions.getSubmissionForReview(
+      actor.tenantId,
+      assignment.eventId,
+      assignment.submissionId,
+    );
+    if (latestMaterial === null) throw notFound("The assigned submission was not found.");
+    await this.#requireActiveSubmission(plan, latestMaterial);
+    const latestRevision = await this.#submissionRevision(
+      actor.tenantId,
+      assignment.eventId,
+      assignment.submissionId,
+      latestMaterial.version ?? latestMaterial.revision,
+    );
+    if (latestRevision !== submissionRevision) {
+      throw conflict("The assigned submission changed while AI suggestions were generated.");
+    }
     const candidates = this.#normalizeProviderCandidates(result, round, providerInput);
     const now = this.#clock().toISOString();
     const provenance: EvaluationSuggestionProvenance = {
