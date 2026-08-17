@@ -2145,7 +2145,7 @@ export class CommunicationService {
       );
       throw conflict(failed.configurationFailure ?? "The reminder audience revision is stale.");
     }
-    const observed: ReminderDispatch[] = [];
+    const ownedDispatches: ReminderDispatch[] = [];
     for (const candidate of sourceResult.candidates) {
       const idempotencyKey = reminderIdempotencyKey(
         scope.organizationId,
@@ -2153,95 +2153,124 @@ export class CommunicationService {
         input.triggerType,
         candidate,
       );
-      const existingDispatch = await runtime.repository.findDispatchByIdempotency(
+      let dispatch = await runtime.repository.findDispatchByIdempotency(
         scope.organizationId,
         scope.eventId,
         idempotencyKey,
       );
-      if (existingDispatch !== undefined) {
-        observed.push(existingDispatch);
-        continue;
-      }
-      const dispatchNow = this.clock().toISOString();
-      let dispatch: ReminderDispatch = {
-        id: reminderDispatchId(idempotencyKey),
-        runId: run.id,
-        organizationId: scope.organizationId,
-        eventId: scope.eventId,
-        recipient: candidate.recipientApplicationId,
-        subject: cloneReminderSubject(candidate.subject),
-        eligibilityReason: candidate.eligibilityReason,
-        cadenceWindow: candidate.cadenceWindow,
-        idempotencyKey,
-        providerMessageId: null,
-        status: "candidate",
-        skipMetadata: null,
-        failureMetadata: null,
-        createdAt: dispatchNow,
-        updatedAt: dispatchNow,
-        eligibleAt: null,
-        skippedAt: null,
-        queuedAt: null,
-        providerAcceptedAt: null,
-        deliveredAt: null,
-        failedAt: null,
-        bouncedAt: null,
-        completedAt: null,
-        outboxJobId: null,
-      };
-      try {
-        dispatch = await runtime.repository.insertDispatch(dispatch);
-      } catch (error) {
-        const duplicate = await runtime.repository.findDispatchByIdempotency(
-          scope.organizationId,
-          scope.eventId,
-          idempotencyKey,
-        );
-        if (duplicate !== undefined) {
-          observed.push(duplicate);
+      let ownedByCurrentRun = false;
+      if (dispatch !== undefined) {
+        const recoverableEnqueueFailure =
+          dispatch.status === "failed" &&
+          dispatch.providerMessageId === null &&
+          dispatch.failureMetadata?.stage === "enqueue";
+        if (
+          dispatch.status !== "candidate" &&
+          dispatch.status !== "eligible" &&
+          !recoverableEnqueueFailure
+        ) {
           continue;
         }
-        throw error;
+      } else {
+        const dispatchNow = this.clock().toISOString();
+        dispatch = {
+          id: reminderDispatchId(idempotencyKey),
+          runId: run.id,
+          organizationId: scope.organizationId,
+          eventId: scope.eventId,
+          recipient: candidate.recipientApplicationId,
+          subject: cloneReminderSubject(candidate.subject),
+          eligibilityReason: candidate.eligibilityReason,
+          cadenceWindow: candidate.cadenceWindow,
+          idempotencyKey,
+          providerMessageId: null,
+          status: "candidate",
+          skipMetadata: null,
+          failureMetadata: null,
+          createdAt: dispatchNow,
+          updatedAt: dispatchNow,
+          eligibleAt: null,
+          skippedAt: null,
+          queuedAt: null,
+          providerAcceptedAt: null,
+          deliveredAt: null,
+          failedAt: null,
+          bouncedAt: null,
+          completedAt: null,
+          outboxJobId: null,
+        };
+        try {
+          dispatch = await runtime.repository.insertDispatch(dispatch);
+          ownedByCurrentRun = true;
+        } catch (error) {
+          const duplicate = await runtime.repository.findDispatchByIdempotency(
+            scope.organizationId,
+            scope.eventId,
+            idempotencyKey,
+          );
+          if (duplicate === undefined) throw error;
+          const recoverableEnqueueFailure =
+            duplicate.status === "failed" &&
+            duplicate.providerMessageId === null &&
+            duplicate.failureMetadata?.stage === "enqueue";
+          if (
+            duplicate.status !== "candidate" &&
+            duplicate.status !== "eligible" &&
+            !recoverableEnqueueFailure
+          ) {
+            continue;
+          }
+          dispatch = duplicate;
+        }
       }
-      if (candidate.normalizedEmail === null || candidate.normalizedEmail.trim().length === 0) {
+      if (dispatch.status === "candidate") {
+        if (candidate.normalizedEmail === null || candidate.normalizedEmail.trim().length === 0) {
+          const skippedAt = this.clock().toISOString();
+          dispatch = await runtime.repository.updateDispatch({
+            ...dispatch,
+            status: "skipped",
+            skipMetadata: { reason: "missing_email" },
+            skippedAt,
+            completedAt: skippedAt,
+            updatedAt: skippedAt,
+          });
+          if (ownedByCurrentRun) ownedDispatches.push(dispatch);
+          else await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+          continue;
+        }
+        if (!candidate.eligible) {
+          const skippedAt = this.clock().toISOString();
+          dispatch = await runtime.repository.updateDispatch({
+            ...dispatch,
+            status: "skipped",
+            skipMetadata: { reason: candidate.eligibilityReason },
+            skippedAt,
+            completedAt: skippedAt,
+            updatedAt: skippedAt,
+          });
+          if (ownedByCurrentRun) ownedDispatches.push(dispatch);
+          else await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
+          continue;
+        }
+        const eligibleAt = this.clock().toISOString();
         dispatch = await runtime.repository.updateDispatch({
           ...dispatch,
-          status: "skipped",
-          skipMetadata: { reason: "missing_email" },
-          skippedAt: this.clock().toISOString(),
-          completedAt: this.clock().toISOString(),
-          updatedAt: this.clock().toISOString(),
+          status: "eligible",
+          eligibleAt,
+          updatedAt: eligibleAt,
         });
-        observed.push(dispatch);
-        continue;
       }
-      if (!candidate.eligible) {
-        const skippedAt = this.clock().toISOString();
-        dispatch = await runtime.repository.updateDispatch({
-          ...dispatch,
-          status: "skipped",
-          skipMetadata: { reason: candidate.eligibilityReason },
-          skippedAt,
-          completedAt: skippedAt,
-          updatedAt: skippedAt,
-        });
-        observed.push(dispatch);
-        continue;
-      }
-      const eligibleAt = this.clock().toISOString();
-      dispatch = await runtime.repository.updateDispatch({
-        ...dispatch,
-        status: "eligible",
-        eligibleAt,
-        updatedAt: eligibleAt,
-      });
       try {
+        const normalizedEmail = candidate.normalizedEmail?.trim();
+        if (normalizedEmail === undefined || normalizedEmail.length === 0) {
+          throw new Error("The reminder recipient email is unavailable.");
+        }
         const result = await runtime.outbox.enqueue({
           dispatchId: dispatch.id,
           runId: dispatch.runId,
           organizationId: dispatch.organizationId,
           eventId: dispatch.eventId,
-          recipient: candidate.normalizedEmail.trim(),
+          recipient: normalizedEmail,
           from: candidate.renderedMessage.from,
           senderPurpose: "speakers",
           subject: candidate.renderedMessage.subject,
@@ -2257,6 +2286,9 @@ export class CommunicationService {
           ...dispatch,
           status: "queued",
           outboxJobId,
+          failureMetadata: null,
+          failedAt: null,
+          completedAt: null,
           queuedAt,
           updatedAt: queuedAt,
         });
@@ -2265,16 +2297,17 @@ export class CommunicationService {
         dispatch = await runtime.repository.updateDispatch({
           ...dispatch,
           status: "failed",
-          failureMetadata: { reason: reminderErrorMessage(error) },
+          failureMetadata: { stage: "enqueue", reason: reminderErrorMessage(error) },
           failedAt,
           completedAt: failedAt,
           updatedAt: failedAt,
         });
       }
-      observed.push(dispatch);
+      if (ownedByCurrentRun) ownedDispatches.push(dispatch);
+      else await this.refreshReminderRun(dispatch.runId, scope.organizationId, scope.eventId);
     }
     const finishedAt = this.clock().toISOString();
-    const counts = observed.reduce(
+    const counts = ownedDispatches.reduce(
       (summary, dispatch) => {
         const count = reminderCountStatus(dispatch.status);
         summary.eligibleCount += count.eligible;
@@ -2287,7 +2320,7 @@ export class CommunicationService {
     );
     run = await runtime.repository.updateRun({
       ...run,
-      candidateCount: sourceResult.candidates.length,
+      candidateCount: ownedDispatches.length,
       ...counts,
       state: "completed",
       completedAt: finishedAt,

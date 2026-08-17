@@ -176,6 +176,83 @@ describe("Cloudflare outbox consumer", () => {
     });
     expect(repository.get("job-1")?.state).toBe("delivered");
   });
+  it("delivers one logical reminder when status persistence fails after provider acceptance", async () => {
+    const idempotencyKey = "reminder-unknown-result-1";
+    const reminder = {
+      from: "speakers@sessionboard.namuh.co",
+      to: ["recipient@example.com"],
+      subject: "Reminder",
+      html: "<p>Reminder</p>",
+      text: "Reminder",
+      idempotencyKey,
+    };
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        deduplicationKey: idempotencyKey,
+        payload: {
+          effect: "send_reminder",
+          runId: "run-1",
+          dispatchId: "dispatch-1",
+          eventId: "event-1",
+          payload: reminder,
+        },
+      }),
+    ]);
+    const accepted = new Map<string, string>();
+    const attemptedKeys: string[] = [];
+    let logicalMessages = 0;
+    const send = vi.fn(async (_payload: unknown, context: { idempotencyKey: string }) => {
+      attemptedKeys.push(context.idempotencyKey);
+      const existing = accepted.get(context.idempotencyKey);
+      if (existing !== undefined) return { providerMessageId: existing };
+      logicalMessages += 1;
+      const providerMessageId = "provider-reminder-stable-1";
+      accepted.set(context.idempotencyKey, providerMessageId);
+      return { providerMessageId };
+    });
+    let recorderCalls = 0;
+    const statusRecorder = {
+      async recordCommunicationStatus() {
+        recorderCalls += 1;
+        if (recorderCalls === 1) throw new Error("status store unavailable");
+      },
+    };
+    let current = NOW;
+    const process = async (queueMessage: OutboxQueueMessage) =>
+      consumeOutboxQueue(
+        { messages: [queueMessage] } as unknown as MessageBatch<unknown>,
+        bindings(),
+        undefined,
+        {
+          repository,
+          adapters: { communications: send },
+          statusRecorder,
+          now: () => current,
+          logger: {},
+          baseRetryDelayMs: 1_000,
+          maxRetryDelayMs: 10_000,
+          maxAttempts: 3,
+          leaseOwner: "test-worker",
+        },
+      );
+    const first = message(queueBody());
+
+    await process(first);
+    expect(first.acked).toBe(false);
+    expect(first.retries).toEqual([1]);
+    expect(repository.get("job-1")?.state).toBe("queued");
+
+    current = new Date(NOW.getTime() + 1_000);
+    const retry = message(queueBody(), 1);
+    await process(retry);
+
+    expect(attemptedKeys).toEqual([idempotencyKey, idempotencyKey]);
+    expect(logicalMessages).toBe(1);
+    expect(recorderCalls).toBe(2);
+    expect(retry.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
   it("records reminder provider acceptance before acknowledging the generic outbox job", async () => {
     const reminder = {
       from: "speakers@sessionboard.namuh.co",
