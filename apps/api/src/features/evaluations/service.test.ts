@@ -4864,6 +4864,10 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       submissionRevision: 7,
       provenance: { provider: "test-provider", model: "test-model" },
     });
+    expect(suggestion.provenance.sourceReferences).toEqual([
+      "abstract:Practical material for the audience.",
+      "abstract:Practical material for the audience.",
+    ]);
     expect(suggestion.candidates.quality?.[0]).toMatchObject({
       value: 4,
       evidence: ["The practical material gives the audience a concrete outcome."],

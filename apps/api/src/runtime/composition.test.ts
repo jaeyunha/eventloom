@@ -8,10 +8,7 @@ import {
   InMemoryReminderRepository,
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import {
-  type EvaluationDecisionProjectionInput,
-  EvaluationService,
-} from "../features/evaluations/service";
+import { type EvaluationDecisionProjectionInput } from "../features/evaluations/service";
 import type {
   EventRoleInvitation,
   EventRoleInvitationRepository,

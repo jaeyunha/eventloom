@@ -2827,9 +2827,7 @@ export class EvaluationService {
       provider: result.provenance?.provider ?? "injected",
       model: result.provenance?.model ?? "unspecified",
       generatedAt: result.provenance?.generatedAt ?? now,
-      sourceReferences:
-        result.provenance?.sourceReferences ??
-        candidates.flatMap((candidate) => candidate.evidence),
+      sourceReferences: candidates.flatMap((candidate) => candidate.provenance.sourceReferences),
       ...(result.provenance?.promptVersion === undefined
         ? {}
         : { promptVersion: result.provenance.promptVersion }),
