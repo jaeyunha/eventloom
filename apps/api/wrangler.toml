@@ -10,6 +10,7 @@ enabled = true
 
 [vars]
 APP_ENV = "local"
+DEPLOYMENT_MODE = "self-hosted"
 WEB_ORIGIN = "http://127.0.0.1:3015"
 OPENSEND_API_URL = "http://127.0.0.1:8026"
 AUTH_FROM_EMAIL = "login@local.example.test"
@@ -54,6 +55,7 @@ workers_dev = true
 enabled = true
 [env.staging.vars]
 APP_ENV = "staging"
+DEPLOYMENT_MODE = "managed"
 AI_PROVIDER = "disabled"
 OPENAI_MODEL = "staging-openai-model-placeholder"
 OPENAI_AGENDA_MODEL = "staging-openai-agenda-model-placeholder"
@@ -117,6 +119,7 @@ crons = ["*/5 * * * *", "0 * * * *"]
 enabled = true
 [env.production.vars]
 APP_ENV = "production"
+DEPLOYMENT_MODE = "managed"
 AI_PROVIDER = "disabled"
 OPENAI_MODEL = "production-openai-model-placeholder"
 OPENAI_AGENDA_MODEL = "production-openai-agenda-model-placeholder"

@@ -1,3 +1,10 @@
+import {
+  deploymentEnvironmentSchema,
+  deploymentModeSchema,
+  type OrganizationEntitlement,
+  organizationEntitlementSchema,
+  resolveDeploymentMode,
+} from "@eventloom/contracts";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 import type { ApiBindings, ApiDependencies } from "../app";
 import { parseCommunicationIdentityEnvironment } from "../env";
@@ -19,6 +26,7 @@ import type {
 } from "../features/auth/types";
 import { apiKeyScopes, organizationRoles } from "../features/auth/types";
 import type { EventRepository } from "../features/events/types";
+import { createOrganizationPolicy } from "../features/organizations/policy";
 import {
   type OrganizationMembership as MemberOrganizationMembership,
   MemberRepositoryConflictError,
@@ -41,6 +49,7 @@ import {
   type CloudflareOutboxMessage,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
+import { D1OrganizationEntitlementRepository } from "../infrastructure/cloudflare/repositories/organization-entitlements";
 import {
   type AdvisoryAiReasoningEffort,
   type CloudflareAiBinding,
@@ -67,6 +76,7 @@ import { createD1RuntimeDependencies, createRuntimeEventRoleInvitationAdapters }
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
     readonly API_ORIGIN?: string;
+    readonly DEPLOYMENT_MODE?: string;
     readonly RUNTIME_PROFILE?: string;
     /** Legacy global Airtable bindings are ignored; each connection chooses its own credential and base. */
     readonly AIRTABLE_ACCESS_TOKEN?: string;
@@ -78,6 +88,7 @@ export type RuntimeBindings = ApiBindings &
     readonly OPENSEND_API_KEY?: string;
     readonly OPENSEND_SENDING_API_KEY?: string;
     readonly OPENSEND_API_URL?: string;
+    readonly ORGANIZATION_PROVISIONING_TOKEN?: string;
     readonly CACHE_INVALIDATION_URL?: string;
     readonly CACHE_INVALIDATION_TOKEN?: string;
     readonly AUTH_FROM_EMAIL?: string;
@@ -533,13 +544,18 @@ function organizationFromValue(value: unknown): OrganizationRecord | null {
   });
 }
 
-function organizationFingerprint(organization: OrganizationRecord, ownerUserId: string): string {
+function organizationFingerprint(
+  organization: OrganizationRecord,
+  ownerUserId: string,
+  entitlement: OrganizationEntitlement,
+): string {
   return JSON.stringify({
     organizationId: organization.organizationId,
     slug: organization.slug,
     name: organization.name,
     config: organization.config,
     ownerUserId,
+    entitlement,
   });
 }
 
@@ -715,6 +731,18 @@ function randomToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function secretEquals(candidate: string | null, expected: string): boolean {
+  if (candidate === null) return false;
+  const candidateBytes = new TextEncoder().encode(candidate);
+  const expectedBytes = new TextEncoder().encode(expected);
+  let difference = candidateBytes.length ^ expectedBytes.length;
+  const length = Math.max(candidateBytes.length, expectedBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (candidateBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  }
+  return difference === 0;
+}
+
 function repositoryConflict(error: unknown): boolean {
   return error instanceof Error && /constraint|unique|duplicate/i.test(error.message);
 }
@@ -729,13 +757,16 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
   async createOrganizationWithOwner(input: {
     readonly organization: OrganizationRecord;
     readonly membership: MemberMembership;
+    readonly entitlement: OrganizationEntitlement;
     readonly idempotencyKey?: string;
   }): Promise<OrganizationRecord> {
     const organization = cloneValue(input.organization);
     const membership = cloneValue(input.membership);
+    const entitlement = organizationEntitlementSchema.parse(input.entitlement);
     if (
       membership.organizationId !== organization.organizationId ||
       membership.role !== "owner" ||
+      entitlement.organizationId !== organization.organizationId ||
       !nonEmpty(membership.userId)
     ) {
       throw new MemberRepositoryConflictError("The organization owner membership is invalid.");
@@ -743,12 +774,12 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
     const allowExisting = input.idempotencyKey !== undefined;
     const operation = () =>
-      this.insertOrganizationWithOwner({ organization, membership, allowExisting });
+      this.insertOrganizationWithOwner({ organization, membership, entitlement, allowExisting });
     if (input.idempotencyKey === undefined) return operation();
 
     const scope = `${encodeURIComponent(membership.userId)}:organization-create`;
     const key = input.idempotencyKey;
-    const fingerprint = organizationFingerprint(organization, membership.userId);
+    const fingerprint = organizationFingerprint(organization, membership.userId, entitlement);
     const claim = await this.#idempotency.begin({ scope, key, fingerprint });
     if (claim.status === "conflict") {
       throw new MemberRepositoryConflictError(
@@ -874,6 +905,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
   private async insertOrganizationWithOwner(input: {
     readonly organization: OrganizationRecord;
     readonly membership: MemberMembership;
+    readonly entitlement: OrganizationEntitlement;
     readonly allowExisting: boolean;
   }): Promise<OrganizationRecord> {
     const existing = await this.readOrganization(input.organization.organizationId);
@@ -882,7 +914,21 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
         throw new MemberRepositoryConflictError("The organization ID already exists.");
       }
       const owners = await this.organizationOwnerIds(input.organization.organizationId);
-      if (owners.includes(input.membership.userId)) return cloneValue(existing);
+      const entitlement = await new D1OrganizationEntitlementRepository(
+        this.database,
+      ).getEntitlement(input.organization.organizationId);
+      if (
+        owners.includes(input.membership.userId) &&
+        entitlement !== null &&
+        JSON.stringify(entitlement) === JSON.stringify(input.entitlement)
+      ) {
+        return cloneValue(existing);
+      }
+      if (owners.includes(input.membership.userId)) {
+        throw new MemberRepositoryConflictError(
+          "The organization entitlement differs from the idempotent request.",
+        );
+      }
       if (owners.length > 0) {
         throw new MemberRepositoryConflictError("The organization already has another owner.");
       }
@@ -934,6 +980,27 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
             input.membership.createdAt,
             input.membership.updatedAt,
           ),
+        this.database
+          .prepare(
+            `INSERT INTO organization_entitlements (
+               organization_id, schema_version, revision, state, capabilities_json,
+               active_event_limit, organizer_seat_limit, not_before, expires_at,
+               created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            input.entitlement.organizationId,
+            input.entitlement.schemaVersion,
+            input.entitlement.revision,
+            input.entitlement.state,
+            JSON.stringify(input.entitlement.capabilities),
+            input.entitlement.limits.activeEvents,
+            input.entitlement.limits.organizerSeats,
+            input.entitlement.notBefore,
+            input.entitlement.expiresAt,
+            input.organization.createdAt,
+            input.organization.updatedAt,
+          ),
       ]);
     } catch (error) {
       if (repositoryConflict(error)) {
@@ -951,6 +1018,12 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     const owners = await this.organizationOwnerIds(input.organization.organizationId);
     if (!owners.includes(input.membership.userId)) {
       throw new MemberRepositoryConflictError("The organization owner membership was not created.");
+    }
+    const entitlement = await new D1OrganizationEntitlementRepository(this.database).getEntitlement(
+      input.organization.organizationId,
+    );
+    if (entitlement === null) {
+      throw new MemberRepositoryConflictError("The organization entitlement was not created.");
     }
     return cloneValue(created);
   }
@@ -2509,6 +2582,22 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   if (bindings.PRIVATE_FILES === undefined) {
     throw new TypeError("The private files binding is required outside local development.");
   }
+  const deploymentMode = resolveDeploymentMode(
+    deploymentEnvironmentSchema.parse(bindings.APP_ENV),
+    bindings.DEPLOYMENT_MODE === undefined
+      ? undefined
+      : deploymentModeSchema.parse(bindings.DEPLOYMENT_MODE),
+  );
+  const provisioningToken = bindings.ORGANIZATION_PROVISIONING_TOKEN?.trim();
+  const entitlementRepository = new D1OrganizationEntitlementRepository(bindings.DB);
+  const organizationPolicy = createOrganizationPolicy(
+    deploymentMode === "managed"
+      ? {
+          deploymentMode,
+          repository: entitlementRepository,
+        }
+      : { deploymentMode },
+  );
   if (bindings.OUTBOX_QUEUE === undefined) {
     throw new TypeError("The outbox queue binding is required outside local development.");
   }
@@ -2613,9 +2702,11 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     eventRoleInvitationAdapters,
     senderAddresses,
     calendarIntegrationOptions,
+    organizationPolicy,
   });
   const memberService = new MemberService({
     identity: new D1MemberIdentityRepository(bindings.DB),
+    organizationEntitlements: entitlementRepository,
     auth: new D1MemberAuthBoundary(bindings.DB, bindings.WEB_ORIGIN),
     invitationDelivery: new CloudflareMemberInvitationDelivery(
       bindings.DB,
@@ -2673,6 +2764,33 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     ...(dependencies.access === undefined ? {} : { access: dependencies.access }),
     auth: betterAuthRuntime,
     members: { service: memberService },
+    ...(deploymentMode === "self-hosted" &&
+    provisioningToken !== undefined &&
+    provisioningToken.length > 0
+      ? {
+          organizationBootstrap: {
+            service: memberService,
+            authenticate: (request: Request) =>
+              secretEquals(
+                request.headers.get("x-eventloom-bootstrap-token"),
+                provisioningToken,
+              ),
+          },
+        }
+      : {}),
+    ...(provisioningToken !== undefined && provisioningToken.length > 0
+      ? {
+          organizationProvisioning: {
+            service: memberService,
+            entitlements: entitlementRepository,
+            authenticate: (request: Request) =>
+              secretEquals(
+                request.headers.get("authorization"),
+                `Bearer ${provisioningToken}`,
+              ),
+          },
+        }
+      : {}),
     integrations,
     ...(airtableIntegration === undefined ? {} : { airtableIntegration }),
   };

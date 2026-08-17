@@ -6,7 +6,10 @@ import type {
   CrmPipelineEntry,
 } from "../../../features/crm/types";
 import type { Event, EventAuditEntry } from "../../../features/events/types";
-import { EventRepositoryConflictError } from "../../../features/events/types";
+import {
+  EventRepositoryCapacityError,
+  EventRepositoryConflictError,
+} from "../../../features/events/types";
 import type { Session, SessionAuditEntry, SessionSettings } from "../../../features/sessions/types";
 import { SessionRepositoryConflictError } from "../../../features/sessions/types";
 import { SqliteD1 } from "../../../test-support/sqlite-d1";
@@ -317,6 +320,39 @@ function crmSqliteState(database: SqliteD1) {
 }
 
 describe("D1 event repository commands", () => {
+  it("guards managed event creation against the current entitlement in the same batch", async () => {
+    const db = database();
+    await new D1EventRepository(db).commitEvent({
+      event: { ...event, version: 1 },
+      expectedVersion: null,
+      creationEntitlement: {
+        revision: 7,
+        activeEventLimit: 3,
+      },
+    });
+
+    const batch = db.batch.mock.calls[0]?.[0] as readonly ReturnType<typeof statement>[];
+    expect(batch[1]?.bound.query).toContain("FROM organization_entitlements");
+    expect(batch[1]?.bound.query).toContain("COUNT(*)");
+    expect(batch[1]?.bound.values).toEqual(["org-1", 7, now, now, "org-1"]);
+  });
+
+  it("reports entitlement admission failures as capacity errors", async () => {
+    const db = database();
+    db.batch.mockRejectedValueOnce(new Error("D1_CAS_CONFLICT"));
+
+    await expect(
+      new D1EventRepository(db).commitEvent({
+        event: { ...event, version: 1 },
+        expectedVersion: null,
+        creationEntitlement: {
+          revision: 7,
+          activeEventLimit: 0,
+        },
+      }),
+    ).rejects.toBeInstanceOf(EventRepositoryCapacityError);
+  });
+
   it("batches tenant-scoped CAS, audit, and sync-job persistence", async () => {
     const db = database();
     await new D1EventRepository(db).commitEvent({ event, expectedVersion: 1, audit: eventAudit });

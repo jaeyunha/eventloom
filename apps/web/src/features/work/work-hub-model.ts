@@ -2,11 +2,15 @@ import type { AccountIdentity, AccountSession } from "../account/account-access"
 import type { PortalContext } from "../portal/types";
 import type { WorkEventInvitation } from "./work-event-invitation-model";
 
+export interface WorkOrganizerOrganization {
+  readonly organizationId: string;
+  readonly name: string;
+  readonly href: string;
+}
+
 export interface WorkOrganizerModel {
   readonly organizationCount: number;
-  readonly organizationNames: readonly string[];
-  readonly continueHref: string | null;
-  readonly continueLabel: string | null;
+  readonly organizations: readonly WorkOrganizerOrganization[];
 }
 
 export interface WorkReviewerModel {
@@ -110,27 +114,29 @@ export function buildWorkHubModel({
   const organizerOrganizations = organizations.filter(({ organizationId }) =>
     organizerIds.has(organizationId),
   );
-  const preferredOrganization = organizerOrganizations.find(
-    ({ organizationId }) => organizationId === preferredOrganizationId,
-  );
-  const preferredName = preferredOrganization
-    ? humanName(preferredOrganization.name, [preferredOrganization.organizationId])
-    : null;
+  const organizerDestinations = organizerOrganizations.flatMap((organization) => {
+    const name = humanName(organization.name, [organization.organizationId]);
+    return name === null
+      ? []
+      : [
+          {
+            organizationId: organization.organizationId,
+            name,
+            href: `/admin/organizations/${encodeURIComponent(organization.organizationId)}/events`,
+          },
+        ];
+  });
+  const orderedOrganizerDestinations = [...organizerDestinations].sort((left, right) => {
+    if (left.organizationId === preferredOrganizationId) return -1;
+    if (right.organizationId === preferredOrganizationId) return 1;
+    return 0;
+  });
   const organizer =
     organizerIds.size === 0
       ? null
       : {
           organizationCount: organizerIds.size,
-          organizationNames: unique(
-            organizerOrganizations.map(({ name, organizationId }) =>
-              humanName(name, [organizationId]),
-            ),
-          ),
-          continueHref:
-            preferredName === null || preferredOrganization === undefined
-              ? null
-              : `/admin/organizations/${encodeURIComponent(preferredOrganization.organizationId)}/events`,
-          continueLabel: preferredName === null ? null : `Continue with ${preferredName}`,
+          organizations: orderedOrganizerDestinations,
         };
 
   const assignmentSummaries = reviewerAssignments.map(reviewerAssignment);

@@ -61,6 +61,7 @@ Use loopback addresses consistently for local browser, callback, and API configu
 
 ```dotenv
 APP_ENV=local
+DEPLOYMENT_MODE=self-hosted
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
@@ -68,6 +69,7 @@ API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
+ORGANIZATION_PROVISIONING_TOKEN=<backend-only-operator-token>
 OPENSEND_API_URL=http://127.0.0.1:8026
 OPENSEND_API_KEY=local-development
 AUTH_FROM_EMAIL=login@local.example.test
@@ -93,12 +95,46 @@ administration is composed only when its organization-scoped integration
 configuration is enabled; manual PAT mode must also be explicitly enabled and
 is not the hosted-production default.
 
-Apply local D1 migrations and start both services from the repository root:
+### Organization provisioning modes
 
-```bash
-bunx wrangler d1 migrations apply DB --cwd apps/api --local
-make dev
-```
+`DEPLOYMENT_MODE` is independent from `APP_ENV`:
+
+- `self-hosted` can expose the first-organization bootstrap route when
+  `ORGANIZATION_BOOTSTRAP_TOKEN` is configured.
+- Both modes keep organization creation outside existing organization
+  workspaces. Operators provision organizations through the authenticated
+  internal route using `ORGANIZATION_PROVISIONING_TOKEN`.
+
+`/work` is the account-level workspace chooser. A person who belongs to multiple
+organizations sees each authorized organization there with its own destination
+action. Creating another organization never happens from inside an existing
+organization Settings page.
+
+Use separate backend-only credentials:
+
+- `ORGANIZATION_BOOTSTRAP_TOKEN` authorizes only
+  `POST /api/setup/organizations/bootstrap` via `X-Eventloom-Bootstrap-Token`
+  for an authenticated verified user without memberships.
+- `ORGANIZATION_PROVISIONING_TOKEN` authorizes
+  `POST /api/internal/organizations` and
+  `PUT /api/internal/organizations/:organizationId/entitlement` via
+  `Authorization: Bearer <token>`. The request supplies the stable owner user ID
+  and a provider-neutral organization entitlement. Managed event creation
+  requires the `events.create` capability; `limits.activeEvents` and
+  `limits.organizerSeats` bound non-retired events and owner/admin seats,
+  respectively. Reusing the same
+  `Idempotency-Key` with the same payload returns the original result.
+
+Local development defaults to `self-hosted`. Staging and production Wrangler
+configuration defaults to `managed`. Leaving a token unset keeps the matching
+routes unmounted. Install the secrets with the Cloudflare Worker secret sync for
+any environment that must provision organizations.
+
+Managed multi-organization hosting for third parties is a licensor/hosted-service
+concern under Elastic License 2.0. Self-hosters may run Eventloom for their own
+organizations; using managed mode to offer Eventloom as a hosted service to
+third parties is outside the permitted licensee use.
+
 
 Concurrent worktrees must use distinct listeners, browser hostnames, local persistence, caches,
 and Docker Compose projects. A dedicated `*.localhost` web hostname is required because browser

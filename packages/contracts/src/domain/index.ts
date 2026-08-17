@@ -1,5 +1,6 @@
 export * from "./agenda";
 export * from "./common";
+export * from "./entitlements";
 export * from "./ids";
 export * from "./integrations";
 export * from "./lifecycle";

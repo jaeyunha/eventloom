@@ -18,7 +18,9 @@ export function WorkHubView({ model }: Readonly<{ model: WorkHubModel }>) {
   const [invitations, setInvitations] = useState(model.invitations ?? []);
   const acceptedEventCount = invitations.filter(({ status }) => status === "accepted").length;
   const availableCount =
-    [model.organizer, model.reviewer, model.participant].filter(Boolean).length +
+    (model.organizer?.organizationCount ?? 0) +
+    (model.reviewer === null ? 0 : 1) +
+    (model.participant === null ? 0 : 1) +
     acceptedEventCount;
   return (
     <div className={styles.shell} data-role-workspace-shell="true">

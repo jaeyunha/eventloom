@@ -46,7 +46,6 @@ type MemberFilter = "all" | MemberRole;
 type MemberStatusFilter = "all" | "pending" | "active";
 
 type OrganizationDraft = {
-  readonly organizationId: string;
   readonly slug: string;
   readonly name: string;
   readonly config: string;
@@ -398,14 +397,12 @@ function MemberSettingsSection({
   organizationNotice,
   onDraftChange,
   onUpdate,
-  onCreate,
 }: Readonly<{
   readonly organizationDraft: OrganizationDraft;
   readonly organizationBusy: boolean;
   readonly organizationNotice: string | null;
   readonly onDraftChange: (field: keyof OrganizationDraft, value: string) => void;
   readonly onUpdate: (event: FormEvent<HTMLFormElement>) => void;
-  readonly onCreate: (event: FormEvent<HTMLFormElement>) => void;
 }>) {
   return (
     <Card>
@@ -467,62 +464,6 @@ function MemberSettingsSection({
           </form>
         </section>
 
-        <details className={styles.advanced}>
-          <summary>Create another organization (advanced)</summary>
-          <form onSubmit={onCreate} className={styles.formStack}>
-            <p className={styles.fieldHint}>
-              The authenticated owner becomes an owner of the new organization. Use this only when
-              you need a separate workspace.
-            </p>
-            <div className={styles.fieldGrid}>
-              <div className={styles.field}>
-                <Label htmlFor="new-organization-id">Organization identifier</Label>
-                <Input
-                  id="new-organization-id"
-                  value={organizationDraft.organizationId}
-                  onChange={(event) => onDraftChange("organizationId", event.target.value)}
-                  maxLength={128}
-                  placeholder="org-secondary"
-                />
-              </div>
-              <div className={styles.field}>
-                <Label htmlFor="new-organization-slug">Workspace slug</Label>
-                <Input
-                  id="new-organization-slug"
-                  value={organizationDraft.slug}
-                  onChange={(event) => onDraftChange("slug", event.target.value)}
-                  maxLength={64}
-                  placeholder="secondary-team"
-                />
-              </div>
-              <div className={styles.field}>
-                <Label htmlFor="new-organization-name">Display name</Label>
-                <Input
-                  id="new-organization-name"
-                  value={organizationDraft.name}
-                  onChange={(event) => onDraftChange("name", event.target.value)}
-                  maxLength={200}
-                  placeholder="Secondary team"
-                />
-              </div>
-            </div>
-            <div className={styles.field}>
-              <Label htmlFor="new-organization-config">Configuration object (JSON)</Label>
-              <Textarea
-                id="new-organization-config"
-                value={organizationDraft.config}
-                onChange={(event) => onDraftChange("config", event.target.value)}
-                spellCheck={false}
-                className={styles.configInput}
-              />
-            </div>
-            <div className={styles.formActions}>
-              <Button type="submit" disabled={organizationBusy}>
-                {organizationBusy ? "Creating organization…" : "Create organization"}
-              </Button>
-            </div>
-          </form>
-        </details>
         {organizationNotice ? (
           <p className={styles.statusMessage} role="status" aria-live="polite">
             {organizationNotice}
@@ -591,7 +532,6 @@ export function MemberWorkspaceLayout({
   organizationNotice,
   onOrganizationDraftChange,
   onOrganizationUpdate,
-  onOrganizationCreate,
 }: Readonly<{
   readonly settingsOnly: boolean;
   readonly currentOrganization: { readonly name: string; readonly role: MemberRole } | undefined;
@@ -630,7 +570,6 @@ export function MemberWorkspaceLayout({
   readonly organizationNotice: string | null;
   readonly onOrganizationDraftChange: (field: keyof OrganizationDraft, value: string) => void;
   readonly onOrganizationUpdate: (event: FormEvent<HTMLFormElement>) => void;
-  readonly onOrganizationCreate: (event: FormEvent<HTMLFormElement>) => void;
 }>) {
   return (
     <main className={styles.workspace}>
@@ -725,7 +664,6 @@ export function MemberWorkspaceLayout({
             organizationNotice={organizationNotice}
             onDraftChange={onOrganizationDraftChange}
             onUpdate={onOrganizationUpdate}
-            onCreate={onOrganizationCreate}
           />
         </TabsContent>
       </Tabs>
