@@ -167,16 +167,12 @@ describe("internal organization provisioning routes", () => {
       "/api/internal/organizations",
       createOrganizationProvisioningRoutes({
         service: { provisionOrganization: input.provisionOrganization },
-        entitlements: input.entitlements ?? {
-          async getEntitlement() {
-            return null;
-          },
-          async putEntitlement(entitlement: never) {
-            return entitlement;
-          },
-        },
+        entitlements: (input.entitlements ?? {
+          getEntitlement: async () => null,
+          putEntitlement: async (entitlement: never) => entitlement,
+        }) as never,
         authenticate: input.authenticate,
-      } as never),
+      }),
     );
     return app;
   }
