@@ -674,6 +674,12 @@ describe.sequential("composed local Worker", () => {
     );
     await errorResponse(staleResponse, 409, "CONFLICT");
 
+    const validateResponse = await runtimeRequest(
+      `${adminBase}/validate`,
+      jsonRequest("POST", { expectedVersion: updated.version }, organizerHeaders),
+    );
+    expect(validateResponse.status).toBe(200);
+
     const publishResponse = await runtimeRequest(
       `${adminBase}/publish`,
       jsonRequest("POST", { expectedVersion: updated.version }, organizerHeaders),

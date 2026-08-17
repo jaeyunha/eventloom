@@ -284,6 +284,11 @@ describe("agenda catalog synchronization", () => {
         ],
       }),
     ).rejects.toMatchObject({ code: "INVALID_AGENDA" });
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: deapproved.version,
+      actorId: "organizer-a",
+    });
     await expect(
       engine.publish({
         eventId: "event-a",
@@ -312,6 +317,11 @@ describe("agenda catalog synchronization", () => {
       }),
     ]);
     expect(restored.entries).toHaveLength(1);
+    await engine.validate({
+      eventId: "event-a",
+      expectedVersion: restored.version,
+      actorId: "organizer-a",
+    });
     await expect(
       engine.publish({
         eventId: "event-a",
