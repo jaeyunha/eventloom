@@ -1,217 +1,126 @@
-# judge-review-ai lane handoff
+# Judge Review AI Lane Handoff
 
-Updated: 2026-08-17
+## Current state
 
-## Current status
-
-The lane is active and in final verification. It is not paused. No production
-deployment was performed.
-
-- Repository: `https://github.com/jaeyunha/eventloom`
+- Repository: `jaeyunha/eventloom`
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
-- Source checkpoint before this documentation update: `2670afbe6e975a22f78513c58d1a23e5e970bef4`
-- Incorporated `github/main`: `e0bf50188e031c33709bb1585923fdf88d9a2124`
-- Latest main contains the merged PR #31 portal-reminders, PR #40, PR #60
-  public-widgets, and PR #61 export work.
-- PR: `https://github.com/jaeyunha/eventloom/pull/34`
-- Handoff issue: `https://github.com/jaeyunha/eventloom/issues/47`
-
-The documentation commit that adds this file will become the next branch tip.
-After pushing, verify the exact remote tip with:
-
-```sh
-git fetch github main
-git rev-parse HEAD github/main github/judge-review-ai
-gh pr view 34 --repo jaeyunha/eventloom \
-  --json state,mergeStateStatus,baseRefOid,headRefOid,url
-```
+- Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3` (`github/main`)
+- Exact head: `979a6bfb0dbf0781f0330abfc629c601258cb2f4`
+- Pull request: https://github.com/jaeyunha/eventloom/pull/34
+- PR state: open, non-draft, mergeable; merge is intentionally not yet performed
+- Handoff issue: https://github.com/jaeyunha/eventloom/issues/47
+- Latest main is fully integrated; no external evaluator repository was inspected or invoked.
+- No production deployment was performed by this lane.
 
 ## Objective and scope
 
-Make advisory AI review suggestions safe at every authoritative boundary while
-preserving explicit human confirmation and the existing review experience.
-
-In scope:
-
-- exactly one provider candidate for every scoreable criterion;
-- rejection of all-free-text rubrics before provider invocation;
-- deterministic, nontrivial, submission-grounded rationales;
-- exact, case-sensitive title/abstract excerpts bound one-to-one to rationales;
-- prompt-injection-resistant provider interaction;
-- active submitted-only AI generation, listing, and resolution;
-- conflict, abstention, withdrawal, decision, assignment-version, and review-write
-  authority checks;
-- D1 as the transactional command authority and Airtable as a read-only
-  projection;
-- advisory dropdown labels, uncounted pending state, and explicit human
-  confirmation;
-- preservation of organizer `under_review` visibility;
-- preservation of merged export, public-widget, and portal-reminder work.
-
-Out of scope:
-
-- production deployment;
-- merging unrelated branches outside the required `github/main` integration;
-- changing provider credentials or external resources.
+Enforce advisory AI review-suggestion correctness and authority at the provider,
+service, repository, and reviewer UI boundaries while preserving explicit human
+confirmation. The lane covers candidate completeness, exact source evidence,
+meaningful rationale, prompt/data separation, submitted-only lifecycle,
+assignment/conflict/decision authority, D1 command authority, Airtable
+projection behavior, dropdown labels, and advisory UI state.
 
 ## Completed implementation
 
-- Service normalization rejects missing, duplicate, unexpected, non-scoreable,
-  partial, and extra criterion candidates before persistence.
-- Provider output must include aligned `title:<literal excerpt>` or
-  `abstract:<literal excerpt>` references for every rationale. The service
-  independently checks exact source membership and rationale grounding, so an
-  injected provider cannot bypass the Cloudflare adapter.
-- Generic, one-word, repeated-source, arbitrary-filler, and unsupported
-  rationales are rejected using machine-testable deterministic rules.
-- Rubrics containing only free-text criteria fail locally with the stable
-  `EVALUATION_ADVISORY_UNSUPPORTED` error and never invoke the provider.
-- Untrusted rubric, title, and abstract data are serialized separately from
-  instructions and explicitly treated as data, not commands.
-- Abstained assignments are rejected before AI provider invocation or protected
-  suggestion reads.
-- Client-supplied `origin: "ai"` review scores are rejected. AI-origin scores
-  can only be created by the validated advisory suggestion resolution path.
-- `saveReview`, `confirmAiScores`, and `submitReview` all use the canonical
-  `writeReview` repository command.
-- The in-memory and D1 write boundaries check assignment identity/version/status,
-  conflicts, submitted material, decisions, plan and round revisions, current
-  submission revision, and temporal plan/round authority before mutation.
-- D1 guard, review mutation, score/evidence replacement, and optional assignment
-  transition execute in one atomic batch. A migrated-D1 withdrawal race test
-  verifies no review persists after authority revocation.
-- Local composition supplies the in-memory repository with the authoritative
-  submission source. D1 remains authoritative for deployed command writes.
-- Airtable evaluation storage exposes only `EvaluationProjectionReader`; it has
-  no evaluation suggestion command mutation methods.
-- Dropdown suggestions render configured labels such as `Reject`, remain
-  pending and uncounted until acceptance/edit, and preserve explicit human
-  confirmation.
-- Added the missing `0029_agenda_validation_revision.sql` to the canonical
-  speaker lifecycle test migration list so the merged-main full test gate
-  exercises the agenda schema expected by current code.
-- Kept PR #61 export jobs, organizer results export, migration 0036, and export
-  handoff unchanged from incorporated main. Kept PR #60 public-widget files and
-  PR #31 portal-reminder files unchanged from incorporated main.
+- Requires exactly one provider candidate for every scoreable criterion.
+- Rejects partial, duplicate, unexpected, non-scoreable, and all-free-text output.
+- Requires deterministic, non-trivial, submission-grounded rationales.
+- Requires exact case-sensitive title/abstract excerpts aligned one-to-one with
+  each rationale, including injected-provider validation.
+- Separates untrusted rubric and submission data from model instructions and
+  preserves strict criterion-bound output schemas.
+- Rejects client-supplied AI-origin review scores and preserves human-confirmation
+  counting semantics.
+- Enforces submitted-only AI generation, listing, resolution, and review writes,
+  with withdrawal, conflict, decision, abstention, and assignment CAS coverage.
+- Uses D1 as the authoritative evaluation command repository and Airtable as the
+  projection path used by production composition.
+- Preserves configured dropdown labels and advisory pending/uncounted UI state.
+- Preserves merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63,
+  and #66 through the c5fc502 integration.
 
-## Verification completed
+## Exact-head verification
 
-Commands and status at the source checkpoint:
+- Focused review-AI matrix: PASS — 8 files, 297 passed, 1 skipped.
+- API typecheck: PASS.
+- Web typecheck: PASS.
+- `git diff --check`: PASS.
+- Chromium advisory QA on isolated ports 3291/9091/9531: PASS — 1 test.
+- Browser QA confirms pending/uncounted advisory state, configured dropdown
+  label mapping, evidence/provenance rendering, keyboard focus, mobile
+  containment, and human-confirmed counted state.
+- `make check`: BLOCKED by four formatter failures in canonical-main files:
+  `apps/web/src/features/admin/cfp-editor-model.ts`,
+  `apps/web/src/features/admin/cfp-editor-sections.tsx`, and
+  `apps/web/src/features/cfp/cfp-wizard.tsx`; the lane-owned formatter failures
+  are clean. These unrelated main files were not modified by this lane.
+- Full repository test/build gates: pending final execution after the five-review
+  authority audit; do not claim them as release evidence until rerun.
 
-- `git diff --check`: **PASS**
-- `bun run test:unit --` focused AI/review matrix: **PASS**; 257 passed,
-  1 credential-gated test skipped.
-- `make check`: **PASS**; workspace typecheck, lint, and format checks clean.
-- `make test`: **PASS** after the agenda migration-list repair and D1 guard
-  assertion correction; 2267 tests passed, 3 skipped.
-- `make build`: **PASS**
-- Isolated Chromium QA:
+## Five-review gate
 
-  ```sh
-  PLAYWRIGHT_WEB_PORT=3291 \
-  PLAYWRIGHT_API_PORT=9091 \
-  PLAYWRIGHT_API_INSPECTOR_PORT=9531 \
-  PLAYWRIGHT_REUSE_EXISTING_SERVER=false \
-  AI_PROVIDER=disabled \
-  bun x playwright test tests/e2e/review-ai-advisory.qa.spec.ts --project=chromium
-  ```
+The final five independent reviews must all be PASS before merge. Record each
+reviewer, exact head, verdict, and evidence here:
 
-  **PASS**, one test. Desktop and mobile artifacts were inspected; mobile has
-  no horizontal overflow and the Accept transition becomes human-confirmed
-  and countable.
+- [ ] Security review at `979a6bfb0dbf0781f0330abfc629c601258cb2f4`
+- [ ] Code-quality review at `979a6bfb0dbf0781f0330abfc629c601258cb2f4`
+- [x] Functional/visual QA at `979a6bfb0dbf0781f0330abfc629c601258cb2f4`
+- [ ] Context/dependency review at `979a6bfb0dbf0781f0330abfc629c601258cb2f4`
+- [ ] Goal/compliance review at `979a6bfb0dbf0781f0330abfc629c601258cb2f4`
 
-- Final source diagnostics: **PASS** for evaluation features, D1 evaluation
-  repositories, web review workspace, and speaker lifecycle support.
+Current security review reported authority findings requiring resolution before
+the gate can pass. Do not merge on a partial or pre-fix review.
 
-Latest captured local browser evidence:
+## Remaining tasks
 
-| Artifact | Dimensions | SHA-256 |
-| --- | ---: | --- |
-| `test-results/review-ai-advisory-desktop.png` | 1440x1000 | `17d0b1efb1ad28fa7730d6d995f861c65d1003be6c0483c397f18590962e2f57` |
-| `test-results/review-ai-advisory-mobile.png` | 390x844 | `d911fd68f872ce9aeabc3354f606f97f217d4a1c7052fbe1eff8d8e7537e0ed9` |
+- [ ] Resolve every confirmed security/code review blocker at the authoritative
+  in-memory, D1, and Airtable boundaries.
+- [ ] Add deterministic regressions for every newly fixed race or admission rule.
+- [ ] Rerun focused tests, API/web typechecks, full relevant gates, and Chromium
+  QA on the next exact pushed head.
+- [ ] Rerun all five independent reviews on that exact pushed head and record
+  five PASS verdicts here.
+- [ ] Update this handoff and issue #47 with the final exact head and evidence.
+- [ ] Update PR #34 body with the final base/head and verification evidence.
+- [ ] Merge PR #34 only after five PASS reviews and clean mergeability.
+- [ ] Do not deploy production.
 
-These are local route-intercepted QA artifacts with `AI_PROVIDER=disabled`;
-they are not live provider or deployment evidence.
+## Known risks and dependencies
 
-## Final five-review checklist
+- `make check` currently reports only unrelated formatting failures in the
+  canonical-main web files listed above; they must be distinguished from any
+  newly introduced lane failure.
+- The final five-review gate is a hard dependency for merge.
+- PR #34 depends on canonical main c5fc502 and must remain based on that exact
+  revision until the next explicit main update.
+- No external evaluator repository may be used.
 
-The final five-review must run on the pushed tip after this handoff update:
+## Dirty/generated/untracked disposition
 
-- [ ] Goal/constraint reviewer returns PASS against current `github/main`.
-- [ ] Code-quality reviewer returns PASS, including D1 value ordering and
-      migrated rollback coverage.
-- [ ] Security reviewer returns PASS for provider, review-write, abstention,
-      withdrawal, decision, and revision authority.
-- [ ] Hands-on QA reviewer returns PASS for focused tests and Chromium flow.
-- [ ] Context/dependency reviewer returns PASS for PR #31/#40/#60/#61
-      preservation and current PR/issue metadata.
-- [ ] Resolve every finding before merge; do not waive a release blocker.
+- The committed lane head contains no generated artifacts.
+- Ignored local outputs such as `apps/web/.next`, `apps/api/dist`,
+  `packages/cli/dist`, `test-results`, and any `apps/web/tmp` content are
+  disposable and must remain unstaged; remove them before final delivery.
+- Only lane-owned source, tests, and this handoff may be staged.
 
-## Remaining delivery tasks
-
-- [ ] Push the handoff documentation commit and verify branch/PR head.
-- [ ] Update PR #34 body with base `e0bf501`, final source checkpoint, actual
-      verification results, and the latest screenshot hashes.
-- [ ] Update issue #47 so it no longer says the lane is paused; retain the
-      detailed checklist, dependency order, and resume commands.
-- [ ] Confirm exactly one open issue titled `[Lane handoff] judge-review-ai`.
-- [ ] Merge PR #34 into `main` only after all five final reviewers PASS.
-- [ ] Verify the resulting GitHub main merge commit and that no deployment was
-      performed.
-
-## Known risks and assumptions
-
-- The final browser run is mocked/route-intercepted local QA, not live provider
-  evidence.
-- Historical persisted suggestions are not retroactively revalidated; new
-  provider output is validated at the service boundary before persistence.
-- The D1 guard relies on existing evaluation, submission, plan, round, and
-  revision tables; no schema migration is introduced by the review-AI lane.
-- The expected D1 CAS diagnostic may emit `malformed JSON` when the guard
-  intentionally aborts a batch. The relevant tests assert rejection and no
-  persisted state.
-- No production deployment has been performed or claimed.
-
-## Dependency and merge order
-
-1. `e0bf50188e031c33709bb1585923fdf88d9a2124` (`github/main`) is already
-   incorporated into this lane.
-2. Push the documentation update and verify PR #34 is clean/mergeable.
-3. Complete the final five-review on the pushed tip.
-4. Merge PR #34 into `main`.
-5. Do not deploy production as part of this lane.
-
-## Dirty, generated, and untracked disposition
-
-- Only intended source, test, and handoff files may be committed.
-- `.debug-journal.md`, `.pr-body.md`, browser screenshots, `test-results`,
-  `.next`, Wrangler state, build output, and temporary QA files must remain
-  deleted or ignored and unstaged.
-- Before final push:
-
-  ```sh
-  git status --short --branch
-  git diff --check
-  git diff --cached --check
-  ```
-
-- The worktree must be clean after the documentation commit.
-
-## Resume and finalization commands
+## Resume and delivery commands
 
 ```sh
 cd /Users/jaeyunha/wt/open-sessionboard/judge-review-ai
 git fetch github main
 git merge --no-edit github/main
+git status --short --branch
 bun run test:unit -- apps/api/src/features/evaluations/service.test.ts \
-  apps/api/src/infrastructure/cloudflare/repositories/evaluations.test.ts
+  apps/api/src/infrastructure/cloudflare/repositories/evaluations.test.ts \
+  apps/api/src/integrations/ai/cloudflare.test.ts
 make check
-make test
-make build
-gh pr view 34 --repo jaeyunha/eventloom
-gh pr merge 34 --repo jaeyunha/eventloom --merge
+git push github judge-review-ai
+gh pr view 34 --repo jaeyunha/open-sessionboard
 ```
 
-Never deploy production from this lane. Merge only after the final five-review
-verdict is PASS and the PR/issue/handoff metadata has been updated.
+Before merge, update the PR body and issue #47 with the exact pushed head,
+re-run all five reviews, verify the PR remains open/mergeable, and merge only
+after every review is PASS. This lane is active and must not be treated as
+paused.
