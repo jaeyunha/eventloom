@@ -57,7 +57,7 @@ describe("event date selection", () => {
   it("places a compact clear action under the schedule copy", () => {
     const markup = renderToStaticMarkup(
       createElement(EventDatePicker, {
-        mode: "single",
+        mode: "range",
         startsAt: "2026-08-24T17:00",
         endsAt: "2026-08-24T17:00",
         scheduleDates: [],

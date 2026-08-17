@@ -5,6 +5,7 @@ import styles from "../review-workspace.module.css";
 import { AssignmentStatusBadge } from "./assignment-assignment-status-badge";
 import type { ReviewerAssignmentController } from "./assignment-reviewer-assignment-controller";
 import { participantDisplayLabel } from "./model-participant-display-label";
+import { submissionDisplayTitle } from "./model-submission-display-title";
 
 export function ReviewerAssignmentEditor({
   controller,
@@ -46,7 +47,7 @@ export function ReviewerAssignmentEditor({
       <div className={styles.sectionHeading}>
         <div>
           <p className={styles.sectionEyebrow}>Selected assignment</p>
-          <h3 id="assignment-editor-heading">{selectedAggregate?.title ?? "No title"}</h3>
+          <h3 id="assignment-editor-heading">{submissionDisplayTitle(selectedAggregate ?? {})}</h3>
         </div>
         <AssignmentStatusBadge status={selectedAssignment.status} />
       </div>

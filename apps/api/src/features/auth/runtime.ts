@@ -4,6 +4,7 @@ import { magicLink } from "better-auth/plugins/magic-link";
 import type { OpenSendSenderAddress } from "../../integrations/opensend/client";
 import type { OpenSendMessage } from "../../integrations/opensend/types";
 import type { BetterAuthRuntimeConfiguration } from "./configuration";
+import { authDisplayName } from "./display-name";
 import type { AuthSession, BetterAuthGateway } from "./types";
 
 export interface BetterAuthRuntimeOptions {
@@ -596,9 +597,11 @@ function sessionFromPayload(payload: unknown): AuthSession | null {
   }
   const expiresAt = new Date(session.expiresAt);
   if (!Number.isFinite(expiresAt.getTime()) || session.userId !== user.id) return null;
+  const displayName = authDisplayName(user.name);
   return {
     sessionId: session.id,
     userId: session.userId,
+    ...(displayName === undefined ? {} : { displayName }),
     email: user.email,
     emailVerified: user.emailVerified === true,
     expiresAt,

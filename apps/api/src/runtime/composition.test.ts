@@ -265,6 +265,7 @@ function productionBindings(
 
 interface AutojoinDatabaseState {
   readonly email: string;
+  readonly name: string | null;
   readonly emailVerified: boolean;
   readonly memberships: Array<{ organization_id: string; role: string }>;
   readonly speakerGrants: Array<{
@@ -288,6 +289,7 @@ interface AutojoinDatabaseState {
 
 function autojoinDatabase(input: {
   readonly email: string;
+  readonly name?: string | null;
   readonly emailVerified: boolean;
   readonly memberships?: readonly { organization_id: string; role: string }[];
   readonly pendingInvitation?: boolean;
@@ -306,6 +308,7 @@ function autojoinDatabase(input: {
 } {
   const state: AutojoinDatabaseState = {
     email: input.email,
+    name: input.name ?? null,
     emailVerified: input.emailVerified,
     memberships: [...(input.memberships ?? [])],
     speakerGrants: [...(input.speakerGrants ?? [])],
@@ -347,6 +350,7 @@ function autojoinDatabase(input: {
                 session_id: "session-autojoin",
                 user_id: "user-autojoin",
                 email: state.email,
+                name: state.name,
                 email_verified: state.emailVerified ? 1 : 0,
                 expires_at: "2099-01-01T00:00:00.000Z",
               } as T;
@@ -360,6 +364,7 @@ function autojoinDatabase(input: {
                       session_id: "session-autojoin",
                       user_id: "user-autojoin",
                       email: state.email,
+                      name: state.name,
                       email_verified: state.emailVerified ? 1 : 0,
                       expires_at: "2099-01-01T00:00:00.000Z",
                       scope_type: "session",
@@ -372,6 +377,7 @@ function autojoinDatabase(input: {
                       session_id: "session-autojoin",
                       user_id: "user-autojoin",
                       email: state.email,
+                      name: state.name,
                       email_verified: state.emailVerified ? 1 : 0,
                       expires_at: "2099-01-01T00:00:00.000Z",
                       scope_type: "membership",
@@ -385,6 +391,7 @@ function autojoinDatabase(input: {
                           session_id: "session-autojoin",
                           user_id: "user-autojoin",
                           email: state.email,
+                          name: state.name,
                           email_verified: 1,
                           expires_at: "2099-01-01T00:00:00.000Z",
                           scope_type: "reviewer_grant",
@@ -399,6 +406,7 @@ function autojoinDatabase(input: {
                       session_id: "session-autojoin",
                       user_id: "user-autojoin",
                       email: state.email,
+                      name: state.name,
                       email_verified: state.emailVerified ? 1 : 0,
                       expires_at: "2099-01-01T00:00:00.000Z",
                       scope_type: "speaker_grant",
@@ -679,6 +687,7 @@ describe("production authenticated tenant scope", () => {
   it("loads a valid session and scopes with one delayed D1 operation", async () => {
     const { database, state } = autojoinDatabase({
       email: "member@example.com",
+      name: "  Dana Organizer  ",
       emailVerified: true,
       memberships: [{ organization_id: "org-membership", role: "reviewer" }],
       speakerGrants: [{ organization_id: "org-speaker", speaker_profile_id: "speaker-1" }],
@@ -695,6 +704,7 @@ describe("production authenticated tenant scope", () => {
     expect(session).toMatchObject({
       sessionId: "session-autojoin",
       userId: "user-autojoin",
+      displayName: "Dana Organizer",
       email: "member@example.com",
       emailVerified: true,
       expiresAt: new Date("2099-01-01T00:00:00.000Z"),
@@ -710,6 +720,20 @@ describe("production authenticated tenant scope", () => {
     expect(scopeQuery).toContain("invitations.status = 'accepted'");
     expect(scopeQuery).toContain("profiles.status <> 'revoked'");
     expect(scopeQuery).toContain("base.email_verified = 1");
+  });
+  it("does not synthesize a D1 session display name from email", async () => {
+    const { database } = autojoinDatabase({
+      email: "private-organizer@example.com",
+      name: null,
+      emailVerified: true,
+      memberships: [{ organization_id: "org-membership", role: "admin" }],
+    });
+
+    const session = await new D1BetterAuthGateway(database).resolveSession("session-token");
+
+    expect(session).not.toBeNull();
+    expect(session).not.toHaveProperty("displayName");
+    expect(session).toMatchObject({ email: "private-organizer@example.com" });
   });
   async function resolveSession(input: {
     readonly email: string;

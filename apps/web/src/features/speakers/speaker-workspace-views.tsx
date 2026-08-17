@@ -1,7 +1,7 @@
 "use client";
 
 import { FileText, ListTodo, Mail, UserPlus, Users } from "lucide-react";
-import type { ChangeEvent, FormEvent, RefObject } from "react";
+import type { FormEvent, RefObject } from "react";
 import { Button } from "../../components/ui/button";
 import {
   Card,
@@ -190,7 +190,7 @@ function SpeakerRosterView({
     fileName: string | null;
     preview: SpeakerImportPreview | null;
     onOpenChange: (open: boolean) => void;
-    onPreview: (event: ChangeEvent<HTMLInputElement>) => void;
+    onPreview: (file: File) => void;
     onCommit: () => void;
   }>;
   onQueryChange: (query: string) => void;

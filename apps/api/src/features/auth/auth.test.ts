@@ -128,6 +128,28 @@ describe("request authentication", () => {
 
     expect(principal).toMatchObject({ kind: "user", userId: "user-1" });
   });
+  it("propagates validated display names without synthesizing one from email", async () => {
+    const { betterAuth, authenticator } = setupAuthenticator();
+    betterAuth.sessions.set(
+      "named-session",
+      session({ displayName: "  Olivia Organizer  ", email: "private@example.com" }),
+    );
+    betterAuth.sessions.set("unnamed-session", session({ email: "private@example.com" }));
+
+    const named = await authenticator.authenticate(
+      new Request("https://api.example.com/private", {
+        headers: { cookie: "better-auth.session_token=named-session" },
+      }),
+    );
+    const unnamed = await authenticator.authenticate(
+      new Request("https://api.example.com/private", {
+        headers: { cookie: "better-auth.session_token=unnamed-session" },
+      }),
+    );
+
+    expect(named).toMatchObject({ displayName: "Olivia Organizer" });
+    expect(unnamed).not.toHaveProperty("displayName");
+  });
   it("resolves the raw session token from a Better Auth signed cookie", async () => {
     const { betterAuth, apiKeys } = setupAuthenticator();
     betterAuth.sessions.set("valid-session", session());

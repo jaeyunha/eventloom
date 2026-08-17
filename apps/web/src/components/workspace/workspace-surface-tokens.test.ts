@@ -233,7 +233,9 @@ describe("workspace semantic surfaces", () => {
     expect(speakers).toMatch(
       /\.actionsStack\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su,
     );
-    expect(speakers).toMatch(/\.workspace\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/su);
+    expect(speakers).toMatch(
+      /\.workspace\s*\{[^}]*width:\s*min\(100%,\s*96rem\)[^}]*max-width:\s*96rem/su,
+    );
     expect(speakers).toMatch(/\.workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su);
     expect(speakers).toMatch(
       /\.tabs,\s*\.view\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/su,

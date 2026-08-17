@@ -101,7 +101,12 @@ export function PortalTaskUpload({ task }: Readonly<{ task: PortalTask }>) {
                   id: file.name,
                   name: file.name,
                   sizeLabel: formatFileUploadSize(file.size),
-                  status: phase === "processing" ? "uploading" : phase === "failure" ? "error" : "selected",
+                  status:
+                    phase === "processing"
+                      ? "uploading"
+                      : phase === "failure"
+                        ? "error"
+                        : "selected",
                   message:
                     phase === "processing"
                       ? "Uploading…"

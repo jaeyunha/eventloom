@@ -88,6 +88,7 @@ export type SessionSortDirection = "asc" | "desc";
 export interface SessionActor {
   tenantId: string;
   userId: string;
+  displayName?: string;
   role?: SessionOrganizationRole;
   roles?: readonly SessionOrganizationRole[];
   /** Set by trusted automation only; automation cannot mutate organizer settings. */

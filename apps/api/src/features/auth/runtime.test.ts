@@ -250,4 +250,76 @@ describe("Better Auth D1 runtime", () => {
       database.dispose();
     }
   });
+
+  it("propagates the validated user name when consuming a magic link", async () => {
+    const database = new SqliteD1(
+      "eventloom-auth-magic-link-",
+      [
+        readFileSync(
+          fileURLToPath(
+            new NodeUrl("../../../migrations/0001_identity_and_access.sql", import.meta.url),
+          ),
+          "utf8",
+        ),
+        readFileSync(
+          fileURLToPath(new NodeUrl("../../../migrations/0003_auth_password.sql", import.meta.url)),
+          "utf8",
+        ),
+      ].join("\n"),
+    );
+    try {
+      const links: string[] = [];
+      const runtime = createBetterAuthRuntime({
+        database: database as unknown as D1Database,
+        configuration: createBetterAuthRuntimeConfiguration({
+          secret: "a-secret-long-enough-for-better-auth-tests",
+          baseUrl: "https://web.example.com",
+          trustedOrigins: ["https://web.example.com"],
+        }),
+        environment: "staging",
+        sendMagicLink: async ({ url }) => {
+          links.push(url);
+        },
+      });
+      const email = "magic-link-organizer@example.com";
+      const verificationCallback = "https://web.example.com/account?verified=true";
+      const signUp = await runtime.handler(
+        new Request("https://web.example.com/api/auth/sign-up/email", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            origin: "https://web.example.com",
+          },
+          body: JSON.stringify({
+            name: "Magic Link Organizer",
+            email,
+            password: "StrongPass1!",
+            callbackURL: verificationCallback,
+          }),
+        }),
+      );
+      expect(signUp.status).toBe(200);
+      expect(links).toHaveLength(1);
+      expect((await runtime.handler(new Request(links[0] ?? ""))).status).toBe(302);
+      links.length = 0;
+
+      await runtime.requestMagicLink({
+        email,
+        callbackUrl: "https://web.example.com/account?magicLink=complete",
+      });
+      expect(links).toHaveLength(1);
+      const token = new URL(links[0] ?? "").searchParams.get("token");
+      expect(token).not.toBeNull();
+
+      const session = await runtime.consumeMagicLink(token ?? "");
+
+      expect(session).toMatchObject({
+        displayName: "Magic Link Organizer",
+        email,
+        emailVerified: true,
+      });
+    } finally {
+      database.dispose();
+    }
+  });
 });

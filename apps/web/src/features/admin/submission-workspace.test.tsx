@@ -348,6 +348,35 @@ describe("organizer submission workspace", () => {
     });
     expect(record.participants[0]?.organization).toBe("Latticework Systems");
   });
+
+  it("uses No title instead of an internal identifier for untitled submissions", () => {
+    const untitledEnvelope: Parameters<typeof mapCanonicalSubmission>[0] = {
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        answers: {
+          ...canonicalEnvelope.submission.answers,
+          title: "",
+        },
+      },
+    };
+    const record = mapCanonicalSubmission(untitledEnvelope);
+    const opaqueRecord = mapCanonicalSubmission({
+      ...untitledEnvelope,
+      submission: {
+        ...untitledEnvelope.submission,
+        answers: {
+          ...untitledEnvelope.submission.answers,
+          title: untitledEnvelope.submission.id,
+        },
+      },
+    });
+
+    expect(record.title).toBe("No title");
+    expect(record.title).not.toBe(canonicalEnvelope.submission.id);
+    expect(opaqueRecord.title).toBe("No title");
+  });
+
   it("loads the authoritative event name instead of presenting a raw event UUID", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

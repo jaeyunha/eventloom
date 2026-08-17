@@ -13,6 +13,7 @@ import {
   AuthConfigurationError,
   createBetterAuthRuntimeConfiguration,
 } from "../features/auth/configuration";
+import { authDisplayName } from "../features/auth/display-name";
 import { createBetterAuthRuntime, createOpenSendMagicLinkMessage } from "../features/auth/runtime";
 import type {
   ApiKeyScope,
@@ -120,6 +121,7 @@ interface SessionRow {
   readonly session_id: string;
   readonly user_id: string;
   readonly email: string;
+  readonly name: string | null;
   readonly email_verified: number;
   readonly expires_at: string;
 }
@@ -335,6 +337,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
            SELECT sessions.id AS session_id,
                   sessions.user_id AS user_id,
                   users.email AS email,
+                  users.name AS name,
                   users.email_verified AS email_verified,
                   sessions.expires_at AS expires_at
              FROM auth_sessions AS sessions
@@ -345,6 +348,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
          SELECT session_id,
                 user_id,
                 email,
+                name,
                 email_verified,
                 expires_at,
                 'session' AS scope_type,
@@ -358,6 +362,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
          SELECT base.session_id,
                 base.user_id,
                 base.email,
+                base.name,
                 base.email_verified,
                 base.expires_at,
                 'membership' AS scope_type,
@@ -373,6 +378,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
          SELECT base.session_id,
                 base.user_id,
                 base.email,
+                base.name,
                 base.email_verified,
                 base.expires_at,
                 'reviewer_grant' AS scope_type,
@@ -391,6 +397,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
          SELECT base.session_id,
                 base.user_id,
                 base.email,
+                base.name,
                 base.email_verified,
                 base.expires_at,
                 'speaker_grant' AS scope_type,
@@ -452,9 +459,11 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
 
     const memberships = membershipsFrom(membershipRows);
 
+    const displayName = authDisplayName(row.name);
     return {
       sessionId: row.session_id,
       userId: row.user_id,
+      ...(displayName === undefined ? {} : { displayName }),
       email: row.email,
       emailVerified: row.email_verified === 1,
       expiresAt,

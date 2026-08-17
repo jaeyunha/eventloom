@@ -132,6 +132,33 @@ function formatAction(action: SessionHistoryEntry["action"]): string {
   return action.replace(/_/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
+function historyActorLabel(entry: SessionHistoryEntry): string {
+  const label = entry.actorLabel?.trim();
+  return label && label !== entry.actorId && !label.includes("@") ? label : "Authorized organizer";
+}
+
+function historyTimestampLabel(value: string): string {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  }).format(timestamp);
+}
+
+function restoreAccessibleName(
+  entry: SessionHistoryEntry,
+  position: number,
+  total: number,
+): string {
+  return `Restore ${formatAction(entry.action)} revision from ${historyTimestampLabel(entry.occurredAt)}, history item ${position} of ${total}`;
+}
+
 function subscribeToSessionTimestamp(): () => void {
   return () => undefined;
 }
@@ -208,7 +235,7 @@ function SessionEditor({
       <CardHeader>
         <CardTitle>Session content</CardTitle>
         <CardDescription>
-          Changes create a new version and require a fresh public-content review.
+          Changes create a new revision and require a fresh public-content review.
         </CardDescription>
       </CardHeader>
       <CardContent className={styles.stack}>
@@ -310,7 +337,9 @@ function SpeakerAssignments({
     ...currentReferences.map((reference) => ({
       id: reference.id,
       displayName:
-        reference.displayName ?? candidatesById.get(reference.id)?.displayName ?? reference.id,
+        reference.displayName ??
+        candidatesById.get(reference.id)?.displayName ??
+        "Speaker unavailable",
       ...(candidatesById.get(reference.id)?.jobTitle === undefined
         ? {}
         : { jobTitle: candidatesById.get(reference.id)?.jobTitle }),
@@ -382,7 +411,7 @@ function SpeakerAssignments({
                 return (
                   <li className={styles.currentAssignment} key={reference.id}>
                     <strong>
-                      {reference.displayName ?? candidate?.displayName ?? reference.id}
+                      {reference.displayName ?? candidate?.displayName ?? "Speaker unavailable"}
                     </strong>
                     <span className={styles.muted}>{formatSpeakerRole(reference.role)}</span>
                   </li>
@@ -468,7 +497,7 @@ function SessionHistory({
   return (
     <WorkspaceSurface
       title="Change history"
-      description="Every saved version remains available for review and restoration."
+      description="Every saved revision remains available for review and restoration."
     >
       {loading ? <p className={styles.muted}>Loading session history...</p> : null}
       {error === null ? null : <Alert variant="destructive">{error}</Alert>}
@@ -477,24 +506,23 @@ function SessionHistory({
       ) : null}
 
       <ol className={styles.historyList}>
-        {entries.map((entry) => {
+        {entries.map((entry, index) => {
           const current = entry.version === session.version;
           const restorable = entry.snapshot !== undefined && entry.version < session.version;
           return (
             <li className={styles.historyItem} key={entry.id}>
               <div className={styles.historyHeader}>
                 <div className={styles.historyCopy}>
-                  <strong>
-                    Version {entry.version} - {formatAction(entry.action)}
-                  </strong>
+                  <strong>{formatAction(entry.action)}</strong>
                   <span className={styles.muted}>
-                    {entry.actorLabel ?? entry.actorId} -{" "}
+                    {historyActorLabel(entry)} -{" "}
                     <SessionHistoryTimestamp value={entry.occurredAt} />
                   </span>
                 </div>
                 {current ? <StatusBadge tone="info">Current</StatusBadge> : null}
                 {!restorable ? null : (
                   <Button
+                    aria-label={restoreAccessibleName(entry, index + 1, entries.length)}
                     disabled={busy || !onRestore}
                     size="sm"
                     type="button"
@@ -507,7 +535,7 @@ function SessionHistory({
                       })
                     }
                   >
-                    Restore version {entry.version}
+                    Restore this revision
                   </Button>
                 )}
               </div>
@@ -521,6 +549,21 @@ function SessionHistory({
                   <span className={styles.snapshotDescription}>{entry.snapshot.description}</span>
                 </div>
               )}
+              <details className={styles.auditDetails}>
+                <summary>Advanced audit details</summary>
+                <dl>
+                  <div>
+                    <dt>Actor reference</dt>
+                    <dd>
+                      <code>{entry.actorId}</code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Stored revision</dt>
+                    <dd>{entry.version}</dd>
+                  </div>
+                </dl>
+              </details>
             </li>
           );
         })}
@@ -567,14 +610,13 @@ export function SessionsWorkspaceView({
             <span>Sessions</span>
           </WorkspaceBreadcrumb>
         }
-        description="Edit canonical session copy, review public-content readiness, and restore prior versions."
+        description="Edit canonical session copy, review public-content readiness, and restore prior revisions."
         metadata={
           <>
             <WorkspaceMetaItem>{sessions.length} sessions</WorkspaceMetaItem>
             {eventName === undefined ? null : (
               <WorkspaceMetaItem>Event {eventName}</WorkspaceMetaItem>
             )}
-            <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
           </>
         }
         title="Sessions"
@@ -618,7 +660,7 @@ export function SessionsWorkspaceView({
                     ? "This event does not have any sessions yet."
                     : `${eventName} does not have any sessions yet.`}{" "}
                   Add sessions to the event program first, then return here to manage public copy,
-                  speakers, and version history.
+                  speakers, and revision history.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -660,7 +702,7 @@ export function SessionsWorkspaceView({
               {selected === null ? (
                 <WorkspaceSurface title="Select a session">
                   <p className={styles.muted}>
-                    Choose a session to edit its content and inspect its version history.
+                    Choose a session to edit its content and inspect its revision history.
                   </p>
                 </WorkspaceSurface>
               ) : (
@@ -948,7 +990,7 @@ function ScopedSessionsWorkspace({
         mutate(
           input.sessionId,
           () => api.restoreVersion(input),
-          `Session content restored from version ${input.version}.`,
+          "Session content restored from the selected revision.",
         )
       }
       onRetry={() => {
