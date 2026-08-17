@@ -4,6 +4,7 @@ import { E2E_SESSION_COOKIE, type E2eAuthSession } from "./auth";
 const DEFAULT_ORGANIZATION_ID = "evaluator-org";
 const DEFAULT_FORM_VERSION = 1;
 const UPDATED_AT = "2026-08-08T12:00:00.000Z";
+export const CFP_FIXTURE_LANGUAGE_OPTIONS = ["English"] as const;
 
 export interface CfpFixtureOptions {
   eventId: string;
@@ -210,7 +211,7 @@ export async function installCfpApi(
         label: "Language",
         kind: "select",
         required: true,
-        options: ["English"],
+        options: CFP_FIXTURE_LANGUAGE_OPTIONS,
       },
     ],
     participantFields: [],

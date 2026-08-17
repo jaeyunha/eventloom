@@ -563,7 +563,7 @@ describe("organizer session settings domain", () => {
           version: 2,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "Olivia Organizer",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract",
@@ -573,7 +573,7 @@ describe("organizer session settings domain", () => {
           version: 3,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "Olivia Organizer",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract with appended detail",
@@ -604,7 +604,7 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "Olivia Organizer",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract",
@@ -615,7 +615,7 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
-          actorLabel: "Olivia Organizer",
+          actorLabel: "Authorized organizer",
           snapshot: expect.objectContaining({
             title: "Prefixed title",
             description: "Original abstract with appended detail",
@@ -664,7 +664,7 @@ describe("organizer session settings domain", () => {
       action: "restored",
       version: 4,
       actorId: "organizer-1",
-      actorLabel: "Olivia Organizer",
+      actorLabel: "Authorized organizer",
       occurredAt: now.toISOString(),
     });
     expect((await readPublishedContent()).sessions).toEqual([]);
@@ -699,7 +699,7 @@ describe("organizer session settings domain", () => {
       action: "approved",
       version: 5,
       actorId: "organizer-1",
-      actorLabel: "Olivia Organizer",
+      actorLabel: "Authorized organizer",
       occurredAt: now.toISOString(),
     });
     expect(await readPublishedContent()).toEqual({
@@ -1333,9 +1333,9 @@ describe("organizer session settings domain", () => {
     });
 
     expect(history.map(({ actorId, actorLabel }) => ({ actorId, actorLabel }))).toEqual([
-      { actorId: "organizer-first", actorLabel: "Shared Name" },
-      { actorId: "organizer-second", actorLabel: "Shared Name" },
-      { actorId: "organizer-first", actorLabel: "Updated Name" },
+      { actorId: "organizer-first", actorLabel: "Authorized organizer" },
+      { actorId: "organizer-second", actorLabel: "Authorized organizer" },
+      { actorId: "organizer-first", actorLabel: "Authorized organizer" },
     ]);
   });
 

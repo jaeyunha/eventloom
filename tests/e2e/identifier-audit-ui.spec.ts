@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { APIResponse, BrowserContext, Locator, Page, TestInfo } from "@playwright/test";
+import { CFP_FIXTURE_LANGUAGE_OPTIONS } from "./fixtures/cfp-api";
 
 const ORGANIZATION_ID = "local-organization";
 const EVENT_ID = "demo-event";
@@ -220,7 +221,7 @@ async function expectIdentifierSafeHistory(history: Locator): Promise<void> {
   await expect(history.getByText("Loading session history...", { exact: true })).toBeHidden({
     timeout: 30_000,
   });
-  await expect(history.getByText(/^Local Organizer - /u)).toHaveCount(2, {
+  await expect(history.getByText(/^Authorized organizer - /u)).toHaveCount(2, {
     timeout: 30_000,
   });
   await expectAllHidden(history.getByText("local-organizer", { exact: true }));
@@ -230,7 +231,7 @@ async function expectIdentifierSafeHistory(history: Locator): Promise<void> {
   ).toBeVisible();
 }
 
-test("session history shows named actors without persisted version counters", async ({
+test("session history shows authorized actors without persisted version counters", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -269,6 +270,7 @@ test("organizer assignment and decision surfaces keep identifiers in advanced da
   page,
 }, testInfo) => {
   test.setTimeout(90_000);
+  expect(CFP_FIXTURE_LANGUAGE_OPTIONS).toEqual(["English"]);
   const opaqueSubmissionId = await createOpaqueTitleSubmission(page, context);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${eventBase}/submissions`);

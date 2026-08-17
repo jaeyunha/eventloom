@@ -357,8 +357,6 @@ function sessionIsPubliclyApproved(session: Session): boolean {
 }
 
 function actorLabel(actor: SessionActor): string {
-  const displayName = actor.displayName?.trim();
-  if (displayName && displayName !== actor.userId && !displayName.includes("@")) return displayName;
   return actor.kind === "automation" ? "Eventloom automation" : "Authorized organizer";
 }
 

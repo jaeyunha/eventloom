@@ -18,7 +18,7 @@ import type { OrganizerWorkspaceViewController } from "./organizer-view-controll
 const aggregate: AggregateRow = {
   id: "submission-internal-42",
   reference: "SUB-SECRET-42",
-  title: "",
+  title: "submission-internal-42",
   countedScore: "4.0",
   possibleScore: "5.0",
   countedReviews: 1,
