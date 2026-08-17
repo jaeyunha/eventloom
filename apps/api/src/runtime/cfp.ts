@@ -152,6 +152,15 @@ function localFixtureForm(tenantId: string, eventId: string, formId = "main-cfp"
         required: true,
         options: [],
       },
+      {
+        id: "participant-company",
+        sectionId: "people",
+        key: "company",
+        label: "Company",
+        kind: "text",
+        required: false,
+        options: [],
+      },
     ],
     rules: [],
   };

@@ -213,6 +213,15 @@ export interface EvaluationOrganizerWorkspace {
   readonly diagnostics?: readonly EvaluationOrganizerWorkspaceDiagnostic[];
 }
 
+export interface EvaluationOrganizerReviewExportSnapshot {
+  readonly plan: EvaluationPlan;
+  readonly submissions: readonly EvaluationSubmissionRecord[];
+  readonly assignments: readonly EvaluationAssignment[];
+  readonly reviews: readonly EvaluationReview[];
+  readonly aggregates: readonly EvaluationAggregate[];
+  readonly decisions: Readonly<Record<string, EvaluationDecision>>;
+}
+
 export interface EvaluationEventMetadata {
   readonly id: string;
   readonly name: string;
@@ -608,7 +617,7 @@ function possibleWeightedTotal(rubric: Rubric): number {
   );
 }
 
-function isHumanConfirmedScore(score: RubricScore | undefined): score is RubricScore {
+export function isHumanConfirmedScore(score: RubricScore | undefined): score is RubricScore {
   return (
     score?.origin === "human" ||
     (score?.origin === "ai" &&
@@ -1030,6 +1039,12 @@ export class EvaluationService {
     return plan;
   }
 
+  async getOrganizerPlan(actor: EvaluationActor, planId: string): Promise<EvaluationPlan> {
+    const plan = await this.#getPlan(actor.tenantId, planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    return plan;
+  }
+
   async getDecision(
     actor: EvaluationActor,
     planId: string,
@@ -1053,6 +1068,70 @@ export class EvaluationService {
     if (source.listSubmissionsForOrganizer === undefined) return [];
     return source.listSubmissionsForOrganizer(actor.tenantId, eventId);
   }
+  async getOrganizerReviewExportSnapshot(
+    actor: EvaluationActor,
+    planId: string,
+  ): Promise<EvaluationOrganizerReviewExportSnapshot> {
+    const plan = await this.#getPlan(actor.tenantId, requireText(planId, "Plan id", 100));
+    requireHumanOrganizer(actor, plan.eventId);
+    const source = this.#submissions as SubmissionReviewSource & EvaluationSubmissionSource;
+    const [listedSubmissions, workspaceRecords] = await Promise.all([
+      source.listSubmissionsForOrganizer?.(actor.tenantId, plan.eventId) ?? Promise.resolve([]),
+      this.#repository.listOrganizerExportRecords(actor.tenantId, plan.eventId, plan.id),
+    ]);
+    const currentPlan = await this.#getPlan(actor.tenantId, plan.id);
+    const submissions = [
+      ...new Map(
+        listedSubmissions
+          .filter(
+            (submission) =>
+              submission.tenantId === actor.tenantId &&
+              submission.eventId === plan.eventId &&
+              isReviewableSubmission(submission),
+          )
+          .map((submission) => [submission.id, submission] as const),
+      ).values(),
+    ].sort((left, right) => left.id.localeCompare(right.id));
+    const assignments = workspaceRecords.assignments.filter(
+      (assignment) =>
+        assignment.tenantId === actor.tenantId &&
+        assignment.eventId === plan.eventId &&
+        assignment.planId === plan.id,
+    );
+    const reviews = workspaceRecords.reviews.filter(
+      (review) =>
+        review.tenantId === actor.tenantId &&
+        review.eventId === plan.eventId &&
+        review.planId === plan.id &&
+        review.submittedAt !== null,
+    );
+    const effectiveAssignments = [...effectiveAssignmentsForPlan(plan, assignments, reviews)].sort(
+      (left, right) => left.id.localeCompare(right.id),
+    );
+    const decisions = Object.fromEntries(
+      workspaceRecords.decisions
+        .filter(
+          (decision) =>
+            decision.tenantId === actor.tenantId &&
+            decision.eventId === plan.eventId &&
+            decision.planId === plan.id,
+        )
+        .map((decision) => [decision.submissionId, decision] as const),
+    );
+    return {
+      plan: currentPlan,
+      submissions,
+      assignments: effectiveAssignments,
+      reviews,
+      aggregates: plan.rounds.flatMap((round) =>
+        submissions.map((submission) =>
+          aggregateForSubmission(plan, round, submission.id, assignments, reviews),
+        ),
+      ),
+      decisions,
+    };
+  }
+
   async getOrganizerWorkspace(
     actor: EvaluationActor,
     eventId: string,
