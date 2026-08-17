@@ -6,7 +6,7 @@
 - Branch: `judge-review-ai`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-review-ai`
 - Exact base: `c5fc50256d10be142e1c9e142d1f78f6980ca2e3`
-- Exact pushed head: `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- Exact pushed head: `a0af25907c6fc6811369a18e8cfc40403a5343f3`
 - Latest integrated `github/main`: `613cd022e47f24aafd5b023ceac52843d976cfdf`
 - Integrated latest `github/main`: `3e236387223e8e95fa9b2ee78d5e5dee1117882f`
 - PR: https://github.com/jaeyunha/eventloom/pull/34
@@ -39,7 +39,7 @@
 - Merged Eventloom work from PRs #31, #33, #40, #60, #61, #62, #63, and #66
   remains present.
 
-## Exact-head verification at a9663c6
+## Exact-head verification at a0af259
 
 - Focused matrix: PASS — 11 files, 314 passed, 1 skipped, including
   structural rationale natural-prose/gibberish regressions and lifecycle
@@ -72,11 +72,11 @@
 
 These must all inspect the same final pushed head and PASS before merge:
 
-- [ ] Security — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
-- [ ] Code quality — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
-- [ ] Functional/visual QA — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
-- [ ] Context/dependencies — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
-- [ ] Goal/compliance — exact pushed head `a9663c6b8190c6d25929c7ce6abc7cb8f6c265d2`
+- [ ] Security — exact pushed head `a0af25907c6fc6811369a18e8cfc40403a5343f3`
+- [ ] Code quality — exact pushed head `a0af25907c6fc6811369a18e8cfc40403a5343f3`
+- [ ] Functional/visual QA — exact pushed head `a0af25907c6fc6811369a18e8cfc40403a5343f3`
+- [ ] Context/dependencies — exact pushed head `a0af25907c6fc6811369a18e8cfc40403a5343f3`
+- [ ] Goal/compliance — exact pushed head `a0af25907c6fc6811369a18e8cfc40403a5343f3`
 
 ## Remaining tasks
 
