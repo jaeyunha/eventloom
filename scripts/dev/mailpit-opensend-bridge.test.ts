@@ -1,4 +1,6 @@
+import { createTransport } from "nodemailer";
 import { describe, expect, it, vi } from "vitest";
+import { speakerEmailHtmlFromText } from "../../apps/api/src/features/speaker/email-body";
 import {
   createMailpitOpenSendHandler,
   type MailTransport,
@@ -115,6 +117,56 @@ describe("Mailpit OpenSend bridge", () => {
     expect(response.status).toBe(503);
     expect(text).not.toContain("private message content");
     expect(text).not.toContain(payload.to[0]);
+  });
+
+  it("generates multipart MIME with the same resolved semantic body in both parts", async () => {
+    const resolvedText = "Hello Priya,\n\nThe latest agenda is ready.";
+    const resolvedHtml = speakerEmailHtmlFromText(resolvedText);
+    const mimeTransport = createTransport({
+      streamTransport: true,
+      buffer: true,
+      newline: "unix",
+    });
+    let rawMime = "";
+    const handler = createMailpitOpenSendHandler({
+      transport: {
+        async sendMail(message) {
+          const result = await mimeTransport.sendMail({
+            from: message.from,
+            to: [...message.to],
+            subject: message.subject,
+            html: message.html,
+            text: message.text,
+          });
+          rawMime = Buffer.isBuffer(result.message)
+            ? result.message.toString("utf8")
+            : String(result.message);
+          return { messageId: result.messageId };
+        },
+      },
+    });
+
+    const response = await handler(
+      request(
+        {
+          ...payload,
+          from: "program@sessionboard.namuh.co",
+          to: ["priya@example.test"],
+          subject: "Latest agenda for Priya",
+          html: resolvedHtml,
+          text: resolvedText,
+          attachments: [],
+        },
+        "speaker-current-version",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(rawMime).toContain("Subject: Latest agenda for Priya");
+    expect(rawMime).toContain("Content-Type: multipart/alternative");
+    expect(rawMime).toContain(resolvedText);
+    expect(rawMime).toContain(resolvedHtml);
+    expect(rawMime).not.toContain("{{");
   });
 
   it("serves a health endpoint", async () => {
