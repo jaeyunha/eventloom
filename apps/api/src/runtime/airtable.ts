@@ -11,6 +11,7 @@ import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import { localDateInTimeZone } from "../features/agenda/timezone";
 import type { AgendaEntry, AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { RequestAuthenticator } from "../features/auth/authenticator";
@@ -3355,9 +3356,9 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   }
 }
 
-interface StoredAgendaState extends AgendaState {
+type StoredAgendaState = AgendaState & {
   id: string;
-}
+};
 interface StoredAgendaEntry {
   id: string;
   eventId: string;
@@ -8724,7 +8725,10 @@ export function createD1ApplicationDependencies(
               return servedSpeaker === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    displayName: neutralSpeakerDisplayName(
+                      participantId,
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -8744,8 +8748,11 @@ export function createD1ApplicationDependencies(
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
+              displayName: neutralSpeakerDisplayName(
+                participantId,
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,

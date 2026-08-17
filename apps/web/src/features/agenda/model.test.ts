@@ -3,6 +3,7 @@ import {
   acceptedSessionCount,
   agendaDays,
   eventDates,
+  eventScheduleDates,
   publicationReadiness,
   resolveAgendaPlacementDate,
 } from "./model";
@@ -49,12 +50,21 @@ const data: AgendaWorkspaceData = {
       },
     ],
   },
+  validation: null,
   rooms: [],
   tracks: [],
   acceptedSessionIds: ["session_early", "session_later"],
   unscheduledSessions: [],
   revisions: [],
   currentPublishedRevision: null,
+};
+
+const validatedData: AgendaWorkspaceData = {
+  ...data,
+  validation: {
+    draftVersion: data.draft.version,
+    validatedAt: "2026-08-08T12:01:00.000Z",
+  },
 };
 
 function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
@@ -114,6 +124,22 @@ describe("agenda workspace model", () => {
     expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-20"]);
   });
 
+  it("uses authoritative sparse dates for assisted placement criteria", () => {
+    expect(
+      eventScheduleDates({
+        startsOn: "2026-09-18",
+        endsOn: "2026-09-20",
+        scheduleDates: ["2026-09-18", "2026-09-20"],
+      }),
+    ).toEqual(["2026-09-18", "2026-09-20"]);
+    expect(
+      eventScheduleDates({
+        startsOn: "2026-09-18",
+        endsOn: "2026-09-20",
+      }),
+    ).toEqual(["2026-09-18", "2026-09-19", "2026-09-20"]);
+  });
+
   it("uses the authoritative event range for empty days and excludes out-of-range draft dates", () => {
     const outsideEntry = data.draft.entries[0];
     if (!outsideEntry) throw new Error("Expected fixture entry.");
@@ -146,8 +172,9 @@ describe("agenda workspace model", () => {
   });
 
   it("requires validation of the exact current draft", () => {
-    expect(publicationReadiness(data, preview()).ready).toBe(true);
-    expect(publicationReadiness(data, preview({ draftVersion: 3 }))).toEqual({
+    expect(publicationReadiness(data, preview()).ready).toBe(false);
+    expect(publicationReadiness(validatedData, preview()).ready).toBe(true);
+    expect(publicationReadiness(validatedData, preview({ draftVersion: 3 }))).toEqual({
       ready: false,
       reasons: ["Validate the current draft before publishing."],
     });
@@ -155,7 +182,7 @@ describe("agenda workspace model", () => {
 
   it("blocks publication for hard conflicts and unoverridden warnings", () => {
     const readiness = publicationReadiness(
-      data,
+      validatedData,
       preview({
         conflicts: [
           {

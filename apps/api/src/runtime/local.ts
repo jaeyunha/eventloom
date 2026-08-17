@@ -5,11 +5,16 @@ import {
 } from "@eventloom/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaCatalogSynchronizer } from "../features/agenda/catalog-sync";
-import { AgendaEngine, AgendaError } from "../features/agenda/engine";
+import {
+  AgendaEngine,
+  AgendaError,
+  DeterministicAgendaSuggestionProvider,
+} from "../features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda/infrastructure";
+import { neutralSpeakerDisplayName } from "../features/agenda/speaker-labels";
 import type {
   AgendaEntryInput,
   AgendaRepository,
@@ -2649,7 +2654,16 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   );
   const sessionRepository = new LocalSessionRepository(speakerRepository);
   const agendaMutationLock = new InMemoryAgendaMutationLock();
-  const agendaEngine = localAgendaEngine(eventRepository, agendaMutationLock, aiProviders?.agenda);
+  const deterministicAgendaSuggestions = new DeterministicAgendaSuggestionProvider();
+  const agendaEngine = localAgendaEngine(
+    eventRepository,
+    agendaMutationLock,
+    aiProviders?.agenda ?? {
+      suggest: (request) => ({
+        placements: deterministicAgendaSuggestions.suggest(request)?.placements?.slice(0, 1) ?? [],
+      }),
+    },
+  );
   let sessionService!: SessionService;
   let completeApprovedRevision:
     | ((eventId: string, revision: PublishedAgendaRevision) => Promise<void>)
@@ -3438,6 +3452,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         }),
       ),
     });
+    await agendaEngine.validate({
+      eventId: "demo-event",
+      expectedVersion: updated.version,
+      actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+    });
     const revision = await agendaEngine.publish({
       eventId: "demo-event",
       actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
@@ -3589,7 +3608,10 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
               return served === undefined
                 ? {
                     id: participantId,
-                    displayName: approvedSpeakerNameById.get(participantId) ?? participantId,
+                    displayName: neutralSpeakerDisplayName(
+                      participantId,
+                      approvedSpeakerNameById.get(participantId),
+                    ),
                     pronouns: null,
                     jobTitle: null,
                     organization: null,
@@ -3611,8 +3633,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             const profile = profileById.get(participantId);
             return {
               id: participantId,
-              displayName:
-                profile?.displayName ?? approvedSpeakerNameById.get(participantId) ?? participantId,
+              displayName: neutralSpeakerDisplayName(
+                participantId,
+                profile?.displayName,
+                approvedSpeakerNameById.get(participantId),
+              ),
               pronouns: null,
               jobTitle: profile?.jobTitle ?? null,
               organization: profile?.company ?? null,

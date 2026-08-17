@@ -71,6 +71,7 @@ function authenticatorFixture() {
         expiresAt: new Date("2027-01-01T00:00:00.000Z"),
         memberships: [{ organizationId: "org-1", role: "owner" }],
         speakerGrants: [],
+        reviewerGrants: [],
       },
     ],
     [
@@ -83,6 +84,7 @@ function authenticatorFixture() {
         expiresAt: new Date("2027-01-01T00:00:00.000Z"),
         memberships: [{ organizationId: "org-2", role: "owner" }],
         speakerGrants: [],
+        reviewerGrants: [],
       },
     ],
   ]);
@@ -292,6 +294,19 @@ describe("agenda API authorization and publication safety", () => {
             method: "PUT",
             headers: { ...ownerHeaders, "content-type": "application/json" },
             body: JSON.stringify({ expectedVersion: 1, entries: [entryA] }),
+          },
+          environment,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request(
+          `${adminPath}/validate`,
+          {
+            method: "POST",
+            headers: { ...ownerHeaders, "content-type": "application/json" },
+            body: JSON.stringify({ expectedVersion: 2 }),
           },
           environment,
         )
