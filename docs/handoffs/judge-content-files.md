@@ -1,10 +1,10 @@
 # Lane handoff: judge-content-files
 
-## Paused state
+## Current continuation state
 
-This lane is **paused by user request**. Do not merge or deploy it. The current
-checkpoint intentionally preserves partially implemented follow-up work so it
-can be resumed without reconstructing the investigation.
+This lane is **active by explicit user override**. Do not deploy production.
+The historical pause checkpoint below remains for provenance; the current lane
+continues from the pushed head and must not rely on its stale base/head values.
 
 ## Repository and branch
 
@@ -12,14 +12,13 @@ can be resumed without reconstructing the investigation.
 - Branch: `judge-content-files`
 - Worktree: `/Users/jaeyunha/wt/open-sessionboard/judge-content-files`
 - Pull request: https://github.com/jaeyunha/eventloom/pull/39
-- Pull request state at pause: `OPEN`, non-draft, `CLEAN`, not merged
-- Exact GitHub-main base incorporated before this checkpoint:
-  `7d6601961367e3eefb87ddbc1cd3236332cc7ee3`
-- Exact pushed head before the checkpoint commit:
-  `20b3b7b6db27e882ec139ee16c87c966ab39ea4b`
-- The checkpoint commit containing this document is the next commit on the same
-  branch. Resolve its exact SHA with `git rev-parse HEAD` after fetching the
-  pushed branch; the handoff issue records that pushed SHA.
+- Pull request state: `OPEN`, non-draft, `MERGEABLE`, not merged
+- Exact current GitHub-main base incorporated:
+  `6a36bb5330c6a4bc09bf2801ccda5cd4adc11cc2`
+- Exact current pushed head:
+  `372d6bc66a20305cc5c72393acc257302456d0eb`
+- The earlier `7d6601...` base and `20b3b7b...` head below are historical
+  checkpoint evidence only and are not current verification evidence.
 
 ## Lane objective and scope
 
@@ -38,8 +37,8 @@ server-authoritative export while preserving:
 
 ## Completed implementation
 
-The first verified commit, `20b3b7b6db27e882ec139ee16c87c966ab39ea4b`,
-is already pushed and present in PR #39. It:
+The current pushed lane includes the earlier implementation plus the verified
+replacement-lineage continuation. It:
 
 - atomically persists an organizer `needs_changes` review, family pointer
   updates, task CAS/update, task transition, and audit in one D1 batch;
@@ -50,9 +49,12 @@ is already pushed and present in PR #39. It:
 - adds local fixture parity needed for participant Files;
 - keeps object keys and capability material out of browser responses.
 
-The paused, not-yet-pushed follow-up patch currently contains:
+The pushed continuation contains:
 
-- migration `0035_speaker_asset_uploader.sql`;
+- migrations `0038_speaker_asset_uploader.sql`,
+  `0039_speaker_asset_creation_idempotency.sql`,
+  `0040_speaker_task_replacement_baseline.sql`, and
+  `0041_private_download_attribution.sql`;
 - immutable asset uploader account ID plus upload-time display-label snapshot
   in the domain, D1 schema/repository, local repository, service, organizer
   parser, and file-review context;
@@ -64,11 +66,16 @@ The paused, not-yet-pushed follow-up patch currently contains:
 - typed `CreatePendingSpeakerAssetVersionCommand`;
 - partial D1 and local repository implementations for optimistic/idempotent
   pending replacement creation;
-- lifecycle fixture migration ordering for `0034` and `0035`.
+- lifecycle fixture migration ordering after main's `0035_event_retirement`
+  and `0037_immutable_speaker_projection_snapshots` migrations;
+- service, route, D1, local, portal, organizer, and HTTP wiring for explicit
+  predecessor/version/idempotency successor creation;
+- replacement-baseline enforcement for `needs_changes` task submission;
+- local HTTP same-key replay and stale-head conflict coverage;
+- requester-bound download capability persistence and audit attribution.
 
-The pending-version repository command is **not wired into the service, HTTP
-routes, or clients yet**. It is preserved as a syntactically coherent
-checkpoint, not claimed as completed behavior.
+The remaining review items below are not release claims until the final five
+reviews and current-head gates pass.
 
 ## Remaining tasks
 
