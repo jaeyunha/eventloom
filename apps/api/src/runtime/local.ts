@@ -3056,6 +3056,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         sessionId: `session-${input.submissionId}`,
         status: input.status,
         actorId: input.decidedBy,
+        isCurrentDecision: input.isCurrentDecision,
         decisionFence: input.decisionFence,
       });
     },

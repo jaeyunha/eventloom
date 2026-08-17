@@ -130,6 +130,7 @@ export interface EvaluationSessionDecisionReconciliationInput {
   readonly decidedAt: string;
   readonly reason: string;
   readonly idempotencyKey: string;
+  readonly isCurrentDecision?: () => Promise<boolean>;
   readonly decisionFence: {
     readonly tenantId: string;
     readonly eventId: string;
@@ -4327,6 +4328,23 @@ export class EvaluationService {
       return;
     }
     const handoff = (async () => {
+      const isCurrentDecision = async (): Promise<boolean> => {
+        const current = await this.#repository.getDecision(
+          input.decision.tenantId,
+          input.decision.planId,
+          input.decision.submissionId,
+        );
+        return (
+          current !== null &&
+          current.version === input.decisionVersion &&
+          current.status === status &&
+          current.history.some(
+            (transition) =>
+              transition.idempotencyKey === input.transition.idempotencyKey &&
+              transition.to === status,
+          )
+        );
+      };
       await reconciliation({
         tenantId: input.decision.tenantId,
         eventId: input.decision.eventId,
@@ -4339,6 +4357,7 @@ export class EvaluationService {
         decidedAt: input.transition.decidedAt,
         reason: input.transition.reason,
         idempotencyKey: input.transition.idempotencyKey,
+        isCurrentDecision,
         decisionFence: {
           tenantId: input.decision.tenantId,
           eventId: input.decision.eventId,

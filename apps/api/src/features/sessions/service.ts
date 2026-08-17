@@ -1205,6 +1205,9 @@ export class SessionService {
           ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
         });
       } else {
+        if (input.beforePersist !== undefined && !(await input.beforePersist())) {
+          return sessionProjection(current);
+        }
         await this.#repository.putSession(next, expected);
         await this.recordAudit(audit);
       }

@@ -3026,7 +3026,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       );
     };
     if (!(await isCurrentDecision())) return;
-    await this.#sessionService?.reconcileDecisionSessionStatus({
+    const reconciliationInput = {
       tenantId: input.tenantId,
       eventId: input.eventId,
       sessionId: `session-${input.submissionId}`,
@@ -3034,7 +3034,35 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       actorId: input.decidedBy,
       isCurrentDecision,
       decisionFence: input.decisionFence,
-    });
+    } as const;
+    if (this.#sessionService !== undefined) {
+      await this.#sessionService.reconcileDecisionSessionStatus(reconciliationInput);
+      return;
+    }
+    const current = await this.#sessions.getSession(
+      input.tenantId,
+      input.eventId,
+      reconciliationInput.sessionId,
+    );
+    if (current === null || !(await isCurrentDecision())) return;
+    const next: Session = {
+      ...current,
+      status: input.status === "rejected" ? "Rejected" : "Waitlisted",
+      version: current.version + 1,
+      updatedAt: input.decidedAt,
+      updatedBy: input.decidedBy,
+      history: [
+        ...current.history,
+        {
+          id: `${current.id}:v${current.version + 1}`,
+          action: "updated",
+          version: current.version + 1,
+          actorId: input.decidedBy,
+          occurredAt: input.decidedAt,
+        },
+      ],
+    };
+    await this.#sessions.putSession(next, current.version, input.decisionFence);
   }
 
   async #ensureProfile(
@@ -3229,7 +3257,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
           },
         ],
       };
-      await this.#sessions.putSession(created, null);
+      await this.#sessions.putSession(created, null, input.decisionFence);
       await this.#sessions.appendAudit({
         id: `${id}:v1`,
         tenantId: input.tenantId,
@@ -3264,7 +3292,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         },
       ],
     };
-    await this.#sessions.putSession(updated, current.version);
+    await this.#sessions.putSession(updated, current.version, input.decisionFence);
     await this.#sessions.appendAudit({
       id: `${id}:v${nextVersion}`,
       tenantId: input.tenantId,
