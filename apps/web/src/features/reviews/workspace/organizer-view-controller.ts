@@ -6,6 +6,10 @@ import type { AggregateRow } from "./organizer-aggregate-row";
 import type { DecisionStatus } from "./organizer-decision-status";
 import { loadRoundAggregates } from "./organizer-load-round-aggregates";
 import { mapSeedRoundAggregates } from "./organizer-map-seed-round-aggregates";
+import {
+  createOrganizerResultsExportAttemptRunner,
+  type OrganizerResultsExportRun,
+} from "./organizer-results-export";
 import type { ReviewPlanSeed } from "./organizer-review-plan-seed";
 
 import { deriveOrganizerWorkspaceModel } from "./organizer-view-model";
@@ -52,7 +56,9 @@ export function useOrganizerWorkspaceViewController({
   const [aggregateLoading, setAggregateLoading] = useState(false);
   const [aggregateError, setAggregateError] = useState<string | null>(null);
   const [aggregateSort, setAggregateSort] = useState<"ascending" | "descending">("descending");
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportRun, setExportRun] = useState<OrganizerResultsExportRun | null>(null);
+  const [exportCreating, setExportCreating] = useState(false);
+  const [exportRequestError, setExportRequestError] = useState<string | null>(null);
   const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">(
     seed.status === "draft" ? "setup" : "overview",
   );
@@ -67,7 +73,15 @@ export function useOrganizerWorkspaceViewController({
   );
   const [decisionRowLimit, setDecisionRowLimit] = useState(5);
   const decisionEditorRef = useRef<HTMLDivElement | null>(null);
+  const exportAbortControllerRef = useRef<AbortController | null>(null);
+  const exportAttemptRunnerRef = useRef(createOrganizerResultsExportAttemptRunner());
   const selectedRound = seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
+  useEffect(
+    () => () => {
+      exportAbortControllerRef.current?.abort();
+    },
+    [],
+  );
   useEffect(() => {
     if (selectedRoundId.length === 0) return;
     let cancelled = false;
@@ -130,34 +144,30 @@ export function useOrganizerWorkspaceViewController({
   }
 
   async function exportResults(): Promise<void> {
-    setExportMessage(`Preparing evaluation-${seed.planId}.csv…`);
+    if (exportAbortControllerRef.current !== null) return;
+    const controller = new AbortController();
+    exportAbortControllerRef.current = controller;
+    setExportCreating(true);
+    setExportRun(null);
+    setExportRequestError(null);
     try {
-      const response = await fetch(
-        `${baseUrl}/api/admin/evaluations/plans/${encodeURIComponent(seed.planId)}/export.csv`,
-        {
-          credentials: "include",
-          cache: "no-store",
-          headers: { accept: "text/csv" },
-        },
-      );
-      if (!response.ok) {
-        const body = (await response.json().catch(() => undefined)) as
-          | { error?: { message?: string } }
-          | undefined;
-        throw new Error(body?.error?.message ?? "The CSV export could not be generated.");
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `evaluation-${seed.planId}.csv`;
-      link.click();
-      URL.revokeObjectURL(url);
-      setExportMessage(`CSV export ready: ${link.download}`);
+      const terminal = await exportAttemptRunnerRef.current.start({
+        baseUrl,
+        planId: seed.planId,
+        signal: controller.signal,
+        onStatus: setExportRun,
+      });
+      setExportRun(terminal);
     } catch (reason: unknown) {
-      setExportMessage(
+      if (controller.signal.aborted) return;
+      setExportRequestError(
         reason instanceof Error ? reason.message : "The CSV export could not be generated.",
       );
+    } finally {
+      if (exportAbortControllerRef.current === controller) {
+        exportAbortControllerRef.current = null;
+        setExportCreating(false);
+      }
     }
   }
 
@@ -179,7 +189,9 @@ export function useOrganizerWorkspaceViewController({
     aggregateError,
     aggregateSort,
     setAggregateSort,
-    exportMessage,
+    exportRun,
+    exportCreating,
+    exportRequestError,
     view,
     setView,
     assignmentTarget,

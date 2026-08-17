@@ -98,6 +98,9 @@ max_batch_timeout = 5
 max_retries = 5
 dead_letter_queue = "open-sessionboard-outbox-staging-dlq"
 
+[env.staging.triggers]
+crons = ["*/5 * * * *"]
+
 [env.production]
 name = "open-sessionboard-api-production"
 workers_dev = false
@@ -108,7 +111,7 @@ zone_name = "production.example.invalid"
 custom_domain = true
 
 [env.production.triggers]
-crons = ["0 * * * *"]
+crons = ["*/5 * * * *", "0 * * * *"]
 
 [env.production.observability]
 enabled = true

@@ -3,6 +3,7 @@ import { Button } from "../../../components/ui/button";
 import styles from "../review-workspace.module.css";
 import { DecisionEditor } from "./organizer-decision-editor";
 import type { DecisionStatus } from "./organizer-decision-status";
+import { OrganizerResultsExportControls } from "./organizer-results-export-controls";
 import type { OrganizerWorkspaceViewController } from "./organizer-view-controller";
 import { OrganizerDecisionTable } from "./organizer-view-decision-table";
 import { OrganizerSubmittedReviews } from "./organizer-view-submitted-reviews";
@@ -19,7 +20,9 @@ export function OrganizerDecisionsPanel({
     aggregateError,
     aggregateSort,
     setAggregateSort,
-    exportMessage,
+    exportRun,
+    exportCreating,
+    exportRequestError,
     decisionQuery,
     setDecisionQuery,
     decisionFilter,
@@ -73,9 +76,12 @@ export function OrganizerDecisionsPanel({
           >
             Sort score {aggregateSort === "descending" ? "ascending" : "descending"}
           </Button>
-          <Button size="sm" type="button" variant="outline" onClick={() => void exportResults()}>
-            Export CSV
-          </Button>
+          <OrganizerResultsExportControls
+            run={exportRun}
+            creating={exportCreating}
+            requestError={exportRequestError}
+            onExport={() => void exportResults()}
+          />
         </div>
       </div>
       <div className={styles.formField}>
@@ -157,11 +163,6 @@ export function OrganizerDecisionsPanel({
           Showing {visibleDecisionRows.length} of {filteredDecisionRows.length} matching submissions
         </p>
       </div>
-      {exportMessage ? (
-        <p className={styles.fieldHint} role="status">
-          {exportMessage}
-        </p>
-      ) : null}
       <OrganizerDecisionTable controller={controller} />
       {selectedAggregate ? (
         <div
