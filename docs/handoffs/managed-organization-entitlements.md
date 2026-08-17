@@ -96,3 +96,8 @@ Important paths:
 
 This second slice was committed and pushed before worktree deletion. Focused
 tests for the new put path may still need expansion before delivery.
+
+## Additional residue preserved 2026-08-17T06:59Z
+
+- Added `apps/api/migrations/0035_idempotency_lease_fencing.sql` for idempotency lease fencing.
+- Migration number `0035` collides with active speaker-asset renumbering on `judge-content-files`; reconcile numbering before merge.
