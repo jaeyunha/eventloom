@@ -595,6 +595,68 @@ describe("CFP rules and configuration", () => {
     });
   });
 
+  it("requires exactly one canonical submission title field key", () => {
+    const missingTitle = buildForm({
+      submissionFields: buildForm().submissionFields.filter((field) => field.key !== "title"),
+    });
+    expect(validateCfpForm(missingTitle)).toMatchObject({
+      success: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: "submissionFields",
+          code: "missing_builtin",
+          message: 'Every CFP form must include exactly one session title field with key "title".',
+        }),
+      ]),
+    });
+
+    const duplicateTitle = buildForm({
+      submissionFields: [
+        ...buildForm().submissionFields,
+        {
+          id: "field_title_duplicate",
+          sectionId: "session",
+          key: "title",
+          label: "Another title",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+    });
+    expect(validateCfpForm(duplicateTitle)).toMatchObject({
+      success: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: "submissionFields",
+          code: "duplicate",
+        }),
+      ]),
+    });
+  });
+
+  it("repairs a mis-keyed session title field when saving a form", async () => {
+    const { service } = createFixture();
+    const saved = await service.saveForm(
+      buildForm({
+        version: 2,
+        submissionFields: buildForm().submissionFields.map((field) =>
+          field.key === "title"
+            ? { ...field, key: "title1", label: "Session title 1", required: false }
+            : field,
+        ),
+      }),
+      1,
+    );
+
+    expect(saved.submissionFields.filter((field) => field.key === "title")).toHaveLength(1);
+    expect(saved.submissionFields.find((field) => field.key === "title")).toMatchObject({
+      label: "Session title 1",
+      key: "title",
+    });
+    expect(saved.submissionFields.some((field) => field.key === "title1")).toBe(false);
+  });
+
   it("enforces the 20-form cap and sanitizes persisted form content", async () => {
     const { service, repository } = createFixture();
     for (let index = 2; index <= 20; index += 1) {

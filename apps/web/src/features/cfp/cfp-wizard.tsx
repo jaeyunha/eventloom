@@ -584,33 +584,57 @@ function answerBoolean(answers: Record<string, unknown>, key: string): boolean {
   return answers[key] === true;
 }
 
+function promoteCanonicalTitleAnswers(
+  answers: Record<string, unknown>,
+): Record<string, unknown> {
+  const currentTitle = answers.title;
+  if (typeof currentTitle === "string" && currentTitle.trim().length > 0) {
+    return answers;
+  }
+  const titleLikeKeys = Object.keys(answers).filter((key) => {
+    const normalized = key.trim().toLocaleLowerCase();
+    return (
+      normalized === "title1" ||
+      normalized.startsWith("title-") ||
+      normalized.endsWith("-title") ||
+      normalized.includes("session-title") ||
+      normalized.includes("session_title")
+    );
+  });
+  if (titleLikeKeys.length !== 1) return answers;
+  const candidate = answers[titleLikeKeys[0]!];
+  if (typeof candidate !== "string" || candidate.trim().length === 0) return answers;
+  return { ...answers, title: candidate };
+}
+
 function draftFromSubmission(eventSlug: string, submission: CfpServerSubmission): CfpDraft {
   const primary =
     submission.participants.find((participant) => participant.role === "primary") ??
     submission.participants[0];
+  const answers = promoteCanonicalTitleAnswers(submission.answers);
   return {
     schemaVersion: 1,
     eventSlug,
     account: {
-      email: answerString(submission.answers, "accountEmail") || primary?.email || "",
-      firstName: answerString(submission.answers, "accountFirstName") || primary?.firstName || "",
-      lastName: answerString(submission.answers, "accountLastName") || primary?.lastName || "",
+      email: answerString(answers, "accountEmail") || primary?.email || "",
+      firstName: answerString(answers, "accountFirstName") || primary?.firstName || "",
+      lastName: answerString(answers, "accountLastName") || primary?.lastName || "",
       acceptedTerms:
-        answerBoolean(submission.answers, "accountAcceptedTerms") ||
+        answerBoolean(answers, "accountAcceptedTerms") ||
         submission.completedSteps.includes("account"),
     },
     submission: {
-      title: answerString(submission.answers, "title"),
+      title: answerString(answers, "title"),
       description:
-        answerString(submission.answers, "abstract") ||
-        answerString(submission.answers, "description"),
-      format: answerString(submission.answers, "format"),
-      tags: Array.isArray(submission.answers.tags)
-        ? submission.answers.tags.filter((value): value is string => typeof value === "string")
+        answerString(answers, "abstract") ||
+        answerString(answers, "description"),
+      format: answerString(answers, "format"),
+      tags: Array.isArray(answers.tags)
+        ? answers.tags.filter((value): value is string => typeof value === "string")
         : [],
-      track: answerString(submission.answers, "track"),
-      level: answerString(submission.answers, "level"),
-      language: answerString(submission.answers, "language") || "English",
+      track: answerString(answers, "track"),
+      level: answerString(answers, "level"),
+      language: answerString(answers, "language") || "English",
     },
     participants:
       submission.participants.length > 0
@@ -627,9 +651,9 @@ function draftFromSubmission(eventSlug: string, submission: CfpServerSubmission)
             {
               id: "primary-speaker",
               role: "Speaker",
-              firstName: answerString(submission.answers, "accountFirstName"),
-              lastName: answerString(submission.answers, "accountLastName"),
-              email: answerString(submission.answers, "accountEmail"),
+              firstName: answerString(answers, "accountFirstName"),
+              lastName: answerString(answers, "accountLastName"),
+              email: answerString(answers, "accountEmail"),
               mobilePhone: "",
               biography: "",
             },
@@ -660,7 +684,7 @@ function draftWithAuthenticatedSession(
   };
 }
 function submissionAnswersFromServer(submission: CfpServerSubmission): DynamicAnswers {
-  return { ...submission.answers };
+  return promoteCanonicalTitleAnswers({ ...submission.answers });
 }
 
 function participantAnswersFromServer(submission: CfpServerSubmission): ParticipantAnswers {
@@ -1582,7 +1606,10 @@ function useCfpWizardController({
         });
         if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
         if (!review.canSubmit) {
-          setErrors(Object.fromEntries(review.issues.map((issue) => [issue.path, issue.message])));
+          const issueEntries = review.issues.map((issue) => [issue.path, issue.message] as const);
+          setErrors(Object.fromEntries(issueEntries));
+          // Validation failures are field errors, not transport failures.
+          setSaveError(issueEntries[0]?.[1] ?? "Check the highlighted fields before submitting.");
           setSaveState("error");
           return;
         }

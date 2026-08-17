@@ -749,11 +749,13 @@ function renderFieldRuleRow({
   readonly onFieldChange: (fieldId: string, patch: Partial<CfpFormField>) => void;
   readonly onRemoveField: (fieldId: string) => void;
 }) {
+  const keyLocked = field.keyLocked === true || field.key === "title" || field.id === "title";
+  const systemOwned = field.system === true || keyLocked;
   return (
     <div key={key} className={styles.fieldRuleRow}>
       <div className={styles.fieldCardHeading}>
         <div>
-          <span>Question {index + 1}</span>
+          <span>Question {index + 1}{systemOwned ? " · System field" : ""}</span>
           <strong>{field.label || "Untitled question"}</strong>
         </div>
         <span>{fieldTypeLabel(field.type)}</span>
@@ -773,8 +775,17 @@ function renderFieldRuleRow({
             id={`field-key-${field.id}`}
             pattern="[A-Za-z][A-Za-z0-9_.-]*"
             value={field.key ?? field.id}
-            onChange={(event) => onFieldChange(field.id, { key: event.target.value })}
+            readOnly={keyLocked}
+            aria-readonly={keyLocked ? true : undefined}
+            title={keyLocked ? "Required system key: title" : "Use lowercase letters, numbers, and hyphens."}
+            onChange={(event) => {
+              if (keyLocked) return;
+              onFieldChange(field.id, { key: event.target.value });
+            }}
           />
+          {keyLocked ? (
+            <p className={styles.fieldHint}>Required system key: title</p>
+          ) : null}
         </div>
         <div className={styles.fieldGroup}>
           <label htmlFor={`field-type-${field.id}`}>Field type</label>
@@ -818,9 +829,13 @@ function renderFieldRuleRow({
         <input
           type="checkbox"
           checked={field.required}
-          onChange={(event) => onFieldChange(field.id, { required: event.target.checked })}
+          disabled={keyLocked}
+          onChange={(event) => {
+            if (keyLocked) return;
+            onFieldChange(field.id, { required: event.target.checked });
+          }}
         />
-        Required
+        {keyLocked ? "Required to submit" : "Required"}
       </label>
       <label>
         <input
@@ -830,9 +845,11 @@ function renderFieldRuleRow({
         />
         Visible
       </label>
-      <button className={styles.textButton} type="button" onClick={() => onRemoveField(field.id)}>
-        Remove
-      </button>
+      {systemOwned ? null : (
+        <button className={styles.textButton} type="button" onClick={() => onRemoveField(field.id)}>
+          Remove
+        </button>
+      )}
     </div>
   );
 }
