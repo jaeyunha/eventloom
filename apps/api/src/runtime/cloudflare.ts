@@ -238,6 +238,28 @@ function isHttpsOrigin(value: unknown): value is string {
   }
 }
 
+function isLoopbackOrigin(value: unknown): value is string {
+  if (!nonEmpty(value)) return false;
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === "" &&
+      (hostname === "127.0.0.1" ||
+        hostname === "localhost" ||
+        hostname.endsWith(".localhost") ||
+        hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function validDate(value: string): Date | null {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : null;
@@ -709,6 +731,18 @@ function randomToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function secretEquals(candidate: string | null, expected: string): boolean {
+  if (candidate === null) return false;
+  const candidateBytes = new TextEncoder().encode(candidate);
+  const expectedBytes = new TextEncoder().encode(expected);
+  let difference = candidateBytes.length ^ expectedBytes.length;
+  const length = Math.max(candidateBytes.length, expectedBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (candidateBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  }
+  return difference === 0;
+}
+
 function repositoryConflict(error: unknown): boolean {
   return error instanceof Error && /constraint|unique|duplicate/i.test(error.message);
 }
@@ -950,9 +984,9 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           .prepare(
             `INSERT INTO organization_entitlements (
                organization_id, schema_version, revision, state, capabilities_json,
-               active_event_limit, not_before, expires_at,
+               active_event_limit, organizer_seat_limit, not_before, expires_at,
                created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             input.entitlement.organizationId,
@@ -961,6 +995,7 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
             input.entitlement.state,
             JSON.stringify(input.entitlement.capabilities),
             input.entitlement.limits.activeEvents,
+            input.entitlement.limits.organizerSeats,
             input.entitlement.notBefore,
             input.entitlement.expiresAt,
             input.organization.createdAt,
@@ -1272,16 +1307,52 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
   async createMembership(input: MemberMembership): Promise<void> {
     try {
-      const result = await this.database
+      const guardedInsert = this.database
         .prepare(
           `INSERT INTO organization_memberships
              (organization_id, user_id, role, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?
+            WHERE ? NOT IN ('owner', 'admin')
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM organization_entitlements entitlement
+                     WHERE entitlement.organization_id = ?
+                       AND entitlement.state = 'active'
+                       AND entitlement.not_before <= ?
+                       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                       AND entitlement.organizer_seat_limit IS NOT NULL
+                       AND (
+                         (SELECT COUNT(*)
+                            FROM organization_memberships member
+                           WHERE member.organization_id = ?
+                             AND member.role IN ('owner', 'admin'))
+                         +
+                         (SELECT COUNT(*)
+                            FROM auth_verifications invitation
+                           WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                             AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                             AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                             AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                         ) < entitlement.organizer_seat_limit
+                       )
+               )`,
         )
-        .bind(input.organizationId, input.userId, input.role, input.createdAt, input.updatedAt)
-        .run();
+        .bind(
+          input.organizationId,
+          input.userId,
+          input.role,
+          input.createdAt,
+          input.updatedAt,
+          input.role,
+          input.organizationId,
+          input.updatedAt,
+          input.updatedAt,
+          input.organizationId,
+          input.organizationId,
+        );
+      const result = await guardedInsert.run();
       if (Number(result.meta?.changes ?? 1) === 0) {
-        throw new MemberRepositoryConflictError("The membership already exists.");
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
       }
     } catch (error) {
       if (error instanceof MemberRepositoryConflictError) throw error;
@@ -1298,14 +1369,55 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     role: MemberMembership["role"],
     updatedAt: string,
   ): Promise<void> {
-    await this.database
+    const guardedUpdate = await this.database
       .prepare(
         `UPDATE organization_memberships
-            SET role = ?, updated_at = ?
-          WHERE organization_id = ? AND user_id = ?`,
+              SET role = ?, updated_at = ?
+            WHERE organization_id = ? AND user_id = ?
+              AND (
+                ? NOT IN ('owner', 'admin')
+                OR role IN ('owner', 'admin')
+                OR NOT EXISTS (
+                  SELECT 1
+                    FROM organization_entitlements entitlement
+                   WHERE entitlement.organization_id = ?
+                     AND entitlement.state = 'active'
+                     AND entitlement.not_before <= ?
+                     AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                     AND entitlement.organizer_seat_limit IS NOT NULL
+                     AND (
+                       (SELECT COUNT(*)
+                          FROM organization_memberships member
+                         WHERE member.organization_id = ?
+                           AND member.role IN ('owner', 'admin'))
+                       +
+                       (SELECT COUNT(*)
+                          FROM auth_verifications invitation
+                         WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                           AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                           AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                           AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                       ) < entitlement.organizer_seat_limit
+                     )
+                )
+              )`,
       )
-      .bind(role, updatedAt, organizationId, userId)
+      .bind(
+        role,
+        updatedAt,
+        organizationId,
+        userId,
+        role,
+        organizationId,
+        updatedAt,
+        updatedAt,
+        organizationId,
+        organizationId,
+      )
       .run();
+    if (Number(guardedUpdate.meta?.changes ?? 1) === 0) {
+      throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
+    }
   }
 
   async removeMembership(organizationId: string, userId: string): Promise<void> {
@@ -1444,11 +1556,35 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     };
     const temporaryDigest = await sha256(randomToken());
     try {
-      await this.database
+      const guardedInsert = this.database
         .prepare(
           `INSERT INTO auth_verifications
              (id, identifier, token_digest, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?
+            WHERE ? NOT IN ('owner', 'admin')
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM organization_entitlements entitlement
+                     WHERE entitlement.organization_id = ?
+                       AND entitlement.state = 'active'
+                       AND entitlement.not_before <= ?
+                       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                       AND entitlement.organizer_seat_limit IS NOT NULL
+                       AND (
+                         (SELECT COUNT(*)
+                            FROM organization_memberships member
+                           WHERE member.organization_id = ?
+                             AND member.role IN ('owner', 'admin'))
+                         +
+                         (SELECT COUNT(*)
+                            FROM auth_verifications invitation
+                           WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                             AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                             AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                             AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                         ) < entitlement.organizer_seat_limit
+                       )
+               )`,
         )
         .bind(
           input.id,
@@ -1457,8 +1593,17 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           input.expiresAt,
           input.createdAt,
           input.updatedAt,
-        )
-        .run();
+          input.role,
+          input.organizationId,
+          input.updatedAt,
+          input.updatedAt,
+          input.organizationId,
+          input.organizationId,
+        );
+      const result = await guardedInsert.run();
+      if (Number(result.meta?.changes ?? 1) === 0) {
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
+      }
     } catch (error) {
       if (repositoryConflict(error)) {
         throw new MemberRepositoryConflictError("The invitation already exists.");
@@ -2291,7 +2436,6 @@ const fixedOrigins = {
 const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
 const LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
   "eventloom-integrated-local-airtable-credential-key-v2";
-const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
 const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
 
 function authEnvironment(value: string): "local" | "staging" | "production" | null {
@@ -2300,13 +2444,16 @@ function authEnvironment(value: string): "local" | "staging" | "production" | nu
 
 export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeBindings {
   if (source.APP_ENV !== "local") return source;
+  const webOrigin = source.WEB_ORIGIN.trim() || fixedOrigins.local.web;
+  const apiOrigin = source.API_ORIGIN?.trim() || fixedOrigins.local.api;
   return {
     ...source,
-    API_ORIGIN: fixedOrigins.local.api,
+    WEB_ORIGIN: webOrigin,
+    API_ORIGIN: apiOrigin,
     AIRTABLE_CREDENTIAL_ENCRYPTION_KEY:
       source.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?.trim() || LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
     BETTER_AUTH_SECRET: LOCAL_BETTER_AUTH_SECRET,
-    CACHE_INVALIDATION_URL: LOCAL_CACHE_INVALIDATION_URL,
+    CACHE_INVALIDATION_URL: `${webOrigin}/api/internal/cache-invalidation`,
     CACHE_INVALIDATION_TOKEN: LOCAL_CACHE_INVALIDATION_TOKEN,
   };
 }
@@ -2421,15 +2568,15 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
 
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment !== null) {
-    if (environment === "local" && bindings.WEB_ORIGIN !== fixedOrigins.local.web) {
-      issues.push("WEB_ORIGIN must match the integrated local web origin.");
+    if (environment === "local" && !isLoopbackOrigin(bindings.WEB_ORIGIN)) {
+      issues.push("WEB_ORIGIN must be a loopback origin for local.");
     }
     if (
       environment === "local" &&
       bindings.API_ORIGIN !== undefined &&
-      bindings.API_ORIGIN !== fixedOrigins.local.api
+      !isLoopbackOrigin(bindings.API_ORIGIN)
     ) {
-      issues.push("API_ORIGIN must match the integrated local API origin.");
+      issues.push("API_ORIGIN must be a loopback origin for local.");
     }
     if (environment !== "local" && !isHttpsOrigin(bindings.WEB_ORIGIN)) {
       issues.push("WEB_ORIGIN must be an HTTPS origin for deployed environments.");
@@ -2672,6 +2819,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   });
   const memberService = new MemberService({
     identity: new D1MemberIdentityRepository(bindings.DB),
+    organizationEntitlements: entitlementRepository,
     auth: new D1MemberAuthBoundary(bindings.DB, bindings.WEB_ORIGIN),
     invitationDelivery: new CloudflareMemberInvitationDelivery(
       bindings.DB,
@@ -2736,7 +2884,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           organizationBootstrap: {
             service: memberService,
             authenticate: (request: Request) =>
-              request.headers.get("x-eventloom-bootstrap-token") === provisioningToken,
+              secretEquals(request.headers.get("x-eventloom-bootstrap-token"), provisioningToken),
           },
         }
       : {}),
@@ -2746,7 +2894,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
             service: memberService,
             entitlements: entitlementRepository,
             authenticate: (request: Request) =>
-              request.headers.get("authorization") === `Bearer ${provisioningToken}`,
+              secretEquals(request.headers.get("authorization"), `Bearer ${provisioningToken}`),
           },
         }
       : {}),

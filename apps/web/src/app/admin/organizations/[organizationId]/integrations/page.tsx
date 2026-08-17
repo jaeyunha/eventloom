@@ -8,5 +8,7 @@ export default async function OrganizationIntegrationsPage({
   params,
 }: OrganizationIntegrationsPageProps) {
   const { organizationId } = await params;
-  return <OrganizationIntegrationsWorkspace organizationId={organizationId} />;
+  return (
+    <OrganizationIntegrationsWorkspace organizationId={organizationId} section="connections" />
+  );
 }

@@ -496,6 +496,7 @@ export const crmPipelineHistory = sqliteTable(
     toStage: text("to_stage").notNull(),
     note: text("note"),
     actorId: text("actor_id").notNull(),
+    actorName: text("actor_name").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (t) => [

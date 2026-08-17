@@ -1,4 +1,5 @@
 import { type OrganizationEntitlement, organizationEntitlementSchema } from "@eventloom/contracts";
+import type { OrganizationEntitlementRepository } from "../organizations/policy";
 import {
   type ActivateMemberInput,
   type ActivateMemberResult,
@@ -102,6 +103,7 @@ export class MemberRepositoryConflictError extends Error {
 
 export interface MemberServiceDependencies {
   readonly identity: MemberIdentityRepository;
+  readonly organizationEntitlements?: OrganizationEntitlementRepository;
   readonly organizations?: MemberOrganizationRepository;
   readonly auth: MemberAuthBoundary;
   readonly invitationDelivery: MemberInvitationDelivery;
@@ -285,6 +287,7 @@ function selfHostedEntitlement(organizationIdValue: string): OrganizationEntitle
     capabilities: [],
     limits: {
       activeEvents: null,
+      organizerSeats: null,
     },
     notBefore: "1970-01-01T00:00:00.000Z",
     expiresAt: null,
@@ -445,6 +448,7 @@ function randomToken(): string {
 
 export class MemberService {
   readonly #identity: MemberIdentityRepository;
+  readonly #organizationEntitlements: OrganizationEntitlementRepository | null;
   readonly #organizations: MemberOrganizationRepository | null;
   readonly #auth: MemberAuthBoundary;
   readonly #invitationDelivery: MemberInvitationDelivery;
@@ -462,6 +466,7 @@ export class MemberService {
 
   constructor(dependencies: MemberServiceDependencies, options: MemberServiceOptions = {}) {
     this.#identity = dependencies.identity;
+    this.#organizationEntitlements = dependencies.organizationEntitlements ?? null;
     this.#organizations = dependencies.organizations ?? null;
     this.#auth = dependencies.auth;
     this.#invitationDelivery = dependencies.invitationDelivery;
@@ -827,6 +832,7 @@ export class MemberService {
       organizationId,
       normalizedEmail,
     );
+    const excludedInvitationId = existingInvitation?.id;
     if (existingInvitation !== null) {
       await this.#identity.revokePendingInvitations(
         organizationId,
@@ -834,6 +840,9 @@ export class MemberService {
         isoDate(this.#clock(), "clock"),
       );
     }
+    await this.#assertOrganizerSeatAvailable(organizationId, requestedRole, {
+      ...(excludedInvitationId === undefined ? {} : { excludedInvitationId }),
+    });
 
     const nowDate = this.#clock();
     const now = isoDate(nowDate, "clock");
@@ -1077,6 +1086,11 @@ export class MemberService {
       if (owners <= 1)
         throw conflict("An organization must retain at least one owner.", "LAST_OWNER");
     }
+    await this.#assertOrganizerSeatAvailable(organizationId, nextRole, {
+      ...(current.role === "owner" || current.role === "admin"
+        ? { excludedUserId: current.userId }
+        : {}),
+    });
     if (current.role !== nextRole) {
       await this.#identity.updateMembershipRole(
         organizationId,
@@ -1088,6 +1102,60 @@ export class MemberService {
     const updated = await this.#identity.getMember(organizationId, userId);
     if (updated === null) throw notFound();
     return clone(updated);
+  }
+
+  async #assertOrganizerSeatAvailable(
+    organizationId: string,
+    requestedRole: MemberRole,
+    options: { readonly excludedUserId?: string; readonly excludedInvitationId?: string } = {},
+  ): Promise<void> {
+    if (
+      (requestedRole !== "owner" && requestedRole !== "admin") ||
+      this.#organizationEntitlements === null
+    ) {
+      return;
+    }
+    const entitlement = await this.#organizationEntitlements.getEntitlement(organizationId);
+    if (
+      entitlement === null ||
+      entitlement.state !== "active" ||
+      Date.parse(entitlement.notBefore) > this.#clock().getTime() ||
+      (entitlement.expiresAt !== null &&
+        Date.parse(entitlement.expiresAt) <= this.#clock().getTime()) ||
+      entitlement.limits.organizerSeats === null
+    ) {
+      return;
+    }
+    const members = await this.#identity.listMembers(organizationId);
+    const organizerMemberIds = new Set(
+      members
+        .filter(
+          (member) =>
+            (member.role === "owner" || member.role === "admin") &&
+            member.userId !== options.excludedUserId,
+        )
+        .map((member) => member.userId),
+    );
+    if (organizerMemberIds.size >= entitlement.limits.organizerSeats) {
+      throw conflict(
+        "The organization has reached its organizer seat limit.",
+        "ORGANIZER_SEAT_LIMIT",
+      );
+    }
+    const pendingOrganizerSeats = (
+      await this.#identity.listPendingInvitations(organizationId)
+    ).filter(
+      (invitation) =>
+        invitation.id !== options.excludedInvitationId &&
+        (invitation.role === "owner" || invitation.role === "admin") &&
+        !organizerMemberIds.has(invitation.userId),
+    ).length;
+    if (organizerMemberIds.size + pendingOrganizerSeats >= entitlement.limits.organizerSeats) {
+      throw conflict(
+        "The organization has reached its organizer seat limit.",
+        "ORGANIZER_SEAT_LIMIT",
+      );
+    }
   }
 
   async revokeMember(actor: MemberActor, input: RevokeMemberInput): Promise<Member> {

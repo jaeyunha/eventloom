@@ -305,6 +305,11 @@ const CORE_PROPOSAL_FIELDS: readonly CfpFormField[] = [
     options: [],
   },
 ];
+function coreTitleField(): CfpFormField {
+  const field = CORE_PROPOSAL_FIELDS.find((candidate) => candidate.id === "title");
+  if (field === undefined) throw new Error("The core CFP title field is missing.");
+  return field;
+}
 
 function firstCoreProposalField(): CfpFormField {
   const field = CORE_PROPOSAL_FIELDS[0];
@@ -446,10 +451,18 @@ export const TIMEZONE_OPTIONS = [
   "UTC",
   "America/Los_Angeles",
   "America/New_York",
+  "America/Toronto",
+  "America/Sao_Paulo",
   "Europe/London",
   "Europe/Berlin",
+  "Europe/Paris",
+  "Africa/Johannesburg",
+  "Asia/Dubai",
   "Asia/Singapore",
-];
+  "Asia/Seoul",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+] as const;
 
 function validCfpTimeZone(value: string): boolean {
   try {

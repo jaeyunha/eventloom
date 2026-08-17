@@ -196,7 +196,7 @@ describe("internal organization provisioning routes", () => {
           revision: 1,
           state: "active",
           capabilities: ["api"],
-          limits: { activeEvents: 1 },
+          limits: { activeEvents: 1, organizerSeats: null },
           notBefore: "2026-08-17T12:00:00.000Z",
           expiresAt: null,
         },
@@ -237,7 +237,7 @@ describe("internal organization provisioning routes", () => {
         idempotencyKey: "provision-customer-1",
         entitlement: expect.objectContaining({
           organizationId: "org-enterprise",
-          limits: { activeEvents: 1 },
+          limits: { activeEvents: 1, organizerSeats: null },
         }),
       }),
     );
@@ -268,7 +268,7 @@ describe("internal organization provisioning routes", () => {
             revision: 2,
             state: "restricted",
             capabilities: [],
-            limits: { activeEvents: 0 },
+            limits: { activeEvents: 0, organizerSeats: null },
             notBefore: "2026-08-17T12:00:00.000Z",
             expiresAt: null,
           },
@@ -286,7 +286,7 @@ describe("internal organization provisioning routes", () => {
       revision: 2,
       state: "restricted" as const,
       capabilities: [] as string[],
-      limits: { activeEvents: 0 },
+      limits: { activeEvents: 0, organizerSeats: null },
       notBefore: "2026-08-17T12:00:00.000Z",
       expiresAt: null,
     };

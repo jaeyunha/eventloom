@@ -131,9 +131,15 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
 
   await page.goto(`${eventBase}/files`);
   await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
-  await expect(page.getByText("No files have been submitted yet")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Create a content request" })).toBeVisible();
-  await expect(page.locator("[data-file-family-row]")).toHaveCount(0);
+  await expect(
+    page.getByLabel("Review and download").getByText("1 uploaded file", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("table", { name: "One row per uploaded file family across every speaker" }),
+  ).toBeVisible();
+  await expect(page.locator("[data-file-family-row]")).toHaveCount(1);
   await expect(page.getByText("Loading Files library")).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.screenshot({
@@ -144,7 +150,9 @@ test("organizer uses the redesigned content workflow on desktop", async ({ page 
   await page.goto(`${organizationBase}/integrations`);
   await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Connection ownership" })).toBeVisible();
+  await page.goto(`${organizationBase}/integrations/event-bindings`);
   await expect(page.getByRole("heading", { name: "Event bindings" })).toBeVisible();
+  await page.goto(`${organizationBase}/integrations/api-keys`);
   await expect(page.getByRole("region", { name: "Organization API keys" })).toBeVisible();
   await expectNoPageOverflow(page);
 });
@@ -168,8 +176,12 @@ test("organizer keeps content operations bounded on mobile", async ({ page }, te
 
   await page.goto(`${eventBase}/files`);
   await expect(page.getByRole("heading", { level: 1, name: "Content collection" })).toBeVisible();
-  await expect(page.getByText("No files have been submitted yet")).toBeVisible();
-  await expect(page.locator("[data-file-family-row]")).toHaveCount(0);
+  await expect(
+    page.getByLabel("Review and download").getByText("1 uploaded file", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator("[data-file-family-row]")).toHaveCount(1);
   await expect(page.getByText("Loading Files library")).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.screenshot({

@@ -1,6 +1,7 @@
 import { CrmRepositoryConflictError } from "../../../features/crm/service";
 import type {
   CrmContact,
+  CrmContactTransitionAudit,
   CrmEventProjection,
   CrmHistoryEntry,
   CrmImportResult,
@@ -20,7 +21,10 @@ import type {
 import {
   batch,
   booleanValue,
+  changed,
+  consequentialAuditId,
   consequentialStatements,
+  type D1StatementCondition,
   guard,
   insertGuard,
   json,
@@ -109,6 +113,7 @@ function pipelineFromRow(row: Row): CrmPipelineEntry {
     toStage: row.to_stage as CrmPipelineEntry["toStage"],
     note: nullableString(row.note),
     actorId: stringValue(row.actor_id),
+    actorName: stringValue(row.actor_name),
     createdAt: stringValue(row.created_at),
   };
 }
@@ -220,6 +225,12 @@ export class D1CrmRepository implements CrmRepository {
       clauses.push("contact.email = ? COLLATE NOCASE");
       values.push(filter.email);
     }
+    if (filter.eventId !== undefined) {
+      clauses.push(
+        "EXISTS (SELECT 1 FROM crm_participant_links link WHERE link.organization_id=contact.organization_id AND link.crm_contact_id=contact.id AND link.event_id=?)",
+      );
+      values.push(filter.eventId);
+    }
     if (filter.status !== undefined) {
       clauses.push("contact.status = ?");
       values.push(filter.status);
@@ -283,19 +294,81 @@ export class D1CrmRepository implements CrmRepository {
     return row === null ? null : contactFromRow(row, parseJson(String(row.tags_json), []));
   }
 
-  async saveContact(contact: CrmContact, expectedVersion: number | null): Promise<CrmContact> {
+  async saveContact(
+    contact: CrmContact,
+    expectedVersion: number | null,
+    transitionAudit?: CrmContactTransitionAudit,
+  ): Promise<CrmContact> {
     if (contact.version !== (expectedVersion ?? 0) + 1)
       throw new CrmRepositoryConflictError("The contact version is invalid.");
+    if (
+      transitionAudit !== undefined &&
+      (transitionAudit.pipeline.organizationId !== contact.organizationId ||
+        transitionAudit.pipeline.contactId !== contact.id ||
+        transitionAudit.history.organizationId !== contact.organizationId ||
+        transitionAudit.history.contactId !== contact.id)
+    ) {
+      throw new CrmRepositoryConflictError("The pipeline audit does not match the contact.");
+    }
+    const contactAction =
+      expectedVersion === null ? "created" : contact.status === "merged" ? "merged" : "updated";
+    const casGuardAction = "crm.contact.cas_guard";
+    const casProbeAction = "crm.contact.cas_probe";
+    const casGuardResourceType = "crm_contact_write_guard";
+    const casGuardResourceId = `${contact.id}:${crypto.randomUUID()}`;
+    const casProbeResourceId = `${contact.id}:${crypto.randomUUID()}`;
+    const casCondition: D1StatementCondition =
+      expectedVersion === null
+        ? {
+            sql: "NOT EXISTS (SELECT 1 FROM crm_contacts WHERE organization_id=? AND id=?)",
+            values: [contact.organizationId, contact.id],
+          }
+        : {
+            sql: "EXISTS (SELECT 1 FROM crm_contacts WHERE organization_id=? AND id=? AND version=?)",
+            values: [contact.organizationId, contact.id, expectedVersion],
+          };
+    const casGuardWrite = {
+      tenantId: contact.organizationId,
+      action: casGuardAction,
+      resourceType: casGuardResourceType,
+      resourceId: casGuardResourceId,
+      resourceVersion: contact.version,
+      occurredAt: contact.updatedAt,
+      condition: casCondition,
+    };
+    const casGuard = consequentialStatements(this.database, casGuardWrite)[0];
+    const casProbeWrite = {
+      tenantId: contact.organizationId,
+      action: casProbeAction,
+      resourceType: casGuardResourceType,
+      resourceId: casProbeResourceId,
+      resourceVersion: contact.version,
+      occurredAt: contact.updatedAt,
+      condition: casCondition,
+    };
+    const casProbe = consequentialStatements(this.database, casProbeWrite)[0];
+    const committedCondition: D1StatementCondition = {
+      sql: "EXISTS (SELECT 1 FROM audit_events WHERE id=? AND tenant_id=? AND action=? AND resource_type=? AND resource_id=?)",
+      values: [
+        consequentialAuditId(casGuardWrite),
+        contact.organizationId,
+        casGuardAction,
+        casGuardResourceType,
+        casGuardResourceId,
+      ],
+    };
     const domain =
       expectedVersion === null
         ? statement(
             this.database,
-            `INSERT INTO crm_contacts (id,organization_id,first_name,last_name,display_name,email,phone,company,title,website,linkedin_url,notes,custom_fields_json,source,status,merged_into_id,merge_audit_id,merged_at,merge_source_ids_json,pipeline_stage,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            this.contactValues(contact),
+            `INSERT INTO crm_contacts (id,organization_id,first_name,last_name,display_name,email,phone,company,title,website,linkedin_url,notes,custom_fields_json,source,status,merged_into_id,merge_audit_id,merged_at,merge_source_ids_json,pipeline_stage,version,created_at,updated_at)
+             SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (${committedCondition.sql})`,
+            [...this.contactValues(contact), ...committedCondition.values],
           )
         : statement(
             this.database,
-            `UPDATE crm_contacts SET first_name=?,last_name=?,display_name=?,email=?,phone=?,company=?,title=?,website=?,linkedin_url=?,notes=?,custom_fields_json=?,source=?,status=?,merged_into_id=?,merge_audit_id=?,merged_at=?,merge_source_ids_json=?,pipeline_stage=?,version=?,updated_at=? WHERE organization_id=? AND id=? AND version=?`,
+            `UPDATE crm_contacts SET first_name=?,last_name=?,display_name=?,email=?,phone=?,company=?,title=?,website=?,linkedin_url=?,notes=?,custom_fields_json=?,source=?,status=?,merged_into_id=?,merge_audit_id=?,merged_at=?,merge_source_ids_json=?,pipeline_stage=?,version=?,updated_at=?
+             WHERE organization_id=? AND id=? AND version=? AND (${committedCondition.sql})`,
             [
               ...this.contactValues(contact).slice(2, 20),
               contact.version,
@@ -303,48 +376,131 @@ export class D1CrmRepository implements CrmRepository {
               contact.organizationId,
               contact.id,
               expectedVersion,
+              ...committedCondition.values,
             ],
           );
     const statements = [
-      expectedVersion === null
-        ? insertGuard(this.database, "crm_contacts", "organization_id=? AND id=?", [
-            contact.organizationId,
-            contact.id,
-          ])
-        : updateGuard(this.database, "crm_contacts", "organization_id=? AND id=? AND version=?", [
-            contact.organizationId,
-            contact.id,
-            expectedVersion,
-          ]),
+      casGuard,
+      casProbe,
       domain,
       statement(
         this.database,
-        "DELETE FROM crm_contact_tags WHERE organization_id=? AND contact_id=?",
-        [contact.organizationId, contact.id],
+        `DELETE FROM crm_contact_tags WHERE organization_id=? AND contact_id=? AND (${committedCondition.sql})`,
+        [contact.organizationId, contact.id, ...committedCondition.values],
       ),
       ...stableSort(contact.tags, (tag) => tag).map((tag) =>
         statement(
           this.database,
-          "INSERT INTO crm_contact_tags (organization_id,contact_id,tag) VALUES (?,?,?)",
-          [contact.organizationId, contact.id, tag],
+          `INSERT INTO crm_contact_tags (organization_id,contact_id,tag)
+           SELECT ?,?,? WHERE (${committedCondition.sql})`,
+          [contact.organizationId, contact.id, tag, ...committedCondition.values],
         ),
       ),
+      ...(transitionAudit === undefined
+        ? []
+        : [
+            statement(
+              this.database,
+              `INSERT INTO crm_pipeline_history (id,organization_id,contact_id,source_crm_contact_id,merge_audit_id,from_stage,to_stage,note,actor_id,actor_name,created_at)
+               SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE (${committedCondition.sql})`,
+              [
+                transitionAudit.pipeline.id,
+                transitionAudit.pipeline.organizationId,
+                transitionAudit.pipeline.contactId,
+                transitionAudit.pipeline.sourceCrmContactId ?? transitionAudit.pipeline.contactId,
+                transitionAudit.pipeline.mergeAuditId ?? null,
+                transitionAudit.pipeline.fromStage,
+                transitionAudit.pipeline.toStage,
+                transitionAudit.pipeline.note,
+                transitionAudit.pipeline.actorId,
+                transitionAudit.pipeline.actorName,
+                transitionAudit.pipeline.createdAt,
+                ...committedCondition.values,
+              ],
+            ),
+            ...consequentialStatements(this.database, {
+              tenantId: transitionAudit.pipeline.organizationId,
+              action: "appended",
+              resourceType: "crm_pipeline_history",
+              resourceId: transitionAudit.pipeline.id,
+              resourceVersion: 1,
+              occurredAt: transitionAudit.pipeline.createdAt,
+              after: transitionAudit.pipeline,
+              condition: committedCondition,
+            }),
+            statement(
+              this.database,
+              `INSERT INTO crm_history (id,organization_id,contact_id,kind,event_id,session_id,title,detail,occurred_at,metadata_json)
+               SELECT ?,?,?,?,?,?,?,?,?,? WHERE (${committedCondition.sql})`,
+              [
+                transitionAudit.history.id,
+                transitionAudit.history.organizationId,
+                transitionAudit.history.contactId,
+                transitionAudit.history.kind,
+                transitionAudit.history.eventId,
+                transitionAudit.history.sessionId,
+                transitionAudit.history.title,
+                transitionAudit.history.detail,
+                transitionAudit.history.occurredAt,
+                json(transitionAudit.history.metadata),
+                ...committedCondition.values,
+              ],
+            ),
+            ...consequentialStatements(this.database, {
+              tenantId: transitionAudit.history.organizationId,
+              eventId: transitionAudit.history.eventId,
+              action: "appended",
+              resourceType: "crm_history",
+              resourceId: transitionAudit.history.id,
+              resourceVersion: 1,
+              occurredAt: transitionAudit.history.occurredAt,
+              after: transitionAudit.history,
+              condition: committedCondition,
+            }),
+          ]),
       ...consequentialStatements(this.database, {
         tenantId: contact.organizationId,
-        action:
-          expectedVersion === null ? "created" : contact.status === "merged" ? "merged" : "updated",
+        action: contactAction,
         resourceType: "crm_contact",
         resourceId: contact.id,
         resourceVersion: contact.version,
         occurredAt: contact.updatedAt,
         after: contact,
+        condition: committedCondition,
         sync: { entityType: "crm_contact", payload: contact },
       }),
+      statement(
+        this.database,
+        "DELETE FROM audit_events WHERE id=? AND tenant_id=? AND action=? AND resource_type=? AND resource_id=?",
+        committedCondition.values,
+      ),
+      statement(
+        this.database,
+        "DELETE FROM audit_events WHERE id=? AND tenant_id=? AND action=? AND resource_type=? AND resource_id=?",
+        [
+          consequentialAuditId(casProbeWrite),
+          contact.organizationId,
+          casProbeAction,
+          casGuardResourceType,
+          casProbeResourceId,
+        ],
+      ),
     ];
-    try {
-      await batch(this.database, statements);
-    } catch (error) {
-      throw this.conflict(error, "The contact changed before it could be saved.");
+    const results = await batch(this.database, statements);
+    const casResult = results[0];
+    if (casResult === undefined) throw new Error("The CRM contact batch returned no CAS result.");
+    if (changed(casResult) === 0) {
+      const probeResult = results[1];
+      if (probeResult === undefined)
+        throw new Error("The CRM contact batch returned no CAS probe result.");
+      if (changed(probeResult) > 0)
+        throw new Error("The CRM contact CAS guard could not be acquired.");
+      const current = await this.getContact(contact.organizationId, contact.id);
+      throw new CrmRepositoryConflictError(
+        "The contact changed before it could be saved.",
+        undefined,
+        current ?? undefined,
+      );
     }
     return contact;
   }
@@ -554,7 +710,7 @@ export class D1CrmRepository implements CrmRepository {
         ),
         statement(
           this.database,
-          "INSERT INTO crm_pipeline_history (id,organization_id,contact_id,source_crm_contact_id,merge_audit_id,from_stage,to_stage,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO crm_pipeline_history (id,organization_id,contact_id,source_crm_contact_id,merge_audit_id,from_stage,to_stage,note,actor_id,actor_name,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
           [
             entry.id,
             entry.organizationId,
@@ -565,6 +721,7 @@ export class D1CrmRepository implements CrmRepository {
             entry.toStage,
             entry.note,
             entry.actorId,
+            entry.actorName,
             entry.createdAt,
           ],
         ),

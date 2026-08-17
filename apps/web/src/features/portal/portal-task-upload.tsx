@@ -1,9 +1,9 @@
 "use client";
 
 import { formatUploadMimeTypes } from "@eventloom/contracts";
-import { type ChangeEvent, useState } from "react";
+import { useState } from "react";
 import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
+import { FileUpload, formatFileUploadSize } from "../../components/ui/file-upload";
 import {
   WorkspaceActionBar,
   WorkspaceFormSection,
@@ -26,8 +26,7 @@ export function PortalTaskUpload({ task }: Readonly<{ task: PortalTask }>) {
   const acceptedTypeSummary = policy.valid ? formatUploadMimeTypes(policy.allowedMimeTypes) : "";
   const busy = busyTaskIds.has(task.id) || phase === "processing";
 
-  function choose(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.currentTarget.files?.[0] ?? null;
+  function choose(selected: File | null) {
     setFile(selected);
     setPhase("idle");
     setError(null);
@@ -37,7 +36,6 @@ export function PortalTaskUpload({ task }: Readonly<{ task: PortalTask }>) {
       setPhase("failure");
       setError(validation.error);
       setFile(null);
-      event.currentTarget.value = "";
     }
   }
 
@@ -83,23 +81,41 @@ export function PortalTaskUpload({ task }: Readonly<{ task: PortalTask }>) {
           <span>Submit this request for organizer review</span>
         </li>
       </ol>
-      <label className={styles.fileField} htmlFor={`task-upload-${task.id}`}>
-        <span>Choose {kind ? kind.replaceAll("_", " ") : "task file"}</span>
-        <Input
-          id={`task-upload-${task.id}`}
-          type="file"
-          accept={policy.valid ? policy.allowedMimeTypes.join(",") : undefined}
-          disabled={busy || !policy.valid || !kind}
-          onChange={choose}
-        />
-        <small>
-          {!kind
+      <FileUpload
+        id={`task-upload-${task.id}`}
+        accept={policy.valid ? policy.allowedMimeTypes.join(",") : undefined}
+        ariaLabel={kind ? `Choose ${kind.replaceAll("_", " ")}` : "Choose file"}
+        disabled={busy || !policy.valid || !kind}
+        title={`Drop your ${kind ? kind.replaceAll("_", " ") : "task"} file here or browse`}
+        hint={
+          !kind
             ? "Upload unavailable: no accepted file kind was provided."
             : policy.valid
               ? `Accepted: ${acceptedTypeSummary}. Maximum ${formatPortalFileSize(policy.maxBytes)}.`
-              : policy.error}
-        </small>
-      </label>
+              : policy.error
+        }
+        files={
+          file
+            ? [
+                {
+                  id: file.name,
+                  name: file.name,
+                  sizeLabel: formatFileUploadSize(file.size),
+                  status: phase === "processing" ? "uploading" : phase === "failure" ? "error" : "selected",
+                  message:
+                    phase === "processing"
+                      ? "Uploading…"
+                      : phase === "failure"
+                        ? (error ?? "Upload failed")
+                        : formatFileUploadSize(file.size),
+                  removable: !busy,
+                },
+              ]
+            : []
+        }
+        onFilesSelected={(files) => choose(files[0] ?? null)}
+        onRemove={() => choose(null)}
+      />
       {error ? (
         <p className={styles.error} role="alert">
           {error}

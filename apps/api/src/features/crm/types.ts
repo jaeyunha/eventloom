@@ -3,6 +3,7 @@ export interface CrmActor {
   readonly kind: "user";
   readonly organizationId: string;
   readonly userId: string;
+  readonly actorName?: string;
   readonly role: "owner" | "admin" | "organizer";
 }
 
@@ -80,13 +81,14 @@ export interface CreateCrmContactInput extends CrmContactInput {
 export interface UpdateCrmContactInput extends CrmContactInput {
   readonly organizationId: string;
   readonly contactId: string;
-  readonly expectedVersion?: number | undefined;
+  readonly expectedVersion: number;
   readonly pipelineNote?: string | null | undefined;
 }
 
 export interface CrmContactSearch {
   readonly query?: string;
   readonly email?: string;
+  readonly eventId?: string;
   readonly tags?: readonly string[];
   readonly pipelineStage?: CrmPipelineStage;
   readonly status?: CrmContactStatus;
@@ -285,6 +287,9 @@ export interface UpdateCrmPipelineInput {
   readonly organizationId: string;
   readonly contactId: string;
   readonly stage: CrmPipelineStage;
+  readonly expectedVersion: number;
+  readonly score?: number | null | undefined;
+  readonly rationale?: string | null | undefined;
   readonly note?: string | null | undefined;
 }
 
@@ -327,7 +332,13 @@ export interface CrmPipelineEntry {
   readonly toStage: CrmPipelineStage;
   readonly note: string | null;
   readonly actorId: string;
+  readonly actorName: string;
   readonly createdAt: string;
+}
+
+export interface CrmContactTransitionAudit {
+  readonly pipeline: CrmPipelineEntry;
+  readonly history: CrmHistoryEntry;
 }
 
 export interface CrmNote {
@@ -452,7 +463,11 @@ export interface CrmRepository {
   ): Promise<readonly CrmContact[]>;
   getContact(organizationId: string, contactId: string): Promise<CrmContact | null>;
   findContactByEmail(organizationId: string, email: string): Promise<CrmContact | null>;
-  saveContact(contact: CrmContact, expectedVersion: number | null): Promise<CrmContact>;
+  saveContact(
+    contact: CrmContact,
+    expectedVersion: number | null,
+    transitionAudit?: CrmContactTransitionAudit,
+  ): Promise<CrmContact>;
   listSegments(organizationId: string): Promise<readonly CrmSegment[]>;
   getSegment(organizationId: string, segmentId: string): Promise<CrmSegment | null>;
   saveSegment(segment: CrmSegment, expectedVersion: number | null): Promise<CrmSegment>;

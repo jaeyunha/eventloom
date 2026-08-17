@@ -343,7 +343,6 @@
 
 .submissionTable tr[data-state="selected"] {
   background: color-mix(in srgb, var(--primary) 8%, var(--admin-surface));
-  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .summaryBar {
@@ -1486,7 +1485,6 @@
 .submissionTable [data-slot="table-body"] [data-slot="table-row"][data-state="selected"],
 .submissionTable [data-slot="table-body"] [data-slot="table-row"][data-bulk-selected="true"] {
   background: var(--muted);
-  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .submissionTable [data-slot="table-head"],

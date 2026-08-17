@@ -15,7 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { type ChangeEvent, type FormEvent, type ReactNode, type RefObject, useState } from "react";
+import { type FormEvent, type ReactNode, type RefObject, useState } from "react";
 import { StatusBadge, WorkspaceListDetail } from "@/components/workspace";
 import {
   Accordion,
@@ -36,6 +36,7 @@ import {
 } from "../../components/ui/alert-dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { FileUpload } from "../../components/ui/file-upload";
 import {
   Card,
   CardContent,
@@ -525,7 +526,7 @@ function SpeakerHeadshotSection({
   onRetry: () => void;
   onImageError: () => void;
   onSessionChange: (submissionId: string) => void;
-  onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onUpload: (file: File) => void;
   mutationStatus: SpeakerMutationStatus;
   mutationMessage: string | null;
 }>) {
@@ -571,17 +572,22 @@ function SpeakerHeadshotSection({
         ) : null}
         <Field>
           <FieldLabel htmlFor="speaker-headshot-upload">Upload or replace headshot</FieldLabel>
-          <Input
+          <FileUpload
             id="speaker-headshot-upload"
-            type="file"
+            ariaLabel="Upload or replace headshot"
             accept={ORGANIZER_HEADSHOT_ACCEPTED_TYPES.join(",")}
-            onChange={onUpload}
             disabled={
               uploadStatus === "busy" ||
               !apiAvailable ||
               !replacementAvailable ||
               selectedSubmissionId === null
             }
+            title="Drop a headshot here or browse"
+            hint="JPEG, PNG, or WebP; maximum 5 MB. Uploads use the event-scoped organizer private upload flow."
+            onFilesSelected={(files) => {
+              const file = files[0];
+              if (file) onUpload(file);
+            }}
           />
         </Field>
         <p className={styles.muted}>
@@ -654,7 +660,7 @@ function SpeakerDetailSection({
     onRetry: () => void;
     onImageError: () => void;
     onSessionChange: (submissionId: string) => void;
-    onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+    onUpload: (file: File) => void;
     mutationStatus: SpeakerMutationStatus;
     mutationMessage: string | null;
   }>;
@@ -1295,7 +1301,7 @@ function SpeakerImportSection({
   fileName: string | null;
   preview: import("./api").SpeakerImportPreview | null;
   onOpenChange: (open: boolean) => void;
-  onPreview: (event: ChangeEvent<HTMLInputElement>) => void;
+  onPreview: (file: File) => void;
   onCommit: () => void;
 }>) {
   return (
@@ -1320,19 +1326,32 @@ function SpeakerImportSection({
           <CardContent className={styles.actionsStack}>
             <Field>
               <FieldLabel htmlFor="speaker-csv">Speakers CSV</FieldLabel>
-              <Input
+              <FileUpload
                 id="speaker-csv"
-                type="file"
+                ariaLabel="Speakers CSV"
                 accept=".csv,text/csv"
-                onChange={onPreview}
                 disabled={commitBusy || !apiAvailable}
+                title="Drop a speakers CSV here or browse"
+                hint="Preview validation before committing rows. Invalid rows are never written to this event."
+                files={
+                  fileName
+                    ? [
+                        {
+                          id: fileName,
+                          name: fileName,
+                          sizeLabel: previewBusy ? "Validating CSV…" : "Selected CSV",
+                          status: previewBusy ? "uploading" : "selected",
+                          removable: false,
+                        },
+                      ]
+                    : []
+                }
+                onFilesSelected={(files) => {
+                  const file = files[0];
+                  if (file) onPreview(file);
+                }}
               />
             </Field>
-            {fileName ? (
-              <p className={styles.muted}>
-                Selected file: <strong>{fileName}</strong>
-              </p>
-            ) : null}
             {previewBusy ? <FormMessage message="Validating CSV…" /> : null}
             {preview ? (
               <div className={styles.actionsStack}>

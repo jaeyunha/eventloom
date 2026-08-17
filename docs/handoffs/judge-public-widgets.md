@@ -49,11 +49,11 @@ agenda caching, and removal of stale `Draft event` copy.
   foreign keys. Canonical D1 publication now stages those publicly unreachable projections before
   reservation while keeping manifest advancement last. Speaker projection IDs combine the agenda
   revision ID and speaker source hash, and migration
-  `0037_immutable_speaker_projection_snapshots.sql` permits multiple immutable snapshots for an
+  `0045_immutable_speaker_projection_snapshots.sql` permits multiple immutable snapshots for an
   expired or failed reservation retry without mutating an older orphan.
 - PR #61 contributes `0036_evaluation_export_jobs.sql`; the immutable speaker snapshot migration
-  is numbered `0037` to keep migration ordinals unique.
-- Migration `0035_event_retirement_compatibility.sql` reconciles deployment-window drift and keeps
+  is numbered `0045` to avoid the existing reviewer-lineage migration ordinals.
+- Migration `0044_event_retirement_compatibility.sql` reconciles deployment-window drift and keeps
   rollback-only `events.status` synchronized with `legacy_retired_at`.
 
 ## Verification contract

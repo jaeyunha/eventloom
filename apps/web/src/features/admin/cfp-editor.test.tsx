@@ -936,7 +936,8 @@ describe("CFP editor", () => {
       keyLocked: true,
       required: true,
     });
-    if (title === undefined) throw new Error("Expected the canonical title field.");
+    expect(title?.id).toBeTruthy();
+    if (title === undefined) throw new Error("The test CFP title field is missing.");
 
     const renamed = updateCfpEditorField(base, title.id, {
       key: "title1",

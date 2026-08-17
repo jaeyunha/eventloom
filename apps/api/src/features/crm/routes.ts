@@ -11,6 +11,7 @@ import type {
   CrmContactInput,
   CrmContactSearch,
   CrmPipelineStage,
+  CrmValue,
   ImportCrmContactsInput,
   MergeCrmContactsInput,
   SendCrmOutreachInput,
@@ -76,6 +77,16 @@ type ContactBody = CrmContactInput & { readonly idempotencyKey?: string };
 
 const idSchema = z.string().trim().min(1).max(200);
 const optionalTextSchema = z.string().trim().max(20_000).nullable().optional();
+const crmValueSchema: z.ZodType<CrmValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(crmValueSchema),
+    z.record(z.string(), crmValueSchema),
+  ]),
+);
 const contactSchema = z
   .object({
     firstName: optionalTextSchema,
@@ -89,7 +100,7 @@ const contactSchema = z
     linkedinUrl: optionalTextSchema,
     notes: optionalTextSchema,
     tags: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
-    customFields: z.record(z.string().trim().min(1).max(100), z.unknown()).optional(),
+    customFields: z.record(z.string().trim().min(1).max(100), crmValueSchema).optional(),
     source: z.enum(["manual", "csv", "speaker", "import"]).optional(),
     pipelineStage: z
       .enum([
@@ -107,6 +118,10 @@ const contactSchema = z
     idempotencyKey: z.string().trim().min(1).max(512).optional(),
   })
   .strict();
+const contactUpdateSchema = contactSchema
+  .omit({ idempotencyKey: true })
+  .extend({ expectedVersion: z.number().int().positive() });
+type ContactUpdateBody = z.infer<typeof contactUpdateSchema>;
 const importSchema = z
   .object({
     csv: z.string().max(2_000_000).optional(),
@@ -158,6 +173,9 @@ const pipelineSchema = z
       "won",
       "lost",
     ]),
+    expectedVersion: z.number().int().positive(),
+    score: z.number().finite().min(0).max(100).nullable().optional(),
+    rationale: z.string().trim().max(2_000).nullable().optional(),
     note: z.string().trim().max(2_000).nullable().optional(),
   })
   .strict();
@@ -264,7 +282,13 @@ function organizer(context: CrmContext, organizationId: string): CrmActor {
   );
   if (membership === undefined || (membership.role !== "owner" && membership.role !== "admin"))
     throw new AuthAccessError("FORBIDDEN", "An owner or administrator is required.");
-  return { kind: "user", organizationId, userId: principal.userId, role: membership.role };
+  return {
+    kind: "user",
+    organizationId,
+    userId: principal.userId,
+    actorName: principal.email,
+    role: membership.role,
+  };
 }
 
 function mapServiceCode(code: CrmServiceErrorCode): RouteErrorCode {
@@ -282,6 +306,35 @@ function mapServiceCode(code: CrmServiceErrorCode): RouteErrorCode {
   }
 }
 
+function crmServiceErrorCode(value: unknown): value is CrmServiceErrorCode {
+  switch (value) {
+    case "CRM_CONFLICT":
+    case "CRM_DEPENDENCY_UNAVAILABLE":
+    case "CRM_FORBIDDEN":
+    case "CRM_INVALID_INPUT":
+    case "CRM_NOT_FOUND":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function crmServiceError(error: unknown): error is CrmServiceError {
+  return (
+    error instanceof CrmServiceError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "CrmServiceError" &&
+      "status" in error &&
+      typeof error.status === "number" &&
+      "code" in error &&
+      crmServiceErrorCode(error.code) &&
+      "message" in error &&
+      typeof error.message === "string")
+  );
+}
+
 function handleError(context: CrmContext, error: unknown): Response {
   if (error instanceof ZodError)
     return errorResponse(
@@ -289,7 +342,11 @@ function handleError(context: CrmContext, error: unknown): Response {
       400,
       "VALIDATION_FAILED",
       "The CRM request is invalid.",
-      error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+      error.issues.map((issue) => ({
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+      })),
     );
   if (error instanceof AuthAccessError)
     return errorResponse(
@@ -298,7 +355,7 @@ function handleError(context: CrmContext, error: unknown): Response {
       error.code === "UNAUTHENTICATED" ? "AUTHENTICATION_REQUIRED" : "ACCESS_DENIED",
       error.message,
     );
-  if (error instanceof CrmServiceError)
+  if (crmServiceError(error)) {
     return errorResponse(
       context,
       error.status,
@@ -306,12 +363,14 @@ function handleError(context: CrmContext, error: unknown): Response {
       error.message,
       error.details,
     );
+  }
   throw error;
 }
 
 function searchInput(context: CrmContext): CrmContactSearch {
   const query = context.req.query("query") ?? context.req.query("q");
   const email = context.req.query("email");
+  const eventId = context.req.query("eventId");
   const company = context.req.query("company");
   const tags = context.req.query("tags");
   const pipelineStage = context.req.query("pipelineStage") as CrmPipelineStage | undefined;
@@ -321,6 +380,7 @@ function searchInput(context: CrmContext): CrmContactSearch {
   return {
     ...(query === undefined ? {} : { query }),
     ...(email === undefined ? {} : { email }),
+    ...(eventId === undefined ? {} : { eventId }),
     ...(company === undefined ? {} : { company }),
     ...(tags === undefined ? {} : { tags: tags.split(",") }),
     ...(pipelineStage === undefined ? {} : { pipelineStage }),
@@ -397,10 +457,7 @@ export function createCrmRoutes(dependencies: CrmRouteDependencies): Hono<CrmRou
   routes.patch("/contacts/:contactId", async (context) => {
     try {
       const organizationId = routeParam(context, "organizationId");
-      const input = await body<ContactBody & { expectedVersion?: number }>(
-        context,
-        contactSchema.extend({ expectedVersion: z.number().int().positive().optional() }),
-      );
+      const input = await body<ContactUpdateBody>(context, contactUpdateSchema);
       const data: UpdateCrmContactInput = {
         organizationId,
         contactId: routeParam(context, "contactId"),

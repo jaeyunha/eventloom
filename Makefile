@@ -1,10 +1,13 @@
-.PHONY: install dev build check test test-e2e all fix clean
+.PHONY: install dev db-local build check test test-e2e all fix clean
 
 install:
 	bun install
 
 dev:
 	bun run dev
+
+db-local:
+	bun run --filter @eventloom/api db:migrate:local
 
 build:
 	bun run build

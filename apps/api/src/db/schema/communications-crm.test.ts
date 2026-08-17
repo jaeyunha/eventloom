@@ -1,6 +1,10 @@
 import { getTableConfig, SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
-import { communicationSends, communicationTemplates } from "./communications-crm";
+import {
+  communicationSends,
+  communicationTemplates,
+  crmPipelineHistory,
+} from "./communications-crm";
 
 const dialect = new SQLiteSyncDialect();
 
@@ -29,5 +33,14 @@ describe("communication sender schema", () => {
     expect(templateSql).toContain(
       "rtrim(substr(sender, instr(sender, '@') + 1), 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')",
     );
+  });
+});
+
+describe("CRM pipeline schema", () => {
+  it("requires a persisted human-readable actor name", () => {
+    const actorName = getTableConfig(crmPipelineHistory).columns.find(
+      (column) => column.name === "actor_name",
+    );
+    expect(actorName).toMatchObject({ notNull: true });
   });
 });
