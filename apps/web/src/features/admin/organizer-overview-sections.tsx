@@ -143,6 +143,20 @@ function OrganizerEventEditor({
           Add the public identity, schedule, and location. New events start as drafts.
         </p>
       </div>
+      {event === undefined ? (
+        <aside aria-labelledby="program-setup-checklist-title">
+          <h3 id="program-setup-checklist-title">Program setup checklist</h3>
+          <p className={styles.muted}>
+            Create the event first, then use Program settings as the edit hub. Optional setup can be
+            skipped and completed later.
+          </p>
+          <ol>
+            <li>Session workflow — defaults are ready for your first draft.</li>
+            <li>Rooms and venues — add spaces when you know your agenda layout.</li>
+            <li>Session classification — add tracks, formats, levels, or tags when needed.</li>
+          </ol>
+        </aside>
+      ) : null}
       <div className={`${styles.eventTwoColumn} ${styles.eventIdentityFields}`}>
         <label className={styles.eventField} htmlFor="organizer-event-name">
           <span className={styles.eventFieldLabel}>Event name</span>
@@ -356,7 +370,7 @@ function OrganizerEventEditor({
 interface OrganizerEventsLoadedProps {
   readonly data: OrganizerEventsData;
   readonly busy: boolean;
-  readonly initialEditor?: "create" | undefined;
+  readonly initialEditor?: string | undefined;
   readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
     | ((
@@ -623,7 +637,12 @@ export function OrganizerEventsLoaded({
   onCreate,
   onUpdate,
 }: OrganizerEventsLoadedProps) {
-  const [editor, setEditor] = useState<"create" | string | null>(initialEditor ?? null);
+  const [editor, setEditor] = useState<"create" | string | null>(() => {
+    if (initialEditor === "create") return "create";
+    return initialEditor !== undefined && data.events.some((event) => event.id === initialEditor)
+      ? initialEditor
+      : null;
+  });
   const [view, setView] = useState<"calendar" | "list">("calendar");
   const [visibleMonth, setVisibleMonth] = useState(() => initialCalendarMonth(data.events));
   const editingEvent =

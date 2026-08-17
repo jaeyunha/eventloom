@@ -510,7 +510,7 @@ describe("event settings view", () => {
         state: { status: "loaded", data: overview },
       }),
     );
-    expect(output).toContain('aria-label="Event settings sections"');
+    expect(output).toContain('aria-label="Program settings sections"');
     expect(output).toContain("Configure this event");
     expect(output).toContain("Event setup");
     expect(output).toContain("Governance");
@@ -521,6 +521,8 @@ describe("event settings view", () => {
     expect(output).toContain('data-change-kind="updated"');
     expect(output).toContain("Summit 2026");
     expect(output).toContain("Organization org_a · Public slug summit-2026");
+    expect(output).toContain("Edit event dates");
+    expect(output).toContain("/admin/organizations/org_a/events?edit=event-a");
     expect(output).not.toContain("Organization org_a · Event event-a");
   });
   it("keeps section links on the canonical event ID when the public slug differs", () => {

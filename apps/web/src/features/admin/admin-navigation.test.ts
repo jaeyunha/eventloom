@@ -33,6 +33,12 @@ describe("organizer navigation model", () => {
     );
     expect(groups.flatMap((group) => group.items)).toHaveLength(14);
     expect(
+      groups.find((group) => group.label === "Program")?.items.map((item) => item.label),
+    ).toContain("Program settings");
+    expect(
+      groups.find((group) => group.label === "People")?.items.map((item) => item.label),
+    ).not.toContain("Program settings");
+    expect(
       groups.flatMap((group) => group.items).filter((item) => item.label === "Content collection"),
     ).toHaveLength(1);
   });
