@@ -100,6 +100,41 @@ bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
+Concurrent worktrees must use distinct listeners, browser hostnames, local persistence, caches,
+and Docker Compose projects. A dedicated `*.localhost` web hostname is required because browser
+cookies are scoped by hostname rather than port. For example:
+
+```dotenv
+WEB_PORT=3045
+WEB_ORIGIN=http://product-evaluation-loop.localhost:3045
+NEXT_PUBLIC_APP_URL=http://product-evaluation-loop.localhost:3045
+NEXT_DIST_DIR=.next-product-evaluation-loop
+
+API_PORT=8987
+API_INSPECTOR_PORT=9287
+API_URL=http://127.0.0.1:8987
+API_ORIGIN=http://127.0.0.1:8987
+API_UPSTREAM_ORIGIN=http://127.0.0.1:8987
+BETTER_AUTH_URL=http://product-evaluation-loop.localhost:3045
+WRANGLER_PERSIST_TO=.wrangler/state-product-evaluation-loop
+
+COMPOSE_PROJECT_NAME=open-sessionboard-product-evaluation-loop
+MAILPIT_SMTP_PORT=1125
+MAILPIT_HTTP_PORT=8125
+OPENSEND_BRIDGE_PORT=8126
+OPENSEND_API_URL=http://127.0.0.1:8126
+
+PLAYWRIGHT_WEB_PORT=3046
+PLAYWRIGHT_API_PORT=8988
+PLAYWRIGHT_API_INSPECTOR_PORT=9288
+PLAYWRIGHT_NEXT_DIST_DIR=.next-playwright-product-evaluation-loop
+```
+
+`WRANGLER_PERSIST_TO` contains local D1, Durable Object, R2, and Queue state. `NEXT_DIST_DIR`
+contains the Next.js development build and data cache. Playwright uses a separate Next
+distribution directory and an ephemeral Wrangler persistence directory, so end-to-end tests can
+run without reading or mutating the integrated development state.
+
 ### Integrated local accounts
 
 The default `make dev` command uses real Better Auth records in the persistent
@@ -148,6 +183,9 @@ Run the web app separately with `NEXT_PUBLIC_RUNTIME_PROFILE=fixture`. Use organ
 - Inbox/API: `http://127.0.0.1:8025`
 - SMTP: `127.0.0.1:1025`
 - OpenSend-compatible bridge: `http://127.0.0.1:8026`
+
+These are defaults. Concurrent worktrees should override `MAILPIT_HTTP_PORT`,
+`MAILPIT_SMTP_PORT`, and `OPENSEND_BRIDGE_PORT` as shown above.
 
 Check each service independently:
 
@@ -331,7 +369,7 @@ generation/checking; Wrangler is the only supported numbered migration applicati
 ```bash
 bun run --cwd apps/api db:generate
 bun run --cwd apps/api db:check
-bunx wrangler d1 migrations apply DB --cwd apps/api --local
+make db-local
 ```
 
 Do not mix `drizzle-kit migrate` with Wrangler's `d1_migrations` history. Airtable is

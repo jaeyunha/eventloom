@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createMailpitOpenSendHandler,
   type MailTransport,
+  mailpitBridgeConfiguration,
   mailpitOpenSendToken,
 } from "./mailpit-opensend-bridge";
 
@@ -35,6 +36,25 @@ function request(body: unknown = payload, key = "mail-key-1", token = "local-dev
 }
 
 describe("Mailpit OpenSend bridge", () => {
+  it("uses isolated listener and SMTP ports from the environment", () => {
+    expect(
+      mailpitBridgeConfiguration({
+        OPENSEND_BRIDGE_PORT: " 8126 ",
+        MAILPIT_SMTP_PORT: " 1125 ",
+      }),
+    ).toEqual({
+      bridgePort: 8126,
+      smtpPort: 1125,
+    });
+    expect(mailpitBridgeConfiguration({})).toEqual({
+      bridgePort: 8026,
+      smtpPort: 1025,
+    });
+    expect(() => mailpitBridgeConfiguration({ OPENSEND_BRIDGE_PORT: "invalid" })).toThrow(
+      "OPENSEND_BRIDGE_PORT must be a valid TCP port.",
+    );
+  });
+
   it("uses the configured OpenSend key for bridge authentication", () => {
     expect(mailpitOpenSendToken({ OPENSEND_API_KEY: " configured-key " })).toBe("configured-key");
     expect(mailpitOpenSendToken({ OPENSEND_API_KEY: " " })).toBe("local-development");

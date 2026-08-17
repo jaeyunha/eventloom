@@ -227,6 +227,28 @@ function isHttpsOrigin(value: unknown): value is string {
   }
 }
 
+function isLoopbackOrigin(value: unknown): value is string {
+  if (!nonEmpty(value)) return false;
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === "" &&
+      (hostname === "127.0.0.1" ||
+        hostname === "localhost" ||
+        hostname.endsWith(".localhost") ||
+        hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function validDate(value: string): Date | null {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : null;
@@ -2231,7 +2253,6 @@ const fixedOrigins = {
 const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
 const LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
   "eventloom-integrated-local-airtable-credential-key-v2";
-const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
 const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
 
 function authEnvironment(value: string): "local" | "staging" | "production" | null {
@@ -2240,13 +2261,16 @@ function authEnvironment(value: string): "local" | "staging" | "production" | nu
 
 export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeBindings {
   if (source.APP_ENV !== "local") return source;
+  const webOrigin = source.WEB_ORIGIN.trim() || fixedOrigins.local.web;
+  const apiOrigin = source.API_ORIGIN?.trim() || fixedOrigins.local.api;
   return {
     ...source,
-    API_ORIGIN: fixedOrigins.local.api,
+    WEB_ORIGIN: webOrigin,
+    API_ORIGIN: apiOrigin,
     AIRTABLE_CREDENTIAL_ENCRYPTION_KEY:
       source.AIRTABLE_CREDENTIAL_ENCRYPTION_KEY?.trim() || LOCAL_AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
     BETTER_AUTH_SECRET: LOCAL_BETTER_AUTH_SECRET,
-    CACHE_INVALIDATION_URL: LOCAL_CACHE_INVALIDATION_URL,
+    CACHE_INVALIDATION_URL: `${webOrigin}/api/internal/cache-invalidation`,
     CACHE_INVALIDATION_TOKEN: LOCAL_CACHE_INVALIDATION_TOKEN,
   };
 }
@@ -2361,15 +2385,15 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
 
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment !== null) {
-    if (environment === "local" && bindings.WEB_ORIGIN !== fixedOrigins.local.web) {
-      issues.push("WEB_ORIGIN must match the integrated local web origin.");
+    if (environment === "local" && !isLoopbackOrigin(bindings.WEB_ORIGIN)) {
+      issues.push("WEB_ORIGIN must be a loopback origin for local.");
     }
     if (
       environment === "local" &&
       bindings.API_ORIGIN !== undefined &&
-      bindings.API_ORIGIN !== fixedOrigins.local.api
+      !isLoopbackOrigin(bindings.API_ORIGIN)
     ) {
-      issues.push("API_ORIGIN must match the integrated local API origin.");
+      issues.push("API_ORIGIN must be a loopback origin for local.");
     }
     if (environment !== "local" && !isHttpsOrigin(bindings.WEB_ORIGIN)) {
       issues.push("WEB_ORIGIN must be an HTTPS origin for deployed environments.");
