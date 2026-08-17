@@ -532,6 +532,7 @@ export interface SpeakerTaskCreateInput {
   acceptedAssetKinds?: readonly SpeakerAssetKind[];
   dependencyIds?: readonly string[];
   reminderOffsetsMinutes?: readonly number[];
+  decisionFence?: SpeakerDecisionWriteFence;
   assignments: readonly {
     participantId: string;
     submissionId: string | null;

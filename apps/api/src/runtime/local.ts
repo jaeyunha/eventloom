@@ -2981,6 +2981,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             invitedByActorType: "user",
             invitedByActorId: input.decidedBy,
             invitedAt: input.decidedAt,
+            ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
           });
         }),
       );
@@ -3045,6 +3046,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           participantId: participant.id,
           submissionId: material.id,
         })),
+        ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
       });
     },
     async reconcileSessionDecision(input) {

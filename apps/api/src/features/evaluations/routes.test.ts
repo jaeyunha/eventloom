@@ -1136,7 +1136,8 @@ describe("evaluation HTTP routes", () => {
     const app = createTestApp({
       decisionProjection: {
         projectDecision: async (input) => {
-          projected.push(structuredClone(input));
+          const { isCurrentDecision: _isCurrentDecision, ...cloneable } = input;
+          projected.push(structuredClone(cloneable));
         },
       },
     });

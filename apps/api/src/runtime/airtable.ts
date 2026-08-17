@@ -106,6 +106,7 @@ import type {
   EvaluationAssignmentScope,
   EvaluationConflictDeclaration,
   EvaluationDecision,
+  EvaluationDecisionStatus,
   EvaluationPlan,
   EvaluationReview,
   EvaluationReviewHistory,
@@ -6538,6 +6539,13 @@ async function enqueueCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
+  readonly decisionFence?: {
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: EvaluationDecisionStatus;
+  };
 }): Promise<{ readonly inserted: boolean; readonly queued: boolean }> {
   const staged = await stageCloudflareOutbox(input);
   if (staged.state !== "pending") return { inserted: staged.inserted, queued: false };
@@ -6564,6 +6572,13 @@ async function stageCloudflareOutbox(input: {
   readonly deduplicationKey: string;
   readonly payload: unknown;
   readonly now?: string;
+  readonly decisionFence?: {
+    readonly eventId: string;
+    readonly planId: string;
+    readonly submissionId: string;
+    readonly version: number;
+    readonly status: EvaluationDecisionStatus;
+  };
 }): Promise<{
   readonly jobId: string;
   readonly inserted: boolean;
@@ -6577,7 +6592,21 @@ async function stageCloudflareOutbox(input: {
       `INSERT INTO outbox_jobs
          (id, tenant_id, topic, deduplication_key, payload_json, state,
           attempt_count, available_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+       ${
+         input.decisionFence === undefined
+           ? "VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)"
+           : `SELECT ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?
+              WHERE EXISTS (
+                SELECT 1
+                FROM evaluation_decisions
+                WHERE organization_id = ?
+                  AND event_id = ?
+                  AND plan_id = ?
+                  AND submission_id = ?
+                  AND version = ?
+                  AND status = ?
+              )`
+}
        ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
     )
     .bind(
@@ -6589,6 +6618,16 @@ async function stageCloudflareOutbox(input: {
       now,
       now,
       now,
+      ...(input.decisionFence === undefined
+        ? []
+        : [
+            input.tenantId,
+            input.decisionFence.eventId,
+            input.decisionFence.planId,
+            input.decisionFence.submissionId,
+            input.decisionFence.version,
+            input.decisionFence.status,
+          ]),
     )
     .run();
   const changes = result.meta?.changes;
@@ -7628,6 +7667,24 @@ export class AirtableEvaluationDecisionProjection {
           ? "waitlisted_participants"
           : "rejected_participants";
     const updatedAt = new Date().toISOString();
+    const decisionFenceSql = `EXISTS (
+      SELECT 1
+      FROM evaluation_decisions
+      WHERE organization_id = ?
+        AND event_id = ?
+        AND plan_id = ?
+        AND submission_id = ?
+        AND version = ?
+        AND status = ?
+    )`;
+    const decisionFenceValues = [
+      input.tenantId,
+      input.eventId,
+      input.planId,
+      input.submissionId,
+      input.decisionVersion,
+      input.status,
+    ];
     const audienceStatements: D1PreparedStatement[] = [];
     for (const participant of submission.participants) {
       const displayName =
@@ -7637,7 +7694,8 @@ export class AirtableEvaluationDecisionProjection {
           .prepare(
             `INSERT INTO communication_recipients
                (id, organization_id, event_id, participant_id, email, display_name, data_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE ${decisionFenceSql}
              ON CONFLICT(id) DO UPDATE SET
                email = excluded.email,
                display_name = excluded.display_name,
@@ -7653,21 +7711,30 @@ export class AirtableEvaluationDecisionProjection {
             displayName,
             JSON.stringify({ submissionId: input.submissionId }),
             updatedAt,
+            ...decisionFenceValues,
           ),
         this.database
           .prepare(
             `DELETE FROM communication_recipient_audiences
               WHERE organization_id = ? AND event_id = ? AND recipient_id = ?
-                AND audience IN ('accepted_participants','waitlisted_participants','rejected_participants')`,
+                AND audience IN ('accepted_participants','waitlisted_participants','rejected_participants')
+                AND ${decisionFenceSql}`,
           )
-          .bind(input.tenantId, input.eventId, participant.id),
+          .bind(input.tenantId, input.eventId, participant.id, ...decisionFenceValues),
         this.database
           .prepare(
             `INSERT INTO communication_recipient_audiences
                (organization_id, event_id, recipient_id, audience)
-             VALUES (?, ?, ?, ?)`,
+             SELECT ?, ?, ?, ?
+             WHERE ${decisionFenceSql}`,
           )
-          .bind(input.tenantId, input.eventId, participant.id, decidedAudience),
+          .bind(
+            input.tenantId,
+            input.eventId,
+            participant.id,
+            decidedAudience,
+            ...decisionFenceValues,
+          ),
       );
     }
     if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) return;
@@ -7738,6 +7805,13 @@ export class AirtableEvaluationDecisionProjection {
         status: input.status,
       },
       now: input.decidedAt,
+      decisionFence: {
+        eventId: input.eventId,
+        planId: input.planId,
+        submissionId: input.submissionId,
+        version: input.decisionVersion,
+        status: input.status,
+      },
     });
   }
 }

@@ -2593,6 +2593,7 @@ export class SpeakerService {
         task,
         expectedVersion: null,
         actorAccountId: input.accountId,
+        ...(input.decisionFence === undefined ? {} : { decisionFence: input.decisionFence }),
       });
       if (!result.ok) {
         if (result.reason === "version_conflict" || result.reason === "invalid_state") {
