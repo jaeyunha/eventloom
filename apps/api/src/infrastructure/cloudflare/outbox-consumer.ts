@@ -13,6 +13,7 @@ import { createCalendarOpenSendMessage } from "../../integrations/opensend/calen
 import { OpenSendError, openSendMessageSchema } from "../../integrations/opensend/types";
 import {
   type CloudflareBindings,
+  type CloudflareEvaluationDecisionPayload,
   type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
   type CloudflareOutboxTopic,
@@ -484,6 +485,7 @@ export interface OutboxAdapters {
   readonly "cache-invalidation"?: TopicAdapter<{ readonly eventId: string }>;
   readonly cacheInvalidation?: TopicAdapter<{ readonly eventId: string }>;
   readonly reports?: TopicAdapter<CloudflareReportsPayload>;
+  readonly "evaluation-decisions"?: TopicAdapter<CloudflareEvaluationDecisionPayload>;
 }
 
 export interface OutboxConsumerBindings extends CloudflareBindings {
@@ -850,6 +852,59 @@ function parseReportsPayload(value: unknown): CloudflareReportsPayload {
     malformedPayload("reports");
   }
   return { kind: "evaluation_review_export", runId: value.runId };
+}
+
+const evaluationDecisionPayloadKeys = new Set([
+  "kind",
+  "tenantId",
+  "eventId",
+  "planId",
+  "submissionId",
+  "decisionId",
+  "decisionVersion",
+  "status",
+  "priorStatus",
+  "reason",
+  "decidedBy",
+  "decidedAt",
+  "transitionIdempotencyKey",
+]);
+const evaluationDecisionStatuses = new Set(["accepted", "waitlisted", "rejected"]);
+
+function parseEvaluationDecisionPayload(value: unknown): CloudflareEvaluationDecisionPayload {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, evaluationDecisionPayloadKeys) ||
+    value.kind !== "evaluation_decision_work" ||
+    typeof value.tenantId !== "string" ||
+    value.tenantId.trim().length === 0 ||
+    typeof value.eventId !== "string" ||
+    value.eventId.trim().length === 0 ||
+    typeof value.planId !== "string" ||
+    value.planId.trim().length === 0 ||
+    typeof value.submissionId !== "string" ||
+    value.submissionId.trim().length === 0 ||
+    typeof value.decisionId !== "string" ||
+    value.decisionId.trim().length === 0 ||
+    !Number.isSafeInteger(value.decisionVersion) ||
+    Number(value.decisionVersion) < 1 ||
+    typeof value.status !== "string" ||
+    !evaluationDecisionStatuses.has(value.status) ||
+    (value.priorStatus !== null &&
+      (typeof value.priorStatus !== "string" ||
+        !evaluationDecisionStatuses.has(value.priorStatus))) ||
+    typeof value.reason !== "string" ||
+    value.reason.trim().length === 0 ||
+    typeof value.decidedBy !== "string" ||
+    value.decidedBy.trim().length === 0 ||
+    typeof value.decidedAt !== "string" ||
+    validDate(value.decidedAt) === null ||
+    typeof value.transitionIdempotencyKey !== "string" ||
+    value.transitionIdempotencyKey.trim().length === 0
+  ) {
+    malformedPayload("evaluation-decisions");
+  }
+  return value as unknown as CloudflareEvaluationDecisionPayload;
 }
 
 function normalizeFailure(cause: unknown): OutboxDeliveryError {
@@ -1380,6 +1435,26 @@ export class OutboxConsumer {
       case "reports": {
         const payload = parseReportsPayload(job.payload);
         const adapter = this.#adapters.reports;
+        if (adapter === undefined) throw adapterError(job.topic);
+        await adapter(payload, context);
+        return;
+      }
+      case "evaluation-decisions": {
+        const payload = parseEvaluationDecisionPayload(job.payload);
+        const expectedKey = `evaluation-decision:${payload.planId}:${payload.submissionId}:v${payload.decisionVersion}`;
+        const expectedJobId = `evaluation-decision:${payload.decisionId}:v${payload.decisionVersion}`;
+        if (
+          payload.tenantId !== job.tenantId ||
+          job.deduplicationKey !== expectedKey ||
+          job.id !== expectedJobId
+        ) {
+          throw new OutboxDeliveryError(
+            "MESSAGE_MISMATCH",
+            "The evaluation decision payload does not match its durable outbox identity.",
+            { retryable: false },
+          );
+        }
+        const adapter = this.#adapters["evaluation-decisions"];
         if (adapter === undefined) throw adapterError(job.topic);
         await adapter(payload, context);
         return;

@@ -14,6 +14,7 @@ export const cloudflareOutboxTopics = [
   "calendar",
   "cache-invalidation",
   "reports",
+  "evaluation-decisions",
 ] as const;
 
 export type CloudflareOutboxTopic = (typeof cloudflareOutboxTopics)[number];
@@ -26,6 +27,22 @@ export interface CloudflareOutboxInvitationTransient {
 export interface CloudflareReportsPayload {
   readonly kind: "evaluation_review_export";
   readonly runId: string;
+}
+
+export interface CloudflareEvaluationDecisionPayload {
+  readonly kind: "evaluation_decision_work";
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly decisionId: string;
+  readonly decisionVersion: number;
+  readonly status: "accepted" | "waitlisted" | "rejected";
+  readonly priorStatus: "accepted" | "waitlisted" | "rejected" | null;
+  readonly reason: string;
+  readonly decidedBy: string;
+  readonly decidedAt: string;
+  readonly transitionIdempotencyKey: string;
 }
 
 export interface CloudflareOutboxMessage {

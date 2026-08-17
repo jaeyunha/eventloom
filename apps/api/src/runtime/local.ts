@@ -3037,6 +3037,15 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         })),
       });
     },
+    async reconcileSessionDecision(input) {
+      await sessionService.reconcileDecisionSessionStatus({
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        sessionId: `session-${input.submissionId}`,
+        status: input.status,
+        actorId: input.decidedBy,
+      });
+    },
   };
   const evaluationService = new EvaluationService(
     evaluationRepository,

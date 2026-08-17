@@ -90,6 +90,7 @@ import type {
   EvaluationAcceptanceHandoff,
   EvaluationAcceptanceHandoffInput,
   EvaluationDecisionProjectionInput,
+  EvaluationSessionDecisionReconciliationInput,
   EvaluationSubmissionRecord,
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
@@ -2989,6 +2990,18 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       acceptedSubmission ?? (await this.#cfp.getSubmission(input.tenantId, input.submissionId));
     if (submission === null || submission.eventId !== input.eventId) return;
     await this.#ensureSpeakerInvitations(input, submission);
+  }
+
+  async reconcileSessionDecision(
+    input: EvaluationSessionDecisionReconciliationInput,
+  ): Promise<void> {
+    await this.#sessionService?.reconcileDecisionSessionStatus({
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      sessionId: `session-${input.submissionId}`,
+      status: input.status,
+      actorId: input.decidedBy,
+    });
   }
 
   async #ensureProfile(

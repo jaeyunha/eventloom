@@ -108,6 +108,19 @@ export interface EvaluationAcceptanceHandoffInput {
   readonly reason: string;
   readonly idempotencyKey: string;
 }
+export interface EvaluationSessionDecisionReconciliationInput {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly decisionId: string;
+  readonly status: Exclude<EvaluationDecisionStatus, "accepted">;
+  readonly decisionVersion: number;
+  readonly decidedBy: string;
+  readonly decidedAt: string;
+  readonly reason: string;
+  readonly idempotencyKey: string;
+}
 export interface EvaluationDecisionProjectionInput extends EvaluationDecisionProjectionData {
   readonly tenantId: string;
   readonly eventId: string;
@@ -131,6 +144,7 @@ export interface EvaluationDecisionProjection {
 
 export interface EvaluationAcceptanceHandoff {
   accept(input: EvaluationAcceptanceHandoffInput): Promise<void>;
+  reconcileSessionDecision?(input: EvaluationSessionDecisionReconciliationInput): Promise<void>;
 }
 
 export interface EvaluationSubmissionRecord {
@@ -995,8 +1009,10 @@ export class EvaluationService {
   readonly #decisionProjection: EvaluationDecisionProjection | undefined;
   readonly #projectedDecisionKeys = new Set<string>();
   readonly #acceptedHandoffKeys = new Set<string>();
+  readonly #reconciledSessionDecisionKeys = new Set<string>();
   readonly #decisionProjectionInFlight = new Map<string, Promise<void>>();
   readonly #acceptanceHandoffInFlight = new Map<string, Promise<void>>();
+  readonly #sessionDecisionReconciliationInFlight = new Map<string, Promise<void>>();
   readonly #repository: EvaluationRepository;
   readonly #submissions: SubmissionReviewSource;
   readonly #eventMetadataSource: EvaluationEventMetadataSource;
@@ -2868,6 +2884,7 @@ export class EvaluationService {
       assignment.submissionId,
     );
     if (material === null) throw notFound("The assigned submission was not found.");
+    await this.#requireActiveSubmission(plan, material);
     const revision = await this.#submissionRevision(
       actor.tenantId,
       assignment.eventId,
@@ -3417,7 +3434,8 @@ export class EvaluationService {
   ): Promise<void> {
     const projection = this.#runDecisionProjection(input);
     if (input.transition.to !== "accepted") {
-      await projection;
+      const reconciliation = this.#runSessionDecisionReconciliation(input);
+      await Promise.all([projection, reconciliation]);
       return;
     }
     const acceptance = this.#runAcceptanceHandoff(input);
@@ -4200,6 +4218,53 @@ export class EvaluationService {
     } finally {
       if (this.#decisionProjectionInFlight.get(deliveryKey) === handoff) {
         this.#decisionProjectionInFlight.delete(deliveryKey);
+      }
+    }
+  }
+
+  async #runSessionDecisionReconciliation(input: {
+    readonly decision: EvaluationDecision;
+    readonly transition: EvaluationDecisionTransition;
+    readonly decisionVersion: number;
+  }): Promise<void> {
+    const status = input.transition.to;
+    if (status === "accepted") return;
+    const reconciliation = this.#acceptanceHandoff?.reconcileSessionDecision;
+    if (reconciliation === undefined) return;
+    const deliveryKey = [
+      input.decision.tenantId,
+      input.decision.planId,
+      input.decision.submissionId,
+      input.decisionVersion,
+    ].join("\u0000");
+    if (this.#reconciledSessionDecisionKeys.has(deliveryKey)) return;
+    const pending = this.#sessionDecisionReconciliationInFlight.get(deliveryKey);
+    if (pending !== undefined) {
+      await pending;
+      return;
+    }
+    const handoff = (async () => {
+      await reconciliation({
+        tenantId: input.decision.tenantId,
+        eventId: input.decision.eventId,
+        planId: input.decision.planId,
+        submissionId: input.decision.submissionId,
+        decisionId: input.decision.id,
+        status,
+        decisionVersion: input.decisionVersion,
+        decidedBy: input.transition.decidedBy,
+        decidedAt: input.transition.decidedAt,
+        reason: input.transition.reason,
+        idempotencyKey: input.transition.idempotencyKey,
+      });
+      this.#reconciledSessionDecisionKeys.add(deliveryKey);
+    })();
+    this.#sessionDecisionReconciliationInFlight.set(deliveryKey, handoff);
+    try {
+      await handoff;
+    } finally {
+      if (this.#sessionDecisionReconciliationInFlight.get(deliveryKey) === handoff) {
+        this.#sessionDecisionReconciliationInFlight.delete(deliveryKey);
       }
     }
   }

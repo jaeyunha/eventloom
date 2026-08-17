@@ -1293,4 +1293,43 @@ describe("organizer session settings domain", () => {
       data: [{ id: "room-retry" }],
     });
   });
+
+  it("demotes an accepted canonical session without changing its identity", async () => {
+    const { service } = setup();
+    const accepted = await service.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-1",
+      title: "Reliable systems",
+      description: "A practical session.",
+      status: "Accepted",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+
+    const rejected = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+    });
+    expect(rejected).toMatchObject({
+      id: accepted.id,
+      status: "Rejected",
+      version: 2,
+    });
+    expect(rejected?.history.at(-1)).toMatchObject({
+      priorStatus: "Accepted",
+      newStatus: "Rejected",
+    });
+
+    const replay = await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: accepted.id,
+      status: "rejected",
+      actorId: "organizer-1",
+    });
+    expect(replay).toMatchObject({ id: accepted.id, status: "Rejected", version: 2 });
+  });
 });

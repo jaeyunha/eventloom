@@ -14,6 +14,7 @@ import { MAX_REVISION_RECONCILIATION_ROUNDS } from "./revision-schedule-sync";
 import {
   type EvaluationDecisionProjectionInput,
   type EvaluationEventMetadataSource,
+  type EvaluationSessionDecisionReconciliationInput,
   EvaluationService,
   type EvaluationServiceOptions,
 } from "./service";
@@ -2617,6 +2618,7 @@ describe("decision outcome projection", () => {
   it("projects every human outcome, onboards only acceptance, and versions handoffs", async () => {
     const projected: EvaluationDecisionProjectionInput[] = [];
     const onboarded: unknown[] = [];
+    const reconciled: EvaluationSessionDecisionReconciliationInput[] = [];
     const { service } = await fixture({
       decisionProjection: {
         projectDecision: async (input) => {
@@ -2626,6 +2628,9 @@ describe("decision outcome projection", () => {
       acceptanceHandoff: {
         accept: async (input) => {
           onboarded.push(structuredClone(input));
+        },
+        reconcileSessionDecision: async (input) => {
+          reconciled.push(structuredClone(input));
         },
       },
     });
@@ -2683,6 +2688,16 @@ describe("decision outcome projection", () => {
       decidedAt: nowIso,
     });
     expect(onboarded).toHaveLength(1);
+    expect(
+      reconciled.map(({ status, decisionVersion, submissionId }) => ({
+        status,
+        decisionVersion,
+        submissionId,
+      })),
+    ).toEqual([
+      { status: "waitlisted", decisionVersion: 2, submissionId: submission.id },
+      { status: "rejected", decisionVersion: 3, submissionId: submission.id },
+    ]);
   });
   it("runs acceptance onboarding alongside the durable decision projection", async () => {
     const started = new Set<string>();
@@ -2720,14 +2735,10 @@ describe("decision outcome projection", () => {
       reason: "Committee consensus",
       idempotencyKey: "decision-concurrent-effects",
     });
-    const concurrent = await Promise.race([
-      bothStarted.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
-    ]);
+    await bothStarted;
     releaseWork?.();
 
     await expect(pending).resolves.toMatchObject({ status: "accepted" });
-    expect(concurrent).toBe(true);
   });
   it("returns after durable projection while scheduled acceptance onboarding continues", async () => {
     let markAcceptanceStarted: (() => void) | undefined;
@@ -4142,6 +4153,11 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         expectedVersion: suggestion.version,
       }),
       "EVALUATION_CONFLICT",
+    );
+    source.set({ ...submission, status: "withdrawn", version: 3 });
+    await expectEvaluationError(
+      service.listAiSuggestions(reviewer("reviewer-1"), assignment.id),
+      "EVALUATION_NOT_FOUND",
     );
   });
 });

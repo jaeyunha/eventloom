@@ -3,6 +3,7 @@ import type {
   CreateRoomInput,
   CreateSessionInput,
   CreateTaxonomyInput,
+  DecisionSessionStatusReconciliationInput,
   Format,
   Level,
   PublishedSessionContentHandoff,
@@ -669,6 +670,45 @@ export class SessionService {
       return sessionProjection(next);
     }
     throw versionConflict("accepted session");
+  }
+
+  async reconcileDecisionSessionStatus(
+    input: DecisionSessionStatusReconciliationInput,
+  ): Promise<Session | null> {
+    const current = await this.#repository.getSession(
+      input.tenantId,
+      this.event(input.eventId),
+      resourceId(input.sessionId, "session id"),
+    );
+    if (current === null) return null;
+    const settings = await this.#repository.getSettings(input.tenantId, input.eventId);
+    const targetStatus = settings?.statuses.find((candidate) =>
+      sameStatus(candidate, input.status),
+    );
+    if (targetStatus === undefined) {
+      throw new SessionServiceError(
+        "VALIDATION_ERROR",
+        400,
+        `The session status ${input.status} is not configured for this event.`,
+      );
+    }
+    if (sameStatus(current.status, targetStatus)) return current;
+    return this.updateSession(
+      {
+        tenantId: input.tenantId,
+        userId: input.actorId,
+        kind: "user",
+        isOrganizer: true,
+        grants: [{ eventId: input.eventId, role: "organizer" }],
+      },
+      {
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        sessionId: current.id,
+        expectedVersion: current.version,
+        status: targetStatus,
+      },
+    );
   }
 
   async createSession(actor: SessionActor, input: CreateSessionInput): Promise<Session> {

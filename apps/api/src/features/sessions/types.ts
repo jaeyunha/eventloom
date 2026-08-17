@@ -250,6 +250,14 @@ export interface SessionSettings {
   history: readonly SessionHistoryEntry[];
 }
 
+export interface DecisionSessionStatusReconciliationInput {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly sessionId: string;
+  readonly status: "waitlisted" | "rejected";
+  readonly actorId: string;
+}
+
 export interface CreateSessionInput {
   tenantId?: string;
   eventId: string;
