@@ -20,6 +20,14 @@ describe("suggestion rationale validation", () => {
         "The rollback checklist documents deployment practices for engineering teams.",
         "The rollback checklist provides safeguards that reduce deployment risk for engineering teams.",
       ],
+      [
+        "The session includes a practical workshop and measurable audience outcomes.",
+        "A practical workshop with measurable audience outcomes merits the highest rating.",
+      ],
+      [
+        "Practical material for the audience.",
+        "Practical material is valuable to the audience as an immediately usable takeaway.",
+      ],
     ] as const;
 
     for (const [source, rationale] of cases) {
@@ -55,6 +63,24 @@ describe("suggestion rationale validation", () => {
     expect(
       isMeaningfulSuggestionRationale(
         "The practical material supports audience needs through glorp wibble.",
+        "Practical material for the audience.",
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "The practical material supports audience needs through snazzle frobnitz.",
+        "Practical material for the audience.",
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "The rollback checklist provides safeguards through splunge crondle.",
+        "The rollback checklist documents deployment practices for engineering teams.",
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulSuggestionRationale(
+        "Because practical material matters, frumious bandersnatch improves outcomes.",
         "Practical material for the audience.",
       ),
     ).toBe(false);

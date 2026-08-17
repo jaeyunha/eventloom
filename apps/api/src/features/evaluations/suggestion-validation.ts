@@ -46,18 +46,50 @@ const GROUNDING_STOP_WORDS = new Set([
 
 const RATIONALE_TEMPLATE_WORDS = new Set([
   ...GROUNDING_STOP_WORDS,
+  "a",
+  "an",
+  "and",
+  "against",
+  "actionable",
+  "attendees",
   "based",
+  "benefit",
+  "clear",
+  "concrete",
   "demonstrates",
+  "defined",
+  "deployment",
   "evidence",
+  "failures",
+  "for",
+  "gives",
+  "helps",
   "indicates",
+  "immediately",
+  "knowledge",
+  "mitigate",
+  "participants",
   "recommendation",
+  "reduce",
+  "risk",
+  "safeguard",
+  "safeguards",
   "selected",
   "shows",
   "support",
   "supported",
   "supporting",
   "supports",
+  "takeaway",
+  "teams",
+  "the",
+  "their",
+  "to",
+  "usable",
   "value",
+  "valuable",
+  "will",
+  "leave",
 ]);
 
 const EXPLANATORY_RELATION_WORDS = new Set([
@@ -170,13 +202,24 @@ export function isMeaningfulSuggestionRationale(value: string, groundingText: st
   const sourceTokens = significantTokens(groundingText);
   if (sourceTokens.size === 0) return false;
   const rationaleTokens = significantTokens(normalized);
-  if (!tokens.some((token) => EXPLANATORY_RELATION_WORDS.has(token))) return false;
   const overlap = [...sourceTokens].filter((token) => rationaleTokens.has(token)).length;
   if (overlap < Math.min(2, sourceTokens.size)) return false;
-  const explanationTokens = [...rationaleTokens].filter(
-    (token) => !sourceTokens.has(token) && !RATIONALE_TEMPLATE_WORDS.has(token),
-  );
+  const explanationTokens = [...rationaleTokens].filter((token) => !sourceTokens.has(token));
   if (explanationTokens.some((token) => FILLER_TOKENS.has(token))) return false;
+  let unsupportedRun = 0;
+  for (const token of tokens) {
+    if (
+      sourceTokens.has(token) ||
+      RATIONALE_TEMPLATE_WORDS.has(token) ||
+      EXPLANATORY_RELATION_WORDS.has(token) ||
+      !/^[a-z]+$/u.test(token)
+    ) {
+      unsupportedRun = 0;
+      continue;
+    }
+    unsupportedRun += 1;
+    if (unsupportedRun >= 2) return false;
+  }
   return explanationTokens.length >= 2;
 }
 
