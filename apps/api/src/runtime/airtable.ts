@@ -202,6 +202,7 @@ import {
   D1PublishedSpeakerProjectionStore,
   type PublishedSpeakerProjectionRecord,
   publishedHeadshotContentType,
+  selectReleasedSpeakerHeadshot,
 } from "../infrastructure/cloudflare/repositories/published-speakers";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import {
@@ -8681,17 +8682,14 @@ export function createD1ApplicationDependencies(
           }
         >();
         for (const profile of profiles) {
-          if (profile.headshotAssetId === undefined) continue;
-          const asset = assets.find(
-            (candidate) =>
-              candidate.id === profile.headshotAssetId &&
-              candidate.tenantId === organizationId &&
-              candidate.eventId === eventId &&
-              candidate.participantId === profile.participantId &&
-              candidate.kind === "headshot" &&
-              candidate.state === "ready" &&
-              candidate.reviewState === "approved",
-          );
+          const asset = selectReleasedSpeakerHeadshot(assets, {
+            tenantId: organizationId,
+            eventId,
+            participantId: profile.participantId,
+            ...(profile.headshotAssetId === undefined
+              ? {}
+              : { selectedAssetId: profile.headshotAssetId }),
+          });
           if (asset === undefined) continue;
           const contentType = publishedHeadshotContentType(asset.contentType);
           if (
@@ -8776,8 +8774,9 @@ export function createD1ApplicationDependencies(
               )
             : Object.fromEntries(publishedHeadshots);
         const speakerHash = await publicationSourceHash({ speakers, headshots });
+        const speakerProjectionId = `${revision.id}:${speakerHash}`;
         const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
-          id: revision.id,
+          id: speakerProjectionId,
           organizationId,
           eventId,
           event: {
@@ -8823,6 +8822,12 @@ export function createD1ApplicationDependencies(
           }
           return;
         }
+        await agendaMutationLock.renew(eventId);
+        await publishedSpeakerProjections.putPublishedSpeakers(
+          publishedSpeakerProjection,
+          revision,
+          agendaHash,
+        );
         const pending = await publicationService.reserveRebuild(actor, {
           organizationId,
           eventId,
@@ -8856,26 +8861,14 @@ export function createD1ApplicationDependencies(
         if (releaseId === null || pendingRevision === null) {
           throw new Error("The reserved D1 publication is missing pending release metadata.");
         }
+        const pendingManifest = pending.releases.find(
+          (release) => release.id === releaseId && release.revision === pendingRevision,
+        );
         try {
           await agendaMutationLock.renew(eventId);
-          await publishedSpeakerProjections.putPublishedSpeakers(
-            publishedSpeakerProjection,
-            revision,
-            agendaHash,
-          );
-          const pendingManifest = pending.releases.find(
-            (release) => release.id === releaseId && release.revision === pendingRevision,
-          );
           if (pendingManifest === undefined) {
             throw new Error("The reserved D1 publication manifest could not be resolved.");
           }
-          await invalidatePublishedSpeakerCache(
-            publishedSpeakerProjections,
-            event.slug,
-            pendingRevision,
-            pendingManifest.cacheRevision,
-          );
-          await invalidatePublishedAgendaCache(agendaEngine, eventId, revision);
           await agendaMutationLock.renew(eventId);
           await publicationService.completeRebuild({
             organizationId,
@@ -8900,6 +8893,30 @@ export function createD1ApplicationDependencies(
             throw new AggregateError([error, failure], "D1 publication handoff cleanup failed.");
           }
           throw error;
+        }
+        try {
+          await invalidatePublishedSpeakerCache(
+            publishedSpeakerProjections,
+            event.slug,
+            pendingRevision,
+            pendingManifest.cacheRevision,
+          );
+          await invalidatePublishedAgendaCache(
+            agendaEngine,
+            eventId,
+            revision,
+            pendingManifest.cacheRevision,
+          );
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "program_publication_cache_invalidation_failed",
+              eventId,
+              releaseId,
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            }),
+          );
         }
         await agendaMutationLock.renew(eventId);
         const served = await publicationRepository.getState(organizationId, eventId);

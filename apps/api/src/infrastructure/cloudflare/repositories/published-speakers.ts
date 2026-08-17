@@ -6,7 +6,7 @@ import type {
   ProgramPublicationManifest,
   ProgramPublicationRepository,
 } from "../../../features/events/types";
-import type { SpeakerRepository } from "../../../features/speaker/types";
+import type { SpeakerAsset, SpeakerRepository } from "../../../features/speaker/types";
 import type {
   PublishedSpeakerHeadshot,
   PublishedSpeakerProjection,
@@ -42,6 +42,47 @@ export function publishedHeadshotContentType(
   return contentType === "image/jpeg" || contentType === "image/png" || contentType === "image/webp"
     ? contentType
     : null;
+}
+
+export function selectReleasedSpeakerHeadshot(
+  assets: readonly SpeakerAsset[],
+  input: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly participantId: string;
+    readonly selectedAssetId?: string;
+  },
+): SpeakerAsset | undefined {
+  const participantHeadshots = assets.filter(
+    (candidate) =>
+      candidate.tenantId === input.tenantId &&
+      candidate.eventId === input.eventId &&
+      candidate.participantId === input.participantId &&
+      candidate.kind === "headshot",
+  );
+  const selectedHeadshot =
+    input.selectedAssetId === undefined
+      ? undefined
+      : participantHeadshots.find((candidate) => candidate.id === input.selectedAssetId);
+  const assetFamilyId = (candidate: SpeakerAsset) => candidate.versionFamilyId ?? candidate.id;
+  const releasedHeadshots = participantHeadshots.filter(
+    (candidate) =>
+      candidate.state === "ready" &&
+      candidate.reviewState === "approved" &&
+      candidate.releasedVersionId === candidate.id &&
+      publishedHeadshotContentType(candidate.contentType) !== null &&
+      Number.isSafeInteger(candidate.sizeBytes) &&
+      candidate.sizeBytes > 0,
+  );
+  if (input.selectedAssetId !== undefined) {
+    if (selectedHeadshot === undefined) return undefined;
+    return releasedHeadshots.find(
+      (candidate) => assetFamilyId(candidate) === assetFamilyId(selectedHeadshot),
+    );
+  }
+  return new Set(releasedHeadshots.map(assetFamilyId)).size === 1
+    ? releasedHeadshots[0]
+    : undefined;
 }
 
 export interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
@@ -162,6 +203,7 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
                   asset.kind === "headshot" &&
                   asset.state === "ready" &&
                   asset.reviewState === "approved" &&
+                  asset.releasedVersionId === asset.id &&
                   asset.objectKey === requestedHeadshot.objectKey &&
                   publishedHeadshotContentType(asset.contentType) ===
                     requestedHeadshot.contentType &&
@@ -187,7 +229,7 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
             speaker.jobTitle,
             speaker.organization,
             speaker.biography,
-            speaker.photoUrl,
+            headshot === undefined ? null : speaker.photoUrl,
             headshot?.assetId ?? null,
             headshot?.objectKey ?? null,
             headshot?.contentType ?? null,
