@@ -915,8 +915,12 @@ function providerFunction(
     provider?.generateSuggestions
   );
 }
-function decisionProjectionIdempotencyKey(submissionId: string, decisionVersion: number): string {
-  return `evaluation-decision:${submissionId}:v${decisionVersion}`;
+function decisionProjectionIdempotencyKey(
+  planId: string,
+  submissionId: string,
+  decisionVersion: number,
+): string {
+  return `evaluation-decision:${planId}:${submissionId}:v${decisionVersion}`;
 }
 
 function decisionTemplatePurpose(
@@ -981,6 +985,10 @@ function isOrganizerWorkspaceSubmission(
 
 function isActiveReviewSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
   return submission.status === "submitted";
+}
+
+function isReviewableSubmission(submission: Readonly<{ status?: string | undefined }>): boolean {
+  return submission.status === "submitted" || submission.status === "reopened";
 }
 
 function gradingRevision(plan: EvaluationPlan): number {
@@ -1096,6 +1104,10 @@ export class EvaluationService {
   ): Promise<EvaluationDecision | null> {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
+    await this.#requireReviewableSubmission(
+      plan,
+      requireText(submissionId, "Submission id", MAX_SUBMISSION_ID_LENGTH),
+    );
     return this.#repository.getDecision(
       actor.tenantId,
       plan.id,
@@ -1110,7 +1122,9 @@ export class EvaluationService {
     requireHumanOrganizer(actor, requireText(eventId, "Event id", 100));
     const source = this.#submissions as SubmissionReviewSource & EvaluationSubmissionSource;
     if (source.listSubmissionsForOrganizer === undefined) return [];
-    return source.listSubmissionsForOrganizer(actor.tenantId, eventId);
+    return (await source.listSubmissionsForOrganizer(actor.tenantId, eventId)).filter(
+      isReviewableSubmission,
+    );
   }
   async getOrganizerReviewExportSnapshot(
     actor: EvaluationActor,
@@ -1288,7 +1302,9 @@ export class EvaluationService {
             aggregateForSubmission(plan, round, submission.id, assignments, reviews),
           );
     const decisions = Object.fromEntries(
-      planDecisions.map((decision) => [decision.submissionId, decision] as const),
+      planDecisions
+        .filter((decision) => activeSubmissionIdSet.has(decision.submissionId))
+        .map((decision) => [decision.submissionId, decision] as const),
     );
     const effectiveAssignmentById = new Map(
       effectiveAssignments.map((assignment) => [assignment.id, assignment] as const),
@@ -2652,6 +2668,7 @@ export class EvaluationService {
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     const assignmentUpdate =
       assignment.status === "assigned"
         ? {
@@ -2685,7 +2702,7 @@ export class EvaluationService {
     criterionIds: readonly string[],
     expectedVersion: number,
   ): Promise<EvaluationReview> {
-    const { assignment } = await this.#getWritableAssignment(actor, assignmentId);
+    const { assignment, plan } = await this.#getWritableAssignment(actor, assignmentId);
     if (assignment.status === "submitted") {
       throw conflict("A submitted review cannot be edited.");
     }
@@ -2725,6 +2742,7 @@ export class EvaluationService {
       version: current.version + 1,
       updatedAt: now,
     };
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     await this.#repository.writeReview({
       authority: {
         tenantId: assignment.tenantId,
@@ -3227,6 +3245,7 @@ export class EvaluationService {
       version: assignment.version + 1,
       updatedAt: now,
     };
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     await this.#repository.writeReview({
       authority: {
         tenantId: assignment.tenantId,
@@ -3252,6 +3271,8 @@ export class EvaluationService {
   ): Promise<EvaluationConflictDeclaration> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
+    const plan = await this.#getPlan(actor.tenantId, assignment.planId);
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     const existing = await this.#repository.getConflict(actor.tenantId, assignment.id);
     if (existing !== null) {
       return existing;
@@ -3268,6 +3289,7 @@ export class EvaluationService {
       reason: requireText(reason, "Conflict reason", 2_000),
       declaredAt: now,
     };
+    await this.#requireActiveSubmission(plan, assignment.submissionId);
     await this.#repository.abstainAssignment(
       {
         ...assignment,
@@ -3290,6 +3312,7 @@ export class EvaluationService {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
     const round = findRound(plan, roundId);
+    await this.#requireReviewableSubmission(plan, submissionId);
     const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
     const assignmentIds = new Set(
       assignments
@@ -3324,9 +3347,7 @@ export class EvaluationService {
       this.#repository.listAssignments(actor.tenantId, plan.id),
       this.#repository.listReviews(actor.tenantId, plan.id),
     ]);
-    if (material === null) {
-      throw notFound("The submission to aggregate was not found.");
-    }
+    await this.#requireReviewableSubmission(plan, material ?? submissionId);
     return aggregateForSubmission(plan, round, submissionId, assignments, reviews);
   }
 
@@ -3345,7 +3366,8 @@ export class EvaluationService {
       this.#repository.listAssignments(actor.tenantId, plan.id),
       this.#repository.listReviews(actor.tenantId, plan.id),
     ]);
-    return [...submissions]
+    return submissions
+      .filter(isReviewableSubmission)
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((submission) =>
         aggregateForSubmission(plan, round, submission.id, assignments, reviews),
@@ -3359,7 +3381,7 @@ export class EvaluationService {
       this.#repository.listAssignments(actor.tenantId, plan.id),
       this.#repository.listReviews(actor.tenantId, plan.id),
     ]);
-    const currentSubmissionIds = await this.#activeSubmissionIds(plan, allAssignments);
+    const currentSubmissionIds = await this.#reviewableSubmissionIds(plan, allAssignments);
     return progressForAssignments(
       plan,
       effectiveAssignmentsForPlan(plan, allAssignments, reviews).filter((assignment) =>
@@ -3378,14 +3400,7 @@ export class EvaluationService {
     const reason = requireText(input.reason, "Decision reason", 5_000);
     const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 200);
     const submissionId = requireText(input.submissionId, "Submission id", MAX_SUBMISSION_ID_LENGTH);
-    const material = await this.#submissions.getSubmissionForReview(
-      actor.tenantId,
-      plan.eventId,
-      submissionId,
-    );
-    if (material === null) {
-      throw notFound("The submission to decide was not found.");
-    }
+    const material = await this.#requireReviewableSubmission(plan, submissionId);
     if (input.status === "accepted") {
       requireAcceptableSubmission(material);
     }
@@ -3399,6 +3414,9 @@ export class EvaluationService {
       }
       const repeatedVersion =
         current.history.findIndex((transition) => transition.idempotencyKey === idempotencyKey) + 1;
+      if (repeatedVersion !== current.version) {
+        return current;
+      }
       await this.#runDecisionWork(
         {
           decision: current,
@@ -3435,6 +3453,7 @@ export class EvaluationService {
       history: [...(current?.history ?? []), transition],
       updatedAt: now,
     };
+    await this.#requireReviewableSubmission(plan, submissionId);
     await this.#repository.putDecision(decision, current?.version ?? null);
     await this.#runDecisionWork(
       {
@@ -4016,7 +4035,7 @@ export class EvaluationService {
     return candidates;
   }
 
-  async #activeSubmissionIds(
+  async #reviewableSubmissionIds(
     plan: EvaluationPlan,
     assignments: readonly EvaluationAssignment[],
   ): Promise<ReadonlySet<string>> {
@@ -4033,29 +4052,33 @@ export class EvaluationService {
       ),
     ];
     if (submissionIds.length === 0) return new Set();
-    const [materials, decisions] = await Promise.all([
-      this.#submissions.getSubmissionsForReview(
-        plan.tenantId,
-        submissionIds.map((submissionId) => ({ eventId: plan.eventId, submissionId })),
-      ),
-      Promise.all(
-        submissionIds.map((submissionId) =>
-          this.#repository.getDecision(plan.tenantId, plan.id, submissionId),
-        ),
-      ),
-    ]);
+    const materials = await this.#submissions.getSubmissionsForReview(
+      plan.tenantId,
+      submissionIds.map((submissionId) => ({ eventId: plan.eventId, submissionId })),
+    );
     const materialById = new Map(materials.map((material) => [material.id, material] as const));
     return new Set(
-      submissionIds.filter((submissionId, index) => {
+      submissionIds.filter((submissionId) => {
         const material = materialById.get(submissionId);
-        return (
-          material !== undefined && isActiveReviewSubmission(material) && decisions[index] === null
-        );
+        return material !== undefined && isReviewableSubmission(material);
       }),
     );
   }
 
-  async #requireActiveSubmission(
+  async #activeSubmissionIds(
+    plan: EvaluationPlan,
+    assignments: readonly EvaluationAssignment[],
+  ): Promise<ReadonlySet<string>> {
+    const reviewableSubmissionIds = await this.#reviewableSubmissionIds(plan, assignments);
+    const decisions = await Promise.all(
+      [...reviewableSubmissionIds].map((submissionId) =>
+        this.#repository.getDecision(plan.tenantId, plan.id, submissionId),
+      ),
+    );
+    return new Set([...reviewableSubmissionIds].filter((_, index) => decisions[index] === null));
+  }
+
+  async #requireReviewableSubmission(
     plan: EvaluationPlan,
     submission: string | SubmissionReviewMaterial,
   ): Promise<SubmissionReviewMaterial> {
@@ -4066,10 +4089,19 @@ export class EvaluationService {
     if (
       material === null ||
       material.tenantId !== plan.tenantId ||
-      material.eventId !== plan.eventId
+      material.eventId !== plan.eventId ||
+      !isReviewableSubmission(material)
     ) {
-      throw notFound("The assigned submission was not found.");
+      throw notFound("Submission not found.");
     }
+    return material;
+  }
+
+  async #requireActiveSubmission(
+    plan: EvaluationPlan,
+    submission: string | SubmissionReviewMaterial,
+  ): Promise<SubmissionReviewMaterial> {
+    const material = await this.#requireReviewableSubmission(plan, submission);
     const decision = await this.#repository.getDecision(plan.tenantId, plan.id, material.id);
     if (!isActiveReviewSubmission(material) || decision !== null) {
       throw conflict("This submission is no longer active for review.");
@@ -4265,6 +4297,7 @@ export class EvaluationService {
       return;
     }
     const idempotencyKey = decisionProjectionIdempotencyKey(
+      input.decision.planId,
       input.decision.submissionId,
       input.decisionVersion,
     );

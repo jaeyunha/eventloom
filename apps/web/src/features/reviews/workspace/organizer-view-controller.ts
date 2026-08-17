@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { OrganizationMember } from "../../members/api";
 import type { ApiPlan } from "./api-api-plan";
 import type { AggregateRow } from "./organizer-aggregate-row";
@@ -72,6 +72,33 @@ export function useOrganizerWorkspaceViewController({
     "undecided",
   );
   const [decisionRowLimit, setDecisionRowLimit] = useState(5);
+  const [decisionOverrides, setDecisionOverrides] = useState<{
+    readonly planId: string;
+    readonly decisions: ReviewPlanSeed["decisionBySubmission"];
+  }>({ planId: seed.planId, decisions: {} });
+  const currentDecisionOverrides = useMemo(
+    () =>
+      decisionOverrides.planId === seed.planId
+        ? Object.fromEntries(
+            Object.entries(decisionOverrides.decisions).filter(
+              ([submissionId, decision]) =>
+                decision.version > (seed.decisionBySubmission[submissionId]?.version ?? 0),
+            ),
+          )
+        : {},
+    [decisionOverrides, seed.decisionBySubmission, seed.planId],
+  );
+  const effectiveDecisionBySubmission = useMemo(
+    () => ({
+      ...seed.decisionBySubmission,
+      ...currentDecisionOverrides,
+    }),
+    [currentDecisionOverrides, seed.decisionBySubmission],
+  );
+  const effectiveSeed = useMemo(
+    () => ({ ...seed, decisionBySubmission: effectiveDecisionBySubmission }),
+    [effectiveDecisionBySubmission, seed],
+  );
   const decisionEditorRef = useRef<HTMLDivElement | null>(null);
   const exportAbortControllerRef = useRef<AbortController | null>(null);
   const exportAttemptRunnerRef = useRef(createOrganizerResultsExportAttemptRunner());
@@ -115,7 +142,7 @@ export function useOrganizerWorkspaceViewController({
     decisionEditorRef.current?.scrollIntoView({ block: "start" });
   }, [selectedDecisionId]);
   const derived = deriveOrganizerWorkspaceModel({
-    seed,
+    seed: effectiveSeed,
     roundAggregates,
     aggregateSort,
     decisionFilter,
@@ -141,6 +168,19 @@ export function useOrganizerWorkspaceViewController({
     setDecisionFilter("all");
     setSelectedDecisionId(submissionId);
     setView("decisions");
+  }
+
+  function recordDecision(
+    submissionId: string,
+    decision: ReviewPlanSeed["decisionBySubmission"][string],
+  ): void {
+    setDecisionOverrides((current) => ({
+      planId: seed.planId,
+      decisions: {
+        ...(current.planId === seed.planId ? current.decisions : {}),
+        [submissionId]: decision,
+      },
+    }));
   }
 
   async function exportResults(): Promise<void> {
@@ -172,7 +212,7 @@ export function useOrganizerWorkspaceViewController({
   }
 
   return {
-    seed,
+    seed: effectiveSeed,
     baseUrl,
     organizationId,
     reviewerMembers,
@@ -208,6 +248,7 @@ export function useOrganizerWorkspaceViewController({
     ...derived,
     openReviewersForSubmission,
     openDecisionForSubmission,
+    recordDecision,
     exportResults,
   };
 }
