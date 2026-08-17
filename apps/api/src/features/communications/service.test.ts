@@ -741,6 +741,65 @@ describe("communications domain", () => {
     ]);
   });
 
+  it("rejects a concurrent same-key send when its payload differs", async () => {
+    const { service, repository, adapter } = await fixture();
+    const firstPreview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      recipientIds: ["participant-1"],
+      data: { message: "Concurrent update" },
+    });
+    const secondPreview = await service.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: "group-template",
+      audience: "all_participants",
+      recipientIds: ["participant-2"],
+      data: { message: "Concurrent update" },
+    });
+    const findSendByIdempotency = repository.findSendByIdempotency.bind(repository);
+    let initialLookups = 0;
+    let releaseInitialLookups: () => void = () => undefined;
+    const initialLookupBarrier = new Promise<void>((resolve) => {
+      releaseInitialLookups = resolve;
+    });
+    repository.findSendByIdempotency = async (tenant, event, idempotencyKey) => {
+      initialLookups += 1;
+      if (initialLookups <= 2) {
+        if (initialLookups === 2) releaseInitialLookups();
+        await initialLookupBarrier;
+        return undefined;
+      }
+      return findSendByIdempotency(tenant, event, idempotencyKey);
+    };
+
+    const results = await Promise.allSettled([
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: firstPreview.id,
+        idempotencyKey: "concurrent-key",
+      }),
+      service.sendGroup(organizer, {
+        eventId,
+        previewId: secondPreview.id,
+        idempotencyKey: "concurrent-key",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        code: "COMMUNICATION_CONFLICT",
+        status: 409,
+      }),
+    });
+    expect(adapter.requests).toHaveLength(1);
+  });
+
   it("starts authorization, template, and recipient reads together and bounds preview calls", async () => {
     const repository = new DelayedCommunicationRepository();
     const service = new CommunicationService(repository, undefined, {

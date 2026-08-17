@@ -1,3 +1,4 @@
+import { type OrganizationEntitlement, organizationEntitlementSchema } from "@eventloom/contracts";
 import {
   type ActivateMemberInput,
   type ActivateMemberResult,
@@ -57,6 +58,11 @@ export interface CreateOrganizationInput {
   readonly idempotencyKey?: string;
 }
 
+export interface ProvisionOrganizationInput extends CreateOrganizationInput {
+  readonly ownerUserId: string;
+  readonly entitlement: OrganizationEntitlement;
+}
+
 export interface UpdateOrganizationInput {
   readonly organizationId: string;
   readonly slug?: string;
@@ -65,16 +71,19 @@ export interface UpdateOrganizationInput {
 }
 export interface OrganizationRepositorySeed {
   readonly organizations?: readonly OrganizationRecord[];
+  readonly entitlements?: readonly OrganizationEntitlement[];
 }
 
 export interface MemberOrganizationRepository {
   createOrganizationWithOwner(input: {
     readonly organization: OrganizationRecord;
     readonly membership: MemberMembership;
+    readonly entitlement: OrganizationEntitlement;
     readonly idempotencyKey?: string;
   }): Promise<OrganizationRecord>;
   listOrganizationsForUser(userId: string): Promise<readonly OrganizationMembership[]>;
   readonly getOrganization?: (organizationId: string) => Promise<OrganizationRecord | null>;
+  readonly getEntitlement?: (organizationId: string) => Promise<OrganizationEntitlement | null>;
   updateOrganization(input: {
     readonly organizationId: string;
     readonly slug?: string;
@@ -138,6 +147,11 @@ const REVOKE_GRANT_FIELDS = [
 ] as const;
 const RESERVE_FIELDS = ["organizationId", "eventId", "roundId", "reviewerId"] as const;
 const ORGANIZATION_FIELDS = ["organizationId", "slug", "name", "config", "idempotencyKey"] as const;
+const PROVISION_ORGANIZATION_FIELDS = [
+  ...ORGANIZATION_FIELDS,
+  "ownerUserId",
+  "entitlement",
+] as const;
 const ORGANIZATION_UPDATE_FIELDS = ["organizationId", "slug", "name", "config"] as const;
 const ORGANIZATION_ID_MAX = 128;
 const ORGANIZATION_SLUG_MAX = 64;
@@ -260,6 +274,21 @@ function organizationConfig(value: unknown, field: string): Readonly<Record<stri
     );
   }
   return clone(config);
+}
+
+function selfHostedEntitlement(organizationIdValue: string): OrganizationEntitlement {
+  return {
+    schemaVersion: 1,
+    organizationId: organizationIdValue,
+    revision: 1,
+    state: "active",
+    capabilities: [],
+    limits: {
+      activeEvents: null,
+    },
+    notBefore: "1970-01-01T00:00:00.000Z",
+    expiresAt: null,
+  };
 }
 
 function organizationRecord(value: unknown, field = "organization"): OrganizationRecord {
@@ -488,7 +517,7 @@ export class MemberService {
 
     const idempotencyKey = normalized.idempotencyKey;
     if (idempotencyKey === undefined) {
-      return this.#createOrganization(actor, normalized, userId);
+      return this.#createOrganization(normalized, userId);
     }
     const cacheKey = `${userId}\u0000${idempotencyKey}`;
     const fingerprint = JSON.stringify(normalized);
@@ -504,7 +533,60 @@ export class MemberService {
       await active;
       return this.createOrganization(actor, input);
     }
-    const operation = this.#createOrganization(actor, normalized, userId);
+    const operation = this.#createOrganization(normalized, userId);
+    this.#organizationCreateLocks.set(cacheKey, operation);
+    try {
+      const result = await operation;
+      this.#organizationCreateResults.set(cacheKey, { fingerprint, result: clone(result) });
+      return result;
+    } finally {
+      if (this.#organizationCreateLocks.get(cacheKey) === operation) {
+        this.#organizationCreateLocks.delete(cacheKey);
+      }
+    }
+  }
+
+  async provisionOrganization(input: ProvisionOrganizationInput): Promise<OrganizationRecord> {
+    const inputValue = objectValue(input, "organization provisioning");
+    assertFields(inputValue, "organization provisioning", PROVISION_ORGANIZATION_FIELDS);
+    const normalized = {
+      organizationId: organizationId(input.organizationId, "organization id"),
+      slug: organizationSlug(input.slug, "organization slug"),
+      name: organizationName(input.name, "organization name"),
+      config: organizationConfig(input.config, "organization config"),
+      ownerUserId: text(input.ownerUserId, "owner user id", 200),
+      entitlement: organizationEntitlementSchema.parse(input.entitlement),
+      ...(input.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: text(input.idempotencyKey, "idempotency key", 512) }),
+    };
+    if (normalized.entitlement.organizationId !== normalized.organizationId) {
+      throw validation("The entitlement organization does not match the provisioned organization.");
+    }
+
+    const idempotencyKey = normalized.idempotencyKey;
+    if (idempotencyKey === undefined) {
+      return this.#createOrganization(normalized, normalized.ownerUserId, normalized.entitlement);
+    }
+    const cacheKey = `${normalized.ownerUserId}\u0000${idempotencyKey}`;
+    const fingerprint = JSON.stringify(normalized);
+    const previous = this.#organizationCreateResults.get(cacheKey);
+    if (previous !== undefined) {
+      if (previous.fingerprint !== fingerprint) {
+        throw conflict("The idempotency key was already used for another organization.");
+      }
+      return clone(previous.result);
+    }
+    const active = this.#organizationCreateLocks.get(cacheKey);
+    if (active !== undefined) {
+      await active;
+      return this.provisionOrganization(input);
+    }
+    const operation = this.#createOrganization(
+      normalized,
+      normalized.ownerUserId,
+      normalized.entitlement,
+    );
     this.#organizationCreateLocks.set(cacheKey, operation);
     try {
       const result = await operation;
@@ -518,7 +600,6 @@ export class MemberService {
   }
 
   async #createOrganization(
-    _actor: MemberActor,
     input: {
       readonly organizationId: string;
       readonly slug: string;
@@ -527,6 +608,7 @@ export class MemberService {
       readonly idempotencyKey?: string;
     },
     userId: string,
+    entitlementInput?: OrganizationEntitlement,
   ): Promise<OrganizationRecord> {
     const now = isoDate(this.#clock(), "clock");
     const organization: OrganizationRecord = {
@@ -544,10 +626,15 @@ export class MemberService {
       createdAt: now,
       updatedAt: now,
     };
+    const entitlement =
+      entitlementInput === undefined
+        ? selfHostedEntitlement(organization.organizationId)
+        : organizationEntitlementSchema.parse(entitlementInput);
     try {
       const created = await this.#organizationMethod("createOrganizationWithOwner")({
         organization,
         membership,
+        entitlement,
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
       });
       const normalized = organizationRecord(created);
@@ -1345,11 +1432,20 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
   readonly #invitations = new Map<string, MemberInvitation>();
   readonly #activationCredentials = new Map<string, string>();
   readonly #organizations = new Map<string, OrganizationRecord>();
+  readonly #entitlements = new Map<string, OrganizationEntitlement>();
+  readonly #organizationCreationIdempotency = new Map<
+    string,
+    { readonly fingerprint: string; readonly organization: OrganizationRecord }
+  >();
 
   constructor(seed: MemberRepositorySeed & OrganizationRepositorySeed = {}) {
     const organizationSeed = seed.organizations;
     for (const organization of organizationSeed ?? []) {
       this.#organizations.set(organization.organizationId, clone(organizationRecord(organization)));
+    }
+    for (const entitlement of seed.entitlements ?? []) {
+      const normalized = organizationEntitlementSchema.parse(entitlement);
+      this.#entitlements.set(normalized.organizationId, clone(normalized));
     }
     for (const user of seed.users ?? []) this.#users.set(user.userId, clone(user));
     for (const membership of seed.memberships ?? []) {
@@ -1369,13 +1465,39 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
   async createOrganizationWithOwner(input: {
     readonly organization: OrganizationRecord;
     readonly membership: MemberMembership;
+    readonly entitlement: OrganizationEntitlement;
     readonly idempotencyKey?: string;
   }): Promise<OrganizationRecord> {
     const organization = organizationRecord(input.organization);
     const membership = clone(input.membership);
+    const entitlement = organizationEntitlementSchema.parse(input.entitlement);
+    const idempotencyKey =
+      input.idempotencyKey === undefined
+        ? undefined
+        : `${membership.userId}\u0000${input.idempotencyKey}`;
+    const fingerprint = JSON.stringify({
+      organizationId: organization.organizationId,
+      slug: organization.slug,
+      name: organization.name,
+      config: organization.config,
+      ownerUserId: membership.userId,
+      entitlement,
+    });
+    if (idempotencyKey !== undefined) {
+      const previous = this.#organizationCreationIdempotency.get(idempotencyKey);
+      if (previous !== undefined) {
+        if (previous.fingerprint !== fingerprint) {
+          throw new MemberRepositoryConflictError(
+            "The organization idempotency key was already used for another request.",
+          );
+        }
+        return clone(previous.organization);
+      }
+    }
     if (
       membership.organizationId !== organization.organizationId ||
       membership.role !== "owner" ||
+      entitlement.organizationId !== organization.organizationId ||
       !this.#users.has(membership.userId)
     ) {
       throw new MemberRepositoryConflictError("The organization owner membership is invalid.");
@@ -1396,6 +1518,13 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
     }
     this.#organizations.set(organization.organizationId, clone(organization));
     this.#memberships.set(membershipKey, membership);
+    this.#entitlements.set(organization.organizationId, clone(entitlement));
+    if (idempotencyKey !== undefined) {
+      this.#organizationCreationIdempotency.set(idempotencyKey, {
+        fingerprint,
+        organization: clone(organization),
+      });
+    }
     return clone(organization);
   }
 
@@ -1413,6 +1542,11 @@ export class InMemoryMemberIdentityRepository implements MemberIdentityRepositor
   async getOrganization(organizationIdValue: string): Promise<OrganizationRecord | null> {
     const organization = this.#organizations.get(organizationIdValue);
     return organization === undefined ? null : clone(organization);
+  }
+
+  async getEntitlement(organizationIdValue: string): Promise<OrganizationEntitlement | null> {
+    const entitlement = this.#entitlements.get(organizationIdValue);
+    return entitlement === undefined ? null : clone(entitlement);
   }
 
   async updateOrganization(input: {

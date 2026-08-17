@@ -653,11 +653,12 @@ export async function loadOrganizerEvaluationDecision(
   baseUrl: string,
   planId: string,
   submissionId: string,
-): Promise<EvaluationDecisionRecord> {
-  return evaluationRequest<EvaluationDecisionRecord>(
+): Promise<EvaluationDecisionRecord | undefined> {
+  const decision = await evaluationRequest<EvaluationDecisionRecord | null>(
     baseUrl,
     `/plans/${encodeURIComponent(planId)}/submissions/${encodeURIComponent(submissionId)}/decision`,
   );
+  return decision ?? undefined;
 }
 
 export function indexOrganizerEvaluationWorkspace(

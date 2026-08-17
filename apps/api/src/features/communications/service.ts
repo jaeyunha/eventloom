@@ -44,6 +44,9 @@ export type CommunicationErrorCode =
   | "COMMUNICATION_CONFLICT"
   | "COMMUNICATION_UNAVAILABLE";
 
+export const COMMUNICATION_OPERATION_MARKER = "__eventloom_speaker_operation";
+type CommunicationPreviewOperation = "generic" | "speaker_invitation";
+
 export class CommunicationError extends Error {
   readonly code: CommunicationErrorCode;
   readonly status: 400 | 403 | 404 | 409 | 503;
@@ -85,6 +88,7 @@ export interface CommunicationPreviewInput {
   audience: CommunicationAudience;
   recipientIds?: readonly string[];
   data?: CommunicationRenderData;
+  protectedRecipientDataKeys?: readonly string[];
 }
 
 export interface SendGroupCommunicationInput {
@@ -332,6 +336,16 @@ function cloneRecipient(recipient: CommunicationRecipient): CommunicationRecipie
     audiences: [...recipient.audiences],
     data: cloneData(recipient.data),
   };
+}
+
+function withoutRecipientDataKeys(
+  recipient: CommunicationRecipientSnapshot,
+  protectedDataKeys: readonly string[] | undefined,
+): CommunicationRecipientSnapshot {
+  if (protectedDataKeys === undefined || protectedDataKeys.length === 0) return recipient;
+  const data = { ...recipient.data };
+  for (const key of protectedDataKeys) delete data[key];
+  return { ...recipient, data };
 }
 
 function templateSnapshot(template: CommunicationTemplate): CommunicationTemplateSnapshot {
@@ -936,6 +950,21 @@ export class CommunicationService {
     actor: CommunicationActor,
     input: CommunicationPreviewInput,
   ): Promise<CommunicationPreview> {
+    return this.previewGroupSendInternal(actor, input, "generic");
+  }
+
+  async previewInvitationGroupSend(
+    actor: CommunicationActor,
+    input: CommunicationPreviewInput,
+  ): Promise<CommunicationPreview> {
+    return this.previewGroupSendInternal(actor, input, "speaker_invitation");
+  }
+
+  private async previewGroupSendInternal(
+    actor: CommunicationActor,
+    input: CommunicationPreviewInput,
+    operation: CommunicationPreviewOperation,
+  ): Promise<CommunicationPreview> {
     requireOrganizer(actor, input.eventId);
     if (input.purpose !== "organizer_group_email" && input.purpose !== "decision") {
       throw invalidInput(
@@ -973,7 +1002,10 @@ export class CommunicationService {
       throw notFound("One or more preview recipients were not found for this event.");
     }
     const snapshots = recipients.map((recipient) => {
-      const snapshot = this.assertRecipientScope(recipient, actor, input.eventId);
+      const snapshot = withoutRecipientDataKeys(
+        this.assertRecipientScope(recipient, actor, input.eventId),
+        input.protectedRecipientDataKeys,
+      );
       if (
         recipientIds !== undefined &&
         snapshot.audiences.length > 0 &&
@@ -983,7 +1015,11 @@ export class CommunicationService {
       }
       return snapshot;
     });
-    const data = cloneData(input.data);
+    const data = {
+      ...cloneData(input.data),
+      [COMMUNICATION_OPERATION_MARKER]:
+        operation === "speaker_invitation" ? "speaker_invitation" : "generic",
+    };
     const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
       const renderedRecipient = renderCommunicationTemplate(
         template,
@@ -1651,6 +1687,20 @@ export class CommunicationService {
           input.idempotencyKey,
         );
         if (existing !== undefined) {
+          if (
+            !sendMatchesPayload(existing, {
+              purpose: input.purpose,
+              audience: input.audience,
+              templateId: input.template.id,
+              templateVersion: input.template.version,
+              recipientIds: input.recipients.map((recipient) => recipient.id),
+              data: input.data,
+            })
+          ) {
+            throw conflict(
+              "The idempotency key was already used with a different communication payload.",
+            );
+          }
           return { send: existing, created: false };
         }
       }

@@ -2,7 +2,11 @@ import type { D1Database, D1PreparedStatement } from "@cloudflare/workers-types"
 
 import { conflict } from "../../../features/evaluations/errors";
 import type {
+  EvaluationPlanRevisionPrecondition,
+  EvaluationPlanScheduleSync,
+  EvaluationPlanScheduleState,
   EvaluationRepository,
+  EvaluationReviewWriteAdmission,
   OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
 } from "../../../features/evaluations/repository";
@@ -42,6 +46,8 @@ import {
 } from "./shared";
 
 interface Row extends Record<string, unknown> {}
+type D1ReadDatabase = Pick<D1Database, "prepare">;
+const MAX_RECONCILIATION_ROUNDS_PER_BATCH = 200;
 
 const text = (value: unknown): string => String(value);
 const nullableText = (value: unknown): string | null => (value == null ? null : String(value));
@@ -84,7 +90,9 @@ async function atomic(
   }
 }
 
-function canonicalPlanBoundaries(plan: EvaluationPlan): EvaluationPlan {
+function canonicalPlanBoundaries<T extends EvaluationPlan | EvaluationPlanScheduleState>(
+  plan: T,
+): T {
   const canonical = (value: string | null | undefined): string | null | undefined => {
     if (value === null || value === undefined) return value;
     const timestamp = Date.parse(value);
@@ -99,7 +107,7 @@ function canonicalPlanBoundaries(plan: EvaluationPlan): EvaluationPlan {
       ...(round.opensAt === undefined ? {} : { opensAt: canonical(round.opensAt) }),
       closesAt: canonical(round.closesAt) ?? null,
     })),
-  };
+  } as T;
 }
 
 function latestPlanBoundary(plan: EvaluationPlan): string | null {
@@ -110,7 +118,233 @@ function latestPlanBoundary(plan: EvaluationPlan): string | null {
   return boundaries.sort((left, right) => right.localeCompare(left))[0] ?? null;
 }
 
-function planWithinEventGuard(database: D1Database, plan: EvaluationPlan): D1PreparedStatement {
+function planTipGuard(
+  database: D1Database,
+  plan: EvaluationPlan,
+  expectedVersion: number,
+  allowPending = false,
+): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+       SELECT 1
+         FROM review_plans p
+        WHERE p.organization_id = ?
+          AND p.event_id = ?
+          AND p.id = ?
+          AND p.version = ?
+          ${allowPending ? "" : "AND p.revision_sync_pending = 0"}
+          AND NOT EXISTS (
+            SELECT 1
+              FROM review_plans successor
+             WHERE successor.organization_id = p.organization_id
+               AND successor.event_id = p.event_id
+               AND successor.predecessor_plan_id = p.id
+          )
+     )`,
+    [plan.tenantId, plan.eventId, plan.id, expectedVersion],
+  );
+}
+
+function planRevisionSyncGuard(
+  database: D1Database,
+  tip: EvaluationPlan,
+  expectedVersion: number,
+  revisionSyncToken: string,
+  allowCompleted = false,
+): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+       SELECT 1
+         FROM review_plans p
+        WHERE p.organization_id = ?
+          AND p.event_id = ?
+          AND p.id = ?
+          AND p.version = ?
+          ${allowCompleted ? "" : "AND p.revision_sync_pending = 1"}
+          AND p.revision_sync_token = ?
+          AND NOT EXISTS (
+            SELECT 1
+              FROM review_plans successor
+             WHERE successor.organization_id = p.organization_id
+               AND successor.event_id = p.event_id
+               AND successor.predecessor_plan_id = p.id
+          )
+     )`,
+    [tip.tenantId, tip.eventId, tip.id, expectedVersion, revisionSyncToken],
+  );
+}
+
+function assignmentWriteScheduleGuard(
+  database: D1Database,
+  scope: EvaluationAssignmentScope,
+  authorizedAt: string,
+  requireRoundOpen: boolean,
+): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+       SELECT 1
+         FROM review_plans plan
+         JOIN review_rounds round
+           ON round.organization_id = plan.organization_id
+          AND round.event_id = plan.event_id
+          AND round.plan_id = plan.id
+          AND round.id = ?
+          AND round.revision = (
+            SELECT MAX(current_round.revision)
+              FROM review_rounds current_round
+             WHERE current_round.organization_id = round.organization_id
+               AND current_round.event_id = round.event_id
+               AND current_round.plan_id = round.plan_id
+               AND current_round.id = round.id
+          )
+        WHERE plan.organization_id = ?
+          AND plan.event_id = ?
+          AND plan.id = ?
+          AND plan.status = 'open'
+          AND (plan.closes_at IS NULL OR plan.closes_at > ?)
+          ${requireRoundOpen ? "AND (round.opens_at IS NULL OR round.opens_at <= ?)" : ""}
+          AND (round.closes_at IS NULL OR round.closes_at > ?)
+     )`,
+    [
+      scope.roundId,
+      scope.tenantId,
+      scope.eventId,
+      scope.planId,
+      authorizedAt,
+      ...(requireRoundOpen ? [authorizedAt] : []),
+      authorizedAt,
+    ],
+  );
+}
+
+function authoritativePlanWritableGuard(
+  database: D1Database,
+  scope: Pick<EvaluationAssignment, "tenantId" | "eventId" | "planId">,
+  allowClosed = false,
+): D1PreparedStatement {
+  return guard(
+    database,
+    `EXISTS (
+       WITH RECURSIVE family(id, status, revision_sync_pending, depth) AS (
+         SELECT id, status, revision_sync_pending, 0
+           FROM review_plans
+          WHERE organization_id = ?
+            AND event_id = ?
+            AND id = ?
+         UNION ALL
+         SELECT successor.id, successor.status, successor.revision_sync_pending, family.depth + 1
+           FROM family
+           JOIN review_plans successor
+             ON successor.organization_id = ?
+            AND successor.event_id = ?
+            AND successor.predecessor_plan_id = family.id
+          WHERE family.depth < 16
+       )
+       SELECT 1
+         FROM family tip
+        WHERE ${allowClosed ? "" : "tip.status = 'open' AND"}
+          tip.revision_sync_pending = 0
+          AND NOT EXISTS (
+            SELECT 1
+              FROM review_plan_lineage_repairs_required repair
+             WHERE repair.organization_id = ?
+               AND repair.event_id = ?
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM review_plans successor
+             WHERE successor.organization_id = ?
+               AND successor.event_id = ?
+               AND successor.predecessor_plan_id = tip.id
+               AND successor.status <> 'draft'
+          )
+     )`,
+    [
+      scope.tenantId,
+      scope.eventId,
+      scope.planId,
+      scope.tenantId,
+      scope.eventId,
+      scope.tenantId,
+      scope.eventId,
+      scope.tenantId,
+      scope.eventId,
+    ],
+  );
+}
+
+function reviewWriteAdmissionGuard(
+  database: D1Database,
+  admission: EvaluationReviewWriteAdmission,
+): D1PreparedStatement {
+  const assignment = admission.assignment;
+  return guard(
+    database,
+    `EXISTS (
+       SELECT 1
+         FROM review_assignments assignment
+         JOIN review_plans plan
+           ON plan.organization_id = assignment.organization_id
+          AND plan.event_id = assignment.event_id
+          AND plan.id = assignment.plan_id
+         JOIN review_rounds round
+           ON round.organization_id = assignment.organization_id
+          AND round.event_id = assignment.event_id
+          AND round.plan_id = assignment.plan_id
+          AND round.id = assignment.round_id
+          AND round.revision = (
+            SELECT MAX(current_round.revision)
+              FROM review_rounds current_round
+             WHERE current_round.organization_id = assignment.organization_id
+               AND current_round.event_id = assignment.event_id
+               AND current_round.plan_id = assignment.plan_id
+               AND current_round.id = assignment.round_id
+          )
+        WHERE assignment.organization_id = ?
+          AND assignment.event_id = ?
+          AND assignment.id = ?
+          AND assignment.version = ?
+          AND assignment.status IN ('assigned', 'in_progress')
+          AND assignment.plan_id = ?
+          AND assignment.round_id = ?
+          AND assignment.submission_id = ?
+          AND assignment.reviewer_id = ?
+          AND assignment.plan_revision = ?
+          AND assignment.rubric_revision = ?
+          AND assignment.round_revision = ?
+          AND assignment.submission_revision = ?
+          AND plan.status = 'open'
+          AND (plan.closes_at IS NULL OR plan.closes_at > ?)
+          AND (round.opens_at IS NULL OR round.opens_at <= ?)
+          AND (round.closes_at IS NULL OR round.closes_at > ?)
+     )`,
+    [
+      assignment.tenantId,
+      assignment.eventId,
+      assignment.id,
+      admission.expectedAssignmentVersion,
+      assignment.planId,
+      assignment.roundId,
+      assignment.submissionId,
+      assignment.reviewerId,
+      assignment.planVersion ?? 0,
+      assignment.rubricRevision ?? 0,
+      assignment.roundRevision ?? 0,
+      assignment.submissionRevision ?? 0,
+      admission.authorizedAt,
+      admission.authorizedAt,
+      admission.authorizedAt,
+    ],
+  );
+}
+
+function planWithinEventGuard(
+  database: D1Database,
+  plan: Pick<EvaluationPlanScheduleState, "eventId" | "id" | "tenantId">,
+): D1PreparedStatement {
   return guard(
     database,
     `EXISTS (
@@ -242,15 +476,87 @@ function updateAssignment(database: D1Database, assignment: EvaluationAssignment
 }
 
 export class D1EvaluationRepository implements EvaluationRepository {
+  readonly supportsAtomicPlanRevisionSync = true;
+
   constructor(private readonly database: D1Database) {}
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
-    const row = await this.database
-      .withSession("first-primary")
+    const session = this.database.withSession("first-primary");
+    const row = await session
       .prepare("SELECT * FROM review_plans WHERE organization_id = ? AND id = ?")
       .bind(tenantId, planId)
       .first<Row>();
-    return row === null ? null : this.hydratePlan(row);
+    return row === null ? null : this.hydratePlan(row, session);
+  }
+
+  async getPlanScheduleState(
+    tenantId: string,
+    planId: string,
+  ): Promise<EvaluationPlanScheduleState | null> {
+    const session = this.database.withSession("first-primary");
+    const plan = await session
+      .prepare(
+        `SELECT id, organization_id, event_id, predecessor_plan_id, status,
+                closes_at, version, updated_at
+           FROM review_plans
+          WHERE organization_id = ? AND id = ?`,
+      )
+      .bind(tenantId, planId)
+      .first<Row>();
+    if (plan === null) return null;
+    const roundRows = await session
+      .prepare(
+        `SELECT round.id, round.predecessor_round_id, round.revision,
+                round.opens_at, round.closes_at
+           FROM review_rounds round
+          WHERE round.organization_id = ?
+            AND round.event_id = ?
+            AND round.plan_id = ?
+            AND round.revision = (
+              SELECT MAX(current_round.revision)
+                FROM review_rounds current_round
+               WHERE current_round.organization_id = round.organization_id
+                 AND current_round.event_id = round.event_id
+                 AND current_round.plan_id = round.plan_id
+                 AND current_round.id = round.id
+            )
+          ORDER BY round.sequence, round.id`,
+      )
+      .bind(tenantId, text(plan.event_id), planId)
+      .all<Row>();
+    return {
+      id: text(plan.id),
+      tenantId: text(plan.organization_id),
+      eventId: text(plan.event_id),
+      predecessorPlanId: nullableText(plan.predecessor_plan_id),
+      status: text(plan.status) as EvaluationPlan["status"],
+      closesAt: nullableText(plan.closes_at),
+      version: numberValue(plan.version),
+      updatedAt: text(plan.updated_at),
+      rounds: rows(roundRows).map((round) => ({
+        id: text(round.id),
+        predecessorRoundId: nullableText(round.predecessor_round_id),
+        revision: numberValue(round.revision),
+        opensAt: nullableText(round.opens_at),
+        closesAt: nullableText(round.closes_at),
+      })),
+    };
+  }
+
+  async getPlanSuccessor(
+    tenantId: string,
+    eventId: string,
+    predecessorPlanId: string,
+  ): Promise<EvaluationPlan | null> {
+    const session = this.database.withSession("first-primary");
+    const row = await session
+      .prepare(
+        `SELECT * FROM review_plans
+          WHERE organization_id = ? AND event_id = ? AND predecessor_plan_id = ?`,
+      )
+      .bind(tenantId, eventId, predecessorPlanId)
+      .first<Row>();
+    return row === null ? null : this.hydratePlan(row, session);
   }
 
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
@@ -264,8 +570,33 @@ export class D1EvaluationRepository implements EvaluationRepository {
     return Promise.all(rows(result).map((row) => this.hydratePlan(row)));
   }
 
-  async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
+  async hasPendingPlanLineageRepair(tenantId: string, eventId: string): Promise<boolean> {
+    const row = await this.database
+      .withSession("first-primary")
+      .prepare(
+        `SELECT 1
+           FROM review_plan_lineage_repairs_required
+          WHERE organization_id = ? AND event_id = ?
+          LIMIT 1`,
+      )
+      .bind(tenantId, eventId)
+      .first<Row>();
+    return row !== null;
+  }
+
+  async putPlan(
+    plan: EvaluationPlan,
+    expectedVersion: number | null,
+    revisionPrecondition?: EvaluationPlanRevisionPrecondition,
+  ): Promise<void> {
     plan = canonicalPlanBoundaries(plan);
+    if (
+      revisionPrecondition !== undefined &&
+      (expectedVersion !== null ||
+        plan.predecessorPlanId !== revisionPrecondition.predecessorPlanId)
+    ) {
+      writeConflict("Evaluation plan revision precondition does not match the new plan.");
+    }
     const projection = plan.reviewerProjection ?? plan.evaluatorProjection ?? plan.projection;
     const commands: D1PreparedStatement[] = [
       expectedVersion === null
@@ -280,21 +611,69 @@ export class D1EvaluationRepository implements EvaluationRepository {
             [plan.tenantId, plan.eventId, plan.id, expectedVersion],
           ),
     ];
+    if (revisionPrecondition !== undefined) {
+      commands.push(
+        guard(
+          this.database,
+          `EXISTS (
+             SELECT 1
+               FROM review_plans predecessor
+              WHERE predecessor.organization_id = ?
+                AND predecessor.event_id = ?
+                AND predecessor.id = ?
+                AND predecessor.version = ?
+                AND predecessor.status IN ('open', 'closed')
+                AND predecessor.grading_locked_at IS NOT NULL
+                AND predecessor.revision_sync_pending = 0
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM review_plans successor
+                   WHERE successor.organization_id = predecessor.organization_id
+                     AND successor.event_id = predecessor.event_id
+                     AND successor.predecessor_plan_id = predecessor.id
+                )
+           )`,
+          [
+            plan.tenantId,
+            plan.eventId,
+            revisionPrecondition.predecessorPlanId,
+            revisionPrecondition.expectedVersion,
+          ],
+        ),
+      );
+      for (const lineageVersion of revisionPrecondition.lineageVersions) {
+        commands.push(
+          guard(
+            this.database,
+            `EXISTS (
+               SELECT 1
+                 FROM review_plans
+                WHERE organization_id = ?
+                  AND event_id = ?
+                  AND id = ?
+                  AND version = ?
+             )`,
+            [plan.tenantId, plan.eventId, lineageVersion.planId, lineageVersion.expectedVersion],
+          ),
+        );
+      }
+    }
     if (expectedVersion === null) {
       commands.push(
         statement(
           this.database,
           `INSERT INTO review_plans
-             (id, organization_id, event_id, name, status, blind_review, closes_at,
+             (id, organization_id, event_id, predecessor_plan_id, name, status, blind_review, closes_at,
               reviews_per_submission, max_assignments_per_reviewer, track_filter,
               auto_distribute, reviewer_projection_field_ids_json,
               reviewer_projection_file_ids_json, grading_revision, grading_locked_at,
               version, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             plan.id,
             plan.tenantId,
             plan.eventId,
+            plan.predecessorPlanId ?? null,
             plan.name,
             plan.status,
             plan.blindReview ? 1 : 0,
@@ -318,13 +697,14 @@ export class D1EvaluationRepository implements EvaluationRepository {
         statement(
           this.database,
           `UPDATE review_plans
-              SET name = ?, status = ?, blind_review = ?, closes_at = ?,
+              SET predecessor_plan_id = ?, name = ?, status = ?, blind_review = ?, closes_at = ?,
                   reviews_per_submission = ?, max_assignments_per_reviewer = ?,
                   track_filter = ?, auto_distribute = ?,
                   reviewer_projection_field_ids_json = ?, reviewer_projection_file_ids_json = ?,
                   grading_revision = ?, grading_locked_at = ?, version = ?, updated_at = ?
             WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
           [
+            plan.predecessorPlanId ?? null,
             plan.name,
             plan.status,
             plan.blindReview ? 1 : 0,
@@ -409,25 +789,31 @@ export class D1EvaluationRepository implements EvaluationRepository {
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
   }
 
-  async putPlanState(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+  async putPlanState(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending = false,
+    revisionSyncToken?: string,
+  ): Promise<void> {
+    if (revisionSyncPending && revisionSyncToken === undefined) {
+      writeConflict("Evaluation plan revision synchronization token is required.");
+    }
     plan = canonicalPlanBoundaries(plan);
     const commands = [
-      updateGuard(
-        this.database,
-        "review_plans",
-        "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
-        [plan.tenantId, plan.eventId, plan.id, expectedVersion],
-      ),
+      planTipGuard(this.database, plan, expectedVersion),
       statement(
         this.database,
         `UPDATE review_plans
             SET status = ?, grading_revision = ?, grading_locked_at = ?,
-                version = ?, updated_at = ?
+                revision_sync_pending = ?, revision_sync_token = ?, version = ?, updated_at = ?
           WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
         [
           plan.status,
           plan.gradingRevision ?? null,
           plan.gradingLockedAt ?? null,
+          revisionSyncPending ? 1 : 0,
+          revisionSyncToken ?? null,
           plan.version,
           plan.updatedAt,
           plan.tenantId,
@@ -437,6 +823,9 @@ export class D1EvaluationRepository implements EvaluationRepository {
         ],
       ),
     ];
+    for (const scheduleSync of scheduleSyncs) {
+      this.addScheduleStatements(commands, scheduleSync);
+    }
     commands.push(
       guard(
         this.database,
@@ -465,36 +854,169 @@ export class D1EvaluationRepository implements EvaluationRepository {
         [plan.tenantId, plan.eventId, plan.id],
       ),
     );
+    for (const scheduleSync of scheduleSyncs) {
+      commands.push(planWithinEventGuard(this.database, scheduleSync.plan));
+    }
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
   }
 
-  async putPlanSchedule(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+  async putPlanSchedule(
+    plan: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncPending = false,
+    revisionSyncToken?: string,
+  ): Promise<void> {
+    if (revisionSyncPending && revisionSyncToken === undefined) {
+      writeConflict("Evaluation plan revision synchronization token is required.");
+    }
     plan = canonicalPlanBoundaries(plan);
-    const commands = [
-      updateGuard(
-        this.database,
-        "review_plans",
-        "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
-        [plan.tenantId, plan.eventId, plan.id, expectedVersion],
-      ),
-      statement(
-        this.database,
-        `UPDATE review_plans
-            SET closes_at = ?, version = ?, updated_at = ?
-          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
-        [
-          plan.closesAt,
-          plan.version,
-          plan.updatedAt,
-          plan.tenantId,
-          plan.eventId,
-          plan.id,
-          expectedVersion,
-        ],
-      ),
-    ];
+    const commands: D1PreparedStatement[] = [planTipGuard(this.database, plan, expectedVersion)];
+    this.addScheduleStatements(
+      commands,
+      { plan, expectedVersion },
+      revisionSyncPending,
+      revisionSyncToken,
+    );
+    for (const scheduleSync of scheduleSyncs) {
+      this.addScheduleStatements(commands, scheduleSync);
+    }
     commands.push(planWithinEventGuard(this.database, plan));
+    for (const scheduleSync of scheduleSyncs) {
+      commands.push(planWithinEventGuard(this.database, scheduleSync.plan));
+    }
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
+  }
+
+  async reconcilePlanRevisionFamily(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    scheduleSyncs: readonly EvaluationPlanScheduleSync[],
+    revisionSyncToken: string,
+  ): Promise<void> {
+    const oversizedSync = scheduleSyncs.length === 1 ? scheduleSyncs[0] : undefined;
+    if (
+      oversizedSync !== undefined &&
+      oversizedSync.plan.rounds.length > MAX_RECONCILIATION_ROUNDS_PER_BATCH
+    ) {
+      const plan = canonicalPlanBoundaries(oversizedSync.plan);
+      for (
+        let offset = 0;
+        offset < plan.rounds.length;
+        offset += MAX_RECONCILIATION_ROUNDS_PER_BATCH
+      ) {
+        const rounds = plan.rounds.slice(offset, offset + MAX_RECONCILIATION_ROUNDS_PER_BATCH);
+        const finalBatch = offset + rounds.length === plan.rounds.length;
+        const commands: D1PreparedStatement[] = [
+          planRevisionSyncGuard(this.database, tip, expectedVersion, revisionSyncToken),
+        ];
+        if (finalBatch) {
+          this.addSchedulePlanStatements(commands, plan, oversizedSync.expectedVersion);
+        } else {
+          commands.push(
+            updateGuard(
+              this.database,
+              "review_plans",
+              "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
+              [plan.tenantId, plan.eventId, plan.id, oversizedSync.expectedVersion],
+            ),
+          );
+        }
+        this.addScheduleRoundStatements(commands, plan, rounds);
+        commands.push(planWithinEventGuard(this.database, plan));
+        await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
+      }
+      return;
+    }
+    const commands: D1PreparedStatement[] = [
+      planRevisionSyncGuard(this.database, tip, expectedVersion, revisionSyncToken),
+    ];
+    for (const scheduleSync of scheduleSyncs) {
+      this.addScheduleStatements(commands, scheduleSync);
+    }
+    for (const scheduleSync of scheduleSyncs) {
+      commands.push(planWithinEventGuard(this.database, scheduleSync.plan));
+    }
+    await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
+  }
+
+  async completePlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    await atomic(
+      this.database,
+      [
+        planRevisionSyncGuard(this.database, tip, expectedVersion, revisionSyncToken, true),
+        statement(
+          this.database,
+          `UPDATE review_plans
+              SET revision_sync_pending = 0, revision_sync_token = ?
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+          [revisionSyncToken, tip.tenantId, tip.eventId, tip.id, expectedVersion],
+        ),
+      ],
+      "Evaluation plan changed since it was loaded.",
+    );
+  }
+
+  async beginPlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    await atomic(
+      this.database,
+      [
+        guard(
+          this.database,
+          `EXISTS (
+             SELECT 1
+               FROM review_plans p
+              WHERE p.organization_id = ?
+                AND p.event_id = ?
+                AND p.id = ?
+                AND p.version = ?
+                AND (
+                  p.revision_sync_pending = 0
+                  OR (
+                    p.revision_sync_pending = 1
+                    AND p.revision_sync_token = ?
+                  )
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM review_plans successor
+                   WHERE successor.organization_id = p.organization_id
+                     AND successor.event_id = p.event_id
+                     AND successor.predecessor_plan_id = p.id
+                )
+           )`,
+          [tip.tenantId, tip.eventId, tip.id, expectedVersion, revisionSyncToken],
+        ),
+        statement(
+          this.database,
+          `UPDATE review_plans
+              SET revision_sync_pending = 1, revision_sync_token = ?
+            WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+          [revisionSyncToken, tip.tenantId, tip.eventId, tip.id, expectedVersion],
+        ),
+      ],
+      "Evaluation plan changed since it was loaded.",
+    );
+  }
+
+  async resumePlanRevisionSync(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    await atomic(
+      this.database,
+      [planRevisionSyncGuard(this.database, tip, expectedVersion, revisionSyncToken, true)],
+      "Evaluation plan revision synchronization ownership changed.",
+    );
   }
 
   async getAssignment(tenantId: string, assignmentId: string) {
@@ -571,6 +1093,8 @@ export class D1EvaluationRepository implements EvaluationRepository {
     await atomic(
       this.database,
       [
+        authoritativePlanWritableGuard(this.database, scope),
+        assignmentWriteScheduleGuard(this.database, scope, input.authorizedAt, true),
         guard(
           this.database,
           `EXISTS (SELECT 1 FROM review_assignments
@@ -708,6 +1232,12 @@ export class D1EvaluationRepository implements EvaluationRepository {
     const targetPredicate =
       targetSubmissionIds.size === 0 ? "0" : [...targetSubmissionIds].map(() => "?").join(", ");
     const commands: D1PreparedStatement[] = [
+      authoritativePlanWritableGuard(this.database, scope, input.allowClosedCleanup === true),
+    ];
+    if (input.allowClosedCleanup !== true) {
+      commands.push(assignmentWriteScheduleGuard(this.database, scope, input.authorizedAt, false));
+    }
+    commands.push(
       guard(
         this.database,
         `(SELECT COUNT(*) FROM review_assignments
@@ -734,7 +1264,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
           expected.size,
         ],
       ),
-    ];
+    );
     for (const item of supersededAssignments) commands.push(updateAssignment(this.database, item));
     for (const item of nextAssignments) {
       commands.push(
@@ -790,12 +1320,19 @@ export class D1EvaluationRepository implements EvaluationRepository {
     return Promise.all(rows(result).map((row) => this.hydrateSuggestion(row)));
   }
 
-  async putSuggestion(suggestion: EvaluationSuggestion, expectedVersion: number | null) {
-    await atomic(
-      this.database,
-      this.suggestionStatements(suggestion, expectedVersion),
-      "Suggestion changed since it was loaded.",
-    );
+  async putSuggestion(
+    suggestion: EvaluationSuggestion,
+    expectedVersion: number | null,
+    admission?: EvaluationReviewWriteAdmission,
+  ) {
+    const commands = this.suggestionStatements(suggestion, expectedVersion);
+    if (admission !== undefined) {
+      commands.unshift(
+        authoritativePlanWritableGuard(this.database, admission.assignment),
+        reviewWriteAdmissionGuard(this.database, admission),
+      );
+    }
+    await atomic(this.database, commands, "Suggestion changed since it was loaded.");
   }
 
   async resolveSuggestion(
@@ -805,6 +1342,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
     expectedAssignmentVersion: number | null,
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
+    admission: EvaluationReviewWriteAdmission,
   ): Promise<EvaluationSuggestionResolution> {
     if (
       (assignment !== null &&
@@ -817,6 +1355,10 @@ export class D1EvaluationRepository implements EvaluationRepository {
       writeConflict("Suggestion resolution targeted another assignment.");
     }
     const commands = [...this.suggestionStatements(suggestion, expectedSuggestionVersion)];
+    commands.unshift(
+      authoritativePlanWritableGuard(this.database, admission.assignment),
+      reviewWriteAdmissionGuard(this.database, admission),
+    );
     if (assignment !== null) {
       commands.push(
         expectedAssignmentVersion === null
@@ -1082,10 +1624,18 @@ export class D1EvaluationRepository implements EvaluationRepository {
     };
   }
 
-  async putReview(review: EvaluationReview, expectedVersion: number | null) {
+  async putReview(
+    review: EvaluationReview,
+    expectedVersion: number | null,
+    admission: EvaluationReviewWriteAdmission,
+  ) {
     await atomic(
       this.database,
-      this.reviewStatements(review, expectedVersion),
+      [
+        authoritativePlanWritableGuard(this.database, admission.assignment),
+        reviewWriteAdmissionGuard(this.database, admission),
+        ...this.reviewStatements(review, expectedVersion),
+      ],
       "Review changed since it was loaded.",
     );
   }
@@ -1095,11 +1645,18 @@ export class D1EvaluationRepository implements EvaluationRepository {
     expectedAssignmentVersion: number,
     review: EvaluationReview,
     expectedReviewVersion: number | null,
+    authorizedAt: string,
   ) {
     this.assertReviewAssignment(assignment, review);
     await atomic(
       this.database,
       [
+        authoritativePlanWritableGuard(this.database, assignment),
+        reviewWriteAdmissionGuard(this.database, {
+          assignment,
+          expectedAssignmentVersion,
+          authorizedAt,
+        }),
         updateGuard(
           this.database,
           "review_assignments",
@@ -1181,11 +1738,18 @@ export class D1EvaluationRepository implements EvaluationRepository {
     expectedAssignmentVersion: number,
     review: EvaluationReview,
     expectedReviewVersion: number,
+    authorizedAt: string,
   ) {
     this.assertReviewAssignment(assignment, review);
     await atomic(
       this.database,
       [
+        authoritativePlanWritableGuard(this.database, assignment),
+        reviewWriteAdmissionGuard(this.database, {
+          assignment,
+          expectedAssignmentVersion,
+          authorizedAt,
+        }),
         updateGuard(
           this.database,
           "review_assignments",
@@ -1214,7 +1778,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
           WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ?
           LIMIT 1`,
       )
-      .bind(tenantId, `decision:evaluation-decision:${submissionId}:v${decision.version}`)
+      .bind(tenantId, `decision:evaluation-decision:${planId}:${submissionId}:v${decision.version}`)
       .first<{
         state: "pending" | "processing" | "delivered" | "failed";
         completed_at: string | null;
@@ -1323,23 +1887,29 @@ export class D1EvaluationRepository implements EvaluationRepository {
     await atomic(this.database, commands, "Decision changed since it was loaded.");
   }
 
-  private async hydratePlan(row: Row): Promise<EvaluationPlan> {
+  private async hydratePlan(
+    row: Row,
+    database: D1ReadDatabase = this.database,
+  ): Promise<EvaluationPlan> {
     const tenantId = text(row.organization_id);
     const eventId = text(row.event_id);
     const planId = text(row.id);
     const roundResult = await statement(
-      this.database,
+      database,
       `SELECT * FROM review_rounds
       WHERE organization_id = ? AND event_id = ? AND plan_id = ? ORDER BY sequence, revision`,
       [tenantId, eventId, planId],
     ).all<Row>();
     const latest = new Map<string, Row>();
     for (const round of rows(roundResult)) latest.set(text(round.id), round);
-    const rounds = await Promise.all([...latest.values()].map((round) => this.hydrateRound(round)));
+    const rounds = await Promise.all(
+      [...latest.values()].map((round) => this.hydrateRound(round, database)),
+    );
     const fieldIds = parseJson<string[]>(text(row.reviewer_projection_field_ids_json), []);
     const fileIds = parseJson<string[]>(text(row.reviewer_projection_file_ids_json), []);
     return {
       id: planId,
+      predecessorPlanId: nullableText(row.predecessor_plan_id),
       tenantId,
       eventId,
       name: text(row.name),
@@ -1362,7 +1932,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
     };
   }
 
-  private async hydrateRound(row: Row): Promise<ReviewRound> {
+  private async hydrateRound(row: Row, database: D1ReadDatabase): Promise<ReviewRound> {
     const keys = [
       text(row.organization_id),
       text(row.event_id),
@@ -1372,28 +1942,28 @@ export class D1EvaluationRepository implements EvaluationRepository {
     ] as const;
     const [rubricRow, criteriaResult, poolRow] = await Promise.all([
       statement(
-        this.database,
+        database,
         `SELECT * FROM review_rubrics WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ? AND revision = ?`,
         keys,
       ).first<Row>(),
       statement(
-        this.database,
+        database,
         `SELECT * FROM review_criteria WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND rubric_id = ? AND rubric_revision = ? ORDER BY sort_order`,
         keys,
       ).all<Row>(),
       statement(
-        this.database,
+        database,
         `SELECT * FROM reviewer_pools WHERE organization_id = ? AND event_id = ? AND round_id = ? AND round_revision = ?`,
         [text(row.organization_id), text(row.event_id), text(row.id), numberValue(row.revision)],
       ).first<Row>(),
     ]);
     const criteria = await Promise.all(
-      rows(criteriaResult).map((criterion) => this.hydrateCriterion(criterion)),
+      rows(criteriaResult).map((criterion) => this.hydrateCriterion(criterion, database)),
     );
     let reviewerPool: ReviewRound["reviewerPool"];
     if (poolRow !== null) {
       const members = await statement(
-        this.database,
+        database,
         `SELECT reviewer_id FROM reviewer_pool_members WHERE organization_id = ? AND event_id = ? AND pool_id = ? ORDER BY reviewer_id`,
         [text(poolRow.organization_id), text(poolRow.event_id), text(poolRow.id)],
       ).all<Row>();
@@ -1404,6 +1974,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
     }
     return {
       id: text(row.id),
+      predecessorRoundId: nullableText(row.predecessor_round_id),
       name: text(row.name),
       sequence: numberValue(row.sequence),
       revision: numberValue(row.revision),
@@ -1422,9 +1993,9 @@ export class D1EvaluationRepository implements EvaluationRepository {
     };
   }
 
-  private async hydrateCriterion(row: Row): Promise<RubricCriterion> {
+  private async hydrateCriterion(row: Row, database: D1ReadDatabase): Promise<RubricCriterion> {
     const options = await statement(
-      this.database,
+      database,
       `SELECT * FROM review_criterion_options
       WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND rubric_id = ? AND rubric_revision = ? AND criterion_id = ? ORDER BY sort_order`,
       [
@@ -1469,13 +2040,14 @@ export class D1EvaluationRepository implements EvaluationRepository {
       statement(
         this.database,
         `INSERT INTO review_rounds
-        (id, organization_id, event_id, plan_id, name, sequence, revision, rubric_id, rubric_revision, opens_at, closes_at, blind_review, anonymization, track_filter)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, organization_id, event_id, plan_id, predecessor_round_id, name, sequence, revision, rubric_id, rubric_revision, opens_at, closes_at, blind_review, anonymization, track_filter)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           round.id,
           plan.tenantId,
           plan.eventId,
           plan.id,
+          round.predecessorRoundId ?? null,
           round.name,
           round.sequence,
           roundRevision,
@@ -1565,6 +2137,96 @@ export class D1EvaluationRepository implements EvaluationRepository {
             [plan.tenantId, plan.eventId, poolId, reviewerId],
           ),
         );
+    }
+  }
+
+  private addScheduleStatements(
+    commands: D1PreparedStatement[],
+    scheduleSync: EvaluationPlanScheduleSync,
+    revisionSyncPending = false,
+    revisionSyncToken?: string,
+  ): void {
+    const plan = canonicalPlanBoundaries(scheduleSync.plan);
+    const { expectedVersion } = scheduleSync;
+    this.addSchedulePlanStatements(
+      commands,
+      plan,
+      expectedVersion,
+      revisionSyncPending,
+      revisionSyncToken,
+    );
+    this.addScheduleRoundStatements(commands, plan, plan.rounds);
+  }
+
+  private addSchedulePlanStatements(
+    commands: D1PreparedStatement[],
+    plan: EvaluationPlanScheduleState,
+    expectedVersion: number,
+    revisionSyncPending = false,
+    revisionSyncToken?: string,
+  ): void {
+    commands.push(
+      updateGuard(
+        this.database,
+        "review_plans",
+        "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
+        [plan.tenantId, plan.eventId, plan.id, expectedVersion],
+      ),
+      statement(
+        this.database,
+        `UPDATE review_plans
+            SET status = ?, closes_at = ?, revision_sync_pending = ?,
+                revision_sync_token = ?, version = ?, updated_at = ?
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+        [
+          plan.status,
+          plan.closesAt ?? null,
+          revisionSyncPending ? 1 : 0,
+          revisionSyncToken ?? null,
+          plan.version,
+          plan.updatedAt,
+          plan.tenantId,
+          plan.eventId,
+          plan.id,
+          expectedVersion,
+        ],
+      ),
+    );
+  }
+
+  private addScheduleRoundStatements(
+    commands: D1PreparedStatement[],
+    plan: EvaluationPlanScheduleState,
+    rounds: EvaluationPlanScheduleState["rounds"],
+  ): void {
+    for (const round of rounds) {
+      commands.push(
+        guard(
+          this.database,
+          `EXISTS (
+             SELECT 1 FROM review_rounds
+              WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ?
+                AND revision = ?
+           )`,
+          [plan.tenantId, plan.eventId, plan.id, round.id, round.revision ?? 1],
+        ),
+        statement(
+          this.database,
+          `UPDATE review_rounds
+              SET opens_at = ?, closes_at = ?
+            WHERE organization_id = ? AND event_id = ? AND plan_id = ? AND id = ?
+              AND revision = ?`,
+          [
+            round.opensAt ?? null,
+            round.closesAt ?? null,
+            plan.tenantId,
+            plan.eventId,
+            plan.id,
+            round.id,
+            round.revision ?? 1,
+          ],
+        ),
+      );
     }
   }
 

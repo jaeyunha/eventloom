@@ -383,4 +383,15 @@ describe("member workspace", () => {
     expect(markup).not.toContain("People directory");
     expect(markup).not.toContain("Reviewer pools");
   });
+
+  it("does not expose organization creation inside organization settings", () => {
+    const markup = renderToStaticMarkup(
+      createElement(OrganizationSettingsWorkspace, {
+        organizationId: "org-1",
+        baseUrl: "https://api.example.test",
+      }),
+    );
+
+    expect(markup).not.toContain('data-testid="organization-creation-form"');
+  });
 });

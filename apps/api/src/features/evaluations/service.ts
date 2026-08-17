@@ -6,6 +6,7 @@ import type {
   OrganizerWorkspaceRecords,
   SubmissionReviewSource,
 } from "./repository";
+import { MAX_REVISION_DEPTH, revisionScheduleSnapshot } from "./revision-schedule-sync";
 import type {
   EvaluationActor,
   EvaluationAggregate,
@@ -46,6 +47,8 @@ import type {
   RubricTotal,
   SubmissionReviewMaterial,
 } from "./types";
+
+const revisionSyncTokenSchema = z.string().uuid();
 
 const MAX_SUBMISSION_ID_LENGTH = 128;
 
@@ -344,6 +347,14 @@ function canonicalInstant(
     throw invalidInput(`${field} must be an ISO-8601 instant with an explicit UTC offset or null.`);
   }
   return new Date(value).toISOString();
+}
+
+function validatedRevisionSyncToken(value: string): string {
+  const parsed = revisionSyncTokenSchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidInput("revisionSyncToken must be a UUID.");
+  }
+  return parsed.data;
 }
 
 function normalizeRounds(rounds: readonly ReviewRound[]): readonly ReviewRound[] {
@@ -883,8 +894,12 @@ function providerFunction(
     provider?.generateSuggestions
   );
 }
-function decisionProjectionIdempotencyKey(submissionId: string, decisionVersion: number): string {
-  return `evaluation-decision:${submissionId}:v${decisionVersion}`;
+function decisionProjectionIdempotencyKey(
+  planId: string,
+  submissionId: string,
+  decisionVersion: number,
+): string {
+  return `evaluation-decision:${planId}:${submissionId}:v${decisionVersion}`;
 }
 
 function decisionTemplatePurpose(
@@ -949,14 +964,20 @@ function gradingRevision(plan: EvaluationPlan): number {
   return plan.gradingRevision ?? plan.version;
 }
 
+function revisionEntityId(id: string, revision: number): string {
+  const simpleSuffix = `-revision-${revision}`;
+  if (id.length + simpleSuffix.length <= 100) return `${id}${simpleSuffix}`;
+  const fingerprint = distributionFingerprint(`${id}:${revision}`).slice(-8);
+  const compactSuffix = `${simpleSuffix}-${fingerprint}`;
+  return `${id.slice(0, 100 - compactSuffix.length)}${compactSuffix}`;
+}
+
 function revisionPlanId(plan: EvaluationPlan): string {
-  const suffix = `-revision-${plan.version}`;
-  return `${plan.id.slice(0, 100 - suffix.length)}${suffix}`;
+  return revisionEntityId(plan.id, plan.version);
 }
 
 function revisionRoundId(roundId: string, planVersion: number): string {
-  const suffix = `-revision-${planVersion}`;
-  return `${roundId.slice(0, 100 - suffix.length)}${suffix}`;
+  return revisionEntityId(roundId, planVersion);
 }
 
 function distributionFingerprint(value: unknown): string {
@@ -1408,7 +1429,15 @@ export class EvaluationService {
       assignmentRule.maxAssignmentsPerReviewer,
       "Maximum assignments per reviewer",
     );
-    const rounds = input.rounds === undefined ? plan.rounds : normalizeRounds(input.rounds);
+    const predecessorRoundIdById = new Map(
+      plan.rounds.map((round) => [round.id, round.predecessorRoundId ?? null] as const),
+    );
+    const rounds = (input.rounds === undefined ? plan.rounds : normalizeRounds(input.rounds)).map(
+      (round) => ({
+        ...round,
+        predecessorRoundId: predecessorRoundIdById.get(round.id) ?? null,
+      }),
+    );
     validateRounds(rounds);
     const nowDate = this.#clock();
     const event = await this.#eventMetadata(actor.tenantId, plan.eventId);
@@ -1465,6 +1494,10 @@ export class EvaluationService {
     if (source.version !== input.expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
+    if (!this.#repository.supportsAtomicPlanRevisionSync) {
+      throw conflict("Review plan revisions require the authoritative D1 runtime.");
+    }
+    await this.#requirePlanTip(source);
     const event = await this.#eventMetadata(actor.tenantId, source.eventId);
     validatePlanTemporalIntegrity({
       currentPlan: source,
@@ -1477,12 +1510,14 @@ export class EvaluationService {
     const revision: EvaluationPlan = {
       ...structuredClone(source),
       id: revisionPlanId(source),
+      predecessorPlanId: source.id,
       name: `${source.name} revision`.slice(0, 200),
       status: "draft",
       rounds: source.rounds.map(
         ({ revision: _roundRevision, rubricRevision: _rubricRevision, ...round }) => ({
           ...round,
           id: revisionRoundId(round.id, source.version),
+          predecessorRoundId: round.id,
         }),
       ),
       gradingRevision: undefined,
@@ -1491,7 +1526,17 @@ export class EvaluationService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.#repository.putPlan(revision, null);
+    const lineageSnapshot = await revisionScheduleSnapshot(
+      this.#repository,
+      { ...revision, status: "open" },
+      revision.updatedAt,
+      { allowOversizedPlans: true, ignoreRoundLimit: true },
+    );
+    await this.#repository.putPlan(revision, null, {
+      predecessorPlanId: source.id,
+      expectedVersion: source.version,
+      lineageVersions: lineageSnapshot.lineageVersions,
+    });
     return revision;
   }
 
@@ -1499,9 +1544,16 @@ export class EvaluationService {
     actor: EvaluationActor,
     planId: string,
     expectedVersion: number,
+    revisionSyncToken: string,
   ): Promise<EvaluationPlan> {
+    revisionSyncToken = validatedRevisionSyncToken(revisionSyncToken);
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
+    if (plan.status === "open" && plan.version === expectedVersion + 1) {
+      await this.#repository.resumePlanRevisionSync(plan, plan.version, revisionSyncToken);
+      await this.#reconcilePlanRevisionFamilyState(plan, plan.version, revisionSyncToken);
+      return plan;
+    }
     const isReopening = plan.status === "closed";
     if (plan.status !== "draft" && !isReopening) {
       throw conflict("Only a draft or closed evaluation plan can be opened.");
@@ -1509,6 +1561,7 @@ export class EvaluationService {
     if (plan.version !== expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
+    await this.#requirePlanTip(plan);
     const now = this.#clock();
     const event = await this.#eventMetadata(actor.tenantId, plan.eventId);
     validatePlanTemporalIntegrity({
@@ -1536,12 +1589,7 @@ export class EvaluationService {
       version: nextVersion,
       updatedAt: now.toISOString(),
     };
-    const putPlanState = this.#repository.putPlanState;
-    if (putPlanState === undefined) {
-      await this.#repository.putPlan(updated, plan.version);
-    } else {
-      await putPlanState.call(this.#repository, updated, plan.version);
-    }
+    await this.#putPlanStateWithRevisionSync(updated, plan.version, revisionSyncToken);
     return updated;
   }
 
@@ -1549,44 +1597,62 @@ export class EvaluationService {
     actor: EvaluationActor,
     planId: string,
     expectedVersion: number,
+    revisionSyncToken: string,
   ): Promise<EvaluationPlan> {
+    revisionSyncToken = validatedRevisionSyncToken(revisionSyncToken);
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
+    if (plan.status === "closed" && plan.version === expectedVersion + 1) {
+      await this.#repository.resumePlanRevisionSync(plan, plan.version, revisionSyncToken);
+      await this.#reconcilePlanRevisionFamilyState(plan, plan.version, revisionSyncToken);
+      return plan;
+    }
     if (plan.status !== "open") {
       throw conflict("Only an open evaluation plan can be closed.");
     }
     if (plan.version !== expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
+    await this.#requirePlanTip(plan);
     const updated: EvaluationPlan = {
       ...plan,
       status: "closed",
       version: plan.version + 1,
       updatedAt: this.#clock().toISOString(),
     };
-    const putPlanState = this.#repository.putPlanState;
-    if (putPlanState === undefined) {
-      await this.#repository.putPlan(updated, plan.version);
-    } else {
-      await putPlanState.call(this.#repository, updated, plan.version);
-    }
+    await this.#putPlanStateWithRevisionSync(updated, plan.version, revisionSyncToken);
     return updated;
   }
 
   async updatePlanSchedule(
     actor: EvaluationActor,
     planId: string,
-    input: { readonly expectedVersion: number; readonly closesAt: string | null },
+    input: {
+      readonly expectedVersion: number;
+      readonly closesAt: string | null;
+      readonly revisionSyncToken: string;
+    },
   ): Promise<EvaluationPlan> {
+    const revisionSyncToken = validatedRevisionSyncToken(input.revisionSyncToken);
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
+    const closesAt = canonicalInstant(input.closesAt, "closesAt") ?? null;
+    if (
+      plan.status === "open" &&
+      plan.version === input.expectedVersion + 1 &&
+      plan.closesAt === closesAt
+    ) {
+      await this.#repository.resumePlanRevisionSync(plan, plan.version, revisionSyncToken);
+      await this.#reconcilePlanRevisionFamilyState(plan, plan.version, revisionSyncToken);
+      return plan;
+    }
     if (plan.status !== "open") {
       throw conflict("Only an open evaluation plan schedule can be changed.");
     }
     if (plan.version !== input.expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
-    const closesAt = canonicalInstant(input.closesAt, "closesAt") ?? null;
+    await this.#requirePlanTip(plan);
     const now = this.#clock();
     if (closesAt !== null && Date.parse(closesAt) <= now.getTime()) {
       throw invalidInput("closesAt must be in the future.");
@@ -1605,13 +1671,126 @@ export class EvaluationService {
       version: plan.version + 1,
       updatedAt: now.toISOString(),
     };
-    const putPlanSchedule = this.#repository.putPlanSchedule;
-    if (putPlanSchedule === undefined) {
-      await this.#repository.putPlan(updated, plan.version);
-    } else {
-      await putPlanSchedule.call(this.#repository, updated, plan.version);
-    }
+    await this.#putPlanScheduleWithRevisionSync(updated, plan.version, revisionSyncToken);
     return updated;
+  }
+
+  async #putPlanStateWithRevisionSync(
+    updated: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    await this.#assertPlanRevisionReconciliationWithinLimit(updated);
+    const snapshot = await revisionScheduleSnapshot(this.#repository, updated, updated.updatedAt, {
+      allowOversizedPlans: true,
+      truncateAtRoundLimit: true,
+    });
+    if (!snapshot.truncated) {
+      await this.#repository.putPlanState(
+        updated,
+        expectedVersion,
+        snapshot.syncs,
+        false,
+        revisionSyncToken,
+      );
+      return;
+    }
+    if (!this.#repository.supportsAtomicPlanRevisionSync) {
+      throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+    }
+    await this.#repository.putPlanState(updated, expectedVersion, [], true, revisionSyncToken);
+    await this.#reconcilePlanRevisionFamilyState(updated, updated.version, revisionSyncToken);
+  }
+
+  async #putPlanScheduleWithRevisionSync(
+    updated: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    await this.#assertPlanRevisionReconciliationWithinLimit(updated);
+    const snapshot = await revisionScheduleSnapshot(this.#repository, updated, updated.updatedAt, {
+      allowOversizedPlans: true,
+      truncateAtRoundLimit: true,
+    });
+    if (!snapshot.truncated) {
+      await this.#repository.putPlanSchedule(
+        updated,
+        expectedVersion,
+        snapshot.syncs,
+        false,
+        revisionSyncToken,
+      );
+      return;
+    }
+    if (!this.#repository.supportsAtomicPlanRevisionSync) {
+      throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+    }
+    await this.#repository.putPlanSchedule(updated, expectedVersion, [], true, revisionSyncToken);
+    await this.#reconcilePlanRevisionFamilyState(updated, updated.version, revisionSyncToken);
+  }
+
+  async reconcilePlanRevisionFamily(
+    actor: EvaluationActor,
+    planId: string,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<EvaluationPlan> {
+    revisionSyncToken = validatedRevisionSyncToken(revisionSyncToken);
+    const tip = await this.#getPlan(actor.tenantId, planId);
+    requireHumanOrganizer(actor, tip.eventId);
+    if (tip.status === "draft" || tip.gradingLockedAt === null) {
+      throw conflict("Only an opened or closed review plan revision can be reconciled.");
+    }
+    if (tip.version !== expectedVersion) {
+      throw conflict("Evaluation plan changed since it was loaded.");
+    }
+    if (!this.#repository.supportsAtomicPlanRevisionSync) {
+      throw conflict("Review plan reconciliation requires the authoritative D1 runtime.");
+    }
+    await this.#requirePlanTip(tip);
+    await this.#assertPlanRevisionReconciliationWithinLimit(tip);
+    await this.#repository.beginPlanRevisionSync(tip, expectedVersion, revisionSyncToken);
+    await this.#reconcilePlanRevisionFamilyState(tip, expectedVersion, revisionSyncToken);
+    return tip;
+  }
+
+  async #assertPlanRevisionReconciliationWithinLimit(plan: EvaluationPlan): Promise<void> {
+    await revisionScheduleSnapshot(this.#repository, plan, this.#clock().toISOString(), {
+      allowOversizedPlans: true,
+      ignoreRoundLimit: true,
+    });
+  }
+
+  async #reconcilePlanRevisionFamilyState(
+    tip: EvaluationPlan,
+    expectedVersion: number,
+    revisionSyncToken: string,
+  ): Promise<void> {
+    await this.#assertPlanRevisionReconciliationWithinLimit(tip);
+    let remainingPlanIds: readonly string[] = [];
+    for (let pass = 0; pass <= MAX_REVISION_DEPTH; pass += 1) {
+      const snapshot = await revisionScheduleSnapshot(
+        this.#repository,
+        tip,
+        this.#clock().toISOString(),
+        { allowOversizedPlans: true, truncateAtRoundLimit: true },
+      );
+      if (snapshot.syncs.length === 0) {
+        await this.#repository.completePlanRevisionSync(tip, expectedVersion, revisionSyncToken);
+        return;
+      }
+      remainingPlanIds = snapshot.syncs.map((sync) => sync.plan.id);
+      if (pass === MAX_REVISION_DEPTH) break;
+      await this.#repository.reconcilePlanRevisionFamily(
+        tip,
+        expectedVersion,
+        snapshot.syncs,
+        revisionSyncToken,
+      );
+    }
+    throw conflict(
+      `Review plan revision reconciliation did not converge: ${remainingPlanIds.join(", ")}.`,
+    );
   }
 
   async assignReviewers(
@@ -1747,6 +1926,7 @@ export class EvaluationService {
           version: assignment.version,
         })),
         reason: "Organizer updated reviewer assignments.",
+        authorizedAt: now,
       },
     );
     return desired;
@@ -1773,6 +1953,7 @@ export class EvaluationService {
       assignments: built.assignments,
       expectedActiveVersions: built.preview.expectedActiveVersions,
       reason: "Organizer applied reviewer distribution.",
+      authorizedAt: this.#clock().toISOString(),
     });
   }
 
@@ -1782,7 +1963,12 @@ export class EvaluationService {
     input: ReplaceEvaluationAssignmentInput,
   ): Promise<EvaluationAssignmentReplacementResult> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
-    const plan = await this.#getPlan(actor.tenantId, assignment.planId);
+    if (await this.#repository.hasPendingPlanLineageRepair(actor.tenantId, assignment.eventId)) {
+      throw conflict("Review plan lineage requires operator repair.");
+    }
+    const plan = await this.#reviewerOperationalPlan(
+      await this.#getPlan(actor.tenantId, assignment.planId),
+    );
     requireHumanOrganizer(actor, plan.eventId);
     if (
       assignment.eventId !== plan.eventId ||
@@ -1876,6 +2062,7 @@ export class EvaluationService {
       successorAssignment,
       expectedAssignmentVersion: input.expectedVersion,
       reason,
+      authorizedAt: now,
     });
   }
 
@@ -2014,13 +2201,54 @@ export class EvaluationService {
     }
     const allowedEventIds =
       normalizedEventId === undefined ? reviewerEventIds : [normalizedEventId];
-    const [listedPlans, workspaceRecords] = await Promise.all([
+    const [pendingRepairs, listedPlans, workspaceRecords] = await Promise.all([
+      Promise.all(
+        allowedEventIds.map(
+          async (eventId) =>
+            [
+              eventId,
+              await this.#repository.hasPendingPlanLineageRepair(actor.tenantId, eventId),
+            ] as const,
+        ),
+      ),
       this.#repository.listPlans(actor.tenantId, normalizedEventId),
       this.#repository.listReviewerWorkspaceRecords(actor.tenantId, actor.userId, allowedEventIds),
     ]);
+    const pendingRepairByEvent = new Map(pendingRepairs);
+    if (normalizedEventId !== undefined && pendingRepairByEvent.get(normalizedEventId) === true) {
+      throw conflict("Review plan lineage requires operator repair.");
+    }
+    const safeEventIds = allowedEventIds.filter(
+      (eventId) => pendingRepairByEvent.get(eventId) !== true,
+    );
+    if (safeEventIds.length === 0) return { assignments: [] };
+    const planKey = (eventId: string, planId: string) => `${eventId}\u0000${planId}`;
+    const listedPlanByKey = new Map(
+      listedPlans.map((plan) => [planKey(plan.eventId, plan.id), plan] as const),
+    );
+    const successorByPredecessor = new Map<string, EvaluationPlan>();
+    for (const candidate of listedPlans) {
+      const predecessorPlanId = candidate.predecessorPlanId;
+      if (predecessorPlanId == null) continue;
+      const predecessorKey = planKey(candidate.eventId, predecessorPlanId);
+      if (successorByPredecessor.has(predecessorKey)) {
+        throw conflict("Review plan revision lineage must remain linear.");
+      }
+      successorByPredecessor.set(predecessorKey, candidate);
+    }
+    const assignedPlanKeys = new Set(
+      workspaceRecords.assignments.map((assignment) =>
+        planKey(assignment.eventId, assignment.planId),
+      ),
+    );
     const reviewerPlans = listedPlans
+      .filter((plan) => assignedPlanKeys.has(planKey(plan.eventId, plan.id)))
+      .map((plan) =>
+        this.#reviewerOperationalPlanFromListedPlans(plan, listedPlanByKey, successorByPredecessor),
+      )
       .filter(
         (plan) =>
+          safeEventIds.includes(plan.eventId) &&
           (normalizedEventId === undefined || plan.eventId === normalizedEventId) &&
           hasRole(actor, plan.eventId, "reviewer"),
       )
@@ -2244,6 +2472,8 @@ export class EvaluationService {
           version: candidate.version,
         })),
         reason: "Organizer removed reviewer assignment.",
+        authorizedAt: this.#clock().toISOString(),
+        allowClosedCleanup: true,
       },
     );
   }
@@ -2253,7 +2483,12 @@ export class EvaluationService {
     if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
       throw forbidden("A conflict declaration removes access to this submission.");
     }
-    const plan = await this.#getPlan(actor.tenantId, assignment.planId);
+    if (await this.#repository.hasPendingPlanLineageRepair(actor.tenantId, assignment.eventId)) {
+      throw conflict("Review plan lineage requires operator repair.");
+    }
+    const plan = await this.#reviewerOperationalPlan(
+      await this.#getPlan(actor.tenantId, assignment.planId),
+    );
     const round = findRound(plan, assignment.roundId);
     const material = await this.#submissions.getSubmissionForReview(
       actor.tenantId,
@@ -2422,9 +2657,14 @@ export class EvaluationService {
         assignment.version,
         review,
         current?.version ?? null,
+        now,
       );
     } else {
-      await this.#repository.putReview(review, current?.version ?? null);
+      await this.#repository.putReview(review, current?.version ?? null, {
+        assignment,
+        expectedAssignmentVersion: assignment.version,
+        authorizedAt: now,
+      });
     }
     return review;
   }
@@ -2476,7 +2716,11 @@ export class EvaluationService {
       updatedAt: now,
     };
     await this.#requireActiveSubmission(plan, assignment.submissionId);
-    await this.#repository.putReview(review, current.version);
+    await this.#repository.putReview(review, current.version, {
+      assignment,
+      expectedAssignmentVersion: assignment.version,
+      authorizedAt: now,
+    });
     return review;
   }
   async generateAiSuggestions(
@@ -2497,6 +2741,7 @@ export class EvaluationService {
       assignment.submissionId,
     );
     if (material === null) throw notFound("The assigned submission was not found.");
+    await this.#requireActiveSubmission(plan, material);
     const producer = this.#aiSuggestionProducer;
     if (producer === undefined) {
       throw advisoryUnavailable(
@@ -2589,7 +2834,11 @@ export class EvaluationService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.#repository.putSuggestion(suggestion, null);
+    await this.#repository.putSuggestion(suggestion, null, {
+      assignment,
+      expectedAssignmentVersion: assignment.version,
+      authorizedAt: now,
+    });
     return suggestion;
   }
 
@@ -2656,6 +2905,7 @@ export class EvaluationService {
       assignment.submissionId,
     );
     if (material === null) throw notFound("The assigned submission was not found.");
+    await this.#requireActiveSubmission(plan, material);
     const submissionRevision = await this.#submissionRevision(
       actor.tenantId,
       assignment.eventId,
@@ -2825,6 +3075,11 @@ export class EvaluationService {
       assignmentUpdate === null ? null : assignment.version,
       review === currentReview ? null : review,
       review === currentReview ? null : (currentReview?.version ?? null),
+      {
+        assignment,
+        expectedAssignmentVersion: assignment.version,
+        authorizedAt: now,
+      },
     );
     return {
       suggestion: resolution.suggestion,
@@ -2946,6 +3201,7 @@ export class EvaluationService {
       assignment.version,
       review,
       current.version,
+      now,
     );
     return review;
   }
@@ -3733,7 +3989,12 @@ export class EvaluationService {
     if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
       throw forbidden("A conflict declaration removes access to this submission.");
     }
-    const plan = await this.#getPlan(actor.tenantId, assignment.planId);
+    if (await this.#repository.hasPendingPlanLineageRepair(actor.tenantId, assignment.eventId)) {
+      throw conflict("Review plan lineage requires operator repair.");
+    }
+    const plan = await this.#reviewerOperationalPlan(
+      await this.#getPlan(actor.tenantId, assignment.planId),
+    );
     const round = findRound(plan, assignment.roundId);
     assertPlanIsWritable(plan, round, this.#clock());
     await this.#requireActiveSubmission(plan, assignment.submissionId);
@@ -3746,6 +4007,141 @@ export class EvaluationService {
       throw notFound("The evaluation plan was not found.");
     }
     return plan;
+  }
+
+  async #requirePlanTip(plan: EvaluationPlan): Promise<void> {
+    const successor = await this.#repository.getPlanSuccessor(plan.tenantId, plan.eventId, plan.id);
+    if (successor !== null) {
+      throw conflict("Only the latest review plan revision can change lifecycle or schedule.");
+    }
+  }
+
+  async #reviewerOperationalPlan(plan: EvaluationPlan): Promise<EvaluationPlan> {
+    if (plan.status === "draft") return plan;
+    let tip = plan;
+    const visited = new Set([plan.id]);
+    for (let depth = 0; depth < MAX_REVISION_DEPTH; depth += 1) {
+      const successor = await this.#repository.getPlanSuccessor(
+        plan.tenantId,
+        plan.eventId,
+        tip.id,
+      );
+      if (successor === null || successor.status === "draft") break;
+      if (visited.has(successor.id)) {
+        throw conflict("Review plan revision lineage contains a cycle.");
+      }
+      visited.add(successor.id);
+      tip = successor;
+    }
+    const overflow = await this.#repository.getPlanSuccessor(plan.tenantId, plan.eventId, tip.id);
+    if (overflow !== null && overflow.status !== "draft") {
+      throw conflict("Review plan revision depth exceeds the synchronization limit.");
+    }
+    if (tip.id === plan.id) return plan;
+    const snapshot = await revisionScheduleSnapshot(
+      this.#repository,
+      tip,
+      this.#clock().toISOString(),
+      { allowOversizedPlans: true, ignoreRoundLimit: true },
+    );
+    const projection = snapshot.syncs.find((sync) => sync.plan.id === plan.id)?.plan;
+    if (projection === undefined) return plan;
+    const roundSchedules = new Map(projection.rounds.map((round) => [round.id, round]));
+    return {
+      ...plan,
+      status: projection.status,
+      closesAt: projection.closesAt ?? null,
+      version: projection.version,
+      updatedAt: projection.updatedAt,
+      rounds: plan.rounds.map((round) => {
+        const schedule = roundSchedules.get(round.id);
+        return schedule === undefined
+          ? round
+          : {
+              ...round,
+              opensAt: schedule.opensAt ?? null,
+              closesAt: schedule.closesAt ?? null,
+            };
+      }),
+    };
+  }
+
+  #reviewerOperationalPlanFromListedPlans(
+    plan: EvaluationPlan,
+    planByKey: ReadonlyMap<string, EvaluationPlan>,
+    successorByPredecessor: ReadonlyMap<string, EvaluationPlan>,
+  ): EvaluationPlan {
+    const planKey = (eventId: string, planId: string) => `${eventId}\u0000${planId}`;
+    const visited = new Set([plan.id]);
+    let tip = plan;
+    for (let depth = 0; depth < MAX_REVISION_DEPTH; depth += 1) {
+      const successor = successorByPredecessor.get(planKey(plan.eventId, tip.id));
+      if (successor === undefined || successor.status === "draft") break;
+      if (
+        successor.tenantId !== plan.tenantId ||
+        successor.eventId !== plan.eventId ||
+        successor.predecessorPlanId !== tip.id ||
+        visited.has(successor.id)
+      ) {
+        throw conflict("Review plan revision lineage is invalid.");
+      }
+      visited.add(successor.id);
+      tip = successor;
+      if (depth === MAX_REVISION_DEPTH - 1) {
+        const overflow = successorByPredecessor.get(planKey(plan.eventId, tip.id));
+        if (overflow !== undefined && overflow.status !== "draft") {
+          throw conflict("Review plan revision depth exceeds the synchronization limit.");
+        }
+      }
+    }
+    if (tip.id === plan.id) return plan;
+
+    const projectedAt = this.#clock().toISOString();
+    const authoritativeStatus = tip.status;
+    let child = tip;
+    while (child.id !== plan.id) {
+      const predecessorPlanId = child.predecessorPlanId;
+      if (predecessorPlanId == null) {
+        throw conflict("Review plan revision lineage is invalid.");
+      }
+      const parent = planByKey.get(planKey(plan.eventId, predecessorPlanId));
+      if (parent === undefined) {
+        throw conflict("Review plan revision lineage is invalid.");
+      }
+      const childRoundByPredecessor = new Map(
+        child.rounds
+          .filter((round) => round.predecessorRoundId !== null)
+          .map((round) => [round.predecessorRoundId as string, round] as const),
+      );
+      const rounds = parent.rounds.map((round) => {
+        const successorRound = childRoundByPredecessor.get(round.id);
+        if (successorRound === undefined) {
+          throw conflict("Review plan revision cannot remove a predecessor round.");
+        }
+        return {
+          ...round,
+          opensAt: successorRound.opensAt,
+          closesAt: successorRound.closesAt,
+        };
+      });
+      const changed =
+        parent.status !== authoritativeStatus ||
+        parent.closesAt !== child.closesAt ||
+        rounds.some(
+          (round, index) =>
+            round.opensAt !== parent.rounds[index]?.opensAt ||
+            round.closesAt !== parent.rounds[index]?.closesAt,
+        );
+      child = {
+        ...parent,
+        status: authoritativeStatus,
+        closesAt: child.closesAt,
+        rounds,
+        version: changed ? parent.version + 1 : parent.version,
+        updatedAt: changed ? projectedAt : parent.updatedAt,
+      };
+    }
+    return child;
   }
 
   async #runDecisionProjection(input: {
@@ -3768,6 +4164,7 @@ export class EvaluationService {
       return;
     }
     const idempotencyKey = decisionProjectionIdempotencyKey(
+      input.decision.planId,
       input.decision.submissionId,
       input.decisionVersion,
     );
