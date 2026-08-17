@@ -3776,7 +3776,6 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const assignmentId = "assignment-suggestion";
     const reviewerId = "reviewer-suggestion";
     const now = "2026-08-10T12:00:00.000Z";
-    const later = "2026-08-10T12:10:00.000Z";
     const transport = new FormulaRecordingTransport();
     transport.seed({
       baseId: "base-test",
