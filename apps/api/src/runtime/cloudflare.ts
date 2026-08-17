@@ -747,6 +747,10 @@ function repositoryConflict(error: unknown): boolean {
   return error instanceof Error && /constraint|unique|duplicate/i.test(error.message);
 }
 
+function missingOrganizationEntitlementsTable(error: unknown): boolean {
+  return error instanceof Error && /no such table: organization_entitlements/i.test(error.message);
+}
+
 /** D1-backed identity, membership, and invitation metadata. */
 export class D1MemberIdentityRepository implements MemberIdentityRepository {
   readonly #idempotency: D1IdempotencyStore;
@@ -1307,16 +1311,65 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
 
   async createMembership(input: MemberMembership): Promise<void> {
     try {
-      const result = await this.database
+      const guardedInsert = this.database
         .prepare(
           `INSERT INTO organization_memberships
              (organization_id, user_id, role, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?
+            WHERE ? NOT IN ('owner', 'admin')
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM organization_entitlements entitlement
+                     WHERE entitlement.organization_id = ?
+                       AND entitlement.state = 'active'
+                       AND entitlement.not_before <= ?
+                       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                       AND entitlement.organizer_seat_limit IS NOT NULL
+                       AND (
+                         (SELECT COUNT(*)
+                            FROM organization_memberships member
+                           WHERE member.organization_id = ?
+                             AND member.role IN ('owner', 'admin'))
+                         +
+                         (SELECT COUNT(*)
+                            FROM auth_verifications invitation
+                           WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                             AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                             AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                             AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                         ) < entitlement.organizer_seat_limit
+                       )
+               )`,
         )
-        .bind(input.organizationId, input.userId, input.role, input.createdAt, input.updatedAt)
-        .run();
+        .bind(
+          input.organizationId,
+          input.userId,
+          input.role,
+          input.createdAt,
+          input.updatedAt,
+          input.role,
+          input.organizationId,
+          input.updatedAt,
+          input.updatedAt,
+          input.organizationId,
+          input.organizationId,
+        );
+      let result: Awaited<ReturnType<typeof guardedInsert.run>>;
+      try {
+        result = await guardedInsert.run();
+      } catch (error) {
+        if (!missingOrganizationEntitlementsTable(error)) throw error;
+        result = await this.database
+          .prepare(
+            `INSERT INTO organization_memberships
+               (organization_id, user_id, role, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?)`,
+          )
+          .bind(input.organizationId, input.userId, input.role, input.createdAt, input.updatedAt)
+          .run();
+      }
       if (Number(result.meta?.changes ?? 1) === 0) {
-        throw new MemberRepositoryConflictError("The membership already exists.");
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
       }
     } catch (error) {
       if (error instanceof MemberRepositoryConflictError) throw error;
@@ -1333,14 +1386,67 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     role: MemberMembership["role"],
     updatedAt: string,
   ): Promise<void> {
-    await this.database
-      .prepare(
-        `UPDATE organization_memberships
-            SET role = ?, updated_at = ?
-          WHERE organization_id = ? AND user_id = ?`,
-      )
-      .bind(role, updatedAt, organizationId, userId)
-      .run();
+    try {
+      const guardedUpdate = await this.database
+        .prepare(
+          `UPDATE organization_memberships
+              SET role = ?, updated_at = ?
+            WHERE organization_id = ? AND user_id = ?
+              AND (
+                ? NOT IN ('owner', 'admin')
+                OR role IN ('owner', 'admin')
+                OR NOT EXISTS (
+                  SELECT 1
+                    FROM organization_entitlements entitlement
+                   WHERE entitlement.organization_id = ?
+                     AND entitlement.state = 'active'
+                     AND entitlement.not_before <= ?
+                     AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                     AND entitlement.organizer_seat_limit IS NOT NULL
+                     AND (
+                       (SELECT COUNT(*)
+                          FROM organization_memberships member
+                         WHERE member.organization_id = ?
+                           AND member.role IN ('owner', 'admin'))
+                       +
+                       (SELECT COUNT(*)
+                          FROM auth_verifications invitation
+                         WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                           AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                           AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                           AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                       ) < entitlement.organizer_seat_limit
+                     )
+                )
+              )`,
+        )
+        .bind(
+          role,
+          updatedAt,
+          organizationId,
+          userId,
+          role,
+          organizationId,
+          updatedAt,
+          updatedAt,
+          organizationId,
+          organizationId,
+        )
+        .run();
+      if (Number(guardedUpdate.meta?.changes ?? 1) === 0) {
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
+      }
+    } catch (error) {
+      if (!missingOrganizationEntitlementsTable(error)) throw error;
+      await this.database
+        .prepare(
+          `UPDATE organization_memberships
+              SET role = ?, updated_at = ?
+            WHERE organization_id = ? AND user_id = ?`,
+        )
+        .bind(role, updatedAt, organizationId, userId)
+        .run();
+    }
   }
 
   async removeMembership(organizationId: string, userId: string): Promise<void> {
@@ -1479,11 +1585,35 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     };
     const temporaryDigest = await sha256(randomToken());
     try {
-      await this.database
+      const guardedInsert = this.database
         .prepare(
           `INSERT INTO auth_verifications
              (id, identifier, token_digest, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?
+            WHERE ? NOT IN ('owner', 'admin')
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM organization_entitlements entitlement
+                     WHERE entitlement.organization_id = ?
+                       AND entitlement.state = 'active'
+                       AND entitlement.not_before <= ?
+                       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > ?)
+                       AND entitlement.organizer_seat_limit IS NOT NULL
+                       AND (
+                         (SELECT COUNT(*)
+                            FROM organization_memberships member
+                           WHERE member.organization_id = ?
+                             AND member.role IN ('owner', 'admin'))
+                         +
+                         (SELECT COUNT(*)
+                            FROM auth_verifications invitation
+                           WHERE invitation.identifier LIKE '{"kind":"member_invitation",%'
+                             AND json_extract(invitation.identifier, '$.invitation.organizationId') = ?
+                             AND json_extract(invitation.identifier, '$.invitation.role') IN ('owner', 'admin')
+                             AND json_extract(invitation.identifier, '$.invitation.status') IN ('pending', 'delivered')
+                         ) < entitlement.organizer_seat_limit
+                       )
+               )`,
         )
         .bind(
           input.id,
@@ -1492,8 +1622,37 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
           input.expiresAt,
           input.createdAt,
           input.updatedAt,
-        )
-        .run();
+          input.role,
+          input.organizationId,
+          input.updatedAt,
+          input.updatedAt,
+          input.organizationId,
+          input.organizationId,
+        );
+      let result: Awaited<ReturnType<typeof guardedInsert.run>>;
+      try {
+        result = await guardedInsert.run();
+      } catch (error) {
+        if (!missingOrganizationEntitlementsTable(error)) throw error;
+        result = await this.database
+          .prepare(
+            `INSERT INTO auth_verifications
+               (id, identifier, token_digest, expires_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            input.id,
+            invitationIdentifier(envelope),
+            temporaryDigest,
+            input.expiresAt,
+            input.createdAt,
+            input.updatedAt,
+          )
+          .run();
+      }
+      if (Number(result.meta?.changes ?? 1) === 0) {
+        throw new MemberRepositoryConflictError("The organizer seat limit has been reached.");
+      }
     } catch (error) {
       if (repositoryConflict(error)) {
         throw new MemberRepositoryConflictError("The invitation already exists.");
