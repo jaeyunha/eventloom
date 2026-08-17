@@ -1411,4 +1411,43 @@ describe("organizer session settings domain", () => {
     ).resolves.toMatchObject({ status: "Rejected", version: 2 });
     expect(synchronizeCalls).toBe(2);
   });
+
+  it("does not synchronize an already-demoted session for stale decision work", async () => {
+    let synchronizeCalls = 0;
+    const repository = new InMemorySessionRepository();
+    const initialService = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+    });
+    await initialService.createSession(actor(), {
+      eventId: "event-a",
+      id: "session-submission-3",
+      title: "Already rejected",
+      description: "An already rejected session.",
+      status: "Rejected",
+      durationMinutes: 30,
+      speakerIds: ["speaker-1"],
+    });
+    const service = new SessionService(repository, {
+      clock: () => now,
+      generateId: () => "generated-session-id",
+      agendaCatalogSynchronizer: {
+        ensureInitialized: async () => undefined,
+        synchronize: async () => {
+          synchronizeCalls += 1;
+          return undefined;
+        },
+      },
+    });
+
+    await service.reconcileDecisionSessionStatus({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessionId: "session-submission-3",
+      status: "rejected",
+      actorId: "organizer-1",
+      isCurrentDecision: async () => false,
+    });
+    expect(synchronizeCalls).toBe(0);
+  });
 });

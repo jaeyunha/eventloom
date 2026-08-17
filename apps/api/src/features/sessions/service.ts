@@ -707,6 +707,9 @@ export class SessionService {
       grants: [{ eventId: input.eventId, role: "organizer" }],
     };
     if (sameStatus(current.status, effectiveTargetStatus)) {
+      if (input.isCurrentDecision !== undefined && !(await input.isCurrentDecision())) {
+        return current;
+      }
       await this.synchronizeAgenda(actor, input.eventId);
       return current;
     }
