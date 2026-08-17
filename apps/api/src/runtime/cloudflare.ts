@@ -2771,10 +2771,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           organizationBootstrap: {
             service: memberService,
             authenticate: (request: Request) =>
-              secretEquals(
-                request.headers.get("x-eventloom-bootstrap-token"),
-                provisioningToken,
-              ),
+              secretEquals(request.headers.get("x-eventloom-bootstrap-token"), provisioningToken),
           },
         }
       : {}),
@@ -2784,10 +2781,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
             service: memberService,
             entitlements: entitlementRepository,
             authenticate: (request: Request) =>
-              secretEquals(
-                request.headers.get("authorization"),
-                `Bearer ${provisioningToken}`,
-              ),
+              secretEquals(request.headers.get("authorization"), `Bearer ${provisioningToken}`),
           },
         }
       : {}),

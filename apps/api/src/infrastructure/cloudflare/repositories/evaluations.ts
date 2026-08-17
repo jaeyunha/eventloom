@@ -2095,7 +2095,7 @@ export class D1EvaluationRepository implements EvaluationRepository {
         commands.push(
           statement(
             this.database,
-          `${insert} INTO review_criterion_options
+            `${insert} INTO review_criterion_options
         (organization_id, event_id, plan_id, rubric_id, rubric_revision, criterion_id, id, label, value, sort_order)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [

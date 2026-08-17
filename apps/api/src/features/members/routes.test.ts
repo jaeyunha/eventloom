@@ -122,9 +122,7 @@ function invitationLifecycle() {
   return { lifecycle, created, revokedIfUnpooled, revokedForMembers };
 }
 
-function fixture(
-  organizationEntitlement?: OrganizationEntitlement,
-) {
+function fixture(organizationEntitlement?: OrganizationEntitlement) {
   let id = 0;
   const identity = new InMemoryMemberIdentityRepository(seed());
   const auth = new InMemoryMemberAuthBoundary({

@@ -1120,7 +1120,8 @@ export class MemberService {
       entitlement === null ||
       entitlement.state !== "active" ||
       Date.parse(entitlement.notBefore) > this.#clock().getTime() ||
-      (entitlement.expiresAt !== null && Date.parse(entitlement.expiresAt) <= this.#clock().getTime()) ||
+      (entitlement.expiresAt !== null &&
+        Date.parse(entitlement.expiresAt) <= this.#clock().getTime()) ||
       entitlement.limits.organizerSeats === null
     ) {
       return;
@@ -1141,7 +1142,9 @@ export class MemberService {
         "ORGANIZER_SEAT_LIMIT",
       );
     }
-    const pendingOrganizerSeats = (await this.#identity.listPendingInvitations(organizationId)).filter(
+    const pendingOrganizerSeats = (
+      await this.#identity.listPendingInvitations(organizationId)
+    ).filter(
       (invitation) =>
         invitation.id !== options.excludedInvitationId &&
         (invitation.role === "owner" || invitation.role === "admin") &&

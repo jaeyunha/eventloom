@@ -399,9 +399,7 @@ test("optional resource failure stays local while accepted session data remains 
 
   await page.goto("/portal?workspace=resources");
   await expect(page.getByRole("heading", { level: 1, name: "Event guide" })).toBeVisible();
-  const guideFailure = page
-    .getByRole("alert")
-    .filter({ hasText: "Event resources unavailable" });
+  const guideFailure = page.getByRole("alert").filter({ hasText: "Event resources unavailable" });
   await expect(guideFailure).toContainText(
     "Published event resources are not available for this event.",
   );
