@@ -129,6 +129,10 @@ describe("production CFP file asset persistence", () => {
       capabilityId: authorization.asset.assetId,
       participantId: "__cfp_submission__",
     });
+    expect(fixture.privateAssets.invalidated.at(-1)).toMatchObject({
+      capabilityId: authorization.asset.assetId,
+      participantId: "__cfp_submission__",
+    });
     expect(fixture.database.query<{ state: string }>("SELECT state FROM cfp_file_assets")).toEqual([
       { state: "ready" },
     ]);

@@ -149,9 +149,8 @@ export class D1CfpFileAssetGateway implements CfpFileAssetGateway {
     if (input.state === "ready") {
       const verified = await this.#privateAssets.verifyUploadCapability(binding);
       if (!verified) throw new CfpError("CONFLICT", "The uploaded object could not be verified.");
-    } else {
-      await this.#privateAssets.invalidateUploadCapability(binding);
     }
+    await this.#privateAssets.invalidateUploadCapability(binding);
     await finalizeCfpFileAsset(this.#database, {
       tenantId: input.tenantId,
       eventId: input.eventId,
