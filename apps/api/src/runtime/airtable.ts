@@ -6667,7 +6667,7 @@ async function enqueueCloudflareOutbox(input: {
       state: staged.state,
     };
   }
-  if (!staged.inserted && input.decisionFence !== undefined) {
+  if (input.decisionFence !== undefined) {
     const current = await input.database
       .prepare(
         `SELECT version, status
