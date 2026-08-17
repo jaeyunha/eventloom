@@ -170,11 +170,6 @@ async function publishHeadshotScenario(input: {
     } as unknown as SessionRepository,
     database,
     queue: { async send() {} } as unknown as Queue,
-    senderAddresses: {
-      auth: "auth@example.test",
-      speakers: "speakers@example.test",
-      calendar: "calendar@example.test",
-    },
   }).accept({
     tenantId: organizationId,
     eventId,
@@ -325,11 +320,6 @@ async function publishHeadshotScenario(input: {
     sessions: businessRepositories.sessions,
     database,
     queue,
-    senderAddresses: {
-      auth: "auth@example.test",
-      speakers: "speakers@example.test",
-      calendar: "calendar@example.test",
-    },
   }).accept({
     tenantId: organizationId,
     eventId,

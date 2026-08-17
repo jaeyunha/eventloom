@@ -814,11 +814,13 @@ describe("evaluation plans and assignments", () => {
         reviewerIds: ["reviewer-1"],
       }),
     ).rejects.toMatchObject({ code: "EVALUATION_NOT_FOUND" });
-    await expect(service.getOrganizerWorkspace(organizer, eventId, plan.id)).resolves.toMatchObject({
-      submissions: [],
-      assignments: [],
-      decisions: {},
-    });
+    await expect(service.getOrganizerWorkspace(organizer, eventId, plan.id)).resolves.toMatchObject(
+      {
+        submissions: [],
+        assignments: [],
+        decisions: {},
+      },
+    );
   });
 
   it("supports an empty replacement and removes organizer and reviewer projections", async () => {

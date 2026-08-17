@@ -3690,9 +3690,7 @@ export class EvaluationService {
         this.#repository.getDecision(plan.tenantId, plan.id, submissionId),
       ),
     );
-    return new Set(
-      [...reviewableSubmissionIds].filter((_, index) => decisions[index] === null),
-    );
+    return new Set([...reviewableSubmissionIds].filter((_, index) => decisions[index] === null));
   }
 
   async #requireReviewableSubmission(

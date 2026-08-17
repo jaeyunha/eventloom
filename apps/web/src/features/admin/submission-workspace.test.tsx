@@ -736,7 +736,7 @@ describe("organizer submission workspace", () => {
           plans:
             evaluationStatus === 404
               ? []
-            : [
+              : [
                   {
                     id: "plan-fallback",
                     status: "open",
@@ -789,10 +789,7 @@ describe("organizer submission workspace", () => {
       evaluationStatus = 503;
       const unavailable = await enrichCanonicalSubmission("", canonicalEnvelope);
       assert.equal(unavailable.id, canonicalEnvelope.submission.id);
-      assert.equal(
-        unavailable.title,
-        "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-      );
+      assert.equal(unavailable.title, "Taming 40-Minute CI: Incremental Builds at Monorepo Scale");
       assert.equal(unavailable.evaluationPlanId, "plan-fallback");
       assert.equal(unavailable.decision?.status, "waitlisted");
       assert.equal(unavailable.decision?.version, 3);

@@ -1807,17 +1807,13 @@ describe("evaluation HTTP routes", () => {
         },
       ],
     });
-    const app = createTestApp(
-      undefined,
-      {},
-      [
-        material("submission-submitted", "submitted"),
-        material("submission-reopened", "reopened"),
-        material("submission-draft", "draft"),
-        material("submission-withdrawn", "withdrawn"),
-        material("submission-unknown", "legacy_review"),
-      ],
-    );
+    const app = createTestApp(undefined, {}, [
+      material("submission-submitted", "submitted"),
+      material("submission-reopened", "reopened"),
+      material("submission-draft", "draft"),
+      material("submission-withdrawn", "withdrawn"),
+      material("submission-unknown", "legacy_review"),
+    ]);
     await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
     await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
       expectedVersion: 1,
@@ -1826,16 +1822,10 @@ describe("evaluation HTTP routes", () => {
     const organizerList = await app.request("/evaluations/events/event-1/submissions");
     expect(organizerList.status).toBe(200);
     expect(
-      ((await organizerList.json()) as Array<{ readonly id: string }>)
-        .map(({ id }) => id)
-        .sort(),
+      ((await organizerList.json()) as Array<{ readonly id: string }>).map(({ id }) => id).sort(),
     ).toEqual(["submission-reopened", "submission-submitted"]);
 
-    for (const submissionId of [
-      "submission-draft",
-      "submission-withdrawn",
-      "submission-unknown",
-    ]) {
+    for (const submissionId of ["submission-draft", "submission-withdrawn", "submission-unknown"]) {
       const decisionPath = `/evaluations/plans/plan-1/submissions/${submissionId}/decision`;
       expect((await app.request(decisionPath)).status).toBe(404);
       expect(
