@@ -325,14 +325,34 @@
   height: 0.75rem;
 }
 
+.scheduleFooter {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
 .timeHint {
   margin: 0;
   color: var(--muted-foreground);
   font-size: 0.73rem;
   line-height: 1.55;
 }
+.scheduleFooter > :global(.eventScheduleTimezone) {
+  flex: 0 1 18rem;
+  margin-left: auto;
+}
 
 @media (max-width: 50rem) {
+  .scheduleFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .scheduleFooter > :global(.eventScheduleTimezone) {
+    width: 100%;
+    margin-left: 0;
+  }
   .heading {
     display: grid;
   }

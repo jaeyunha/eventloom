@@ -478,6 +478,7 @@ function renderDatePickerDetails({
   endTimeLabel,
   defaultStartTime,
   defaultEndTime,
+  headerAside,
   timeHint,
   constraints,
   timeZone,
@@ -505,6 +506,7 @@ function renderDatePickerDetails({
   readonly endTimeLabel: string;
   readonly defaultStartTime: string;
   readonly defaultEndTime: string;
+  readonly headerAside?: ReactNode;
   readonly timeHint: string;
   readonly constraints: TemporalConstraints;
   readonly timeZone?: string | undefined;
@@ -619,7 +621,10 @@ function renderDatePickerDetails({
               </div>
             )}
           </div>
-          <p className={styles.timeHint}>{timeHint}</p>
+          <div className={styles.scheduleFooter}>
+            <p className={styles.timeHint}>{timeHint}</p>
+            {headerAside}
+          </div>
         </>
       ) : null}
     </div>
@@ -799,7 +804,6 @@ export function EventDatePickerFields({
           <p>{description}</p>
         </div>
         <div className={styles.headingActions}>
-          {headerAside}
           {clearable && (startDate !== "" || endDate !== "" || scheduleDates.length > 0) ? (
             <Button type="button" variant="ghost" onClick={clearSelection} disabled={disabled}>
               Clear {isSingleSelection ? "date" : "dates"}
@@ -889,6 +893,7 @@ export function EventDatePickerFields({
               endsAt,
               timeHint,
               timeZone,
+              headerAside,
             })
           : null}
       </div>
