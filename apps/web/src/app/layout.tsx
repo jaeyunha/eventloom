@@ -39,7 +39,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
           <TooltipProvider>
             {children}
-            <Toaster />
+            <Toaster position="bottom-right" duration={3_000} />
             {process.env.NODE_ENV === "development" ? <DevToolsBadgeHider /> : null}
           </TooltipProvider>
         </ThemeProvider>

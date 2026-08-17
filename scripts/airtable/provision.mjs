@@ -129,7 +129,6 @@ export const TABLE_DEFINITIONS = [
       link("Organization", "Organizations", "Organization that owns this event."),
       text("Name", "Event display name."),
       text("Slug", "Public event slug."),
-      select("Status", ["draft", "open", "closed", "archived"], "Event lifecycle state."),
       longText("Description", "Event description."),
       json("Settings JSON", "Event configuration and integration settings."),
       dateTime("Starts At", "Event start timestamp in ISO 8601 format."),

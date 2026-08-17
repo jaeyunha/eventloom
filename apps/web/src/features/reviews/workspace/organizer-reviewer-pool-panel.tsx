@@ -5,7 +5,6 @@ import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/aler
 import { Button } from "../../../components/ui/button";
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -70,11 +69,6 @@ export function OrganizerReviewerPoolView({
             Assignments are created separately below.
           </CardDescription>
         </div>
-        <CardAction>
-          <Button asChild variant="outline" size="sm">
-            <Link href={invitationHref}>Invite reviewers</Link>
-          </Button>
-        </CardAction>
       </CardHeader>
       <CardContent className={styles.reviewTeamContent}>
         {loading ? (

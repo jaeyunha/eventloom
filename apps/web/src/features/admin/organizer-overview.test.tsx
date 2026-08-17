@@ -18,7 +18,6 @@ import { OrganizerEventsView, OrganizerOverviewView } from "./organizer-overview
 import {
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
-  eventStatusClass,
   getCalendarMonthCells,
   initialCalendarMonth,
   normalizeOrganizerEventSlug,
@@ -57,7 +56,6 @@ const loadedCore: OrganizerOverviewCoreData = {
       id: "event-live",
       name: "Live program",
       slug: "live-program",
-      status: "published",
       startsAt: "2026-09-17T00:00:00.000Z",
       endsAt: "2026-09-18T00:00:00.000Z",
     },
@@ -91,7 +89,6 @@ const eventRecord: OrganizerEventRecord = {
   organizationId: "ai-engineer",
   slug: "live-program",
   name: "Live program",
-  status: "active",
   timeZone: "America/Los_Angeles",
   startsAt: "2026-09-17T16:00:00.000Z",
   endsAt: "2026-09-18T00:00:00.000Z",
@@ -158,11 +155,6 @@ describe("organizer overview", () => {
     expect(output).not.toContain("/admin/organizations/ai-engineer/events/live-program/settings");
     expect(output).not.toContain("Keep your program moving");
     expect(output).not.toContain("Summit 2026");
-  });
-
-  it("presents active events with the same live status treatment as published events", () => {
-    expect(eventStatusClass("active")).toBe(eventStatusClass("published"));
-    expect(eventStatusClass("active")).not.toBe(eventStatusClass("archived"));
   });
 
   it("renders explicit empty states for events and action items", () => {
@@ -417,14 +409,14 @@ describe("organizer overview", () => {
     ).toBe(false);
   });
 
-  it("initializes from the earliest non-archived valid event start", () => {
+  it("initializes from the earliest valid event start", () => {
     const month = initialCalendarMonth([
-      { status: "archived", startsAt: "2020-01-01T00:00:00.000Z", timeZone: "UTC" },
-      { status: "active", startsAt: "not-a-date", timeZone: "UTC" },
-      { status: "draft", startsAt: "2026-04-08T00:00:00.000Z", timeZone: "UTC" },
-      { status: "active", startsAt: "2026-03-08T00:00:00.000Z", timeZone: "UTC" },
+      { startsAt: "2020-01-01T00:00:00.000Z", timeZone: "UTC" },
+      { startsAt: "not-a-date", timeZone: "UTC" },
+      { startsAt: "2026-04-08T00:00:00.000Z", timeZone: "UTC" },
+      { startsAt: "2026-03-08T00:00:00.000Z", timeZone: "UTC" },
     ]);
-    expect([month.getFullYear(), month.getMonth(), month.getDate()]).toEqual([2026, 2, 1]);
+    expect([month.getFullYear(), month.getMonth(), month.getDate()]).toEqual([2020, 0, 1]);
   });
   it("renders Calendar by default and keeps List actions behind the view switch", () => {
     const output = renderToStaticMarkup(
@@ -438,7 +430,6 @@ describe("organizer overview", () => {
         },
         onCreate: async () => undefined,
         onUpdate: async () => undefined,
-        onArchive: async () => undefined,
       }),
     );
 
@@ -455,6 +446,27 @@ describe("organizer overview", () => {
     expect(output).toContain("September 2026 events");
     expect(output).not.toContain("Organization events and their current status");
     expect(output).not.toContain(">Agenda<");
+  });
+
+  it("omits event lifecycle status from management surfaces", () => {
+    const output = renderToStaticMarkup(
+      createElement(OrganizerEventsView, {
+        state: {
+          status: "loaded",
+          data: {
+            organizationId: eventRecord.organizationId,
+            events: [eventRecord],
+          },
+        },
+        onCreate: async () => undefined,
+        onUpdate: async () => undefined,
+      }),
+    );
+
+    expect(output).not.toContain('id="organizer-event-status"');
+    expect(output).not.toContain(">Status<");
+    expect(output).not.toContain(">Active<");
+    expect(output).not.toContain("Archive event");
   });
 
   it("opens the event creation form from an explicit initial state", () => {
@@ -493,7 +505,6 @@ describe("organizer overview", () => {
         onRetry: () => undefined,
         onCreate: async () => undefined,
         onUpdate: async () => undefined,
-        onArchive: async () => undefined,
       }),
     );
 
@@ -525,7 +536,6 @@ describe("organizer overview", () => {
       api.createEvent({
         name: "Live program",
         slug: "live-program",
-        status: "draft",
         timeZone: "America/Los_Angeles",
         startsAt: eventRecord.startsAt,
         endsAt: eventRecord.endsAt,
@@ -542,7 +552,6 @@ describe("organizer overview", () => {
     expect(JSON.parse(String(requestedInit?.body))).toEqual({
       name: "Live program",
       slug: "live-program",
-      status: "draft",
       timeZone: "America/Los_Angeles",
       startsAt: eventRecord.startsAt,
       endsAt: eventRecord.endsAt,
@@ -643,7 +652,6 @@ describe("organizer overview", () => {
     const values: OrganizerEventFormValues = {
       name: "New program",
       slug: "new-program",
-      status: "draft",
       timeZone: "America/Los_Angeles",
       startsAt: "2026-09-17T09:00",
       endsAt: "2026-09-20T17:00",

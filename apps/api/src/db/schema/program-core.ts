@@ -25,6 +25,7 @@ export const events = sqliteTable(
     slug: text().notNull(),
     name: text().notNull(),
     status: text().notNull(),
+    legacyRetiredAt: text("legacy_retired_at"),
     timeZone: text("time_zone").notNull(),
     startsAt: text("starts_at").notNull(),
     endsAt: text("ends_at").notNull(),
@@ -45,10 +46,9 @@ export const events = sqliteTable(
   (t) => [
     unique("events_organization_id_unique").on(t.organizationId, t.id),
     uniqueIndex("events_organization_slug_unique").on(t.organizationId, t.slug),
-    index("events_organization_status_updated_idx").on(t.organizationId, t.status, t.updatedAt),
     index("events_organization_slug_idx").on(t.organizationId, t.slug),
-    check("events_status_check", sql`${t.status} in ('draft','active','archived')`),
     check("events_duration_check", sql`${t.defaultDurationMinutes}>0`),
+    check("events_status_check", sql`${t.status} in ('draft','active','archived')`),
     check("events_version_check", sql`${t.version}>0`),
     check("events_times_check", sql`${t.endsAt}>${t.startsAt}`),
     check(
